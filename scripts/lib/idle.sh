@@ -64,58 +64,83 @@ fleet_unescape_conninfo_val() {
 # postgres:// URIs and libpq keyword=value conninfo strings) in-process so
 # embedded or trailing newlines in passwords never corrupt the redacted DSN.
 fleet_split_dsn_password_vars() {
-  local dsn="$1" proto rest userinfo hostpart user pass="" redacted REPLY_DECODED="" REPLY_UNESCAPED=""
+  local dsn="$1" proto rest userinfo hostpart user pass="" redacted REPLY_DECODED=""
   REPLY_PASS=""
   REPLY_REDACTED=""
   if [[ "$dsn" != *"://"* ]]; then
-    redacted="$dsn"
-    local first_match=1 m1 m3 m5
-    while true; do
-      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; then
-        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
-        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          if (( first_match )); then
-            fleet_unescape_conninfo_val_var "$m3"
-            pass="$REPLY_UNESCAPED"
-          fi
-          first_match=0
-          redacted="${m1}${m5}"
-          continue
+    local LC_ALL=C i=0 n=${#dsn} tok_start key val ch quote kept_tokens=()
+    while (( i < n )); do
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      (( i < n )) || break
+      tok_start=$i
+      key=""
+      while (( i < n )); do
+        ch="${dsn:i:1}"
+        if [[ "$ch" == "=" || "$ch" =~ [[:space:]] ]]; then
+          break
         fi
+        key+="$ch"
+        i=$(( i + 1 ))
+      done
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      if (( i >= n )) || [[ "${dsn:i:1}" != "=" || -z "$key" ]]; then
+        return 0
       fi
-      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; then
-        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
-        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          if (( first_match )); then
-            fleet_unescape_conninfo_val_var "$m3"
-            pass="$REPLY_UNESCAPED"
+      i=$(( i + 1 ))
+      while (( i < n )) && [[ "${dsn:i:1}" =~ [[:space:]] ]]; do
+        i=$(( i + 1 ))
+      done
+      val=""
+      if (( i < n )) && [[ "${dsn:i:1}" == "'" || "${dsn:i:1}" == '"' ]]; then
+        quote="${dsn:i:1}"
+        i=$(( i + 1 ))
+        local closed=0
+        while (( i < n )); do
+          ch="${dsn:i:1}"
+          if [[ "$ch" == "\\" ]]; then
+            (( i + 1 < n )) || return 0
+            val+="${dsn:i+1:1}"
+            i=$(( i + 2 ))
+          elif [[ "$ch" == "$quote" ]]; then
+            i=$(( i + 1 ))
+            closed=1
+            break
+          else
+            val+="$ch"
+            i=$(( i + 1 ))
           fi
-          first_match=0
-          redacted="${m1}${m5}"
-          continue
-        fi
-      fi
-      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)[[:space:]]*(.*)$ ]]; then
-        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
-        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
-          if (( first_match )); then
-            fleet_unescape_conninfo_val_var "$m3"
-            pass="$REPLY_UNESCAPED"
+        done
+        (( closed == 1 )) || return 0
+      else
+        while (( i < n )); do
+          ch="${dsn:i:1}"
+          if [[ "$ch" =~ [[:space:]] ]]; then
+            break
+          elif [[ "$ch" == "\\" ]]; then
+            (( i + 1 < n )) || return 0
+            val+="${dsn:i+1:1}"
+            i=$(( i + 2 ))
+          else
+            val+="$ch"
+            i=$(( i + 1 ))
           fi
-          first_match=0
-          redacted="${m1}${m5}"
-          continue
-        fi
+        done
       fi
-      break
+      if [[ "$key" == "sslpassword" ]]; then
+        return 0
+      elif [[ "$key" == "password" ]]; then
+        pass="$val"
+      else
+        kept_tokens+=("${dsn:tok_start:i-tok_start}")
+      fi
     done
-    if [[ "$redacted" =~ (^|[[:space:]])(password|sslpassword)[[:space:]]*= ]]; then
-      return 0
-    fi
-    redacted="${redacted#"${redacted%%[![:space:]]*}"}"
-    redacted="${redacted%"${redacted##*[![:space:]]}"}"
+    local IFS=' '
     REPLY_PASS="$pass"
-    REPLY_REDACTED="$redacted"
+    REPLY_REDACTED="${kept_tokens[*]}"
     return 0
   fi
   proto="${dsn%%://*}"
@@ -217,16 +242,43 @@ fleet_psql_query() {
 }
 
 # fleet_env_or_file KEY [ENV_FILE] — resolves KEY from the process environment
-# first, falling back to ENV_FILE without sourcing it.
+# first, falling back to ENV_FILE without sourcing it. Matches
+# internal/creds.splitEnvKeyValue (tolerates an 'export ' prefix, strips
+# unquoted inline '#comments', and strips one layer of matching quotes).
 fleet_env_or_file() {
-  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val=""
+  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val="" line t k v
   val="${!key:-}"
   if [[ -z "$val" && -r "$env_file" ]]; then
-    if declare -F env_get >/dev/null 2>&1; then
-      val="$(env_get "$key" "$env_file")"
-    else
-      val="$(grep -E "^${key}=" "$env_file" 2>/dev/null | tail -n1 | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//' || true)"
-    fi
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line="${line%$'\r'}"
+      t="${line#"${line%%[![:space:]]*}"}"
+      t="${t%"${t##*[![:space:]]}"}"
+      [[ -z "$t" || "$t" == \#* ]] && continue
+      [[ "$t" == "export "* ]] && t="${t#export }"
+      [[ "$t" == *"="* ]] || continue
+      k="${t%%=*}"
+      k="${k#"${k%%[![:space:]]*}"}"
+      k="${k%"${k##*[![:space:]]}"}"
+      [[ "$k" == "$key" ]] || continue
+      v="${t#*=}"
+      v="${v#"${v%%[![:space:]]*}"}"
+      v="${v%"${v##*[![:space:]]}"}"
+      if [[ "$v" != \"* && "$v" != \'* ]]; then
+        if [[ "$v" == *" #"* ]]; then
+          v="${v%% \#*}"
+          v="${v%"${v##*[![:space:]]}"}"
+        elif [[ "$v" == *$'\t#'* ]]; then
+          v="${v%%$'\t#'*}"
+          v="${v%"${v##*[![:space:]]}"}"
+        fi
+      fi
+      if (( ${#v} >= 2 )); then
+        if [[ ( "${v:0:1}" == '"' && "${v: -1}" == '"' ) || ( "${v:0:1}" == "'" && "${v: -1}" == "'" ) ]]; then
+          v="${v:1:${#v}-2}"
+        fi
+      fi
+      val="$v"
+    done < "$env_file"
   fi
   printf '%s' "$val"
 }
@@ -473,12 +525,11 @@ fleet_sanitize_summary() {
 }
 
 # fleet_probe_in_memory_counts ENV_FILE SVC_STATE — prints
-# "<turns>|<approvals>|<has_approvals_hdr>" from the running server's /healthz
-# headers, or "0|0|0" when unreachable.
+# "<turns>|<approvals>|<has_approvals_hdr>|<status>" from the running server's
+# /healthz headers, where <status> is "ok" or "err".
 fleet_probe_in_memory_counts() {
   local env_file="${1:-/etc/fleet/fleet.env}" svc_state="${2:-unknown}"
   local addr="" hdrs="" turns=0 approvals="" has_approvals_hdr=0
-  command -v curl >/dev/null 2>&1 || { printf '0|0|0\n'; return 0; }
   addr="$(fleet_env_or_file FLEET_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")"
   [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")"
@@ -486,19 +537,20 @@ fleet_probe_in_memory_counts() {
     addr="127.0.0.1:8080"
   fi
   if [[ -z "$addr" ]]; then
-    printf '0|0|0\n'
+    printf '0|0|0|ok\n'
     return 0
   fi
+  command -v curl >/dev/null 2>&1 || { printf '0|0|0|err\n'; return 0; }
   [[ "$addr" == :* ]] && addr="127.0.0.1${addr}"
   local curl_max=2
   if [[ "${FLEET_WAIT_DEADLINE_EPOCH:-}" =~ ^[0-9]+$ ]] && (( 10#$FLEET_WAIT_DEADLINE_EPOCH > 0 )); then
     local now_ep rem_ep
     now_ep="$(date +%s)"
     rem_ep=$(( 10#$FLEET_WAIT_DEADLINE_EPOCH - now_ep ))
-    (( rem_ep <= 0 )) && { printf '0|0|0\n'; return 0; }
+    (( rem_ep <= 0 )) && { printf '0|0|0|err\n'; return 0; }
     (( rem_ep < curl_max )) && curl_max="$rem_ep"
   fi
-  local curl_args=(-sSI --noproxy '*' --max-time "$curl_max")
+  local curl_args=(-fsSI --noproxy '*' --max-time "$curl_max")
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
     local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
     if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
@@ -527,7 +579,10 @@ fleet_probe_in_memory_counts() {
       cert_file="$(fleet_env_or_file FLEET_TLS_CERT_FILE "$env_file")"
       [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CHAT_TLS_CERT_FILE "$env_file")"
       [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CUTLASS_TLS_CERT_FILE "$env_file")"
-      [[ -r "$cert_file" ]] && curl_args+=(--cacert "$cert_file")
+      if [[ -n "$cert_file" ]]; then
+        [[ -r "$cert_file" ]] || { printf '0|0|0|err\n'; return 0; }
+        curl_args+=(--cacert "$cert_file")
+      fi
       tls_domain="$(fleet_env_or_file FLEET_TLS_DOMAIN "$env_file")"
       [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")"
       [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")"
@@ -542,10 +597,12 @@ fleet_probe_in_memory_counts() {
     fi
   fi
   addr="${addr%/}/healthz"
-  if hdrs="$(curl "${curl_args[@]}" "$addr" 2>/dev/null || true)"; then
-    turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
-    approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
+  if ! hdrs="$(curl "${curl_args[@]}" "$addr" 2>/dev/null)"; then
+    printf '0|0|0|err\n'
+    return 0
   fi
+  turns="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Turns:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
+  approvals="$(printf '%s\n' "$hdrs" | grep -i '^X-Fleet-Active-Approvals:' | tail -n1 | cut -d: -f2- | tr -d '[:space:]' || true)"
   if [[ "$turns" =~ ^[0-9]+$ ]]; then
     turns=$(( 10#$turns ))
   else
@@ -557,7 +614,7 @@ fleet_probe_in_memory_counts() {
   else
     approvals=0
   fi
-  printf '%s|%s|%s\n' "$turns" "$approvals" "$has_approvals_hdr"
+  printf '%s|%s|%s|ok\n' "$turns" "$approvals" "$has_approvals_hdr"
 }
 
 # fleet_active_work_summary ENV_FILE [SERVICE_NAME] — inspects sched.tasks,
@@ -598,15 +655,20 @@ fleet_active_work_summary() {
     return 0
   fi
 
-  local mem_info mem_rest mem_turns=0 mem_approvals=0 has_mem_approvals=0
+  local mem_info mem_rest mem_turns=0 mem_approvals=0 has_mem_approvals=0 mem_status="ok"
   mem_info="$(fleet_probe_in_memory_counts "$env_file" "$svc_state")"
   mem_turns="${mem_info%%|*}"
   mem_rest="${mem_info#*|}"
   mem_approvals="${mem_rest%%|*}"
-  has_mem_approvals="${mem_rest#*|}"
+  mem_rest="${mem_rest#*|}"
+  has_mem_approvals="${mem_rest%%|*}"
+  mem_status="${mem_rest#*|}"
   [[ "$mem_turns" =~ ^[0-9]+$ ]] && mem_turns=$(( 10#$mem_turns )) || mem_turns=0
   [[ "$mem_approvals" =~ ^[0-9]+$ ]] && mem_approvals=$(( 10#$mem_approvals )) || mem_approvals=0
   [[ "$has_mem_approvals" == "1" ]] || has_mem_approvals=0
+  if [[ "$mem_status" == "err" && ( "$svc_state" == "active" || "$svc_state" == "unknown" ) ]]; then
+    items+=("in-memory healthz active-work probe failed while service is ${svc_state}")
+  fi
 
   sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")"
   chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"

@@ -286,7 +286,7 @@ func localHealthTLSMode() string {
 	return "off"
 }
 
-func localHealthTLSConfig() *tls.Config {
+func localHealthTLSConfig(requireCert bool) (*tls.Config, error) {
 	rootCAs, err := x509.SystemCertPool()
 	if err != nil || rootCAs == nil {
 		rootCAs = x509.NewCertPool()
@@ -306,9 +306,14 @@ func localHealthTLSConfig() *tls.Config {
 		//nolint:gosec // G304: operator-configured TLS certificate path from fleet.env.
 		pemBytes, err := os.ReadFile(certFile)
 		if err != nil {
+			if requireCert {
+				return nil, fmt.Errorf("read TLS cert %s: %w", certFile, err)
+			}
 			break
 		}
-		_ = rootCAs.AppendCertsFromPEM(pemBytes)
+		if !rootCAs.AppendCertsFromPEM(pemBytes) && requireCert {
+			return nil, fmt.Errorf("parse TLS cert PEM %s", certFile)
+		}
 		if serverName == "" {
 			if block, _ := pem.Decode(pemBytes); block != nil {
 				if cert, err := x509.ParseCertificate(block.Bytes); err == nil {
@@ -326,10 +331,10 @@ func localHealthTLSConfig() *tls.Config {
 		MinVersion: tls.VersionTLS12,
 		RootCAs:    rootCAs,
 		ServerName: serverName,
-	}
+	}, nil
 }
 
-func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int, hasApprovalsHeader bool) {
+func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int, hasApprovalsHeader bool, err error) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
 	if addr == "" {
 		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR"))
@@ -341,7 +346,7 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 		addr = "127.0.0.1:8080"
 	}
 	if addr == "" {
-		return 0, 0, false
+		return 0, 0, false, nil
 	}
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
@@ -351,10 +356,12 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 		addr = "[::1]:" + rest
 	}
 	url := addr
+	useTLS := strings.HasPrefix(url, "https://")
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		tlsMode := localHealthTLSMode()
 		if tlsMode == "manual" || tlsMode == "auto" {
 			url = "https://" + url
+			useTLS = true
 		} else {
 			url = "http://" + url
 		}
@@ -365,9 +372,12 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, false, err
 	}
-	tlsCfg := localHealthTLSConfig()
+	tlsCfg, err := localHealthTLSConfig(useTLS)
+	if err != nil {
+		return 0, 0, false, err
+	}
 	if tlsCfg.ServerName != "" {
 		req.Host = tlsCfg.ServerName
 	}
@@ -378,14 +388,17 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, 0, false
+		return 0, 0, false, err
 	}
 	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, 0, false, fmt.Errorf("healthz status %d", resp.StatusCode)
+	}
 	turns, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Turns")))
 	rawApprovals := strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Approvals"))
 	approvals, aerr := strconv.Atoi(rawApprovals)
 	hasApprovalsHeader = rawApprovals != "" && aerr == nil
-	return turns, approvals, hasApprovalsHeader
+	return turns, approvals, hasApprovalsHeader, nil
 }
 
 // ActiveWork inspects the sched and chat databases for in-flight work on the
@@ -426,7 +439,10 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 	// still protected even if it has no row in turns, and so a completed approval
 	// whose SetApprovalResult failed does not wedge the idle gate when the live
 	// daemon reports X-Fleet-Active-Approvals: 0.
-	memTurns, memApprovals, hasMemApprovals := probeInMemoryActiveCounts(ctx, svcState)
+	memTurns, memApprovals, hasMemApprovals, memErr := probeInMemoryActiveCounts(ctx, svcState)
+	if memErr != nil && (svcState == "active" || svcState == "unknown") && firstErr == nil {
+		firstErr = fmt.Errorf("in-memory healthz probe failed: %w", memErr)
+	}
 	skipApprovalsQuery := hasMemApprovals && memApprovals == 0
 
 	var chatItems []string

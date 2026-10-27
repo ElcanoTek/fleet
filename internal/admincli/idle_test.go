@@ -89,6 +89,11 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			wantPass: "foo bar",
 			wantRed:  "host=127.0.0.1 user=fleet dbname=sched",
 		},
+		{
+			dsn:      "host=127.0.0.1 password=secret application_name='audit password=canary' dbname=sched",
+			wantPass: "secret",
+			wantRed:  "host=127.0.0.1 application_name='audit password=canary' dbname=sched",
+		},
 	}
 
 	for _, tc := range cases {
@@ -115,9 +120,10 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 	}
 
 	// Verify fleet_resolve_dsn prefers FLEET_SCHED_DATABASE_URL in the env file
-	// over a generic DATABASE_URL in the calling shell's environment.
+	// (including 'export ' prefix and inline '#comment') over a generic DATABASE_URL
+	// in the calling shell's environment.
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	if err := os.WriteFile(envFile, []byte("FLEET_SCHED_DATABASE_URL=postgres://specific@127.0.0.1:5432/sched\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile, []byte("export FLEET_SCHED_DATABASE_URL=postgres://specific@127.0.0.1:5432/sched # inline comment\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, envFile)
