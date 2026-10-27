@@ -2135,6 +2135,12 @@ func (g *approvalRunGate) leave() {
 	}
 }
 
+func (g *approvalRunGate) activeCount() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.active
+}
+
 // drain refuses further admissions and waits for the admitted ones, or ctx.
 func (g *approvalRunGate) drain(ctx context.Context) bool {
 	g.mu.Lock()

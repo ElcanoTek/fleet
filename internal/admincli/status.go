@@ -52,7 +52,7 @@ func cmdStatus(argv []string) int {
 	// 3. both databases reachable + active work summary.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
-	checkActiveWork(r, *schedURL, *chatURL)
+	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL)
 
 	// 4. sandbox image present + runnable.
 	if *skipSandbox {
@@ -163,7 +163,7 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 // approval execution is currently in flight. Advisory only (never increments
 // r.failed) so a healthy box running a job still exits 0 on `fleet status`
 // while surfacing what would block `fleet update` / `fleet restart`.
-func checkActiveWork(r *report, schedFlag, chatFlag string) {
+func checkActiveWork(r *report, unit, schedFlag, chatFlag string) {
 	sDSN, _ := schedDSN(schedFlag)
 	cDSN, _ := chatDSN(chatFlag)
 	if sDSN == "" && cDSN == "" {
@@ -171,7 +171,7 @@ func checkActiveWork(r *report, schedFlag, chatFlag string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	items, err := ActiveWork(ctx, sDSN, cDSN)
+	items, err := ActiveWorkForService(ctx, unit, sDSN, cDSN)
 	if len(items) > 0 {
 		r.warnLine("active work", strings.Join(items, "; "))
 		return

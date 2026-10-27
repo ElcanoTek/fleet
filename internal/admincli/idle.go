@@ -5,9 +5,11 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -52,6 +54,22 @@ func ClearUpdateDrain() {
 	_ = os.Remove(p)
 }
 
+func parseServiceTimestamp(startTS string) int64 {
+	startTS = strings.TrimSpace(startTS)
+	if startTS == "" || startTS == "n/a" {
+		return 0
+	}
+	if epochStr, ok := strings.CutPrefix(startTS, "@"); ok {
+		if secs, err := strconv.ParseInt(strings.TrimSpace(epochStr), 10, 64); err == nil && secs > 0 {
+			return secs
+		}
+	}
+	if t, err := time.ParseInLocation("Mon 2006-01-02 15:04:05 MST", startTS, time.Local); err == nil {
+		return t.Unix()
+	}
+	return 0
+}
+
 // serviceRuntimeState inspects systemd for the unit's current ActiveState and
 // ExecMainStartTimestamp. It returns ("active", startUnix), ("inactive", 0) when
 // the unit is installed and not active, or ("unknown", 0) when systemd or the
@@ -75,7 +93,7 @@ func serviceRuntimeState(unit string) (string, int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	//nolint:gosec // G204: fixed "systemctl" binary; unit is resolved via serviceName.
-	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
+	out, err := exec.CommandContext(ctx, "systemctl", "show", "--timestamp=unix", "-p", "ActiveState", "-p", "ExecMainStartTimestamp", unit).Output()
 	if err != nil {
 		return "unknown", 0
 	}
@@ -90,13 +108,7 @@ func serviceRuntimeState(unit string) (string, int64) {
 	}
 	switch activeState {
 	case "active":
-		var startUnix int64
-		if startTS != "" && startTS != "n/a" {
-			if t, err := time.Parse("Mon 2006-01-02 15:04:05 MST", startTS); err == nil {
-				startUnix = t.Unix()
-			}
-		}
-		return "active", startUnix
+		return "active", parseServiceTimestamp(startTS)
 	case "":
 		return "unknown", 0
 	default:
@@ -113,14 +125,51 @@ func sanitizeSummaryText(s string) string {
 	}, s)
 }
 
+func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int) {
+	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
+	if addr == "" {
+		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR"))
+	}
+	if addr == "" && svcState == "active" && !truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
+		addr = "127.0.0.1:8088"
+	}
+	if addr == "" {
+		return 0, 0
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	url := addr
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "http://" + url
+	}
+	url = strings.TrimRight(url, "/") + "/healthz"
+
+	reqCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return 0, 0
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, 0
+	}
+	_ = resp.Body.Close()
+	turns, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Turns")))
+	approvals, _ = strconv.Atoi(strings.TrimSpace(resp.Header.Get("X-Fleet-Active-Approvals")))
+	return turns, approvals
+}
+
 // ActiveWork inspects the sched and chat databases for in-flight work on the
 // default service unit.
 func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, error) {
 	return ActiveWorkForService(ctx, serviceName(""), schedDSNVal, chatDSNVal)
 }
 
-// ActiveWorkForService inspects the sched and chat databases for in-flight work
-// that would be interrupted by stopping or restarting the given systemd unit:
+// ActiveWorkForService inspects the sched and chat databases (plus the running
+// server's in-memory counters on /healthz) for in-flight work that would be
+// interrupted by stopping or restarting the given systemd unit:
 //   - sched.tasks with status IN ('running', 'leased', 'assigned') that hold an
 //     unexpired lease or were started by the current service process
 //   - chat.turns with status = 'running' AND finished_at IS NULL in the current service instance
@@ -145,12 +194,43 @@ func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal str
 		items = append(items, found...)
 	}
 
+	var chatItems []string
 	if strings.TrimSpace(chatDSNVal) != "" {
 		found, err := queryChatActiveWork(ctx, chatDSNVal, svcStartUnix)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
+		chatItems = append(chatItems, found...)
 		items = append(items, found...)
+	}
+
+	// Also consult the running server's in-memory counters via /healthz so a live
+	// turn whose initial CreateTurn failed during a transient database hiccup is
+	// still protected even if it has no row in turns.
+	memTurns, memApprovals := probeInMemoryActiveCounts(ctx, svcState)
+	if memTurns > 0 {
+		hasTurnItem := false
+		for _, it := range chatItems {
+			if strings.HasPrefix(it, "chat turn ") {
+				hasTurnItem = true
+				break
+			}
+		}
+		if !hasTurnItem {
+			items = append(items, fmt.Sprintf("%d in-memory chat turn(s) active", memTurns))
+		}
+	}
+	if memApprovals > 0 {
+		hasApprovalItem := false
+		for _, it := range chatItems {
+			if strings.HasPrefix(it, "approval execution ") {
+				hasApprovalItem = true
+				break
+			}
+		}
+		if !hasApprovalItem {
+			items = append(items, fmt.Sprintf("%d in-memory approval execution(s) active", memApprovals))
+		}
 	}
 
 	return items, firstErr

@@ -48,12 +48,21 @@ func cmdStart(argv []string) int   { return systemctlVerb("start", argv) }
 func cmdRestart(argv []string) int { return systemctlVerb("restart", argv) }
 func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 
+func defaultWaitTimeout() time.Duration {
+	if raw := os.Getenv("FLEET_UPDATE_WAIT_SECONDS"); raw != "" {
+		if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 {
+			return time.Duration(secs) * time.Second
+		}
+	}
+	return 10 * time.Minute
+}
+
 func systemctlVerb(verb string, argv []string) int {
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	service := fs.String("service", "", "systemd unit name (default: $FLEET_SERVICE_NAME or \"fleet\")")
 	force := fs.Bool("force", false, "restart/stop even when scheduled tasks or chat turns are running (env FLEET_UPDATE_FORCE=1)")
 	wait := fs.Bool("wait", false, "wait for running tasks or chat turns to finish before restarting/stopping (env FLEET_UPDATE_WAIT=1)")
-	waitTimeout := fs.Duration("wait-timeout", 10*time.Minute, "maximum time to wait when --wait is set")
+	waitTimeout := fs.Duration("wait-timeout", defaultWaitTimeout(), "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}

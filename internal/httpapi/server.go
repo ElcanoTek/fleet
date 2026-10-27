@@ -1067,6 +1067,8 @@ func (s *Server) getInflight(convID string) (inflightEntry, bool) {
 }
 
 func (s *Server) healthz(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("X-Fleet-Active-Turns", strconv.Itoa(s.ActiveTurns()))
+	w.Header().Set("X-Fleet-Active-Approvals", strconv.Itoa(s.approvalRuns.activeCount()))
 	// Draining (#278): report 503 the moment graceful shutdown begins so a load
 	// balancer / readiness probe stops routing new traffic to this instance while
 	// it drains in-flight work. Checked first — a draining box is unready

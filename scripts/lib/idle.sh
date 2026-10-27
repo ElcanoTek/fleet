@@ -141,11 +141,15 @@ fleet_service_runtime_state() {
   local active_state start_ts start_epoch=0
   active_state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null | tr -d '[:space:]' || true)"
   if [[ "$active_state" == "active" ]]; then
-    start_ts="$(systemctl show -p ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
-    if [[ -n "$start_ts" && "$start_ts" != "n/a" ]]; then
+    start_ts="$(systemctl show --timestamp=unix -p ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
+    start_ts="${start_ts#"${start_ts%%[![:space:]]*}"}"
+    start_ts="${start_ts%"${start_ts##*[![:space:]]}"}"
+    if [[ "$start_ts" == @* ]]; then
+      start_epoch="${start_ts#@}"
+    elif [[ -n "$start_ts" && "$start_ts" != "n/a" ]]; then
       start_epoch="$(date -d "$start_ts" +%s 2>/dev/null || echo 0)"
-      [[ "$start_epoch" =~ ^[0-9]+$ ]] || start_epoch=0
     fi
+    [[ "$start_epoch" =~ ^[0-9]+$ ]] || start_epoch=0
     printf 'active|%s\n' "$start_epoch"
     return 0
   fi
