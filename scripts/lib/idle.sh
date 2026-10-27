@@ -51,17 +51,23 @@ fleet_split_dsn_password() {
   local dsn="$1" proto rest userinfo hostpart user pass="" redacted
   if [[ "$dsn" != *"://"* ]]; then
     redacted="$dsn"
-    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; do
-      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
-    done
-    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; do
-      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
-    done
-    while [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)[[:space:]]*(.*)$ ]]; do
-      pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-      redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+    local first_match=1
+    while true; do
+      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
+        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
+        first_match=0
+        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+      elif [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
+        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
+        first_match=0
+        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+      elif [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
+        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
+        first_match=0
+        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
+      else
+        break
+      fi
     done
     if [[ "$redacted" =~ (^|[[:space:]])password[[:space:]]*= ]]; then
       printf '\n\n'
@@ -96,7 +102,7 @@ fleet_split_dsn_password() {
     local IFS='&'
     for param in $query; do
       if [[ "$param" == password=* ]]; then
-        [[ -n "$pass" ]] || pass="$(fleet_uri_decode "${param#password=}")"
+        pass="$(fleet_uri_decode "${param#password=}")"
       else
         kept+=("$param")
       fi
@@ -349,6 +355,22 @@ fleet_probe_in_memory_counts() {
   local curl_args=(-sSI --max-time 2)
   if [[ "$addr" != http://* && "$addr" != https://* ]]; then
     local tls_mode="" cert_file="" tls_domain="" host_only="" port_only="8080"
+    if [[ "$addr" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+      host_only="[${BASH_REMATCH[1]}]"
+      port_only="${BASH_REMATCH[2]}"
+    elif [[ "$addr" =~ ^\[([^]]+)\]$ ]]; then
+      host_only="[${BASH_REMATCH[1]}]"
+    elif [[ "$addr" == *:* ]]; then
+      host_only="${addr%:*}"
+      port_only="${addr##*:}"
+    else
+      host_only="$addr"
+    fi
+    case "$host_only" in
+      ""|"0.0.0.0") host_only="127.0.0.1" ;;
+      "[::]"|"::") host_only="[::1]" ;;
+    esac
+    addr="${host_only}:${port_only}"
     tls_mode="$(fleet_env_or_file FLEET_TLS_MODE "$env_file")"
     [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")"
     [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")"
@@ -364,10 +386,7 @@ fleet_probe_in_memory_counts() {
       [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")"
       [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")"
       if [[ -n "$tls_domain" ]]; then
-        host_only="${addr%%:*}"
-        [[ "$addr" == *:* ]] && port_only="${addr##*:}"
-        [[ -z "$host_only" || "$host_only" == "0.0.0.0" ]] && host_only="127.0.0.1"
-        curl_args+=(--resolve "${tls_domain}:${port_only}:${host_only}")
+        curl_args+=(--connect-to "${tls_domain}:${port_only}:${host_only}:${port_only}")
         addr="https://${tls_domain}:${port_only}"
       else
         addr="https://${addr}"

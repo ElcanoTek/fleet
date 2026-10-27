@@ -290,6 +290,10 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	}
 	if strings.HasPrefix(addr, ":") {
 		addr = "127.0.0.1" + addr
+	} else if rest, ok := strings.CutPrefix(addr, "0.0.0.0:"); ok {
+		addr = "127.0.0.1:" + rest
+	} else if rest, ok := strings.CutPrefix(addr, "[::]:"); ok {
+		addr = "[::1]:" + rest
 	}
 	url := addr
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
