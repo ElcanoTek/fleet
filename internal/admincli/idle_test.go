@@ -167,7 +167,7 @@ func TestUpdateBlocksOnActiveWorkUnlessWaitOrForce(t *testing.T) {
 	// Fake psql: records call count in stateFile. When FLEET_TEST_BUSY_CALLS is
 	// set, returns an active scheduled task for the first N calls, then empty.
 	script := `#!/usr/bin/env bash
-if [[ "$*" == *"to_regclass('public.tasks') IS NOT NULL"* ]]; then
+if [[ "$*" == *"to_regclass('tasks') IS NOT NULL"* ]]; then
   printf 't\n'
   exit 0
 fi

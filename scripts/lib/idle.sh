@@ -410,7 +410,7 @@ fleet_active_work_summary() {
   chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"
 
   if [[ -n "$sched_dsn" ]]; then
-    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('public.tasks') IS NOT NULL;")"; then
+    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('tasks') IS NOT NULL;")"; then
       if [[ "$has_tbl" == "t" ]]; then
         if out="$(fleet_psql_query "$sched_dsn" "
           SELECT COALESCE((
@@ -446,7 +446,7 @@ fleet_active_work_summary() {
       items+=("sched database active-work query failed while service is ${svc_state}")
     fi
 
-    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('public.datasets') IS NOT NULL;")"; then
+    if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('datasets') IS NOT NULL;")"; then
       if [[ "$has_tbl" == "t" ]]; then
         if out="$(fleet_psql_query "$sched_dsn" "
           SELECT COALESCE((
@@ -478,7 +478,7 @@ fleet_active_work_summary() {
   fi
 
   if [[ -n "$chat_dsn" ]]; then
-    if has_tbl="$(fleet_psql_query "$chat_dsn" "SELECT to_regclass('public.turns') IS NOT NULL;")"; then
+    if has_tbl="$(fleet_psql_query "$chat_dsn" "SELECT to_regclass('turns') IS NOT NULL;")"; then
       if [[ "$has_tbl" == "t" ]]; then
         if out="$(fleet_psql_query "$chat_dsn" "
           SELECT COALESCE((
@@ -514,13 +514,13 @@ fleet_active_work_summary() {
     fi
 
     if has_tbl="$(fleet_psql_query "$chat_dsn" "
-      SELECT to_regclass('public.approvals') IS NOT NULL
+      SELECT to_regclass('approvals') IS NOT NULL
          AND EXISTS (
            SELECT 1
-             FROM information_schema.columns
-            WHERE table_schema = 'public'
-              AND table_name = 'approvals'
-              AND column_name = 'is_err'
+             FROM pg_attribute
+            WHERE attrelid = to_regclass('approvals')
+              AND attname = 'is_err'
+              AND NOT attisdropped
          );")"; then
       if [[ "$has_tbl" == "t" ]]; then
         if out="$(fleet_psql_query "$chat_dsn" "

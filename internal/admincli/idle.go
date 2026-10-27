@@ -407,7 +407,7 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, f
 	defer cancel()
 
 	var hasTasks bool
-	if err := db.QueryRowContext(qctx, "SELECT to_regclass('public.tasks') IS NOT NULL").Scan(&hasTasks); err != nil || !hasTasks {
+	if err := db.QueryRowContext(qctx, "SELECT to_regclass('tasks') IS NOT NULL").Scan(&hasTasks); err != nil || !hasTasks {
 		return nil, err
 	}
 
@@ -448,7 +448,7 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64, f
 	}
 
 	var hasDatasets bool
-	if err := db.QueryRowContext(qctx, "SELECT to_regclass('public.datasets') IS NOT NULL").Scan(&hasDatasets); err != nil {
+	if err := db.QueryRowContext(qctx, "SELECT to_regclass('datasets') IS NOT NULL").Scan(&hasDatasets); err != nil {
 		return out, err
 	}
 	if hasDatasets {
@@ -496,7 +496,7 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 	var out []string
 
 	var hasTurns bool
-	if err := db.QueryRowContext(qctx, "SELECT to_regclass('public.turns') IS NOT NULL").Scan(&hasTurns); err != nil {
+	if err := db.QueryRowContext(qctx, "SELECT to_regclass('turns') IS NOT NULL").Scan(&hasTurns); err != nil {
 		return nil, err
 	}
 	if hasTurns {
@@ -531,13 +531,13 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 
 	var hasApprovalsIsErr bool
 	if err := db.QueryRowContext(qctx, `
-		SELECT to_regclass('public.approvals') IS NOT NULL
+		SELECT to_regclass('approvals') IS NOT NULL
 		   AND EXISTS (
 		     SELECT 1
-		       FROM information_schema.columns
-		      WHERE table_schema = 'public'
-		        AND table_name = 'approvals'
-		        AND column_name = 'is_err'
+		       FROM pg_attribute
+		      WHERE attrelid = to_regclass('approvals')
+		        AND attname = 'is_err'
+		        AND NOT attisdropped
 		   )`).Scan(&hasApprovalsIsErr); err != nil {
 		return out, err
 	}

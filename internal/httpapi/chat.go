@@ -738,7 +738,7 @@ func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
 // admitActiveTurnOrAbort increments activeTurns and activeTurnCount and then
 // re-checks IsDraining() so no turn can launch after the /healthz in-memory
 // counter was observed as zero while draining.
-func (s *Server) admitActiveTurnOrAbort(convID string, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
+func (s *Server) admitActiveTurnOrAbort(convID string, buf *turnBuffer, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
 	if !s.IsDraining() {
@@ -747,6 +747,9 @@ func (s *Server) admitActiveTurnOrAbort(convID string, turnToken uint64, turnCan
 	s.activeTurnCount.Add(-1)
 	s.activeTurns.Done()
 	turnCancel()
+	if buf != nil {
+		buf.Emit("turn.cancelled", map[string]any{"reason": "server_draining"})
+	}
 	s.finishTurn(convID, turnToken)
 	s.maybeDrainQueue(convID)
 	fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
@@ -1051,6 +1054,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 
+	// Track the goroutine on activeTurns BEFORE attaching the persister or
+	// emitting metadata events so graceful shutdown (DrainTurns) and external
+	// update drains never seal a half-initialized turn as completed.
+	if !s.admitActiveTurnOrAbort(conv.ID, buf, turnToken, turnCancel, fail) {
+		return true
+	}
+
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
@@ -1189,12 +1199,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// this HTTP response disconnects. turnCtx is intentionally NOT
 	// derived from r.Context(): the turn must outlive the HTTP request.
 	//
-	// Track the goroutine on activeTurns BEFORE launching it so graceful
-	// shutdown (DrainTurns) can block on it and Wait never races ahead of Add
-	// (#278). The counter mirrors the WaitGroup for the SIGUSR1 status log.
-	if !s.admitActiveTurnOrAbort(conv.ID, turnToken, turnCancel, fail) {
-		return true
-	}
 	// releaseSlot must run exactly once, and BEFORE the tail drain — the
 	// completing turn's own slot is what the next drained turn needs, and a
 	// deferred-only release would deterministically starve the queue at cap.

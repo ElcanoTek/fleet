@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -48,13 +49,16 @@ func cmdStart(argv []string) int   { return systemctlVerb("start", argv) }
 func cmdRestart(argv []string) int { return systemctlVerb("restart", argv) }
 func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 
-func defaultWaitTimeout() time.Duration {
-	if raw := envOrFile("FLEET_UPDATE_WAIT_SECONDS"); raw != "" {
-		if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 {
-			return time.Duration(secs) * time.Second
-		}
+func parseConfiguredWaitTimeout() (time.Duration, error) {
+	raw := envOrFile("FLEET_UPDATE_WAIT_SECONDS")
+	if raw == "" {
+		return 10 * time.Minute, nil
 	}
-	return 10 * time.Minute
+	secs, err := strconv.Atoi(raw)
+	if err != nil || secs < 0 {
+		return 0, fmt.Errorf("invalid FLEET_UPDATE_WAIT_SECONDS=%q (must be a non-negative integer)", raw)
+	}
+	return time.Duration(secs) * time.Second, nil
 }
 
 func systemctlVerb(verb string, argv []string) int {
@@ -62,9 +66,22 @@ func systemctlVerb(verb string, argv []string) int {
 	service := fs.String("service", "", "systemd unit name (default: $FLEET_SERVICE_NAME or \"fleet\")")
 	force := fs.Bool("force", false, "restart/stop even when scheduled tasks or chat turns are running (env FLEET_UPDATE_FORCE=1)")
 	wait := fs.Bool("wait", false, "wait for running tasks or chat turns to finish before restarting/stopping (env FLEET_UPDATE_WAIT=1)")
-	waitTimeout := fs.Duration("wait-timeout", defaultWaitTimeout(), "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
+	waitTimeout := fs.Duration("wait-timeout", 10*time.Minute, "maximum time to wait when --wait is set (env FLEET_UPDATE_WAIT_SECONDS)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
+	}
+	waitTimeoutSet := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "wait-timeout" {
+			waitTimeoutSet = true
+		}
+	})
+	if !waitTimeoutSet {
+		cfgTimeout, err := parseConfiguredWaitTimeout()
+		if err != nil {
+			return errf(2, "%v", err)
+		}
+		*waitTimeout = cfgTimeout
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
