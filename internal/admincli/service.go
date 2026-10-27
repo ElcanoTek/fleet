@@ -49,7 +49,7 @@ func cmdRestart(argv []string) int { return systemctlVerb("restart", argv) }
 func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 
 func defaultWaitTimeout() time.Duration {
-	if raw := os.Getenv("FLEET_UPDATE_WAIT_SECONDS"); raw != "" {
+	if raw := envOrFile("FLEET_UPDATE_WAIT_SECONDS"); raw != "" {
 		if secs, err := strconv.Atoi(raw); err == nil && secs >= 0 {
 			return time.Duration(secs) * time.Second
 		}
@@ -70,20 +70,18 @@ func systemctlVerb(verb string, argv []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if (verb == "restart" || verb == "stop") && !*force && !truthy(os.Getenv("FLEET_UPDATE_FORCE")) {
-		sDSN, _ := schedDSN("")
-		cDSN, _ := chatDSN("")
-		if sDSN != "" || cDSN != "" {
-			defer ClearUpdateDrain()
-			maxWait := time.Duration(0)
-			if *wait || truthy(os.Getenv("FLEET_UPDATE_WAIT")) {
-				maxWait = *waitTimeout
-			}
-			resolvedUnit := serviceName(*service)
-			if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
-				unitName := resolvedUnit + ".service"
-				return errf(6, "refusing to %s %s while work is in flight (%v) — wait for it to finish, pass --wait, or pass --force", verb, unitName, err)
-			}
+	if (verb == "restart" || verb == "stop") && !*force && !truthy(envOrFile("FLEET_UPDATE_FORCE")) {
+		sDSN := idleSchedDSN("")
+		cDSN := idleChatDSN("")
+		defer ClearUpdateDrain()
+		maxWait := time.Duration(0)
+		if *wait || truthy(envOrFile("FLEET_UPDATE_WAIT")) {
+			maxWait = *waitTimeout
+		}
+		resolvedUnit := serviceName(*service)
+		if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
+			unitName := resolvedUnit + ".service"
+			return errf(6, "refusing to %s %s while work is in flight (%v) — wait for it to finish, pass --wait, or pass --force", verb, unitName, err)
 		}
 	}
 

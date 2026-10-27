@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 	"unicode"
 )
@@ -22,7 +21,6 @@ const (
 
 var (
 	drainOwnerToken = fmt.Sprintf("draining pid-%d-%d\n", os.Getpid(), time.Now().UnixNano())
-	drainOwned      atomic.Bool
 )
 
 // ActiveWorkError is returned by WaitIdle when scheduled tasks, chat turns, or
@@ -51,25 +49,25 @@ func drainFilePath() string {
 // SetUpdateDrain writes or refreshes the update drain sentinel file so the
 // running Fleet server refuses new chat turns/approvals and pauses scheduler
 // task claims.
-func SetUpdateDrain() {
+func SetUpdateDrain() error {
 	p := drainFilePath()
 	if p == "" {
-		return
+		return fmt.Errorf("update drain file path is empty")
 	}
 	//nolint:gosec // G301,G306: non-secret drain sentinel inspected by the fleet service user.
-	_ = os.MkdirAll(filepath.Dir(p), 0o755)
-	//nolint:gosec // G306: non-secret drain sentinel inspected by the fleet service user.
-	if err := os.WriteFile(p, []byte(drainOwnerToken), 0o644); err == nil {
-		drainOwned.Store(true)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return fmt.Errorf("create drain sentinel dir: %w", err)
 	}
+	//nolint:gosec // G306: non-secret drain sentinel inspected by the fleet service user.
+	if err := os.WriteFile(p, []byte(drainOwnerToken), 0o644); err != nil {
+		return fmt.Errorf("write drain sentinel %s: %w", p, err)
+	}
+	return nil
 }
 
 // ClearUpdateDrain removes the update drain sentinel file if it is owned by
 // this process invocation.
 func ClearUpdateDrain() {
-	if !drainOwned.Load() {
-		return
-	}
 	p := drainFilePath()
 	if p == "" {
 		return
@@ -78,7 +76,6 @@ func ClearUpdateDrain() {
 	if data, err := os.ReadFile(p); err == nil && string(data) == drainOwnerToken {
 		_ = os.Remove(p)
 	}
-	drainOwned.Store(false)
 }
 
 func parseServiceTimestamp(startTS string) int64 {
@@ -138,7 +135,7 @@ func serviceRuntimeState(unit string) (string, int64) {
 		}
 	}
 	switch activeState {
-	case "active":
+	case "active", "activating", "reloading":
 		return "active", parseServiceTimestamp(startTS)
 	case "":
 		return "unknown", 0
@@ -433,13 +430,17 @@ func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal strin
 	start := time.Now()
 	deadline := start.Add(max(maxWait, 0))
 	for {
-		SetUpdateDrain()
+		if err := SetUpdateDrain(); err != nil {
+			return &ActiveWorkError{Items: []string{err.Error()}}
+		}
 		items, err := ActiveWorkForService(ctx, unit, schedDSNVal, chatDSNVal)
 		if err != nil && svcState == "active" {
 			items = append(items, fmt.Sprintf("active-work query failed while service is active: %v", err))
 		}
 		if len(items) == 0 {
-			SetUpdateDrain()
+			if err := SetUpdateDrain(); err != nil {
+				return &ActiveWorkError{Items: []string{err.Error()}}
+			}
 			return nil
 		}
 		if maxWait <= 0 || !time.Now().Before(deadline) {

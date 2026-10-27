@@ -120,24 +120,21 @@ fleet_resolve_dsn() {
     pass="$(fleet_env_or_file DB_PASSWORD "$env_file")"
     name="$(fleet_env_or_file DB_NAME "$env_file")"
     ssl="$(fleet_env_or_file DB_SSLMODE "$env_file")"
-    if [[ -n "$host" || -n "$port" || -n "$user" || -n "$pass" || -n "$name" || -n "$ssl" ]]; then
-      [[ -n "$host" ]] || host="localhost"
-      [[ -n "$port" ]] || port="5432"
-      [[ -n "$user" ]] || user="$def_user"
-      [[ -n "$name" ]] || name="$def_name"
-      [[ -n "$ssl" ]] || ssl="disable"
-      auth="$(fleet_uri_encode_userinfo "$user")"
-      if [[ -n "$pass" ]]; then
-        auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
-      fi
-      val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
+    [[ -n "$host" ]] || host="localhost"
+    [[ -n "$port" ]] || port="5432"
+    [[ -n "$user" ]] || user="$def_user"
+    [[ -n "$name" ]] || name="$def_name"
+    [[ -n "$ssl" ]] || ssl="disable"
+    auth="$(fleet_uri_encode_userinfo "$user")"
+    if [[ -n "$pass" ]]; then
+      auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
     fi
+    val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
   fi
   printf '%s' "$val"
 }
 
 FLEET_DRAIN_OWNER_TOKEN="${FLEET_DRAIN_OWNER_TOKEN:-pid-$$-${RANDOM:-0}}"
-FLEET_DRAIN_OWNED="${FLEET_DRAIN_OWNED:-0}"
 
 # fleet_drain_file [ENV_FILE] — returns the drain sentinel file path inspected
 # by the running fleet server and scheduler pool.
@@ -162,16 +159,13 @@ fleet_drain_file() {
 fleet_set_drain() {
   local drain_file
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
-  mkdir -p "$(dirname "$drain_file")" 2>/dev/null || true
-  if printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" 2>/dev/null; then
-    FLEET_DRAIN_OWNED=1
-  fi
+  mkdir -p "$(dirname "$drain_file")" 2>/dev/null || return 1
+  printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" 2>/dev/null || return 1
 }
 
 # fleet_clear_drain [ENV_FILE] — removes the update drain sentinel file if owned
-# by this invocation.
+# by this invocation (even when fleet_set_drain ran inside a $(...) subshell).
 fleet_clear_drain() {
-  [[ "${FLEET_DRAIN_OWNED:-0}" == "1" ]] || return 0
   local drain_file cur=""
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
   if [[ -f "$drain_file" ]]; then
@@ -180,7 +174,6 @@ fleet_clear_drain() {
       rm -f "$drain_file" 2>/dev/null || true
     fi
   fi
-  FLEET_DRAIN_OWNED=0
 }
 
 # fleet_service_runtime_state [SERVICE_NAME] — prints "<state>|<start_epoch>"
@@ -203,7 +196,7 @@ fleet_service_runtime_state() {
   fi
   local active_state start_ts start_epoch=0
   active_state="$(systemctl show -p ActiveState --value "$unit" 2>/dev/null | tr -d '[:space:]' || true)"
-  if [[ "$active_state" == "active" ]]; then
+  if [[ "$active_state" == "active" || "$active_state" == "activating" || "$active_state" == "reloading" ]]; then
     start_ts="$(systemctl show --timestamp=unix -p ExecMainStartTimestamp --value "$unit" 2>/dev/null || true)"
     start_ts="${start_ts#"${start_ts%%[![:space:]]*}"}"
     start_ts="${start_ts%"${start_ts##*[![:space:]]}"}"
@@ -441,9 +434,15 @@ fleet_wait_for_idle() {
   local start now elapsed summary=""
   start="$(date +%s)"
   while true; do
-    fleet_set_drain "$env_file"
+    if ! fleet_set_drain "$env_file"; then
+      printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
+      return 1
+    fi
     if summary="$(fleet_active_work_summary "$env_file" "$svc_unit")"; then
-      fleet_set_drain "$env_file"
+      if ! fleet_set_drain "$env_file"; then
+        printf 'failed to write update drain sentinel %s\n' "$(fleet_drain_file "$env_file")"
+        return 1
+      fi
       return 0
     fi
     now="$(date +%s)"

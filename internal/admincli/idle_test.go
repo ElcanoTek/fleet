@@ -98,6 +98,27 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		t.Errorf("fleet_resolve_dsn DB_* parts got %q", got)
 	}
 
+	// Verify unconditional localhost:5432 defaults when no URL or DB_* vars are set.
+	emptyEnv := filepath.Join(t.TempDir(), "empty.env")
+	if err := os.WriteFile(emptyEnv, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, emptyEnv)
+	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
+	out, err = cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fleet_resolve_dsn default: %v\n%s", err, string(out))
+	}
+	if got := strings.TrimSpace(string(out)); got != "postgres://fleet@localhost:5432/sched?sslmode=disable" {
+		t.Errorf("fleet_resolve_dsn default got %q", got)
+	}
+	if got := idleSchedDSN(""); got == "" {
+		t.Errorf("idleSchedDSN(\"\") = empty, want default DSN")
+	}
+	if got := idleChatDSN(""); got == "" {
+		t.Errorf("idleChatDSN(\"\") = empty, want default DSN")
+	}
+
 	// Verify fractional systemd Unix timestamp parsing.
 	if got := parseServiceTimestamp("@1793108488.662800"); got != 1793108488 {
 		t.Errorf("parseServiceTimestamp(@1793108488.662800) = %d, want 1793108488", got)
@@ -191,19 +212,16 @@ exit 0
 		t.Errorf("--force must not report active-work blocker:\n%s", out)
 	}
 
-	// 4. fleet_wait_for_idle polls until work clears and leaves the drain file set for the caller.
+	// 4. fleet_wait_for_idle invoked inside a $(...) subshell leaves the drain
+	// file set on success, and fleet_clear_drain in the parent shell removes it.
 	_ = os.Remove(stateFile)
 	root := repoRootFromTest(t)
 	idleLib := filepath.Join(root, "scripts", "lib", "idle.sh")
-	cmd := exec.Command("bash", "-c", `. "$1"; fleet_wait_for_idle "$2" 5 1`, "_", idleLib, envFile)
+	cmd := exec.Command("bash", "-c", `. "$1"; _summary="$(fleet_wait_for_idle "$2" 5 1)"; [[ -f "$2.update.drain" ]] || exit 2; fleet_clear_drain "$2"; [[ ! -f "$2.update.drain" ]]`, "_", idleLib, envFile)
 	cmd.Env = append(append(os.Environ(), baseEnv...), "FLEET_TEST_BUSY_CALLS=1")
 	if waitOut, werr := cmd.CombinedOutput(); werr != nil {
-		t.Fatalf("fleet_wait_for_idle should succeed once work clears: %v\n%s", werr, string(waitOut))
+		t.Fatalf("fleet_wait_for_idle subshell + parent fleet_clear_drain failed: %v\n%s", werr, string(waitOut))
 	}
-	if _, statErr := os.Stat(envFile + ".update.drain"); statErr != nil {
-		t.Errorf("expected fleet_wait_for_idle to leave drain file set on success: %v", statErr)
-	}
-	_ = os.Remove(envFile + ".update.drain")
 }
 
 func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
