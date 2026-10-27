@@ -51,23 +51,36 @@ fleet_split_dsn_password() {
   local dsn="$1" proto rest userinfo hostpart user pass="" redacted
   if [[ "$dsn" != *"://"* ]]; then
     redacted="$dsn"
-    local first_match=1
+    local first_match=1 m1 m3 m5
     while true; do
-      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
-        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-        first_match=0
-        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
-      elif [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
-        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-        first_match=0
-        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
-      elif [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)([[:space:]]*.*)$ ]] && [[ ! "${BASH_REMATCH[5]}" =~ (^|[[:space:]])password= ]]; then
-        (( first_match )) && pass="$(fleet_unescape_conninfo_val "${BASH_REMATCH[3]}")"
-        first_match=0
-        redacted="${BASH_REMATCH[1]}${BASH_REMATCH[5]}"
-      else
-        break
+      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\'(([^\'\\]|\\.)*)\'[[:space:]]*(.*)$ ]]; then
+        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
+        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
+          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          first_match=0
+          redacted="${m1}${m5}"
+          continue
+        fi
       fi
+      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=\"(([^\"\\]|\\.)*)\"[[:space:]]*(.*)$ ]]; then
+        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
+        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
+          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          first_match=0
+          redacted="${m1}${m5}"
+          continue
+        fi
+      fi
+      if [[ "$redacted" =~ ^(.*(^|[[:space:]]))password=(([^[:space:]\'\"\\]|\\.)+)[[:space:]]*(.*)$ ]]; then
+        m1="${BASH_REMATCH[1]}"; m3="${BASH_REMATCH[3]}"; m5="${BASH_REMATCH[5]}"
+        if [[ ! "$m5" =~ (^|[[:space:]])password= ]]; then
+          (( first_match )) && pass="$(fleet_unescape_conninfo_val "$m3")"
+          first_match=0
+          redacted="${m1}${m5}"
+          continue
+        fi
+      fi
+      break
     done
     if [[ "$redacted" =~ (^|[[:space:]])password[[:space:]]*= ]]; then
       printf '\n\n'
