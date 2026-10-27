@@ -430,6 +430,9 @@ func (s *Server) stopGateForRow(convID string, acceptedSeq int64) (gen uint64, s
 // here on completion.
 func (s *Server) maybeDrainQueue(convID string) {
 	if s.IsDraining() {
+		if !s.shuttingDown.Load() && UpdateDrainActive() {
+			s.rekickDrainAfter(convID, 3*time.Second)
+		}
 		return // rows stay durable; boot recovery re-queues, never auto-runs
 	}
 	if s.stopSweepPending(convID) {

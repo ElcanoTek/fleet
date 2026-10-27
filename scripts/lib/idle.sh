@@ -220,10 +220,22 @@ fleet_drain_file() {
 
 # fleet_set_drain [ENV_FILE] — creates or refreshes the update drain sentinel
 # file so the running server refuses new chat turns/approvals and pauses
-# scheduler task claims.
+# scheduler task claims. Refuses if another live process already owns a fresh
+# drain sentinel.
 fleet_set_drain() {
-  local drain_file
+  local drain_file cur="" other_pid=""
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
+  if [[ -f "$drain_file" ]] && [[ -n "$(find "$drain_file" -mmin -15 2>/dev/null || true)" ]]; then
+    cur="$(cat "$drain_file" 2>/dev/null || true)"
+    if [[ -n "$cur" && "$cur" != "draining ${FLEET_DRAIN_OWNER_TOKEN}" ]]; then
+      if [[ "$cur" =~ ^draining[[:space:]]+pid-([0-9]+)- ]]; then
+        other_pid="${BASH_REMATCH[1]}"
+        if [[ -n "$other_pid" && "$other_pid" != "$$" ]] && kill -0 "$other_pid" 2>/dev/null; then
+          return 1
+        fi
+      fi
+    fi
+  fi
   mkdir -p "$(dirname "$drain_file")" 2>/dev/null || return 1
   printf 'draining %s\n' "$FLEET_DRAIN_OWNER_TOKEN" > "$drain_file" 2>/dev/null || return 1
 }
@@ -401,14 +413,14 @@ fleet_active_work_summary() {
                 GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, created_at)))::bigint)
               ), '; ')
             FROM (
-              SELECT id, title, status, started_at, created_at
+              SELECT id, title, status, started_at, updated_at, created_at
                 FROM tasks
                WHERE status IN ('running', 'leased', 'assigned')
                  AND (
                    (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-                   OR (${svc_start_epoch} > 0 AND COALESCE(started_at, created_at) >= to_timestamp(${svc_start_epoch}))
+                   OR (${svc_start_epoch} > 0 AND COALESCE(started_at, updated_at, created_at) >= to_timestamp(${svc_start_epoch}))
                  )
-               ORDER BY COALESCE(started_at, created_at) ASC
+               ORDER BY COALESCE(started_at, updated_at, created_at) ASC
                LIMIT 5
             ) t
           ), '');")"; then

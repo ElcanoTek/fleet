@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"database/sql"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -49,13 +51,41 @@ func drainFilePath() string {
 	return serverEnvFile("") + ".update.drain"
 }
 
+func drainOwnerAlive(content string) bool {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(content), "draining pid-")
+	if !ok {
+		return false
+	}
+	dash := strings.IndexByte(rest, '-')
+	if dash <= 0 {
+		return false
+	}
+	pid, err := strconv.Atoi(rest[:dash])
+	if err != nil || pid <= 0 || pid == os.Getpid() {
+		return false
+	}
+	err = syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
 // SetUpdateDrain writes or refreshes the update drain sentinel file so the
 // running Fleet server refuses new chat turns/approvals and pauses scheduler
-// task claims.
+// task claims. If another live lifecycle process already owns a fresh sentinel,
+// it refuses rather than stealing ownership.
 func SetUpdateDrain() error {
 	p := drainFilePath()
 	if p == "" {
 		return fmt.Errorf("update drain file path is empty")
+	}
+	//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+	if st, err := os.Stat(p); err == nil && time.Since(st.ModTime()) <= 15*time.Minute {
+		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+		if data, rerr := os.ReadFile(p); rerr == nil {
+			cur := string(data)
+			if cur != drainOwnerToken && drainOwnerAlive(cur) {
+				return fmt.Errorf("another update or service drain is already in progress (%s)", strings.TrimSpace(cur))
+			}
+		}
 	}
 	//nolint:gosec // G301,G306: non-secret drain sentinel inspected by the fleet service user.
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -363,9 +393,9 @@ func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64) (
 		 WHERE status IN ('running', 'leased', 'assigned')
 		   AND (
 		     (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
-		     OR ($1 > 0 AND COALESCE(started_at, created_at) >= to_timestamp($1))
+		     OR ($1 > 0 AND COALESCE(started_at, updated_at, created_at) >= to_timestamp($1))
 		   )
-		 ORDER BY COALESCE(started_at, created_at) ASC
+		 ORDER BY COALESCE(started_at, updated_at, created_at) ASC
 		 LIMIT 5`, svcStartUnix)
 	if err != nil {
 		return nil, err

@@ -227,7 +227,7 @@ Every status badge means one of eleven things. What each one means, and what to 
 | `PAUSED_AWAITING_INPUT` | The run reached a decision it was not willing to make alone and stopped to ask a question. It holds no resources while it waits. Answer it and it resumes from there; this state is the system working as designed, not a failure. Most deployments let it wait indefinitely, but an operator can set an expiry after which an unanswered run fails — ask yours whether one is set. |
 | `PAUSED_AWAITING_WAKE` | The run put itself to sleep until a set time or an expected event, for example to check back on something later. It wakes on its own; every sleep has a deadline. Sleeping runs also get their own short list on the dashboard, so parked work stays visible without a status filter. |
 
-Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a scheduled task holds a live `LEASED` or `RUNNING` lease (or a chat turn or approved action is running), and pause new task claims while draining when `--wait` is passed (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check).
+Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a scheduled task holds a live `LEASED` or `RUNNING` lease (or a dataset run, chat turn, or approved action is running), and pause new task claims and dataset starts while draining when `--wait` is passed (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check).
 
 > **The retry rule in one line.** Transient failures retry themselves — quietly,
 > by going back to the queue with a growing delay. Deterministic ones do not:
