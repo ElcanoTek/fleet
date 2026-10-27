@@ -181,6 +181,7 @@ func checkActiveWork(r *report, unit, schedFlag, chatFlag string, redactTitles b
 		return
 	}
 	if err != nil {
+		r.warnLine("active work", "active-work check failed: "+firstLine(errString(err)))
 		return
 	}
 	r.pass("active work", "idle (no running tasks, chat turns, or approval executions)")

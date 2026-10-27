@@ -411,18 +411,23 @@ func (s *Server) BeginShutdown() {
 // new traffic to it.
 func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrainActive() }
 
-// UpdateDrainFile returns the path of the external update drain sentinel file
-// ($FLEET_UPDATE_DRAIN_FILE, else $FLEET_DRAIN_FILE, else
-// <$FLEET_ENV_FILE>.update.drain, else /etc/fleet/fleet.env.update.drain).
+// UpdateDrainFile returns the canonical path of the external update drain
+// sentinel file ($FLEET_UPDATE_DRAIN_FILE, else $FLEET_DRAIN_FILE, else
+// <$FLEET_ENV_FILE>.update.drain when $FLEET_ENV_FILE is absolute, else
+// /etc/fleet/fleet.env.update.drain). Relative override paths are resolved
+// under /etc/fleet so the daemon (whose WorkingDirectory is /var/lib/fleet),
+// operator CLIs, and update.sh always inspect the same file regardless of CWD.
 func UpdateDrainFile() string {
-	if p := strings.TrimSpace(os.Getenv("FLEET_UPDATE_DRAIN_FILE")); p != "" {
-		return p
+	for _, key := range []string{"FLEET_UPDATE_DRAIN_FILE", "FLEET_DRAIN_FILE"} {
+		if p := strings.TrimSpace(os.Getenv(key)); p != "" {
+			if filepath.IsAbs(p) {
+				return filepath.Clean(p)
+			}
+			return filepath.Join("/etc/fleet", p)
+		}
 	}
-	if p := strings.TrimSpace(os.Getenv("FLEET_DRAIN_FILE")); p != "" {
-		return p
-	}
-	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" {
-		return envFile + ".update.drain"
+	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" && filepath.IsAbs(envFile) {
+		return filepath.Clean(envFile) + ".update.drain"
 	}
 	return filepath.Join("/etc/fleet", "fleet.env.update.drain")
 }

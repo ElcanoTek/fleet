@@ -220,6 +220,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	persistCancel()
 	if s.IsDraining() {
+		buf.Emit("turn.cancelled", map[string]any{"reason": "shutting_down"})
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseSlot()
@@ -246,6 +247,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if s.IsDraining() {
 		s.activeTurnCount.Add(-1)
 		s.activeTurns.Done()
+		buf.Emit("turn.cancelled", map[string]any{"reason": "shutting_down"})
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseSlot()

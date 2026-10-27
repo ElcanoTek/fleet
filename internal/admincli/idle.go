@@ -40,15 +40,21 @@ func (e *ActiveWorkError) Error() string {
 
 // drainFilePath resolves the update drain sentinel path from the process
 // environment or the deployment env file, matching httpapi.UpdateDrainFile and
-// scripts/lib/idle.sh.
+// scripts/lib/idle.sh. Relative override paths are anchored under /etc/fleet so
+// the daemon and operator CLI agree on one path regardless of working directory.
 func drainFilePath() string {
-	if p := strings.TrimSpace(envOrFile("FLEET_UPDATE_DRAIN_FILE")); p != "" {
-		return p
+	for _, key := range []string{"FLEET_UPDATE_DRAIN_FILE", "FLEET_DRAIN_FILE"} {
+		if p := strings.TrimSpace(envOrFile(key)); p != "" {
+			if filepath.IsAbs(p) {
+				return filepath.Clean(p)
+			}
+			return filepath.Join("/etc/fleet", p)
+		}
 	}
-	if p := strings.TrimSpace(envOrFile("FLEET_DRAIN_FILE")); p != "" {
-		return p
+	if envFile := serverEnvFile(""); filepath.IsAbs(envFile) {
+		return filepath.Clean(envFile) + ".update.drain"
 	}
-	return serverEnvFile("") + ".update.drain"
+	return filepath.Join("/etc/fleet", "fleet.env.update.drain")
 }
 
 func drainOwnerAlive(content string) bool {

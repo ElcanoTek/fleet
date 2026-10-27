@@ -202,20 +202,28 @@ fleet_resolve_dsn() {
 FLEET_DRAIN_OWNER_TOKEN="${FLEET_DRAIN_OWNER_TOKEN:-pid-$$-${RANDOM:-0}}"
 
 # fleet_drain_file [ENV_FILE] — returns the drain sentinel file path inspected
-# by the running fleet server and scheduler pool.
+# by the running fleet server and scheduler pool. Relative override paths are
+# anchored under /etc/fleet so the daemon, operator CLI, and update.sh agree on
+# one path regardless of working directory.
 fleet_drain_file() {
   local env_file="${1:-/etc/fleet/fleet.env}" p=""
   p="$(fleet_env_or_file FLEET_UPDATE_DRAIN_FILE "$env_file")"
+  if [[ -z "$p" ]]; then
+    p="$(fleet_env_or_file FLEET_DRAIN_FILE "$env_file")"
+  fi
   if [[ -n "$p" ]]; then
-    printf '%s' "$p"
+    if [[ "$p" == /* ]]; then
+      printf '%s' "$p"
+    else
+      printf '/etc/fleet/%s' "$p"
+    fi
     return 0
   fi
-  p="$(fleet_env_or_file FLEET_DRAIN_FILE "$env_file")"
-  if [[ -n "$p" ]]; then
-    printf '%s' "$p"
-    return 0
+  if [[ "$env_file" == /* ]]; then
+    printf '%s.update.drain' "$env_file"
+  else
+    printf '/etc/fleet/fleet.env.update.drain'
   fi
-  printf '%s.update.drain' "$env_file"
 }
 
 # fleet_set_drain [ENV_FILE] — creates or refreshes the update drain sentinel
