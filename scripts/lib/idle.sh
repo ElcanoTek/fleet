@@ -96,11 +96,16 @@ fleet_drain_file() {
     printf '%s' "$FLEET_UPDATE_DRAIN_FILE"
     return 0
   fi
+  if [[ -n "${FLEET_DRAIN_FILE:-}" ]]; then
+    printf '%s' "$FLEET_DRAIN_FILE"
+    return 0
+  fi
   printf '%s.update.drain' "$env_file"
 }
 
-# fleet_set_drain [ENV_FILE] — creates the update drain sentinel file so the
-# running server refuses new chat turns/approvals and pauses scheduler task claims.
+# fleet_set_drain [ENV_FILE] — creates or refreshes the update drain sentinel
+# file so the running server refuses new chat turns/approvals and pauses
+# scheduler task claims.
 fleet_set_drain() {
   local drain_file
   drain_file="$(fleet_drain_file "${1:-/etc/fleet/fleet.env}")"
@@ -157,20 +162,21 @@ fleet_sanitize_summary() {
   printf '%s' "$1" | LC_ALL=C tr -d '[:cntrl:]'
 }
 
-# fleet_active_work_summary ENV_FILE — inspects sched.tasks, chat.turns, and
-# chat.approvals for in-flight work.
+# fleet_active_work_summary ENV_FILE [SERVICE_NAME] — inspects sched.tasks,
+# chat.turns, and chat.approvals for in-flight work.
 #
 # Prints a semicolon-separated description and returns 1 when work is active;
 # prints nothing and returns 0 when idle (or when the service is not running so
 # crash-stranded rows can be recovered on start).
 fleet_active_work_summary() {
   local env_file="${1:-/etc/fleet/fleet.env}"
+  local svc_unit="${2:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   local sched_dsn chat_dsn approval_window out items=()
   local svc_info svc_state="unknown" svc_start_epoch=0
   approval_window="${FLEET_IDLE_APPROVAL_WINDOW_SECONDS:-7200}"
   [[ "$approval_window" =~ ^[0-9]+$ ]] || approval_window=7200
 
-  svc_info="$(fleet_service_runtime_state "${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}")"
+  svc_info="$(fleet_service_runtime_state "$svc_unit")"
   svc_state="${svc_info%%|*}"
   svc_start_epoch="${svc_info#*|}"
   [[ "$svc_start_epoch" =~ ^[0-9]+$ ]] || svc_start_epoch=0
@@ -200,8 +206,10 @@ fleet_active_work_summary() {
                  SELECT id, title, status, started_at, created_at
                    FROM tasks
                   WHERE status IN ('running', 'leased', 'assigned')
-                    AND lease_expires_at IS NOT NULL
-                    AND lease_expires_at >= now()
+                    AND (
+                      (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
+                      OR (${svc_start_epoch} > 0 AND COALESCE(started_at, created_at) >= to_timestamp(${svc_start_epoch}))
+                    )
                   ORDER BY COALESCE(started_at, created_at) ASC
                   LIMIT 5
                ) t
@@ -246,7 +254,14 @@ fleet_active_work_summary() {
     fi
 
     if out="$(fleet_psql_query "$chat_dsn" "
-      SELECT CASE WHEN to_regclass('public.approvals') IS NULL THEN ''
+      SELECT CASE WHEN to_regclass('public.approvals') IS NULL
+                    OR NOT EXISTS (
+                      SELECT 1
+                        FROM information_schema.columns
+                       WHERE table_schema = 'public'
+                         AND table_name = 'approvals'
+                         AND column_name = 'is_err'
+                    ) THEN ''
              ELSE COALESCE((
                SELECT string_agg(
                  format('approval execution %s (%s, %ss)',
@@ -283,20 +298,22 @@ fleet_active_work_summary() {
   return 1
 }
 
-# fleet_wait_for_idle ENV_FILE MAX_WAIT_SECONDS POLL_SECONDS — sets the update
-# drain sentinel file so new work admission stops, then polls
-# fleet_active_work_summary until the deployment is idle (returns 0 with the
-# drain file still set) or MAX_WAIT_SECONDS elapses (clears the drain file,
-# prints the remaining active work on stdout, and returns 1).
+# fleet_wait_for_idle ENV_FILE MAX_WAIT_SECONDS POLL_SECONDS [SERVICE_NAME] —
+# sets and refreshes the update drain sentinel file so new work admission stops,
+# then polls fleet_active_work_summary until the deployment is idle (returns 0
+# with the drain file still set) or MAX_WAIT_SECONDS elapses (clears the drain
+# file, prints the remaining active work on stdout, and returns 1).
 fleet_wait_for_idle() {
   local env_file="${1:-/etc/fleet/fleet.env}" max_wait="${2:-0}" poll="${3:-5}"
+  local svc_unit="${4:-${SERVICE_NAME:-${FLEET_SERVICE_NAME:-fleet}}}"
   [[ "$max_wait" =~ ^[0-9]+$ ]] || max_wait=0
   [[ "$poll" =~ ^[0-9]+$ ]] && (( poll > 0 )) || poll=5
-  fleet_set_drain "$env_file"
   local start now elapsed summary=""
   start="$(date +%s)"
   while true; do
-    if summary="$(fleet_active_work_summary "$env_file")"; then
+    fleet_set_drain "$env_file"
+    if summary="$(fleet_active_work_summary "$env_file" "$svc_unit")"; then
+      fleet_set_drain "$env_file"
       return 0
     fi
     now="$(date +%s)"

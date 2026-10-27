@@ -29,8 +29,9 @@ func (e *ActiveWorkError) Error() string {
 	return strings.Join(e.Items, "; ")
 }
 
-// SetUpdateDrain writes the update drain sentinel file so the running Fleet
-// server refuses new chat turns/approvals and pauses scheduler task claims.
+// SetUpdateDrain writes or refreshes the update drain sentinel file so the
+// running Fleet server refuses new chat turns/approvals and pauses scheduler
+// task claims.
 func SetUpdateDrain() {
 	p := httpapi.UpdateDrainFile()
 	if p == "" {
@@ -58,6 +59,9 @@ func ClearUpdateDrain() {
 func serviceRuntimeState(unit string) (string, int64) {
 	if truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		return "active", 0
+	}
+	if strings.TrimSpace(unit) == "" {
+		unit = serviceName("")
 	}
 	if !strings.HasSuffix(unit, ".service") {
 		unit += ".service"
@@ -109,14 +113,21 @@ func sanitizeSummaryText(s string) string {
 	}, s)
 }
 
-// ActiveWork inspects the sched and chat databases for in-flight work that
-// would be interrupted by stopping or restarting fleet.service:
-//   - sched.tasks with status IN ('running', 'leased', 'assigned') and an unexpired lease
+// ActiveWork inspects the sched and chat databases for in-flight work on the
+// default service unit.
+func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, error) {
+	return ActiveWorkForService(ctx, serviceName(""), schedDSNVal, chatDSNVal)
+}
+
+// ActiveWorkForService inspects the sched and chat databases for in-flight work
+// that would be interrupted by stopping or restarting the given systemd unit:
+//   - sched.tasks with status IN ('running', 'leased', 'assigned') that hold an
+//     unexpired lease or were started by the current service process
 //   - chat.turns with status = 'running' AND finished_at IS NULL in the current service instance
 //   - chat.approvals with status = 'approved' AND is_err IS NULL AND
 //     result_text LIKE 'Approved%executing%' within 2h in the current service instance
-func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, error) {
-	svcState, svcStartUnix := serviceRuntimeState(serviceName(""))
+func ActiveWorkForService(ctx context.Context, unit, schedDSNVal, chatDSNVal string) ([]string, error) {
+	svcState, svcStartUnix := serviceRuntimeState(unit)
 	if svcState == "inactive" {
 		// When the service unit is installed and not active, any running/leased rows
 		// in Postgres are crash-stranded and will be recovered on boot.
@@ -127,7 +138,7 @@ func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, 
 	var firstErr error
 
 	if strings.TrimSpace(schedDSNVal) != "" {
-		found, err := querySchedActiveWork(ctx, schedDSNVal)
+		found, err := querySchedActiveWork(ctx, schedDSNVal, svcStartUnix)
 		if err != nil && firstErr == nil {
 			firstErr = err
 		}
@@ -145,7 +156,7 @@ func ActiveWork(ctx context.Context, schedDSNVal, chatDSNVal string) ([]string, 
 	return items, firstErr
 }
 
-func querySchedActiveWork(ctx context.Context, dsn string) ([]string, error) {
+func querySchedActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([]string, error) {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err
@@ -167,10 +178,12 @@ func querySchedActiveWork(ctx context.Context, dsn string) ([]string, error) {
 		       GREATEST(0, EXTRACT(EPOCH FROM (now() - COALESCE(started_at, created_at)))::bigint)
 		  FROM tasks
 		 WHERE status IN ('running', 'leased', 'assigned')
-		   AND lease_expires_at IS NOT NULL
-		   AND lease_expires_at >= now()
+		   AND (
+		     (lease_expires_at IS NOT NULL AND lease_expires_at >= now())
+		     OR ($1 > 0 AND COALESCE(started_at, created_at) >= to_timestamp($1))
+		   )
 		 ORDER BY COALESCE(started_at, created_at) ASC
-		 LIMIT 5`)
+		 LIMIT 5`, svcStartUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -239,11 +252,19 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 		_ = rows.Close()
 	}
 
-	var hasApprovals bool
-	if err := db.QueryRowContext(qctx, "SELECT to_regclass('public.approvals') IS NOT NULL").Scan(&hasApprovals); err != nil {
+	var hasApprovalsIsErr bool
+	if err := db.QueryRowContext(qctx, `
+		SELECT to_regclass('public.approvals') IS NOT NULL
+		   AND EXISTS (
+		     SELECT 1
+		       FROM information_schema.columns
+		      WHERE table_schema = 'public'
+		        AND table_name = 'approvals'
+		        AND column_name = 'is_err'
+		   )`).Scan(&hasApprovalsIsErr); err != nil {
 		return out, err
 	}
-	if hasApprovals {
+	if hasApprovalsIsErr {
 		approvalCutoff := max(svcStartUnix, nowUnix-int64(defaultIdleApprovalWindow/time.Second))
 		rows, err := db.QueryContext(qctx, `
 			SELECT id,
@@ -278,26 +299,33 @@ func queryChatActiveWork(ctx context.Context, dsn string, svcStartUnix int64) ([
 	return out, nil
 }
 
-// WaitIdle sets the update drain sentinel file to quiesce new work admission,
-// then polls ActiveWork until no tasks, turns, or approval executions are in
-// flight, or until maxWait elapses. When work remains in flight at the
-// deadline, it clears the drain sentinel and returns *ActiveWorkError. When it
-// succeeds, the drain sentinel remains set until the caller clears it after
-// restarting or stopping the service.
+// WaitIdle sets the update drain sentinel file to quiesce new work admission on
+// the default service unit, then polls ActiveWork until idle or maxWait elapses.
 func WaitIdle(ctx context.Context, schedDSNVal, chatDSNVal string, maxWait, pollInterval time.Duration, out io.Writer) error {
+	return WaitIdleForService(ctx, serviceName(""), schedDSNVal, chatDSNVal, maxWait, pollInterval, out)
+}
+
+// WaitIdleForService sets and refreshes the update drain sentinel file to
+// quiesce new work admission, then polls ActiveWorkForService until no tasks,
+// turns, or approval executions are in flight, or until maxWait elapses. When
+// work remains in flight at the deadline, it clears the drain sentinel and
+// returns *ActiveWorkError. When it succeeds, the drain sentinel remains set
+// until the caller clears it after restarting or stopping the service.
+func WaitIdleForService(ctx context.Context, unit, schedDSNVal, chatDSNVal string, maxWait, pollInterval time.Duration, out io.Writer) error {
 	if pollInterval <= 0 {
 		pollInterval = 2 * time.Second
 	}
-	SetUpdateDrain()
-	svcState, _ := serviceRuntimeState(serviceName(""))
+	svcState, _ := serviceRuntimeState(unit)
 	start := time.Now()
 	deadline := start.Add(max(maxWait, 0))
 	for {
-		items, err := ActiveWork(ctx, schedDSNVal, chatDSNVal)
+		SetUpdateDrain()
+		items, err := ActiveWorkForService(ctx, unit, schedDSNVal, chatDSNVal)
 		if err != nil && svcState == "active" {
 			items = append(items, fmt.Sprintf("active-work query failed while service is active: %v", err))
 		}
 		if len(items) == 0 {
+			SetUpdateDrain()
 			return nil
 		}
 		if maxWait <= 0 || !time.Now().Before(deadline) {

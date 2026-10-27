@@ -412,16 +412,19 @@ func (s *Server) BeginShutdown() {
 func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrainActive() }
 
 // UpdateDrainFile returns the path of the external update drain sentinel file
-// ($FLEET_DRAIN_FILE, else <dir($FLEET_ENV_FILE)>/fleet.update.drain, else
-// /etc/fleet/fleet.update.drain).
+// ($FLEET_UPDATE_DRAIN_FILE, else $FLEET_DRAIN_FILE, else
+// <$FLEET_ENV_FILE>.update.drain, else /etc/fleet/fleet.env.update.drain).
 func UpdateDrainFile() string {
+	if p := strings.TrimSpace(os.Getenv("FLEET_UPDATE_DRAIN_FILE")); p != "" {
+		return p
+	}
 	if p := strings.TrimSpace(os.Getenv("FLEET_DRAIN_FILE")); p != "" {
 		return p
 	}
 	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" {
-		return filepath.Join(filepath.Dir(envFile), "fleet.update.drain")
+		return envFile + ".update.drain"
 	}
-	return "/etc/fleet/fleet.update.drain"
+	return filepath.Join("/etc/fleet", "fleet.env.update.drain")
 }
 
 // UpdateDrainActive reports whether an operator verb (fleet update / restart /

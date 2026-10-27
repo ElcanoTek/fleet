@@ -70,8 +70,9 @@ func systemctlVerb(verb string, argv []string) int {
 			if *wait || truthy(os.Getenv("FLEET_UPDATE_WAIT")) {
 				maxWait = *waitTimeout
 			}
-			if err := WaitIdle(ctx, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
-				unitName := serviceName(*service) + ".service"
+			resolvedUnit := serviceName(*service)
+			if err := WaitIdleForService(ctx, resolvedUnit, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
+				unitName := resolvedUnit + ".service"
 				return errf(6, "refusing to %s %s while work is in flight (%v) — wait for it to finish, pass --wait, or pass --force", verb, unitName, err)
 			}
 		}
