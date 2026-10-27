@@ -184,11 +184,12 @@ Preflight & diagnostics (in-binary; no server needed):
 
 Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-  fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--no-node-repair] [--yes] [--dry-run]
+  fleet update    [--check] [--no-pull] [--client-config <dir>] [--service <name>] [--branch <name>] [--adopt-units] [--no-node-repair] [--wait] [--force] [--yes] [--dry-run]
                                                              (--check: read-only "N commits behind upstream" + can this box build the
                                                               web tier; mutates nothing, non-zero when the node floor is unmet;
                                                               --adopt-units: adopt shipped systemd units that drifted, without the prompt;
-                                                              --no-node-repair: refuse instead of repairing a node shortfall in place)
+                                                              --no-node-repair: refuse instead of repairing a node shortfall in place;
+                                                              --wait: wait for running tasks/turns to finish; --force: update even if busy)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
   fleet status    [--service <name>] [--no-sandbox]    (quick read-only health report; non-zero exit if unhealthy)
   fleet doctor    [--check] [--no-restart] [--node] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
@@ -199,8 +200,8 @@ Operator lifecycle (bootstrap → update → status/doctor):
   fleet diagnose  [--output <file>] [--service <name>] [--no-sandbox]
                                                              (redacted support bundle: status + config names + DB versions + sandbox image → .tar.gz)
   fleet start     [--service <name>]                   (systemctl start; needs root/sudo — distinct from "fleet serve", which runs the daemon in the foreground)
-  fleet restart   [--service <name>]                   (systemctl restart; needs root/sudo)
-  fleet stop      [--service <name>]                   (systemctl stop; needs root/sudo)
+  fleet restart   [--service <name>] [--wait] [--force] (systemctl restart; blocks on running tasks/turns unless --wait or --force)
+  fleet stop      [--service <name>] [--wait] [--force] (systemctl stop; blocks on running tasks/turns unless --wait or --force)
   fleet logs      [--service <name>] [-n 50] [-f]      (journalctl tail; -f follows; a.k.a. tail)
   fleet timers install [--backup] [--maintenance] [--dry-run]
                                                         (install + enable the daily fleet-backup / fleet-maintenance

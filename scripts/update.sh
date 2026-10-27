@@ -73,6 +73,18 @@
 #                          fail with the repair command instead (env
 #                          FLEET_UPDATE_NODE_REPAIR=0) — for boxes whose node
 #                          is managed outside dnf (nvm, nodesource, an image)
+#   --wait                 wait up to --wait-timeout seconds for running
+#                          scheduled tasks, chat turns, or approval executions
+#                          to finish before starting the update (env
+#                          FLEET_UPDATE_WAIT=1). Even without --wait, if a task
+#                          or turn starts while the build is running, update.sh
+#                          waits up to --wait-timeout before installing the new
+#                          binary and restarting the service
+#   --wait-timeout <sec>   maximum seconds to wait for in-flight work to finish
+#                          (env FLEET_UPDATE_WAIT_SECONDS, default 600)
+#   --force                skip the active-work blocker and update/restart
+#                          immediately even when a task or turn is running
+#                          (env FLEET_UPDATE_FORCE=1)
 #   --dry-run              print the plan; build/restart nothing. Always exits 0
 #                          — it reports whether the plan is BLOCKED (e.g. the
 #                          node floor is unmet) in the plan itself, the same
@@ -108,6 +120,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Retiring the Next.js web tier on an upgraded box (ADR-0091).
 # shellcheck source=lib/web-tier.sh
 . "$SCRIPT_DIR/lib/web-tier.sh"
+# Active-work inspection + drain helpers (sched tasks, chat turns, approvals).
+# shellcheck source=lib/idle.sh
+. "$SCRIPT_DIR/lib/idle.sh"
 
 SRC_DIR="${SRC_DIR:-$REPO_ROOT}"
 # Client bundle dir: env/flag wins; else the dir bootstrap persisted under the
@@ -192,6 +207,9 @@ NODE_REPAIR="${FLEET_UPDATE_NODE_REPAIR:-1}"
 # a cached rebuild against an unmoved base would produce the same image with
 # the same old creation date and the gate would spin forever doing nothing.
 SANDBOX_MAX_AGE_DAYS="${FLEET_SANDBOX_MAX_AGE_DAYS:-7}"
+WAIT_FOR_IDLE="${FLEET_UPDATE_WAIT:-0}"
+WAIT_SECONDS="${FLEET_UPDATE_WAIT_SECONDS:-600}"
+FORCE_UPDATE="${FLEET_UPDATE_FORCE:-0}"
 DRY_RUN=0
 
 while [[ $# -gt 0 ]]; do
@@ -210,6 +228,10 @@ while [[ $# -gt 0 ]]; do
     --pin=*)          CLIENT_CONFIG_PIN="${1#*=}" ;;
     --sandbox-max-age)   shift; [[ $# -gt 0 ]] || { echo "error: --sandbox-max-age needs a day count" >&2; exit 1; }; SANDBOX_MAX_AGE_DAYS="$1" ;;
     --sandbox-max-age=*) SANDBOX_MAX_AGE_DAYS="${1#*=}" ;;
+    --wait)           WAIT_FOR_IDLE=1 ;;
+    --wait-timeout)   shift; [[ $# -gt 0 ]] || { echo "error: --wait-timeout needs a second count" >&2; exit 1; }; WAIT_SECONDS="$1" ;;
+    --wait-timeout=*) WAIT_SECONDS="${1#*=}" ;;
+    --force)          FORCE_UPDATE=1 ;;
     --no-pull)        NO_PULL=1 ;;
     --yes|-y)         ASSUME_YES=1 ;;
     --dry-run)        DRY_RUN=1 ;;
@@ -300,6 +322,8 @@ node_probe() {
 # here, not silently disable the backstop (or arithmetic-error mid-update).
 [[ "$SANDBOX_MAX_AGE_DAYS" =~ ^[0-9]+$ ]] \
   || die "--sandbox-max-age / FLEET_SANDBOX_MAX_AGE_DAYS must be a non-negative integer day count (0 disables), got: ${SANDBOX_MAX_AGE_DAYS}"
+[[ "$WAIT_SECONDS" =~ ^[0-9]+$ ]] \
+  || die "--wait-timeout / FLEET_UPDATE_WAIT_SECONDS must be a non-negative integer second count, got: ${WAIT_SECONDS}"
 
 # require_go_toolchain — fail the build step with an actionable message rather
 # than an opaque one.
@@ -367,6 +391,39 @@ if [[ "$REEXEC" == "1" ]]; then
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
 else
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, no-pull=${NO_PULL}, dry-run=${DRY_RUN})"
+fi
+
+# The service's env file (the unit's EnvironmentFile=). Never sourced — read
+# key-by-key via env_get. Resolved before step 1 so both the pre-update idle
+# check and step 2's bundle reconcile can read it.
+backend_env_file="${FLEET_ENV_FILE:-/etc/fleet/fleet.env}"
+
+# ── active-work gate (before pulling or building) ──────────────────────────
+# Refuse to start an update while a scheduled task, chat turn, or detached
+# approval execution is in flight unless --wait or --force was passed.
+if [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "$FORCE_UPDATE" == "1" ]]; then
+    info "[dry-run] --force set: skipping the active-work blocker"
+  elif ! _active_summary="$(fleet_active_work_summary "$backend_env_file")"; then
+    if [[ "$WAIT_FOR_IDLE" == "1" ]]; then
+      info "[dry-run] active work in flight (${_active_summary}) — would wait up to ${WAIT_SECONDS}s before updating"
+    else
+      warn "[dry-run] BLOCKER: active work in flight (${_active_summary}) — a real run would refuse to update until idle (or pass --wait / --force)"
+      DRY_RUN_BLOCKED=1
+    fi
+  else
+    info "[dry-run] would check that ${SERVICE_NAME} has no running tasks or active chat turns before updating and before restarting"
+  fi
+elif [[ "$FORCE_UPDATE" == "1" ]]; then
+  if ! _active_summary="$(fleet_active_work_summary "$backend_env_file")"; then
+    warn "--force set: proceeding despite active work in flight (${_active_summary})"
+  fi
+else
+  _pre_wait=0
+  [[ "$WAIT_FOR_IDLE" == "1" ]] && _pre_wait="$WAIT_SECONDS"
+  if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$_pre_wait" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
+    die "refusing to update while work is in flight (${_active_summary}) — wait for it to finish, pass --wait (FLEET_UPDATE_WAIT=1), or pass --force (FLEET_UPDATE_FORCE=1)"
+  fi
 fi
 
 # ── 1. pull the fleet checkout ────────────────────────────────────────────
@@ -470,6 +527,9 @@ else
           FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS" \
           FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
           FLEET_UPDATE_NODE_REPAIR="$NODE_REPAIR" \
+          FLEET_UPDATE_WAIT="$WAIT_FOR_IDLE" \
+          FLEET_UPDATE_WAIT_SECONDS="$WAIT_SECONDS" \
+          FLEET_UPDATE_FORCE="$FORCE_UPDATE" \
           bash "$SRC_DIR/scripts/update.sh"
       fi
     fi
@@ -1262,6 +1322,14 @@ else
       INSTALL_DIR="/opt/fleet"
     fi
   fi
+  # If a scheduled task or chat turn started while the build was running,
+  # wait up to WAIT_SECONDS for it to finish before overwriting the live
+  # binary or restarting the service.
+  if [[ "$FORCE_UPDATE" != "1" ]]; then
+    if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$WAIT_SECONDS" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
+      die "refusing to install the new binary and restart ${SERVICE_NAME} while work is still in flight after waiting ${WAIT_SECONDS}s (${_active_summary}) — live binary left in place; retry once idle or pass --force"
+    fi
+  fi
   # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
   if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
     info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
@@ -1594,6 +1662,11 @@ else
   # update.sh has no rollback of the binary, so on a failure the old tier is
   # NOT restarted (it would hold :3000 against the new fleet, which systemd
   # keeps retrying); it stays stopped with its files intact, and the run stops.
+  if [[ "$FORCE_UPDATE" != "1" ]]; then
+    if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$WAIT_SECONDS" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
+      die "refusing to restart ${SERVICE_NAME} while work is still in flight after waiting ${WAIT_SECONDS}s (${_active_summary}) — retry once idle or pass --force"
+    fi
+  fi
   fleet_stop_web_tier || true
   if systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME"; then
     ok "${SERVICE_NAME} is active"

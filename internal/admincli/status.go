@@ -49,9 +49,10 @@ func cmdStatus(argv []string) int {
 	// 2. required env vars.
 	checkEnv(r)
 
-	// 3. both databases reachable.
+	// 3. both databases reachable + active work summary.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
+	checkActiveWork(r, *schedURL, *chatURL)
 
 	// 4. sandbox image present + runnable.
 	if *skipSandbox {
@@ -156,6 +157,29 @@ func checkDB(r *report, label, flagURL string, resolve func(string) (string, err
 		return
 	}
 	r.pass(label, "reachable ("+redactDSN(dsn)+")")
+}
+
+// checkActiveWork reports whether any scheduled task, chat turn, or detached
+// approval execution is currently in flight. Advisory only (never increments
+// r.failed) so a healthy box running a job still exits 0 on `fleet status`
+// while surfacing what would block `fleet update` / `fleet restart`.
+func checkActiveWork(r *report, schedFlag, chatFlag string) {
+	sDSN, _ := schedDSN(schedFlag)
+	cDSN, _ := chatDSN(chatFlag)
+	if sDSN == "" && cDSN == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	items, err := ActiveWork(ctx, sDSN, cDSN)
+	if len(items) > 0 {
+		r.warnLine("active work", strings.Join(items, "; "))
+		return
+	}
+	if err != nil {
+		return
+	}
+	r.pass("active work", "idle (no running tasks, chat turns, or approval executions)")
 }
 
 // checkSandbox resolves the image ref the running process would consume

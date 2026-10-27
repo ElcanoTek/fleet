@@ -51,9 +51,31 @@ func cmdStop(argv []string) int    { return systemctlVerb("stop", argv) }
 func systemctlVerb(verb string, argv []string) int {
 	fs := flag.NewFlagSet(verb, flag.ContinueOnError)
 	service := fs.String("service", "", "systemd unit name (default: $FLEET_SERVICE_NAME or \"fleet\")")
+	force := fs.Bool("force", false, "restart/stop even when scheduled tasks or chat turns are running (env FLEET_UPDATE_FORCE=1)")
+	wait := fs.Bool("wait", false, "wait for running tasks or chat turns to finish before restarting/stopping (env FLEET_UPDATE_WAIT=1)")
+	waitTimeout := fs.Duration("wait-timeout", 10*time.Minute, "maximum time to wait when --wait is set")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if (verb == "restart" || verb == "stop") && !*force && !truthy(os.Getenv("FLEET_UPDATE_FORCE")) {
+		sDSN, _ := schedDSN("")
+		cDSN, _ := chatDSN("")
+		if sDSN != "" || cDSN != "" {
+			maxWait := time.Duration(0)
+			if *wait || truthy(os.Getenv("FLEET_UPDATE_WAIT")) {
+				maxWait = *waitTimeout
+			}
+			if err := WaitIdle(ctx, sDSN, cDSN, maxWait, 2*time.Second, os.Stderr); err != nil {
+				unitName := serviceName(*service) + ".service"
+				return errf(6, "refusing to %s %s while work is in flight (%v) — wait for it to finish, pass --wait, or pass --force", verb, unitName, err)
+			}
+		}
+	}
+
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return errf(5, "systemctl not on PATH (no systemd)")
 	}
@@ -65,8 +87,6 @@ func systemctlVerb(verb string, argv []string) int {
 	// Signal-cancelled (not time-bounded): a restart can take a moment; Ctrl-C / SIGTERM
 	// tears it down cleanly. restart/stop manage a system unit and may need root/sudo —
 	// systemctl's own permission error propagates via the child exit code.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	//nolint:gosec // G204: fixed "systemctl" binary; unit is the operator-supplied unit name.
 	cmd := exec.CommandContext(ctx, "systemctl", verb, unit)
 	cmd.Stdout = os.Stdout
