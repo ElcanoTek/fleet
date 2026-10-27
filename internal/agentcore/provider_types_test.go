@@ -626,9 +626,11 @@ func TestGoogleRefusesClaudeModelIDs(t *testing.T) {
 	}
 }
 
-// The signature replay keeps reaches Gemini on the replayed call: a turn
+// The signature that replay keeps reaches Gemini on the replayed call: a turn
 // resumed from replayed messages (a context checkpoint, say) sends the call
-// with its thoughtSignature, as the same turn's next step would have.
+// with its thoughtSignature, as the same turn's next step would have. The
+// replay goes through geminiSignatureStep as a run's does, so a google model
+// that step did not take for Gemini would lose the signature here.
 func TestGoogleReplayedCallCarriesItsSignature(t *testing.T) {
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -656,6 +658,13 @@ func TestGoogleReplayedCallCarriesItsSignature(t *testing.T) {
 			fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: "ok"}},
 		}},
 	})
+	_, step, err := geminiSignatureStep(context.Background(), fantasy.PrepareStepFunctionOptions{Model: lm, Messages: replayed})
+	if err != nil {
+		t.Fatalf("geminiSignatureStep: %v", err)
+	}
+	if step.Messages != nil {
+		replayed = step.Messages
+	}
 	if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: replayed}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
