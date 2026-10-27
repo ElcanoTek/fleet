@@ -126,10 +126,10 @@ func Registry() []Spec {
 			EnvVar: "FLEET_MAX_TOOL_OUTPUT_BYTES"},
 		// The approval default-deny window (#225). Bounds mirror the
 		// per-conversation override's: at least a minute (a shorter window is a
-		// deny in disguise) and at most 24h (a typo must not leave cards
+		// deny in disguise) and at most 7d (a typo must not leave cards
 		// effectively un-expiring). The stager reads the live value once per
 		// turn, so an edit governs the next staged card without a restart.
-		{Key: "approval_timeout_seconds", Kind: KindInt, Min: 60, Max: 86400,
+		{Key: "approval_timeout_seconds", Kind: KindInt, Min: 60, Max: 604800,
 			EnvVar: "FLEET_APPROVAL_TIMEOUT_SECONDS"},
 		// The per-run cost ceiling every chat turn and scheduled run is bounded
 		// by (agentcore checkCeilings). Live: every consumer reads

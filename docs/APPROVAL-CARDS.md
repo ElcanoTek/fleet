@@ -172,9 +172,9 @@ informational form.
 Default-deny on timeout stays (#225) — it is the right posture for real
 actions. What changed:
 
-- **The default window is 3600s, not 300s**, and the global layer is now
+- **The default window is 86400s (24h), not 300s**, and the global layer is now
   admin-settable live (`approval_timeout_seconds`, Settings → Admin →
-  Features, 60s–24h). Five minutes measured from *whenever the agent staged
+  Features, 60s–7d). Five minutes measured from *whenever the agent staged
   the card* — often deep into a run the user had reasonably stopped watching —
   mostly denied the final, wanted action (the same observation that motivated
   notify mode). Per-tool bundle windows and the per-conversation override

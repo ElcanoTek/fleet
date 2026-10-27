@@ -194,6 +194,9 @@ export type ConversationSummary = {
   // project"). In the rail a project conversation lives only under its
   // project, not in Pinned/Chats.
   project_id?: string;
+  // auto_approve opts this conversation into pre-approving executable critical
+  // tools without parking on an inline approval card.
+  auto_approve?: boolean;
 };
 
 export type ServerConfig = {
@@ -842,6 +845,25 @@ export function ChatExperience({
   // and cleared once the conversation is actually created. The flag
   // rides along on the first /api/chat POST as `lockdown: true`.
   const [pendingLockdown, setPendingLockdown] = useState(false);
+  // pendingAutoApproveByKey tracks the composer's Auto-approve toggle per
+  // unpromoted draft / pending submission key, and rides along on the first
+  // /api/chat POST.
+  const [draftKey, setDraftKey] = useState("__draft_0__");
+  const draftKeyRef = useRef("__draft_0__");
+  const [pendingAutoApproveByKey, setPendingAutoApproveByKey] = useState<
+    Record<string, boolean>
+  >({});
+  const pendingAutoApproveRef = useRef<Map<string, boolean>>(new Map());
+  const setPendingAutoApproveForKey = useCallback(
+    (key: string, val: boolean) => {
+      pendingAutoApproveRef.current.set(key, val);
+      setPendingAutoApproveByKey((prev) =>
+        prev[key] === val ? prev : { ...prev, [key]: val },
+      );
+    },
+    [],
+  );
+  const newChatDraftGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -919,6 +941,106 @@ export function ChatExperience({
     activeConversation?.lockdown === true ||
     (isPendingKey(activeConversationId) &&
       (pendingLockdown || serverConfig.lockdownOnly));
+  const activePendingKey =
+    activeConversationId === null
+      ? draftKey
+      : isPendingKey(activeConversationId)
+        ? activeConversationId
+        : null;
+  const isAutoApprove = activeConversation
+    ? activeConversation.auto_approve === true
+    : activePendingKey !== null &&
+      pendingAutoApproveByKey[activePendingKey] === true;
+  const autoApproveSeqRef = useRef<Map<string, number>>(new Map());
+  const autoApproveChainRef = useRef<Map<string, Promise<void>>>(new Map());
+  const autoApproveValueRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveDisplayedRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveCommittedRef = useRef<Map<string, boolean>>(new Map());
+  const autoApproveInFlightRef = useRef<Map<string, number>>(new Map());
+  const toggleAutoApprove = useCallback(() => {
+    if (!activeConversationId || isPendingKey(activeConversationId)) {
+      const key = activeConversationId ?? draftKeyRef.current;
+      setPendingAutoApproveForKey(key, !isAutoApprove);
+      return;
+    }
+    const convId = activeConversationId;
+    if (!autoApproveCommittedRef.current.has(convId)) {
+      autoApproveCommittedRef.current.set(convId, isAutoApprove);
+    }
+    const desired = autoApproveValueRef.current.get(convId) ?? isAutoApprove;
+    const next = !desired;
+    const seq = (autoApproveSeqRef.current.get(convId) ?? 0) + 1;
+    autoApproveSeqRef.current.set(convId, seq);
+    autoApproveValueRef.current.set(convId, next);
+    autoApproveInFlightRef.current.set(
+      convId,
+      (autoApproveInFlightRef.current.get(convId) ?? 0) + 1,
+    );
+    const applyState = (val: boolean) => {
+      setConversations((curr) =>
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
+      );
+      setArchivedConversations((curr) =>
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: val } : c)),
+      );
+    };
+    if (next) {
+      autoApproveDisplayedRef.current.set(convId, true);
+      applyState(true);
+    } else {
+      // Keep showing Auto-approve as enabled until the disable POST commits on
+      // the server so the header never claims approval is required while a
+      // streaming turn still sees liveAutoApprove=true.
+      autoApproveDisplayedRef.current.set(convId, isAutoApprove);
+    }
+    const url = conversationApiUrl(convId, "/auto-approve");
+    if (!url) {
+      autoApproveInFlightRef.current.set(
+        convId,
+        Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+      );
+      return;
+    }
+    const prev = autoApproveChainRef.current.get(convId) ?? Promise.resolve();
+    const run = prev.then(async () => {
+      try {
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ auto_approve: next }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        let committed = next;
+        try {
+          const body = (await res.json()) as { auto_approve?: boolean };
+          if (typeof body?.auto_approve === "boolean") {
+            committed = body.auto_approve;
+          }
+        } catch {
+          // ignore empty/non-JSON body
+        }
+        autoApproveCommittedRef.current.set(convId, committed);
+        if (autoApproveSeqRef.current.get(convId) === seq) {
+          autoApproveDisplayedRef.current.set(convId, committed);
+          autoApproveValueRef.current.set(convId, committed);
+          applyState(committed);
+        }
+      } catch {
+        if (autoApproveSeqRef.current.get(convId) === seq) {
+          const fallback = autoApproveCommittedRef.current.get(convId) ?? false;
+          autoApproveDisplayedRef.current.set(convId, fallback);
+          autoApproveValueRef.current.set(convId, fallback);
+          applyState(fallback);
+        }
+      } finally {
+        autoApproveInFlightRef.current.set(
+          convId,
+          Math.max(0, (autoApproveInFlightRef.current.get(convId) ?? 1) - 1),
+        );
+      }
+    });
+    autoApproveChainRef.current.set(convId, run);
+  }, [isAutoApprove, activeConversationId, setPendingAutoApproveForKey]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
@@ -2333,6 +2455,24 @@ export function ChatExperience({
   };
 
   const refreshConversations = async () => {
+    const seqAtStart = new Map(autoApproveSeqRef.current);
+    const reconcileAutoApprove = (list: ConversationSummary[]) =>
+      list.map((c) => {
+        const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
+        const startSeq = seqAtStart.get(c.id) ?? 0;
+        const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
+        if (
+          (inFlight || curSeq !== startSeq) &&
+          autoApproveDisplayedRef.current.has(c.id)
+        ) {
+          return {
+            ...c,
+            auto_approve: autoApproveDisplayedRef.current.get(c.id),
+          };
+        }
+        autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
+        return c;
+      });
     try {
       // Active and archived lists in parallel (#282). The archived fetch is
       // best-effort — a failure leaves the previous archived list in place
@@ -2345,13 +2485,15 @@ export function ChatExperience({
         const data = (await activeRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setConversations(data.conversations ?? []);
+        setConversations(reconcileAutoApprove(data.conversations ?? []));
       }
       if (archivedRes.ok) {
         const data = (await archivedRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setArchivedConversations(data.conversations ?? []);
+        setArchivedConversations(
+          reconcileAutoApprove(data.conversations ?? []),
+        );
       }
     } catch {
       // non-fatal
@@ -4485,6 +4627,11 @@ export function ChatExperience({
     const lockdown =
       serverConfig.lockdownAvailable && (explicit || serverConfig.lockdownOnly);
     setPendingLockdown(lockdown);
+    newChatDraftGenRef.current += 1;
+    const nextDraft = `__draft_${newChatDraftGenRef.current}__`;
+    draftKeyRef.current = nextDraft;
+    setDraftKey(nextDraft);
+    setPendingAutoApproveForKey(nextDraft, false);
     // Lockdown chats are pinned to the allow-list. Default both modes
     // to the live default tier — for lockdown that's also the first
     // allowed slug, and for normal chat it's the workspace default.
@@ -4806,6 +4953,9 @@ export function ChatExperience({
     setModelPickerOpen,
     setModelSearchQuery,
     setPendingLockdown,
+    draftKeyRef,
+    pendingAutoApproveRef,
+    setPendingAutoApproveForKey,
     setSidebarOpen,
     setSpreadsheetNudgeDismissed,
     activeConversationIdRef,
@@ -6710,6 +6860,8 @@ export function ChatExperience({
                 promptRef={promptRef}
                 submitPrompt={submitPrompt}
                 sealed={isLockdown}
+                isAutoApprove={isAutoApprove}
+                toggleAutoApprove={toggleAutoApprove}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}
                 isDraggingOver={isDraggingOver}

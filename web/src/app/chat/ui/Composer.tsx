@@ -144,6 +144,11 @@ export type ComposerProps = {
   // pending "new sealed chat", and lockdown-only servers.
   sealed: boolean;
 
+  // Per-conversation auto-approve toggle: pre-approves executable critical
+  // tools in this chat without parking on an approval card.
+  isAutoApprove?: boolean;
+  toggleAutoApprove?: () => void;
+
   // Turn / upload gating
   isStreaming: boolean;
   isUploadingAttachments: boolean;
@@ -261,6 +266,8 @@ export function Composer({
   promptRef,
   submitPrompt,
   sealed,
+  isAutoApprove = false,
+  toggleAutoApprove,
   isStreaming,
   isUploadingAttachments,
   isDraggingOver,
@@ -1332,6 +1339,33 @@ export function Composer({
               >
                 <Icon name="stop" className="size-[1.125rem]" />
                 <span className="sr-only">Stop</span>
+              </button>
+            ) : null}
+            {/* Per-conversation Auto-approve toggle: pre-approves executable
+                      critical tools in this chat without parking on an inline
+                      approval card. Enabled even while streaming so a user can
+                      turn it on or off mid-turn. */}
+            {toggleAutoApprove ? (
+              <button
+                type="button"
+                aria-label={
+                  isAutoApprove
+                    ? "Auto-approve tools in this chat is on (click to turn off)"
+                    : "Auto-approve tools in this chat (click to turn on)"
+                }
+                data-tip-top={
+                  isAutoApprove
+                    ? "Auto-approve on for this chat"
+                    : "Auto-approve tools in this chat"
+                }
+                aria-pressed={isAutoApprove}
+                className={`${TOOL_BTN} ${isAutoApprove ? TOOL_BTN_ACTIVE : ""}`}
+                onClick={toggleAutoApprove}
+              >
+                <Icon name="zap" className="size-3.5" />
+                <span className="sr-only">
+                  {isAutoApprove ? "Auto-approve on" : "Auto-approve off"}
+                </span>
               </button>
             ) : null}
             {/* Send-key preference toggle (issue #315), restyled as the

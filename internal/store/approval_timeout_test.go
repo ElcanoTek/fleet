@@ -207,3 +207,49 @@ func TestSetApprovalTimeout_RoundTrip(t *testing.T) {
 		t.Errorf("after clear ApprovalTimeoutSeconds = %v, want nil", *got.ApprovalTimeoutSeconds)
 	}
 }
+
+func TestSetAutoApprove_RoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+
+	got, err := s.Get(ctx, "alice@example.com", conv.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.AutoApprove {
+		t.Errorf("fresh conversation AutoApprove = true, want false")
+	}
+
+	if err := s.SetAutoApprove(ctx, "alice@example.com", conv.ID, true); err != nil {
+		t.Fatalf("SetAutoApprove(true): %v", err)
+	}
+	got, err = s.Get(ctx, "alice@example.com", conv.ID)
+	if err != nil {
+		t.Fatalf("Get after set: %v", err)
+	}
+	if !got.AutoApprove {
+		t.Errorf("AutoApprove = false, want true")
+	}
+	list, err := s.List(ctx, "alice@example.com", false)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 || !list[0].AutoApprove {
+		t.Errorf("List did not carry AutoApprove: %+v", list)
+	}
+
+	if err := s.SetAutoApprove(ctx, "alice@example.com", conv.ID, false); err != nil {
+		t.Fatalf("SetAutoApprove(false): %v", err)
+	}
+	got, err = s.Get(ctx, "alice@example.com", conv.ID)
+	if err != nil {
+		t.Fatalf("Get after clear: %v", err)
+	}
+	if got.AutoApprove {
+		t.Errorf("after clear AutoApprove = true, want false")
+	}
+}

@@ -114,11 +114,10 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		conversationID: convID,
 		userEmail:      user,
 		sink:           sink,
-		// Same resolution as the turn-time stager. A schedule_task card skips
-		// the global layer (resolveTimeoutSeconds): the day-long staged-task
-		// window applies unless the conversation's override is longer.
+		// Same resolution as the turn-time stager: the day-long staged-task
+		// floor applies unless the conversation's or global timeout is longer.
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		globalTimeoutSeconds: promoteApprovalTimeoutSeconds,
+		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		// The promoted task inherits this conversation's connectors (ADR-0068)
 		// the same way an agent-staged schedule_task does.
 		taskConnectors: s.chatTaskConnectorsFor(user, convID),
@@ -133,12 +132,6 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 		"rationale": proposal.Rationale,
 	})
 }
-
-// promoteApprovalTimeoutSeconds is the promote stager's global layer. The
-// promote card is a schedule_task card, which resolveTimeoutSeconds gives the
-// day-long staged-task window instead, so this applies only if the stager is
-// ever used for another tool.
-const promoteApprovalTimeoutSeconds = 3600
 
 // transcriptFromHistory renders the user/assistant TEXT turns of a conversation
 // into a plain "User:/Assistant:" transcript for the synthesizer, dropping
