@@ -79,12 +79,21 @@ type FileOpRequest struct {
 	// Stream: the plain file name (same directory) the completed partial file
 	// is renamed to, and whether to delete the partial file instead. With
 	// Final, ExpectedSHA256 is the whole body's hash: the commit is refused if
-	// the staged file's content differs.
+	// the staged file's content differs (a full re-hash of the file).
 	Final string
 	Abort bool
 	// CommitOnly renames the complete partial file (Offset bytes) to Final
 	// without writing: the caller picks the name after the last chunk.
 	CommitOnly bool
+	// ExpectedCTimeNS chains the steps of a stream: the CTimeNS the previous
+	// step returned. The step is refused (ErrFileOpStale) when the partial
+	// file's ctime moved since, i.e. something else changed it.
+	ExpectedCTimeNS int64
+
+	// Timeout raises this one op's time limit above the default (capped at
+	// maxFileOpTimeout), for an op whose cost scales with a file's size, such
+	// as hashing a large file.
+	Timeout time.Duration
 
 	// Edit.
 	OldText    string
@@ -148,9 +157,12 @@ type FileOpResult struct {
 	// hash either (an old entry that was not a regular file, or could not be
 	// read), and why an edit has no diff (a change over the line cap); Added
 	// and Removed are then zero.
-	Replaced     bool
-	OldSize      int64
-	DiffNote     string
+	Replaced bool
+	OldSize  int64
+	DiffNote string
+	// CTimeNS is the partial file's ctime after a stream step, the
+	// ExpectedCTimeNS of the next.
+	CTimeNS      int64
 	rootIdentity FileOpRootIdentity
 }
 
@@ -489,6 +501,9 @@ func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
 		wire["final"] = req.Final
 		wire["abort"] = req.Abort
 		wire["commit_only"] = req.CommitOnly
+		if req.ExpectedCTimeNS != 0 {
+			wire["expected_ctime_ns"] = req.ExpectedCTimeNS
+		}
 		if req.ExpectedSHA256 != "" {
 			wire["expected_sha256"] = req.ExpectedSHA256
 		}
@@ -540,6 +555,7 @@ type fileOpResponse struct {
 	DiffNote   string `json:"diff_note"`
 	Dev        uint64 `json:"dev"`
 	Ino        uint64 `json:"ino"`
+	CTimeNS    int64  `json:"ctime_ns"`
 
 	decoded []byte // a streamed read's payload, decoded in place of DataB64
 }
@@ -659,6 +675,7 @@ func decodeFileOpResponse(out []byte) (FileOpResult, error) {
 		Data: data, Size: resp.Size, ReplacedCount: resp.Count, SHA256: resp.SHA256,
 		OldSHA256: resp.OldSHA256, Added: resp.Added, Removed: resp.Removed, Diff: resp.Diff,
 		Replaced: resp.Replaced, OldSize: resp.OldSize, DiffNote: resp.DiffNote,
+		CTimeNS:      resp.CTimeNS,
 		rootIdentity: FileOpRootIdentity{Dev: resp.Dev, Ino: resp.Ino},
 	}, nil
 }

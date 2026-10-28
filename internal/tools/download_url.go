@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"charm.land/fantasy"
@@ -308,11 +309,13 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	}
 	validDir := filepath.Dir(validFirst)
 	room := downloadRoom(dir, resp.ContentLength)
-	if err := room(0); err != nil {
+	release, err := room(0)
+	if err != nil {
 		res.Status = downloadStatusError
 		res.Error = err.Error()
 		return res
 	}
+	release()
 	// Stream the body into the sandbox through the FileOp seam — the write
 	// inherits the container's runtime, limits, and confinement instead of
 	// running as host os I/O (#1083) — a chunk at a time into a hidden partial
@@ -642,35 +645,60 @@ func collisionSafeNames(filename, sourceURL string) func(i int) string {
 	}
 }
 
-// downloadDestination picks where a streamed body lands from its SHA-256:
-// the first free collision-safe name, or an earlier download of the same URL
-// whose bytes are identical (reused, so retries do not pile up copies).
-func downloadDestination(ctx context.Context, sb *sandbox.Sandbox, dir, validDir string, names func(int) string, pickedName string) func(string) (streamTarget, error) {
-	return func(sum string) (streamTarget, error) {
-		for i := 0; i < 1000; i++ {
+// downloadNameGap is how many missing collision-safe names in a row end the
+// search for an identical earlier copy: deleting a few copies leaves gaps,
+// and a copy past a gap must still be found.
+const downloadNameGap = 8
+
+// downloadDestination picks where a streamed body lands from its SHA-256 and
+// size: an earlier download of the same URL whose bytes are identical (reused,
+// so retries do not pile up copies), else the first free collision-safe name.
+// Only files no larger than the body are hashed.
+func downloadDestination(ctx context.Context, sb *sandbox.Sandbox, dir, validDir string, names func(int) string, pickedName string) func(string, int64) (streamTarget, error) {
+	return func(sum string, size int64) (streamTarget, error) {
+		free, missing := "", 0
+		for i := 0; i < 1000 && missing < downloadNameGap; i++ {
 			candidate := filepath.Join(validDir, names(i))
-			exists, existing, err := sandboxFileSHA256(ctx, sb, filepath.Join(dir, names(i)), candidate)
+			exists, existing, err := sandboxFileSHA256(ctx, sb, filepath.Join(dir, names(i)), candidate, size)
 			if err != nil {
 				return streamTarget{}, fmt.Errorf("probe %s: %w", candidate, err)
 			}
-			if !exists {
-				return streamTarget{Path: candidate}, nil
-			}
-			if existing == sum {
+			switch {
+			case !exists:
+				missing++
+				if free == "" {
+					free = candidate
+				}
+			case existing == sum:
 				return streamTarget{Path: candidate, Reuse: true}, nil
+			default:
+				missing = 0
 			}
 		}
-		return streamTarget{}, fmt.Errorf("1000 different copies of %s already exist in %s", pickedName, validDir)
+		if free == "" {
+			return streamTarget{}, fmt.Errorf("1000 different copies of %s already exist in %s", pickedName, validDir)
+		}
+		return streamTarget{Path: free}, nil
 	}
+}
+
+// downloadReservations counts the bytes of chunks that passed downloadRoom
+// but are not on disk yet, so concurrent downloads cannot each pass the check
+// against the same free space.
+var downloadReservations struct {
+	sync.Mutex
+	outstanding uint64
 }
 
 // downloadRoom returns the disk-headroom check run before each chunk: a
 // download never takes the filesystem holding dir below the reserve
 // (downloadReserve), so a run of large downloads cannot fill the box. A body
-// that declared its length is checked whole up front. The check fails open:
-// a disk that cannot be measured does not block downloads.
-func downloadRoom(dir string, declared int64) func(next int64) error {
-	return func(next int64) error {
+// that declared its length is checked whole up front. A chunk that passes is
+// reserved until the caller runs the returned release (once it is on disk).
+// The check fails open: a disk that cannot be measured does not block
+// downloads.
+func downloadRoom(dir string, declared int64) func(next int64) (release func(), err error) {
+	return func(next int64) (func(), error) {
 		// The directory may not exist yet: measure its nearest existing
 		// ancestor, which is on the same filesystem.
 		at := dir
@@ -680,9 +708,13 @@ func downloadRoom(dir string, declared int64) func(next int64) error {
 			}
 			at = filepath.Dir(at)
 		}
+		downloadReservations.Lock()
+		defer downloadReservations.Unlock()
 		total, avail, err := downloadDiskUsage(at)
 		if err != nil || total == 0 {
-			return nil //nolint:nilerr // fails open, as diskguard does: an unmeasurable disk never blocks a download
+			// Fails open, as diskguard does: an unmeasurable disk never blocks
+			// a download.
+			return func() {}, nil
 		}
 		need := next
 		if next == 0 && declared > 0 {
@@ -690,11 +722,25 @@ func downloadRoom(dir string, declared int64) func(next int64) error {
 		}
 		need = max(need, 0)
 		reserve := downloadReserve(total)
-		if avail < reserve || avail-reserve < uint64(need) {
-			return fmt.Errorf("not enough free disk space: %s free, and downloads keep at least %s free on this filesystem; free up space (Settings → Admin → Server → storage) and retry",
-				humanBytes(avail), humanBytes(reserve))
+		pending, want := downloadReservations.outstanding, uint64(need)
+		if avail < reserve+pending || avail-reserve-pending < want {
+			return nil, fmt.Errorf("not enough free disk space: %s free, and downloads keep at least %s free on this filesystem; free up space (Settings → Admin → Server → storage) and retry",
+				humanBytes(avail-min(avail, pending)), humanBytes(reserve))
 		}
-		return nil
+		if next <= 0 {
+			// The up-front check of a declared length reserves nothing: the
+			// chunks reserve their own bytes as they arrive.
+			return func() {}, nil
+		}
+		downloadReservations.outstanding += want
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				downloadReservations.Lock()
+				downloadReservations.outstanding -= want
+				downloadReservations.Unlock()
+			})
+		}, nil
 	}
 }
 

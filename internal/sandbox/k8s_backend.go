@@ -1134,7 +1134,7 @@ func (k *k8sImpl) executeFileOp(ctx context.Context, req FileOpRequest, anchor s
 	if podName == "" {
 		return FileOpResult{}, fmt.Errorf("fileop %s: %w", req.Op, ErrClosed)
 	}
-	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+	cmdCtx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
 
 	reqJSON, err := encodeFileOpWire(req, anchor)

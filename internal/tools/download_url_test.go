@@ -845,3 +845,59 @@ func TestDownloadURL_AnIdenticalReDownloadReusesTheFile(t *testing.T) {
 	}
 	noPartialFiles(t, dir)
 }
+
+func TestDownloadURL_ReuseFindsACopyPastAGap(t *testing.T) {
+	var body atomic.Value
+	body.Store("first\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body.Load().(string))
+	}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	sb := fsTestSandbox(t)
+	first := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	body.Store("second\n")
+	second := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	if first.Status != "success" || second.Status != "success" || second.SavedTo == first.SavedTo {
+		t.Fatalf("first %+v second %+v", first, second)
+	}
+	// Deleting the first copy leaves a gap before the second: a re-download
+	// of the second body still finds it rather than refilling the gap.
+	if err := os.Remove(filepath.Join(dir, filepath.Base(first.SavedTo))); err != nil {
+		t.Fatal(err)
+	}
+	again := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	if again.Status != "success" || !again.Deduplicated || again.SavedTo != second.SavedTo {
+		t.Fatalf("want the second copy reused, got %+v", again)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*"))
+	if len(matches) != 1 {
+		t.Fatalf("want 1 file, got %v", matches)
+	}
+}
+
+func TestDownloadRoom_ConcurrentChunksShareTheFreeSpace(t *testing.T) {
+	prev := downloadDiskUsage
+	t.Cleanup(func() { downloadDiskUsage = prev })
+	// 100 GiB disk, 5 GiB reserve, 10 MiB above it: room for one 8 MiB
+	// chunk, not two at once.
+	downloadDiskUsage = func(string) (uint64, uint64, error) { return 100 << 30, 5<<30 + 10<<20, nil }
+	dir := t.TempDir()
+	releaseA, err := downloadRoom(dir, -1)(8 << 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := downloadRoom(dir, -1)(8 << 20); err == nil {
+		t.Fatal("a second concurrent chunk passed against the same free space")
+	}
+	releaseA()
+	releaseA() // idempotent
+	releaseB, err := downloadRoom(dir, -1)(8 << 20)
+	if err != nil {
+		t.Fatalf("released space not reusable: %v", err)
+	}
+	releaseB()
+	if downloadReservations.outstanding != 0 {
+		t.Fatalf("reservations leaked: %d", downloadReservations.outstanding)
+	}
+}

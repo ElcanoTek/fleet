@@ -915,6 +915,13 @@ def do_stream(req):
                     "stale",
                     "partial file holds %d bytes, expected %d" % (info.st_size, offset),
                 )
+            # Fleet passes back the ctime the previous step reported: any
+            # write, truncate, chmod or rename since then moves it, so bytes
+            # changed between steps (even an overwrite of the same length)
+            # are caught without hashing the file again.
+            expected_ctime = int(req.get("expected_ctime_ns") or 0)
+            if expected_ctime and info.st_ctime_ns != expected_ctime:
+                return fail("stale", "partial file was changed by something else")
         view = memoryview(data)
         while view:
             written = os.write(fd, view)
@@ -941,8 +948,11 @@ def do_stream(req):
             current = _lstat_at(parent_fd, name)
             if not _same_file(current, written_info) or current.st_size != size:
                 raise UnsafePath("partial file changed before it was committed")
-            # The bytes themselves, not just their count: Fleet sends the hash
-            # of the body it streamed, so a same-length overwrite is caught.
+            if current.st_ctime_ns != written_info.st_ctime_ns:
+                return fail("stale", "partial file was changed by something else")
+            # Optionally the bytes themselves: a full re-hash, which Fleet
+            # does not ask for on large downloads (the ctime chain above
+            # covers changes between steps without reading the file again).
             expected = _expected_digest(req)
             if expected:
                 try:
@@ -959,7 +969,14 @@ def do_stream(req):
             if not _same_file(committed, written_info) or committed.st_size != size:
                 raise UnsafePath("committed file changed during the rename")
             os.fsync(parent_fd)
-        return {"ok": True, "err_kind": "", "err": "", "data_b64": "", "size": size}
+        return {
+            "ok": True,
+            "err_kind": "",
+            "err": "",
+            "data_b64": "",
+            "size": size,
+            "ctime_ns": written_info.st_ctime_ns,
+        }
     except FileExistsError:
         return fail("stale", "partial file already exists")
     except IsADirectoryError:

@@ -13,8 +13,14 @@ lands in the conversation workspace through the sandbox FileOp seam.
   file (on a filesystem without hard links, `renameat2(RENAME_NOREPLACE)`;
   with neither, the download fails rather than risk a replacing rename).
   Every chunk checks the partial file holds exactly the bytes written so far,
-  in the executor and again in Fleet, so bytes another process appended are
-  never committed. Host memory stays at about one chunk whatever the file size.
+  in the executor and again in Fleet, and each step (append or commit) passes
+  the ctime the step before reported: if anything else wrote to, truncated or
+  touched the partial file in between, even overwriting the same length, the
+  executor refuses to go on. That costs a `fstat`, not a re-hash of the file,
+  so a 512 MB commit stays well inside the file-op time limit. A process in
+  the sandbox can still change the file after the commit, as it can any
+  workspace file; `sha256` describes the body Fleet received and wrote.
+  Host memory stays at about one chunk whatever the file size.
 - **512 MB cap** (was 100 MB, when the whole body was buffered). A body that
   declares more is refused before anything is written; one that streams past
   the cap is aborted and its partial file removed. The cap covers the largest
@@ -30,12 +36,16 @@ lands in the conversation workspace through the sandbox FileOp seam.
   download that would leave less than 5% of it (the default
   `FLEET_DISK_MIN_FREE_PERCENT` floor) or 2 GiB, whichever is larger, is
   refused or aborted with its partial file removed. A body that declares its
-  length is checked whole before anything is written. The check fails open:
+  length is checked whole before anything is written. A chunk that passes the
+  check stays reserved until it is on disk, so concurrent downloads cannot all
+  pass against the same free space. The check fails open:
   a disk that cannot be measured does not block downloads.
 - **Re-downloads do not pile up.** Files are named `<stem>__<url hash><ext>`; a
   re-download of the same URL whose bytes match an earlier copy reuses that
-  file (`deduplicated: true`) instead of writing another. Only changed content
-  gets a new `_1`, `_2`, … name. Completed downloads otherwise live and go with
+  file (`deduplicated: true`) instead of writing another; the search for one
+  runs past deleted copies (it ends after 8 missing names in a row) and hashes
+  only files no larger than the body, under a time limit scaled to its size.
+  Only changed content gets a new name: the first free one of `_1`, `_2`, …. Completed downloads otherwise live and go with
   their conversation's workspace (conversation TTL, deletion, the admin
   cleanup). `.fleet-download-<24 hex>.partial` is a name
   Fleet reserves for this; nothing else should create files with it.
