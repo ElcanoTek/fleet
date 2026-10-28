@@ -188,7 +188,7 @@ A task can stop making progress in several ways. Each has a bound:
 | `running`, lease stolen | `errTaskLeaseLost` cancels the stale run | immediate |
 | `paused_awaiting_input` | `ExpirePausedTasks` fails it terminally | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (off by default) |
 | `paused_awaiting_wake`, unreachable | `ExpireStrandedWakeTasks` fails it terminally | 24h past the deadline |
-| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 1800; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
+| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 14400; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
 
 `paused_awaiting_wake` was the gap. `WakeDueTasks` filters on
 `wake_at IS NOT NULL`, so a row without one can never wake — and

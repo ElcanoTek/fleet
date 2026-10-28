@@ -705,10 +705,12 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 }
 
 // defaultTurnExecutionTimeout caps how long a single turn may run
-// server-side once detached from the SSE connection. Well above the
-// per-turn cost + iteration ceilings, which are the real safety nets.
-// Operators can override via CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
-const defaultTurnExecutionTimeout = 30 * time.Minute
+// server-side once detached from the SSE connection. Matches the 4-hour
+// scheduled-task wall timeout (FLEET_TASK_WALL_TIMEOUT) so multi-campaign
+// audits and large interactive workflows are bounded by the per-turn cost
+// and iteration ceilings rather than a 30-minute wall-clock cutoff.
+// Operators can override via FLEET_TURN_TIMEOUT_SECONDS / CHAT_TURN_TIMEOUT_SECONDS (config.TurnTimeoutSeconds).
+const defaultTurnExecutionTimeout = 4 * time.Hour
 
 // turnTimeout resolves the configured per-turn wall-clock cap, falling
 // back to defaultTurnExecutionTimeout when unset or non-positive.
@@ -721,10 +723,10 @@ func (s *Server) turnTimeout() time.Duration {
 
 // bufferRetainTTL is how long a finished turn's event buffer stays in the
 // inflight map after completion — long enough for a client that dropped
-// mid-turn to return and replay from its Last-Event-ID. Default 15m covers the
-// p95 long interactive agent run; tune via FLEET_SSE_BUFFER_DURATION (e.g. 2m on
-// a memory-constrained box, 30m on beefy hardware).
-var bufferRetainTTL = envDuration("FLEET_SSE_BUFFER_DURATION", 15*time.Minute)
+// mid-turn to return and replay from its Last-Event-ID. Default 60m covers
+// long interactive agent runs; tune via FLEET_SSE_BUFFER_DURATION (e.g. 2m on
+// a memory-constrained box, 60m on beefy hardware).
+var bufferRetainTTL = envDuration("FLEET_SSE_BUFFER_DURATION", 60*time.Minute)
 
 // sseMaxBytesPerTurn caps a single turn's in-memory event buffer. Past it, the
 // oldest events are evicted (sliding window) so a chatty 15m turn can't grow

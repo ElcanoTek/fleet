@@ -197,7 +197,7 @@ sandbox image that was present all along.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
-| `FLEET_TURN_TIMEOUT_SECONDS` | `1800` | Hard deadline on one interactive chat turn (legacy alias `CHAT_TURN_TIMEOUT_SECONDS`). |
+| `FLEET_TURN_TIMEOUT_SECONDS` | `14400` | Hard deadline on one interactive chat turn (legacy alias `CHAT_TURN_TIMEOUT_SECONDS`). |
 | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | `0` (off) | Auto-archive a conversation this many days after its last activity; `0` leaves archiving to the user. |
 | `CONVERSATION_TTL_DAYS` | `14` | Retention of unpinned conversations before the maintenance sweep deletes them (no `FLEET_` prefix). |
 | `FLEET_CHAT_DB_MAX_CONNS` / `_MIN_CONNS` / `_MAX_CONN_IDLE_TIME` / `_MAX_CONN_LIFETIME` | pgx defaults | Chat-store connection-pool sizing; the `FLEET_SCHED_DB_*` quartet is the same for the scheduler DB. Durations take Go syntax. |

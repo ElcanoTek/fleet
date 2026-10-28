@@ -315,25 +315,25 @@ func TestSpawn_JSONResultShape(t *testing.T) {
 	}
 }
 
-// TestSpawn_DefaultFanoutIsFiveSixthRefused pins #264's "max 5 concurrent
-// sub-agents": with the package-default fan-out cap (newSubagentConfig clamps a 0
-// to 5), the 6th spawn in a run is refused with the documented message.
+// TestSpawn_DefaultFanoutIsFiveSixthRefused pins #264's per-parent fan-out cap:
+// with the package-default fan-out cap (newSubagentConfig clamps a 0 to 20),
+// the 21st spawn in a run is refused with the documented message.
 func TestSpawn_DefaultFanoutIsFiveSixthRefused(t *testing.T) {
 	child := &budgetMockModel{name: "c", inTokens: 1, outTokens: 1, costUSD: 0.001}
-	// maxChildren=0 → clamped to the package default (5).
+	// maxChildren=0 → clamped to the package default (20).
 	parent := newParentForSpawn(t, child, 10.0, 0, 1, 0)
-	if parent.subagent.maxChildren != 5 {
-		t.Fatalf("default maxChildren = %d, want 5 (#264)", parent.subagent.maxChildren)
+	if parent.subagent.maxChildren != 20 {
+		t.Fatalf("default maxChildren = %d, want 20 (#264)", parent.subagent.maxChildren)
 	}
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 20; i++ {
 		resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "t", MaxCostUSD: 0.001}, "call-1")
 		if out := parseSpawnOutput(t, resp); !out.Success {
 			t.Fatalf("spawn %d within the cap was refused: %q", i, out.Result)
 		}
 	}
-	resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "sixth", MaxCostUSD: 0.001}, "call-1")
+	resp, _ := parent.spawn(context.Background(), spawnSubagentInput{Task: "twenty-first", MaxCostUSD: 0.001}, "call-1")
 	if out := parseSpawnOutput(t, resp); out.Success || !strings.Contains(out.Result, "max concurrent sub-agents reached") {
-		t.Fatalf("6th spawn must be refused with the documented message, got success=%v result=%q", out.Success, out.Result)
+		t.Fatalf("21st spawn must be refused with the documented message, got success=%v result=%q", out.Success, out.Result)
 	}
 }
 

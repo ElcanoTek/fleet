@@ -189,7 +189,7 @@ type PoolConfig struct {
 	PersistentREPL bool
 	// PersistentIdleTTL bounds how long a persistent per-conversation sandbox may
 	// sit idle (no run_python/bash call) before the reaper closes it
-	// (FLEET_PYTHON_REPL_IDLE_TTL). Zero falls back to 30m.
+	// (FLEET_PYTHON_REPL_IDLE_TTL). Zero falls back to 2h.
 	PersistentIdleTTL time.Duration
 	// PersistentMaxSessions bounds how many persistent sandboxes are kept
 	// (FLEET_PYTHON_REPL_MAX). SOFT cap: on each create, least-recently-used IDLE
@@ -213,7 +213,7 @@ func NewPool(cfg PoolConfig) *Pool {
 	if cfg.PersistentREPL {
 		p.persistent = make(map[string]*persistentEntry)
 		if p.cfg.PersistentIdleTTL <= 0 {
-			p.cfg.PersistentIdleTTL = 30 * time.Minute
+			p.cfg.PersistentIdleTTL = 2 * time.Hour
 		}
 		p.persistentDone = make(chan struct{})
 		safe.Go("sandbox.pool.persistentKeeper", func() { p.persistentKeeper(p.persistentDone) })

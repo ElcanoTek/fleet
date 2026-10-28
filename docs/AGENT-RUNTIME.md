@@ -115,7 +115,7 @@ controls is whether that kernel survives **between turns**:
   a persistent kernel back to a clean slate mid-conversation.
 
 A persistent sandbox is reclaimed on conversation delete, on process shutdown,
-and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **1800s**).
+and by an idle reaper (`FLEET_PYTHON_REPL_IDLE_TTL`, default **7200s**).
 `FLEET_PYTHON_REPL_MAX` (default **32**; `0` disables it) bounds how many are
 kept: each time a persistent sandbox is created, least-recently-used **idle**
 sessions are evicted until the count is back under the cap. It is a soft cap —
@@ -1656,7 +1656,7 @@ Each spawn obeys these non-negotiable properties:
   **parent → sub-agent only**: a child does not get the `spawn_subagent` tool
   registered at all, so it cannot delegate further. An operator can raise the depth
   to allow deeper trees.
-- **Fan-out cap.** `FLEET_SUBAGENTS_MAX_CHILDREN` (default `5`) bounds per-parent
+- **Fan-out cap.** `FLEET_SUBAGENTS_MAX_CHILDREN` (default `20`) bounds per-parent
   fan-out; the `(N+1)`-th spawn is **refused** with `"max concurrent sub-agents
   reached"` as an error **result** rather than blocking.
 
