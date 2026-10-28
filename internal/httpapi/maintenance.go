@@ -114,6 +114,16 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 		log.Printf("maintenance: workspace sweep removed %d orphan dir(s)", removed)
 	}
 
+	// download_url partial files a cancelled turn left behind (the sandbox
+	// was retired before the download could abort its own partial). Without
+	// this, one that no later download into the same directory sweeps would
+	// sit on disk until its conversation is deleted.
+	if n, freed, err := store.SweepStaleDownloadPartials(tools.WorkspaceDirForConversation(""), store.DownloadPartialMaxAge); err != nil {
+		log.Printf("maintenance: download partial sweep: %v", err)
+	} else if n > 0 {
+		log.Printf("maintenance: download partial sweep removed %d file(s), %d bytes", n, freed)
+	}
+
 	// Reconcile the shared file library's staged tree against its manifest
 	// (docs/SHARED-FILES.md): re-stage anything missing or wrong-sized, remove
 	// strays. This is what makes the mutating endpoints' staging "best-effort,

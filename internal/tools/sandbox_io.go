@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
@@ -68,65 +69,70 @@ func sandboxWriteFile(ctx context.Context, sb *sandbox.Sandbox, resolved, valid 
 	return err
 }
 
-// sandboxFileExists probes a validated path via a 1-byte sandboxed read.
-// Used by download_url's collision-suffix loop in place of host os.Stat.
-func sandboxFileExists(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string) (bool, error) {
-	if sb == nil {
-		return false, fmt.Errorf("file access requires a sandbox; pool.Take returned nil or was bypassed")
-	}
-	root, err := fileOpRoot(ctx, resolved, valid, false)
-	if err != nil {
-		return false, err
-	}
-	_, err = sb.RunFileOp(ctx, sandbox.FileOpRequest{
-		Op:    sandbox.FileOpRead,
-		Path:  valid,
-		Root:  root,
-		Limit: 1,
-	})
-	switch {
-	case err == nil:
-		return true, nil
-	case errors.Is(err, sandbox.ErrFileOpNotFound):
-		return false, nil
-	case errors.Is(err, sandbox.ErrFileOpIsDirectory):
-		return true, nil
-	default:
-		return false, err
-	}
-}
-
 // errStreamTooLarge: the source held more than sandboxStreamWrite's cap.
 var errStreamTooLarge = errors.New("stream exceeded its size cap")
 
-// sandboxStreamWrite copies src to the validated path through the FileOp seam
-// without holding it whole: chunkBytes at a time into a hidden partial file
-// beside the destination (sandbox.FileOpStream), renamed to the destination
-// with the last chunk, never replacing an existing file. More than maxBytes
-// fails with errStreamTooLarge. On any failure the partial file is removed
-// (or, when the abort cannot run, swept by a later streamed write), so a
-// destination either holds the whole body or does not exist. Returns
-// the size and the SHA-256 of what was written.
-func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string, src io.Reader, maxBytes int64, chunkBytes int) (size int64, sha256Hex string, err error) {
-	if sb == nil {
-		return 0, "", fmt.Errorf("file access requires a sandbox; pool.Take returned nil or was bypassed")
-	}
-	root, err := fileOpRoot(ctx, resolved, valid, true)
+// sandboxFileSHA256 probes a validated path through the FileOp seam: whether
+// an entry exists there and, for a regular file, its SHA-256 (the executor
+// hashes the whole file whatever window it returns).
+func sandboxFileSHA256(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string) (exists bool, sum string, err error) {
+	root, err := fileOpRoot(ctx, resolved, valid, false)
 	if err != nil {
-		return 0, "", err
+		return false, "", err
+	}
+	res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{Op: sandbox.FileOpRead, Path: valid, Root: root, Limit: 1})
+	switch {
+	case err == nil:
+		return true, strings.TrimPrefix(strings.ToLower(res.SHA256), "sha256:"), nil
+	case errors.Is(err, sandbox.ErrFileOpNotFound):
+		return false, "", nil
+	case errors.Is(err, sandbox.ErrFileOpIsDirectory):
+		return true, "", nil
+	default:
+		return false, "", err
+	}
+}
+
+// streamTarget is where a streamed body ends up: Path, validated, in the
+// streamed directory; Reuse when an identical file is already there, so the
+// new copy is discarded instead of committed.
+type streamTarget struct {
+	Path  string
+	Reuse bool
+}
+
+// sandboxStreamWrite copies src into dir through the FileOp seam without
+// holding it whole: chunkBytes at a time into a hidden partial file
+// (sandbox.FileOpStream). Before each chunk room(next) may refuse it (a disk
+// headroom check). Once the whole body landed, choose picks the destination
+// from the body's SHA-256: a new name, committed with a no-replace rename the
+// executor refuses if the staged bytes no longer hash to the body, or an
+// identical existing file, in which case the partial file is removed. More
+// than maxBytes fails with errStreamTooLarge. On any failure the partial file
+// is removed (or, when the abort cannot run, swept by a later streamed
+// write), so nothing half-written is left behind.
+func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolvedDir, validDir string, src io.Reader,
+	maxBytes int64, chunkBytes int, room func(next int64) error, choose func(sum string) (streamTarget, error),
+) (target streamTarget, size int64, sha256Hex string, err error) {
+	if sb == nil {
+		return streamTarget{}, 0, "", fmt.Errorf("file access requires a sandbox; pool.Take returned nil or was bypassed")
 	}
 	partialName, err := sandbox.StreamPartialName()
 	if err != nil {
-		return 0, "", err
+		return streamTarget{}, 0, "", err
 	}
-	partial := filepath.Join(filepath.Dir(valid), partialName)
-	final := filepath.Base(valid)
+	partial := filepath.Join(validDir, partialName)
+	root, err := fileOpRoot(ctx, filepath.Join(resolvedDir, partialName), partial, true)
+	if err != nil {
+		return streamTarget{}, 0, "", err
+	}
 	started := false
-	abort := func() {
+	fail := func(err error) (streamTarget, int64, string, error) {
 		if started {
 			// Best effort on a fresh context: the caller's may be what failed.
 			_, _ = sb.RunFileOp(context.WithoutCancel(ctx), sandbox.FileOpRequest{Op: sandbox.FileOpStream, Path: partial, Root: root, Abort: true})
 		}
+		return streamTarget{}, 0, "", err
 	}
 	sum := sha256.New()
 	limited := io.LimitReader(src, maxBytes+1)
@@ -136,33 +142,49 @@ func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, vali
 		n, rerr := io.ReadFull(limited, buf)
 		last := errors.Is(rerr, io.EOF) || errors.Is(rerr, io.ErrUnexpectedEOF)
 		if rerr != nil && !last {
-			abort()
-			return 0, "", fmt.Errorf("read response body: %w", rerr)
+			return fail(fmt.Errorf("read response body: %w", rerr))
 		}
 		if offset+int64(n) > maxBytes {
-			abort()
-			return 0, "", errStreamTooLarge
+			return fail(errStreamTooLarge)
 		}
-		req := sandbox.FileOpRequest{Op: sandbox.FileOpStream, Path: partial, Root: root, Offset: offset, Data: buf[:n]}
-		if last {
-			req.Final = final
+		if room != nil {
+			if err := room(int64(n)); err != nil {
+				return fail(err)
+			}
 		}
+		sum.Write(buf[:n])
 		started = true
-		res, err := sb.RunFileOp(ctx, req)
+		res, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{Op: sandbox.FileOpStream, Path: partial, Root: root, Offset: offset, Data: buf[:n]})
 		if err != nil {
-			abort()
-			return 0, "", err
+			return fail(err)
 		}
 		if res.Size != offset+int64(n) {
 			// The executor checks this too; a mismatch means the partial file
 			// was written by something else, so its bytes are not the body's.
-			abort()
-			return 0, "", fmt.Errorf("streamed file holds %d bytes, expected %d", res.Size, offset+int64(n))
+			return fail(fmt.Errorf("streamed file holds %d bytes, expected %d", res.Size, offset+int64(n)))
 		}
-		sum.Write(buf[:n])
 		offset += int64(n)
 		if last {
-			return offset, hex.EncodeToString(sum.Sum(nil)), nil
+			break
 		}
 	}
+	digest := hex.EncodeToString(sum.Sum(nil))
+	target, err = choose(digest)
+	if err != nil {
+		return fail(err)
+	}
+	if target.Reuse {
+		_, _, _, _ = fail(nil)
+		return target, offset, digest, nil
+	}
+	if filepath.Dir(target.Path) != validDir {
+		return fail(fmt.Errorf("destination %s is outside the streamed directory", target.Path))
+	}
+	if _, err := sb.RunFileOp(ctx, sandbox.FileOpRequest{
+		Op: sandbox.FileOpStream, Path: partial, Root: root, Offset: offset,
+		Final: filepath.Base(target.Path), ExpectedSHA256: digest, CommitOnly: true,
+	}); err != nil {
+		return fail(err)
+	}
+	return target, offset, digest, nil
 }

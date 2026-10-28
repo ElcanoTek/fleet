@@ -22,7 +22,22 @@ lands in the conversation workspace through the sandbox FileOp seam.
 - **Failure leaves nothing behind.** Any error aborts the partial file. If the
   abort itself cannot run (a cancelled turn retires the sandbox first), the
   first chunk of the next streamed write into that directory removes partial
-  files untouched for an hour. `.fleet-download-<24 hex>.partial` is a name
+  files untouched for an hour, and the hourly maintenance pass
+  (`store.SweepStaleDownloadPartials`) removes them from every conversation
+  workspace even if no later download comes.
+- **Downloads cannot fill the disk.** Before each chunk the free space of the
+  filesystem holding the destination is measured (`diskguard.Usage`); a
+  download that would leave less than 5% of it (the default
+  `FLEET_DISK_MIN_FREE_PERCENT` floor) or 2 GiB, whichever is larger, is
+  refused or aborted with its partial file removed. A body that declares its
+  length is checked whole before anything is written. The check fails open:
+  a disk that cannot be measured does not block downloads.
+- **Re-downloads do not pile up.** Files are named `<stem>__<url hash><ext>`; a
+  re-download of the same URL whose bytes match an earlier copy reuses that
+  file (`deduplicated: true`) instead of writing another. Only changed content
+  gets a new `_1`, `_2`, … name. Completed downloads otherwise live and go with
+  their conversation's workspace (conversation TTL, deletion, the admin
+  cleanup). `.fleet-download-<24 hex>.partial` is a name
   Fleet reserves for this; nothing else should create files with it.
 - **HTML interstitials are followed to the file**, up to 3 hops: a meta refresh,
   or a page whose only link names a data or attachment file (`.csv`, `.xlsx`,

@@ -266,3 +266,30 @@ func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
 		t.Fatalf("file committed without a no-replace primitive: %v", err)
 	}
 }
+
+func TestFileOp_StreamRefusesASameLengthOverwrite(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	partial := streamPartial(t, root)
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Data: []byte("abc")}); err != nil {
+		t.Fatal(err)
+	}
+	// Another process rewrites the staged bytes in place: same inode, same size.
+	f, err := os.OpenFile(partial, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 3, Data: []byte("def"),
+		Final: "r.csv", ExpectedSHA256: sha256Hex([]byte("abcdef"))})
+	if !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("committed overwritten bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "r.csv")); !os.IsNotExist(err) {
+		t.Fatalf("destination created: %v", err)
+	}
+}

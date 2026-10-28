@@ -387,3 +387,41 @@ func TestConversationStorageMetaByIDs(t *testing.T) {
 		t.Errorf("meta mismatch: %+v", m)
 	}
 }
+
+func TestSweepStaleDownloadPartials(t *testing.T) {
+	root := t.TempDir()
+	conv := filepath.Join(root, "conv", "sub")
+	if err := os.MkdirAll(conv, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(conv, ".fleet-download-0123456789abcdef01234567.partial")
+	fresh := filepath.Join(conv, ".fleet-download-89abcdef0123456789abcdef.partial")
+	other := filepath.Join(conv, "report.csv")
+	lookalike := filepath.Join(conv, ".fleet-download-notapartial.partial")
+	for _, p := range []string{stale, fresh, other, lookalike} {
+		if err := os.WriteFile(p, []byte("bytes"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	for _, p := range []string{stale, other, lookalike} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, freed, err := SweepStaleDownloadPartials(root, DownloadPartialMaxAge)
+	if err != nil || n != 1 || freed != 5 {
+		t.Fatalf("n=%d freed=%d err=%v", n, freed, err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale partial kept: %v", err)
+	}
+	for _, p := range []string{fresh, other, lookalike} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("%s removed: %v", p, err)
+		}
+	}
+	if n, _, err := SweepStaleDownloadPartials(filepath.Join(root, "missing"), time.Hour); n != 0 || err != nil {
+		t.Fatalf("missing root: %d %v", n, err)
+	}
+}

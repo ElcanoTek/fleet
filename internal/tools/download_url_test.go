@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"unicode/utf8"
 )
@@ -27,6 +29,10 @@ import (
 // blow away. Mirrors withWorkspace in fastio_upload_test.go but without
 // pre-seeding any file.
 func downloadCtx(t *testing.T) (context.Context, string) {
+	t.Helper()
+	prevUsage := downloadDiskUsage
+	downloadDiskUsage = func(string) (uint64, uint64, error) { return 1 << 40, 1 << 39, nil }
+	t.Cleanup(func() { downloadDiskUsage = prevUsage })
 	t.Helper()
 	// httptest servers listen on loopback, which the production SSRF guard
 	// blocks — substitute an unguarded dialer for the duration of the test.
@@ -233,10 +239,11 @@ func TestDownloadURL_NoRedirectChainIsSingleEntry(t *testing.T) {
 	}
 }
 
-func shrinkDownloadLimits(t *testing.T, maxBytes int64, chunk int) {
+// shrinkDownloadLimits caps downloads at 1 MiB in chunk-byte pieces.
+func shrinkDownloadLimits(t *testing.T, chunk int) {
 	t.Helper()
 	prevMax, prevChunk := downloadURLMaxBytes, downloadURLChunkBytes
-	downloadURLMaxBytes, downloadURLChunkBytes = maxBytes, chunk
+	downloadURLMaxBytes, downloadURLChunkBytes = 1<<20, chunk
 	t.Cleanup(func() { downloadURLMaxBytes, downloadURLChunkBytes = prevMax, prevChunk })
 }
 
@@ -249,7 +256,7 @@ func noPartialFiles(t *testing.T, dir string) {
 }
 
 func TestDownloadURL_SizeCapEnforced(t *testing.T) {
-	shrinkDownloadLimits(t, 1<<20, 64<<10)
+	shrinkDownloadLimits(t, 64<<10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// Stream past the cap without a Content-Length, so the cap is hit
 		// mid-stream after several chunks have landed.
@@ -276,7 +283,7 @@ func TestDownloadURL_SizeCapEnforced(t *testing.T) {
 }
 
 func TestDownloadURL_DeclaredOversizeIsRefusedBeforeWriting(t *testing.T) {
-	shrinkDownloadLimits(t, 1<<20, 64<<10)
+	shrinkDownloadLimits(t, 64<<10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(2<<20))
 		_, _ = w.Write(make([]byte, 2<<20))
@@ -291,7 +298,7 @@ func TestDownloadURL_DeclaredOversizeIsRefusedBeforeWriting(t *testing.T) {
 }
 
 func TestDownloadURL_StreamsManyChunksIntoOneFile(t *testing.T) {
-	shrinkDownloadLimits(t, 1<<20, 4<<10)
+	shrinkDownloadLimits(t, 4<<10)
 	want := make([]byte, 50_000)
 	for i := range want {
 		want[i] = byte(i % 251)
@@ -326,11 +333,12 @@ func TestDownloadURL_EmptyBodySavesAnEmptyFile(t *testing.T) {
 	noPartialFiles(t, dir)
 }
 
-func TestDownloadURL_DeduplicatesByURLHash(t *testing.T) {
-	body := []byte("same bytes")
+func TestDownloadURL_ChangedContentGetsItsOwnName(t *testing.T) {
+	var body atomic.Value
+	body.Store("same bytes")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write(body)
+		_, _ = io.WriteString(w, body.Load().(string))
 	}))
 	defer srv.Close()
 
@@ -338,6 +346,10 @@ func TestDownloadURL_DeduplicatesByURLHash(t *testing.T) {
 	url := srv.URL + "/same.txt"
 
 	first := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: url})
+	// New content behind the same URL: the second download must keep its own
+	// file (an identical body would reuse the first; see
+	// TestDownloadURL_AnIdenticalReDownloadReusesTheFile).
+	body.Store("new bytes")
 	second := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: url})
 
 	if first.Status != "success" || second.Status != "success" {
@@ -777,4 +789,59 @@ func TestDownloadURL_WarnsWhenAChasedFileRedirectsToALogin(t *testing.T) {
 	if res.Status != "success" || res.Warning == "" {
 		t.Fatalf("a chased data link that ends on a login page must warn: %+v", res)
 	}
+}
+
+func TestDownloadURL_KeepsTheDiskReserveFree(t *testing.T) {
+	shrinkDownloadLimits(t, 64<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		chunk := make([]byte, 64<<10)
+		for i := 0; i < 8; i++ {
+			_, _ = w.Write(chunk)
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	// 100 GiB disk, reserve 5 GiB; free space drops below it mid-download.
+	free := uint64(5<<30) + 200<<10
+	downloadDiskUsage = func(string) (uint64, uint64, error) {
+		f := free
+		free -= 64 << 10
+		return 100 << 30, f, nil
+	}
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/big.bin"})
+	if res.Status != "error" || !strings.Contains(res.Error, "free disk space") {
+		t.Fatalf("want a disk-reserve refusal, got %+v", res)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*"))
+	if len(matches) > 0 {
+		t.Fatalf("a refused download left files: %v", matches)
+	}
+	noPartialFiles(t, dir)
+}
+
+func TestDownloadURL_AnIdenticalReDownloadReusesTheFile(t *testing.T) {
+	var body atomic.Value
+	body.Store("a,b\n1,2\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, body.Load().(string))
+	}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	sb := fsTestSandbox(t)
+	first := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	second := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	if first.Status != "success" || second.Status != "success" || second.SavedTo != first.SavedTo || !second.Deduplicated || first.Deduplicated {
+		t.Fatalf("first %+v second %+v", first, second)
+	}
+	body.Store("a,b\n3,4\n")
+	third := runDownloadURL(ctx, sb, DownloadURLParams{URL: srv.URL + "/r.csv"})
+	if third.Status != "success" || third.SavedTo == first.SavedTo || third.Deduplicated {
+		t.Fatalf("changed content must get its own file: %+v", third)
+	}
+	matches, _ := filepath.Glob(filepath.Join(dir, "*"))
+	if len(matches) != 2 {
+		t.Fatalf("want 2 files, got %v", matches)
+	}
+	noPartialFiles(t, dir)
 }

@@ -77,9 +77,14 @@ type FileOpRequest struct {
 	Data []byte
 
 	// Stream: the plain file name (same directory) the completed partial file
-	// is renamed to, and whether to delete the partial file instead.
+	// is renamed to, and whether to delete the partial file instead. With
+	// Final, ExpectedSHA256 is the whole body's hash: the commit is refused if
+	// the staged file's content differs.
 	Final string
 	Abort bool
+	// CommitOnly renames the complete partial file (Offset bytes) to Final
+	// without writing: the caller picks the name after the last chunk.
+	CommitOnly bool
 
 	// Edit.
 	OldText    string
@@ -483,6 +488,10 @@ func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
 		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
 		wire["final"] = req.Final
 		wire["abort"] = req.Abort
+		wire["commit_only"] = req.CommitOnly
+		if req.ExpectedSHA256 != "" {
+			wire["expected_sha256"] = req.ExpectedSHA256
+		}
 	case FileOpEdit:
 		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
 		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))

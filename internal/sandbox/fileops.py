@@ -864,7 +864,14 @@ def do_stream(req):
     fd = -1
     try:
         # Only the first chunk may create directories; an abort never does.
-        first = int(req.get("offset", 0)) == 0 and not req.get("abort")
+        # commit_only renames an already complete partial file (the caller
+        # chose the final name after the last chunk landed). Only the first
+        # chunk creates the partial file and its directories.
+        first = (
+            int(req.get("offset", 0)) == 0
+            and not req.get("abort")
+            and not req.get("commit_only")
+        )
         parent_fd, name = _open_parent(req, create=first)
         if not STREAM_PARTIAL_RE.match(name):
             raise UnsafePath(
@@ -877,7 +884,9 @@ def do_stream(req):
         _test_pause(req, parent_fd)
         offset = int(req.get("offset", 0))
         data = base64.b64decode(req.get("data_b64", ""))
-        if offset == 0:
+        if req.get("commit_only") and (data or not req.get("final")):
+            return fail("", "commit_only takes a final name and no data")
+        if first:
             fd = os.open(
                 name,
                 os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -932,6 +941,18 @@ def do_stream(req):
             current = _lstat_at(parent_fd, name)
             if not _same_file(current, written_info) or current.st_size != size:
                 raise UnsafePath("partial file changed before it was committed")
+            # The bytes themselves, not just their count: Fleet sends the hash
+            # of the body it streamed, so a same-length overwrite is caught.
+            expected = _expected_digest(req)
+            if expected:
+                try:
+                    staged = _sha256_open_at(parent_fd, name)
+                except StaleContent as exc:
+                    return fail("stale", str(exc))
+                if staged != expected:
+                    return fail(
+                        "stale", "partial file content differs from the streamed body"
+                    )
             if not _commit_no_replace(parent_fd, name, final):
                 return fail("stale", "a file named %s appeared meanwhile" % final)
             committed = _lstat_at(parent_fd, final)

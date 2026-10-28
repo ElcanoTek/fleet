@@ -442,7 +442,9 @@ or a page whose only link is the file, the assistant follows it to the file, up
 to three pages deep. If a link that names a spreadsheet or report returns a web
 page instead, usually a sign-in page or an expired link, the assistant is told
 so rather than treating the page as the file. Links to private or internal
-addresses are refused.
+addresses are refused. Downloading the same link again reuses the earlier file
+when nothing changed, and a download is refused when it would leave the server
+short of free disk space.
 
 ## 5. Connectors in a conversation
 
