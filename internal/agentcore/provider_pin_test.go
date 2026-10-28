@@ -30,8 +30,8 @@ func TestUpstreamPinFor(t *testing.T) {
 		// per-upstream prompt-cache locality as every other OpenAI slug. The
 		// second row keeps the family's pin covered independently of whichever
 		// slug currently holds the tier.
-		{DefaultMaxModel, "Anthropic", false},             // strong tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
-		{"google/gemini-4-argon", "Google", true},         // previous strong tier: strict pin to Google
+		{DefaultMaxModel, "Anthropic", false},     // strong tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
+		{"google/gemini-4-argon", "Google", true}, // previous strong tier: strict pin to Google
 		{"openai/gpt-5.4", "OpenAI", false},
 		// x-ai/ has no entry: it held the strong tier for one release and was
 		// deliberately left unpinned (xAI is its only upstream).
@@ -365,15 +365,15 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:            "Anthropic", // everyday default: Claude Haiku 5.5
-		"openai/gpt-6-luna-pro":     "OpenAI",
-		"deepseek/v3":               "DeepSeek",
-		"~z-ai/glm-latest":          "Z.AI",
-		"openai/gpt-5.4":            "OpenAI",
+		DefaultCoreModel:        "Anthropic", // everyday default: Claude Haiku 5.5
+		"openai/gpt-6-luna-pro": "OpenAI",
+		"deepseek/v3":           "DeepSeek",
+		"~z-ai/glm-latest":      "Z.AI",
+		"openai/gpt-5.4":        "OpenAI",
 		DefaultMaxModel:         "Anthropic", // strong tier: Claude Opus 5.5
 		"google/gemini-4-argon": "Google",    // previous strong tier: Gemini 4 Argon on the strict google/ pin
-		"x-ai/grok-4.6":             "", // xAI is unpinned: single upstream already
-		"mistralai/mixtral":         "",
+		"x-ai/grok-4.6":         "",          // xAI is unpinned: single upstream already
+		"mistralai/mixtral":     "",
 	}
 	for slug, want := range cases {
 		if got := preferredUpstreamFor(slug); got != want {
