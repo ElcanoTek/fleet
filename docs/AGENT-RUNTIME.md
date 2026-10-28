@@ -1122,7 +1122,7 @@ the round continues instead of aborting the stream. Logs, Sentry, and
 `panic_events` receive only an opaque incident id, a value-free panic class,
 and non-content tool/run attribution; the recovered value and stack are
 discarded before telemetry. The model sees only the incident id and a
-**possibly executed** marker. Failed tool results continue to suppress in-round
+**possibly executed** marker. Contained tool panics continue to suppress in-round
 provider re-drive under ADR-0035/ADR-0065, even after the step finished.
 
 Invocation-local phase state attributes policy/output failures and marks a

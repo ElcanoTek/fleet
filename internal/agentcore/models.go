@@ -57,28 +57,21 @@ const (
 	// on one upstream with graceful degradation.
 	DefaultCoreModel = "anthropic/claude-haiku-5.5"
 	// DefaultMaxModel is the strong tier — the model escalation
-	// (suggest_advanced_model, chat's "advanced model") resolves to. Exact slug,
-	// never a `~latest` alias. Gemini 4 Argon (2026-10-14, replacing
-	// anthropic/claude-opus-5.5): Google's Gemini 4 generation, released on
-	// OpenRouter 2026-10-13. $2/M in, $10/M out ($4/$20 for Opus 5.5), cache
-	// reads at $0.10/M, a 1,048,576-token window. Endpoints are Google Vertex
-	// (global, global/priority) and Google AI Studio; the strict `google/` pin in
-	// canonicalUpstream holds every request on Vertex (encrypted thought
-	// signatures validate only at the minting upstream), which also keeps the
-	// prompt cache on one upstream. Still a different provider family from the
-	// default, so an escalation is also a provider change. History: Claude
-	// Opus 5.5 (2026-09-22, replacing
-	// anthropic/claude-opus-5): same 1M window and the same eleven official
-	// endpoints across Anthropic, Claude Platform on AWS, Bedrock, Azure and
-	// Google, at $4/M in and $20/M out (Opus 5: $5/$25). History: Claude Opus 5
-	// (2026-09-21, replacing
-	// openai/gpt-5.6-sol): 1M window, 11 healthy OpenRouter endpoints across
-	// four clouds, and a different provider family from the default so an
-	// escalation is also a provider change. It matches the `anthropic/` soft pin
-	// in canonicalUpstream, so the escalation path keeps per-upstream prompt-cache
-	// locality. The scheduled-task FALLBACK is configured separately
-	// (FLEET_TASK_FALLBACK_MODEL; production uses deepseek/deepseek-v4.1-flash).
-	DefaultMaxModel = "google/gemini-4-argon"
+	// (suggest_advanced_model, chat's "advanced model") and the default task
+	// tier resolve to. Exact slug, never a `~latest` alias. Claude Opus 5.5
+	// (2026-10-28, replacing google/gemini-4-argon): 1,000,000-token window and
+	// eleven official endpoints across Anthropic, Claude Platform on AWS,
+	// Amazon Bedrock, Azure and Google Vertex, at $4/M in and $20/M out.
+	// Gemini 4 Argon's strict single-provider `google/` pin had no upstream
+	// fallback and suffered repeated mid-stream 504 idle timeouts on long
+	// tool-heavy turns (such as Pages dashboard builds); Opus 5.5 restores the
+	// multi-cloud official-weights pool and explicit prompt-cache breakpoints.
+	// History: Gemini 4 Argon (2026-10-14, replacing anthropic/claude-opus-5.5);
+	// Claude Opus 5.5 (2026-09-22, replacing anthropic/claude-opus-5); Claude
+	// Opus 5 (2026-09-21, replacing openai/gpt-5.6-sol). The scheduled-task
+	// FALLBACK is configured separately (FLEET_TASK_FALLBACK_MODEL; production
+	// uses deepseek/deepseek-v4.1-flash).
+	DefaultMaxModel = "anthropic/claude-opus-5.5"
 	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
 	// with DefaultMaxModel.
 	AdvancedModelSlug = DefaultMaxModel

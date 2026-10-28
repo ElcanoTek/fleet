@@ -6,11 +6,18 @@ tool calls and results. It does not restart the original tool sequence.
 
 The checkpoint is captured after queued user input is injected and before the
 provider call. Recovery is permitted only when no tool event occurred after that
-checkpoint and no earlier tool step in the attempt returned an error. Failed
-tool results, including contained crashes, may hide a partially executed write.
+checkpoint and no earlier tool step in the attempt suffered a contained panic.
+Ordinary tool error responses in already-completed steps (such as `page_not_found`
+or input validation errors) are preserved in the checkpointed input and do not
+re-execute on resume, whereas contained tool panics may hide an unrecorded
+mutation at a crash boundary and suppress recovery.
 If a tool began during the failed step, recovery also remains suppressed:
 the existing `ErrCommittedSideEffects` and task retry policy apply. Cancellation,
-budget exhaustion, validation and authentication errors do not gain retries.
+budget exhaustion, validation and authentication errors do not gain retries. When
+a mid-stream SSE error with a retryable status code (`502`/`503`/`504`) arrives
+without having been retried by the pre-stream HTTP retry loop and no fallback
+model is configured (as in interactive chat), Fleet performs one bounded
+same-model retry from the checkpoint before surfacing exhaustion.
 
 Completed step usage remains charged once. Completed steps count against the
 iteration limit after recovery. The failed step's partial text is discarded;

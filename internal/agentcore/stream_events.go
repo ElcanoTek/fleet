@@ -175,8 +175,9 @@ type streamSink struct {
 	// whether a failed stream attempt may be re-driven: text/reasoning output is
 	// regenerable, an executed tool is not (re-driving the round could repeat
 	// its side effect). See streamRoundWithResilience.
-	toolEvents        int
-	failedToolResults int
+	toolEvents          int
+	failedToolResults   int
+	panickedToolResults int
 	// toolStarts holds the dispatch time of each in-flight tool call, keyed by
 	// call id, so onToolResult can report how long the tool itself took. The
 	// provider's streaming time is excluded: fantasy dispatches a step's tools
@@ -330,6 +331,9 @@ func (s *streamSink) onToolResult(id, name, text string, isErr bool) {
 	s.toolEvents++
 	if isErr {
 		s.failedToolResults++
+		if isContainedToolPanicText(text) {
+			s.panickedToolResults++
+		}
 	}
 	card := s.takeShownCard(id, name, text, isErr)
 	s.entries = append(s.entries, RunEntry{
@@ -407,10 +411,11 @@ func (s *streamSink) toolEventCount() int {
 // its output would be appended AFTER the failed attempt's partial text,
 // duplicating it in both the persisted history and the final answer.
 type sinkMark struct {
-	entries           int
-	finalText         int
-	toolEvents        int
-	failedToolResults int
+	entries             int
+	finalText           int
+	toolEvents          int
+	failedToolResults   int
+	panickedToolResults int
 }
 
 // mark snapshots the current accumulation point. Nil-safe (zero mark).
@@ -420,7 +425,13 @@ func (s *streamSink) mark() sinkMark {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return sinkMark{entries: len(s.entries), finalText: s.finalText.Len(), toolEvents: s.toolEvents, failedToolResults: s.failedToolResults}
+	return sinkMark{
+		entries:             len(s.entries),
+		finalText:           s.finalText.Len(),
+		toolEvents:          s.toolEvents,
+		failedToolResults:   s.failedToolResults,
+		panickedToolResults: s.panickedToolResults,
+	}
 }
 
 // rollbackTo discards everything accumulated after the mark: partial entries,
@@ -447,6 +458,7 @@ func (s *streamSink) rollbackTo(m sinkMark) {
 	}
 	s.toolEvents = m.toolEvents
 	s.failedToolResults = m.failedToolResults
+	s.panickedToolResults = m.panickedToolResults
 	// A mark sits at a step boundary, so the re-driven attempt's first text
 	// is a new step's and needs the same break the abandoned one carried.
 	s.stepEnded = s.finalText.Len() > 0

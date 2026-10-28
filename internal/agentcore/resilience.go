@@ -892,6 +892,19 @@ func (e *engine) streamRoundWithResilience(
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (context still too large after forced compaction): %w", err)
 		case streamErrorRetryExhausted:
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
+				if !streamBlipRetryUsed && isUnretriedMidStreamError(err) {
+					streamBlipRetryUsed = true
+					log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
+						providerErrStatus(providerErr), streamBlipRetryDelay)
+					e.logStreamBlipRetry(providerErr, err)
+					select {
+					case <-time.After(streamBlipRetryDelay):
+					case <-ctx.Done():
+						return streamRoundOutcome{}, fmt.Errorf("context cancelled during stream-blip retry: %w", ctx.Err())
+					}
+					rollbackAttempt()
+					continue
+				}
 				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (retry budget exhausted): %w: %w", ErrRetryBudgetExhausted, err)
 			}
 			e.logFallbackSwap(class, providerErr)

@@ -15,8 +15,8 @@ func TestDefaultTiersResolveTheirContextWindows(t *testing.T) {
 		{DefaultCoreModel, 1_000_000},
 		{"anthropic/claude-haiku-4.5", 200_000}, // the Haiku 5 row must not swallow Haiku 4.5
 		{"openai/gpt-6-luna-pro", 1_050_000},
-		{DefaultMaxModel, 1_048_576},
-		{"anthropic/claude-opus-5.5", 1_000_000},
+		{DefaultMaxModel, 1_000_000},
+		{"google/gemini-4-argon", 1_048_576},
 		{"openai/gpt-6-luna", 1_050_000},
 		{"openai/gpt-6-sol-pro", 1_050_000},
 		{"anthropic/claude-opus-5", 1_000_000},

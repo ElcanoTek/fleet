@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -10,6 +11,23 @@ import (
 
 	"charm.land/fantasy"
 )
+
+// isUnretriedMidStreamError reports whether err is an in-band SSE stream error
+// (Title=="stream error" and StatusCode==0 before normalization) that Fantasy's
+// pre-stream retry loop never retried (no *fantasy.RetryError wrapper). When no
+// fallback model is configured (e.g., interactive chat), streamErrorRetryExhausted
+// grants the same single bounded same-model retry that streamErrorStreamBlip gets.
+func isUnretriedMidStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var retryErr *fantasy.RetryError
+	if errors.As(err, &retryErr) {
+		return false
+	}
+	var providerErr *fantasy.ProviderError
+	return errors.As(err, &providerErr) && providerErr.StatusCode == 0 && providerErr.Title == "stream error"
+}
 
 // Some OpenAI-compatible providers send numeric HTTP codes inside an SSE
 // error envelope. Fantasy's adapter decodes code as a string and can lose the

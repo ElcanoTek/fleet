@@ -1,6 +1,6 @@
-# Model defaults: Claude Haiku 5.5 everyday, Gemini 4 Argon as the strong tier
+# Model defaults: Claude Haiku 5.5 everyday, Claude Opus 5.5 as the strong tier
 
-**Status:** shipped 2026-10-15 (previous swaps 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
+**Status:** shipped 2026-10-28 (previous swaps 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
 note for the default-model swaps, and the checklist for the next one.
 
 ## Changing the defaults (checklist)
@@ -34,6 +34,16 @@ hold the slugs, plus data that has to be checked by hand:
 
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
+
+## 2026-10-28: Claude Opus 5.5 restored as the strong tier
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` | `anthropic/claude-haiku-5.5` | unchanged |
+| `DefaultMaxModel` (`suggest_advanced_model`, chat's "advanced model", and the default `task_model` tier) | `google/gemini-4-argon` | `anthropic/claude-opus-5.5` |
+
+- **Why: reliability on long, tool-heavy turns.** Under the strict `google/` pin (`Only=[Google]`, no upstream fallbacks), `google/gemini-4-argon` suffered repeated mid-stream `504 Upstream idle timeout exceeded` failures when generating large structured/HTML outputs (such as Pages dashboard builds) after 20+ tool steps. `anthropic/claude-opus-5.5` is served by eleven official endpoints across five clouds (Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure, Google Vertex), supports explicit prompt-cache breakpoints, and is already listed in `officialPoolSlugs` and covered by the `anthropic/claude-opus-5` 1,000,000-token context window prefix.
+- Gemini 4 Argon remains selectable in the catalog with its exact-slug context window and 32K completion-token floor intact.
 
 ## 2026-10-15 (follow-up): Operations Center tasks default to the advanced tier
 

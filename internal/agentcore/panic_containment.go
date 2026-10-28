@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"charm.land/fantasy"
@@ -189,11 +190,17 @@ func (t *panicContainedTool) Run(ctx context.Context, call fantasy.ToolCall) (re
 	return t.inner.Run(ctx, call)
 }
 
+const (
+	containedToolPanicPrefix = "Tool execution failed unexpectedly. Reference: "
+	containedToolPanicSuffix = ". The call may have committed side effects; verify state before retrying."
+)
+
 func containedToolPanicText(incidentID string) string {
-	return fmt.Sprintf(
-		"Tool execution failed unexpectedly. Reference: %s. The call may have committed side effects; verify state before retrying.",
-		incidentID,
-	)
+	return containedToolPanicPrefix + incidentID + containedToolPanicSuffix
+}
+
+func isContainedToolPanicText(text string) bool {
+	return strings.HasPrefix(text, containedToolPanicPrefix) && strings.HasSuffix(text, containedToolPanicSuffix)
 }
 
 // safeToolResultText is the last defense around Fantasy result flattening.
