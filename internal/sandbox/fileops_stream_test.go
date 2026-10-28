@@ -205,3 +205,47 @@ func TestFileOp_StreamSweepsStalePartials(t *testing.T) {
 		t.Fatalf("a recent partial (a running download) was removed: %v", err)
 	}
 }
+
+// On a filesystem without hard links (some RWX volumes) the commit falls back
+// to a rename after an existence check, and still never replaces a file.
+func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 required")
+	}
+	root := t.TempDir()
+	run := func(req map[string]any) map[string]any {
+		t.Helper()
+		in, _ := json.Marshal(req)
+		script := "import errno, os\n" +
+			"def _nolink(*a, **k):\n    raise OSError(errno.EPERM, 'hard links not supported')\n" +
+			"os.link = _nolink\n" + string(fileOpsScript)
+		cmd := exec.Command("python3", "-I", "-c", script)
+		cmd.Stdin = bytes.NewReader(in)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var resp map[string]any
+		if err := json.Unmarshal(out, &resp); err != nil {
+			t.Fatalf("%s: %v", out, err)
+		}
+		return resp
+	}
+	name, _ := StreamPartialName()
+	partial := filepath.Join(root, name)
+	resp := run(map[string]any{"op": "stream", "path": partial, "root": root, "anchor": root, "offset": 0, "data_b64": "YWJj", "final": "r.csv"})
+	if resp["ok"] != true {
+		t.Fatalf("commit without hard links: %v", resp)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "r.csv")); string(got) != "abc" {
+		t.Fatalf("committed %q", got)
+	}
+	name2, _ := StreamPartialName()
+	resp = run(map[string]any{"op": "stream", "path": filepath.Join(root, name2), "root": root, "anchor": root, "offset": 0, "data_b64": "eA==", "final": "r.csv"})
+	if resp["ok"] == true || resp["err_kind"] != "stale" {
+		t.Fatalf("rename fallback replaced an existing file: %v", resp)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "r.csv")); string(got) != "abc" {
+		t.Fatalf("existing file replaced: %q", got)
+	}
+}

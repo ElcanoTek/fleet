@@ -433,6 +433,17 @@ The whole file can be up to 64 MiB, sent in chunks of at most 8 MiB each; the
 connector may set lower limits of its own. The connector's existing permissions and publication checks still apply; a
 staged upload alone does not mean a page or document was published.
 
+Files from a link — a report link in an email, a signed download URL a
+connector hands back, a public CSV — the assistant saves into the
+conversation's working space with its download tool. A file can be up to 512 MB
+(a larger one is not saved at all), and a download may take up to 5 minutes by
+default, 30 at most. When a link first shows a "your download will start" page
+or a page whose only link is the file, the assistant follows it to the file, up
+to three pages deep. If a link that names a spreadsheet or report returns a web
+page instead, usually a sign-in page or an expired link, the assistant is told
+so rather than treating the page as the file. Links to private or internal
+addresses are refused.
+
 ## 5. Connectors in a conversation
 
 A connector is a live link to a system: a mailbox, a reporting API, a document

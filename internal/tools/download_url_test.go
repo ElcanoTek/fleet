@@ -714,6 +714,7 @@ func TestInterstitialTarget(t *testing.T) {
 		`<a href="/a.csv">a</a><a href="/b.csv">b</a>`:                                   "",
 		`<a href="javascript:go()">x.csv</a>`:                                            "",
 		`<a href="/about">about</a>`:                                                     "",
+		`<p>Your scan is ready: <a href="/att/scan.JPG">scan</a></p>`:                    "https://t.example/att/scan.JPG",
 		`<a class=btn href=/files/r.csv>Download</a>`:                                    "https://t.example/files/r.csv",
 		`<!-- <a href="/old/r.csv">r</a> --><p>Nothing here</p>`:                         "",
 		`<script>var s = '<meta http-equiv="refresh" content="0;url=/x.csv">';</script>`: "",

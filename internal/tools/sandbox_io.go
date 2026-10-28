@@ -148,9 +148,16 @@ func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, vali
 			req.Final = final
 		}
 		started = true
-		if _, err := sb.RunFileOp(ctx, req); err != nil {
+		res, err := sb.RunFileOp(ctx, req)
+		if err != nil {
 			abort()
 			return 0, "", err
+		}
+		if res.Size != offset+int64(n) {
+			// The executor checks this too; a mismatch means the partial file
+			// was written by something else, so its bytes are not the body's.
+			abort()
+			return 0, "", fmt.Errorf("streamed file holds %d bytes, expected %d", res.Size, offset+int64(n))
 		}
 		sum.Write(buf[:n])
 		offset += int64(n)

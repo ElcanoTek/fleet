@@ -23,13 +23,16 @@ import (
 // ("5; url=https://…", quotes optional).
 var refreshURLRE = regexp.MustCompile(`(?i)^\s*\d*\s*[;,]?\s*url\s*=\s*['"]?([^'"\s]+)`)
 
-// dataFileExts are extensions of the report and data files a download link
-// usually names.
+// dataFileExts are extensions of the report, data and attachment files a
+// download link usually names.
 var dataFileExts = map[string]bool{
 	".csv": true, ".tsv": true, ".txt": true, ".json": true, ".xml": true,
 	".xlsx": true, ".xls": true, ".xlsm": true, ".parquet": true,
 	".zip": true, ".gz": true, ".tgz": true, ".bz2": true, ".7z": true,
-	".pdf": true, ".docx": true, ".pptx": true,
+	".pdf": true, ".doc": true, ".docx": true, ".ppt": true, ".pptx": true,
+	".rtf": true, ".odt": true, ".ods": true, ".odp": true,
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true, ".tif": true, ".tiff": true,
+	".eml": true, ".msg": true, ".ics": true,
 }
 
 func isHTMLResponse(resp *http.Response) bool {

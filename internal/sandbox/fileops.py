@@ -766,6 +766,43 @@ def _sweep_stale_partials(parent_fd, keep):
                     os.unlink(entry.name, dir_fd=parent_fd)
 
 
+# linkat fails with these where the filesystem has no hard links (some RWX
+# volumes); the commit then falls back to a checked rename.
+_NO_HARDLINK_ERRNOS = {
+    errno.EPERM,
+    errno.EOPNOTSUPP,
+    getattr(errno, "ENOTSUP", errno.EOPNOTSUPP),
+    errno.EXDEV,
+    errno.EMLINK,
+    errno.ENOSYS,
+}
+
+
+def _commit_no_replace(parent_fd, name, final):
+    """Rename name to final without replacing an existing entry. False when
+    final exists. link + unlink is atomic about that; a filesystem without hard
+    links gets a rename after an existence check instead."""
+    try:
+        os.link(
+            name,
+            final,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+    except FileExistsError:
+        return False
+    except OSError as exc:
+        if exc.errno not in _NO_HARDLINK_ERRNOS:
+            raise
+        if _lstat_at(parent_fd, final) is not None:
+            return False
+        os.rename(name, final, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        return True
+    os.unlink(name, dir_fd=parent_fd)
+    return True
+
+
 def _plain_name(name):
     return (
         bool(name) and name not in (".", "..") and "/" not in name and "\0" not in name
@@ -827,6 +864,12 @@ def do_stream(req):
             view = view[written:]
         written_info = os.fstat(fd)
         size = written_info.st_size
+        if size != offset + len(data):
+            # Something else wrote to the partial file: never commit it.
+            return fail(
+                "stale",
+                "partial file holds %d bytes, expected %d" % (size, offset + len(data)),
+            )
         final = req.get("final") or ""
         if final:
             os.fsync(fd)
@@ -835,25 +878,17 @@ def do_stream(req):
         if final:
             if not _plain_name(final) or final.startswith(".fleet-"):
                 raise UnsafePath("final name must be a plain file name")
-            # The entry linked must still be the file just written: linkat
-            # never follows, so a swapped-in symlink would otherwise be linked.
-            if not _same_file(_lstat_at(parent_fd, name), written_info):
+            # The entry committed must still be the file just written, unchanged:
+            # linkat never follows, so a swapped-in symlink would otherwise be
+            # linked, and bytes appended since would be committed.
+            current = _lstat_at(parent_fd, name)
+            if not _same_file(current, written_info) or current.st_size != size:
                 raise UnsafePath("partial file changed before it was committed")
-            # link + unlink commits without replacing: an entry that appeared
-            # at final meanwhile fails the link instead of being overwritten.
-            try:
-                os.link(
-                    name,
-                    final,
-                    src_dir_fd=parent_fd,
-                    dst_dir_fd=parent_fd,
-                    follow_symlinks=False,
-                )
-            except FileExistsError:
+            if not _commit_no_replace(parent_fd, name, final):
                 return fail("stale", "a file named %s appeared meanwhile" % final)
-            if not _same_file(_lstat_at(parent_fd, final), written_info):
+            committed = _lstat_at(parent_fd, final)
+            if not _same_file(committed, written_info) or committed.st_size != size:
                 raise UnsafePath("committed file changed during the rename")
-            os.unlink(name, dir_fd=parent_fd)
             os.fsync(parent_fd)
         return {"ok": True, "err_kind": "", "err": "", "data_b64": "", "size": size}
     except FileExistsError:

@@ -10,7 +10,10 @@ lands in the conversation workspace through the sandbox FileOp seam.
   the `stream` FileOp: each chunk is appended, at a checked offset, to a hidden
   `.fleet-download-<random>.partial` file beside the destination; the last
   chunk renames it into place with link + unlink, never replacing an existing
-  file. Host memory stays at about one chunk whatever the file size.
+  file (on a filesystem without hard links, a rename after an existence check).
+  Every chunk checks the partial file holds exactly the bytes written so far,
+  in the executor and again in Fleet, so bytes another process appended are
+  never committed. Host memory stays at about one chunk whatever the file size.
 - **512 MB cap** (was 100 MB, when the whole body was buffered). A body that
   declares more is refused before anything is written; one that streams past
   the cap is aborted and its partial file removed. The cap covers the largest
@@ -21,7 +24,8 @@ lands in the conversation workspace through the sandbox FileOp seam.
   files untouched for an hour. `.fleet-download-<24 hex>.partial` is a name
   Fleet reserves for this; nothing else should create files with it.
 - **HTML interstitials are followed to the file**, up to 3 hops: a meta refresh,
-  or a page whose only link names a data file (`.csv`, `.xlsx`, `.zip`, …).
+  or a page whose only link names a data or attachment file (`.csv`, `.xlsx`,
+  `.zip`, `.pdf`, `.doc`, `.png`, …).
   The page is tokenized (`golang.org/x/net/html`), so markup inside a comment,
   a script or an attribute value is never followed. Hops use the same SSRF-guarded client and a
   per-call cookie jar (a gateway that sets a session cookie on the page gets
