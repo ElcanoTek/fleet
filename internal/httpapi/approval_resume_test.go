@@ -881,7 +881,7 @@ func TestApprovalResume_ExecutionFailureDeferredByBlockerWithoutOptInPolicy(t *t
 func TestApprovalResume_OutcomeUnknownDoesNotAutoArm(t *testing.T) {
 	h := newResumeHarness(t, agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}}, 30*time.Millisecond)
 	h.s.scheduleTask = func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
-		return nil, errors.New("THE REQUEST WAS SENT TO THE REMOTE SERVICE BEFORE THE CONNECTION FAILED; THE OUTCOME IS UNKNOWN.")
+		return nil, errors.New("the request was sent to the remote service before the connection failed; the outcome is unknown")
 	}
 	conv := h.conversation()
 	ctx := context.Background()

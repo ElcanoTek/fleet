@@ -230,7 +230,11 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 // another card of the conversation is still armed.
 func (s *Server) resumeReplyFlag(ctx context.Context, out map[string]any, approval *store.Approval) map[string]any {
 	out = approvalResumeReplyFlag(out, approval)
-	if out["resume"] == true || approval == nil || s.store == nil || !agentcore.ResumeAfterApprovalEnabled() {
+	if out["resume"] == true || approval == nil || s.store == nil {
+		return out
+	}
+	_, realStore := s.store.(*store.Store)
+	if !agentcore.ResumeAfterApprovalEnabled() && (!realStore || s.agent == nil) {
 		return out
 	}
 	if armed, err := s.store.HasArmedApprovals(ctx, approval.ConversationID); err == nil && armed {
