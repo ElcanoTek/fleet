@@ -283,7 +283,7 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		// CheckRedirect kept appending the chased requests' redirects.
 		res.RedirectChain = chain
 	}
-	if isHTMLResponse(resp) && (looksLikeDataFile(parsed.Path) || looksLikeDataFile(resp.Request.URL.Path)) {
+	if isHTMLResponse(resp) && namedADataFile(parsed.Path, resp.Request.URL.Path, res.HTMLChase) {
 		res.Warning = "the server returned an HTML page, not the file the link names: often a login page or an expired link. Check the saved page before parsing it."
 	}
 
@@ -370,6 +370,20 @@ func followInterstitials(resp *http.Response, get func(string) (*http.Response, 
 		res.ContentType = resp.Header.Get("Content-Type")
 	}
 	return resp, body, closeAll, nil
+}
+
+// namedADataFile reports whether the requested URL, the final one, or any
+// interstitial target followed on the way names a data file.
+func namedADataFile(requested, final string, chased []string) bool {
+	if looksLikeDataFile(requested) || looksLikeDataFile(final) {
+		return true
+	}
+	for _, c := range chased {
+		if u, err := url.Parse(c); err == nil && looksLikeDataFile(u.Path) {
+			return true
+		}
+	}
+	return false
 }
 
 // fetchInterstitialTarget fetches an interstitial's target, or returns nil

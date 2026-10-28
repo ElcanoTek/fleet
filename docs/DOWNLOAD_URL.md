@@ -18,16 +18,18 @@ lands in the conversation workspace through the sandbox FileOp seam.
 - **Failure leaves nothing behind.** Any error aborts the partial file. If the
   abort itself cannot run (a cancelled turn retires the sandbox first), the
   first chunk of the next streamed write into that directory removes partial
-  files untouched for an hour.
+  files untouched for an hour. `.fleet-download-<24 hex>.partial` is a name
+  Fleet reserves for this; nothing else should create files with it.
 - **HTML interstitials are followed to the file**, up to 3 hops: a meta refresh,
-  or a page whose only link names a data file (`.csv`, `.xlsx`, `.zip`, …;
-  quoted or unquoted `href`). Hops use the same SSRF-guarded client and a
+  or a page whose only link names a data file (`.csv`, `.xlsx`, `.zip`, …).
+  The page is tokenized (`golang.org/x/net/html`), so markup inside a comment,
+  a script or an attribute value is never followed. Hops use the same SSRF-guarded client and a
   per-call cookie jar (a gateway that sets a session cookie on the page gets
   it back on the file request), and are listed in `html_chase`. A page naming
   several files, or none, is saved as it is.
 - **Result fields:** `sha256` of the saved file (hashed while streaming), and a
-  `warning` when a link naming a data file (the requested URL or the final
-  one) returned HTML — usually a login page or an expired link.
+  `warning` when a link naming a data file (the requested URL, an interstitial
+  target, or the final URL) returned HTML — usually a login page or an expired link.
 - **Timeout** covers the whole download: 300 s by default, 1800 s at most.
 
 ## Deviations

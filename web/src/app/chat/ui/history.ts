@@ -1662,7 +1662,6 @@ function withResult(t: ToolCall, c: { text: string; is_err: boolean; card?: unkn
 /** Map an MCP tool name like `mcp_email_search_emails` to a display string. */
 export function prettyToolName(name: string): string {
   if (name.startsWith("mcp_email_")) return name.replace("mcp_email_", "email: ");
-  if (name.startsWith("mcp_explorer_")) return name.replace("mcp_explorer_", "email: ");
   if (name.startsWith("mcp_sendgrid_")) return name.replace("mcp_sendgrid_", "sendgrid: ");
   if (name.startsWith("mcp_")) return name.replace(/^mcp_/, "");
   return name;
@@ -1740,14 +1739,7 @@ export function humanToolLabel(name: string): string {
     case "mcp_email_send_email":
       return "Sending email";
     case "mcp_email_search_emails":
-    case "mcp_explorer_search_emails":
-    case "mcp_explorer_search_emails_fuzzy":
-    case "mcp_explorer_find_latest_report":
       return "Searching inbox";
-    case "mcp_explorer_get_email":
-      return "Reading email";
-    case "mcp_explorer_get_download_link":
-      return "Getting email file link";
   }
   for (const { match, tools, display } of sspPrefixes) {
     if (!name.startsWith(match)) continue;
@@ -1766,9 +1758,6 @@ export function humanToolLabel(name: string): string {
   if (name.startsWith("mcp_email_")) {
     return `Email ${humanize(name.slice("mcp_email_".length)).toLowerCase()}`;
   }
-  if (name.startsWith("mcp_explorer_")) {
-    return `Email ${humanize(name.slice("mcp_explorer_".length)).toLowerCase()}`;
-  }
   if (name.startsWith("mcp_sendgrid_")) {
     return `SendGrid ${humanize(name.slice("mcp_sendgrid_".length)).toLowerCase()}`;
   }
@@ -1786,7 +1775,7 @@ export function toolIcon(name: string): string {
   if (name === "view_file" || name === "write_file" || name === "edit_file") return "📄";
   if (name === "web_fetch" || name === "smart_search") return "🔎";
   if (name === "spawn_subagent") return "🤖";
-  if (name.startsWith("mcp_email_") || name.startsWith("mcp_explorer_")) return "📧";
+  if (name.startsWith("mcp_email_")) return "📧";
   if (name.startsWith("mcp_sendgrid_")) return "📤";
   return "🛠";
 }

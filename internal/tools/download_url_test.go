@@ -709,11 +709,15 @@ func TestDownloadURL_SavesAnOrdinaryPageAndWarnsOnHTMLForADataLink(t *testing.T)
 func TestInterstitialTarget(t *testing.T) {
 	base, _ := url.Parse("https://t.example/c/1")
 	for page, want := range map[string]string{
-		`<meta content="5;URL='https://f.example/r.xlsx'" http-equiv="refresh">`: "https://f.example/r.xlsx",
-		`<a href="/dl/r.zip">r</a> <a href="/dl/r.zip">again</a>`:                "https://t.example/dl/r.zip",
-		`<a href="/a.csv">a</a><a href="/b.csv">b</a>`:                           "",
-		`<a href="javascript:go()">x.csv</a>`:                                    "",
-		`<a href="/about">about</a>`:                                             "",
+		`<meta content="5;URL='https://f.example/r.xlsx'" http-equiv="refresh">`:         "https://f.example/r.xlsx",
+		`<a href="/dl/r.zip">r</a> <a href="/dl/r.zip">again</a>`:                        "https://t.example/dl/r.zip",
+		`<a href="/a.csv">a</a><a href="/b.csv">b</a>`:                                   "",
+		`<a href="javascript:go()">x.csv</a>`:                                            "",
+		`<a href="/about">about</a>`:                                                     "",
+		`<a class=btn href=/files/r.csv>Download</a>`:                                    "https://t.example/files/r.csv",
+		`<!-- <a href="/old/r.csv">r</a> --><p>Nothing here</p>`:                         "",
+		`<script>var s = '<meta http-equiv="refresh" content="0;url=/x.csv">';</script>`: "",
+		`<meta http-equiv="Refresh" content="0; URL=/dl/r.csv?a=1&amp;b=2">`:             "https://t.example/dl/r.csv?a=1&b=2",
 	} {
 		if got := interstitialTarget([]byte(page), base); got != want {
 			t.Errorf("%s: got %q want %q", page, got, want)
@@ -750,5 +754,26 @@ func TestDownloadURL_ChaseKeepsCookiesAndWarnsOnAnExpiredTarget(t *testing.T) {
 	}
 	if last := res.RedirectChain[len(res.RedirectChain)-1]; !strings.HasSuffix(last, "/cdn/report.csv") {
 		t.Fatalf("redirect chain misses the post-chase hop: %v", res.RedirectChain)
+	}
+}
+
+func TestDownloadURL_WarnsWhenAChasedFileRedirectsToALogin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<a href="/report.csv">Download</a>`)
+		case "/report.csv":
+			http.Redirect(w, r, "/login", http.StatusFound)
+		case "/login":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<form>Sign in</form>`)
+		}
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || res.Warning == "" {
+		t.Fatalf("a chased data link that ends on a login page must warn: %+v", res)
 	}
 }

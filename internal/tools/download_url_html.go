@@ -1,13 +1,16 @@
 package tools
 
 import (
-	"html"
+	"bytes"
 	"mime"
 	"net/http"
 	"net/url"
 	"path"
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/html"
+	"golang.org/x/net/html/atom"
 )
 
 // Interstitial handling for download_url: an email click-tracker or a file
@@ -16,11 +19,9 @@ import (
 // find that next URL; download_url fetches it through the same SSRF-guarded
 // client.
 
-var (
-	metaRefreshRE    = regexp.MustCompile(`(?is)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']\s*\d*\s*;?\s*url\s*=\s*['"]?([^"'>\s]+)`)
-	metaRefreshAltRE = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']\s*\d*\s*;?\s*url\s*=\s*['"]?([^"'>\s]+)[^>]*http-equiv\s*=\s*["']?refresh`)
-	anchorHrefRE     = regexp.MustCompile(`(?is)<a\b[^>]*?\bhref\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'>]+))`)
-)
+// refreshURLRE pulls the URL out of a meta refresh's content attribute
+// ("5; url=https://…", quotes optional).
+var refreshURLRE = regexp.MustCompile(`(?i)^\s*\d*\s*[;,]?\s*url\s*=\s*['"]?([^'"\s]+)`)
 
 // dataFileExts are extensions of the report and data files a download link
 // usually names.
@@ -44,37 +45,67 @@ func looksLikeDataFile(p string) bool {
 // interstitialTarget returns the URL an interstitial page moves on to: its
 // meta refresh, else its only link to a data file. "" when the page names no
 // single file (an ordinary page, a login form, a list of several downloads).
+// The page is tokenized, not pattern-matched, so markup inside a comment, a
+// script or an attribute value is never followed.
 func interstitialTarget(page []byte, base *url.URL) string {
-	text := string(page)
-	for _, re := range []*regexp.Regexp{metaRefreshRE, metaRefreshAltRE} {
-		if m := re.FindStringSubmatch(text); m != nil {
-			if u := resolveHTTP(base, m[1]); u != "" {
-				return u
+	z := html.NewTokenizer(bytes.NewReader(page))
+	refresh, found := "", ""
+	several := false
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break
+		}
+		if tt != html.StartTagToken && tt != html.SelfClosingTagToken {
+			continue
+		}
+		tok := z.Token()
+		switch tok.DataAtom {
+		case atom.Meta:
+			if refresh == "" && strings.EqualFold(attr(tok, "http-equiv"), "refresh") {
+				if m := refreshURLRE.FindStringSubmatch(attr(tok, "content")); m != nil {
+					refresh = resolveHTTP(base, m[1])
+				}
 			}
+		case atom.A:
+			u := resolveHTTP(base, attr(tok, "href"))
+			if u == "" {
+				continue
+			}
+			parsed, err := url.Parse(u)
+			if err != nil || !looksLikeDataFile(parsed.Path) {
+				continue
+			}
+			if found != "" && found != u {
+				several = true // several files: not an interstitial, let the agent choose
+			}
+			found = u
+		default:
+			// Only meta refreshes and links move an interstitial on.
 		}
 	}
-	found := ""
-	for _, m := range anchorHrefRE.FindAllStringSubmatch(text, -1) {
-		u := resolveHTTP(base, m[1]+m[2]+m[3])
-		if u == "" {
-			continue
-		}
-		parsed, err := url.Parse(u)
-		if err != nil || !looksLikeDataFile(parsed.Path) {
-			continue
-		}
-		if found != "" && found != u {
-			return "" // several files: not an interstitial, let the agent choose
-		}
-		found = u
+	if refresh != "" {
+		return refresh
+	}
+	if several {
+		return ""
 	}
 	return found
+}
+
+func attr(tok html.Token, name string) string {
+	for _, a := range tok.Attr {
+		if a.Key == name {
+			return a.Val
+		}
+	}
+	return ""
 }
 
 // resolveHTTP resolves an HTML attribute value against base and keeps it only
 // if it is an http(s) URL.
 func resolveHTTP(base *url.URL, ref string) string {
-	ref = strings.TrimSpace(html.UnescapeString(ref))
+	ref = strings.TrimSpace(ref) // the tokenizer already decoded entities
 	u, err := url.Parse(ref)
 	if err != nil {
 		return ""
