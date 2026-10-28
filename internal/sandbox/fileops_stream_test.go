@@ -266,3 +266,98 @@ func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
 		t.Fatalf("file committed without a no-replace primitive: %v", err)
 	}
 }
+
+func TestFileOp_StreamRefusesASameLengthOverwrite(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+	partial := streamPartial(t, root)
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Data: []byte("abc")}); err != nil {
+		t.Fatal(err)
+	}
+	// Another process rewrites the staged bytes in place: same inode, same size.
+	f, err := os.OpenFile(partial, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 3, Data: []byte("def"),
+		Final: "r.csv", ExpectedSHA256: sha256Hex([]byte("abcdef"))})
+	if !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("committed overwritten bytes: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "r.csv")); !os.IsNotExist(err) {
+		t.Fatalf("destination created: %v", err)
+	}
+}
+
+func TestFileOp_StreamCTimeChainCatchesChangesBetweenSteps(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	ctx := context.Background()
+	root := t.TempDir()
+
+	// Untouched between steps: the chain holds and the commit lands.
+	partial := streamPartial(t, root)
+	res, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Data: []byte("abc")})
+	if err != nil || res.CTimeNS == 0 {
+		t.Fatalf("first chunk: ctime %d, %v", res.CTimeNS, err)
+	}
+	res, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 3, Data: []byte("def"), ExpectedCTimeNS: res.CTimeNS})
+	if err != nil {
+		t.Fatalf("chained chunk: %v", err)
+	}
+	if _, err := sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 6, Final: "ok.csv", CommitOnly: true, ExpectedCTimeNS: res.CTimeNS}); err != nil {
+		t.Fatalf("chained commit: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(root, "ok.csv")); err != nil || string(got) != "abcdef" {
+		t.Fatalf("committed %q %v", got, err)
+	}
+
+	// Rewritten in place between steps (same inode, same size): both the next
+	// append and the commit are refused.
+	overwrite := func(path string) {
+		t.Helper()
+		time.Sleep(20 * time.Millisecond) // past a coarse timestamp tick
+		f, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteAt([]byte("x"), 0); err != nil {
+			t.Fatal(err)
+		}
+		_ = f.Close()
+	}
+	partial = streamPartial(t, root)
+	res, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Data: []byte("abc")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	overwrite(partial)
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 3, Data: []byte("def"), ExpectedCTimeNS: res.CTimeNS})
+	if !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("appended to a changed partial: %v", err)
+	}
+	_, err = sb.RunFileOp(ctx, FileOpRequest{Op: FileOpStream, Path: partial, Root: root, Offset: 3, Final: "bad.csv", CommitOnly: true, ExpectedCTimeNS: res.CTimeNS})
+	if !errors.Is(err, ErrFileOpStale) {
+		t.Fatalf("committed a changed partial: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bad.csv")); !os.IsNotExist(err) {
+		t.Fatalf("destination created: %v", err)
+	}
+}
+
+func TestFileOpRequest_TimeoutIsBounded(t *testing.T) {
+	for _, tc := range []struct{ in, want time.Duration }{
+		{0, fileOpTimeout},
+		{time.Second, fileOpTimeout},
+		{3 * time.Minute, 3 * time.Minute},
+		{time.Hour, maxFileOpTimeout},
+	} {
+		if got := (FileOpRequest{Timeout: tc.in}).timeout(); got != tc.want {
+			t.Errorf("timeout(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}

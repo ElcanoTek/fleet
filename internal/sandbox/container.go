@@ -927,6 +927,15 @@ func (c *containerImpl) poisoned() bool {
 // an error instead of hanging the turn.
 const fileOpTimeout = 60 * time.Second
 
+// maxFileOpTimeout caps FileOpRequest.Timeout.
+const maxFileOpTimeout = 10 * time.Minute
+
+// timeout is the op's time limit: fileOpTimeout unless the request asks for
+// more, up to maxFileOpTimeout.
+func (req FileOpRequest) timeout() time.Duration {
+	return min(max(req.Timeout, fileOpTimeout), maxFileOpTimeout)
+}
+
 // runFileOp executes one file operation INSIDE the container via a one-shot
 // `podman exec -i python3 -c <fileops.py>` (#784), so read/write/edit inherit
 // the container's runtime, seccomp, caps, cgroups, disk/PID limits, and network
@@ -971,7 +980,7 @@ func (c *containerImpl) executeFileOp(ctx context.Context, req FileOpRequest, an
 	if containerID == "" {
 		return FileOpResult{}, fmt.Errorf("fileop %s: %w", req.Op, ErrClosed)
 	}
-	cmdCtx, cancel := context.WithTimeout(ctx, fileOpTimeout)
+	cmdCtx, cancel := context.WithTimeout(ctx, req.timeout())
 	defer cancel()
 
 	reqJSON, err := encodeFileOpWire(req, anchor)

@@ -97,7 +97,9 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   `RunFileOp` seam (nil sandbox fails closed, no host fallback), while their
   network halves stay host-side under the brokered-fetch class above.
   `download_url` streams a large body through the seam's `stream` op: chunks
-  append, at a checked offset, to a hidden `.fleet-download-<random>.partial`
+  append, at a checked offset and ctime (each step names the ctime the step
+  before reported, so a change in between is refused), to a hidden
+  `.fleet-download-<random>.partial`
   file that the last chunk renames into place without replacing anything (or
   that an abort removes; a later first chunk sweeps partials untouched for an
   hour, for when the abort could not run). The executor refuses that op for

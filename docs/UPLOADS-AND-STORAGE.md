@@ -72,6 +72,11 @@ disk usage was invisible to admins.
   conversation TTL) + `handlers.CleanupTempFiles` (orchestrator
   `temp_uploads`, which previously had **no caller**). The existing
   post-turn sweeps remain; the timer covers idle servers.
+- **Download partials**: the same pass removes `download_url` partial files
+  (`.fleet-download-*.partial`) left untouched for an hour by a cancelled
+  download (`store.SweepStaleDownloadPartials`); `download_url` itself keeps a
+  free-space reserve and reuses identical re-downloads
+  ([DOWNLOAD_URL.md](DOWNLOAD_URL.md)).
 - **Admin storage panel** (Settings → Admin → Server): byte totals for
   attachment uploads / task uploads / workspaces, host-disk headroom, the
   ten largest conversation workspaces with title/owner/pinned context, and

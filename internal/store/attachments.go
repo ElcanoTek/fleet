@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 )
 
@@ -294,4 +295,74 @@ func (s *Store) ConversationStorageMetaByIDs(ctx context.Context, ids []string) 
 		out[id] = m
 	}
 	return out, rows.Err()
+}
+
+// downloadPartialRE matches the hidden partial files download_url streams
+// into (sandbox.StreamPartialName; fileops.py enforces the same pattern).
+var downloadPartialRE = regexp.MustCompile(`^\.fleet-download-[0-9a-f]{24}\.partial$`)
+
+// DownloadPartialMaxAge is how long a download partial file may sit untouched
+// before the sweep removes it. A running download rewrites its partial every
+// chunk and times out within 30 minutes, so an hour-old one is abandoned.
+const DownloadPartialMaxAge = time.Hour
+
+// SweepStaleDownloadPartials removes download_url partial files left under
+// root by a download that never finished (a cancelled turn can retire the
+// sandbox before the download aborts its own partial). Only regular files
+// with the exact reserved name, untouched for olderThan, are removed; symlinks
+// are never followed. The in-sandbox sweep on a later download's first chunk
+// covers the same case per directory; this one needs no later download.
+// Returns the count and bytes removed; a missing root is (0, 0, nil).
+func SweepStaleDownloadPartials(root string, olderThan time.Duration) (int, int64, error) {
+	if root == "" {
+		return 0, 0, nil
+	}
+	if _, err := os.Stat(root); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return 0, 0, nil
+		}
+		return 0, 0, err
+	}
+	// Removal goes through a root-scoped handle, so a directory swapped for a
+	// symlink mid-walk cannot redirect it outside root.
+	scoped, err := os.OpenRoot(root)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer scoped.Close()
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	var freed int64
+	var errs []error
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			// An unreadable subtree is skipped, not fatal: keep sweeping.
+			if d != nil && d.IsDir() && path != root {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() || !downloadPartialRE.MatchString(d.Name()) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			return nil //nolint:nilerr // a file that vanished or is fresh is simply not swept
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil //nolint:nilerr // a path the walk produced is always under root; skip if not
+		}
+		if err := scoped.Remove(rel); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("remove %s: %w", path, err))
+			return nil
+		}
+		removed++
+		freed += info.Size()
+		return nil
+	})
+	if walkErr != nil {
+		errs = append(errs, walkErr)
+	}
+	return removed, freed, errors.Join(errs...)
 }
