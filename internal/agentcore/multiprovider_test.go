@@ -101,6 +101,9 @@ func TestBuildProvider(t *testing.T) {
 		{"vercel with key", ProviderConfig{Name: "v", Type: ProviderTypeVercel, APIKey: "k"}, false},
 		{"vercel with base url", ProviderConfig{Name: "v", Type: ProviderTypeVercel, APIKey: "k", BaseURL: "http://203.0.113.10/v1"}, false},
 		{"vercel without key errors", ProviderConfig{Name: "v", Type: ProviderTypeVercel}, true},
+		{"azure with key and endpoint", ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k", BaseURL: "https://res.openai.azure.com"}, false},
+		{"azure without endpoint errors", ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k"}, true},
+		{"azure without key errors", ProviderConfig{Name: "az", Type: ProviderTypeAzure, BaseURL: "https://res.openai.azure.com"}, true},
 		{"unknown type errors", ProviderConfig{Name: "x", Type: ProviderType("bogus")}, true},
 	}
 	for _, tc := range cases {
