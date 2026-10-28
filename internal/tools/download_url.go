@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -39,9 +40,11 @@ const downloadURLDescription = "Download bytes from any HTTP(S) URL straight int
 	"Use this after `mcp_fast_io_download action=file-url` to pull the returned opaque `fleet-download://...` handle's bytes onto disk; Fleet keeps the real signed URL server-side so its bearer token never enters your context. " +
 	"Use it for email reports too: `mcp_explorer_get_download_link` returns a `download_url` for an attachment or a cached report link, valid for 15 minutes, so fetch it right away. " +
 	"It also accepts ordinary HTTP(S) URLs for other one-call URL→scratch fetches (public CSVs, signed S3 links, generated reports, etc.).\n\n" +
-	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 512 MB (a file over the cap is not saved at all).\n\n" +
+	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 512 MB (a file over the cap is not saved at all). " +
+	"When the link answers with an HTML interstitial (an email click-tracker's \"your download will start\" page, a meta refresh, or a page whose only link is the file) it follows it to the file, up to 3 times, and lists the hops in `html_chase`. " +
+	"The result carries the saved file's `sha256`, and a `warning` when a link that names a data file (.csv, .xlsx, .zip, ...) returned an HTML page instead: usually a login page or an expired link.\n\n" +
 	"REQUIRED: `url` (http, https, or a fleet-download handle returned by mcp_fast_io_download).\n" +
-	"OPTIONAL: `output_dir` (defaults to the per-conversation workspace; a relative path is interpreted against it; an absolute path must be inside the chat-server's allowed dirs), `filename` (override the auto-detected name; the collision suffix is still appended), `timeout_seconds` (default 120, max 600; raise it for a large file).\n\n" +
+	"OPTIONAL: `output_dir` (defaults to the per-conversation workspace; a relative path is interpreted against it; an absolute path must be inside the chat-server's allowed dirs), `filename` (override the auto-detected name; the collision suffix is still appended), `timeout_seconds` (whole download; default 300, max 1800).\n\n" +
 	"NOT FOR: HTML pages you want to read as markdown — use `web_fetch` for that. Private or internal addresses are refused."
 
 // DownloadURLParams is the typed tool surface.
@@ -63,8 +66,16 @@ var (
 )
 
 const (
-	downloadURLDefaultTimeout = 120 * time.Second
-	downloadURLMaxTimeout     = 600 * time.Second
+	// downloadURLHTMLScanBytes is how much of an HTML response is scanned for
+	// an interstitial's target. Never a size limit: the page is saved whole.
+	downloadURLHTMLScanBytes = 1 << 20
+	// downloadURLMaxInterstitials bounds the interstitial pages followed.
+	downloadURLMaxInterstitials = 3
+)
+
+const (
+	downloadURLDefaultTimeout = 300 * time.Second
+	downloadURLMaxTimeout     = 1800 * time.Second
 	downloadURLDefaultName    = "download"
 
 	downloadStatusSuccess = "success"
@@ -82,7 +93,11 @@ type downloadURLResult struct {
 	ContentType   string   `json:"content_type,omitempty"`
 	HTTPStatus    int      `json:"http_status,omitempty"`
 	RedirectChain []string `json:"redirect_chain,omitempty"`
-	Error         string   `json:"error,omitempty"`
+	// HTMLChase lists the interstitial pages' targets followed to the file.
+	HTMLChase []string `json:"html_chase,omitempty"`
+	SHA256    string   `json:"sha256,omitempty"`
+	Warning   string   `json:"warning,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // NewDownloadURLTool returns the native download_url tool, bound to the
@@ -176,17 +191,18 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	// them with the call, as browserbase_live_view does.
 	defer client.CloseIdleConnections()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("build request: %v", err)
-		return res
+	get := func(target string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("User-Agent", BrowserUserAgent)
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+		return client.Do(req)
 	}
-	req.Header.Set("User-Agent", BrowserUserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-	resp, err := client.Do(req)
+	resp, err := get(raw)
 	if err != nil {
 		res.Status = downloadStatusError
 		res.Error = fmt.Sprintf("fetch %s: %v", displayURL, transportErrForDisplay(err, protected))
@@ -245,6 +261,18 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		return res
 	}
 
+	resp, body, closeChased, err := followInterstitials(resp, get, protected, &res) //nolint:bodyclose // closeChased closes every body it opened; the first is closed by the defer above
+	defer closeChased()
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = err.Error()
+		return res
+	}
+	finalURL = resp.Request.URL.String()
+	if isHTMLResponse(resp) && looksLikeDataFile(parsed.Path) {
+		res.Warning = "the server returned an HTML page, not the file the link names: often a login page or an expired link. Check the saved page before parsing it."
+	}
+
 	if resp.ContentLength > downloadURLMaxBytes {
 		res.Status = downloadStatusError
 		res.Error = downloadTooLarge()
@@ -268,7 +296,7 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	// inherits the container's runtime, limits, and confinement instead of
 	// running as host os I/O (#1083) — a chunk at a time into a hidden partial
 	// file that is renamed into place only once the whole body arrived.
-	size, err := sandboxStreamWrite(ctx, sb, outPath, validOut, resp.Body, downloadURLMaxBytes, downloadURLChunkBytes)
+	size, digest, err := sandboxStreamWrite(ctx, sb, outPath, validOut, body, downloadURLMaxBytes, downloadURLChunkBytes)
 	if err != nil {
 		res.Status = downloadStatusError
 		if errors.Is(err, errStreamTooLarge) {
@@ -283,7 +311,65 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	res.Filename = filepath.Base(validOut)
 	res.SavedTo = validOut
 	res.SizeBytes = size
+	res.SHA256 = digest
 	return res
+}
+
+// followInterstitials follows an HTML interstitial (an email click-tracker's
+// "your download will start" page, a meta refresh) to the file it stands in
+// front of, at most downloadURLMaxInterstitials times, recording each hop in
+// res. It returns the response to save, the body to read (an HTML page's
+// scanned head is replayed in front of the rest), and a func closing every
+// body it opened. A page that names no single file is saved as it is, and
+// so is one whose target fails.
+func followInterstitials(resp *http.Response, get func(string) (*http.Response, error), protected bool, res *downloadURLResult) (*http.Response, io.Reader, func(), error) {
+	var opened []*http.Response
+	closeAll := func() {
+		for _, r := range opened {
+			_ = r.Body.Close()
+		}
+	}
+	var body io.Reader = resp.Body
+	for hops := 0; !protected && isHTMLResponse(resp); hops++ {
+		peek, err := io.ReadAll(io.LimitReader(resp.Body, downloadURLHTMLScanBytes))
+		if err != nil {
+			return resp, nil, closeAll, fmt.Errorf("read response body: %w", err)
+		}
+		body = io.MultiReader(bytes.NewReader(peek), resp.Body)
+		target := ""
+		if hops < downloadURLMaxInterstitials {
+			target = interstitialTarget(peek, resp.Request.URL)
+		}
+		if target == "" {
+			break
+		}
+		next := fetchInterstitialTarget(get, target)
+		if next == nil {
+			break
+		}
+		opened = append(opened, next)
+		resp = next
+		body = resp.Body
+		res.HTMLChase = append(res.HTMLChase, target)
+		res.FinalURL = resp.Request.URL.String()
+		res.HTTPStatus = resp.StatusCode
+		res.ContentType = resp.Header.Get("Content-Type")
+	}
+	return resp, body, closeAll, nil
+}
+
+// fetchInterstitialTarget fetches an interstitial's target, or returns nil
+// when it fails: the interstitial page is then saved instead.
+func fetchInterstitialTarget(get func(string) (*http.Response, error), target string) *http.Response {
+	next, err := get(target)
+	if err != nil {
+		return nil
+	}
+	if next.StatusCode >= 400 {
+		_ = next.Body.Close()
+		return nil
+	}
+	return next
 }
 
 func downloadTooLarge() string {

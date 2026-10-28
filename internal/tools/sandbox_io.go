@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -102,18 +104,19 @@ var errStreamTooLarge = errors.New("stream exceeded its size cap")
 // beside the destination (sandbox.FileOpStream), renamed to the destination
 // with the last chunk, never replacing an existing file. More than maxBytes
 // fails with errStreamTooLarge. On any failure the partial file is removed,
-// so a destination either holds the whole body or does not exist.
-func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string, src io.Reader, maxBytes int64, chunkBytes int) (int64, error) {
+// so a destination either holds the whole body or does not exist. Returns
+// the size and the SHA-256 of what was written.
+func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string, src io.Reader, maxBytes int64, chunkBytes int) (size int64, sha256Hex string, err error) {
 	if sb == nil {
-		return 0, fmt.Errorf("file access requires a sandbox; pool.Take returned nil or was bypassed")
+		return 0, "", fmt.Errorf("file access requires a sandbox; pool.Take returned nil or was bypassed")
 	}
 	root, err := fileOpRoot(ctx, resolved, valid, true)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	partialName, err := sandbox.StreamPartialName()
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	partial := filepath.Join(filepath.Dir(valid), partialName)
 	final := filepath.Base(valid)
@@ -124,6 +127,7 @@ func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, vali
 			_, _ = sb.RunFileOp(context.WithoutCancel(ctx), sandbox.FileOpRequest{Op: sandbox.FileOpStream, Path: partial, Root: root, Abort: true})
 		}
 	}
+	sum := sha256.New()
 	limited := io.LimitReader(src, maxBytes+1)
 	buf := make([]byte, chunkBytes)
 	var offset int64
@@ -132,11 +136,11 @@ func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, vali
 		last := errors.Is(rerr, io.EOF) || errors.Is(rerr, io.ErrUnexpectedEOF)
 		if rerr != nil && !last {
 			abort()
-			return 0, fmt.Errorf("read response body: %w", rerr)
+			return 0, "", fmt.Errorf("read response body: %w", rerr)
 		}
 		if offset+int64(n) > maxBytes {
 			abort()
-			return 0, errStreamTooLarge
+			return 0, "", errStreamTooLarge
 		}
 		req := sandbox.FileOpRequest{Op: sandbox.FileOpStream, Path: partial, Root: root, Offset: offset, Data: buf[:n]}
 		if last {
@@ -145,11 +149,12 @@ func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, vali
 		started = true
 		if _, err := sb.RunFileOp(ctx, req); err != nil {
 			abort()
-			return 0, err
+			return 0, "", err
 		}
+		sum.Write(buf[:n])
 		offset += int64(n)
 		if last {
-			return offset, nil
+			return offset, hex.EncodeToString(sum.Sum(nil)), nil
 		}
 	}
 }

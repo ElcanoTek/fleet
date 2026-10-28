@@ -5,12 +5,15 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -651,5 +654,69 @@ func TestDownloadURL_HTTPErrorPreviewIsRuneSafe(t *testing.T) {
 	}
 	if !strings.HasSuffix(res.Error, strings.Repeat("x", 199)+"...") {
 		t.Fatalf("preview should stop before the straddling rune, got %q", res.Error)
+	}
+}
+
+func TestDownloadURL_FollowsAnInterstitialToTheFile(t *testing.T) {
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, `<html><head><meta http-equiv="refresh" content="0; url=%s/landing"></head></html>`, srvURL)
+		case "/landing":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<p>Your report is ready. <a href="/files/report.csv?sig=a&amp;x=1">Download</a> <a href="/help">Help</a></p>`)
+		case "/files/report.csv":
+			w.Header().Set("Content-Type", "text/csv")
+			fmt.Fprint(w, "a,b\n1,2\n")
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || len(res.HTMLChase) != 2 || !strings.HasSuffix(res.Filename, ".csv") || res.Warning != "" {
+		t.Fatalf("%+v", res)
+	}
+	got, _ := os.ReadFile(res.SavedTo)
+	sum := sha256.Sum256(got)
+	if string(got) != "a,b\n1,2\n" || res.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("saved %q sha %q", got, res.SHA256)
+	}
+	if !strings.Contains(res.HTMLChase[1], "sig=a&x=1") {
+		t.Fatalf("entity-decoded target: %v", res.HTMLChase)
+	}
+}
+
+func TestDownloadURL_SavesAnOrdinaryPageAndWarnsOnHTMLForADataLink(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<form>Sign in</form><a href="/a.csv">a</a><a href="/b.csv">b</a>`)
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/export/report.csv"})
+	if res.Status != "success" || len(res.HTMLChase) != 0 || res.Warning == "" {
+		t.Fatalf("%+v", res)
+	}
+	got, _ := os.ReadFile(res.SavedTo)
+	if !strings.Contains(string(got), "Sign in") {
+		t.Fatalf("page not saved whole: %q", got)
+	}
+}
+
+func TestInterstitialTarget(t *testing.T) {
+	base, _ := url.Parse("https://t.example/c/1")
+	for page, want := range map[string]string{
+		`<meta content="5;URL='https://f.example/r.xlsx'" http-equiv="refresh">`: "https://f.example/r.xlsx",
+		`<a href="/dl/r.zip">r</a> <a href="/dl/r.zip">again</a>`:                "https://t.example/dl/r.zip",
+		`<a href="/a.csv">a</a><a href="/b.csv">b</a>`:                           "",
+		`<a href="javascript:go()">x.csv</a>`:                                    "",
+		`<a href="/about">about</a>`:                                             "",
+	} {
+		if got := interstitialTarget([]byte(page), base); got != want {
+			t.Errorf("%s: got %q want %q", page, got, want)
+		}
 	}
 }
