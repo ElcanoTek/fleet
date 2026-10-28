@@ -117,7 +117,7 @@ describe("PatrolPopover", () => {
 
     await waitFor(() => expect(onStartPatrol).toHaveBeenCalledTimes(1));
     expect(onStartPatrol.mock.calls[0][0]).toMatchObject({
-      title: "Trading Patrol",
+      title: "Recurring Patrol",
       prompt: "Check Deal 123 pacing and update the dashboard.",
       cron: "0 * * * *",
       autoApprove: true,

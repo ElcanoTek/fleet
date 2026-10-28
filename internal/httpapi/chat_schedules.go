@@ -494,13 +494,6 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if req.AutoApprove != nil {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
-			writeScheduleError(w, err)
-			return
-		}
-		conv.AutoApprove = *req.AutoApprove
-	}
 	patch := store.ChatSchedulePatch{
 		Title:           req.Title,
 		Prompt:          req.Prompt,
@@ -525,6 +518,13 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 	if err != nil {
 		writeScheduleError(w, err)
 		return
+	}
+	if req.AutoApprove != nil {
+		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
+			writeScheduleError(w, err)
+			return
+		}
+		conv.AutoApprove = *req.AutoApprove
 	}
 	if sched.Status == store.ChatScheduleStatusActive {
 		s.armShortScheduleTimer(sched.NextRunAt)

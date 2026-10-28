@@ -260,7 +260,7 @@ export type ComposerProps = {
   isPendingKey: (key: string | null) => boolean;
 
   // In-chat recurring patrols & one-shot timers
-  onStartPatrol?: (input: CreatePatrolInput) => void | Promise<void>;
+  onStartPatrol?: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
   activePatrolCount?: number;
 };
 
@@ -1328,10 +1328,11 @@ export function Composer({
                   <PatrolPopover
                     initialPrompt={prompt}
                     onStartPatrol={async (input) => {
-                      await onStartPatrol(input);
-                      if (prompt.trim() && input.prompt === prompt.trim()) {
+                      const ok = await onStartPatrol(input);
+                      if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
                         setPrompt("");
                       }
+                      return ok;
                     }}
                     onClose={() => {
                       setPatrolPopoverOpen(false);

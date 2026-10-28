@@ -39,9 +39,9 @@ tiers, are unaffected by any of this. Only the compiled-in fallback moves.
 | Slot | Before | After |
 |---|---|---|
 | `DefaultCoreModel` (chat default, pre-filled `task_model` tier, and auxiliary calls) | `anthropic/claude-haiku-5.5` | `anthropic/claude-opus-5.5` |
-| `DefaultMaxModel` (fallback frontier model for chat turns and scheduled tasks) | `anthropic/claude-opus-5.5` | `google/gemini-4-argon` |
+| `DefaultMaxModel` (fallback frontier model for in-chat patrols, Operations Center task form pre-fill, and `suggest_advanced_model`) | `anthropic/claude-opus-5.5` | `google/gemini-4-argon` |
 
-- **Why: frontier intelligence by default across both Chat and scheduled tasks, with cross-provider fallback.** Interactive chat turns, in-chat patrols, and scheduled tasks all start on `anthropic/claude-opus-5.5`, while `google/gemini-4-argon` serves as the automatic fallback frontier model when the primary model is unavailable or a task/turn needs a cross-provider fallback.
+- **Why: frontier intelligence by default across both Chat and scheduled tasks, with cross-provider fallback.** Interactive chat turns, in-chat patrols, and scheduled tasks all start on `anthropic/claude-opus-5.5`, while `google/gemini-4-argon` serves as the automatic fallback frontier model for in-chat patrol turns, the pre-filled fallback model in the Operations Center task form, and the target of `suggest_advanced_model`.
 
 ## 2026-10-28 (earlier): Claude Opus 5.5 restored as the strong tier
 

@@ -200,6 +200,7 @@ const PATROL_PRESETS = [
   { id: "daily", label: "Daily 9am", kind: "patrol" as const, cron: "0 9 * * *", durationSeconds: 0 },
   { id: "timer30m", label: "In 30m (once)", kind: "timer" as const, cron: "", durationSeconds: 1800 },
   { id: "timer2h", label: "In 2h (once)", kind: "timer" as const, cron: "", durationSeconds: 7200 },
+  { id: "custom", label: "Custom", kind: "patrol" as const, cron: "0 */2 * * *", durationSeconds: 0 },
 ];
 
 export type CreatePatrolInput = {
@@ -217,19 +218,26 @@ export function PatrolPopover({
   onClose,
 }: {
   initialPrompt?: string;
-  onStartPatrol: (input: CreatePatrolInput) => void | Promise<void>;
+  onStartPatrol: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
   onClose: () => void;
 }) {
   const [presetId, setPresetId] = useState<string>("2h");
-  const [title, setTitle] = useState<string>("Trading Patrol");
+  const [customCron, setCustomCron] = useState<string>("0 */2 * * *");
+  const [title, setTitle] = useState<string>("Recurring Patrol");
   const [patrolPrompt, setPatrolPrompt] = useState<string>(() =>
     (initialPrompt ?? "").trim() ||
-    "Patrol active campaigns, deal pacing, and recent inbox/report updates. Flag any anomalies, under-delivery, or margin shifts and take or stage the needed updates.",
+    "Check for new updates, verify key metrics, and summarize anything that needs attention.",
   );
   const [autoApprove, setAutoApprove] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   const selectedPreset = PATROL_PRESETS.find((p) => p.id === presetId) ?? PATROL_PRESETS[1];
+  const effectiveCron =
+    selectedPreset.id === "custom"
+      ? customCron.trim()
+      : selectedPreset.kind === "patrol"
+        ? selectedPreset.cron
+        : undefined;
   const tz =
     typeof Intl !== "undefined"
       ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
@@ -260,7 +268,7 @@ export function PatrolPopover({
       </div>
 
       <p className="text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]">
-        Wakes this conversation on your cadence with full memory and persistent Python state.
+        Wakes this conversation on your cadence with full history, workspace files, and enabled connectors.
       </p>
 
       <div className="flex flex-wrap gap-1">
@@ -283,6 +291,21 @@ export function PatrolPopover({
         })}
       </div>
 
+      {selectedPreset.id === "custom" ? (
+        <label className="grid gap-1">
+          <span className="text-[0.68rem] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+            Custom cron expression ({tz})
+          </span>
+          <input
+            type="text"
+            value={customCron}
+            onChange={(e) => setCustomCron(e.target.value)}
+            placeholder="0 */2 * * *"
+            className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 font-mono text-[0.76rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+          />
+        </label>
+      ) : null}
+
       <label className="grid gap-1">
         <span className="text-[0.68rem] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
           Patrol label
@@ -291,7 +314,7 @@ export function PatrolPopover({
           type="text"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Trading Patrol"
+          placeholder="Recurring Patrol"
           className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
         />
       </label>
@@ -331,20 +354,22 @@ export function PatrolPopover({
         </button>
         <button
           type="button"
-          disabled={!patrolPrompt.trim() || submitting}
+          disabled={!patrolPrompt.trim() || (selectedPreset.id === "custom" && !customCron.trim()) || submitting}
           onClick={async () => {
             setSubmitting(true);
             try {
-              await onStartPatrol({
+              const ok = await onStartPatrol({
                 title: title.trim() || "Chat Patrol",
                 prompt: patrolPrompt.trim(),
-                cron: selectedPreset.kind === "patrol" ? selectedPreset.cron : undefined,
+                cron: effectiveCron,
                 timezone: tz,
                 durationSeconds:
                   selectedPreset.kind === "timer" ? selectedPreset.durationSeconds : undefined,
                 autoApprove,
               });
-              onClose();
+              if (ok !== false) {
+                onClose();
+              }
             } finally {
               setSubmitting(false);
             }

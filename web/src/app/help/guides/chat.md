@@ -105,8 +105,8 @@ sent before pressing the card's run button.
 You can also run a recurring **patrol** or a one-shot **timer** directly inside
 a chat conversation, without leaving the thread or promoting it to a separate
 Operations Center job. Each time a patrol or timer fires, the assistant wakes up
-in the same conversation with its full message history, workspace files,
-checkpointed Python variables, and enabled connectors intact.
+in the same conversation with its full message history, workspace files, and
+enabled connectors intact.
 
 Start a patrol or timer in either of two ways:
 

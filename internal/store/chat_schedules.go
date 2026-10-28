@@ -423,80 +423,16 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 	if err != nil {
 		return nil, err
 	}
-
-	recomputeNext := false
-	if patch.Title != nil {
-		if t := strings.TrimSpace(*patch.Title); t != "" {
-			cur.Title = t
+	if cur.Status == ChatScheduleStatusCancelled || cur.Status == ChatScheduleStatusCompleted {
+		if isNoOpTerminalSchedulePatch(cur.Status, patch) {
+			_ = tx.Commit()
+			return &cur, nil
 		}
-	}
-	if patch.Prompt != nil {
-		p := strings.TrimSpace(*patch.Prompt)
-		if p == "" {
-			return nil, fmt.Errorf("%w: prompt cannot be empty", ErrInvalidChatSchedule)
-		}
-		cur.Prompt = p
-	}
-	if patch.Timezone != nil {
-		normTZ, _, err := normalizeTimezone(*patch.Timezone)
-		if err != nil {
-			return nil, err
-		}
-		cur.Timezone = normTZ
-		recomputeNext = true
-	}
-	if patch.CronExpr != nil {
-		spec := strings.TrimSpace(*patch.CronExpr)
-		if spec != "" {
-			if cur.CronExpr == "" && patch.MaxRuns == nil {
-				cur.MaxRuns = 0
-			}
-			cur.CronExpr = spec
-			cur.DurationSeconds = 0
-			recomputeNext = true
-		}
-	}
-	if patch.DurationSeconds != nil && *patch.DurationSeconds > 0 {
-		if *patch.DurationSeconds < MinChatTimerDurationSeconds || *patch.DurationSeconds > MaxChatTimerDurationSeconds {
-			return nil, fmt.Errorf("%w: duration_seconds must be between %d and %d", ErrInvalidChatSchedule, MinChatTimerDurationSeconds, MaxChatTimerDurationSeconds)
-		}
-		cur.DurationSeconds = *patch.DurationSeconds
-		cur.CronExpr = ""
-		cur.MaxRuns = 1
-		recomputeNext = true
-	}
-	if patch.MaxRuns != nil && cur.CronExpr != "" {
-		if *patch.MaxRuns >= 0 {
-			cur.MaxRuns = *patch.MaxRuns
-		}
-	}
-	if patch.Status != nil {
-		st := strings.TrimSpace(*patch.Status)
-		switch st {
-		case ChatScheduleStatusActive:
-			if cur.Status != ChatScheduleStatusActive {
-				recomputeNext = true
-			}
-			cur.Status = ChatScheduleStatusActive
-		case ChatScheduleStatusPaused, ChatScheduleStatusCancelled:
-			cur.Status = st
-		default:
-			return nil, fmt.Errorf("%w: unsupported status %q", ErrInvalidChatSchedule, st)
-		}
+		return nil, fmt.Errorf("%w: cannot modify a %s schedule", ErrInvalidChatSchedule, cur.Status)
 	}
 
-	if recomputeNext && cur.Status == ChatScheduleStatusActive {
-		if cur.CronExpr != "" {
-			cleanSpec, normTZ, nextAt, err := validateAndComputeNextCron(cur.CronExpr, cur.Timezone, now)
-			if err != nil {
-				return nil, err
-			}
-			cur.CronExpr = cleanSpec
-			cur.Timezone = normTZ
-			cur.NextRunAt = nextAt
-		} else if cur.DurationSeconds > 0 {
-			cur.NextRunAt = nowUnix + int64(cur.DurationSeconds)
-		}
+	if err := applyChatSchedulePatch(&cur, patch, now); err != nil {
+		return nil, err
 	}
 
 	updated, err := scanChatSchedule(tx.QueryRowContext(ctx,
@@ -529,6 +465,86 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 		return nil, err
 	}
 	return &updated, nil
+}
+
+func isNoOpTerminalSchedulePatch(curStatus string, patch ChatSchedulePatch) bool {
+	return patch.Status != nil && strings.TrimSpace(*patch.Status) == curStatus &&
+		patch.Title == nil && patch.Prompt == nil && patch.CronExpr == nil &&
+		patch.Timezone == nil && patch.DurationSeconds == nil && patch.MaxRuns == nil
+}
+
+func applyChatSchedulePatch(cur *ChatSchedule, patch ChatSchedulePatch, now time.Time) error {
+	recomputeNext := false
+	if patch.Title != nil {
+		if t := strings.TrimSpace(*patch.Title); t != "" {
+			cur.Title = t
+		}
+	}
+	if patch.Prompt != nil {
+		p := strings.TrimSpace(*patch.Prompt)
+		if p == "" {
+			return fmt.Errorf("%w: prompt cannot be empty", ErrInvalidChatSchedule)
+		}
+		cur.Prompt = p
+	}
+	if patch.Timezone != nil {
+		normTZ, _, err := normalizeTimezone(*patch.Timezone)
+		if err != nil {
+			return err
+		}
+		cur.Timezone = normTZ
+		recomputeNext = true
+	}
+	if patch.CronExpr != nil {
+		if spec := strings.TrimSpace(*patch.CronExpr); spec != "" {
+			if cur.CronExpr == "" && patch.MaxRuns == nil {
+				cur.MaxRuns = 0
+			}
+			cur.CronExpr = spec
+			cur.DurationSeconds = 0
+			recomputeNext = true
+		}
+	}
+	if patch.DurationSeconds != nil && *patch.DurationSeconds > 0 {
+		if *patch.DurationSeconds < MinChatTimerDurationSeconds || *patch.DurationSeconds > MaxChatTimerDurationSeconds {
+			return fmt.Errorf("%w: duration_seconds must be between %d and %d", ErrInvalidChatSchedule, MinChatTimerDurationSeconds, MaxChatTimerDurationSeconds)
+		}
+		cur.DurationSeconds = *patch.DurationSeconds
+		cur.CronExpr = ""
+		cur.MaxRuns = 1
+		recomputeNext = true
+	}
+	if patch.MaxRuns != nil && cur.CronExpr != "" && *patch.MaxRuns >= 0 {
+		cur.MaxRuns = *patch.MaxRuns
+	}
+	if patch.Status != nil {
+		st := strings.TrimSpace(*patch.Status)
+		switch st {
+		case ChatScheduleStatusActive:
+			if cur.Status != ChatScheduleStatusActive {
+				recomputeNext = true
+			}
+			cur.Status = ChatScheduleStatusActive
+		case ChatScheduleStatusPaused, ChatScheduleStatusCancelled:
+			cur.Status = st
+		default:
+			return fmt.Errorf("%w: unsupported status %q", ErrInvalidChatSchedule, st)
+		}
+	}
+	if recomputeNext && cur.Status == ChatScheduleStatusActive {
+		if cur.CronExpr != "" {
+			cleanSpec, normTZ, nextAt, err := validateAndComputeNextCron(cur.CronExpr, cur.Timezone, now)
+			if err != nil {
+				return err
+			}
+			cur.CronExpr = cleanSpec
+			cur.Timezone = normTZ
+			cur.NextRunAt = nextAt
+		} else if cur.DurationSeconds > 0 {
+			cur.NextRunAt = now.Unix() + int64(cur.DurationSeconds)
+		}
+	}
+	return nil
 }
 
 // CancelChatSchedule marks a schedule cancelled and cancels any still-queued
@@ -877,7 +893,7 @@ func ChatPatrolInputText(sched ChatSchedule, runNumber int) string {
 		header = fmt.Sprintf("[%s: %s (run #%d)]", kindLabel, title, runNumber)
 	}
 	return fmt.Sprintf(
-		"%s\n%s\n\n(Triggered automatically by this conversation's %s schedule id=%s. You are continuing in the same chat conversation with full access to prior messages, workspace files, persistent Python state, and enabled connectors. Carry out the patrol instructions thoroughly, take any needed actions or updates, and write a clear summary of what you checked and changed.)",
+		"%s\n%s\n\n(Triggered automatically by this conversation's %s schedule id=%s. You are continuing in the same chat conversation with full access to prior messages, workspace files, enabled connectors, and conversation context. Carry out the patrol instructions thoroughly, take any needed actions or updates, and write a clear summary of what you checked and changed.)",
 		header,
 		strings.TrimSpace(sched.Prompt),
 		strings.ToLower(kindLabel),

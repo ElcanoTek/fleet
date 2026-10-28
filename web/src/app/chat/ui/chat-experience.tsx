@@ -5073,7 +5073,7 @@ export function ChatExperience({
     }
   };
 
-  const handleStartPatrol = async (input: CreatePatrolInput) => {
+  const handleStartPatrol = async (input: CreatePatrolInput): Promise<boolean> => {
     const convId = activeConversationId;
     if (!convId || isPendingKey(convId)) {
       // New empty chat: enable auto-approve if requested and ask the
@@ -5088,10 +5088,10 @@ export function ChatExperience({
         : `a one-shot timer in ${input.durationSeconds ?? 1800} seconds${input.title ? ` (title "${input.title}")` : ""}`;
       const synthesized = `${input.prompt}\n\nPlease also set up an in-chat patrol using \`chat_patrol\` (${cadenceDesc}) with those instructions so this chat keeps checking automatically.`;
       await submitPrompt(synthesized);
-      return;
+      return true;
     }
     const url = conversationApiUrl(convId, "/schedules");
-    if (!url) return;
+    if (!url) return false;
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -5108,7 +5108,7 @@ export function ChatExperience({
       if (!res.ok) {
         const msg = (await res.text()).trim();
         showRailError(msg || `Couldn't schedule patrol (HTTP ${res.status}).`);
-        return;
+        return false;
       }
       const data = (await res.json()) as {
         schedule?: ChatSchedule;
@@ -5121,8 +5121,10 @@ export function ChatExperience({
           ? `Scheduled ${data.schedule.title} (${formatScheduleCadence(data.schedule)}).`
           : "Patrol scheduled.",
       });
+      return true;
     } catch {
       showRailError("Couldn't reach the server to schedule the patrol.");
+      return false;
     }
   };
 

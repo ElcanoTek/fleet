@@ -240,9 +240,21 @@ func stagesTaskChangeOnly(toolName string) bool {
 // layers: it waits stagedTaskApprovalTimeoutSeconds, or a per-conversation
 // override when that is longer. An explicit per-tool manifest value still
 // wins — the operator named that tool.
+func (a *approvalStager) isPatrolOrPatrolResume() bool {
+	if a.inputKind == agent.InputKindChatPatrol {
+		return true
+	}
+	if a.inputKind == agent.InputKindApprovalResume && a.store != nil {
+		if list, err := a.store.ListChatSchedules(a.ctx, a.userEmail, a.conversationID, false); err == nil && len(list) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 	t := a.resolveBaseTimeoutSeconds(toolName)
-	if a.inputKind == agent.InputKindChatPatrol && t < defaultApprovalTimeoutSeconds {
+	if agentcore.ApprovalTimeoutForTool(toolName) <= 0 && a.isPatrolOrPatrolResume() && t < defaultApprovalTimeoutSeconds {
 		return defaultApprovalTimeoutSeconds
 	}
 	return t

@@ -41,7 +41,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -202,7 +201,7 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 	if approval == nil || handlerOnlyApproval(approval.ToolName) {
 		return
 	}
-	if !agentcore.ResumeAfterApproval(approval.ToolName) && a.inputKind != agent.InputKindChatPatrol {
+	if !agentcore.ResumeAfterApproval(approval.ToolName) && !a.isPatrolOrPatrolResume() {
 		return
 	}
 	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)
