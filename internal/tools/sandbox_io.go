@@ -103,8 +103,9 @@ var errStreamTooLarge = errors.New("stream exceeded its size cap")
 // without holding it whole: chunkBytes at a time into a hidden partial file
 // beside the destination (sandbox.FileOpStream), renamed to the destination
 // with the last chunk, never replacing an existing file. More than maxBytes
-// fails with errStreamTooLarge. On any failure the partial file is removed,
-// so a destination either holds the whole body or does not exist. Returns
+// fails with errStreamTooLarge. On any failure the partial file is removed
+// (or, when the abort cannot run, swept by a later streamed write), so a
+// destination either holds the whole body or does not exist. Returns
 // the size and the SHA-256 of what was written.
 func sandboxStreamWrite(ctx context.Context, sb *sandbox.Sandbox, resolved, valid string, src io.Reader, maxBytes int64, chunkBytes int) (size int64, sha256Hex string, err error) {
 	if sb == nil {

@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func streamPartial(t *testing.T, dir string) string {
@@ -177,5 +178,30 @@ func TestFileOp_StreamAbortCreatesNothing(t *testing.T) {
 	_, _ = sb.RunFileOp(context.Background(), FileOpRequest{Op: FileOpStream, Path: streamPartial(t, missing), Root: root, Abort: true})
 	if _, err := os.Stat(filepath.Join(root, "never")); !os.IsNotExist(err) {
 		t.Fatalf("abort created directories: %v", err)
+	}
+}
+
+func TestFileOp_StreamSweepsStalePartials(t *testing.T) {
+	sb := fileopTestSandbox(t)
+	root := t.TempDir()
+	stale := streamPartial(t, root)
+	fresh := streamPartial(t, root)
+	for _, p := range []string{stale, fresh} {
+		if err := os.WriteFile(p, []byte("left over"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sb.RunFileOp(context.Background(), FileOpRequest{Op: FileOpStream, Path: streamPartial(t, root), Root: root, Data: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale partial kept: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("a recent partial (a running download) was removed: %v", err)
 	}
 }

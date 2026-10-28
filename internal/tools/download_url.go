@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -33,12 +34,12 @@ var downloadURLDialContext = newSSRFGuardedDialer().DialContext
 
 // downloadURLDescription is the prompt-facing description of the
 // download_url tool: the one generic URL → workspace fetch. It is how agents
-// land a fast.io signed URL, an email attachment or cached report link (the
-// download_url Elcano Explorer's get_download_link returns), a public asset,
-// or any other URL that just needs to be on disk.
+// land a fast.io signed URL, an email attachment or report link an email
+// connector hands out, a public asset, or any other URL that just needs to be
+// on disk. Client connector names stay out of it: they live in bundles.
 const downloadURLDescription = "Download bytes from any HTTP(S) URL straight into your per-conversation workspace. " +
 	"Use this after `mcp_fast_io_download action=file-url` to pull the returned opaque `fleet-download://...` handle's bytes onto disk; Fleet keeps the real signed URL server-side so its bearer token never enters your context. " +
-	"Use it for email reports too: `mcp_explorer_get_download_link` returns a `download_url` for an attachment or a cached report link, valid for 15 minutes, so fetch it right away. " +
+	"Use it for email reports too: when an email connector hands you a short-lived download URL for an attachment or a report link, fetch it right away. " +
 	"It also accepts ordinary HTTP(S) URLs for other one-call URL→scratch fetches (public CSVs, signed S3 links, generated reports, etc.).\n\n" +
 	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 512 MB (a file over the cap is not saved at all). " +
 	"When the link answers with an HTML interstitial (an email click-tracker's \"your download will start\" page, a meta refresh, or a page whose only link is the file) it follows it to the file, up to 3 times, and lists the hops in `html_chase`. " +
@@ -52,7 +53,7 @@ type DownloadURLParams struct {
 	URL            string `json:"url" description:"HTTP/HTTPS URL, or an opaque fleet-download:// handle returned by mcp_fast_io_download. Required."`
 	OutputDir      string `json:"output_dir,omitempty" description:"Directory to save the file in. Defaults to the per-conversation workspace (same dir bash/run_python land files in). A relative path is interpreted against the workspace; an absolute path must be inside the chat-server's allowed dirs."`
 	Filename       string `json:"filename,omitempty" description:"Override the auto-detected filename. The collision-suffix is still appended so repeated downloads of the same URL don't overwrite each other."`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"Per-request timeout in seconds. Defaults to 120. Capped at 600."`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"Timeout in seconds for the whole download. Defaults to 300. Capped at 1800."`
 }
 
 // downloadURLMaxBytes caps one download. The archive's link cache keeps report
@@ -170,7 +171,16 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	// of URLs the redirector walks through. The default policy stops at
 	// 10 hops, the same as httpx.
 	var chain []string
+	// A per-call cookie jar: an interstitial that sets a session cookie
+	// usually wants it back on the request for the file.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = fmt.Sprintf("cookie jar: %v", err)
+		return res
+	}
 	client := &http.Client{
+		Jar:     jar,
 		Timeout: timeout,
 		// Same SSRF guard as web_fetch: without it this tool could fetch
 		// cloud metadata (169.254.169.254) or internal services and
@@ -269,7 +279,11 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		return res
 	}
 	finalURL = resp.Request.URL.String()
-	if isHTMLResponse(resp) && looksLikeDataFile(parsed.Path) {
+	if !protected && len(res.HTMLChase) > 0 {
+		// CheckRedirect kept appending the chased requests' redirects.
+		res.RedirectChain = chain
+	}
+	if isHTMLResponse(resp) && (looksLikeDataFile(parsed.Path) || looksLikeDataFile(resp.Request.URL.Path)) {
 		res.Warning = "the server returned an HTML page, not the file the link names: often a login page or an expired link. Check the saved page before parsing it."
 	}
 

@@ -720,3 +720,35 @@ func TestInterstitialTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestDownloadURL_ChaseKeepsCookiesAndWarnsOnAnExpiredTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "1", Path: "/"})
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<a href="/go/report.csv">Download</a>`)
+		case "/go/report.csv":
+			if c, err := r.Cookie("s"); err != nil || c.Value != "1" {
+				http.Error(w, "no session", http.StatusForbidden)
+				return
+			}
+			http.Redirect(w, r, "/cdn/report.csv", http.StatusFound)
+		case "/cdn/report.csv":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<form>Sign in again</form>`)
+		}
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || len(res.HTMLChase) != 1 {
+		t.Fatalf("cookie not carried to the chased target: %+v", res)
+	}
+	if res.Warning == "" {
+		t.Fatalf("HTML from a chased data link must warn: %+v", res)
+	}
+	if last := res.RedirectChain[len(res.RedirectChain)-1]; !strings.HasSuffix(last, "/cdn/report.csv") {
+		t.Fatalf("redirect chain misses the post-chase hop: %v", res.RedirectChain)
+	}
+}

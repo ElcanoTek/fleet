@@ -741,6 +741,31 @@ def do_write(req):
 STREAM_PARTIAL_RE = re.compile(r"^\.fleet-download-[0-9a-f]{24}\.partial$")
 
 
+# A partial file untouched this long belongs to no running download (a
+# download's whole timeout is at most 30 minutes): the first chunk of a new
+# streamed write removes such leftovers from its directory, e.g. after a
+# cancelled turn retired the sandbox before the abort could run.
+STREAM_PARTIAL_STALE_SECONDS = 3600
+
+
+def _sweep_stale_partials(parent_fd, keep):
+    now = time.time()
+    with os.scandir(parent_fd) as entries:
+        for entry in entries:
+            if entry.name == keep or not STREAM_PARTIAL_RE.match(entry.name):
+                continue
+            try:
+                info = os.stat(entry.name, dir_fd=parent_fd, follow_symlinks=False)
+            except OSError:
+                continue
+            if (
+                stat.S_ISREG(info.st_mode)
+                and now - info.st_mtime > STREAM_PARTIAL_STALE_SECONDS
+            ):
+                with contextlib.suppress(OSError):
+                    os.unlink(entry.name, dir_fd=parent_fd)
+
+
 def _plain_name(name):
     return (
         bool(name) and name not in (".", "..") and "/" not in name and "\0" not in name
@@ -774,6 +799,7 @@ def do_stream(req):
                 0o600,
                 dir_fd=parent_fd,
             )
+            _sweep_stale_partials(parent_fd, name)
         else:
             before = _lstat_at(parent_fd, name)
             if before is None:

@@ -19,7 +19,7 @@ import (
 var (
 	metaRefreshRE    = regexp.MustCompile(`(?is)<meta[^>]+http-equiv\s*=\s*["']?refresh["']?[^>]*content\s*=\s*["']\s*\d*\s*;?\s*url\s*=\s*['"]?([^"'>\s]+)`)
 	metaRefreshAltRE = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']\s*\d*\s*;?\s*url\s*=\s*['"]?([^"'>\s]+)[^>]*http-equiv\s*=\s*["']?refresh`)
-	anchorHrefRE     = regexp.MustCompile(`(?is)<a\b[^>]*?\bhref\s*=\s*["']([^"']+)["']`)
+	anchorHrefRE     = regexp.MustCompile(`(?is)<a\b[^>]*?\bhref\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s"'>]+))`)
 )
 
 // dataFileExts are extensions of the report and data files a download link
@@ -55,7 +55,7 @@ func interstitialTarget(page []byte, base *url.URL) string {
 	}
 	found := ""
 	for _, m := range anchorHrefRE.FindAllStringSubmatch(text, -1) {
-		u := resolveHTTP(base, m[1])
+		u := resolveHTTP(base, m[1]+m[2]+m[3])
 		if u == "" {
 			continue
 		}

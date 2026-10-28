@@ -99,9 +99,11 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   `download_url` streams a large body through the seam's `stream` op: chunks
   append, at a checked offset, to a hidden `.fleet-download-<random>.partial`
   file that the last chunk renames into place without replacing anything (or
-  that an abort removes). The executor refuses that op for any other name, so
-  it cannot extend or delete a file the agent made, and the walk, no-follow
-  and bound-root checks are the same as for a write.
+  that an abort removes; a later first chunk sweeps partials untouched for an
+  hour, for when the abort could not run). The executor refuses that op for
+  any other name, so it cannot extend or delete a file the agent made, and the
+  walk, no-follow and bound-root checks are the same as for a write. See
+  [docs/DOWNLOAD_URL.md](../DOWNLOAD_URL.md).
 - **Approval/email broker staging**: `email_materialize` reads a size-bounded,
   conversation-confined content file after the send-email approval stager has
   selected it; inline email previews similarly read validated upload/workspace
