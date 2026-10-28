@@ -23,6 +23,7 @@ const GeneralSettings = lazy(() => import("@/app/settings/page"));
 const ConnectionsPage = lazy(() => import("@/app/settings/connections/page"));
 const SharedFilesPage = lazy(() => import("@/app/settings/shared-files/page"));
 const SkillsPage = lazy(() => import("@/app/settings/skills/page"));
+const PersonasPage = lazy(() => import("@/app/settings/personas/page"));
 const TeamPage = lazy(() => import("@/app/settings/team/page"));
 const AdminOverview = lazy(() => import("@/app/settings/admin/page"));
 const AdminDoctor = lazy(() => import("@/app/settings/admin/doctor/page"));
@@ -37,6 +38,7 @@ const settingsPages: Record<string, () => ReactNode> = {
   "/settings/connections": () => <ConnectionsPage />,
   "/settings/shared-files": () => <SharedFilesPage />,
   "/settings/skills": () => <SkillsPage />,
+  "/settings/personas": () => <PersonasPage />,
   "/settings/team": () => <TeamPage />,
   "/settings/admin": () => <AdminOverview />,
   "/settings/admin/doctor": () => <AdminDoctor />,

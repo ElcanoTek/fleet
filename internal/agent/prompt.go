@@ -410,7 +410,12 @@ type UserSkillPromptEntry struct {
 // buildSystemPrompt's hidden is the turn's interactive_hidden_tools snapshot
 // (see activeMCPToolNames); nil hides nothing. The composition order is
 // documented above, under "system-prompt composition".
-func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry, hosted hostedMCPRoster, hidden []string) (string, error) {
+//
+// layer is the turn's user-persona layer (docs/USER-PERSONAS.md): persona is
+// then the bundle persona the layer builds on, and the layer — nil for a plain
+// bundle persona — is written directly after it, so it sits in the same stable
+// prefix position for every turn of the conversation.
+func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, conversationID string, memories []string, projectInstructions string, notes []agentcore.Note, enabledOptionalMCPServers []string, userSkills []UserSkillPromptEntry, hosted hostedMCPRoster, hidden []string) (string, error) {
 	var sb strings.Builder
 
 	fastIOOn := m.fastIOEnabledForTurn(enabledOptionalMCPServers, hidden)
@@ -449,6 +454,7 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 	fmt.Fprintf(&sb, "---\n\n# Persona: %s\n\n", strings.TrimSuffix(filepath.Base(personaFile), ".yaml"))
 	sb.Write(personaContent)
 	sb.WriteString("\n\n")
+	writeUserPersonaLayer(&sb, layer)
 
 	// 3. runtime date
 	sb.WriteString(runtimeDateContext(time.Now()))

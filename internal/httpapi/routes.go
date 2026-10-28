@@ -64,6 +64,9 @@ func (s *Server) Routes() http.Handler {
 	// User-authored skills (the builder, docs/SKILLS.md phase 2).
 	mux.Handle("/user-skills", auth(member(mutate(http.HandlerFunc(s.userSkillsCollection)))))
 	mux.Handle("/user-skills/", auth(member(mutate(http.HandlerFunc(s.userSkillByID)))))
+	// User-authored personas (docs/USER-PERSONAS.md).
+	mux.Handle("/user-personas", auth(member(mutate(http.HandlerFunc(s.userPersonasCollection)))))
+	mux.Handle("/user-personas/", auth(member(mutate(http.HandlerFunc(s.userPersonaByID)))))
 	// Dynamic model discovery (#251): the model catalog, routed through the
 	// backend so the API key stays server-side and the allow-list is applied
 	// before the response reaches the browser.

@@ -151,6 +151,7 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
+import type { UserPersonaOption } from "./userPersonas";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -259,6 +260,9 @@ export type PromptSaveTarget = {
 type PersonasResponse = {
   personas: string[];
   default: string;
+  // The caller's own active personas (docs/USER-PERSONAS.md), selected by
+  // their ref ("user:<name>"). Absent on an older server.
+  user_personas?: UserPersonaOption[];
 };
 
 export type RankedModel = {
@@ -706,6 +710,9 @@ export function ChatExperience({
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
+  // The user's own personas for the composer picker (Settings → Personas).
+  // Refetched on every mount with the bundle roster, so not snapshotted.
+  const [userPersonas, setUserPersonas] = useState<UserPersonaOption[]>([]);
   // Which empty-state protocol pill the user has opened into its form/intake
   // panel (null = show the card grid). Only meaningful on the empty new-chat
   // view; reset whenever we return to a clean slate.
@@ -5259,7 +5266,11 @@ export function ChatExperience({
   nudgeRecoveryRef.current = nudgeRecovery;
   const refreshConversationsRef = useRef(refreshConversations);
   const loadMcpServerCatalogPreviewRef = useRef(loadMcpServerCatalogPreview);
+  const clearConversationRef = useRef(clearConversation);
+  const setPromptForKeyRef = useRef(setPromptForKey);
   useEffect(() => {
+    clearConversationRef.current = clearConversation;
+    setPromptForKeyRef.current = setPromptForKey;
     reattachToConvRef.current = reattachToConv;
     sweepStreamLivenessRef.current = sweepStreamLiveness;
     loadConversationRef.current = loadConversation;
@@ -5493,6 +5504,35 @@ export function ChatExperience({
       }
     }
 
+    // New-chat link (?persona=<ref>&draft=<text>): Settings → Personas opens
+    // a fresh chat on a chosen persona, optionally with a message already in
+    // the composer (the digital-twin builder). Consumed and stripped like ?c=;
+    // the draft is only placed in the composer — nothing is sent until the
+    // user presses Send.
+    let newChatLink: { persona: string | null; draft: string } | null = null;
+    {
+      const params = new URLSearchParams(window.location.search);
+      const persona = params.get("persona");
+      const draft = params.get("draft");
+      if (persona !== null || draft !== null) {
+        newChatLink = { persona: persona?.trim() || null, draft: draft ?? "" };
+        params.delete("persona");
+        params.delete("draft");
+        const qs = params.toString();
+        window.history.replaceState(
+          null,
+          "",
+          window.location.pathname + (qs ? `?${qs}` : ""),
+        );
+      }
+    }
+    const openNewChatLink = () => {
+      if (!newChatLink) return;
+      clearConversationRef.current();
+      if (newChatLink.persona) setSelectedPersona(newChatLink.persona);
+      if (newChatLink.draft) setPromptForKeyRef.current(PENDING_CONV_KEY, newChatLink.draft);
+    };
+
     // Team link (?team=<conversation id>, "Copy link for <team>"): consumed
     // and stripped like ?c=, then resolved by the server, which alone knows
     // which page this viewer may see (docs/TEAM-SHARING.md):
@@ -5550,7 +5590,10 @@ export function ChatExperience({
           const pd = (await pr.json()) as PersonasResponse;
           if (!cancelled) {
             setPersonas(pd.personas);
-            if (!willLoadConversation) setSelectedPersona(pd.default);
+            setUserPersonas(pd.user_personas ?? []);
+            if (!willLoadConversation) {
+              setSelectedPersona(newChatLink?.persona ?? pd.default);
+            }
           }
         }
       } catch {
@@ -5646,9 +5689,11 @@ export function ChatExperience({
         const ownerLink =
           teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
-        const target = deepLinkConvId ?? ownerLink ?? convs[0]?.id ?? null;
+        const target =
+          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
+          openNewChatLink();
           return;
         }
         // Flip before awaiting so a personas fetch that resolves after this
@@ -5741,6 +5786,12 @@ export function ChatExperience({
       const activeId = restored?.activeConversationId ?? null;
       if (isRealConvId(activeId)) {
         pendingHistoryScrollRef.current = activeId;
+      }
+      // A persona link starts a fresh chat before the background revalidation
+      // reads the active conversation, so it does not reload the old one.
+      if (newChatLink && !deepLinkConvId) {
+        willLoadConversation = true;
+        openNewChatLink();
       }
       void revalidateInBackground();
       // A deep link overrides the rehydrated selection — the user was just
@@ -7125,6 +7176,7 @@ export function ChatExperience({
                 spreadsheetNudge={spreadsheetNudge}
                 setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}
                 personas={personas}
+                userPersonas={userPersonas}
                 selectedPersona={selectedPersona}
                 setSelectedPersona={setSelectedPersona}
                 personaPickerOpen={personaPickerOpen}

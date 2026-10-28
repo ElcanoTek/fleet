@@ -5,12 +5,14 @@
 package httpapi
 
 import (
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -18,6 +20,10 @@ import (
 type personasResponse struct {
 	Personas []string `json:"personas"`
 	Default  string   `json:"default"`
+	// UserPersonas are the caller's own ACTIVE personas (docs/USER-PERSONAS.md),
+	// selected by their Ref ("user:<name>"). Proposals are not listed: they
+	// cannot run until approved.
+	UserPersonas []userPersonaSummary `json:"user_personas"`
 }
 
 // serverConfigResponse is the small "what does this server expose" payload
@@ -185,8 +191,17 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// The caller's own personas are a nice-to-have on this roster: a failed
+	// read lists the bundle personas alone rather than failing the picker.
+	var mine []store.UserPersona
+	if list, err := s.store.ListUserPersonas(r.Context(), userFromCtx(r.Context())); err == nil {
+		mine = list
+	} else {
+		log.Printf("list user personas: %v", err)
+	}
 	writeJSON(w, personasResponse{
-		Personas: names,
-		Default:  s.cfg.PersonaDefault,
+		Personas:     names,
+		Default:      s.cfg.PersonaDefault,
+		UserPersonas: activeUserPersonaSummaries(mine),
 	})
 }

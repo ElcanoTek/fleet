@@ -914,6 +914,10 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM user_skills WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete user skills: %w", err)
 	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM user_personas WHERE user_email = $1`, normalizeEmail(email)); err != nil {
+		return fmt.Errorf("delete user personas: %w", err)
+	}
 	// Per-project UI state (migration 070) goes with the users row below via
 	// its ON DELETE CASCADE — in other people's projects too.
 	//

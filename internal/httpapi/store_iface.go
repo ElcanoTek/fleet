@@ -67,6 +67,15 @@ type chatStore interface {
 	ListUserSkills(ctx context.Context, userEmail string) ([]store.UserSkill, error)
 	ListWorkspaceSharedUserSkills(ctx context.Context) ([]store.UserSkill, error)
 	DeleteUserSkill(ctx context.Context, userEmail, id string) error
+	// User-authored personas (docs/USER-PERSONAS.md).
+	ListUserPersonas(ctx context.Context, userEmail string) ([]store.UserPersona, error)
+	GetUserPersonaByName(ctx context.Context, userEmail, name string) (*store.UserPersona, error)
+	CreateUserPersona(ctx context.Context, userEmail string, in store.UserPersonaInput) (*store.UserPersona, error)
+	UpdateUserPersona(ctx context.Context, userEmail, id string, in store.UserPersonaInput) (*store.UserPersona, error)
+	ProposeUserPersona(ctx context.Context, userEmail string, in store.UserPersonaInput) (*store.UserPersona, error)
+	ApproveUserPersona(ctx context.Context, userEmail, id string) (*store.UserPersona, error)
+	DeleteUserPersona(ctx context.Context, userEmail, id string) error
+	UserChatDigest(ctx context.Context, userEmail string, maxConversations, maxMessagesPerConversation, maxChars, maxTotalChars int) ([]store.ChatDigestConversation, error)
 	// Read-only public sharing (#226): the owner issues/revokes a share token;
 	// GetConversationByShareToken serves the unauthenticated /shared/{token} read.
 	SetShareToken(ctx context.Context, ownerEmail, convID, token string, expiresAt *int64) error

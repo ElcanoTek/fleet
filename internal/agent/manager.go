@@ -51,6 +51,11 @@ type TurnInput struct {
 	// something the user wrote. See injected.go and ADR-0058.
 	InjectedContext string
 	Persona         string // persona name, e.g. "assistant"
+	// UserPersona is the user-authored persona layer for this turn
+	// (docs/USER-PERSONAS.md), nil for a plain bundle persona. When set, Persona
+	// is the bundle persona the layer builds on — its YAML and tool policy still
+	// apply — and the layer is written right after it in the system prompt.
+	UserPersona *UserPersonaLayer
 	// Model is the OpenRouter slug to drive this turn. Required: the server
 	// holds no default. A blank or unresolvable slug fails the turn up-front.
 	Model   string
@@ -1670,7 +1675,7 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 			notes = got
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(persona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted, hidden)
+	systemPrompt, err := m.buildSystemPrompt(persona, in.UserPersona, in.ConversationID, in.Memories, in.ProjectInstructions, notes, in.OptionalMCPServersEnabled, in.UserSkills, hosted, hidden)
 	if err != nil {
 		return "", fmt.Errorf("compose system prompt: %w", err)
 	}
@@ -1756,6 +1761,13 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*TurnResult, error) {
 	startedAt := time.Now()
 	persona := defaultIfEmpty(strings.TrimSpace(in.Persona), m.config.PersonaDefault)
+	if IsUserPersonaRef(persona) {
+		// An unresolved "user:<name>" reference is not a persona file: the
+		// HTTP layer resolves it to the base persona before the turn. Fail safe
+		// to the deployment default rather than failing the turn on a missing
+		// file (or reading one named after user input).
+		persona = m.config.PersonaDefault
+	}
 
 	if in.ConversationID != "" {
 		ctx = tools.WithConversationID(ctx, in.ConversationID)

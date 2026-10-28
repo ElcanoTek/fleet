@@ -186,7 +186,7 @@ var pagePaths = map[string]bool{
 	"/settings/admin/providers": true, "/settings/admin/server": true,
 	"/settings/admin/users": true, "/settings/connections": true,
 	"/settings/shared-files": true, "/settings/skills": true, "/settings/team": true,
-	"/help": true,
+	"/settings/personas": true, "/help": true,
 }
 
 // Bootstrap is the JSON the SPA reads at boot from #fleet-bootstrap: the

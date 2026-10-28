@@ -131,6 +131,11 @@ automatically resumes the patrol turn as soon as you approve it. Conversations
 with an active or paused patrol are exempt from retention sweeps until the
 patrol is stopped.
 
+A patrol runs as the chat's persona, so a persona of your own — a digital twin,
+say — can keep watch for you: press **Start patrol** on one of its suggested
+patrols in **Settings → Personas** (see
+[Your own personas and digital twin](#your-own-personas-and-digital-twin)).
+
 ### ACP clients (Zed, Neovim, Emacs, JetBrains, Buzz)
 
 `fleet acp` lets an Agent Client Protocol client talk to fleet. The client
@@ -325,7 +330,7 @@ The toolbar beneath the message box is a row of icons. Left to right:
 | Control | What it does |
 | --- | --- |
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
-| Persona | A saved working style for the assistant, shown when your deployment ships personas. **Default** is right for nearly everything. |
+| Persona | How the assistant thinks and writes in this chat: your deployment's personas under **Workspace**, and your own under **Yours** (see [Your own personas and digital twin](#your-own-personas-and-digital-twin)). It is chosen before the first message; once the chat is underway the control is hidden. **Manage your personas** (or **Create your own persona**) at the bottom of the menu opens **Settings → Personas**. |
 | Prompt library | Opens the shared library to insert or save a prompt. See [The prompt library](#9-the-prompt-library). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
@@ -438,6 +443,49 @@ and tasks, or click **Clone & edit** on any Workspace pack skill to load its
 instructions into the editor and customize it (you can also ask the assistant in
 chat to propose a skill or edit an existing one, then click **Approve** or
 **Approve & share** in **Settings → Skills**).
+
+### Your own personas and digital twin
+
+Under **Settings → Personas** you can write personas of your own. They are
+private: only chats you start can use them, and they appear under **Yours** in
+the composer's persona menu.
+
+- **Build your digital twin.** Describe yourself (your role, what you watch, how
+  you decide, how you like things written), choose whether the twin may read
+  what you typed in your recent chats, and choose **Suggest actions** or **Act on
+  my behalf**. **Build with the assistant** opens a new chat with that request
+  already in the composer; nothing is sent until you press Send. The assistant
+  can read only the messages you typed — not its own replies, and never
+  lockdown, archived or deleted chats — asks a few questions, then stages a
+  **draft** persona with suggested patrols. **Write it myself** opens the editor
+  on a twin template instead.
+- **Drafts wait for you.** A persona the assistant proposes shows **Proposed —
+  review it** (or **Proposed edit to …** when it changes one you have) and does
+  nothing until you press **Approve**; **Discard** deletes it. You can also ask
+  the assistant in any chat to create or improve a persona; it uses the
+  `persona_studio` tool and the result lands here the same way.
+- **New persona** opens the editor, optionally starting from a template
+  (**Digital twin**, **Patrol analyst**, **Writing partner**). Set a display name
+  (the short name is derived from it and cannot change later, because chats
+  refer to it), one line on what it is for, **Digital twin** or **Specialist
+  assistant**, **Suggest actions** or **Act on my behalf**, the workspace
+  persona it **Builds on** (its expertise and tool access carry over — your
+  persona adds instructions, it cannot unlock tools the workspace persona does
+  not have), the instructions, and up to 8 suggested patrols (a title, how
+  often, a time zone, and what to do each time; at least 5 minutes apart).
+  You can keep up to 50 personas.
+- **Start chat** opens a new chat on the persona. **Start patrol** on a
+  suggested patrol opens a new chat on the persona, attaches the patrol to it,
+  and runs the first check right away. A persona set to **Act on my behalf**
+  turns that chat's **⚡ Auto-approve** on; one set to **Suggest actions** leaves
+  approval cards in place. Either way, autonomy is an instruction to the
+  assistant plus that one default — the chat's approval setting still decides
+  which tool calls stop for you.
+- **Edit** changes every chat that uses the persona from its next turn.
+  **Delete** leaves those chats in place; they continue on the workspace default
+  persona.
+- **Workspace personas** lists your deployment's personas: **Start chat** on
+  one, or **Customize** to start your own persona from it.
 
 For Bento presentations, your deployment can supply a default branded starter.
 Ask for a different theme or a blank deck whenever you prefer; the starter's

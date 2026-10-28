@@ -206,6 +206,12 @@ func (s *fakeChatStore) ListWorkspaceSharedUserSkills(_ context.Context) ([]stor
 	return nil, nil
 }
 
+// User personas (docs/USER-PERSONAS.md): the fake has none — GET /personas
+// lists them alongside the bundle roster.
+func (s *fakeChatStore) ListUserPersonas(_ context.Context, _ string) ([]store.UserPersona, error) {
+	return nil, nil
+}
+
 // Shared file library (docs/SHARED-FILES.md): the fake has none — the turn
 // path lists it on every run for the prompt block, and an empty library
 // appends nothing.

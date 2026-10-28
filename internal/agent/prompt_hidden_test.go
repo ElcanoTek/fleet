@@ -45,7 +45,7 @@ func TestBuildSystemPrompt_FastIOGatedOnVisibleTools(t *testing.T) {
 		{"nothing hidden", nil, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			prompt, err := m.buildSystemPrompt("victoria", "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{}, tc.hidden)
+			prompt, err := m.buildSystemPrompt("victoria", nil, "conv-x", nil, "", nil, nil, nil, hostedMCPRoster{}, tc.hidden)
 			if err != nil {
 				t.Fatal(err)
 			}

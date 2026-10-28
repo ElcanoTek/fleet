@@ -1,7 +1,7 @@
 "use client";
 
 // SetNav — the settings area's sticky left sub-nav (the design's .set-nav).
-// General · Team · Connections · Skills · Shared files, plus an expandable Admin parent whose
+// General · Team · Connections · Skills · Personas · Shared files, plus an expandable Admin parent whose
 // children (Overview · Server · Doctor · Users · Features · Providers · Notifications) indent
 // behind a left border and fade in. Admin renders only for admins (resolved
 // client-side by useIsAdmin; every admin API stays server-gated regardless).
@@ -22,6 +22,7 @@ const SECTIONS = [
   { href: "/settings/team", label: "Team" },
   { href: "/settings/connections", label: "Connections" },
   { href: "/settings/skills", label: "Skills" },
+  { href: "/settings/personas", label: "Personas" },
   // Member-visible on purpose: the page itself adapts (read-only library for
   // members, manage controls for admins) — NOT an ADMIN_SUBS entry.
   { href: "/settings/shared-files", label: "Shared files" },
