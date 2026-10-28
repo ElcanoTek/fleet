@@ -207,4 +207,9 @@ PUT /api/user-skills/{id}
 DELETE /api/user-skills/{id}
 GET /api/user-skills
 POST /api/user-skills
+GET /api/user-personas
+POST /api/user-personas
+PUT /api/user-personas/{id}
+DELETE /api/user-personas/{id}
+POST /api/user-personas/{id}/approve
 GET /api/version

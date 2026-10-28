@@ -36,6 +36,9 @@ var interactiveOnlyToolNames = map[string]bool{
 	// scheduled model "ask" a form nobody will ever submit.
 	ShowUIToolName:     true,
 	ChatPatrolToolName: true,
+	// persona_studio drafts a persona for the person at the keyboard to
+	// review; a headless run has no owner reviewing in the moment.
+	PersonaStudioToolName: true,
 }
 
 // ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
@@ -84,6 +87,7 @@ func DefaultTools() []fantasy.AgentTool {
 		NewGenerateImageTool(nil),
 		NewShowUITool(),
 		NewChatPatrolTool(),
+		NewPersonaStudioTool(),
 	}
 }
 
@@ -120,6 +124,7 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewGenerateImageTool(sb),
 		NewShowUITool(),
 		NewChatPatrolTool(),
+		NewPersonaStudioTool(),
 	}
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)

@@ -424,6 +424,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		if persona == "" {
 			persona = s.cfg.PersonaDefault
 		}
+		if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
+			s.userPersonaError(w, err)
+			return
+		}
 		title := strings.TrimSpace(req.Title)
 		if title == "" {
 			// Instant heuristic title (#302): a real noun-phrase name with zero
@@ -1432,13 +1436,17 @@ func (s *Server) runTurnAsync(
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
+	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
+	// A "user:<name>" persona runs as its bundle base plus the owner's layer.
+	turnPersona, personaLayer := s.resolveTurnPersona(turnCtx, conv)
 
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userInput,
 		InjectedContext:           injectedContext,
-		Persona:                   conv.Persona,
+		Persona:                   turnPersona,
+		UserPersona:               personaLayer,
 		Model:                     conv.Model,
 		History:                   history,
 		Memories:                  memories,

@@ -53,6 +53,13 @@ import { ToolsPopover } from "./ToolsPopover";
 import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { Link } from "@/app/lib/Link";
+import {
+  formatBundlePersona,
+  isUserPersonaRef,
+  personaLabel,
+  type UserPersonaOption,
+} from "./userPersonas";
 
 // isNewlyReleased was a module-level helper in chat-experience; its only
 // caller was the composer's model-picker rows, so it moves here verbatim
@@ -120,7 +127,6 @@ const TOOL_BTN_ACTIVE =
 // never clip, if they outgrow even that).
 const COMPOSER_POP_BASE =
   "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 grid grid-cols-[minmax(0,1fr)] gap-[0.1rem] rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-[0.3rem] shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0";
-const COMPOSER_POP = `${COMPOSER_POP_BASE} sm:w-[15.5rem]`;
 const COMPOSER_POP_WIDE = `${COMPOSER_POP_BASE} sm:w-[19rem]`;
 
 // The design's .pop-row / .pop-title type ramp, for the composer's simple
@@ -173,8 +179,10 @@ export type ComposerProps = {
   spreadsheetNudge: NudgeDecision;
   setSpreadsheetNudgeDismissed: Dispatch<SetStateAction<boolean>>;
 
-  // Persona picker
+  // Persona picker: the workspace (bundle) roster plus the user's own
+  // personas (Settings → Personas), selected by their "user:<name>" ref.
   personas: string[];
+  userPersonas?: UserPersonaOption[];
   selectedPersona: string;
   setSelectedPersona: Dispatch<SetStateAction<string>>;
   personaPickerOpen: boolean;
@@ -287,6 +295,7 @@ export function Composer({
   spreadsheetNudge,
   setSpreadsheetNudgeDismissed,
   personas,
+  userPersonas = [],
   selectedPersona,
   setSelectedPersona,
   personaPickerOpen,
@@ -1099,10 +1108,50 @@ export function Composer({
                 isStreaming ||
                 (activeConversationId !== null && messages.length > 0);
               if (personaLocked) return null;
-              const personaOptions =
-                personas.length > 0 ? personas : [selectedPersona];
-              const formatPersona = (p: string) =>
-                p.charAt(0).toUpperCase() + p.slice(1);
+              // The workspace roster, keeping a selection that is not on it
+              // (a stale snapshot) visible rather than silently unselected.
+              const workspaceOptions =
+                personas.length > 0
+                  ? personas
+                  : isUserPersonaRef(selectedPersona)
+                    ? []
+                    : [selectedPersona];
+              const currentLabel = personaLabel(selectedPersona, userPersonas);
+              const pick = (p: string) => {
+                setSelectedPersona(p);
+                setPersonaPickerOpen(false);
+                personaButtonRef.current?.focus();
+              };
+              const option = (value: string, title: string, sub?: string) => {
+                const selected = value === selectedPersona;
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
+                    onClick={() => pick(value)}
+                  >
+                    <span className="grid min-w-0">
+                      <span className={`${POP_TITLE} truncate`}>{title}</span>
+                      {sub ? (
+                        <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                          {sub}
+                        </span>
+                      ) : null}
+                    </span>
+                    {selected ? (
+                      <span
+                        aria-hidden="true"
+                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                      />
+                    ) : null}
+                  </button>
+                );
+              };
+              const groupHead =
+                "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.66rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]";
               return (
                 // Positioning anchor only (see the model picker above):
                 // presentational wrapper, Escape delegated so it works from
@@ -1129,46 +1178,53 @@ export function Composer({
                     type="button"
                     aria-haspopup="listbox"
                     aria-expanded={personaPickerOpen}
-                    aria-label={`Persona — ${formatPersona(selectedPersona)}`}
-                    data-tip-top={`Persona — ${formatPersona(selectedPersona)}`}
-                    className={`${TOOL_BTN} ${personaPickerOpen ? TOOL_BTN_ACTIVE : ""}`}
+                    aria-label={`Persona — ${currentLabel}`}
+                    data-tip-top={`Persona — ${currentLabel}`}
+                    className={`${TOOL_BTN} ${personaPickerOpen || isUserPersonaRef(selectedPersona) ? TOOL_BTN_ACTIVE : ""}`}
                     onClick={() => setPersonaPickerOpen((open) => !open)}
                   >
                     <Icon name="persona" className="size-3.5" />
                   </button>
                   {personaPickerOpen ? (
-                    <div
-                      role="listbox"
-                      aria-label="Persona"
-                      className={COMPOSER_POP}
-                    >
-                      {personaOptions.map((p) => {
-                        const selected = p === selectedPersona;
-                        return (
-                          <button
-                            key={p}
-                            type="button"
-                            role="option"
-                            aria-selected={selected}
-                            className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
-                            onClick={() => {
-                              setSelectedPersona(p);
-                              setPersonaPickerOpen(false);
-                              personaButtonRef.current?.focus();
-                            }}
-                          >
-                            <span className={`${POP_TITLE} truncate`}>
-                              {formatPersona(p)}
-                            </span>
-                            {selected ? (
-                              <span
-                                aria-hidden="true"
-                                className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                              />
-                            ) : null}
-                          </button>
-                        );
-                      })}
+                    <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
+                      <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
+                        {userPersonas.length > 0 ? (
+                          <>
+                            <div role="group" aria-label="Your personas" className="grid gap-[0.1rem]">
+                              <div aria-hidden="true" className={groupHead}>
+                                Yours
+                              </div>
+                              {userPersonas.map((p) =>
+                                option(
+                                  p.ref,
+                                  p.display_name || p.name,
+                                  [
+                                    p.kind === "twin" ? "Digital twin" : null,
+                                    p.autonomy === "act" ? "acts for you" : "suggests actions",
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · "),
+                                ),
+                              )}
+                            </div>
+                            <div role="group" aria-label="Workspace personas" className="grid gap-[0.1rem]">
+                              <div aria-hidden="true" className={groupHead}>
+                                Workspace
+                              </div>
+                              {workspaceOptions.map((p) => option(p, formatBundlePersona(p)))}
+                            </div>
+                          </>
+                        ) : (
+                          workspaceOptions.map((p) => option(p, formatBundlePersona(p)))
+                        )}
+                      </div>
+                      <Link
+                        href="/settings/personas"
+                        className="mt-[0.2rem] flex items-center gap-[0.4rem] rounded-[0.5rem] border-t border-[var(--color-border-subtle)] px-[0.6rem] py-[0.45rem] text-[0.76rem] text-[var(--color-text-secondary)] no-underline transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                      >
+                        <Icon name="plus" className="size-3" />
+                        {userPersonas.length > 0 ? "Manage your personas" : "Create your own persona"}
+                      </Link>
                     </div>
                   ) : null}
                 </div>

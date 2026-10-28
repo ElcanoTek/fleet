@@ -498,3 +498,53 @@ describe("Composer — per-chat Auto-approve toggle", () => {
     expect(toggleAutoApprove).toHaveBeenCalledTimes(1);
   });
 });
+
+// User personas (docs/USER-PERSONAS.md): the persona menu groups the user's
+// own personas above the workspace ones, names them by display name, selects
+// them by their "user:<name>" ref, and links to Settings → Personas.
+describe("Composer — persona picker with user personas", () => {
+  it("groups Yours and Workspace and selects a user persona by ref", () => {
+    const setSelectedPersona = vi.fn();
+    render(
+      <Host
+        overrides={{
+          personas: ["assistant", "trader"],
+          selectedPersona: "user:my-twin",
+          setSelectedPersona,
+          userPersonas: [
+            {
+              ref: "user:my-twin",
+              name: "my-twin",
+              display_name: "My Twin",
+              description: "",
+              kind: "twin",
+              autonomy: "advise",
+            },
+          ],
+        }}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Persona — My Twin" });
+    fireEvent.click(trigger);
+    const listbox = screen.getByRole("listbox", { name: "Persona" });
+    const yours = within(listbox).getByRole("group", { name: "Your personas" });
+    const mine = within(yours).getByRole("option", { name: /My Twin/ });
+    expect(mine).toHaveAttribute("aria-selected", "true");
+    expect(within(mine).getByText("Digital twin · suggests actions")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Manage your personas/ })).toHaveAttribute(
+      "href",
+      "/settings/personas",
+    );
+    const workspace = within(listbox).getByRole("group", { name: "Workspace personas" });
+    fireEvent.click(within(workspace).getByRole("option", { name: "Trader" }));
+    expect(setSelectedPersona).toHaveBeenCalledWith("trader");
+  });
+
+  it("without user personas lists the workspace roster flat and invites creating one", () => {
+    render(<Host overrides={{ personas: ["assistant"], selectedPersona: "assistant" }} />);
+    fireEvent.click(screen.getByRole("button", { name: "Persona — Assistant" }));
+    expect(screen.queryByRole("group", { name: "Your personas" })).toBeNull();
+    expect(screen.getByRole("option", { name: "Assistant" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("link", { name: /Create your own persona/ })).toBeInTheDocument();
+  });
+});
