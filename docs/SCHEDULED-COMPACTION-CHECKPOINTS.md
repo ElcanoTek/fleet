@@ -710,6 +710,16 @@ That round cost about $6.
   re-run of an elided call, so a run that loops on summaries alone, as Sonnet
   did during its audit above, is not helped. That loop happens with elision
   off too; it is a matter for the summary, not for elision.
+- Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
+  four with elision cost $2.25 a run and five without $1.49. The runs with
+  elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M
+  prompt tokens, against 0.5–2.4M in four of the five without): a trim keeps
+  more history than a summary, Gemini takes many small steps, and only
+  about 15–20% of its prompt is cached. They were also more accurate (69
+  cells against 64 on average; the two cheapest runs without elision stopped
+  early with wrong values). The raise did not fire in any of them. Not yet
+  looked into, and a second round with elision on, on all seven models, is
+  still to run.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.
