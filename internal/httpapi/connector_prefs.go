@@ -170,19 +170,7 @@ func (s *Server) applyConnectorPrefs(ctx context.Context, user string, enabled [
 		}
 		accountDefaults[name] = seat
 	}
-	seen := make(map[string]bool, len(enabled))
 	for _, name := range enabled {
-		if name == "email" {
-			if _, hasEmail := byName["email"]; !hasEmail {
-				if _, hasExplorer := byName["explorer"]; hasExplorer {
-					name = "explorer"
-				}
-			}
-		}
-		if seen[name] {
-			continue
-		}
-		seen[name] = true
 		info, known := byName[name]
 		if !known {
 			kept = append(kept, name)
