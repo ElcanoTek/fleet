@@ -922,6 +922,59 @@ func (c *containerImpl) poisoned() bool {
 	return c.execPoisoned.Load()
 }
 
+// reapDetachedProcesses kills any process inside the container that is not PID 1
+// (sleep infinity) and not the root persistent Python bridge process
+// (python3 /opt/bridge/bridge.py) when a persistent turn releases its borrow.
+// If the reap fails or cannot be confirmed, it poisons and kills the container
+// so no detached background process can survive across turns.
+func (c *containerImpl) reapDetachedProcesses() bool {
+	containerID := c.currentContainerID()
+	if containerID == "" {
+		return false
+	}
+	reapCtx, cancel := context.WithTimeout(context.Background(), execReapTimeout)
+	defer cancel()
+	const script = `import os, signal
+self_pid = os.getpid()
+bridge_pid = None
+for entry in os.listdir('/proc'):
+    if not entry.isdigit():
+        continue
+    pid = int(entry)
+    if pid in (1, self_pid):
+        continue
+    try:
+        with open(f'/proc/{pid}/cmdline', 'rb') as f:
+            cmd = f.read()
+        if b'/opt/bridge/bridge.py' in cmd and bridge_pid is None:
+            bridge_pid = pid
+    except Exception:
+        pass
+for entry in os.listdir('/proc'):
+    if not entry.isdigit():
+        continue
+    pid = int(entry)
+    if pid in (1, self_pid, bridge_pid):
+        continue
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+`
+	args := c.podmanArgs([]string{"exec", containerID, "python3", "-c", script})
+	out, err := exec.CommandContext(reapCtx, c.cfg.PodmanBinary, args...).CombinedOutput() //nolint:gosec // fixed podman binary + generated containerID + constant script
+	if err != nil {
+		if containerAlreadyGone(string(out)) {
+			return false
+		}
+		log.Printf("sandbox: persistent turn-release process reap failed (%s): %v (%.200s); retiring container", containerID, err, string(out))
+		c.execPoisoned.Store(true)
+		c.killContainerNow(containerID)
+		return false
+	}
+	return true
+}
+
 // fileOpTimeout bounds a single sandboxed file operation (#784). Generous
 // enough for a 10 MB view read, short enough that a wedged container surfaces
 // an error instead of hanging the turn.

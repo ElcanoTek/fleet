@@ -32,8 +32,7 @@ type ChatPatrolParams struct {
 	Cron            string `json:"cron,omitempty" description:"Standard 5-field cron expression for a recurring patrol in this chat (e.g. '0 */2 * * *' for every 2 hours, '0 9,13,17 * * 1-5' for 3x daily on weekdays). Minimum interval is 5 minutes. Mutually exclusive with duration_seconds."`
 	Timezone        string `json:"timezone,omitempty" description:"IANA timezone for evaluating cron (e.g. 'America/New_York', 'America/Chicago', 'UTC'). Defaults to 'UTC'."`
 	DurationSeconds int    `json:"duration_seconds,omitempty" description:"Seconds to wait before firing a one-shot timer in this chat (minimum 10, e.g. 1800 for 30 minutes, 7200 for 2 hours). Mutually exclusive with cron."`
-	MaxRuns         int    `json:"max_runs,omitempty" description:"Optional cap on how many times a recurring cron patrol should fire before completing (0 = unlimited)."`
-	AutoApprove     *bool  `json:"auto_approve,omitempty" description:"When true (recommended for unattended patrols), enables Auto-approve (⚡) on this conversation so session-approvable tool calls run automatically during patrol turns without stalling on manual approval prompts."`
+	MaxRuns         *int   `json:"max_runs,omitempty" description:"Optional cap on how many times a recurring cron patrol should fire before completing (0 = unlimited)."`
 	AllowMultiple   bool   `json:"allow_multiple,omitempty" description:"When true on 'create', adds an additional recurring patrol alongside any existing recurring patrol in this conversation instead of updating the existing one in place."`
 }
 
@@ -98,8 +97,8 @@ Use chat_patrol when a user asks you to:
 - View, pause, resume, update, or stop an active patrol/timer in this chat
 
 Best practices:
-1. Pass auto_approve=true when creating a patrol or timer that will invoke critical tools while the user is away, so patrol turns run end-to-end without stalling on manual approval cards.
-2. Because chat_patrol executes immediately without ending your turn, when a user asks you to start a patrol AND do an initial check, call chat_patrol(action="create", ...) to arm the recurring schedule and also perform the initial check in the same turn.`
+1. Because chat_patrol executes immediately without ending your turn, when a user asks you to start a patrol AND do an initial check, call chat_patrol(action="create", ...) to arm the recurring schedule and also perform the initial check in the same turn.
+2. If auto_approve is false in the tool result and the patrol will invoke critical tools while the user is away, remind the user they can click "⚡ Enable Auto-approve" in the Patrol bar or composer so unattended runs execute without waiting on manual approval cards.`
 
 // NewChatPatrolTool constructs the interactive chat_patrol tool.
 func NewChatPatrolTool() fantasy.AgentTool {
@@ -126,11 +125,10 @@ func NewChatPatrolTool() fantasy.AgentTool {
 			if err != nil {
 				return fantasy.NewTextErrorResponse(err.Error()), nil
 			}
-			out, err := json.MarshalIndent(res, "", "  ")
-			if err != nil {
-				return fantasy.NewTextResponse(res.Message), nil
+			if out, mErr := json.MarshalIndent(res, "", "  "); mErr == nil {
+				return fantasy.NewTextResponse(string(out)), nil
 			}
-			return fantasy.NewTextResponse(string(out)), nil
+			return fantasy.NewTextResponse(res.Message), nil
 		},
 	)
 }

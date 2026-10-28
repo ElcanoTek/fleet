@@ -1429,16 +1429,16 @@ func TestLoad_PythonREPL(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
 
-	// Defaults: persistent, no cell ceiling, 6h idle TTL, 64 sessions.
+	// Defaults: per-turn container isolation, no cell ceiling, 6h idle TTL, 64 sessions.
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.PythonREPLMode != "persistent" {
-		t.Errorf("PythonREPLMode default = %q, want persistent", cfg.PythonREPLMode)
+	if cfg.PythonREPLMode != "per-turn" {
+		t.Errorf("PythonREPLMode default = %q, want per-turn", cfg.PythonREPLMode)
 	}
-	if !cfg.PersistentPythonREPL() {
-		t.Error("PersistentPythonREPL() must be true by default")
+	if cfg.PersistentPythonREPL() {
+		t.Error("PersistentPythonREPL() must be false by default")
 	}
 	if cfg.PythonCellTimeoutSeconds != 0 {
 		t.Errorf("PythonCellTimeoutSeconds default = %d, want 0", cfg.PythonCellTimeoutSeconds)
@@ -1453,7 +1453,7 @@ func TestLoad_PythonREPL(t *testing.T) {
 		t.Errorf("PythonREPLMaxSessions default = %d, want 64", cfg.PythonREPLMaxSessions)
 	}
 
-	t.Setenv("FLEET_PYTHON_REPL_MODE", "per-turn")
+	t.Setenv("FLEET_PYTHON_REPL_MODE", "persistent")
 	t.Setenv("FLEET_PYTHON_CELL_TIMEOUT", "120")
 	t.Setenv("FLEET_PYTHON_REPL_IDLE_TTL", "600")
 	t.Setenv("FLEET_PYTHON_REPL_MAX", "8")
@@ -1461,8 +1461,8 @@ func TestLoad_PythonREPL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.PythonREPLMode != "per-turn" || cfg.PersistentPythonREPL() {
-		t.Errorf("PythonREPLMode = %q persistent=%v, want per-turn/false", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
+	if cfg.PythonREPLMode != "persistent" || !cfg.PersistentPythonREPL() {
+		t.Errorf("PythonREPLMode = %q persistent=%v, want persistent/true", cfg.PythonREPLMode, cfg.PersistentPythonREPL())
 	}
 	if cfg.PythonCellTimeoutSeconds != 120 {
 		t.Errorf("PythonCellTimeoutSeconds = %d, want 120", cfg.PythonCellTimeoutSeconds)

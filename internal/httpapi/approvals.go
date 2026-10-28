@@ -396,15 +396,11 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// suggest_advanced_model), outbound email (send_email, send_template_email),
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.
-	if (a.isAutoApprove() || a.inputKind == agent.InputKindChatPatrol) && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		via := "conversation_auto_approve"
-		if !a.isAutoApprove() && a.inputKind == agent.InputKindChatPatrol {
-			via = "chat_patrol_auto_approve"
-		}
+	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
 		a.sink.Emit("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
-			"via":  via,
+			"via":  "conversation_auto_approve",
 		})
 		return agentcore.PreApprovedSentinel, nil
 	}

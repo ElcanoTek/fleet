@@ -157,7 +157,7 @@ func (s *scheduleFakeStore) TriggerChatScheduleNow(ctx context.Context, userEmai
 		ClientInputID:  store.ChatPatrolInputKeyPrefix + scheduleID + ":1",
 		Message:        store.ChatPatrolInputText(sc, sc.RunCount),
 		Attachments:    "[]",
-		Mode:           store.InputModeQueued,
+		Mode:           store.InputModePatrol,
 	})
 	if err != nil {
 		return nil, err
@@ -325,12 +325,17 @@ func TestChatPatrolTool_InvokedInsideTurn(t *testing.T) {
 	}
 	srv.DrainTurns(context.Background())
 
-	// Verify the schedule was created and patrol.updated was emitted on the SSE stream.
+	// Verify the schedule was created and patrol.updated was emitted on the SSE stream,
+	// while the model-callable chat_patrol tool did NOT elevate conv.AutoApprove without user consent.
 	if !strings.Contains(rec.Body.String(), "event: patrol.updated") {
 		t.Errorf("expected SSE stream to contain patrol.updated event, got:\n%s", rec.Body.String())
 	}
 	list, _ := st.ListChatSchedules(context.Background(), "trader@elcanotek.com", conv.ID, false)
 	if len(list) != 1 || list[0].Title != "2h Deal Patrol" {
 		t.Errorf("expected 1 created patrol schedule, got %+v", list)
+	}
+	updatedConv, _ := st.Get(context.Background(), "trader@elcanotek.com", conv.ID)
+	if updatedConv != nil && updatedConv.AutoApprove {
+		t.Errorf("model-invoked chat_patrol must not enable conversation auto_approve without explicit user action")
 	}
 }

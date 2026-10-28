@@ -100,6 +100,37 @@ Text fields keep spaces as you type; larger text boxes accept several lines.
 The prompt preview preserves those line breaks so you can check what will be
 sent before pressing the card's run button.
 
+### In-chat patrols and timers
+
+You can also run a recurring **patrol** or a one-shot **timer** directly inside
+a chat conversation, without leaving the thread or promoting it to a separate
+Operations Center job. Each time a patrol or timer fires, the assistant wakes up
+in the same conversation with its full message history, workspace files,
+checkpointed Python variables, and enabled connectors intact.
+
+Start a patrol or timer in either of two ways:
+
+- **Ask in chat:** tell the assistant what to patrol and how often (for example,
+  *"patrol my deals every 2 hours and update the dashboard if pacing drops"* or
+  *"check back in 30 minutes and verify the backfill"*). The assistant uses the
+  `chat_patrol` tool (`create`, `list`, `update`, `pause`, `resume`, `cancel`) to
+  attach or adjust the schedule on the current conversation.
+- **Use the Patrol button in the composer:** click **Patrol** in the composer
+  toolbar, choose a preset (**Every 1h**, **Every 2h**, **Every 4h**, **Every
+  6h**, **In 30m (1x)**, or **Custom**), enter the patrol instructions, and
+  press **Start patrol**.
+
+When a conversation has an active or paused patrol or timer, the **Patrol bar**
+appears at the top of the thread showing the schedule's status (**Patrol
+active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
+the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
+Enabling **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or composer)
+lets session-approvable tool calls run hands-free while you are away; if a
+patrol turn does stage an approval card, the card stays open for 24 hours and
+automatically resumes the patrol turn as soon as you approve it. Conversations
+with an active or paused patrol are exempt from retention sweeps until the
+patrol is stopped.
+
 ### ACP clients (Zed, Neovim, Emacs, JetBrains, Buzz)
 
 `fleet acp` lets an Agent Client Protocol client talk to fleet. The client
@@ -332,8 +363,8 @@ sit at the top of the list. Typically the first is fast and inexpensive — the 
 new conversations start on, and the right choice for pulls, checks, and
 formatting — and the second is stronger, for judgment calls, retrospectives, and
 anything where depth matters more than speed. By default those two are
-**Claude Haiku 5.5** (new conversations start on it) and **Claude Opus 5.5** (the
-model a "switch to a stronger model" suggestion offers); your admin can point
+**Claude Opus 5.5** (new conversations start on it) and **Gemini 4 Argon** (the
+frontier fallback and alternative model); your admin can point
 either slot at a different model. Your admin can also pin more models just
 below those two, sometimes under their own name and with a tag such as
 **alpha** that marks a model still in trial. A pinned model can also show

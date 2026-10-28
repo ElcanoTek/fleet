@@ -130,6 +130,9 @@ func (s *settlementStore) ListPendingMemoryProposalsForConversation(context.Cont
 func (s *settlementStore) GetBranchOrigin(context.Context, string, string) (*store.BranchOrigin, error) {
 	return nil, nil
 }
+func (s *settlementStore) ListChatSchedules(context.Context, string, string, bool) ([]store.ChatSchedule, error) {
+	return nil, nil
+}
 
 func TestTerminalSettlementExcludesLargeResolvedCards(t *testing.T) {
 	st := &settlementStore{}

@@ -149,7 +149,7 @@ func normalizeTimezone(tz string) (string, *time.Location, error) {
 	}
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		return "", nil, fmt.Errorf("%w: invalid timezone %q: %v", ErrInvalidChatSchedule, tz, err)
+		return "", nil, fmt.Errorf("%w: invalid timezone %q: %s", ErrInvalidChatSchedule, tz, err.Error())
 	}
 	return tz, loc, nil
 }
@@ -189,7 +189,7 @@ func validateAndComputeNextCron(cronExpr, tz string, now time.Time) (string, str
 	}
 	sched, err := cron.ParseStandard(cleanSpec)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("%w: invalid cron expression %q: %v", ErrInvalidChatSchedule, cleanSpec, err)
+		return "", "", 0, fmt.Errorf("%w: invalid cron expression %q: %s", ErrInvalidChatSchedule, cleanSpec, err.Error())
 	}
 	base := now.In(loc)
 	next1 := sched.Next(base)
@@ -197,9 +197,16 @@ func validateAndComputeNextCron(cronExpr, tz string, now time.Time) (string, str
 		return "", "", 0, fmt.Errorf("%w: cron expression %q never fires", ErrInvalidChatSchedule, cleanSpec)
 	}
 	if MinChatPatrolCronInterval > 0 {
-		next2 := sched.Next(next1)
-		if !next2.IsZero() && next2.Sub(next1) < MinChatPatrolCronInterval {
-			return "", "", 0, fmt.Errorf("%w: patrol cadence must be at least %s between runs", ErrInvalidChatSchedule, MinChatPatrolCronInterval)
+		cur := next1
+		for i := 0; i < 48; i++ {
+			nxt := sched.Next(cur)
+			if nxt.IsZero() {
+				break
+			}
+			if nxt.Sub(cur) < MinChatPatrolCronInterval {
+				return "", "", 0, fmt.Errorf("%w: patrol cadence must be at least %s between runs", ErrInvalidChatSchedule, MinChatPatrolCronInterval)
+			}
+			cur = nxt
 		}
 	}
 	return cleanSpec, normTZ, next1.Unix(), nil
@@ -363,6 +370,9 @@ func (s *Store) GetChatSchedule(ctx context.Context, userEmail, convID, schedule
 // ListChatSchedules lists schedules for a conversation owned by userEmail.
 // When includeTerminal is false, only active and paused schedules are returned.
 func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]ChatSchedule, error) {
+	if s == nil || s.db == nil {
+		return []ChatSchedule{}, nil
+	}
 	query := `SELECT ` + chatScheduleSelectCols + `
 		FROM chat_schedules
 		WHERE conversation_id = $1 AND user_email = $2`
@@ -563,6 +573,26 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 		return nil, err
 	}
 
+	// Coalesce repeated Run-now clicks when a patrol turn is already queued or
+	// running in this conversation, so clicking Run-now while busy does not stack
+	// duplicate patrol turns or burn run_count against MaxRuns.
+	existingInput, err := scanInputRow(tx.QueryRowContext(ctx,
+		inputQueueSelect+`
+		  WHERE conversation_id = $1
+		    AND state IN ('queued', 'running')
+		    AND (mode = 'patrol' OR client_input_id LIKE $2)
+		  ORDER BY position ASC LIMIT 1`,
+		convID, ChatPatrolInputKeyPrefix+"%",
+	))
+	if err == nil {
+		if cerr := tx.Commit(); cerr != nil {
+			return nil, cerr
+		}
+		return &ClaimedChatSchedule{Schedule: sched, Input: existingInput}, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+
 	if maxPending > 0 {
 		var pending int
 		if err := tx.QueryRowContext(ctx,
@@ -609,7 +639,7 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",
-		Mode:           InputModeQueued,
+		Mode:           InputModePatrol,
 		State:          InputStateQueued,
 	})
 	if err != nil {
@@ -725,7 +755,7 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 			SELECT 1 FROM chat_input_queue
 			 WHERE conversation_id = $1
 			   AND state IN ('queued', 'running')
-			   AND client_input_id LIKE $2
+			   AND (mode = 'patrol' OR client_input_id LIKE $2)
 		)`,
 		convID, ChatPatrolInputKeyPrefix+"%",
 	).Scan(&hasInFlightPatrol); err != nil {
@@ -757,15 +787,20 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 
 	busy := hasInFlightPatrol || hasPendingApproval || (maxPending > 0 && pendingCount >= maxPending)
 	if busy {
+		// Advance next_run_at so a blocked one-shot timer or recurring patrol
+		// never sits at the head of ORDER BY next_run_at ASC and starves later
+		// due schedules in other conversations.
+		nextAt := nowUnix + 30
 		if sched.CronExpr != "" {
-			if _, _, nextAt, err := validateAndComputeNextCron(sched.CronExpr, sched.Timezone, now); err == nil {
-				_, _ = tx.ExecContext(ctx,
-					`UPDATE chat_schedules SET next_run_at = $1, updated_at = $2 WHERE id = $3`,
-					nextAt, nowUnix, sched.ID,
-				)
-				_ = tx.Commit()
+			if _, _, cronNext, err := validateAndComputeNextCron(sched.CronExpr, sched.Timezone, now); err == nil {
+				nextAt = cronNext
 			}
 		}
+		_, _ = tx.ExecContext(ctx,
+			`UPDATE chat_schedules SET next_run_at = $1, updated_at = $2 WHERE id = $3`,
+			nextAt, nowUnix, sched.ID,
+		)
+		_ = tx.Commit()
 		return nil, nil
 	}
 
@@ -810,7 +845,7 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",
-		Mode:           InputModeQueued,
+		Mode:           InputModePatrol,
 		State:          InputStateQueued,
 	})
 	if err != nil {

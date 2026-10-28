@@ -25,7 +25,7 @@ func TestUpstreamPinFor(t *testing.T) {
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
 		{"deepseek/deepseek-v4-flash-0731", "DeepSeek", false},
-		{DefaultMaxModel, "Google", true},          // fallback frontier tier (Gemini 4 Argon): strict pin to Google
+		{DefaultMaxModel, "Google", true},                  // fallback frontier tier (Gemini 4 Argon): strict pin to Google
 		{"anthropic/claude-haiku-5.5", "Anthropic", false}, // previous default: soft pin to Anthropic
 		{"openai/gpt-5.4", "OpenAI", false},
 		// x-ai/ has no entry: it held the strong tier for one release and was

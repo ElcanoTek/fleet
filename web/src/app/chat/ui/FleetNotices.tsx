@@ -55,7 +55,7 @@ export function PatrolTurnNotice({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const panelId = useId();
   // Extract a clean title from `[Scheduled Patrol — Run #N: Title]` if present
-  const headerMatch = text.match(/^\[Scheduled (?:Patrol|Timer)[^\]]*\]/);
+  const headerMatch = text.match(/^\[Scheduled (?:Patrol|Timer)[^\]]*\]/i);
   const badgeText = headerMatch
     ? headerMatch[0].slice(1, -1)
     : "Scheduled patrol run — triggered automatically in this chat";

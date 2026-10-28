@@ -30,6 +30,12 @@ const (
 	// sweep, remove, send-now: every query excludes only 'direct'); only the
 	// launch marks its input as fleet's, not the user's.
 	InputModeResume = "resume"
+	// InputModePatrol marks the turn fleet starts itself when an in-chat patrol
+	// or one-shot timer schedule fires (migration 087, docs/CHAT-PATROLS.md).
+	// Like InputModeResume, it drains in FIFO order through startTurn and its
+	// mode is server-owned so client-supplied client_input_id values cannot
+	// spoof patrol provenance.
+	InputModePatrol = "patrol"
 
 	InputStateQueued    = "queued"
 	InputStateRunning   = "running"

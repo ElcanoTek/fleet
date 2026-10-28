@@ -34,11 +34,11 @@
 export const DEFAULT_MODEL = "anthropic/claude-opus-5.5";
 export const DEFAULT_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
 
-export const FALLBACK_MODEL = "google/gemini-4-argon";
-export const FALLBACK_MODEL_LABEL = "Google: Gemini 4 Argon";
+export const ADVANCED_MODEL = "google/gemini-4-argon";
+export const ADVANCED_MODEL_LABEL = "Google: Gemini 4 Argon";
 
-export const ADVANCED_MODEL = FALLBACK_MODEL;
-export const ADVANCED_MODEL_LABEL = FALLBACK_MODEL_LABEL;
+export const FALLBACK_MODEL = ADVANCED_MODEL;
+export const FALLBACK_MODEL_LABEL = ADVANCED_MODEL_LABEL;
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback

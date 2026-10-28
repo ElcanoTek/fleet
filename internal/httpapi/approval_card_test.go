@@ -381,6 +381,9 @@ func (s *cardGetStore) ListPendingMemoryProposalsForConversation(context.Context
 func (s *cardGetStore) GetBranchOrigin(context.Context, string, string) (*store.BranchOrigin, error) {
 	return nil, nil
 }
+func (s *cardGetStore) ListChatSchedules(context.Context, string, string, bool) ([]store.ChatSchedule, error) {
+	return nil, nil
+}
 
 // pending_approvals and resolved_approvals carry the stored card; a row with
 // none, or with one that no longer validates, carries no card field.

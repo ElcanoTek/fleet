@@ -790,10 +790,6 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 		if fb, ferr := r.mgr.Resolve(ctx, r.cfg.TaskFallbackModel); ferr == nil {
 			fallback = fb
 		}
-	} else if fbSlug := agentcore.CurrentFallbackModel(); fbSlug != "" && fbSlug != modelSlug {
-		if fb, ferr := r.mgr.Resolve(ctx, fbSlug); ferr == nil {
-			fallback = fb
-		}
 	}
 	if fallback != nil {
 		providerFallbacks = nil

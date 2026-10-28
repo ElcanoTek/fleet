@@ -503,8 +503,8 @@ func (m *Manager) buildSystemPrompt(persona, conversationID string, memories []s
 		sb.WriteString("You have a `chat_patrol` tool that attaches a recurring cron patrol or a one-shot timer directly to THIS chat conversation:\n")
 		sb.WriteString("- When a patrol or timer fires, Fleet wakes you up right here in the same conversation with the full transcript, workspace files, persistent Python state, and enabled connectors intact.\n")
 		sb.WriteString("- Use `chat_patrol` (`action=\"create\"`) whenever the user asks you to patrol every N hours in chat (e.g. `cron=\"0 */2 * * *\"` for every 2 hours), monitor deals/pacing/pages on a loop in this thread, or check back after a delay (`duration_seconds=1800` for 30 minutes).\n")
-		sb.WriteString("- Set `auto_approve=true` when creating a patrol that needs to call session-approvable tools while the user is away so patrol runs don't stall on manual approval prompts.\n")
 		sb.WriteString("- Because `chat_patrol` executes immediately without ending your turn, when a user asks to start a patrol, call `chat_patrol(action=\"create\", ...)` and also run the initial check in the same turn unless they asked you to wait.\n")
+		sb.WriteString("- If `auto_approve` is false in the result and the patrol will invoke critical tools while the user is away, let the user know they can toggle **⚡ Auto-approve** in the Patrol bar or composer.\n")
 		sb.WriteString("- Use `chat_patrol` (`action=\"list\"`, `\"update\"`, `\"pause\"`, `\"resume\"`, or `\"cancel\"`) to inspect or adjust this conversation's active patrol.\n\n")
 	}
 

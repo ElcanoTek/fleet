@@ -48,13 +48,11 @@ func TestChatPatrolTool_ActionNormalizationAndHandler(t *testing.T) {
 		}, nil
 	})
 
-	autoApprove := true
 	inputBytes, _ := json.Marshal(ChatPatrolParams{
-		Action:      "start", // alias for "create"
-		Title:       "Hourly Deal Check",
-		Prompt:      "Check deal pacing and update the dashboard.",
-		Cron:        "0 */2 * * *",
-		AutoApprove: &autoApprove,
+		Action: "start", // alias for "create"
+		Title:  "Hourly Deal Check",
+		Prompt: "Check deal pacing and update the dashboard.",
+		Cron:   "0 */2 * * *",
 	})
 	resp, err = tool.Run(ctx, fantasy.ToolCall{
 		ID:    "tc-2",

@@ -240,6 +240,7 @@ above fails otherwise.
 - [`BUNDLE-PREFLIGHT.md`](BUNDLE-PREFLIGHT.md) — Bundle preflight in CI — the reusable gate and the `mcp_catalog` check
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
+- [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
