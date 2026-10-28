@@ -2160,10 +2160,12 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
 	// When the underlying execution itself failed (toolErr != nil && !stopped,
 	// excluding post-execution output governance blocks whose side effect
-	// already ran and excluding user-stopped executions), durably arm the row
-	// in Postgres so the conversation automatically resumes and the agent can
-	// diagnose the error and recover gracefully instead of stopping dead.
-	execFailed := toolErr != nil && !stopped
+	// already ran, user-stopped executions, and MCP transport disconnects where
+	// the remote outcome is unknown), durably arm the row in Postgres so the
+	// conversation automatically resumes and the agent can diagnose the error
+	// and recover gracefully instead of stopping dead.
+	outcomeUnknown := toolErr != nil && strings.Contains(strings.ToUpper(toolErr.Error()), "OUTCOME IS UNKNOWN")
+	execFailed := toolErr != nil && !stopped && !outcomeUnknown
 	if execFailed && approval.ResumeState == "" && (s.cfg == nil || !s.cfg.MockMode) {
 		if st, ok := s.store.(*store.Store); ok && s.agent != nil {
 			if armed, aerr := st.ArmFailedApprovalResume(execCtx, user, approvalID); aerr == nil && armed {
