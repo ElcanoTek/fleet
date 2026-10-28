@@ -1480,9 +1480,9 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         // when an in-chat patrol/timer fired: the row is fleet's notice, not
         // the user's words.
         ...(userContent.kind === APPROVAL_RESUME_KIND
-          ? { kind: APPROVAL_RESUME_KIND as const }
+          ? { kind: APPROVAL_RESUME_KIND }
           : userContent.kind === CHAT_PATROL_KIND
-            ? { kind: CHAT_PATROL_KIND as const }
+            ? { kind: CHAT_PATROL_KIND }
             : {}),
         state: "done",
       });
