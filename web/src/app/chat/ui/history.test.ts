@@ -508,6 +508,7 @@ describe("historyToMessages — a stopped turn replayed from history", () => {
 
 describe("prettyToolName", () => {
   it.each([
+    ["mcp_explorer_search_emails", "explorer: search_emails"],
     ["mcp_email_search_emails", "email: search_emails"],
     ["mcp_sendgrid_send_email", "sendgrid: send_email"],
     ["mcp_fastio_download", "fastio_download"],
@@ -529,6 +530,8 @@ describe("humanToolLabel", () => {
     ["web_fetch", "Fetching page"],
     ["smart_search", "Searching the web"],
     ["mcp_email_send_email", "Sending email"],
+    ["mcp_explorer_search_emails", "Searching inbox"],
+    ["mcp_explorer_find_latest_report", "Email find latest report"],
     ["mcp_email_search_emails", "Searching inbox"],
     ["mcp_email_archive_thread", "Email archive thread"],
     ["mcp_sendgrid_send", "SendGrid send"],
@@ -566,6 +569,7 @@ describe("toolIcon", () => {
     expect(toolIcon("edit_file")).toBe("📄");
     expect(toolIcon("web_fetch")).toBe("🔎");
     expect(toolIcon("smart_search")).toBe("🔎");
+    expect(toolIcon("mcp_explorer_search_emails")).toBe("📧");
     expect(toolIcon("mcp_email_search_emails")).toBe("📧");
     expect(toolIcon("mcp_sendgrid_send_email")).toBe("📤");
     expect(toolIcon("something_unknown")).toBe("🛠");

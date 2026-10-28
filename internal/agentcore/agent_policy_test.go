@@ -28,7 +28,14 @@ func TestMain(m *testing.M) {
 func testFixturePolicy() AgentPolicy {
 	return AgentPolicy{
 		ParallelSafeTools: []string{
-			// Email + sendgrid
+			// Explorer + Email + sendgrid
+			"mcp_explorer_search_emails",
+			"mcp_explorer_search_emails_fuzzy",
+			"mcp_explorer_find_latest_report",
+			"mcp_explorer_get_email",
+			"mcp_explorer_get_download_link",
+			"mcp_explorer_list_archived_attachments",
+			"mcp_explorer_get_archived_download_link",
 			"mcp_email_search_emails",
 			"mcp_email_search_emails_fuzzy",
 			"mcp_email_get_email",

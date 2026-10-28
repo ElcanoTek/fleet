@@ -1659,8 +1659,9 @@ function withResult(t: ToolCall, c: { text: string; is_err: boolean; card?: unkn
   return next;
 }
 
-/** Map an MCP tool name like `mcp_email_search_emails` to a display string. */
+/** Map an MCP tool name like `mcp_explorer_search_emails` or `mcp_email_search_emails` to a display string. */
 export function prettyToolName(name: string): string {
+  if (name.startsWith("mcp_explorer_")) return name.replace("mcp_explorer_", "explorer: ");
   if (name.startsWith("mcp_email_")) return name.replace("mcp_email_", "email: ");
   if (name.startsWith("mcp_sendgrid_")) return name.replace("mcp_sendgrid_", "sendgrid: ");
   if (name.startsWith("mcp_")) return name.replace(/^mcp_/, "");
@@ -1739,6 +1740,7 @@ export function humanToolLabel(name: string): string {
     case "mcp_email_send_email":
       return "Sending email";
     case "mcp_email_search_emails":
+    case "mcp_explorer_search_emails":
       return "Searching inbox";
   }
   for (const { match, tools, display } of sspPrefixes) {
@@ -1754,6 +1756,9 @@ export function humanToolLabel(name: string): string {
     }
     rest = rest.replace(/_/g, " ").trim();
     return rest ? `${display} ${rest}` : display;
+  }
+  if (name.startsWith("mcp_explorer_")) {
+    return `Email ${humanize(name.slice("mcp_explorer_".length)).toLowerCase()}`;
   }
   if (name.startsWith("mcp_email_")) {
     return `Email ${humanize(name.slice("mcp_email_".length)).toLowerCase()}`;
@@ -1775,7 +1780,7 @@ export function toolIcon(name: string): string {
   if (name === "view_file" || name === "write_file" || name === "edit_file") return "📄";
   if (name === "web_fetch" || name === "smart_search") return "🔎";
   if (name === "spawn_subagent") return "🤖";
-  if (name.startsWith("mcp_email_")) return "📧";
+  if (name.startsWith("mcp_explorer_") || name.startsWith("mcp_email_")) return "📧";
   if (name.startsWith("mcp_sendgrid_")) return "📤";
   return "🛠";
 }

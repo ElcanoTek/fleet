@@ -1303,7 +1303,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 		seen := make(map[string]bool, len(enabledOptional))
 		clean := make([]string, 0, len(enabledOptional))
 		for _, n := range enabledOptional {
-			n = strings.ToLower(strings.TrimSpace(n))
+			n = canonicalOptionalServer(n, valid)
 			if n == "" || !valid[n] || seen[n] {
 				continue
 			}

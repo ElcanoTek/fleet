@@ -419,6 +419,16 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 	return valid
 }
 
+// canonicalOptionalServer maps the legacy "email" connector id to "explorer"
+// when a bundle replaced the Python ses_s3_email server with Explorer (#1859).
+func canonicalOptionalServer(name string, valid map[string]bool) string {
+	n := strings.ToLower(strings.TrimSpace(name))
+	if n == "email" && !valid["email"] && valid["explorer"] {
+		return "explorer"
+	}
+	return n
+}
+
 // handleConversationMCPServersGet serves GET /conversations/{id}/mcp-servers.
 //
 // Per-conversation MCP-server catalog. Response shape:
@@ -432,9 +442,10 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 // state. Reads from Manager's frozen catalogs + the conversation's fresh
 // opt-in list from Postgres.
 func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.Request, user, _ string, conv *store.Conversation) {
+	valid := s.optionalServerWhitelist(r.Context(), user)
 	enabled := make(map[string]bool, len(conv.OptionalMCPServersEnabled))
 	for _, n := range conv.OptionalMCPServersEnabled {
-		enabled[n] = true
+		enabled[canonicalOptionalServer(n, valid)] = true
 	}
 	// Availability layer: a connector the user disabled on the connections
 	// page never appears in the conversation picker. Best-effort — a prefs
@@ -528,7 +539,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	seen := make(map[string]bool, len(req.EnabledOptional))
 	clean := make([]string, 0, len(req.EnabledOptional))
 	for _, n := range req.EnabledOptional {
-		n = strings.ToLower(strings.TrimSpace(n))
+		n = canonicalOptionalServer(n, valid)
 		if n == "" || !valid[n] || seen[n] {
 			continue
 		}
