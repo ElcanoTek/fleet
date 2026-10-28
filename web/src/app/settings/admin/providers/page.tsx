@@ -2,11 +2,12 @@
 
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
 // surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
-// Vercel AI Gateway API key or point at any OpenAI-compatible endpoint (Ollama,
-// vLLM, LM Studio…); rows overlay the client bundle's providers: table and take
-// effect on the next turn, no restart. Multiple providers run simultaneously —
-// routing picks per model slug (an explicit "name/model" prefix, a provider's
-// models list, else the first catch-all).
+// Vercel AI Gateway API key, an Azure OpenAI resource, or point at any
+// OpenAI-compatible endpoint (Ollama, vLLM, LM Studio…); rows overlay the
+// client bundle's providers: table and take effect on the next turn, no
+// restart. Multiple providers run simultaneously — routing picks per model
+// slug (an explicit "name/model" prefix, a provider's models list, else the
+// first catch-all).
 //
 // SECURITY: API-key values are WRITE-ONLY, mirroring MCP credential accounts.
 // The list reports only whether a key is stored; the edit form's key field
@@ -136,6 +137,17 @@ const PROVIDER_TYPES: Record<
     keyNeeded: true,
     windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
+  },
+  azure: {
+    label: "Azure OpenAI",
+    hint: "An Azure OpenAI resource, with one of its keys. Use the endpoint the Azure portal shows as the Base URL, and list your deployment names as the models. Name a GPT-5 or o-series deployment after its model, in lower case (e.g. gpt-5-prod, o4-mini), or its turns fail; newer reasoning models such as GPT-6 may not work yet.",
+    urlLabel: "Base URL",
+    urlPlaceholder: "https://your-resource.openai.azure.com",
+    urlNeeded: true,
+    keyLabel: "API key",
+    keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 128000",
   },
 };
 
@@ -525,8 +537,8 @@ function ProvidersAdmin() {
           />
         </ConnPanelHead>
         <ClampInfo>
-          An OpenRouter, Anthropic, OpenAI or Vercel AI Gateway key, or any OpenAI-compatible
-          endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
+          An OpenRouter, Anthropic, OpenAI or Vercel AI Gateway key, an Azure OpenAI resource, or any
+          OpenAI-compatible endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
           <CodeChip>provider/model</CodeChip> prefix or by its models list; a provider with an
           empty models list is a catch-all serving any slug. Changes apply on the next message —
           no restart. Keys are stored encrypted and are never shown again.
@@ -775,7 +787,7 @@ function ProvidersAdmin() {
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment
             provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI or Vercel
-            key, or an OpenAI-compatible endpoint.
+            key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
           </ConnEmpty>
         ) : (
           <ConnRows>

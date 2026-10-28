@@ -29,7 +29,10 @@ func TestValidateProviders(t *testing.T) {
 		{"openaicompat without base_url", []ProviderDef{{Name: "vllm", Type: "openaicompat", APIKeyEnv: "VLLM_API_KEY"}}, "requires base_url"},
 		{"valid vercel", []ProviderDef{{Name: "gateway", Type: "vercel", APIKeyEnv: "AI_GATEWAY_API_KEY"}}, ""},
 		{"vercel without api_key_env", []ProviderDef{{Name: "gateway", Type: "vercel"}}, "api_key_env is required"},
-		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel"},
+		{"valid azure", []ProviderDef{{Name: "az", Type: "azure", APIKeyEnv: "AZURE_OPENAI_API_KEY", BaseURL: "https://res.openai.azure.com"}}, ""},
+		{"azure without api_key_env", []ProviderDef{{Name: "az", Type: "azure", BaseURL: "https://res.openai.azure.com"}}, "api_key_env is required"},
+		{"azure without base_url", []ProviderDef{{Name: "az", Type: "azure", APIKeyEnv: "AZURE_OPENAI_API_KEY"}}, "requires base_url"},
+		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel|azure"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
