@@ -209,8 +209,8 @@ func TestFileOp_StreamSweepsStalePartials(t *testing.T) {
 }
 
 // On a filesystem without hard links (some RWX volumes) the commit falls back
-// existing file is never replaced.
 // to renameat2(RENAME_NOREPLACE), and with neither the commit fails, so an
+// existing file is never replaced.
 func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required")
