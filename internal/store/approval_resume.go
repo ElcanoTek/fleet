@@ -76,6 +76,21 @@ func (s *Store) ArmApprovalResume(ctx context.Context, userEmail, approvalID str
 	return n == 1, err
 }
 
+// ArmFailedApprovalResume marks an already-claimed (approved) approval row as
+// armed when its underlying execution failed and was not stopped by the user,
+// so ClaimApprovalResume starts one recovery turn with the failure in context.
+func (s *Store) ArmFailedApprovalResume(ctx context.Context, userEmail, approvalID string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET resume_state = 'armed'
+		  WHERE id = $1 AND user_email = $2 AND status = 'approved' AND resume_state = '' AND COALESCE(stop_requested_at, 0) = 0`,
+		approvalID, userEmail)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // HasArmedApprovals reports whether the conversation still has an armed card
 // (pending or settled): a settlement there may release a resume.
 func (s *Store) HasArmedApprovals(ctx context.Context, convID string) (bool, error) {
@@ -343,16 +358,22 @@ func (s *Store) appendNoticeTx(ctx context.Context, tx *sql.Tx, convID, kind, te
 // person declined or let time out.
 func ApprovalResumeInputText(items []ApprovalResumeItem) string {
 	parts := make([]string, 0, len(items))
+	hasErr := false
 	for _, it := range items {
 		p := fmt.Sprintf("%s approval_id=%s outcome=%s", it.ToolName, it.ID, it.Outcome)
 		if it.IsErr {
 			p += " result=error"
+			hasErr = true
 		}
 		parts = append(parts, p)
 	}
 	head, noun, pron := "[Approval resolved]", "result is", "it"
 	if len(items) > 1 {
 		head, noun, pron = "[Approvals resolved]", "results are", "them"
+	}
+	if hasErr {
+		return fmt.Sprintf("%s %s. The %s in the conversation; one or more approved actions failed with an error (result=error). Diagnose the failure from the tool_result in the conversation history, fix the parameters or state, and retry or recover gracefully so the user's request completes. Do not retry a declined or timed-out action unless the user asks. (Written by fleet, not the user.)",
+			head, strings.Join(parts, "; "), noun)
 	}
 	return fmt.Sprintf("%s %s. The %s in the conversation; continue the task: verify %s and carry on, or stop if nothing remains. Do not retry a declined or timed-out action unless the user asks. (Written by fleet, not the user.)",
 		head, strings.Join(parts, "; "), noun, pron)

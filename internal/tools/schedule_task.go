@@ -34,7 +34,7 @@ type ScheduleTaskParams struct {
 	MaxIterations        int      `json:"max_iterations,omitempty" description:"Optional cap on agent steps per run. Omit for the orchestrator default."`
 	AllowNetwork         bool     `json:"allow_network,omitempty" description:"Whether the scheduled task's sandbox keeps outbound network egress. Default false (sealed). Set true only when the task genuinely needs to reach the network."`
 	ThinkingBudgetTokens *int     `json:"thinking_budget_tokens,omitempty" description:"Optional per-task extended-thinking budget in tokens (Claude models). Omit to inherit the deployment default; 0 disables thinking for this task; a positive value sets its budget."`
-	Tags                 []string `json:"tags,omitempty" description:"Optional tags for organizing/filtering the task in the scheduler."`
+	Tags                 []string `json:"tags,omitempty" description:"Optional tags for organizing/filtering the task in the scheduler (lowercase alphanumeric, '-', and '.', e.g. 'pages', 'daily-refresh')."`
 }
 
 const scheduleTaskDescription = `Creates a new SCHEDULED task in the Fleet orchestrator (the Operations Center), so work the user wants run later — or on a repeating cadence — runs unattended without them leaving chat.

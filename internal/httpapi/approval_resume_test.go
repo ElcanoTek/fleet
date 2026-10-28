@@ -783,3 +783,49 @@ func TestApprovalResume_ReleasingBlockerAnswersResume(t *testing.T) {
 	}
 	h.idle(conv.ID)
 }
+
+// Even when no tool opted into critical_tool_resume (or for a handler-only
+// schedule_task call), if an approved action fails at execution time
+// (is_err=true), fleet automatically arms the row and launches a recovery turn
+// with the failure in context so the agent can diagnose and recover gracefully
+// instead of leaving the conversation dead.
+func TestApprovalResume_ExecutionFailureAutoArmsAndStartsRecoveryTurn(t *testing.T) {
+	// Zero policy: no tool is listed in critical_tool_resume.
+	h := newResumeHarness(t, agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}}, 30*time.Millisecond)
+	h.s.scheduleTask = func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	conv := h.conversation()
+	ctx := context.Background()
+	entries := []agent.HistoryEntry{
+		histEntry("user", "text", agent.TextContent{Text: "Schedule the daily refresh."}),
+		histEntry("assistant", "tool_call", agent.ToolCallContent{ID: "call_sched", Name: "schedule_task", Input: `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`}),
+		histEntry("tool", "tool_result", agent.ToolResultContent{ID: "call_sched", Name: "schedule_task", Text: "APPROVAL_REQUIRED"}),
+	}
+	if _, err := h.s.store.AppendHistory(ctx, conv.ID, entries); err != nil {
+		t.Fatal(err)
+	}
+	stager := &approvalStager{ctx: ctx, store: h.s.store, conversationID: conv.ID, userEmail: resumeTestUser, sink: discardSink{}}
+	id, err := stager.Stage("schedule_task", "call_sched", `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	out := h.resolve(conv.ID, id, true)
+	if out["status"] != "approved" || out["is_err"] != true || out["resume"] != true {
+		t.Fatalf("failed approve answer = %v, want status=approved, is_err=true, resume=true", out)
+	}
+	res := h.decision()
+	if res.Input == nil || len(res.Claimed) != 1 || !res.Claimed[0].IsErr {
+		t.Fatalf("decision = %+v, want one claimed error item with a recovery input", res)
+	}
+	h.idle(conv.ID)
+	reqs := h.resumeRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("%d resume requests, want 1", len(reqs))
+	}
+	for _, want := range []string{"schedule failed: unexpected EOF", "result=error", "Diagnose the failure"} {
+		if !strings.Contains(reqs[0].body, want) {
+			t.Errorf("recovery turn request lacks %q", want)
+		}
+	}
+}

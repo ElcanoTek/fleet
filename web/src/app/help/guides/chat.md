@@ -739,7 +739,10 @@ approves the whole action.
 
 A deployment can also have the assistant **carry on by itself** once you decide
 a card for chosen actions (updating a record in an external system, for
-example), so it can check the result and continue without you typing "done".
+example), so it can check the result and continue without you typing "done";
+and if an action you approved fails with an error (and you did not press
+**Stop**), the assistant automatically starts one recovery turn to diagnose the
+error and fix or retry it gracefully.
 A couple of seconds after you approve, decline, or the card times out — or,
 for an action that was still running, once its result is in — a new turn
 starts on its own. It opens with a muted **Continued automatically after an

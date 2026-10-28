@@ -347,6 +347,21 @@ func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
 	if res := claimResume(t, s, conv.ID); res.Input != nil {
 		t.Fatalf("a superseded card resumed: %+v", res)
 	}
+
+	// An unarmed card that FAILS at execution time (and was not stopped) can be
+	// armed via ArmFailedApprovalResume so the agent can recover gracefully.
+	failed := stageResume(t, s, conv.ID, "schedule_task", false)
+	approveWithResult(t, s, failed.ID, true)
+	if ok, err := s.ArmFailedApprovalResume(ctx, resumeUser, failed.ID); err != nil || !ok {
+		t.Fatalf("ArmFailedApprovalResume = %t, %v", ok, err)
+	}
+	if got := resumeState(t, s, failed.ID); got != ApprovalResumeArmed {
+		t.Fatalf("failed unarmed card resume_state = %q, want armed", got)
+	}
+	res := claimResume(t, s, conv.ID)
+	if res.Input == nil || len(res.Claimed) != 1 || !res.Claimed[0].IsErr || !strings.Contains(res.Input.Message, "Diagnose the failure") {
+		t.Fatalf("claim of failed card = %+v, want recovery input", res)
+	}
 }
 
 // The restart rule: a due resume that never started (armed settled card, or

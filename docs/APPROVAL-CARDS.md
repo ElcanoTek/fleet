@@ -212,8 +212,11 @@ recorded. See [APPROVED-CALL-BUDGET.md](APPROVED-CALL-BUDGET.md).
 For tools a bundle lists in `agent_policy.critical_tool_resume`, a settled
 card (approved and its result recorded, declined, or timed out) starts one new
 turn in the conversation once no other card there is pending or executing, so
-the agent verifies the outcome and continues without the user typing. The turn
-runs through the input queue (a running turn makes it wait), its input renders
+the agent verifies the outcome and continues without the user typing. In
+addition, if any approved action fails at execution time (and was not stopped
+by the user), fleet automatically arms the card and starts one recovery turn so
+the agent can diagnose the failure from the tool result and recover gracefully.
+The turn runs through the input queue (a running turn makes it wait), its input renders
 as a "Continued automatically after an approval" notice, an hourly cap bounds
 it, and a restart drops a due resume with a note instead of running it. The
 approve/decline answer says `"resume": true` for such a card so the web

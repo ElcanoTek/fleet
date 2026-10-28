@@ -42,10 +42,15 @@ agent_policy:
 - Installed at boot from `cmd/fleet/main.go` like every other `agent_policy`
   value. The scheduled `fleet run` path stages no cards and does not install
   it.
-- **Absent key = today's behaviour, exactly.** `noteApprovalSettled` returns
-  before touching anything when no tool opted in, no card is armed, the
-  approve/decline answers carry no new key, and the card payload gains no new
-  field (`resume_after_approval` is only sent when true).
+- **Absent key = today's behaviour on success, decline, or timeout.** When no
+  tool opted in and the card succeeds, is declined, or times out,
+  `noteApprovalSettled` returns before touching anything, no card is armed at
+  staging, the approve/decline answers carry no new key, and the card payload
+  gains no new field (`resume_after_approval` is only sent when true). When an
+  approved action **fails at execution time** (`toolErr != nil` and not stopped
+  by the user), `executeClaimedApproval` durably arms the row via
+  `ArmFailedApprovalResume` so a single recovery turn starts with the error in
+  context.
 
 ### The flow
 
