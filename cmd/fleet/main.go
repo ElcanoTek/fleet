@@ -608,7 +608,7 @@ func run() error {
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
 	accountEvents := accountEventsRecorder(cfg, chatStore, schedStorage)
-	if err := seedBootstrapAdmins(schedStorage, accountEvents); err != nil {
+	if err := seedBootstrapAdmins(schedStorage, accountEvents, cfg.AccountsManagedByAuth); err != nil {
 		return err
 	}
 
@@ -782,6 +782,7 @@ func run() error {
 	// Auto-approve-in-test (#225) bypasses the human-in-the-loop approval gate.
 	// It is off by default and intended only for CI/test pipelines with a mocked
 	// backend; log loudly so it can never be on in production unnoticed.
+	logCentralAuth(cfg)
 	if cfg.AutoApproveInTest {
 		log.Printf("WARNING: FLEET_AUTO_APPROVE_IN_TEST is ON — executable critical tools are auto-approved without human review; handler-only task, preview and model-suggestion cards still require explicit decisions. Do NOT use this in production.")
 	}
@@ -825,6 +826,10 @@ func run() error {
 		SandboxMemoryMaxMB: cfg.SandboxMemoryMaxMB,
 		SandboxCPUsMax:     cfg.SandboxCPUsMax,
 		SandboxPidsMax:     cfg.SandboxPidsMax,
+		// Central Auth only: the Operations Center refuses its own password
+		// login and the bearer it minted, like the other two planes.
+		PasswordLoginDisabled: cfg.PasswordLoginDisabled,
+		AccountsManagedByAuth: cfg.AccountsManagedByAuth,
 	}
 	warnIfNoAdminKey(hcfg.AdminAPIKey)
 	h := handlers.New(hcfg, schedStorage, keyMgr)
@@ -1881,6 +1886,24 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 // ── DSN / addr resolution ──
 
 // chatDSN resolves the interactive chat Postgres DSN.
+// logCentralAuth says at boot what central Auth controls on this Fleet
+// (ADR-0095), so an operator reading the journal knows where accounts and
+// passwords are managed.
+func logCentralAuth(cfg *config.Config) {
+	if cfg.AccountsManagedByAuth {
+		log.Printf("auth: accounts, roles and teams are managed in central Auth; Fleet's account pages are view-only (the root CLI still works).")
+		if len(cfg.AdminEmails) > 0 {
+			log.Printf("auth: ADMIN_EMAILS is ignored: Fleet Admin comes from central Auth")
+		}
+	}
+	if cfg.AccountEventsFeedToAuthIgnored {
+		log.Printf("account events: FLEET_ACCOUNT_EVENTS_URL points at central Auth and is ignored (membership flows one way, Auth to Fleet); remove FLEET_ACCOUNT_EVENTS_URL and FLEET_ACCOUNT_EVENTS_SECRET from the env file")
+	}
+	if cfg.PasswordLoginDisabled {
+		log.Printf("auth: Fleet passwords are off; people sign in through central Auth only. Root can turn them back on with FLEET_OIDC_ALLOW_PASSWORD=1 and a restart.")
+	}
+}
+
 // toDBPoolStats adapts a database/sql pool snapshot into the metrics package's
 // DB-agnostic shape (#276).
 func toDBPoolStats(s sql.DBStats) metrics.DBPoolStats {
@@ -1962,9 +1985,15 @@ func defaultTaskTimezone() string {
 // A seed that changes a Chat account's effective Ops role is published on the
 // account-events feed (source "system"); re-asserting an existing grant on
 // every boot is not a change and publishes nothing.
-func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Recorder) error {
+func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Recorder, managedByAuth bool) error {
 	admins := bootstrapAdmins()
 	if len(admins) == 0 {
+		return nil
+	}
+	// Where central Auth manages accounts it alone grants the Ops role; seeding
+	// at every boot would restore access Auth took away (ADR-0095).
+	if managedByAuth {
+		log.Printf("orchestrator bootstrap admins ignored: accounts are managed in central Auth (%d configured; grant Fleet Admin there instead)", len(admins))
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

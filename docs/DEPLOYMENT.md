@@ -354,9 +354,15 @@ each piece yourself):
    > `FLEET_OIDC_CLIENT_SECRET` are set** (optional: `FLEET_OIDC_SCOPES`,
    > `FLEET_OIDC_ALLOWED_DOMAINS`, `FLEET_OIDC_BUTTON_LABEL`,
    > `FLEET_OIDC_REDIRECT_URI`, and `FLEET_OIDC_AUTO_START=1` to try SSO
-   > silently on an anonymous visit and only show the login card, with both
-   > options, when the IdP has no session; `/login?manual=1` always shows the
-   > card). The default scope is `openid email`; discovery's
+   > silently on an anonymous visit and only show the login card when the IdP
+   > has no session; `/login?manual=1` always shows the card). **Setting up (3)
+   > turns (1) off**: a Fleet that signs in through central Auth has no
+   > passwords of its own, in the web UI or the Operations Center, and its
+   > accounts, roles and teams are managed in Auth (with Auth's team sync on).
+   > `FLEET_OIDC_ALLOW_PASSWORD=1` is the break-glass that turns passwords
+   > back on (restart to apply); see
+   > [SSO only](features/central-auth-integration.md#sso-only-auth-signs-people-in-and-manages-them).
+   > The default scope is `openid email`; discovery's
    > `client_secret_basic` is honored (including Elcano Auth), with the existing
    > `client_secret_post` fallback for other providers. Configure Auth's signed
    > back-channel endpoint as `/api/auth/backchannel-logout`; central OIDC

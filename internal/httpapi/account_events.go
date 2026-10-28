@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/accountevents"
-	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // WithAccountEvents injects the account-events recorder (docs/ACCOUNT-EVENTS.md).
@@ -42,7 +41,7 @@ type teamMemberLister interface {
 // rename: each member's change is snapshotted and published on its own, with
 // the admin as actor. A member list that cannot be read publishes nothing and
 // says so (a resync repairs it), rather than guessing at who moved.
-func (s *Server) beginTeamRename(r *http.Request, team string) func() {
+func (s *Server) beginTeamRename(r *http.Request, team, source, actor string) func() {
 	lister, ok := s.store.(teamMemberLister)
 	if s.accountEvents == nil || !ok {
 		return func() {}
@@ -55,10 +54,9 @@ func (s *Server) beginTeamRename(r *http.Request, team string) func() {
 			team, logSafe(err.Error()))
 		return func() {}
 	}
-	actor := userFromCtx(r.Context())
 	commits := make([]func(), 0, len(members))
 	for _, email := range members {
-		commits = append(commits, s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, actor))
+		commits = append(commits, s.beginAccountChange(r, email, source, actor))
 	}
 	return func() {
 		for _, commit := range commits {

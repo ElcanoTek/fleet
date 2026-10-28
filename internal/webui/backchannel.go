@@ -41,6 +41,7 @@ import (
 const (
 	logoutEvent            = "http://schemas.openid.net/event/backchannel-logout"
 	applicationAccessEvent = "urn:elcanotek:event:application-access"
+	teamRenameEvent        = "urn:elcanotek:event:team-rename"
 
 	jwksCacheTTL        = 10 * time.Minute
 	jwksMinRefresh      = time.Minute
@@ -229,10 +230,30 @@ func isInteger(v any) (float64, bool) {
 	return f, true
 }
 
-// verifySignedEvent checks the JWS shape, header and signature, and the
-// claims common to both event types, returning the claims and the normalized
-// identity.
+// verifySignedEvent checks a signed event about one account (logout,
+// access): the envelope (verifySignedEnvelope) plus the subject and email it
+// must name, returning the claims and the normalized identity.
 func (g *Gateway) verifySignedEvent(raw, typ, issuer, audience string, now time.Time) (claims map[string]any, ev backchannelIdentity, err error) {
+	claims, ev, err = g.verifySignedEnvelope(raw, typ, issuer, audience, now)
+	if err != nil {
+		return nil, ev, err
+	}
+	sub, _ := claims["sub"].(string)
+	email, _ := claims["email"].(string)
+	ev.subject = strings.TrimSpace(sub)
+	ev.email = strings.ToLower(strings.TrimSpace(email))
+	at := strings.LastIndexByte(ev.email, '@')
+	if ev.subject == "" || jsLen(ev.subject) > 255 ||
+		ev.email == "" || jsLen(ev.email) > 254 || at <= 0 || at == len(ev.email)-1 {
+		return nil, ev, errInvalidToken
+	}
+	return claims, ev, nil
+}
+
+// verifySignedEnvelope checks the JWS shape, header and signature, and the
+// claims every signed event carries (issuer, audience, event id, iat, exp, no
+// nonce), returning the claims and the event id, issuer and iat.
+func (g *Gateway) verifySignedEnvelope(raw, typ, issuer, audience string, now time.Time) (claims map[string]any, ev backchannelIdentity, err error) {
 	if len(raw) > maxBackchannelToken {
 		return nil, ev, errInvalidToken
 	}
@@ -284,24 +305,17 @@ func (g *Gateway) verifySignedEvent(raw, typ, issuer, audience string, now time.
 
 	normIssuer := strings.TrimRight(issuer, "/")
 	iss, _ := claims["iss"].(string)
-	sub, _ := claims["sub"].(string)
-	email, _ := claims["email"].(string)
 	jti, _ := claims["jti"].(string)
 	ev = backchannelIdentity{
-		subject: strings.TrimSpace(sub),
-		email:   strings.ToLower(strings.TrimSpace(email)),
 		eventID: strings.TrimSpace(jti),
 		issuer:  normIssuer,
 	}
-	at := strings.LastIndexByte(ev.email, '@')
 	iat, iatOK := isInteger(claims["iat"])
 	exp, expOK := isInteger(claims["exp"])
 	nowSec := float64(now.Unix())
 	_, hasNonce := claims["nonce"]
 	if strings.TrimRight(iss, "/") != normIssuer ||
 		claims["aud"] != audience ||
-		ev.subject == "" || jsLen(ev.subject) > 255 ||
-		ev.email == "" || jsLen(ev.email) > 254 || at <= 0 || at == len(ev.email)-1 ||
 		ev.eventID == "" || jsLen(ev.eventID) > 255 ||
 		!iatOK || iat <= 0 || iat > nowSec+60 ||
 		// Back-Channel Logout 1.0 requires exp; Auth signs a fresh iat/exp per
@@ -375,8 +389,45 @@ func (g *Gateway) verifyAccessToken(raw, issuer, audience string, now time.Time)
 	return a, nil
 }
 
+// teamRename is a verified central-Auth team rename: app-wide, so it names
+// no account.
+type teamRename struct {
+	eventID, issuer string
+	version         int64
+	from, to        string
+}
+
+// verifyTeamRenameToken checks a team+jwt: the envelope, no account claims
+// (an app-wide command is never mistaken for, or made from, an account
+// event), and exactly {from, to, version} under the team-rename event.
+func (g *Gateway) verifyTeamRenameToken(raw, issuer, audience string, now time.Time) (teamRename, error) {
+	var t teamRename
+	claims, ev, err := g.verifySignedEnvelope(raw, "team+jwt", issuer, audience, now)
+	if err != nil {
+		return t, err
+	}
+	_, hasSub := claims["sub"]
+	_, hasEmail := claims["email"]
+	events, _ := claims["events"].(map[string]any)
+	rename, isMap := events[teamRenameEvent].(map[string]any)
+	if hasSub || hasEmail || len(events) != 1 || !isMap || len(rename) != 3 {
+		return t, errInvalidToken
+	}
+	t.eventID, t.issuer = ev.eventID, ev.issuer
+	t.from, _ = rename["from"].(string)
+	t.to, _ = rename["to"].(string)
+	version, versionOK := isInteger(rename["version"])
+	// The same bounds as an access event's settings values; chat-server
+	// applies the full team-label rule (store.ValidExternalTeam).
+	if !versionOK || version <= 0 || t.from == "" || t.to == "" || jsLen(t.from) > 64 || jsLen(t.to) > 64 {
+		return t, errInvalidToken
+	}
+	t.version = int64(version)
+	return t, nil
+}
+
 // handleBackchannel is POST /api/auth/backchannel-logout. Exactly one of
-// logout_token / access_token. 204 when chat-server recorded it, 503 when it
+// logout_token / access_token / team_token. 204 when chat-server recorded it, 503 when it
 // could not (Auth retries), 400 for anything malformed or unverifiable.
 func (g *Gateway) handleBackchannel(w http.ResponseWriter, r *http.Request) {
 	cfg := g.cfg.OIDC
@@ -405,11 +456,27 @@ func (g *Gateway) handleBackchannel(w http.ResponseWriter, r *http.Request) {
 	}
 	_, hasLogout := r.PostForm["logout_token"]
 	_, hasAccess := r.PostForm["access_token"]
-	if hasLogout == hasAccess {
+	_, hasTeam := r.PostForm["team_token"]
+	if n := boolCount(hasLogout, hasAccess, hasTeam); n != 1 {
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 	now := time.Now()
+	if hasTeam {
+		t, err := g.verifyTeamRenameToken(r.PostForm.Get("team_token"), cfg.Issuer, cfg.ClientID, now)
+		if err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		g.backchannelCall(w, "", "/auth/external-team-rename", struct {
+			EventID string `json:"event_id"`
+			Issuer  string `json:"issuer"`
+			Version int64  `json:"version"`
+			From    string `json:"from"`
+			To      string `json:"to"`
+		}{t.eventID, t.issuer, t.version, t.from, t.to})
+		return
+	}
 	if hasAccess {
 		a, err := g.verifyAccessToken(r.PostForm.Get("access_token"), cfg.Issuer, cfg.ClientID, now)
 		if err != nil {
@@ -459,4 +526,14 @@ func (g *Gateway) backchannelCall(w http.ResponseWriter, email, target string, p
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
+}
+
+func boolCount(bs ...bool) int {
+	n := 0
+	for _, b := range bs {
+		if b {
+			n++
+		}
+	}
+	return n
 }

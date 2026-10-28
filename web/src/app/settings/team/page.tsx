@@ -27,6 +27,7 @@
 // (ADR-0057).
 
 import { useCallback, useEffect, useState } from "react";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 
 import { btnClass, SETTINGS_INPUT } from "../ui/atoms";
@@ -58,6 +59,10 @@ export default function TeamSettingsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  // Set when central Auth manages this Fleet's teams (team sync): Auth sends
+  // each person's team, so this page shows it but cannot change it (the
+  // server refuses PUT /api/me/team there too).
+  const centralAuth = getBootstrap().centralAuth;
   // Leaving is destructive in a way the old fire-then-report flow never said:
   // it unshares chats. true = the confirm is open.
   const [confirmLeave, setConfirmLeave] = useState(false);
@@ -162,6 +167,21 @@ export default function TeamSettingsPage() {
 
         {loading ? (
           <p className="text-[0.82rem] text-[var(--color-text-muted)]">Loading…</p>
+        ) : centralAuth ? (
+          <p className="m-0 text-[0.9rem] text-[var(--color-text-primary)]">
+            {me?.team_id ? (
+              <>
+                You are in{" "}
+                <strong className="font-semibold" data-testid="team-current">
+                  {me.team_id}
+                </strong>
+                .{" "}
+              </>
+            ) : (
+              "You are not in a team. "
+            )}
+            Teams are set in Auth by an administrator.
+          </p>
         ) : me?.team_id ? (
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="m-0 text-[0.9rem] text-[var(--color-text-primary)]">

@@ -35,6 +35,9 @@ func TestLoad_MalformedKnobFailsLoud(t *testing.T) {
 		{"FLEET_UPLOAD_MAX_BYTES", "1G", []string{"FLEET_UPLOAD_MAX_BYTES", `"1G"`, "integer"}},
 		{"FLEET_CHAT_DB_CONNECT_TIMEOUT", "30", []string{"FLEET_CHAT_DB_CONNECT_TIMEOUT", `"30"`, "duration"}},
 		{"FLEET_SEARCH_ENABLED", "enabled", []string{"FLEET_SEARCH_ENABLED", "boolean"}},
+		// The central-Auth break-glass: a typo must not silently keep
+		// passwords off (or on).
+		{"FLEET_OIDC_ALLOW_PASSWORD", "sometimes", []string{"FLEET_OIDC_ALLOW_PASSWORD", `"sometimes"`, "boolean"}},
 		// A legacy alias spelling is parsed just as strictly; the error names
 		// the canonical spelling (matching what the reload path reports).
 		{"CUTLASS_MAX_COST_USD", "free", []string{"FLEET_MAX_COST_USD", `"free"`}},

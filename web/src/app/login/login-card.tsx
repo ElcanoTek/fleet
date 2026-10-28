@@ -5,9 +5,23 @@ import { ThemeToggle } from "@/app/shared/ui/ThemeToggle";
 
 // errorCodeToMessage maps the `?e=` query param our login handler redirects
 // with to a human-readable message. We keep "invalid" deliberately vague
-// so the UI can't be used to enumerate which email addresses exist.
-function errorCodeToMessage(code: string | null): string | null {
+// so the UI can't be used to enumerate which email addresses exist. Where a
+// message would point at the password form, it says so only when the card
+// has one.
+function errorCodeToMessage(
+  code: string | null,
+  passwordLoginEnabled: boolean,
+): string | null {
   if (!code) return null;
+  if (!passwordLoginEnabled) {
+    if (code === "password_off" || code === "invalid" || code === "missing")
+      return "Password sign-in is turned off here. Sign in with SSO.";
+    if (code === "elcano_unavailable")
+      return "Elcano email sign-in isn't available right now. Sign in with SSO.";
+    if (code === "oidc_unavailable")
+      return "Single sign-on isn't available right now. Try again in a moment.";
+    if (code === "oidc_error") return "Single sign-on failed. Try again.";
+  }
   if (code === "invalid") return "Invalid email or password.";
   if (code === "missing") return "Please enter both email and password.";
   if (code === "server")
@@ -28,6 +42,11 @@ function errorCodeToMessage(code: string | null): string | null {
   return "Could not sign in.";
 }
 
+// passwordLoginEnabled is false on a Fleet that signs in through central Auth
+// only (FLEET_OIDC_* set, FLEET_OIDC_ALLOW_PASSWORD not): the password form and
+// its divider are omitted and the SSO button becomes the card's primary action.
+// The server refuses the form's endpoint there too; this only stops offering it.
+//
 // magicLinkLoginEnabled is resolved server-side from AUTH_SIGNING_PUBKEY (the same
 // gate the backend uses) and passed in as a prop. When the Elcano-email path
 // isn't configured — e.g. a white-labelled deploy — the secondary button and
@@ -43,6 +62,7 @@ function errorCodeToMessage(code: string | null): string | null {
 // login_title to "Reklaim what's yours." still displayed "Welcome aboard."
 // The page-level server component reads them instead and hands them down.
 export default function LoginCard({
+  passwordLoginEnabled = true,
   magicLinkLoginEnabled,
   oidcEnabled = false,
   oidcLabel = "Sign in with SSO",
@@ -51,6 +71,7 @@ export default function LoginCard({
   appName,
   teamLink = false,
 }: {
+  passwordLoginEnabled?: boolean;
   magicLinkLoginEnabled: boolean;
   oidcEnabled?: boolean;
   oidcLabel?: string;
@@ -77,7 +98,7 @@ export default function LoginCard({
   // theme is owned by the shared ThemeToggle (useTheme) below.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const nextError = errorCodeToMessage(params.get("e"));
+    const nextError = errorCodeToMessage(params.get("e"), passwordLoginEnabled);
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
@@ -86,8 +107,10 @@ export default function LoginCard({
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [passwordLoginEnabled]);
 
+  const primary =
+    "inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] px-4 py-3 font-bold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px";
   const secondary =
     "flex min-h-11 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-4 py-2.5 text-sm font-bold text-[var(--color-text-secondary)] transition hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)]";
   const field =
@@ -145,39 +168,60 @@ export default function LoginCard({
           </div>
         ) : null}
 
-        <form action="/api/auth/login" method="post">
-          <label htmlFor="email" className={label}>
-            Email
-          </label>
-          <input
-            id="email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            placeholder="you@example.com"
-            className={`${field} mb-4`}
-          />
-          <label htmlFor="password" className={label}>
-            Password
-          </label>
-          <input
-            id="password"
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            className={field}
-          />
-          <button
-            type="submit"
-            className="mt-5 inline-flex min-h-11 w-full items-center justify-center rounded-[var(--radius-md)] bg-[linear-gradient(140deg,var(--color-primary-fill),var(--color-primary-fill-hover))] px-4 py-3 font-bold text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))] focus-visible:outline-none focus-visible:[box-shadow:var(--focus-ring)] active:translate-y-px"
-          >
-            Sign in
-          </button>
-        </form>
+        {passwordLoginEnabled ? (
+          <form action="/api/auth/login" method="post">
+            <label htmlFor="email" className={label}>
+              Email
+            </label>
+            <input
+              id="email"
+              name="email"
+              type="email"
+              autoComplete="email"
+              required
+              placeholder="you@example.com"
+              className={`${field} mb-4`}
+            />
+            <label htmlFor="password" className={label}>
+              Password
+            </label>
+            <input
+              id="password"
+              name="password"
+              type="password"
+              autoComplete="current-password"
+              required
+              className={field}
+            />
+            <button type="submit" className={`mt-5 ${primary}`}>
+              Sign in
+            </button>
+          </form>
+        ) : (
+          // Central Auth only: SSO is the one way in, so it takes the primary
+          // action's place. An <a> for the same reason as below. The
+          // `enabled:` hover variant does not match an <a>, so the hover fill
+          // is restated for it.
+          <div className="grid gap-3">
+            {oidcEnabled ? (
+              // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/oidc/start is a route handler that 303s to the IdP and sets PKCE cookies, not a Next page.
+              <a
+                href="/api/auth/oidc/start"
+                className={`${primary} hover:bg-[linear-gradient(140deg,var(--color-primary-fill-hover),var(--color-primary-fill-hover))]`}
+              >
+                {oidcLabel}
+              </a>
+            ) : null}
+            {magicLinkLoginEnabled ? (
+              // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/auth/elcano-login is a route handler that 303s to the auth service, not a Next page.
+              <a href="/api/auth/elcano-login" className={secondary}>
+                Use Elcano email
+              </a>
+            ) : null}
+          </div>
+        )}
 
-        {magicLinkLoginEnabled || oidcEnabled ? (
+        {passwordLoginEnabled && (magicLinkLoginEnabled || oidcEnabled) ? (
           <>
             <div className="my-5 flex items-center gap-3 text-[0.6875rem] tracking-wide text-[var(--color-text-muted)] uppercase">
               <span className="h-px flex-1 bg-[var(--color-border)]" />

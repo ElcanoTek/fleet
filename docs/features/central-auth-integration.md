@@ -1,13 +1,14 @@
 # Central Auth integration
 
-Fleet keeps all three login paths independent:
+Fleet has three ways to sign in:
 
-- Fleet email/password remains available and is governed only by Fleet's user
-  database and password-derived session epoch.
-- The legacy `elcano_auth` magic-link cookie remains supported when
-  `AUTH_SIGNING_PUBKEY` is configured.
-- A central password Auth deployment can be configured through Fleet's existing
-  OIDC Authorization Code + PKCE client.
+- Fleet email/password, governed by Fleet's user database and
+  password-derived session epoch. **Off whenever central Auth is configured**
+  (below), unless `FLEET_OIDC_ALLOW_PASSWORD=1`.
+- The legacy `elcano_auth` magic-link cookie, when `AUTH_SIGNING_PUBKEY` is
+  configured.
+- A central password Auth deployment, through Fleet's OIDC Authorization
+  Code + PKCE client.
 
 For the central Auth service, set:
 
@@ -31,21 +32,92 @@ failed deliveries for seven days. Set `AUTH_SIGNING_PUBKEY` only where the
 legacy magic-link cookie is actually in use; it then also serves as an
 offline fallback for logout verification.
 
+## SSO only: Auth signs people in and manages them
+
+Configuring central Auth (the issuer, client id and client secret above, the
+same three values that make Fleet offer SSO at all) turns Fleet's own
+passwords off and hands account management to Auth
+([ADR-0095](../adr/0095-central-auth-fleets-have-no-passwords.md)). There is
+no separate switch to forget. Both decisions are made once at startup from
+configuration, never from whether Auth answers, and the browser gateway,
+chat-server and the Operations Center all apply them:
+
+- The login card shows the SSO button as its only action (and "Use Elcano
+  email" when `AUTH_SIGNING_PUBKEY` is set); there is no password form, on
+  `/login?manual=1` either. A password form posted anyway is refused with
+  `?e=password_off` before any password is checked, and chat-server's
+  `/auth/verify` refuses too.
+- A session cookie minted by a password login stops working at once, whether
+  it predates the switch or not. A browser that also holds a valid
+  `elcano_auth` cookie is signed in by that one instead.
+- The Operations Center's `POST /auth/login` (and its public `/v1/auth/login`)
+  answers 403, and a bearer it minted earlier is refused by the auth
+  middleware, task creation and upload alike.
+- **Accounts, roles and teams are managed in Auth.** Settings → Admin → Users
+  is the view-only usage list (no Add user, no row editor with roles, team,
+  password reset or delete, no Rename team) with a link to Auth's console,
+  and Settings → Team shows a person's team without Create or Leave.
+  Chat-server refuses each of those writes (409, saying where to make the
+  change): Auth adds people through its Fleet grant
+  ([CENTRAL-AUTH-PROVISIONING.md](../CENTRAL-AUTH-PROVISIONING.md)), sends
+  their Chat and Ops roles, and with team sync on sends their team. A team
+  renamed in Auth is renamed here the same share-keeping way an admin's
+  Rename team did ([CENTRAL-AUTH-PROVISIONING.md](../CENTRAL-AUTH-PROVISIONING.md#team-renames)).
+  A change made here would not reach Auth, and Auth's next push would
+  quietly undo it.
+- **One way: Auth to Fleet.** Auth is the single source of truth and pushes
+  to Fleet; nothing flows back. Do not point Fleet's account-events feed
+  ([ACCOUNT-EVENTS.md](../ACCOUNT-EVENTS.md)) at Auth on such a deployment:
+  Fleet's account pages change nothing, and a change root makes with the CLI
+  stays local until Auth's next push for that person overwrites it.
+- **Team sync is part of this.** Since Fleet no longer changes teams, Auth's
+  team sync must be on for the Fleet application, or teams cannot be changed
+  anywhere. `production-support`'s `register-auth-apps.sh` switches it on when
+  it registers a Fleet that has no teams yet, so the teams set in Auth win.
+  A Fleet that already has teams needs a one-time import into Auth first,
+  after its people are granted Fleet there (Auth's DEPLOY.md, "Fleet team
+  sync"); the script stops and says so rather than guessing.
+- **Removing someone.** Removing Fleet from their access in Auth signs them
+  out of both planes and keeps their data (reversible). Erasing their Fleet
+  data is a deliberate root command on the server, `fleet admin rm <email>`:
+  Auth is never able to delete Fleet data.
+- Unchanged: central SSO sessions, the `elcano_auth` cookie, machine API keys,
+  webhook signatures, the operator's shared-token channel and every root CLI
+  command (`fleet admin add`, `fleet chat user passwd`, …). Password rows are
+  kept; they are just not accepted.
+
+**Before the first update that carries this**, check that everyone who signs
+in to a client's Fleet has an Auth account under the same email with Fleet
+granted. Anyone who does not is locked out until they get one (their Fleet
+data is kept and is theirs at their first SSO sign-in). To give them time,
+set `FLEET_OIDC_ALLOW_PASSWORD=1` before updating and remove it later.
+
+**Break-glass.** When Auth is down nobody can sign in to the web UI. Root sets
+`FLEET_OIDC_ALLOW_PASSWORD=1` in `/etc/fleet/fleet.env`, runs `fleet restart`,
+signs in with a Fleet password (`fleet admin add <email>` sets one), and
+removes the line and restarts again once Auth is back. It turns passwords
+back on only: accounts stay managed in Auth (use the root CLI meanwhile). The setting is read at
+startup only, so every change to it (or to the `FLEET_OIDC_*` values) takes a
+restart; a config reload ([CONFIG-RELOAD.md](../CONFIG-RELOAD.md)) never
+applies it. The boot log says when passwords are off.
+
+## Auto-start
+
 With `FLEET_OIDC_AUTO_START=1`, an anonymous visit to `/login` first sends the
 browser to Auth with `prompt=none`. A browser that already holds an Auth
 session comes back with a code and lands in Fleet without a click; one that
 does not is returned with `error=login_required` and Fleet shows its normal
-login card, SSO button and password form both present, with no error banner.
-`/login?manual=1` always shows the card, and a page carrying `?e=` (a login
-error) never auto-starts, so the local admin password stays one URL away when
-Auth is unreachable. Auth supports `prompt=none` from `1521760`+; an older Auth
-ignores it and shows its own login form instead.
+login card with no error banner: just the SSO button, or the SSO button and
+the password form where `FLEET_OIDC_ALLOW_PASSWORD=1`. `/login?manual=1`
+always shows the card, and a page carrying `?e=` (a login error) never
+auto-starts, so a failed attempt cannot loop. Auth supports `prompt=none` from
+`1521760`+; an older Auth ignores it and shows its own login form instead.
 
 Logging out of Fleet ends the central session too. `POST /api/auth/logout`
 clears Fleet's cookies as before and, whenever central Auth is configured,
 sends the browser to `<FLEET_OIDC_ISSUER>/logout?client_id=…` (Auth's
 RP-initiated logout) whatever kind of Fleet session it held: one minted
-through Auth, one from the break-glass password, or none. Fleet cannot see
+through Auth, one from a break-glass password, or none. Fleet cannot see
 Auth's host-only cookie, so it cannot tell whether this browser also holds a
 central session, and a person who signed in both ways expects one Sign out to
 end both. Auth revokes every central session of the account (all devices),
@@ -57,9 +129,9 @@ silently. Only a deployment without central Auth lands on `/login?manual=1`.
 The reverse direction ends everything too: Auth's back-channel logout (from
 Auth's own Sign out, Explorer or Lens) rotates both the external epoch and the
 account's password session salt, so Fleet sessions that came from Auth AND a
-Fleet session from the break-glass password end within seconds. The
-break-glass password itself keeps working (it is a way to sign in, not a
-session that survives a sign-out), so it remains available when Auth is down.
+Fleet session from a break-glass password end within seconds. Where
+`FLEET_OIDC_ALLOW_PASSWORD=1` keeps passwords on, the password itself keeps
+working (it is a way to sign in, not a session that survives a sign-out).
 
 Register the exact callback and signed logout endpoint on Auth:
 

@@ -203,6 +203,8 @@ type Bootstrap struct {
 	// on its own: entering or leaving one is a full page load, so the decision
 	// servePage makes for it runs (see fullLoadRoutes).
 	FullLoadRoutes []string `json:"fullLoadRoutes"`
+	// CentralAuth is set when Auth manages accounts (see bootCentralAuth).
+	CentralAuth *bootCentralAuth `json:"centralAuth,omitempty"`
 }
 
 // fullLoadRoutes are the client routes whose page depends on a decision only
@@ -220,11 +222,22 @@ type Bootstrap struct {
 // state the router keeps across /settings round trips.
 var fullLoadRoutes = []string{"/login", "/no-access", "/shared/"}
 
+// bootCentralAuth is present when central Auth manages this Fleet's
+// accounts, roles and teams: the account pages become view-only and link to
+// Auth's console.
+type bootCentralAuth struct {
+	AdminURL string `json:"adminUrl"`
+}
+
 type bootSession struct {
 	Email string `json:"email"`
 }
 
 type bootLogin struct {
+	// PasswordLoginEnabled is false on a Fleet that signs in through central
+	// Auth only: the login card drops its password form, and Settings → Admin
+	// → Users its password controls.
+	PasswordLoginEnabled  bool   `json:"passwordLoginEnabled"`
 	MagicLinkLoginEnabled bool   `json:"magicLinkLoginEnabled"`
 	OIDCEnabled           bool   `json:"oidcEnabled"`
 	OIDCLabel             string `json:"oidcLabel"`
@@ -307,6 +320,10 @@ func (g *Gateway) servePage(w http.ResponseWriter, r *http.Request, sess *webses
 	boot.Branding = g.branding.get()
 	if sess != nil {
 		boot.Session = &bootSession{Email: sess.Email}
+	}
+	boot.Login.PasswordLoginEnabled = !g.cfg.PasswordLoginDisabled
+	if g.cfg.AccountsManagedByAuth {
+		boot.CentralAuth = &bootCentralAuth{AdminURL: g.cfg.authAdminURL()}
 	}
 	boot.Login.MagicLinkLoginEnabled = g.cfg.ElcanoPubKeyB64 != ""
 	if g.cfg.OIDC != nil {

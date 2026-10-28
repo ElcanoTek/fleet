@@ -88,7 +88,8 @@ page that says **Something went wrong** offers **Reload** too.
 
 None of the tabs beyond the first two are required for daily work.
 
-Administrators assign access under **Settings → Admin → Users**. Ops Center
+Administrators assign access under **Settings → Admin → Users**, or in central
+Auth when your deployment signs in through it. Ops Center
 offers **None**, **Viewer** (read-only), and **Contributor** (can create and run
 tasks). **Fleet Admin** grants full Chat and Ops permissions; selecting it again
 turns it off and defaults to Chat Contributor plus Ops None. Central Auth account

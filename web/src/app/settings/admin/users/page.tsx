@@ -17,6 +17,7 @@
 // independently 403s non-admins, and fetchUsers surfaces that below.
 
 import { useEffect, useId, useRef, useState, type MouseEvent } from "react";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 import { useRouter } from "@/app/lib/navigation";
 
@@ -454,6 +455,11 @@ const MENU_EST_HEIGHT_PX = 640; // flip-above threshold (described permissions +
 export default function AdminUsersPage() {
   const router = useRouter();
   const admin = useIsAdmin();
+  // Set when central Auth manages this Fleet's accounts: people, roles, teams
+  // and passwords are all changed in Auth (which sends them here), so the page
+  // is the view-only usage list and links to Auth. The server refuses every
+  // account write there too.
+  const centralAuth = getBootstrap().centralAuth;
 
   const [users, setUsers] = useState<AdminUser[] | null>(null);
   const [stats, setStats] = useState<UserStat[] | null>(null);
@@ -899,7 +905,10 @@ export default function AdminUsersPage() {
       title="Users"
       intro={
         <>
-          View usage and manage roles of everyone in the workspace. Numbers here
+          {centralAuth
+            ? "View usage of everyone in the workspace. People, roles and teams are managed in Auth. "
+            : "View usage and manage roles of everyone in the workspace. "}
+          Numbers here
           are all-time interactive-chat activity per account; for windowed spend
           across chat + scheduled tasks and the per-user adoption audit, open
           the{" "}
@@ -968,7 +977,7 @@ export default function AdminUsersPage() {
                   </option>
                 ))}
               </select>
-              {filterTeam !== "all" && filterTeam !== "(none)" ? (
+              {!centralAuth && filterTeam !== "all" && filterTeam !== "(none)" ? (
                 renameDraft === null ? (
                   <button
                     type="button"
@@ -1233,7 +1242,7 @@ export default function AdminUsersPage() {
                           {stat?.advanced_switches ?? "—"}
                         </td>
                         <td className={`${TD} w-[2.4rem] text-right`}>
-                          {account ? (
+                          {account && !centralAuth ? (
                             <button
                               type="button"
                               aria-label={`Edit ${row.email}`}
@@ -1255,7 +1264,9 @@ export default function AdminUsersPage() {
                       colSpan={9}
                       className={`${TD} py-4 text-center text-[var(--color-text-muted)]`}
                     >
-                      No users provisioned yet — add one below.
+                      {centralAuth
+                        ? "No users yet. People are added in Auth."
+                        : "No users provisioned yet — add one below."}
                     </td>
                   </tr>
                 )}
@@ -1378,105 +1389,128 @@ export default function AdminUsersPage() {
             </div>
           ) : null}
 
-          {/* ── add user ── */}
-          <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
-            <RevealButton
-              open={addOpen}
-              closedLabel="Add user"
-              onClick={() => setAddOpen((o) => !o)}
-            />
-            {addOpen ? (
-              <ConnForm className="mt-[0.7rem]">
-                <ConnField label="Email" grow>
-                  <input
-                    id="newUserEmail"
-                    aria-label="New user email"
-                    type="email"
-                    value={newEmail}
-                    placeholder="email@example.com"
-                    onChange={(e) => setNewEmail(e.target.value)}
-                    className={SETTINGS_INPUT}
-                  />
-                </ConnField>
-                <ConnField label="Password" grow>
-                  <div className="flex gap-[0.45rem]">
+          {/* ── add user ── Where Auth manages accounts, people are added in
+              Auth, whose Fleet grant creates the account here. */}
+          {!centralAuth ? (
+            <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
+              <RevealButton
+                open={addOpen}
+                closedLabel="Add user"
+                onClick={() => setAddOpen((o) => !o)}
+              />
+              {addOpen ? (
+                <ConnForm className="mt-[0.7rem]">
+                  <ConnField label="Email" grow>
                     <input
-                      id="newUserPassword"
-                      aria-label="New user password"
-                      type="text"
-                      value={newPassword}
-                      placeholder="min 8 chars"
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      className={`${SETTINGS_INPUT} font-[family-name:var(--font-code)] text-[0.85rem]!`}
+                      id="newUserEmail"
+                      aria-label="New user email"
+                      type="email"
+                      value={newEmail}
+                      placeholder="email@example.com"
+                      onChange={(e) => setNewEmail(e.target.value)}
+                      className={SETTINGS_INPUT}
                     />
-                    <button
-                      type="button"
-                      onClick={() => setNewPassword(generatePassword())}
-                      className={btnClass({ sm: true })}
-                    >
-                      Generate
-                    </button>
+                  </ConnField>
+                  <ConnField label="Password" grow>
+                    <div className="flex gap-[0.45rem]">
+                      <input
+                        id="newUserPassword"
+                        aria-label="New user password"
+                        type="text"
+                        value={newPassword}
+                        placeholder="min 8 chars"
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className={`${SETTINGS_INPUT} font-[family-name:var(--font-code)] text-[0.85rem]!`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setNewPassword(generatePassword())}
+                        className={btnClass({ sm: true })}
+                      >
+                        Generate
+                      </button>
+                    </div>
+                  </ConnField>
+                  <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-[0.7rem]">
+                    <PermissionFields
+                      role={newRole}
+                      opsRole={newOpsRole}
+                      labelPrefix="New user"
+                      onChange={({ role, opsRole }) => {
+                        setNewRole(role);
+                        setNewOpsRole(opsRole);
+                      }}
+                    />
                   </div>
-                </ConnField>
-                <div className="grid w-full gap-[0.7rem] rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-surface-2)] p-[0.7rem]">
-                  <PermissionFields
-                    role={newRole}
-                    opsRole={newOpsRole}
-                    labelPrefix="New user"
-                    onChange={({ role, opsRole }) => {
-                      setNewRole(role);
-                      setNewOpsRole(opsRole);
-                    }}
-                  />
-                </div>
-                <ConnField label="Team" grow>
-                  <TeamPicker
-                    id="newUserTeam"
-                    label="New user team"
-                    teams={teams}
-                    value={newTeam}
-                    onChange={setNewTeam}
-                    className={SETTINGS_INPUT}
-                  />
-                </ConnField>
-                <button
-                  type="button"
-                  onClick={() => void addUser()}
-                  disabled={addDisabled}
-                  className={btnClass({ variant: "primary" })}
-                >
-                  {addStatus === "saving" ? "Adding…" : "Add user"}
-                </button>
-              </ConnForm>
-            ) : null}
-            {addStatus && addStatus !== "saving" ? (
-              <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">
-                {addStatus}
-              </p>
-            ) : null}
-            {addedPassword ? (
+                  <ConnField label="Team" grow>
+                    <TeamPicker
+                      id="newUserTeam"
+                      label="New user team"
+                      teams={teams}
+                      value={newTeam}
+                      onChange={setNewTeam}
+                      className={SETTINGS_INPUT}
+                    />
+                  </ConnField>
+                  <button
+                    type="button"
+                    onClick={() => void addUser()}
+                    disabled={addDisabled}
+                    className={btnClass({ variant: "primary" })}
+                  >
+                    {addStatus === "saving" ? "Adding…" : "Add user"}
+                  </button>
+                </ConnForm>
+              ) : null}
+              {addStatus && addStatus !== "saving" ? (
+                <p className="mt-2 text-[0.75rem] text-[var(--color-danger-soft)]">
+                  {addStatus}
+                </p>
+              ) : null}
+              {addedPassword ? (
+                <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
+                  Created{" "}
+                  <span className="text-[var(--color-text-secondary)]">
+                    {addedPassword.email}
+                  </span>{" "}
+                  — password (shown once):{" "}
+                  <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
+                    {addedPassword.password}
+                  </code>
+                </p>
+              ) : null}
               <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                Created{" "}
-                <span className="text-[var(--color-text-secondary)]">
-                  {addedPassword.email}
-                </span>{" "}
-                — password (shown once):{" "}
-                <code className="font-[family-name:var(--font-code)] text-[var(--color-text-secondary)]">
-                  {addedPassword.password}
+                Chat and Ops Center permissions are separate: chat Viewer is
+                read-only, while Contributor can actively use Chat or create Ops
+                Center tasks. Admin is one unified grant across both. CLI
+                equivalent for the admin case:{" "}
+                <code className="font-[family-name:var(--font-code)]">
+                  fleet admin add
                 </code>
+                .
               </p>
-            ) : null}
-            <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-              Chat and Ops Center permissions are separate: chat Viewer is
-              read-only, while Contributor can actively use Chat or create Ops
-              Center tasks. Admin is one unified grant across both. CLI
-              equivalent for the admin case:{" "}
-              <code className="font-[family-name:var(--font-code)]">
-                fleet admin add
-              </code>
-              .
-            </p>
-          </div>
+            </div>
+          ) : (
+            <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
+              <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
+                People sign in to this Fleet through Auth and are managed
+                there: adding someone, their Chat and Ops Center roles, their
+                team and password resets. Granting someone Fleet in Auth creates
+                their account here; removing it signs them out and keeps their
+                data.{" "}
+                {centralAuth.adminUrl ? (
+                  <a
+                    href={centralAuth.adminUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    Open Auth
+                  </a>
+                ) : null}
+              </p>
+            </div>
+          )}
         </ConnPanel>
       )}
     </SetSection>

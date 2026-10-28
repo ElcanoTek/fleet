@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import AdminUsersPage from "./page";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 import {
   parseOwnedSharedProjects,
 } from "./DeleteRefusal";
@@ -818,6 +819,28 @@ describe("AdminUsersPage", () => {
     expect(sent.password.length).toBe(16);
     // The generated password is surfaced once under the row.
     expect(await screen.findByText(sent.password)).toBeInTheDocument();
+  });
+
+  // Where central Auth manages accounts, people, roles, teams and passwords
+  // change in Auth: the page is the view-only usage list and links there (the
+  // server refuses every account write too).
+  it("is view-only and points at Auth when Auth manages accounts", async () => {
+    setBootstrapForTest({ centralAuth: { adminUrl: "https://auth.example.com/admin" } });
+    try {
+      render(<AdminUsersPage />);
+      await screen.findByText("bob@x.com");
+      expect(screen.getByText(/People, roles and teams are managed in Auth/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Add user" })).toBeNull();
+      expect(screen.queryByLabelText("New user email")).toBeNull();
+      fireEvent.change(screen.getByLabelText("Filter by team"), { target: { value: "blue" } });
+      expect(screen.queryByRole("button", { name: "Rename team" })).toBeNull();
+      expect(screen.getByRole("link", { name: "Open Auth" })).toHaveAttribute("href", "https://auth.example.com/admin");
+      // Usage is still shown.
+      expect(screen.getByText("alice@x.com")).toBeInTheDocument();
+    } finally {
+      setBootstrapForTest(null);
+    }
   });
 
   it("surfaces the backend self-delete guard message in the panel", async () => {

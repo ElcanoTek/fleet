@@ -67,14 +67,18 @@ Three rules keep the gate honest in the other direction:
   issuer+subject generation. A signed central logout event (idempotent by
   `jti`) rotates that generation AND the account's `session_salt`, so it ends
   the account's Fleet password sessions too: "signed out of every app" means
-  every app. The break-glass password remains a way to sign in afterwards.
+  every app. Where passwords are on (no central Auth, or
+  `FLEET_OIDC_ALLOW_PASSWORD=1`), the password remains a way to sign in
+  afterwards; a central-Auth Fleet otherwise refuses password sessions
+  outright (ADR-0095).
 - **Per account, not per device.** Two devices signed into one account share one
   epoch: a reset ends both (the point), and neither can be ended alone.
 - **The Operations Center bearer login is untouched.** `fleet sched user
   passwd` re-upserts through `AddUser`, whose `ON CONFLICT` writes
   `session_token` back unchanged, so an issued bearer token survives a sched
   password change. Ending one means deleting (and re-creating) the sched user.
-  A chat password reset never governed that credential.
+  A chat password reset never governed that credential. On a Fleet that signs
+  in through central Auth no such bearer is accepted at all (ADR-0095).
 - **Magic-link (`elcano_auth`) sessions carry no epoch** and stay revocable only
   at the auth service that mints them.
 - **Next-only routes are not gated.** The epoch is enforced by the two

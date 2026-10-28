@@ -23,6 +23,12 @@ type ExternalAccessState struct {
 	ChatRole, OpsRole      string
 	Team                   *string
 	IssuedAt               int64
+	// TeamRename is the version of the provider's last team rename when it
+	// wrote this state (settings "team_rename"), or nil when it sent none. A
+	// team written before a rename Fleet has since applied names the team
+	// under its old name, so ApplyExternalAccess ignores it (roles still
+	// apply): an event that was slow to arrive cannot undo a rename.
+	TeamRename *int64
 }
 
 // ValidExternalTeam reports whether team (already trimmed) is a team label an
@@ -102,6 +108,24 @@ func (s *Store) ApplyExternalAccess(ctx context.Context, next ExternalAccessStat
 		return ExternalAccessState{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	// A team written before the provider's last applied rename is stale.
+	// Checked under the rename lock (shared here, exclusive in
+	// ApplyExternalTeamRename), taken first so the order is always rename
+	// lock, identity lock, team names, rows.
+	if next.Team != nil && next.TeamRename != nil {
+		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock_shared(hashtext('external_team_renames'), hashtext($1))`, next.Issuer); err != nil {
+			return ExternalAccessState{}, false, err
+		}
+		var applied int64
+		switch scanErr := tx.QueryRowContext(ctx, `SELECT version FROM external_team_renames WHERE issuer = $1`, next.Issuer).Scan(&applied); {
+		case errors.Is(scanErr, sql.ErrNoRows):
+		case scanErr != nil:
+			return ExternalAccessState{}, false, scanErr
+		}
+		if *next.TeamRename < applied {
+			next.Team = nil
+		}
+	}
 	// Serialize every event for this identity, the FIRST one included. The
 	// FOR UPDATE below locks the stored state row, but before an identity's
 	// first event commits there is no row to lock: two concurrent first

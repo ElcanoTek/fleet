@@ -51,6 +51,9 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	// every orchestrator call a 403.
 	wc.ChatToken = cfg.SharedToken
 	wc.OrchestratorToken = cfg.SharedToken
+	// Decided once by config.Load so the gateway and both backends agree.
+	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
+	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth
 	if wc.SessionSecret == "" {
 		log.Printf("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
 	}

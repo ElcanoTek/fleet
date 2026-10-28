@@ -298,6 +298,10 @@ var envKnobs = []envKnob{
 	{key: "FLEET_LOCKDOWN_ONLY", fleet: true, kind: kindBool},
 	{key: "FLEET_MOCK_MODE", fleet: true, kind: kindBool},
 
+	// ── central Auth sign-in ── the break-glass that turns Fleet passwords
+	// back on while Auth SSO is configured (Config.PasswordLoginDisabled).
+	{key: "FLEET_OIDC_ALLOW_PASSWORD", kind: kindBool},
+
 	// ─────────────────────────────────────────────────────────────────────
 	// scopeExternal (#1273): parsed at the point of use, NOT by Load. Load
 	// still validates every row below (externalKnobProblems), so a malformed

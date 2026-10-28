@@ -279,13 +279,18 @@ defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants ful
 Chat and Ops Center permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
 with no Ops access. Accounts created and granted Fleet in central Auth are added
-here automatically with the roles selected there. When your operator has turned
-on Fleet's account-events feed, role changes, team changes and removals you
-make here are sent to whatever it points at. If that is central Auth and it is
-set up to adopt them, central Auth shows your changes too, and the most recent
-change on either side wins. With team sync on in central Auth, moving someone
-between teams there moves them here too, with the same effect as moving them
-yourself: what they shared with their old team stops being shared. Renaming a
+here automatically with the roles selected there. When your deployment signs
+people in through central Auth, central Auth manages everyone by default: the
+sign-in page offers single sign-on only, and this page lists people and their
+usage without any controls (no **Add user**, no row editor, no **Rename team**)
+and links to central Auth, where people are added and removed and their roles,
+teams and passwords are changed. **Settings → Team** then shows your team but
+cannot change it. Moving someone between teams in central Auth moves them
+here too, with the same effect as moving them yourself: what they shared with
+their old team stops being shared. Renaming a team in central Auth renames it
+here and keeps everything shared with it shared with the renamed team. Otherwise, when your operator has turned on
+Fleet's account-events feed, role changes, team changes and removals you make
+here are sent to whatever it points at. Renaming a
 team keeps everything shared with it shared with the renamed team; a new team
 that later takes the old name starts with nothing shared.
 
@@ -903,8 +908,9 @@ optional set of instructions, and **Who can see it**: **Only you** (a private
 project) or your team. Shared with your team, everyone on it sees the project's
 instructions, its team learnings, and any chat shared with them — but each chat
 stays **Only you** until its owner shares it. You need to be on a team for the
-team option to be available; teams are set up in **Settings → Team** and members
-are added by an admin. Creating a project lands you on its home. The same choices
+team option to be available. Teams are set up in **Settings → Team** and members
+are added by an admin, or, when your deployment signs in through central Auth,
+both are done there by an administrator. Creating a project lands you on its home. The same choices
 are reachable later from **Project settings** (the gear on the project home, or
 the project's menu in the rail), which only the owner can open.
 

@@ -106,6 +106,12 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Auth sends each person's team (team sync); one chosen here would not
+	// reach Auth everywhere and its next push would undo it.
+	if s.accountsManagedByAuth() {
+		http.Error(w, errOwnTeamInAuth, http.StatusConflict)
+		return
+	}
 	var body struct {
 		TeamID *string `json:"team_id"`
 	}

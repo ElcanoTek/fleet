@@ -306,3 +306,40 @@ func TestResolverPrecedence(t *testing.T) {
 		t.Fatal("fleet cannot re-mint the auth service's cookie")
 	}
 }
+
+// A deployment that signs people in through central Auth only refuses the
+// cookie a password login minted, whether it names its source or (as Mint
+// writes it) leaves the source out, and falls back to the elcano_auth cookie
+// rather than stranding a browser that holds both. Central sessions pass.
+func TestResolverRefusesPasswordSessions(t *testing.T) {
+	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
+	future := time.Now().Add(time.Hour).Unix()
+	r := &Resolver{HMAC: NewHMAC(secret), ElcanoPubKey: pub, RefusePassword: true}
+	sourceless, _ := r.HMAC.Mint("alice@x.com", "e")
+	now := time.Now().Unix()
+	exp, idle := freshDeadlines(now)
+	named, err := r.HMAC.encode(payload{Email: "alice@x.com", Exp: exp, Idle: idle, Epoch: "e", Source: string(SourcePassword)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oidcTok, _ := r.HMAC.MintOIDC("dave@x.com", "e", "https://auth.example.com", "sub-1")
+	elcanoTok := mintElcano(t, priv, map[string]any{"email": "carol@x.com", "exp": future})
+
+	for name, tok := range map[string]string{"source-less": sourceless, "source password": named} {
+		if s := r.HMAC.Verify(tok); s == nil || s.Source != SourcePassword {
+			t.Fatalf("%s: fixture is not a password session: %+v", name, s)
+		}
+		if s := r.Resolve(tok, ""); s != nil {
+			t.Errorf("%s password cookie accepted: %+v", name, s)
+		}
+		if s := r.Resolve(tok, elcanoTok); s == nil || s.Source != SourceElcano || s.Email != "carol@x.com" {
+			t.Errorf("%s password cookie hid the elcano cookie: %+v", name, s)
+		}
+	}
+	if s := r.Resolve(oidcTok, ""); s == nil || s.Source != SourceOIDC || s.Email != "dave@x.com" {
+		t.Errorf("central session refused: %+v", s)
+	}
+	if s := r.Resolve("", elcanoTok); s == nil || s.Source != SourceElcano {
+		t.Errorf("elcano cookie refused: %+v", s)
+	}
+}

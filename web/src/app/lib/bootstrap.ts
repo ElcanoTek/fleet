@@ -25,6 +25,8 @@ export type Bootstrap = {
   branding: BootBranding;
   session: { email: string } | null;
   login: {
+    /** False on a Fleet that signs in through central Auth only (Go PasswordLoginEnabled). */
+    passwordLoginEnabled: boolean;
     magicLinkLoginEnabled: boolean;
     oidcEnabled: boolean;
     oidcLabel: string;
@@ -34,6 +36,11 @@ export type Bootstrap = {
   notFound?: boolean;
   /** Routes whose page the server decides (Go fullLoadRoutes); "/x/" is a prefix. */
   fullLoadRoutes?: string[];
+  /**
+   * Present when central Auth manages this Fleet's accounts, roles and teams
+   * (Go bootCentralAuth): the account pages are view-only and link to Auth.
+   */
+  centralAuth?: { adminUrl: string };
 };
 
 /** Mirrors the Go DefaultBranding (and clientconfig's defaults). */
@@ -48,6 +55,7 @@ export const DEFAULT_BOOTSTRAP: Bootstrap = {
   },
   session: null,
   login: {
+    passwordLoginEnabled: true,
     magicLinkLoginEnabled: false,
     oidcEnabled: false,
     oidcLabel: "Sign in with SSO",

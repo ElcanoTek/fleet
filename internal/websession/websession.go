@@ -350,11 +350,17 @@ type Resolver struct {
 	HMAC             *HMAC
 	ElcanoPubKey     ed25519.PublicKey
 	ElcanoCookieName string
+	// RefusePassword ignores an HMAC cookie a password login minted (a
+	// verified SourcePassword session, which is also what a cookie without a
+	// source claim is): the deployment signs people in through central Auth
+	// only. The elcano_auth cookie is still considered, so a browser holding
+	// both is not stranded by the one it may no longer use.
+	RefusePassword bool
 }
 
 // Resolve verifies the two cookie values.
 func (r *Resolver) Resolve(hmacToken, elcanoToken string) *Session {
-	if s := r.HMAC.Verify(hmacToken); s != nil {
+	if s := r.HMAC.Verify(hmacToken); s != nil && (!r.RefusePassword || s.Source != SourcePassword) {
 		return s
 	}
 	if c := VerifyElcanoToken(r.ElcanoPubKey, elcanoToken); c != nil {

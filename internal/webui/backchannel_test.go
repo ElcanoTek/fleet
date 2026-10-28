@@ -293,3 +293,72 @@ func TestBackchannelRoute(t *testing.T) {
 		t.Fatalf("unconfigured: %d", res.StatusCode)
 	}
 }
+
+func teamRenameClaims(issuer string, now time.Time, rename map[string]any) map[string]any {
+	return map[string]any{
+		"iss": issuer, "aud": bcAudience, "jti": "evt-r1",
+		"iat": float64(now.Unix()), "exp": float64(now.Add(2 * time.Minute).Unix()),
+		"events": map[string]any{teamRenameEvent: rename},
+	}
+}
+
+// A team rename is app-wide: a team+jwt naming no account, carrying exactly
+// {from, to, version}. It is forwarded to chat-server with no user identity;
+// an account claim, another event, an extra key or the wrong typ is refused,
+// and an access token can never be read as one (or the other way round).
+func TestBackchannelTeamRename(t *testing.T) {
+	k := newSigningKey(t)
+	issuer := "https://auth.example.com"
+	e := bcEnv(t, issuer, k.b64)
+	now := time.Now()
+	good := map[string]any{"from": "Trading", "to": "Research", "version": float64(4)}
+	tr, err := e.g.verifyTeamRenameToken(k.sign(t, "team+jwt", teamRenameClaims(issuer, now, good)), issuer, bcAudience, now)
+	if err != nil || tr.from != "Trading" || tr.to != "Research" || tr.version != 4 || tr.eventID != "evt-r1" || tr.issuer != issuer {
+		t.Fatalf("%v %+v", err, tr)
+	}
+	withSub := teamRenameClaims(issuer, now, good)
+	withSub["sub"] = "acct-1"
+	withEmail := teamRenameClaims(issuer, now, good)
+	withEmail["email"] = "dave@x.com"
+	twoEvents := teamRenameClaims(issuer, now, good)
+	twoEvents["events"].(map[string]any)[applicationAccessEvent] = map[string]any{"action": "grant", "version": float64(1)}
+	for name, tok := range map[string]string{
+		"access typ":     k.sign(t, "access+jwt", teamRenameClaims(issuer, now, good)),
+		"names account":  k.sign(t, "team+jwt", withSub),
+		"names email":    k.sign(t, "team+jwt", withEmail),
+		"two events":     k.sign(t, "team+jwt", twoEvents),
+		"extra key":      k.sign(t, "team+jwt", teamRenameClaims(issuer, now, map[string]any{"from": "a", "to": "b", "version": float64(1), "x": "y"})),
+		"no from":        k.sign(t, "team+jwt", teamRenameClaims(issuer, now, map[string]any{"from": "", "to": "b", "version": float64(1)})),
+		"zero version":   k.sign(t, "team+jwt", teamRenameClaims(issuer, now, map[string]any{"from": "a", "to": "b", "version": float64(0)})),
+		"long name":      k.sign(t, "team+jwt", teamRenameClaims(issuer, now, map[string]any{"from": "a", "to": strings.Repeat("x", 65), "version": float64(1)})),
+		"other audience": k.sign(t, "team+jwt", func() map[string]any { c := teamRenameClaims(issuer, now, good); c["aud"] = "other"; return c }()),
+		"expired":        k.sign(t, "team+jwt", teamRenameClaims(issuer, now.Add(-time.Hour), good)),
+	} {
+		if _, err := e.g.verifyTeamRenameToken(tok, issuer, bcAudience, now); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	// An access token is not readable as a team rename and vice versa.
+	if _, err := e.g.verifyAccessToken(k.sign(t, "team+jwt", teamRenameClaims(issuer, now, good)), issuer, bcAudience, now); err == nil {
+		t.Error("a team+jwt read as an access token")
+	}
+
+	// The route forwards it with no user identity.
+	form := "team_token=" + url.QueryEscape(k.sign(t, "team+jwt", teamRenameClaims(issuer, now, good)))
+	if res := e.do(bcPost(form, int64(len(form)))); res.StatusCode != http.StatusNoContent {
+		t.Fatalf("team rename: %d", res.StatusCode)
+	}
+	got := e.chat.last(t)
+	if got.URI != "/auth/external-team-rename" || got.Header.Get("X-User-Email") != "" || got.Header.Get("X-Chat-Server-Token") != testChatToken ||
+		got.Body != `{"event_id":"evt-r1","issuer":"https://auth.example.com","version":4,"from":"Trading","to":"Research"}` {
+		t.Fatalf("%q %v %q", got.URI, got.Header, got.Body)
+	}
+	access := "access_token=" + url.QueryEscape(k.sign(t, "access+jwt", accessClaims(issuer, now, map[string]any{"action": "revoke", "version": float64(2)})))
+	if res := e.do(bcPost(form+"&"+access, int64(len(form+"&"+access)))); res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("team + access tokens: %d", res.StatusCode)
+	}
+	e.chat.respond = func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(500) }
+	if res := e.do(bcPost(form, int64(len(form)))); res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("chat failure: %d (Auth must retry)", res.StatusCode)
+	}
+}

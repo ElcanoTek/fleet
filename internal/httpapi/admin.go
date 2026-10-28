@@ -44,12 +44,15 @@ type userStat struct {
 }
 
 // isAdmin returns true when the authenticated user is in the ADMIN_EMAILS
-// allowlist. Case-insensitive. This is the out-of-band bootstrap gate: it
+// allowlist (ignored where central Auth manages accounts). Case-insensitive. This is the out-of-band bootstrap gate: it
 // works before any DB role is assigned (so the first operator can mint other
 // admins) and complements — does not replace — the users.role = 'admin' path
 // checked in adminMiddleware (#237).
 func (s *Server) isAdmin(email string) bool {
-	if len(s.cfg.AdminEmails) == 0 {
+	// Where central Auth manages accounts, Fleet Admin comes from Auth alone
+	// (users.role = 'admin' through its push); an env allowlist would grant
+	// what Auth may have taken away (ADR-0095).
+	if s.accountsManagedByAuth() || len(s.cfg.AdminEmails) == 0 {
 		return false
 	}
 	needle := strings.ToLower(strings.TrimSpace(email))
@@ -221,8 +224,16 @@ func (s *Server) handleAdminUserItem(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodPatch:
+		if s.accountsManagedByAuth() {
+			http.Error(w, errRolesTeamsInAuth, http.StatusConflict)
+			return
+		}
 		s.handleAdminUserPatch(w, r, email)
 	case http.MethodDelete:
+		if s.accountsManagedByAuth() {
+			http.Error(w, errDeleteInAuth, http.StatusConflict)
+			return
+		}
 		s.handleAdminUserDelete(w, r, email)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

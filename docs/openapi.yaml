@@ -3102,6 +3102,11 @@ paths:
   /auth/login:
     post:
       summary: Username/password login → user token.
+      description: >-
+        Refused with 403 on a Fleet that signs in through central Auth
+        (FLEET_OIDC_* configured and FLEET_OIDC_ALLOW_PASSWORD not on,
+        ADR-0095), where a token this login minted earlier is not accepted
+        either.
       security: []
       requestBody:
         content:
@@ -3114,6 +3119,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/LoginResponse" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
   /auth/elcano-login:
     get:
       summary: Begin/complete Elcano unified login (sets the elcano_auth cookie).

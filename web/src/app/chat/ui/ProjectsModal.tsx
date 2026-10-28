@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { Link } from "@/app/lib/Link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -303,11 +304,14 @@ export function ProjectsModal({
             ) : !me.team_id ? (
               // No team → display-only. Where to fix it depends on who is
               // asking: most users on a fleet box ARE admins, so sending them
-              // to ask someone else would be worse than useless.
+              // to ask someone else would be worse than useless. Where Auth
+              // manages teams, nobody can fix it in Fleet.
               <p className="m-0 rounded-[0.75rem] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                {me.admin
-                  ? "You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team."
-                  : "You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users."}
+                {getBootstrap().centralAuth
+                  ? "You’re not on a team yet. Teams are set in Auth by an administrator."
+                  : me.admin
+                    ? "You’re not on a team yet. Add yourself to one in Settings → Admin → Users, or create one in Settings → Team."
+                    : "You’re not on a team yet. Ask an admin to add you in Settings → Admin → Users."}
               </p>
             ) : (
               <div className="grid gap-1">

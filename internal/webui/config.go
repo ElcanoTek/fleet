@@ -42,6 +42,18 @@ type Config struct {
 	// all set.
 	OIDC *OIDCConfig
 
+	// PasswordLoginDisabled is config.Config.PasswordLoginDisabled, set by the
+	// caller (cmd/fleet), never read from the environment here: the backends
+	// must make the same decision, so it is made once. The password form is
+	// refused and hidden, and a session a password login minted (before the
+	// switch, or on another replica) no longer authenticates.
+	PasswordLoginDisabled bool
+
+	// AccountsManagedByAuth is config.Config.AccountsManagedByAuth, set by
+	// the caller like PasswordLoginDisabled: the pages that manage accounts,
+	// roles and teams become view-only and point at Auth's console.
+	AccountsManagedByAuth bool
+
 	// CatwalkURL is the catwalk model database base (CATWALK_URL).
 	CatwalkURL string
 
@@ -151,6 +163,19 @@ func firstNonEmpty(vals ...string) string {
 
 func (c *Config) elcanoCookieName() string {
 	return firstNonEmpty(c.ElcanoCookieName, websession.DefaultElcanoCookieName)
+}
+
+// authAdminURL is central Auth's admin console, <issuer>/admin, or "" when
+// the issuer is not an http(s) URL.
+func (c *Config) authAdminURL() string {
+	if c.OIDC == nil {
+		return ""
+	}
+	u, err := url.Parse(c.OIDC.Issuer)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return ""
+	}
+	return u.ResolveReference(&url.URL{Path: strings.TrimRight(u.Path, "/") + "/admin"}).String()
 }
 
 func (c *Config) authLoginURL() string {
