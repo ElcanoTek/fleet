@@ -259,9 +259,9 @@ describe("FeaturesAdminPage", () => {
   });
 
   // The task model's server default is usually empty, which means "follow
-  // the advanced model". The row must say so rather than render a blank
+  // the default model". The row must say so rather than render a blank
   // default, and an empty value must not offer a Save.
-  it("renders an unset task model as following the advanced model", async () => {
+  it("renders an unset task model as following the default model", async () => {
     const TASK_TIER: Resolved = {
       key: "task_model",
       kind: "model",
@@ -275,10 +275,10 @@ describe("FeaturesAdminPage", () => {
 
     const row = await screen.findByTestId("setting-task_model");
     expect(within(row).getByText("Task model")).toBeInTheDocument();
-    expect(within(row).getByText(/follows the advanced model when unset/)).toBeInTheDocument();
+    expect(within(row).getByText(/follows the default model when unset/)).toBeInTheDocument();
     const input = within(within(row).getByTestId("model-picker-task_model")).getByRole("combobox");
     expect(input).toHaveValue("");
-    expect(input).toHaveAttribute("placeholder", "Follows the advanced model");
+    expect(input).toHaveAttribute("placeholder", "Follows the default model");
     expect(screen.queryByTestId("save-task_model")).toBeNull();
   });
 

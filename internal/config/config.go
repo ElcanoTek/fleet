@@ -1352,25 +1352,26 @@ type Config struct {
 
 	// ── python REPL (#213) ──
 	// PythonREPLMode selects the run_python kernel lifetime
-	// (FLEET_PYTHON_REPL_MODE). "per-turn" (the default) keeps the legacy
+	// (FLEET_PYTHON_REPL_MODE). "persistent" (the default) reuses ONE
+	// sandbox+kernel per conversation across turns so variables/imports survive
+	// between turns and across in-chat patrol runs. "per-turn" keeps the legacy
 	// behaviour: a fresh sandbox + kernel each turn, destroyed at turn end.
-	// "persistent" reuses ONE sandbox+kernel per conversation across turns so
-	// variables/imports survive between turns. Persistent mode applies only to
-	// non-lockdown interactive chat; lockdown and scheduled runs always stay
-	// per-turn. Any other value falls back to "per-turn" with a warning.
+	// Persistent mode applies only to non-lockdown interactive chat; lockdown
+	// and scheduled runs always stay per-turn. Any other value falls back to
+	// "per-turn" with a warning.
 	PythonREPLMode string
 	// PythonCellTimeoutSeconds is a host-operator ceiling on a single run_python
 	// cell (FLEET_PYTHON_CELL_TIMEOUT). 0 (default) disables the ceiling, leaving
-	// the per-call timeout_seconds param (default 300) in charge. When >0, the
+	// the per-call timeout_seconds param (default 900) in charge. When >0, the
 	// effective per-cell timeout is min(timeout_seconds, this).
 	PythonCellTimeoutSeconds int
 	// PythonREPLIdleTTLSeconds bounds how long a persistent per-conversation
 	// sandbox may sit idle (no run_python call) before the reaper closes it
-	// (FLEET_PYTHON_REPL_IDLE_TTL, default 7200 = 2h). Only meaningful when
+	// (FLEET_PYTHON_REPL_IDLE_TTL, default 21600 = 6h). Only meaningful when
 	// PythonREPLMode == "persistent".
 	PythonREPLIdleTTLSeconds int
 	// PythonREPLMaxSessions bounds how many persistent per-conversation sandboxes
-	// are kept (FLEET_PYTHON_REPL_MAX, default 32). SOFT cap: evaluated only when
+	// are kept (FLEET_PYTHON_REPL_MAX, default 64). SOFT cap: evaluated only when
 	// a new one is created, evicting least-recently-used IDLE sessions, so the
 	// live count can overshoot. Only meaningful when PythonREPLMode ==
 	// "persistent". 0 disables the cap.
@@ -1891,10 +1892,10 @@ func Load(envFile string) (*Config, error) {
 		SandboxWarmSize:       lp.getenvFleetInt("SANDBOX_WARM_SIZE", -1),
 		SandboxWarmTTLSeconds: lp.getenvFleetInt("SANDBOX_WARM_TTL", 300),
 
-		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
+		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePersistent)),
 		PythonCellTimeoutSeconds: lp.getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
-		PythonREPLIdleTTLSeconds: lp.getenvFleetInt("PYTHON_REPL_IDLE_TTL", 7200),
-		PythonREPLMaxSessions:    lp.getenvFleetInt("PYTHON_REPL_MAX", 32),
+		PythonREPLIdleTTLSeconds: lp.getenvFleetInt("PYTHON_REPL_IDLE_TTL", 21600),
+		PythonREPLMaxSessions:    lp.getenvFleetInt("PYTHON_REPL_MAX", 64),
 
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),
 		LockdownOnly:          lp.getenvFleetBool("LOCKDOWN_ONLY", false),
@@ -2556,14 +2557,15 @@ func (c *Config) PersistentPythonREPL() bool {
 }
 
 // normalizePythonREPLMode validates FLEET_PYTHON_REPL_MODE and fails closed to
-// the conservative "per-turn" default on any unrecognized value (a typo must
-// never silently keep a stale kernel alive across turns). Case/space tolerant.
+// the conservative "per-turn" mode on any unrecognized value (a typo must
+// never silently keep a stale kernel alive across turns). Empty defaults to
+// "persistent". Case/space tolerant.
 func normalizePythonREPLMode(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "", pythonREPLModePerTurn:
-		return pythonREPLModePerTurn
-	case pythonREPLModePersistent:
+	case "", pythonREPLModePersistent:
 		return pythonREPLModePersistent
+	case pythonREPLModePerTurn:
+		return pythonREPLModePerTurn
 	default:
 		log.Printf("Warning: FLEET_PYTHON_REPL_MODE=%q is not recognized (want %q or %q); falling back to %q",
 			raw, pythonREPLModePerTurn, pythonREPLModePersistent, pythonREPLModePerTurn)

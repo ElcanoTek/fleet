@@ -127,6 +127,11 @@ type approvalStager struct {
 	// lockdownOnly is cfg.LockdownOnly: every chat is lockdown, including
 	// ones created before it was turned on.
 	lockdownOnly bool
+	// inputKind identifies the source of the turn (e.g. agent.InputKindChatPatrol)
+	// so unattended in-chat patrol turns auto-approve executable session-approvable
+	// tools, enforce at least a 24h timeout on any remaining staged cards, and arm
+	// resume-after-approval automatically.
+	inputKind string
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -236,6 +241,14 @@ func stagesTaskChangeOnly(toolName string) bool {
 // override when that is longer. An explicit per-tool manifest value still
 // wins — the operator named that tool.
 func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
+	t := a.resolveBaseTimeoutSeconds(toolName)
+	if a.inputKind == agent.InputKindChatPatrol && t < defaultApprovalTimeoutSeconds {
+		return defaultApprovalTimeoutSeconds
+	}
+	return t
+}
+
+func (a *approvalStager) resolveBaseTimeoutSeconds(toolName string) int {
 	if t := agentcore.ApprovalTimeoutForTool(toolName); t > 0 {
 		return t
 	}
@@ -377,17 +390,21 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			return agentcore.PreApprovedSentinel, nil
 		}
 	}
-	// Per-conversation auto-approve: when the user toggles Auto-approve on for
-	// this chat, executable critical tools run without parking on an approval
-	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
+	// Per-conversation auto-approve (or an unattended in-chat patrol turn):
+	// executable critical tools run without parking on an approval card.
+	// Handler-only tools (schedule_task, manage_tasks, preview_email,
 	// suggest_advanced_model), outbound email (send_email, send_template_email),
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.
-	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+	if (a.isAutoApprove() || a.inputKind == agent.InputKindChatPatrol) && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+		via := "conversation_auto_approve"
+		if !a.isAutoApprove() && a.inputKind == agent.InputKindChatPatrol {
+			via = "chat_patrol_auto_approve"
+		}
 		a.sink.Emit("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
-			"via":  "conversation_auto_approve",
+			"via":  via,
 		})
 		return agentcore.PreApprovedSentinel, nil
 	}

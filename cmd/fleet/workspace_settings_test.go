@@ -170,9 +170,9 @@ func TestSeedModelTiersFromConfig(t *testing.T) {
 		agentcore.SetTaskModel("")
 	})
 	seedModelTiersFromConfig(&config.Config{DefaultModel: "acme/frontier-1", AdvancedModel: "acme/frontier-1-pro"})
-	// No FLEET_TASK_MODEL: the task tier follows the advanced tier.
-	if got := agentcore.CurrentTaskModel(); got != "acme/frontier-1-pro" {
-		t.Fatalf("task tier = %q, want the advanced tier it follows", got)
+	// No FLEET_TASK_MODEL: the task tier follows the default tier.
+	if got := agentcore.CurrentTaskModel(); got != "acme/frontier-1" {
+		t.Fatalf("task tier = %q, want the default tier it follows", got)
 	}
 	if got := agentcore.CurrentDefaultModel(); got != "acme/frontier-1" {
 		t.Fatalf("default tier = %q, want the env-derived slug", got)

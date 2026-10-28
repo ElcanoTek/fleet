@@ -213,7 +213,7 @@ func NewPool(cfg PoolConfig) *Pool {
 	if cfg.PersistentREPL {
 		p.persistent = make(map[string]*persistentEntry)
 		if p.cfg.PersistentIdleTTL <= 0 {
-			p.cfg.PersistentIdleTTL = 2 * time.Hour
+			p.cfg.PersistentIdleTTL = 6 * time.Hour
 		}
 		p.persistentDone = make(chan struct{})
 		safe.Go("sandbox.pool.persistentKeeper", func() { p.persistentKeeper(p.persistentDone) })

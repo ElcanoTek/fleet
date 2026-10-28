@@ -47,7 +47,10 @@ IMPORTANT — translate the user's natural-language schedule to cron yourself BE
 
 Supply EITHER cron (recurring) OR run_at (one-time), never both. Omit both only if the user wants it to run once, immediately. If the user's phrasing is ambiguous (no time, unclear cadence, unclear timezone), ASK a clarifying question instead of guessing.
 
-This is a CRITICAL action: the user sees an approval card (task name, prompt preview, schedule, estimated run frequency) and must click Approve before the task is created. After approval the tool returns the new task's id and a pointer to view it in the Operations Center. Do NOT call this tool to do work right now — it enqueues a NEW independent scheduled task; for work in the current conversation, just do it directly.`
+This is a CRITICAL action: the user sees an approval card (task name, prompt preview, schedule, estimated run frequency) and must click Approve before the task is created. After approval the tool returns the new task's id and a pointer to view it in the Operations Center. Do NOT call this tool to do work right now — it enqueues a NEW independent scheduled task; for work in the current conversation, just do it directly.
+
+NOTE — In-chat patrols vs. Operations Center tasks:
+If the user wants you to patrol, monitor, or check back IN THIS CHAT CONVERSATION (e.g. "patrol this every 2 hours in chat", "check back in 30 minutes", or "keep watching these deals every few hours here"), prefer the chat_patrol tool instead of schedule_task so each run wakes up in this same conversation with full chat history and workspace state.`
 
 // NewScheduleTaskTool returns the schedule_task tool. Its Run is an explicit
 // error because the interactive orchestration layer intercepts every call,

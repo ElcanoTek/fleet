@@ -55,25 +55,27 @@ const (
 	// jobs on Luna Pro ran in 4–10 minutes at $0.16–0.62 with 89–95% cache
 	// hits. The `openai/` soft pin in canonicalUpstream keeps the prompt cache
 	// on one upstream with graceful degradation.
-	DefaultCoreModel = "anthropic/claude-haiku-5.5"
-	// DefaultMaxModel is the strong tier — the model escalation
-	// (suggest_advanced_model, chat's "advanced model") and the default task
-	// tier resolve to. Exact slug, never a `~latest` alias. Claude Opus 5.5
-	// (2026-10-28, replacing google/gemini-4-argon): 1,000,000-token window and
-	// eleven official endpoints across Anthropic, Claude Platform on AWS,
-	// Amazon Bedrock, Azure and Google Vertex, at $4/M in and $20/M out.
-	// Gemini 4 Argon's strict single-provider `google/` pin had no upstream
-	// fallback and suffered repeated mid-stream 504 idle timeouts on long
-	// tool-heavy turns (such as Pages dashboard builds); Opus 5.5 restores the
-	// multi-cloud official-weights pool and explicit prompt-cache breakpoints.
-	// History: Gemini 4 Argon (2026-10-14, replacing anthropic/claude-opus-5.5);
-	// Claude Opus 5.5 (2026-09-22, replacing anthropic/claude-opus-5); Claude
-	// Opus 5 (2026-09-21, replacing openai/gpt-5.6-sol). The scheduled-task
-	// FALLBACK is configured separately (FLEET_TASK_FALLBACK_MODEL; production
-	// uses deepseek/deepseek-v4.1-flash).
-	DefaultMaxModel = "anthropic/claude-opus-5.5"
-	// AdvancedModelSlug is chat's name for the same strong tier. Kept in sync
-	// with DefaultMaxModel.
+	// DefaultCoreModel is the primary frontier model (interactive chat default +
+	// scheduled tasks when FLEET_TASK_MODEL is unset). Exact slug, never a
+	// `~latest` alias: throughput-priority routing sprays requests across
+	// providers, and prompt caches are per-upstream; and an alias slug defeats
+	// the send-side reasoning reconstruction (see isAliasModel).
+	//
+	// Claude Opus 5.5 (2026-10-28): 1,000,000-token window and eleven official
+	// endpoints across Anthropic, Claude Platform on AWS, Amazon Bedrock, Azure
+	// and Google Vertex, at $4/M in and $20/M out. The `anthropic/` soft pin
+	// keeps the prompt cache on one upstream with explicit cache breakpoints.
+	DefaultCoreModel = "anthropic/claude-opus-5.5"
+	// DefaultMaxModel (and DefaultFallbackModel) is the frontier fallback tier —
+	// the second pinned picker slot, the automatic fallback for scheduled tasks
+	// and chat patrols, and the switch-on-struggle target. Exact slug, never a
+	// `~latest` alias. Google Gemini 4 Argon (2026-10-28): 1,048,576-token
+	// context window and 32K minimum output floor.
+	DefaultMaxModel = "google/gemini-4-argon"
+	// DefaultFallbackModel is the explicit fallback-tier name for DefaultMaxModel.
+	DefaultFallbackModel = DefaultMaxModel
+	// AdvancedModelSlug is chat's historical name for the second frontier slot.
+	// Kept in sync with DefaultMaxModel / DefaultFallbackModel.
 	AdvancedModelSlug = DefaultMaxModel
 	// DefaultMaxCompletionTokens caps a single completion's output tokens.
 	DefaultMaxCompletionTokens = 16384

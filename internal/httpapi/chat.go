@@ -1431,7 +1431,10 @@ func (s *Server) runTurnAsync(
 
 	journal := newTurnJournalWriter(s.store, buf.turnID)
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
+	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
 
+	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
+	turnStager.inputKind = inputKind
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:               userInput,
 		InjectedContext:           injectedContext,
@@ -1450,7 +1453,7 @@ func (s *Server) runTurnAsync(
 		ImageAttachments:          imageAttachments,
 		UploadsRoot:               userUploadsRoot(s.cfg.EmailAttachmentDir, user),
 		ThinkingConfig:            resolveThinkingConfig(conv.ThinkingConfig, s.cfg.DefaultThinkingBudgetTokens),
-		ApprovalStager:            s.newTurnStager(turnCtx, conv, user, buf),
+		ApprovalStager:            turnStager,
 		MemoryProposer: &memoryProposer{
 			ctx:            turnCtx,
 			store:          s.store,

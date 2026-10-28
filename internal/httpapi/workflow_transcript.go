@@ -73,8 +73,8 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 				continue
 			}
 			var c agent.TextContent
-			if json.Unmarshal(e.Content, &c) != nil || c.Kind == agent.InputKindApprovalResume {
-				// A resume input is fleet's note that an approval was settled
+			if json.Unmarshal(e.Content, &c) != nil || c.Kind == agent.InputKindApprovalResume || c.Kind == agent.InputKindChatPatrol {
+				// A resume or patrol input is fleet's own trigger notice
 				// (docs/RESUME-AFTER-APPROVAL.md), not a user request.
 				continue
 			}

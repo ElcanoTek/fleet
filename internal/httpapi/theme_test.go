@@ -268,10 +268,10 @@ func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
 	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
 
-	// With no task-tier override, task_model is the advanced tier.
+	// With no task-tier override, task_model is the default tier.
 	w := httptest.NewRecorder()
 	s.clientConfigHandler(w, req)
-	want := `"models":{"default_model":"` + agentcore.DefaultCoreModel + `","advanced_model":"` + agentcore.DefaultMaxModel + `","task_model":"` + agentcore.DefaultMaxModel + `"}`
+	want := `"models":{"default_model":"` + agentcore.DefaultCoreModel + `","advanced_model":"` + agentcore.DefaultMaxModel + `","task_model":"` + agentcore.DefaultCoreModel + `"}`
 	if !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body %s must carry the compiled-in tier pair %s", w.Body.String(), want)
 	}
@@ -280,7 +280,7 @@ func TestClientConfig_CarriesLiveModelTiers(t *testing.T) {
 	agentcore.SetAdvancedModel("acme/frontier-1-pro")
 	w = httptest.NewRecorder()
 	s.clientConfigHandler(w, req)
-	want = `"models":{"default_model":"acme/frontier-1","advanced_model":"acme/frontier-1-pro","task_model":"acme/frontier-1-pro"}`
+	want = `"models":{"default_model":"acme/frontier-1","advanced_model":"acme/frontier-1-pro","task_model":"acme/frontier-1"}`
 	if !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body %s must carry the overridden tiers %s", w.Body.String(), want)
 	}

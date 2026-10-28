@@ -312,6 +312,17 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"POST /api/conversations/{id}/queue/{inputId}/send-now", func(r *http.Request) string {
 			return conv(r) + "/queue/" + p(r, "inputId") + "/send-now"
 		}, noBody, jsonForcedOK},
+		{"GET /api/conversations/{id}/schedules", func(r *http.Request) string { return withRawQuery(conv(r)+"/schedules", r) }, noBody, jsonForced},
+		{"POST /api/conversations/{id}/schedules", func(r *http.Request) string { return conv(r) + "/schedules" }, jsonBodyIfAny, jsonForced},
+		{"PATCH /api/conversations/{id}/schedules/{scheduleId}", func(r *http.Request) string {
+			return conv(r) + "/schedules/" + p(r, "scheduleId")
+		}, jsonBodyIfAny, jsonForced},
+		{"DELETE /api/conversations/{id}/schedules/{scheduleId}", func(r *http.Request) string {
+			return conv(r) + "/schedules/" + p(r, "scheduleId")
+		}, noBody, jsonForced},
+		{"POST /api/conversations/{id}/schedules/{scheduleId}/run-now", func(r *http.Request) string {
+			return conv(r) + "/schedules/" + p(r, "scheduleId") + "/run-now"
+		}, noBody, jsonForced},
 		{"POST /api/conversations/{id}/rename", func(r *http.Request) string { return conv(r) + "/rename" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/share", func(r *http.Request) string { return conv(r) + "/share" }, jsonBodyIfAny, textJSON},
 		{"DELETE /api/conversations/{id}/share", func(r *http.Request) string { return conv(r) + "/share" }, noBody, textOK},

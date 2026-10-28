@@ -5,7 +5,7 @@ import type { McpServer, Task, TaskTemplate } from "@/app/shared/lib/orchestrato
 import { buildPromptWithRecipients } from "./taskEmailBlock";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import {
-  ADVANCED_MODEL,
+  DEFAULT_MODEL,
   DEFAULT_TASK_FALLBACK_MODEL,
   _resetModelTiersForTests,
   setModelTiers,
@@ -87,7 +87,7 @@ describe("TaskCreateModal — default model pair", () => {
     fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
-      model: ADVANCED_MODEL,
+      model: DEFAULT_MODEL,
       fallback_model: DEFAULT_TASK_FALLBACK_MODEL,
     });
   });
@@ -187,11 +187,11 @@ describe("TaskCreateModal — default model pair", () => {
     });
   });
 
-  // With no task-model override the server sends task_model = the advanced
-  // tier; an older server sends none, and the form still follows the advanced
-  // tier. The chat default never reaches a task.
-  it("follows the advanced tier, never the chat default", async () => {
-    setModelTiers({ default_model: "acme/fast-chat", advanced_model: "acme/frontier-pro" });
+  // With no task-model override the server sends task_model = the default
+  // frontier tier; an older server sends none, and the form still follows the
+  // default frontier tier.
+  it("follows the default frontier tier when task_model is unset", async () => {
+    setModelTiers({ default_model: "acme/frontier-pro", advanced_model: "acme/fallback" });
     createTask.mockResolvedValue({ id: "t1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });

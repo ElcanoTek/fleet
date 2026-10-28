@@ -146,9 +146,9 @@ func transcriptFromHistory(history []agent.HistoryEntry) string {
 		if err := json.Unmarshal(e.Content, &tc); err != nil {
 			continue
 		}
-		if tc.Kind == agent.InputKindApprovalResume {
-			// fleet's own note that an approval was settled, not something
-			// the user asked for: it must not shape a synthesized prompt.
+		if tc.Kind == agent.InputKindApprovalResume || tc.Kind == agent.InputKindChatPatrol {
+			// fleet's own note that an approval was settled or a schedule fired,
+			// not something the user asked for: it must not shape a synthesized prompt.
 			continue
 		}
 		text := strings.TrimSpace(tc.Text)

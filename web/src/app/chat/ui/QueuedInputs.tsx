@@ -16,6 +16,7 @@ export function queuedInputLabel(it: QueuedInput): string {
   if (it.state === "injected") return "steering";
   if (it.mode === "steer") return "steer";
   if (it.mode === "resume") return "auto-continue";
+  if (it.mode === "patrol") return "patrol";
   return "queued";
 }
 

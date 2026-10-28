@@ -9,6 +9,7 @@ import {
   applyToolResult,
   applyTurnOutcome,
   APPROVAL_RESUME_KIND,
+  CHAT_PATROL_KIND,
   clearRetryNotice,
   historyToMessages,
   parseApprovalCardData,
@@ -17,6 +18,7 @@ import {
   parsePythonStream,
   type Approval,
   type ApprovalStatus,
+  type ChatSchedule,
   type ContextCompactedEventPayload,
   type ContextPressureEventPayload,
   type HistoryEntry,
@@ -73,7 +75,8 @@ export type QueuedInput = {
   client_input_id: string;
   // "resume": the turn fleet starts itself after an approval card is settled
   // (docs/RESUME-AFTER-APPROVAL.md), waiting behind a running turn.
-  mode: "queued" | "steer" | "resume";
+  // "patrol": an in-chat recurring patrol or one-shot timer firing.
+  mode: "queued" | "steer" | "resume" | "patrol";
   state: string;
   position: number;
   message_preview: string;
@@ -581,6 +584,11 @@ export interface TurnStreamDeps {
   promoteStreamKey: TurnStreamState["promoteStreamKey"];
   streamingConvsRef: TurnStreamState["streamingConvsRef"];
   isStreaming: boolean;
+  onPatrolUpdated?: (
+    convId: string,
+    schedules: ChatSchedule[],
+    autoApprove?: boolean,
+  ) => void;
   // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
   // hook builds its own from the platform — `navigator.locks` plus a
   // BroadcastChannel where both exist, and today's independent per-tab chain
@@ -2339,10 +2347,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       const text = (p.text ?? "").trim();
       if (!text) return;
       // A turn fleet started itself after an approval card was settled
-      // (docs/RESUME-AFTER-APPROVAL.md): its input is fleet's notice, and the
-      // row renders as one — the same marker the persisted entry carries.
+      // (docs/RESUME-AFTER-APPROVAL.md) or when an in-chat patrol/timer fired:
+      // its input is fleet's notice, and the row renders as one — the same
+      // marker the persisted entry carries.
       const resumeKind =
-        p.kind === APPROVAL_RESUME_KIND ? APPROVAL_RESUME_KIND : undefined;
+        p.kind === APPROVAL_RESUME_KIND
+          ? APPROVAL_RESUME_KIND
+          : p.kind === CHAT_PATROL_KIND
+            ? CHAT_PATROL_KIND
+            : undefined;
       // The server-added suffix for this turn, on its own field since
       // migration 056 (docs/ATTACHMENT-SCOPING.md). Carried onto the bubble so
       // a reattach mid-turn shows the collapsed "context fleet added" note the
@@ -2815,6 +2828,15 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // Full snapshot on every queue mutation (#785) — no event sourcing.
       const p = payload as { items?: QueuedInput[] };
       setQueuedInputs((cur) => new Map(cur).set(ctx.target, p.items ?? []));
+      return;
+    }
+
+    if (event.event === "patrol.updated") {
+      const p = payload as {
+        schedules?: ChatSchedule[];
+        auto_approve?: boolean;
+      };
+      deps.onPatrolUpdated?.(ctx.target, p.schedules ?? [], p.auto_approve);
       return;
     }
 

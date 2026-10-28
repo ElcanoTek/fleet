@@ -51,6 +51,46 @@ export function AutoContinueNotice({ text }: { text: string }) {
   );
 }
 
+export function PatrolTurnNotice({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+  // Extract a clean title from `[Scheduled Patrol — Run #N: Title]` if present
+  const headerMatch = text.match(/^\[Scheduled (?:Patrol|Timer)[^\]]*\]/);
+  const badgeText = headerMatch
+    ? headerMatch[0].slice(1, -1)
+    : "Scheduled patrol run — triggered automatically in this chat";
+  return (
+    <div
+      data-testid="patrol-turn-notice"
+      className="w-full rounded-[var(--radius-lg)] border border-[color-mix(in_srgb,var(--color-accent)_32%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-accent)_6%,var(--color-overlay-soft))] px-3 py-2 text-left text-[0.78rem] leading-[1.55] text-[var(--color-text-secondary)] sm:text-[0.82rem]"
+    >
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-3 text-left"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="inline-block size-2 shrink-0 rounded-full bg-[var(--color-accent)]" />
+          <Icon name="clock" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+          <span className="min-w-0 truncate text-[0.7rem] font-semibold uppercase tracking-[0.07em] text-[var(--color-text-primary)]">
+            {badgeText}
+          </span>
+        </span>
+        <span className="shrink-0 text-[0.68rem] text-[var(--color-text-muted)]">
+          {expanded ? "Hide prompt" : "Show prompt"}
+        </span>
+      </button>
+      <div id={panelId} hidden={!expanded}>
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-words border-t border-[var(--color-border)] pt-2 font-mono text-[0.7rem] leading-[1.5] text-[var(--color-text-secondary)]">
+          {text.trim()}
+        </pre>
+      </div>
+    </div>
+  );
+}
+
 export function FleetNotices({ notices }: { notices: string[] | undefined }) {
   if (!notices || notices.length === 0) return null;
   return (

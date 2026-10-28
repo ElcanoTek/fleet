@@ -19,19 +19,14 @@ func TestUpstreamPinFor(t *testing.T) {
 		wantOrder string // "" = expect nil pin
 		strict    bool
 	}{
-		{DefaultCoreModel, "Anthropic", false},     // everyday default (Claude Haiku 5.5): soft pin to Anthropic, official-weights pool
+		{DefaultCoreModel, "Anthropic", false},     // default frontier tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
 		{"openai/gpt-6-luna-pro", "OpenAI", false}, // previous everyday default: soft pin to OpenAI
 		{"z-ai/glm-5.2", "Z.AI", false},
 		{"z-ai/glm-4.6", "Z.AI", false},
 		{"~z-ai/glm-latest", "Z.AI", false}, // `~` alias inherits the pin
 		{"deepseek/deepseek-v4-flash-0731", "DeepSeek", false},
-		// The strong tier is back in the openai/ family, which IS pinned (soft:
-		// Order, fallbacks allowed) — so the escalation path gets the same
-		// per-upstream prompt-cache locality as every other OpenAI slug. The
-		// second row keeps the family's pin covered independently of whichever
-		// slug currently holds the tier.
-		{DefaultMaxModel, "Anthropic", false},     // strong tier (Claude Opus 5.5): soft pin to Anthropic, official-weights pool
-		{"google/gemini-4-argon", "Google", true}, // previous strong tier: strict pin to Google
+		{DefaultMaxModel, "Google", true},          // fallback frontier tier (Gemini 4 Argon): strict pin to Google
+		{"anthropic/claude-haiku-5.5", "Anthropic", false}, // previous default: soft pin to Anthropic
 		{"openai/gpt-5.4", "OpenAI", false},
 		// x-ai/ has no entry: it held the strong tier for one release and was
 		// deliberately left unpinned (xAI is its only upstream).
@@ -365,15 +360,15 @@ func TestUpstreamPinQuantizationsNotAliased(t *testing.T) {
 // fallback; it must agree with upstreamPinFor on which family owns a slug.
 func TestPreferredUpstreamFor(t *testing.T) {
 	cases := map[string]string{
-		DefaultCoreModel:        "Anthropic", // everyday default: Claude Haiku 5.5
-		"openai/gpt-6-luna-pro": "OpenAI",
-		"deepseek/v3":           "DeepSeek",
-		"~z-ai/glm-latest":      "Z.AI",
-		"openai/gpt-5.4":        "OpenAI",
-		DefaultMaxModel:         "Anthropic", // strong tier: Claude Opus 5.5
-		"google/gemini-4-argon": "Google",    // previous strong tier: Gemini 4 Argon on the strict google/ pin
-		"x-ai/grok-4.6":         "",          // xAI is unpinned: single upstream already
-		"mistralai/mixtral":     "",
+		DefaultCoreModel:             "Anthropic", // default frontier tier: Claude Opus 5.5
+		"openai/gpt-6-luna-pro":      "OpenAI",
+		"deepseek/v3":                "DeepSeek",
+		"~z-ai/glm-latest":           "Z.AI",
+		"openai/gpt-5.4":             "OpenAI",
+		DefaultMaxModel:              "Google",    // fallback frontier tier: Gemini 4 Argon on the strict google/ pin
+		"anthropic/claude-haiku-5.5": "Anthropic", // previous default tier
+		"x-ai/grok-4.6":              "",          // xAI is unpinned: single upstream already
+		"mistralai/mixtral":          "",
 	}
 	for slug, want := range cases {
 		if got := preferredUpstreamFor(slug); got != want {

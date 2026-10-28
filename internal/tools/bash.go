@@ -584,7 +584,7 @@ func runBashWithSandbox(ctx context.Context, sb *sandbox.Sandbox, params BashPar
 
 	timeoutSeconds := params.TimeoutSeconds
 	if timeoutSeconds <= 0 {
-		timeoutSeconds = 300
+		timeoutSeconds = 900
 	}
 
 	start := time.Now()

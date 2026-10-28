@@ -555,6 +555,10 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// The turn fleet starts after a settled approval card
 		// (approval_resume.go): its input is fleet's notice, not the user's.
 		req.inputKind = agent.InputKindApprovalResume
+	} else if strings.HasPrefix(row.ClientInputID, store.ChatPatrolInputKeyPrefix) {
+		// The turn fleet starts when an in-chat patrol or timer schedule fires
+		// (chat_schedules.go): its input is a patrol header, not a user bubble.
+		req.inputKind = agent.InputKindChatPatrol
 	}
 	if !s.startTurn(nil, nil, user, conv, req, &queuedLaunch{rowID: row.ID, claimTurnID: row.TurnID, sweepGen: sweepGen, inputKey: row.ClientInputID}, releaseSlot, nil) {
 		releaseSlot()

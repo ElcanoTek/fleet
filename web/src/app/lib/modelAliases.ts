@@ -31,11 +31,14 @@
 // dropped across tool loops and Anthropic hard-400s with "Invalid
 // `signature` in `thinking` block" (root-caused + live-verified
 // 2026-06-04).
-export const DEFAULT_MODEL = "anthropic/claude-haiku-5.5";
-export const DEFAULT_MODEL_LABEL = "Anthropic: Claude Haiku 5.5";
+export const DEFAULT_MODEL = "anthropic/claude-opus-5.5";
+export const DEFAULT_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
 
-export const ADVANCED_MODEL = "anthropic/claude-opus-5.5";
-export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
+export const FALLBACK_MODEL = "google/gemini-4-argon";
+export const FALLBACK_MODEL_LABEL = "Google: Gemini 4 Argon";
+
+export const ADVANCED_MODEL = FALLBACK_MODEL;
+export const ADVANCED_MODEL_LABEL = FALLBACK_MODEL_LABEL;
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback
@@ -43,9 +46,8 @@ export const ADVANCED_MODEL_LABEL = "Anthropic: Claude Opus 5.5";
 // which arrives as `task_fallback_model` on /api/client-config. Read it via
 // currentTaskFallbackModel(). (The form's pre-filled PRIMARY is the live
 // task tier, currentTaskModel(): the admin "Task model" setting, which
-// follows the advanced tier unless overridden. Chat runs on the fast
-// default tier; a scheduled task is a long unattended run.)
-export const DEFAULT_TASK_FALLBACK_MODEL = "deepseek/deepseek-v4.1-flash";
+// follows the default frontier tier unless overridden.)
+export const DEFAULT_TASK_FALLBACK_MODEL = FALLBACK_MODEL;
 
 // Display names for slugs we know by heart. An admin-configured tier
 // slug outside this map renders as itself — honest, and the pickers'
@@ -63,7 +65,7 @@ const KNOWN_LABELS: Readonly<Record<string, string>> = {
 let liveTiers = {
   defaultModel: DEFAULT_MODEL,
   advancedModel: ADVANCED_MODEL,
-  taskModel: ADVANCED_MODEL,
+  taskModel: DEFAULT_MODEL,
   taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
 };
 
@@ -146,13 +148,14 @@ export function setModelTiers(cfg: ModelTiersConfig | null | undefined): void {
   const adv = String(cfg?.advanced_model ?? "").trim();
   const task = String(cfg?.task_model ?? "").trim();
   const fb = String(cfg?.task_fallback_model ?? "").trim();
+  const defaultModel = def || DEFAULT_MODEL;
   const advancedModel = adv || ADVANCED_MODEL;
   liveTiers = {
-    defaultModel: def || DEFAULT_MODEL,
+    defaultModel,
     advancedModel,
     // An older server sends no task_model; the task tier then follows the
-    // advanced tier, which is what the server would have resolved anyway.
-    taskModel: task || advancedModel,
+    // default frontier tier, which is what the server resolves too.
+    taskModel: task || defaultModel,
     taskFallbackModel: fb || DEFAULT_TASK_FALLBACK_MODEL,
   };
   livePinned = parsePinned(cfg?.pinned);
@@ -228,7 +231,7 @@ export function _resetModelTiersForTests(): void {
   liveTiers = {
     defaultModel: DEFAULT_MODEL,
     advancedModel: ADVANCED_MODEL,
-    taskModel: ADVANCED_MODEL,
+    taskModel: DEFAULT_MODEL,
     taskFallbackModel: DEFAULT_TASK_FALLBACK_MODEL,
   };
 }

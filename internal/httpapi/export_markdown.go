@@ -101,6 +101,9 @@ func textEntryHeading(role string, c agent.TextContent) string {
 	if c.Kind == agent.InputKindApprovalResume {
 		return "Fleet (continued after approval)"
 	}
+	if c.Kind == agent.InputKindChatPatrol {
+		return "Fleet (scheduled patrol)"
+	}
 	return roleHeading(role)
 }
 

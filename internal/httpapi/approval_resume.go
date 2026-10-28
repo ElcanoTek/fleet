@@ -41,6 +41,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -192,11 +193,16 @@ func approvalResumeIDs(items []store.ApprovalResumeItem) []string {
 	return out
 }
 
-// armApprovalResume arms a freshly staged card of an opted-in tool. Best
+// armApprovalResume arms a freshly staged card of an opted-in tool (or any
+// non-handler-only card staged during an unattended in-chat patrol turn so
+// approving the card automatically resumes the patrol conversation). Best
 // effort: a failed write leaves the card unarmed, which is exactly the
 // behaviour without the feature (no turn starts on its own).
 func (a *approvalStager) armApprovalResume(approval *store.Approval) {
-	if approval == nil || !agentcore.ResumeAfterApproval(approval.ToolName) || handlerOnlyApproval(approval.ToolName) {
+	if approval == nil || handlerOnlyApproval(approval.ToolName) {
+		return
+	}
+	if !agentcore.ResumeAfterApproval(approval.ToolName) && a.inputKind != agent.InputKindChatPatrol {
 		return
 	}
 	ok, err := a.store.ArmApprovalResume(a.ctx, a.userEmail, approval.ID)

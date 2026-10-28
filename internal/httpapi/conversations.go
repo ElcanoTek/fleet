@@ -397,6 +397,13 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// In-chat patrols and timers (migration 086): GET list, POST create,
+	// PATCH {scheduleID}, DELETE {scheduleID}, POST {scheduleID}/run-now.
+	if sub == "schedules" {
+		s.handleScheduleRoutes(w, r, user, id, subArg)
+		return
+	}
+
 	// Everything else is a (sub, method)-keyed action. The table replaces the
 	// former ~630-line switch: its cases were mutually exclusive on exactly
 	// these pairs, so a lookup preserves the match behavior — including the

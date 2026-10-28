@@ -26,11 +26,11 @@ func PythonBridgeScript() []byte { return pythonBridgeScript }
 type RunPythonParams struct {
 	Code           string   `json:"code" description:"The Python code to execute."`
 	ReturnVars     []string `json:"return_vars,omitempty" description:"List of variable names to extract from the kernel after execution."`
-	TimeoutSeconds int      `json:"timeout_seconds,omitempty" description:"Maximum time in seconds to wait for Python execution. Defaults to 300 (a stricter host ceiling may apply)."`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty" description:"Maximum time in seconds to wait for Python execution. Defaults to 900 (a stricter host ceiling may apply)."`
 	ResetKernel    bool     `json:"reset_kernel,omitempty" description:"Set true to wipe the kernel (discard all variables/imports) and start fresh before running this code. Only meaningful in persistent REPL mode; in per-turn mode the kernel is fresh each turn anyway."`
 }
 
-const runPythonDescription = "Executes Python code in a per-turn IPython kernel inside a sandbox container. " +
+const runPythonDescription = "Executes Python code in an IPython kernel inside a sandbox container. " +
 	"Use for: pandas DataFrames, numpy/scipy calculations, charts (matplotlib/seaborn), Excel I/O, PDF read/generate, " +
 	"image manipulation (Pillow), HTML/XML parsing (BeautifulSoup, lxml), ML (scikit-learn). " +
 	"DO NOT use to: import MCP tools (they are separate callable tools), import from mcp/* or internal/* directories. " +
@@ -42,13 +42,13 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"  Documents: openpyxl, xlsxwriter (Excel), pypdf, reportlab (PDF), python-pptx (PowerPoint), python-docx (Word)\n" +
 	"  Images:    pillow (PIL)\n" +
 	"  Parsing:   beautifulsoup4, lxml, pyyaml, requests, tabulate\n\n" +
-	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the DEFAULT 'per-turn' mode the IPython " +
-	"kernel is FRESH at the start of every turn and DESTROYED at turn end: variables, imports, and objects DO NOT " +
-	"survive into the next turn, so to carry state across turns write to disk (any workspace file persists). In " +
-	"'persistent' mode the kernel survives across ALL turns of this conversation — `df = pd.read_csv(...)` built in one " +
-	"turn is still in scope turns later, no re-read needed. Either way, within ONE turn multiple run_python calls share " +
-	"the same kernel. Pass reset_kernel=true to deliberately wipe a persistent kernel back to a clean slate. (Lockdown " +
-	"chats always run per-turn.) NOTE: a cancelled or timed-out cell retires the whole sandbox — the container is " +
+	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the DEFAULT 'persistent' mode the IPython " +
+	"kernel survives across ALL turns and patrol cycles of this conversation — `df = pd.read_csv(...)` built in one " +
+	"turn is still in scope turns or hours later, no re-read needed. In 'per-turn' mode (or lockdown chats) the kernel is " +
+	"FRESH at the start of every turn and DESTROYED at turn end: variables, imports, and objects DO NOT survive into the " +
+	"next turn, so to carry state across turns write to disk (any workspace file persists). Either way, within ONE turn " +
+	"multiple run_python calls share the same kernel. Pass reset_kernel=true to deliberately wipe a persistent kernel back " +
+	"to a clean slate. NOTE: a cancelled or timed-out cell retires the whole sandbox — the container is " +
 	"killed so nothing the cell started keeps running, kernel variables are lost (in persistent mode prior-turn " +
 	"variables too), and further sandbox calls this turn are refused; workspace FILES survive, so keep durable state " +
 	"in a workspace file if a long cell might be interrupted.\n\n" +
@@ -85,7 +85,7 @@ const runPythonDescription = "Executes Python code in a per-turn IPython kernel 
 	"  For SMALL values, set `return_vars=[\"payload\"]` and use the returned `vars` value in the next call. All tool results share a final model-visible size boundary: a large `vars` response is always replaced by a valid bounded envelope with byte counts, never partial JSON/base64. Governed non-binary text may offer a `view_file` recovery path; encoded/binary values intentionally do not.\n" +
 	"  For payloads larger than about 10 KB, write them to a workspace file and pass the path/URL/blob id (a path-taking upload tool, image tools that accept a workspace path, etc.). This keeps bytes out of model context and avoids corruption. The server actively rejects oversized inline base64 uploads to fast.io; do not try to drive the upload yourself via `mcp_fast_io_upload action=stream-upload`."
 
-const defaultPythonTimeoutSeconds = 300
+const defaultPythonTimeoutSeconds = 900
 
 // NewRunPythonTool returns a run_python tool bound to the given
 // per-turn sandbox. The caller MUST pass a non-nil sandbox from the
