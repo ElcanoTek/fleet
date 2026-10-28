@@ -982,7 +982,7 @@ work; co-writing a live conversation is not something the platform does.
 **Stop** halts the current turn; the partial reply stays in the transcript,
 marked **Turn stopped.** with **Retry** on the latest turn, and it still reads
 that way after a reload. A turn the platform ends early is marked the same way:
-one that reaches the per-turn time limit (30 minutes by default) or cost or
+one that reaches the per-turn time limit (4 hours by default) or cost or
 token ceiling, or one a server restart cut off partway, which also carries a
 note saying so.
 Typing and sending while a turn is running does not interrupt it: your message

@@ -119,12 +119,12 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		t.Errorf("ShutdownGraceSeconds default: got %d, want 30", cfg.ShutdownGraceSeconds)
 	}
 	// Sub-agent / delegation defaults (#175 tightened by #264): depth 1
-	// (parent → sub-agent only), fan-out 5, per-child budget fraction 0.10.
+	// (parent → sub-agent only), fan-out 20, per-child budget fraction 0.10.
 	if cfg.SubagentsMaxDepth != 1 {
 		t.Errorf("SubagentsMaxDepth default: got %d, want 1", cfg.SubagentsMaxDepth)
 	}
-	if cfg.SubagentsMaxChildren != 5 {
-		t.Errorf("SubagentsMaxChildren default: got %d, want 5", cfg.SubagentsMaxChildren)
+	if cfg.SubagentsMaxChildren != 20 {
+		t.Errorf("SubagentsMaxChildren default: got %d, want 20", cfg.SubagentsMaxChildren)
 	}
 	if cfg.SubagentsBudgetFraction != 0.10 {
 		t.Errorf("SubagentsBudgetFraction default: got %v, want 0.10", cfg.SubagentsBudgetFraction)
@@ -1443,8 +1443,11 @@ func TestLoad_PythonREPL(t *testing.T) {
 	if cfg.PythonCellTimeoutSeconds != 0 {
 		t.Errorf("PythonCellTimeoutSeconds default = %d, want 0", cfg.PythonCellTimeoutSeconds)
 	}
-	if cfg.PythonREPLIdleTTLSeconds != 1800 {
-		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 1800", cfg.PythonREPLIdleTTLSeconds)
+	if cfg.PythonREPLIdleTTLSeconds != 7200 {
+		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 7200", cfg.PythonREPLIdleTTLSeconds)
+	}
+	if cfg.TurnTimeoutSeconds != 14400 {
+		t.Errorf("TurnTimeoutSeconds default = %d, want 14400", cfg.TurnTimeoutSeconds)
 	}
 	if cfg.PythonREPLMaxSessions != 32 {
 		t.Errorf("PythonREPLMaxSessions default = %d, want 32", cfg.PythonREPLMaxSessions)

@@ -176,7 +176,7 @@ func newSubagentConfig(opts SubagentOptions) subagentConfig {
 // remaining budget). Keep these in sync with internal/config defaults.
 const (
 	defaultSubagentMaxDepth       = 1
-	defaultSubagentMaxChildren    = 5
+	defaultSubagentMaxChildren    = 20
 	defaultSubagentBudgetFraction = 0.10
 )
 

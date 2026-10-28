@@ -64,9 +64,11 @@ When registered, every spawn obeys these non-negotiable properties:
 4. **One-level delegation + fan-out cap.** `maxDepth` (default `1`) means **parent →
    sub-agent only**: a child is built **without** the `spawn_subagent` tool (the
    primary, structural enforcement — non-registration, immune to an off-by-one in a
-   counter), with the in-body depth check as a backstop. `maxChildren` (default `5`)
-   bounds per-parent fan-out. A spawn exceeding either is **refused with an error
-   result** — never a panic, never a silent allow, never a block.
+   counter), with the in-body depth check as a backstop. `maxChildren` (default `20`,
+   raised from `5` so multi-campaign/multi-ticket audits can delegate in parallel
+   batches; operator-tunable via `FLEET_SUBAGENTS_MAX_CHILDREN`) bounds per-parent
+   fan-out. A spawn exceeding either is **refused with an error result** — never a
+   panic, never a silent allow, never a block.
 
 ## Enforcement
 
@@ -207,7 +209,9 @@ which move a wall:
 
 Walls that did **not** move: one governed core, monotonic privilege, the 10%
 remaining-budget fraction with refuse-over-cap and atomic reserve+settle, depth 1,
-fan-out 5, credentials host-side.
+the per-parent fan-out cap (later raised from 5 to 20 by default for large
+multi-ticket/campaign audits while keeping the hard parent budget ceiling and
+depth=1 wall intact), credentials host-side.
 
 This ADR **extends** ADR-0001 rather than superseding it: it does not weaken the
 one-governed-loop invariant, it adds the privilege/budget/recursion constraints
@@ -264,8 +268,8 @@ Amendment, in two parts:
 
 Walls that did **not** move: one governed core (a child is still
 `(*Agent).Execute` → `agentcore.Run`), monotonic privilege, the hard budget split
-with atomic reserve+settle, depth 1, fan-out 5, credentials host-side, and the
-structural registration gates.
+with atomic reserve+settle, depth 1, the per-parent fan-out cap (default 20),
+credentials host-side, and the structural registration gates.
 
 ## Consequences
 

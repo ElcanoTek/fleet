@@ -188,7 +188,7 @@ A task can stop making progress in several ways. Each has a bound:
 | `running`, lease stolen | `errTaskLeaseLost` cancels the stale run | immediate |
 | `paused_awaiting_input` | `ExpirePausedTasks` fails it terminally | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` (off by default) |
 | `paused_awaiting_wake`, unreachable | `ExpireStrandedWakeTasks` fails it terminally | 24h past the deadline |
-| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 1800; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
+| Interactive turn hung | Per-turn context deadline | `FLEET_TURN_TIMEOUT_SECONDS` (default 14400; legacy alias `CHAT_TURN_TIMEOUT_SECONDS`) |
 
 `paused_awaiting_wake` was the gap. `WakeDueTasks` filters on
 `wake_at IS NOT NULL`, so a row without one can never wake — and
@@ -253,7 +253,7 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | `0` (off) | Fail a task awaiting input longer than this. |
 | `FLEET_TASK_WALL_TIMEOUT` | `4h` | Per-run wall-clock ceiling. `0` disables. |
 | `FLEET_PYTHON_REPL_MAX` | `32` | Persistent sandbox session cap (soft). `0` = unbounded. |
-| `FLEET_PYTHON_REPL_IDLE_TTL` | `30m` | Idle time before a persistent sandbox is reaped. |
+| `FLEET_PYTHON_REPL_IDLE_TTL` | `2h` | Idle time before a persistent sandbox is reaped. |
 
 ## Honest scope
 

@@ -168,7 +168,7 @@ Chat with the agent (TUI, #457):
   fleet chat [--conversation <id>] [--model <slug>] [--email …] [--server …] [--token-file <path>]
 
 Serve an ACP client (Agent Client Protocol over stdio — Zed, JetBrains, Neovim, Emacs, …; docs/ACP.md):
-  fleet acp [--email …] [--server …] [--model <slug>] [--timeout 30m]
+  fleet acp [--email …] [--server …] [--model <slug>] [--timeout 4h]
 
 Preflight & diagnostics (in-binary; no server needed):
   fleet validate-config [--bundle-path <dir>] [--skip-network-checks] [--json]

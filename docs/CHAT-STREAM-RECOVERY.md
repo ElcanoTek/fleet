@@ -363,7 +363,7 @@ slot is reconciled against Postgres once the stream drains.
 
 ## Retain window vs. the database
 
-`bufferRetainTTL` (`FLEET_SSE_BUFFER_DURATION`, default 15 minutes) keeps a
+`bufferRetainTTL` (`FLEET_SSE_BUFFER_DURATION`, default 60 minutes) keeps a
 finished turn's buffer around so a client returning quickly gets the missed
 events replayed. Beyond it there is no buffer, and `/inflight` legitimately
 reports nothing about a turn that completed perfectly. Recovery therefore does

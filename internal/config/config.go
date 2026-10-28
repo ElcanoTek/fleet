@@ -84,7 +84,7 @@ const DefaultTitleModel = agentcore.DefaultCoreModel
 // default is 0.10 (#264, "≤10% of the parent's remaining budget per child").
 const (
 	defaultSubagentsMaxDepth       = 1
-	defaultSubagentsMaxChildren    = 5
+	defaultSubagentsMaxChildren    = 20
 	defaultSubagentsBudgetFraction = 0.10
 )
 
@@ -1028,7 +1028,7 @@ type Config struct {
 	//
 	// SubagentsMaxDepth caps recursion; the default is 1 ("parent → sub-agent only",
 	// #264) — a child does not get the spawn tool. SubagentsMaxChildren caps per-parent
-	// fan-out (default 5). SubagentsBudgetFraction is each child's default/maximum
+	// fan-out (default 20). SubagentsBudgetFraction is each child's default/maximum
 	// slice of the parent's REMAINING budget (default 0.10; a call requesting more is
 	// refused). A spawn exceeding any cap is REFUSED with a tool-result error.
 	// SubagentsModel names the default child model slug (FLEET_SUBAGENTS_MODEL); empty
@@ -1366,7 +1366,7 @@ type Config struct {
 	PythonCellTimeoutSeconds int
 	// PythonREPLIdleTTLSeconds bounds how long a persistent per-conversation
 	// sandbox may sit idle (no run_python call) before the reaper closes it
-	// (FLEET_PYTHON_REPL_IDLE_TTL, default 1800 = 30m). Only meaningful when
+	// (FLEET_PYTHON_REPL_IDLE_TTL, default 7200 = 2h). Only meaningful when
 	// PythonREPLMode == "persistent".
 	PythonREPLIdleTTLSeconds int
 	// PythonREPLMaxSessions bounds how many persistent per-conversation sandboxes
@@ -1723,7 +1723,7 @@ func Load(envFile string) (*Config, error) {
 
 		ShutdownGraceSeconds: lp.getenvFleetInt("SHUTDOWN_GRACE_SECONDS", 30),
 
-		TurnTimeoutSeconds:   lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 1800),
+		TurnTimeoutSeconds:   lp.getenvFleetInt("TURN_TIMEOUT_SECONDS", 14400),
 		Temperature:          lp.getenvFleetFloat("TEMPERATURE", 0.3),
 		LLMMaxTokens:         lp.getenvInt("LLM_MAX_TOKENS", 16384),
 		TitleModel:           getenvFleetDefault("TITLE_MODEL", DefaultTitleModel),
@@ -1893,7 +1893,7 @@ func Load(envFile string) (*Config, error) {
 
 		PythonREPLMode:           normalizePythonREPLMode(getenvFleetDefault("PYTHON_REPL_MODE", pythonREPLModePerTurn)),
 		PythonCellTimeoutSeconds: lp.getenvFleetInt("PYTHON_CELL_TIMEOUT", 0),
-		PythonREPLIdleTTLSeconds: lp.getenvFleetInt("PYTHON_REPL_IDLE_TTL", 1800),
+		PythonREPLIdleTTLSeconds: lp.getenvFleetInt("PYTHON_REPL_IDLE_TTL", 7200),
 		PythonREPLMaxSessions:    lp.getenvFleetInt("PYTHON_REPL_MAX", 32),
 
 		WorkspaceRoot:         getenvFleet("WORKSPACE_ROOT"),

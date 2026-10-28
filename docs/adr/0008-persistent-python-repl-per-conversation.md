@@ -67,7 +67,7 @@ Lifecycle safety (`internal/sandbox/persistent.go`):
   Close — so a `TakePersistent` racing the reaper can never receive a sandbox
   that is mid-Close.
 - **Reclamation on three paths:** an idle-TTL reaper
-  (`FLEET_PYTHON_REPL_IDLE_TTL`, default 30m), conversation delete
+  (`FLEET_PYTHON_REPL_IDLE_TTL`, default 2h), conversation delete
   (`ReleaseChatSession`, deferred to the last borrow when a turn is in flight),
   and process shutdown (`Pool.Close` drains the map). A **soft** session cap
   (`FLEET_PYTHON_REPL_MAX`, default 32) evicts least-recently-used **idle**
