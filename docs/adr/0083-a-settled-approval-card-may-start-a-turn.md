@@ -32,8 +32,7 @@ declined, or timed out) and no other card of the conversation is still pending
 or executing, fleet starts **one** new turn in that conversation, under these
 rules:
 
-1. **Opt-in per tool, default unchanged.** Without the key no turn ever starts
-   on its own, and nothing about the approval path changes.
+1. **Opt-in per tool on success/decline/timeout; automatic recovery on execution error.** For a successful, declined, or timed-out card, a turn starts on its own only when the tool is listed in `agent_policy.critical_tool_resume` (or staged by an unattended in-chat patrol turn). When an approved action fails at execution time before post-execution output governance (and was not stopped by the user), fleet durably arms the row (`ArmFailedApprovalResume`) and starts one recovery turn so the agent can inspect the error in history and recover gracefully instead of stopping dead.
 2. **Through the ordinary queue, so through `agentcore.Run`.** The turn is an
    input-queue row (mode `resume`) drained by the same launch path as a
    follow-up the user queued: same governance, persona, model, connectors,
@@ -58,8 +57,10 @@ rules:
 ## Consequences
 
 - The invariant becomes: an interactive turn starts from a person's input,
-  **or** from a settled approval card of a tool the bundle opted in, through
-  the queue. No other server-started chat turn exists.
+  from a settled approval card of a tool the bundle opted in (or an in-chat
+  patrol card), **or** from an approved card whose execution failed (and was
+  not stopped by the user), through the queue. No other server-started chat
+  turn exists.
 - Opted-in deployments spend model tokens without a message from the user,
   bounded by the cap; every resume is an audit log line, a counter, and a
   durable queue row.

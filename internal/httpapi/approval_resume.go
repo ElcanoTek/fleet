@@ -101,8 +101,21 @@ func (r *approvalResumeScheduler) take(convID string, gen uint64) bool {
 // policy (the bundle dropped its tool across a restart), which still settles
 // into a decision rather than staying armed for good.
 func (s *Server) noteApprovalSettled(convID string, approval *store.Approval) {
+	if convID == "" || s.store == nil {
+		return
+	}
 	armed := approval != nil && approval.ResumeState == store.ApprovalResumeArmed
-	if convID == "" || s.store == nil || (!armed && !agentcore.ResumeAfterApprovalEnabled()) {
+	if !armed && !agentcore.ResumeAfterApprovalEnabled() {
+		if _, ok := s.store.(*store.Store); ok && s.agent != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			has, err := s.store.HasArmedApprovals(ctx, convID)
+			cancel()
+			if err == nil && has {
+				armed = true
+			}
+		}
+	}
+	if !armed && !agentcore.ResumeAfterApprovalEnabled() {
 		return
 	}
 	s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
@@ -217,7 +230,11 @@ func (a *approvalStager) armApprovalResume(approval *store.Approval) {
 // another card of the conversation is still armed.
 func (s *Server) resumeReplyFlag(ctx context.Context, out map[string]any, approval *store.Approval) map[string]any {
 	out = approvalResumeReplyFlag(out, approval)
-	if out["resume"] == true || approval == nil || s.store == nil || !agentcore.ResumeAfterApprovalEnabled() {
+	if out["resume"] == true || approval == nil || s.store == nil {
+		return out
+	}
+	_, realStore := s.store.(*store.Store)
+	if !agentcore.ResumeAfterApprovalEnabled() && (!realStore || s.agent == nil) {
 		return out
 	}
 	if armed, err := s.store.HasArmedApprovals(ctx, approval.ConversationID); err == nil && armed {

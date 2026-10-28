@@ -57,8 +57,8 @@ type ManageTasksParams struct {
 	Cron          string     `json:"cron,omitempty" description:"Replacement 5-field cron expression (update only), e.g. '0 9 * * MON-FRI'. Translate the user's words to cron yourself. Omit to leave the schedule alone."`
 	Model         string     `json:"model,omitempty" description:"Replacement model slug (update only). Omit to leave it alone."`
 	MaxIterations int        `json:"max_iterations,omitempty" description:"Replacement per-run step cap (update only). Omit to leave it alone."`
-	AddTags       []string   `json:"add_tags,omitempty" description:"Tags to add (update only)."`
-	RemoveTags    []string   `json:"remove_tags,omitempty" description:"Tags to remove (update only)."`
+	AddTags       []string   `json:"add_tags,omitempty" description:"Tags to add (update only; lowercase alphanumeric, '-', and '.', e.g. 'pages', 'daily-refresh')."`
+	RemoveTags    []string   `json:"remove_tags,omitempty" description:"Tags to remove (update only; lowercase alphanumeric, '-', and '.')."`
 }
 
 const manageTasksDescription = `Changes or stops EXISTING scheduled tasks in the Fleet orchestrator (the Operations Center), so a user can maintain their jobs from chat instead of opening each one by hand.

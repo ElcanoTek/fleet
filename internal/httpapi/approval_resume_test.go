@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -782,4 +783,131 @@ func TestApprovalResume_ReleasingBlockerAnswersResume(t *testing.T) {
 		t.Fatalf("second decision = %+v, want the released resume", res)
 	}
 	h.idle(conv.ID)
+}
+
+// Even when no tool opted into critical_tool_resume (or for a handler-only
+// schedule_task call), if an approved action fails at execution time
+// (is_err=true), fleet automatically arms the row and launches a recovery turn
+// with the failure in context so the agent can diagnose and recover gracefully
+// instead of leaving the conversation dead.
+func TestApprovalResume_ExecutionFailureAutoArmsAndStartsRecoveryTurn(t *testing.T) {
+	// Zero policy: no tool is listed in critical_tool_resume.
+	h := newResumeHarness(t, agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}}, 30*time.Millisecond)
+	h.s.scheduleTask = func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	conv := h.conversation()
+	ctx := context.Background()
+	entries := []agent.HistoryEntry{
+		histEntry("user", "text", agent.TextContent{Text: "Schedule the daily refresh."}),
+		histEntry("assistant", "tool_call", agent.ToolCallContent{ID: "call_sched", Name: "schedule_task", Input: `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`}),
+		histEntry("tool", "tool_result", agent.ToolResultContent{ID: "call_sched", Name: "schedule_task", Text: "APPROVAL_REQUIRED"}),
+	}
+	if _, err := h.s.store.AppendHistory(ctx, conv.ID, entries); err != nil {
+		t.Fatal(err)
+	}
+	stager := &approvalStager{ctx: ctx, store: h.s.store, conversationID: conv.ID, userEmail: resumeTestUser, sink: discardSink{}}
+	id, err := stager.Stage("schedule_task", "call_sched", `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	out := h.resolve(conv.ID, id, true)
+	if out["status"] != "approved" || out["is_err"] != true || out["resume"] != true {
+		t.Fatalf("failed approve answer = %v, want status=approved, is_err=true, resume=true", out)
+	}
+	res := h.decision()
+	if res.Input == nil || len(res.Claimed) != 1 || !res.Claimed[0].IsErr {
+		t.Fatalf("decision = %+v, want one claimed error item with a recovery input", res)
+	}
+	h.idle(conv.ID)
+	reqs := h.resumeRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("%d resume requests, want 1", len(reqs))
+	}
+	for _, want := range []string{"schedule failed: unexpected EOF", "result=error", "Diagnose the failure"} {
+		if !strings.Contains(reqs[0].body, want) {
+			t.Errorf("recovery turn request lacks %q", want)
+		}
+	}
+}
+
+// When critical_tool_resume is empty, a failed approval is auto-armed and
+// deferred by a second unarmed pending card; when the second unarmed card later
+// settles, noteApprovalSettled still wakes the scheduler and claims the waiting
+// armed failure card.
+func TestApprovalResume_ExecutionFailureDeferredByBlockerWithoutOptInPolicy(t *testing.T) {
+	h := newResumeHarness(t, agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}}, 30*time.Millisecond)
+	h.s.scheduleTask = func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
+		return nil, io.ErrUnexpectedEOF
+	}
+	conv := h.conversation()
+	ctx := context.Background()
+	entries := []agent.HistoryEntry{
+		histEntry("user", "text", agent.TextContent{Text: "Schedule the daily refresh."}),
+		histEntry("assistant", "tool_call", agent.ToolCallContent{ID: "call_sched", Name: "schedule_task", Input: `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`}),
+		histEntry("tool", "tool_result", agent.ToolResultContent{ID: "call_sched", Name: "schedule_task", Text: "APPROVAL_REQUIRED"}),
+	}
+	if _, err := h.s.store.AppendHistory(ctx, conv.ID, entries); err != nil {
+		t.Fatal(err)
+	}
+	stager := &approvalStager{ctx: ctx, store: h.s.store, conversationID: conv.ID, userEmail: resumeTestUser, sink: discardSink{}}
+	failedID, err := stager.Stage("schedule_task", "call_sched", `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	blocker := h.stage(conv.ID, "mcp_deals_archive_deal", "call_b")
+	if blocker.ResumeState != "" {
+		t.Fatalf("blocker resume_state = %q, want empty", blocker.ResumeState)
+	}
+	// Failed schedule_task auto-arms, but is deferred by the pending blocker.
+	h.resolve(conv.ID, failedID, true)
+	if res := h.decision(); len(res.Outstanding) != 1 {
+		t.Fatalf("first decision = %+v, want deferred on the blocker", res)
+	}
+	// Settling the unarmed blocker while ResumeAfterApprovalEnabled() is false
+	// still kicks the scheduler because the conversation has an armed row.
+	if out := h.resolve(conv.ID, blocker.ID, false); out["resume"] != true {
+		t.Fatalf("blocker answer = %v, want resume:true", out)
+	}
+	if res := h.decision(); res.Input == nil || len(res.Claimed) != 1 || !res.Claimed[0].IsErr {
+		t.Fatalf("second decision = %+v, want the released error recovery turn", res)
+	}
+	h.idle(conv.ID)
+}
+
+// An outcome-unknown error (e.g. MCP transport died after sending the request)
+// must not auto-arm a retry turn when the tool did not opt into
+// critical_tool_resume, since the side effect may already have executed.
+func TestApprovalResume_OutcomeUnknownDoesNotAutoArm(t *testing.T) {
+	h := newResumeHarness(t, agentcore.AgentPolicy{CriticalToolSuffixes: []string{"update_deal"}}, 30*time.Millisecond)
+	h.s.scheduleTask = func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
+		return nil, errors.New("the request was sent to the remote service before the connection failed; the outcome is unknown")
+	}
+	conv := h.conversation()
+	ctx := context.Background()
+	entries := []agent.HistoryEntry{
+		histEntry("user", "text", agent.TextContent{Text: "Schedule the daily refresh."}),
+		histEntry("assistant", "tool_call", agent.ToolCallContent{ID: "call_sched", Name: "schedule_task", Input: `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`}),
+		histEntry("tool", "tool_result", agent.ToolResultContent{ID: "call_sched", Name: "schedule_task", Text: "APPROVAL_REQUIRED"}),
+	}
+	if _, err := h.s.store.AppendHistory(ctx, conv.ID, entries); err != nil {
+		t.Fatal(err)
+	}
+	stager := &approvalStager{ctx: ctx, store: h.s.store, conversationID: conv.ID, userEmail: resumeTestUser, sink: discardSink{}}
+	id, err := stager.Stage("schedule_task", "call_sched", `{"prompt":"Refresh Merrell","cron":"0 18 * * *"}`)
+	if err != nil {
+		t.Fatalf("Stage: %v", err)
+	}
+	out := h.resolve(conv.ID, id, true)
+	if out["status"] != "approved" || out["is_err"] != true || out["resume"] == true {
+		t.Fatalf("outcome-unknown answer = %v, want status=approved, is_err=true, resume!=true", out)
+	}
+	select {
+	case res := <-h.decisions:
+		t.Fatalf("unexpected resume decision for outcome-unknown error: %+v", res)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got, _ := h.s.store.GetApproval(ctx, resumeTestUser, id); got.ResumeState != "" {
+		t.Fatalf("resume_state = %q, want empty (unarmed)", got.ResumeState)
+	}
 }

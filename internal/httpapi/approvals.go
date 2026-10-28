@@ -35,6 +35,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/croncount"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/metrics"
@@ -1164,7 +1165,7 @@ func summarizeScheduleTaskInput(toolName, rawInput string) map[string]any {
 		"prompt":        strings.TrimSpace(p.Prompt),
 		"model":         strings.TrimSpace(p.Model),
 		"allow_network": p.AllowNetwork,
-		"tags":          p.Tags,
+		"tags":          sanitizeTaskTagSlice(p.Tags),
 		// Connectors the task inherits from this conversation (ADR-0068), the
 		// always-on servers every run binds anyway, and the flag the card turns
 		// into a warning: approving as-is schedules a task that can reach no
@@ -1212,6 +1213,8 @@ func summarizeManageTasksInput(toolName, rawInput string) map[string]any {
 	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
 		return map[string]any{"tool": toolName, "raw": rawInput}
 	}
+	p.AddTags = sanitizeTaskTagSlice(p.AddTags)
+	p.RemoveTags = sanitizeTaskTagSlice(p.RemoveTags)
 	action := strings.TrimSpace(p.Action)
 	ids := p.CleanTaskIDs()
 	out := map[string]any{
@@ -1251,8 +1254,8 @@ func (s *Server) runStagedManageTasks(ctx context.Context, approval *store.Appro
 		Cron:          strings.TrimSpace(p.Cron),
 		Model:         strings.TrimSpace(p.Model),
 		MaxIterations: p.MaxIterations,
-		AddTags:       p.AddTags,
-		RemoveTags:    p.RemoveTags,
+		AddTags:       sanitizeTaskTagSlice(p.AddTags),
+		RemoveTags:    sanitizeTaskTagSlice(p.RemoveTags),
 		RequestedBy:   approval.UserEmail,
 	}
 	if !p.Match.IsEmpty() {
@@ -1613,25 +1616,58 @@ type approvalRequest struct {
 	NarrowedArg string `json:"narrowed_arg,omitempty"`
 }
 
-// prevalidateStagedTaskPrompt checks the prompt of a schedule_task or
-// manage_tasks call with the same EXECUTION REQUIREMENTS grammar every task
-// write path uses (models.ValidateExecutionRequirements, #1601). The approved
-// call reaches storage.EnqueueTaskAs / UpdateEditableTask, which refuse a
-// malformed declaration; this moves that refusal ahead of the card. Any other
-// tool, args that do not parse (the card and the executor report those), and
-// a manage_tasks call that changes no prompt pass.
+// sanitizeTaskTagSlice normalizes common agent separator characters (':' and
+// '_', e.g. from serialization keys like "pages:merrell-elc07361" or snake_case
+// "daily_refresh") to '-' so they pass models.NormalizeAndValidateTags without
+// failing after the user clicks Approve.
+func sanitizeTaskTagSlice(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
+	r := strings.NewReplacer(":", "-", "_", "-")
+	out := make([]string, len(tags))
+	for i, t := range tags {
+		out[i] = r.Replace(strings.TrimSpace(t))
+	}
+	return out
+}
+
+// prevalidateStagedTaskPrompt checks the prompt, cron, and tags of a
+// schedule_task or manage_tasks call before a card is staged (#1601). The
+// approved call reaches storage.EnqueueTaskAs / UpdateEditableTask, which
+// refuse a malformed EXECUTION REQUIREMENTS declaration, an unparseable cron
+// expression, or invalid tags; this moves those refusals ahead of the card so
+// the agent can fix them immediately in the same turn. Any other tool, args
+// that do not parse (the card and the executor report those), and a
+// manage_tasks call that changes no prompt/cron/tags pass.
 func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 	if toolName != tools.ScheduleTaskToolName && toolName != tools.ManageTasksToolName {
 		return nil
 	}
 	var args struct {
-		Prompt string `json:"prompt"`
+		Prompt     string   `json:"prompt"`
+		Cron       string   `json:"cron"`
+		Tags       []string `json:"tags"`
+		AddTags    []string `json:"add_tags"`
+		RemoveTags []string `json:"remove_tags"`
 	}
-	// Best effort: args that do not parse leave the prompt empty, which
+	// Best effort: args that do not parse leave the fields empty, which
 	// validates, and the card and the executor report them.
-	_ = json.Unmarshal([]byte(rawInput), &args)
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
+		return nil //nolint:nilerr // intentional: unparseable JSON is handled by the card and executor
+	}
 	if err := models.ValidateExecutionRequirements(args.Prompt); err != nil {
 		return &agentcore.StageRefusedError{Reason: fmt.Sprintf("%v. Nothing was staged for approval: fix the prompt's EXECUTION REQUIREMENTS line and call %s again", err, toolName)}
+	}
+	if cronExpr := strings.TrimSpace(args.Cron); cronExpr != "" {
+		if _, err := cron.ParseStandard(cronExpr); err != nil {
+			return &agentcore.StageRefusedError{Reason: fmt.Sprintf("invalid cron expression %q: %v. Nothing was staged for approval: fix the cron expression and call %s again", cronExpr, err, toolName)}
+		}
+	}
+	for _, tagSet := range [][]string{args.Tags, args.AddTags, args.RemoveTags} {
+		if _, err := models.NormalizeAndValidateTags(sanitizeTaskTagSlice(tagSet)); err != nil {
+			return &agentcore.StageRefusedError{Reason: fmt.Sprintf("invalid task tags: %v. Nothing was staged for approval: fix the tags (allowed characters: a-z, 0-9, '-', '.') and call %s again", err, toolName)}
+		}
 	}
 	return nil
 }
@@ -2122,6 +2158,21 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		}, approval)
 	}
 	// SetApprovalResult commits the history breadcrumb in the same transaction.
+	// When the underlying execution itself failed (toolErr != nil && !stopped,
+	// excluding post-execution output governance blocks whose side effect
+	// already ran, user-stopped executions, and MCP transport disconnects where
+	// the remote outcome is unknown), durably arm the row in Postgres so the
+	// conversation automatically resumes and the agent can diagnose the error
+	// and recover gracefully instead of stopping dead.
+	outcomeUnknown := toolErr != nil && strings.Contains(strings.ToUpper(toolErr.Error()), "OUTCOME IS UNKNOWN")
+	execFailed := toolErr != nil && !stopped && !outcomeUnknown
+	if execFailed && approval.ResumeState == "" && (s.cfg == nil || !s.cfg.MockMode) {
+		if st, ok := s.store.(*store.Store); ok && s.agent != nil {
+			if armed, aerr := st.ArmFailedApprovalResume(execCtx, user, approvalID); aerr == nil && armed {
+				approval.ResumeState = store.ApprovalResumeArmed
+			}
+		}
+	}
 	s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 	// A tool in critical_tool_progress: tell the owner it finished, in case
 	// they walked away from the running card (approval_progress.go).
@@ -3006,7 +3057,7 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		MaxIterations:        p.MaxIterations,
 		AllowNetwork:         p.AllowNetwork,
 		ThinkingBudgetTokens: p.ThinkingBudgetTokens,
-		Tags:                 p.Tags,
+		Tags:                 sanitizeTaskTagSlice(p.Tags),
 		// The connectors this conversation had enabled when the card was staged
 		// (ADR-0068) — the card showed them, the task gets them.
 		Connectors: p.Connectors,
