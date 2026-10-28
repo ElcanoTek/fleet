@@ -1,4 +1,4 @@
-# Model defaults: Claude Haiku 5.5 everyday, Claude Opus 5.5 as the strong tier
+# Model defaults: Claude Opus 5.5 as primary default, Gemini 4 Argon as fallback frontier tier
 
 **Status:** shipped 2026-10-28 (previous swaps 2026-10-15, 2026-10-14, 2026-09-22 and 2026-09-21, recorded below). Design
 note for the default-model swaps, and the checklist for the next one.
@@ -26,8 +26,7 @@ hold the slugs, plus data that has to be checked by hand:
 5. **Context window**: if no `modelContextWindows` prefix covers the new slug, add one.
    `TestDefaultTiersResolveTheirContextWindows` checks the static table on its own.
 6. **User guide**: update the two names in `internal/clientconfig/builtin_skills/fleet-guide/chat.md`
-   and the advanced model's name in `operations-center.md` (the task form pre-fills the
-   task tier, which follows the advanced tier), then `make sync-guides`. The drift test
+   and `operations-center.md`, then `make sync-guides`. The drift test
    checks both guides.
 7. **Docs**: a row in the table below, plus the pools in
    [UPSTREAM-ROUTING-FLOOR.md](UPSTREAM-ROUTING-FLOOR.md).
@@ -35,7 +34,16 @@ hold the slugs, plus data that has to be checked by hand:
 Deployments that set `FLEET_DEFAULT_MODEL` / `FLEET_ADVANCED_MODEL`, or the admin model
 tiers, are unaffected by any of this. Only the compiled-in fallback moves.
 
-## 2026-10-28: Claude Opus 5.5 restored as the strong tier
+## 2026-10-28 (update): Claude Opus 5.5 as primary default tier, Gemini 4 Argon as fallback frontier tier
+
+| Slot | Before | After |
+|---|---|---|
+| `DefaultCoreModel` (chat default, pre-filled `task_model` tier, and auxiliary calls) | `anthropic/claude-haiku-5.5` | `anthropic/claude-opus-5.5` |
+| `DefaultMaxModel` (fallback frontier model for chat turns and scheduled tasks) | `anthropic/claude-opus-5.5` | `google/gemini-4-argon` |
+
+- **Why: frontier intelligence by default across both Chat and scheduled tasks, with cross-provider fallback.** Interactive chat turns, in-chat patrols, and scheduled tasks all start on `anthropic/claude-opus-5.5`, while `google/gemini-4-argon` serves as the automatic fallback frontier model when the primary model is unavailable or a task/turn needs a cross-provider fallback.
+
+## 2026-10-28 (earlier): Claude Opus 5.5 restored as the strong tier
 
 | Slot | Before | After |
 |---|---|---|

@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -146,12 +147,15 @@ func transcriptFromHistory(history []agent.HistoryEntry) string {
 		if err := json.Unmarshal(e.Content, &tc); err != nil {
 			continue
 		}
-		if tc.Kind == agent.InputKindApprovalResume || tc.Kind == agent.InputKindChatPatrol {
-			// fleet's own note that an approval was settled or a schedule fired,
+		if tc.Kind == agent.InputKindApprovalResume {
+			// fleet's own note that an approval was settled,
 			// not something the user asked for: it must not shape a synthesized prompt.
 			continue
 		}
 		text := strings.TrimSpace(tc.Text)
+		if tc.Kind == agent.InputKindChatPatrol {
+			text = store.ExtractChatPatrolPrompt(text)
+		}
 		if text == "" {
 			continue
 		}

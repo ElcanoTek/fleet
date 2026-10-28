@@ -32,6 +32,15 @@ func (s *Server) SweepDueChatSchedules(ctx context.Context) (int, error) {
 		}
 		s.emitPatrolUpdate(ctx, item.Input.UserEmail, item.Schedule.ConversationID, nil, autoApprove)
 	}
+	if ql, ok := s.store.(interface {
+		ListQueuedPatrolConversations(context.Context) ([]string, error)
+	}); ok {
+		if convIDs, qerr := ql.ListQueuedPatrolConversations(ctx); qerr == nil {
+			for _, convID := range convIDs {
+				s.maybeDrainQueue(convID)
+			}
+		}
+	}
 	return len(claimed), err
 }
 
@@ -300,7 +309,9 @@ func (s *Server) chatPatrolCancel(ctx context.Context, conv *store.Conversation,
 			return nil, err
 		}
 		for _, item := range active {
-			_, _ = s.store.CancelChatSchedule(ctx, user, conv.ID, item.ID)
+			if _, cerr := s.store.CancelChatSchedule(ctx, user, conv.ID, item.ID); cerr != nil && !errors.Is(cerr, store.ErrChatScheduleNotFound) {
+				return nil, cerr
+			}
 		}
 		s.emitPatrolUpdate(ctx, user, conv.ID, buf, conv.AutoApprove)
 		return &tools.ChatPatrolResult{
@@ -432,17 +443,6 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	if req.AutoApprove != nil {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
-			writeScheduleError(w, err)
-			return
-		}
-		conv.AutoApprove = *req.AutoApprove
-	} else if !conv.AutoApprove {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err == nil {
-			conv.AutoApprove = true
-		}
-	}
 	sched, err := s.store.CreateChatSchedule(r.Context(), store.ChatScheduleInput{
 		ConversationID:  conv.ID,
 		UserEmail:       user,
@@ -457,6 +457,17 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 	if err != nil {
 		writeScheduleError(w, err)
 		return
+	}
+	if req.AutoApprove != nil {
+		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
+			writeScheduleError(w, err)
+			return
+		}
+		conv.AutoApprove = *req.AutoApprove
+	} else if !conv.AutoApprove {
+		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err == nil {
+			conv.AutoApprove = true
+		}
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)

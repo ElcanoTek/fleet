@@ -51,7 +51,18 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 		t.Errorf("unexpected updated schedule: %+v", sched2)
 	}
 
-	// 3. Create a one-shot timer alongside the recurring patrol.
+	// 3. Pause the recurring patrol so it does not compete for the same
+	// conversation's patrol slot when testing the one-shot timer claim below,
+	// then create a one-shot timer alongside it.
+	paused := ChatScheduleStatusPaused
+	pSched, err := s.UpdateChatSchedule(ctx, "trader@elcanotek.com", conv.ID, sched.ID, ChatSchedulePatch{Status: &paused})
+	if err != nil {
+		t.Fatalf("UpdateChatSchedule (pause): %v", err)
+	}
+	if pSched.Status != ChatScheduleStatusPaused {
+		t.Errorf("status = %q, want paused", pSched.Status)
+	}
+
 	timerSched, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
 		ConversationID:  conv.ID,
 		UserEmail:       "trader@elcanotek.com",
@@ -94,17 +105,7 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 		t.Errorf("timer schedule %s was not in claimed set", timerSched.ID)
 	}
 
-	// 5. Pause and resume the recurring patrol.
-	paused := ChatScheduleStatusPaused
-	pSched, err := s.UpdateChatSchedule(ctx, "trader@elcanotek.com", conv.ID, sched.ID, ChatSchedulePatch{Status: &paused})
-	if err != nil {
-		t.Fatalf("UpdateChatSchedule (pause): %v", err)
-	}
-	if pSched.Status != ChatScheduleStatusPaused {
-		t.Errorf("status = %q, want paused", pSched.Status)
-	}
-
-	// 6. Cancel the recurring patrol.
+	// 5. Cancel the recurring patrol.
 	cSched, err := s.CancelChatSchedule(ctx, "trader@elcanotek.com", conv.ID, sched.ID)
 	if err != nil {
 		t.Fatalf("CancelChatSchedule: %v", err)

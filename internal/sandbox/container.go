@@ -937,6 +937,8 @@ func (c *containerImpl) reapDetachedProcesses() bool {
 	const script = `import os, signal
 self_pid = os.getpid()
 bridge_pid = None
+kernel_pids = set()
+proc_info = {}
 for entry in os.listdir('/proc'):
     if not entry.isdigit():
         continue
@@ -946,15 +948,24 @@ for entry in os.listdir('/proc'):
     try:
         with open(f'/proc/{pid}/cmdline', 'rb') as f:
             cmd = f.read()
+        ppid = 0
+        with open(f'/proc/{pid}/status', 'rb') as f:
+            for line in f:
+                if line.startswith(b'PPid:'):
+                    ppid = int(line.split()[1])
+                    break
+        proc_info[pid] = (ppid, cmd)
         if b'/opt/bridge/bridge.py' in cmd and bridge_pid is None:
             bridge_pid = pid
     except Exception:
         pass
-for entry in os.listdir('/proc'):
-    if not entry.isdigit():
-        continue
-    pid = int(entry)
-    if pid in (1, self_pid, bridge_pid):
+if bridge_pid is not None:
+    for pid, (ppid, cmd) in proc_info.items():
+        if ppid == bridge_pid and b'ipykernel_launcher' in cmd:
+            kernel_pids.add(pid)
+keep = {1, self_pid, bridge_pid} | kernel_pids
+for pid in proc_info:
+    if pid in keep:
         continue
     try:
         os.kill(pid, signal.SIGKILL)

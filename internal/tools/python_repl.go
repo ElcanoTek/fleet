@@ -42,11 +42,12 @@ const runPythonDescription = "Executes Python code in an IPython kernel inside a
 	"  Documents: openpyxl, xlsxwriter (Excel), pypdf, reportlab (PDF), python-pptx (PowerPoint), python-docx (Word)\n" +
 	"  Images:    pillow (PIL)\n" +
 	"  Parsing:   beautifulsoup4, lxml, pyyaml, requests, tabulate\n\n" +
-	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the DEFAULT 'persistent' mode the IPython " +
-	"kernel survives across ALL turns and patrol cycles of this conversation — `df = pd.read_csv(...)` built in one " +
-	"turn is still in scope turns or hours later, no re-read needed. In 'per-turn' mode (or lockdown chats) the kernel is " +
-	"FRESH at the start of every turn and DESTROYED at turn end: variables, imports, and objects DO NOT survive into the " +
-	"next turn, so to carry state across turns write to disk (any workspace file persists). Either way, within ONE turn " +
+	"KERNEL LIFETIME — depends on the server's FLEET_PYTHON_REPL_MODE. In the default 'per-turn' mode (and in lockdown chats) " +
+	"the kernel is FRESH at the start of every turn and DESTROYED at turn end: in-memory variables, imports, and objects DO NOT " +
+	"survive into the next turn, so to carry state across turns or patrol cycles write to disk (every workspace file in your " +
+	"per-conversation scratch directory persists across all turns and patrols). When FLEET_PYTHON_REPL_MODE='persistent' is " +
+	"enabled on the server, the IPython kernel itself survives across turns and patrol cycles of this conversation (`df = pd.read_csv(...)` " +
+	"built in one turn remains in scope turns or hours later). Either way, within ONE turn " +
 	"multiple run_python calls share the same kernel. Pass reset_kernel=true to deliberately wipe a persistent kernel back " +
 	"to a clean slate. NOTE: a cancelled or timed-out cell retires the whole sandbox — the container is " +
 	"killed so nothing the cell started keeps running, kernel variables are lost (in persistent mode prior-turn " +

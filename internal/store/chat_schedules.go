@@ -448,6 +448,9 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 	if patch.CronExpr != nil {
 		spec := strings.TrimSpace(*patch.CronExpr)
 		if spec != "" {
+			if cur.CronExpr == "" && patch.MaxRuns == nil {
+				cur.MaxRuns = 0
+			}
 			cur.CronExpr = spec
 			cur.DurationSeconds = 0
 			recomputeNext = true
@@ -571,6 +574,9 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	}
 	if err != nil {
 		return nil, err
+	}
+	if sched.Status != ChatScheduleStatusActive && sched.Status != ChatScheduleStatusPaused {
+		return nil, fmt.Errorf("%w: cannot trigger a %s schedule", ErrInvalidChatSchedule, sched.Status)
 	}
 
 	// Coalesce repeated Run-now clicks when a patrol turn is already queued or
@@ -877,4 +883,53 @@ func ChatPatrolInputText(sched ChatSchedule, runNumber int) string {
 		strings.ToLower(kindLabel),
 		sched.ID,
 	)
+}
+
+// ListQueuedPatrolConversations returns conversations that currently have a
+// queued patrol input row in chat_input_queue (for example, a patrol row
+// returned to 'queued' by RecoverInputQueue on daemon restart) so the periodic
+// schedule sweep can kick their queue drain.
+func (s *Store) ListQueuedPatrolConversations(ctx context.Context) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT DISTINCT conversation_id
+		   FROM chat_input_queue
+		  WHERE state = 'queued'
+		    AND (mode = 'patrol' OR client_input_id LIKE $1)
+		  ORDER BY conversation_id ASC
+		  LIMIT 25`,
+		ChatPatrolInputKeyPrefix+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var convID string
+		if err := rows.Scan(&convID); err != nil {
+			return nil, err
+		}
+		out = append(out, convID)
+	}
+	return out, rows.Err()
+}
+
+// ExtractChatPatrolPrompt strips the Fleet-generated "[Scheduled ...]" header
+// line and "(Triggered automatically by ...)" footer from a ChatPatrolInputText
+// entry so promoted tasks and saved workflows preserve the user's patrol
+// instructions without synthetic wrapper text.
+func ExtractChatPatrolPrompt(text string) string {
+	s := strings.TrimSpace(text)
+	if strings.HasPrefix(s, "[Scheduled ") {
+		if nl := strings.IndexByte(s, '\n'); nl >= 0 {
+			s = strings.TrimSpace(s[nl+1:])
+		}
+	}
+	if idx := strings.LastIndex(s, "\n\n(Triggered automatically by this conversation's "); idx >= 0 {
+		s = strings.TrimSpace(s[:idx])
+	}
+	return s
 }
