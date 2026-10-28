@@ -107,6 +107,11 @@ type TextContent struct {
 // settled (agent_policy.critical_tool_resume, docs/RESUME-AFTER-APPROVAL.md).
 const InputKindApprovalResume = "approval_resume"
 
+// InputKindChatPatrol is TextContent.Kind / TurnInput.InputKind for the
+// synthetic input of a turn fleet starts when an in-chat patrol or timer
+// schedule fires (migration 086).
+const InputKindChatPatrol = "chat_patrol"
+
 // EntryTypeNotice is a UI-only history entry fleet writes to tell the reader
 // something happened that is not a turn, e.g. an automatic resume that was
 // skipped or dropped. Its content is NoticeContent; replay never sends it to

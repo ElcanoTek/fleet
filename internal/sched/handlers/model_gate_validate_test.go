@@ -16,6 +16,7 @@ import (
 func TestValidateTaskCreate_UnpinnedTaskUsesTaskTier(t *testing.T) {
 	const prompt = "do the thing for the team"
 	t.Cleanup(func() {
+		agentcore.SetDefaultModel("")
 		agentcore.SetAdvancedModel("")
 		agentcore.SetTaskModel("")
 	})
@@ -29,9 +30,9 @@ func TestValidateTaskCreate_UnpinnedTaskUsesTaskTier(t *testing.T) {
 
 	t.Run("the default follows the live task tier", func(t *testing.T) {
 		h := &Handlers{config: Config{DefaultTaskModel: "   "}}
-		agentcore.SetAdvancedModel("acme/frontier-pro")
+		agentcore.SetDefaultModel("acme/frontier-pro")
 		if got := h.defaultTaskModel(); got != "acme/frontier-pro" {
-			t.Fatalf("default task model = %q, want the advanced tier it follows", got)
+			t.Fatalf("default task model = %q, want the default frontier tier it follows", got)
 		}
 		agentcore.SetTaskModel("acme/long-runner")
 		if got := h.defaultTaskModel(); got != "acme/long-runner" {

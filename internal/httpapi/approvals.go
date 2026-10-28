@@ -127,6 +127,11 @@ type approvalStager struct {
 	// lockdownOnly is cfg.LockdownOnly: every chat is lockdown, including
 	// ones created before it was turned on.
 	lockdownOnly bool
+	// inputKind identifies the source of the turn (e.g. agent.InputKindChatPatrol)
+	// so unattended in-chat patrol turns auto-approve executable session-approvable
+	// tools, enforce at least a 24h timeout on any remaining staged cards, and arm
+	// resume-after-approval automatically.
+	inputKind string
 }
 
 var _ agent.MCPScopeBinder = (*approvalStager)(nil)
@@ -235,7 +240,27 @@ func stagesTaskChangeOnly(toolName string) bool {
 // layers: it waits stagedTaskApprovalTimeoutSeconds, or a per-conversation
 // override when that is longer. An explicit per-tool manifest value still
 // wins — the operator named that tool.
+func (a *approvalStager) isPatrolOrPatrolResume() bool {
+	if a.inputKind == agent.InputKindChatPatrol {
+		return true
+	}
+	if a.inputKind == agent.InputKindApprovalResume && a.store != nil {
+		if list, err := a.store.ListChatSchedules(a.ctx, a.userEmail, a.conversationID, false); err == nil && len(list) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
+	t := a.resolveBaseTimeoutSeconds(toolName)
+	if agentcore.ApprovalTimeoutForTool(toolName) <= 0 && a.isPatrolOrPatrolResume() && t < defaultApprovalTimeoutSeconds {
+		return defaultApprovalTimeoutSeconds
+	}
+	return t
+}
+
+func (a *approvalStager) resolveBaseTimeoutSeconds(toolName string) int {
 	if t := agentcore.ApprovalTimeoutForTool(toolName); t > 0 {
 		return t
 	}
@@ -377,9 +402,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			return agentcore.PreApprovedSentinel, nil
 		}
 	}
-	// Per-conversation auto-approve: when the user toggles Auto-approve on for
-	// this chat, executable critical tools run without parking on an approval
-	// card. Handler-only tools (schedule_task, manage_tasks, preview_email,
+	// Per-conversation auto-approve (or an unattended in-chat patrol turn):
+	// executable critical tools run without parking on an approval card.
+	// Handler-only tools (schedule_task, manage_tasks, preview_email,
 	// suggest_advanced_model), outbound email (send_email, send_template_email),
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.

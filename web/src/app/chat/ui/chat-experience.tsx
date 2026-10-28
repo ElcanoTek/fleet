@@ -54,6 +54,7 @@ import {
   parseApprovalNarrowable,
   type Approval,
   type ApprovalStatus,
+  type ChatSchedule,
   type HistoryEntry,
   type MemoryProposal,
   type Message,
@@ -77,6 +78,11 @@ import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
+import {
+  PatrolBanner,
+  formatScheduleCadence,
+  type CreatePatrolInput,
+} from "./PatrolBanner";
 import { ProjectsModal, type Project } from "./ProjectsModal";
 import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
 import { MemoryGraphView } from "./MemoryGraphView";
@@ -1042,6 +1048,9 @@ export function ChatExperience({
     autoApproveChainRef.current.set(convId, run);
   }, [isAutoApprove, activeConversationId, setPendingAutoApproveForKey]);
   const [isLoadingMcpServers, setIsLoadingMcpServers] = useState(false);
+  const [schedulesByConv, setSchedulesByConv] = useState<
+    Map<string, ChatSchedule[]>
+  >(() => new Map());
   const [memories, setMemories] = useState<UserMemory[]>([]);
   const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
   // Memory-manager tab (#523): the flat record list (default) or the derived
@@ -2638,6 +2647,7 @@ export function ChatExperience({
           kind?: string;
           supersedes_content?: string;
         }>;
+        schedules?: ChatSchedule[] | null;
       };
       // The attach check at the top ran BEFORE the fetch. A reload that took
       // long enough for recovery to give up waiting on it — and for a queued
@@ -2696,6 +2706,11 @@ export function ChatExperience({
           return nextOrigins;
         });
       }
+      setSchedulesByConv((prev) => {
+        const nextSchedules = new Map(prev);
+        nextSchedules.set(data.conversation.id, data.schedules ?? []);
+        return nextSchedules;
+      });
       const next = historyToMessages(data.history ?? []);
 
       // Re-attach approval cards + memory proposals so a page reload (or the
@@ -4981,6 +4996,25 @@ export function ChatExperience({
     promoteStreamKey,
     streamingConvsRef,
     isStreaming,
+    onPatrolUpdated: (convId, schedules, autoApprove) => {
+      setSchedulesByConv((prev) => {
+        const next = new Map(prev);
+        next.set(convId, schedules);
+        return next;
+      });
+      if (typeof autoApprove === "boolean") {
+        setConversations((curr) =>
+          curr.map((c) =>
+            c.id === convId ? { ...c, auto_approve: autoApprove } : c,
+          ),
+        );
+        setArchivedConversations((curr) =>
+          curr.map((c) =>
+            c.id === convId ? { ...c, auto_approve: autoApprove } : c,
+          ),
+        );
+      }
+    },
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
@@ -5000,6 +5034,206 @@ export function ChatExperience({
     sendNowQueuedInput,
     followApprovalResume,
   } = useTurnStream(turnStreamDeps);
+
+  const activeSchedules = useMemo(() => {
+    const id = activeConversationId;
+    if (
+      !id ||
+      id === PENDING_CONV_KEY ||
+      id.startsWith(`${PENDING_CONV_KEY}:`)
+    ) {
+      return [];
+    }
+    return schedulesByConv.get(id) ?? [];
+  }, [activeConversationId, schedulesByConv]);
+  const activePatrolCount = useMemo(
+    () => activeSchedules.filter((s) => s.status === "active").length,
+    [activeSchedules],
+  );
+
+  const applyScheduleResponse = (
+    convId: string,
+    data: { schedules?: ChatSchedule[]; auto_approve?: boolean },
+  ) => {
+    if (Array.isArray(data.schedules)) {
+      setSchedulesByConv((prev) => {
+        const next = new Map(prev);
+        next.set(convId, data.schedules ?? []);
+        return next;
+      });
+    }
+    if (typeof data.auto_approve === "boolean") {
+      const aa = data.auto_approve;
+      setConversations((curr) =>
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: aa } : c)),
+      );
+      setArchivedConversations((curr) =>
+        curr.map((c) => (c.id === convId ? { ...c, auto_approve: aa } : c)),
+      );
+    }
+  };
+
+  const handleStartPatrol = async (input: CreatePatrolInput): Promise<boolean> => {
+    const convId = activeConversationId;
+    if (!convId || isPendingKey(convId)) {
+      // New empty chat: enable auto-approve if requested and ask the
+      // assistant to register the schedule via chat_patrol and run the
+      // initial check right away.
+      const key = convId ?? draftKeyRef.current;
+      if (input.autoApprove) {
+        setPendingAutoApproveForKey(key, true);
+      }
+      const cadenceDesc = input.cron
+        ? `cron "${input.cron}" (timezone "${input.timezone || "UTC"}"${input.title ? `, title "${input.title}"` : ""})`
+        : `a one-shot timer in ${input.durationSeconds ?? 1800} seconds${input.title ? ` (title "${input.title}")` : ""}`;
+      const synthesized = `${input.prompt}\n\nPlease also set up an in-chat patrol using \`chat_patrol\` (${cadenceDesc}) with those instructions so this chat keeps checking automatically.`;
+      await submitPrompt(synthesized);
+      return true;
+    }
+    const url = conversationApiUrl(convId, "/schedules");
+    if (!url) return false;
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: input.title,
+          prompt: input.prompt,
+          cron: input.cron,
+          timezone: input.timezone,
+          duration_seconds: input.durationSeconds,
+          auto_approve: input.autoApprove,
+        }),
+      });
+      if (!res.ok) {
+        const msg = (await res.text()).trim();
+        showRailError(msg || `Couldn't schedule patrol (HTTP ${res.status}).`);
+        return false;
+      }
+      const data = (await res.json()) as {
+        schedule?: ChatSchedule;
+        schedules?: ChatSchedule[];
+        auto_approve?: boolean;
+      };
+      applyScheduleResponse(convId, data);
+      notify({
+        message: data.schedule
+          ? `Scheduled ${data.schedule.title} (${formatScheduleCadence(data.schedule)}).`
+          : "Patrol scheduled.",
+      });
+      return true;
+    } catch {
+      showRailError("Couldn't reach the server to schedule the patrol.");
+      return false;
+    }
+  };
+
+  const handleRunPatrolNow = async (scheduleId: string) => {
+    if (!activeConversationId || isPendingKey(activeConversationId)) return;
+    const convId = activeConversationId;
+    const url = conversationApiUrl(
+      convId,
+      `/schedules/${encodeURIComponent(scheduleId)}/run-now`,
+    );
+    if (!url) return;
+    try {
+      const res = await fetch(url, { method: "POST" });
+      if (!res.ok) {
+        showRailError(`Couldn't trigger patrol (HTTP ${res.status}).`);
+        return;
+      }
+      const data = (await res.json()) as {
+        schedules?: ChatSchedule[];
+        auto_approve?: boolean;
+      };
+      applyScheduleResponse(convId, data);
+      void refreshQueue(convId);
+      void followApprovalResume(convId, approvalResumeFollowSettledMs);
+    } catch {
+      showRailError("Couldn't reach the server to trigger patrol.");
+    }
+  };
+
+  const handleTogglePausePatrol = async (
+    scheduleId: string,
+    currentStatus: ChatSchedule["status"],
+  ) => {
+    if (!activeConversationId || isPendingKey(activeConversationId)) return;
+    const convId = activeConversationId;
+    const url = conversationApiUrl(
+      convId,
+      `/schedules/${encodeURIComponent(scheduleId)}`,
+    );
+    if (!url) return;
+    const action = currentStatus === "paused" ? "resume" : "pause";
+    try {
+      const res = await fetch(url, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        showRailError(`Couldn't ${action} patrol (HTTP ${res.status}).`);
+        return;
+      }
+      const data = (await res.json()) as {
+        schedules?: ChatSchedule[];
+        auto_approve?: boolean;
+      };
+      applyScheduleResponse(convId, data);
+    } catch {
+      showRailError(`Couldn't reach the server to ${action} patrol.`);
+    }
+  };
+
+  const handleCancelPatrol = async (scheduleId: string) => {
+    if (!activeConversationId || isPendingKey(activeConversationId)) return;
+    const convId = activeConversationId;
+    const url = conversationApiUrl(
+      convId,
+      `/schedules/${encodeURIComponent(scheduleId)}`,
+    );
+    if (!url) return;
+    try {
+      const res = await fetch(url, { method: "DELETE" });
+      if (!res.ok) {
+        showRailError(`Couldn't cancel patrol (HTTP ${res.status}).`);
+        return;
+      }
+      const data = (await res.json()) as {
+        schedules?: ChatSchedule[];
+        auto_approve?: boolean;
+      };
+      applyScheduleResponse(convId, data);
+    } catch {
+      showRailError("Couldn't reach the server to cancel patrol.");
+    }
+  };
+
+  // When the open conversation has an active patrol and is currently idle,
+  // poll /inflight via reattachToConv every 15s while the tab is visible so
+  // background patrol turns stream live onto the screen automatically as soon
+  // as the server's sweep fires them.
+  useEffect(() => {
+    const convId = activeConversationId;
+    if (
+      !convId ||
+      convId === PENDING_CONV_KEY ||
+      convId.startsWith(`${PENDING_CONV_KEY}:`) ||
+      activePatrolCount === 0 ||
+      isStreaming
+    ) {
+      return;
+    }
+    const id = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
+        return;
+      }
+      if (attachedConvIdsRef.current.has(convId)) return;
+      void reattachToConvRef.current(convId);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, [activeConversationId, activePatrolCount, isStreaming, attachedConvIdsRef]);
 
   // Latest-callback refs for the two mount-once effects below. reattachToConv
   // and loadConversation are mutually recursive, so neither can be expressed
@@ -6841,6 +7075,19 @@ export function ChatExperience({
                   </button>
                 </div>
               ) : null}
+              {activeConversationId && activeSchedules.length > 0 ? (
+                <PatrolBanner
+                  schedules={activeSchedules}
+                  isAutoApprove={isAutoApprove}
+                  isStreaming={isStreaming}
+                  onToggleAutoApprove={toggleAutoApprove}
+                  onRunNow={(id) => void handleRunPatrolNow(id)}
+                  onTogglePause={(id, status) =>
+                    void handleTogglePausePatrol(id, status)
+                  }
+                  onCancel={(id) => void handleCancelPatrol(id)}
+                />
+              ) : null}
               {activeConversationId ? (
                 <QueuedInputs
                   items={queuedInputs.get(activeConversationId) ?? []}
@@ -6854,6 +7101,8 @@ export function ChatExperience({
               ) : null}
               <Composer
                 cancelRecovery={cancelRecovery}
+                onStartPatrol={handleStartPatrol}
+                activePatrolCount={activePatrolCount}
                 prompt={prompt}
                 setPrompt={setPrompt}
                 promptPlaceholder={promptPlaceholder}

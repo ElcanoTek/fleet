@@ -1429,7 +1429,7 @@ func TestLoad_PythonREPL(t *testing.T) {
 	isolateEnv(t)
 	chdir(t, t.TempDir())
 
-	// Defaults: per-turn, no cell ceiling, 30m idle TTL, 32 sessions.
+	// Defaults: per-turn container isolation, no cell ceiling, 6h idle TTL, 64 sessions.
 	cfg, err := Load("")
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -1443,14 +1443,14 @@ func TestLoad_PythonREPL(t *testing.T) {
 	if cfg.PythonCellTimeoutSeconds != 0 {
 		t.Errorf("PythonCellTimeoutSeconds default = %d, want 0", cfg.PythonCellTimeoutSeconds)
 	}
-	if cfg.PythonREPLIdleTTLSeconds != 7200 {
-		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 7200", cfg.PythonREPLIdleTTLSeconds)
+	if cfg.PythonREPLIdleTTLSeconds != 21600 {
+		t.Errorf("PythonREPLIdleTTLSeconds default = %d, want 21600", cfg.PythonREPLIdleTTLSeconds)
 	}
 	if cfg.TurnTimeoutSeconds != 14400 {
 		t.Errorf("TurnTimeoutSeconds default = %d, want 14400", cfg.TurnTimeoutSeconds)
 	}
-	if cfg.PythonREPLMaxSessions != 32 {
-		t.Errorf("PythonREPLMaxSessions default = %d, want 32", cfg.PythonREPLMaxSessions)
+	if cfg.PythonREPLMaxSessions != 64 {
+		t.Errorf("PythonREPLMaxSessions default = %d, want 64", cfg.PythonREPLMaxSessions)
 	}
 
 	t.Setenv("FLEET_PYTHON_REPL_MODE", "persistent")

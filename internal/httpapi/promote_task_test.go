@@ -67,10 +67,10 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv := seedConv(t, s, user)
-	// The promoted task runs on the task tier, which follows the advanced
+	// The promoted task runs on the task tier, which follows the default
 	// tier, not on the conversation's own model ("openrouter/auto").
-	agentcore.SetAdvancedModel("acme/frontier-pro")
-	t.Cleanup(func() { agentcore.SetAdvancedModel("") })
+	agentcore.SetDefaultModel("acme/frontier-pro")
+	t.Cleanup(func() { agentcore.SetDefaultModel("") })
 	// The conversation had two connectors on when it was promoted (ADR-0068):
 	// the promoted task must inherit exactly those.
 	if err := s.store.SetOptionalMCPServers(context.Background(), user, conv.ID, []string{"gamma", "tavily"}); err != nil {

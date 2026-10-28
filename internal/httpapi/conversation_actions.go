@@ -193,6 +193,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		origin = nil
 	}
 	conv.BranchOrigin = origin
+	schedules, serr := s.store.ListChatSchedules(r.Context(), user, id, false)
+	if serr != nil || schedules == nil {
+		schedules = []store.ChatSchedule{}
+	}
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
@@ -204,6 +208,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
+		"schedules":                schedules,
 	})
 }
 

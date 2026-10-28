@@ -351,6 +351,20 @@ func (s *Sandbox) Poisoned() bool {
 	return s.impl.poisoned()
 }
 
+// ReapDetachedProcesses terminates any background processes inside a persistent
+// sandbox that are not PID 1 or the persistent Python bridge process when a
+// turn releases its borrow. Returns false (and poisons the sandbox) if cleanup
+// could not be confirmed.
+func (s *Sandbox) ReapDetachedProcesses() bool {
+	if s == nil || s.impl == nil {
+		return true
+	}
+	if r, ok := s.impl.(interface{ reapDetachedProcesses() bool }); ok {
+		return r.reapDetachedProcesses()
+	}
+	return true
+}
+
 // RunPython dispatches one run_python invocation through the active
 // backend. Bridge stdin/stdout serialization is the backend's problem,
 // not the caller's.

@@ -22,7 +22,7 @@ kernel_process = None
 client = None
 
 IOPUB_POLL_SECONDS = 0.25
-DEFAULT_EXECUTION_TIMEOUT_SECONDS = 300
+DEFAULT_EXECUTION_TIMEOUT_SECONDS = 900
 # Max bytes captured per stream (stdout/stderr/result). Compile-time constant:
 # the bridge runs inside the sandbox via `podman exec` with no --env forwarding
 # (see internal/sandbox/container.go), so a host-side override would never reach

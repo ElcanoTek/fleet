@@ -426,7 +426,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, shared_files, teams RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, chat_schedules, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, shared_files, teams RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -3183,14 +3183,17 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	pn, _ := purgeRes.RowsAffected()
 	expired += int(pn)
 
-	// 1. TTL sweep.
+	// 1. TTL sweep. Conversations with an active or paused patrol/timer schedule
+	//    are exempt just like pinned/project conversations so a scheduled patrol
+	//    is never reaped between runs.
+	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM chat_schedules cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day
 		// restore window. Only touches live rows (deleted_at IS NULL) so a
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -3200,7 +3203,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -3227,7 +3230,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
 		        ) AS rn
 		        FROM conversations
-		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL
+		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+`
 		    ) ranked
 		    WHERE rn > $1
 		 )`,

@@ -1168,6 +1168,9 @@ func run() error {
 			}
 		}
 	}()
+	// In-chat patrol and timer sweep (migration 086): claims due chat_schedules
+	// rows every 10 seconds and enqueues their turns into chat_input_queue.
+	startChatScheduleSweeper(ctx, chatSrv)
 	// One maintenance loop drives every periodic reclaimer on the box (chat
 	// retention sweeps, attachment + temp-upload files, orphan workspaces,
 	// stale git worktrees). See startMaintenanceLoop.
@@ -1193,6 +1196,26 @@ func run() error {
 	// and hand unsent rows back before the process exits.
 	awaitAccountEventsDelivery(accountEventsDone)
 	return nil
+}
+
+func startChatScheduleSweeper(ctx context.Context, chatSrv *httpapi.Server) {
+	go func() {
+		defer safe.Recover("cmd.chat-schedule-sweep", nil)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweepCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				if _, err := chatSrv.SweepDueChatSchedules(sweepCtx); err != nil {
+					log.Printf("chat schedule sweep: %v", err)
+				}
+				cancel()
+			}
+		}
+	}()
 }
 
 // awaitShutdown blocks until a terminal signal or a fatal listener error,

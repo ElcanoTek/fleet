@@ -171,15 +171,15 @@ const META: Record<string, SettingMeta> = {
       "What a new conversation starts on — the first pinned, \u201Crecommended\u201D row in every model picker. Pick from the OpenRouter catalog or any workspace provider configured under Admin \u2192 Model providers (Bedrock, OpenAI-direct, \u2026 appear as provider/model), or type any slug. Applies live: the web re-reads it on every shell mount. Conversations that already picked a model keep it.",
   },
   advanced_model: {
-    label: "Advanced model",
+    label: "Fallback model",
     description:
-      "The stronger escalation target — what the agent\u2019s \u201Cswitch to the advanced model\u201D suggestion and the spreadsheet nudge move a conversation to, and the second pinned picker row. Same sources as the default model. Applies to the next suggestion; a card already on screen keeps the model it offered.",
+      "The secondary frontier model — what patrol/task runs fail over to, what the agent\u2019s model suggestion and spreadsheet nudge offer to switch to, and the second pinned picker row. Same sources as the default model. Applies to the next suggestion; a card already on screen keeps the model it offered.",
   },
   task_model: {
     label: "Task model",
     description:
-      "What Operations Center tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the advanced model, because a scheduled task is a long unattended run. Set it only to give tasks a different model from chat\u2019s advanced tier. Applies live to new tasks; a task that already has a model keeps it.",
-    emptyDefault: "Follows the advanced model",
+      "What Operations Center tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the default frontier model. Set it only to give tasks a different primary model from chat\u2019s default tier. Applies live to new tasks; a task that already has a model keeps it.",
+    emptyDefault: "Follows the default model",
   },
   escalation_signals_enabled: {
     label: "Offer the advanced model when a turn struggles",

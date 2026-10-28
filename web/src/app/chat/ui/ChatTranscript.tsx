@@ -66,6 +66,7 @@ function MessageMarkdown({
 }
 import {
   APPROVAL_RESUME_KIND,
+  CHAT_PATROL_KIND,
   humanToolLabel,
   liveSubagentLabel,
   shortModelName,
@@ -74,7 +75,7 @@ import {
 } from "./history";
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
 import { advancedRetryAllowed, anySwitchSuggestionPending, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
-import { AutoContinueNotice, FleetNotices } from "./FleetNotices";
+import { AutoContinueNotice, FleetNotices, PatrolTurnNotice } from "./FleetNotices";
 import { InjectedContextNote } from "./InjectedContextNote";
 import {
   buildTranscriptRows,
@@ -730,7 +731,9 @@ export function ChatTranscript({
                       >
                         <div
                           className={
-                            message.role === "user" && message.kind !== APPROVAL_RESUME_KIND
+                            message.role === "user" &&
+                            message.kind !== APPROVAL_RESUME_KIND &&
+                            message.kind !== CHAT_PATROL_KIND
                               ? "min-w-0 max-w-[88%] sm:max-w-[72%]"
                               : "min-w-0 flex-1"
                           }
@@ -1284,6 +1287,16 @@ export function UserTurn({
     return (
       <>
         <AutoContinueNotice text={message.content} />
+        <InjectedContextNote text={message.injectedContext} />
+      </>
+    );
+  }
+  if (message.kind === CHAT_PATROL_KIND) {
+    // fleet's own input for an automatic in-chat patrol or timer turn:
+    // rendered as a patrol notice banner rather than a user bubble.
+    return (
+      <>
+        <PatrolTurnNotice text={message.content} />
         <InjectedContextNote text={message.injectedContext} />
       </>
     );

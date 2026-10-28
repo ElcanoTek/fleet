@@ -1821,6 +1821,15 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, fmt.Errorf("resolve model: %w", err)
 	}
 	modelSlug := model.Model()
+	var turnFallbackModel fantasy.LanguageModel
+	if in.InputKind == InputKindChatPatrol && len(providerFallbacks) == 0 {
+		fbSlug := agentcore.CurrentFallbackModel()
+		if fbSlug != "" && fbSlug != modelSlug && (!in.Lockdown || m.config.LockdownAllows(fbSlug)) {
+			if fb, ferr := m.modelResolver().Resolve(ctx, fbSlug); ferr == nil {
+				turnFallbackModel = fb
+			}
+		}
+	}
 
 	// Open the per-user hosted (remote) MCP overlay BEFORE composing the system
 	// prompt: the prompt's "not mounted this turn" section needs the overlay's
@@ -1900,6 +1909,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		Label:                 in.ConversationID,
 		ConversationID:        in.ConversationID,
 		Model:                 model,
+		FallbackModel:         turnFallbackModel,
 		FallbackModels:        providerFallbacks,
 		Temperature:           m.config.LiveTemperature(),
 		MaxTokens:             maxTokens,

@@ -2,8 +2,12 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -82,10 +86,10 @@ func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, fun
 		p.retireDead(e)
 	}
 
-	// Create path: pull a (warm, if available) sandbox via Take and adopt it as
-	// this conversation's persistent sandbox. Take's own cleanup is sb.Close,
-	// which we intentionally drop — ownership transfers to the persistent map.
-	sb, _, err := p.Take(ctx)
+	// Create path: build a conversation-scoped sandbox (or pull from Take on
+	// non-container backends) and adopt it as this conversation's persistent
+	// sandbox.
+	sb, _, err := p.newPersistentSandbox(ctx, convID)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -112,6 +116,47 @@ func (p *Pool) TakePersistent(ctx context.Context, convID string) (*Sandbox, fun
 	return sb, p.borrow(e), nil
 }
 
+func isSafeConversationDirSegment(convID string) bool {
+	if convID == "" || !filepath.IsLocal(convID) {
+		return false
+	}
+	return !strings.ContainsAny(convID, `/\`)
+}
+
+// newPersistentSandbox constructs a persistent sandbox for convID. On the
+// rootless-Podman container backend with a configured WorkspaceHostDir, the
+// container's writable workspace bind-mount is scoped to <WorkspaceHostDir>/<convID>
+// rather than the shared workspace root so a long-lived persistent container
+// never mounts sibling users' or conversations' directories.
+func (p *Pool) newPersistentSandbox(ctx context.Context, convID string) (*Sandbox, func(), error) {
+	if p.cfg.Mode == ModeContainer && p.cfg.Container.WorkspaceHostDir != "" && isSafeConversationDirSegment(convID) {
+		if p.isClosed() {
+			return nil, func() {}, ErrClosed
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		convDir := filepath.Join(p.cfg.Container.WorkspaceHostDir, convID)
+		if err := os.MkdirAll(convDir, 0o755); err != nil { //nolint:gosec // readable by rootless container user
+			return nil, func() {}, fmt.Errorf("prepare persistent conversation workspace %s: %w", convDir, err)
+		}
+		cfg := p.warmContainerConfig()
+		cfg.WorkspaceHostDir = convDir
+		startCtx, cancel := context.WithTimeout(ctx, p.startTimeoutFor(cfg)+5*time.Second)
+		defer cancel()
+		sb, err := p.newBackendSandbox(startCtx, cfg)
+		if err != nil {
+			return nil, func() {}, err
+		}
+		if p.isClosed() {
+			sb.Close()
+			return nil, func() {}, ErrClosed
+		}
+		return sb, sb.Close, nil
+	}
+	return p.Take(ctx)
+}
+
 // borrow returns the per-turn cleanup for a claimed entry. It captures the
 // entry POINTER (not the conversation ID) so a release always lands on the
 // right entry even if the map slot was meanwhile replaced (e.g. after a dead
@@ -130,6 +175,7 @@ func (p *Pool) borrow(e *persistentEntry) func() {
 		}
 		e.inUse--
 		e.lastUsed = p.now()
+		idleAndOpen := e.inUse <= 0 && !e.closeRequested
 		shouldClose := e.inUse <= 0 && e.closeRequested
 		if shouldClose {
 			if cur, ok := p.persistent[e.convID]; ok && cur == e {
@@ -137,6 +183,17 @@ func (p *Pool) borrow(e *persistentEntry) func() {
 			}
 		}
 		p.persistentMu.Unlock()
+		if idleAndOpen && !e.sb.ReapDetachedProcesses() {
+			p.persistentMu.Lock()
+			e.closeRequested = true
+			if e.inUse <= 0 {
+				if cur, ok := p.persistent[e.convID]; ok && cur == e {
+					delete(p.persistent, e.convID)
+				}
+				shouldClose = true
+			}
+			p.persistentMu.Unlock()
+		}
 		if shouldClose {
 			e.sb.Close()
 		}

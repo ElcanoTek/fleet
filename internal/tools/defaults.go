@@ -34,7 +34,8 @@ var interactiveOnlyToolNames = map[string]bool{
 	// person at the keyboard and its reply arrives as that person's next
 	// message — a headless run has neither, so offering it there would let a
 	// scheduled model "ask" a form nobody will ever submit.
-	ShowUIToolName: true,
+	ShowUIToolName:     true,
+	ChatPatrolToolName: true,
 }
 
 // ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
@@ -82,6 +83,7 @@ func DefaultTools() []fantasy.AgentTool {
 		NewRunPythonTool(nil),
 		NewGenerateImageTool(nil),
 		NewShowUITool(),
+		NewChatPatrolTool(),
 	}
 }
 
@@ -117,6 +119,7 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewRunPythonTool(sb),
 		NewGenerateImageTool(sb),
 		NewShowUITool(),
+		NewChatPatrolTool(),
 	}
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)

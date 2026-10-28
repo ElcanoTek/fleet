@@ -50,6 +50,7 @@ import {
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 import { ToolsLibrary } from "./ToolsLibrary";
 import { ToolsPopover } from "./ToolsPopover";
+import { PatrolPopover, type CreatePatrolInput } from "./PatrolBanner";
 import { countOn, orderedCategories, type PickerCategory } from "./toolsPicker";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
@@ -257,6 +258,10 @@ export type ComposerProps = {
   activeConversationIdRef: RefObject<string | null>;
   abortControllersRef: RefObject<Map<string, AbortController>>;
   isPendingKey: (key: string | null) => boolean;
+
+  // In-chat recurring patrols & one-shot timers
+  onStartPatrol?: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
+  activePatrolCount?: number;
 };
 
 export function Composer({
@@ -327,6 +332,8 @@ export function Composer({
   activeConversationIdRef,
   abortControllersRef,
   isPendingKey,
+  onStartPatrol,
+  activePatrolCount = 0,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
   // - `isComposerFocused` drives the keyboard-hint line under the composer:
@@ -377,6 +384,9 @@ export function Composer({
   const modelChipRef = useRef<HTMLButtonElement | null>(null);
   const personaButtonRef = useRef<HTMLButtonElement | null>(null);
   const mcpButtonRef = useRef<HTMLButtonElement | null>(null);
+  const patrolButtonRef = useRef<HTMLButtonElement | null>(null);
+  const patrolPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [patrolPopoverOpen, setPatrolPopoverOpen] = useState(false);
   // The Tools library modal (null = closed), optionally opened on one
   // connection from a dimmed popover row.
   const [toolsLibrary, setToolsLibrary] = useState<{ selected?: string } | null>(null);
@@ -439,6 +449,20 @@ export function Composer({
   useEffect(() => {
     if (modelPickerOpen && !isStreaming) modelInputRef.current?.focus();
   }, [modelPickerOpen, isStreaming, modelInputRef]);
+
+  useEffect(() => {
+    if (!patrolPopoverOpen) return;
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        patrolPopoverRef.current &&
+        !patrolPopoverRef.current.contains(event.target as Node)
+      ) {
+        setPatrolPopoverOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [patrolPopoverOpen]);
 
   return (
     <>
@@ -1257,6 +1281,63 @@ export function Composer({
                     onSetAccount={(name, account) =>
                       void setMcpServerAccount(activeConversationId, name, account)
                     }
+                  />
+                ) : null}
+              </div>
+            ) : null}
+            {onStartPatrol && !sealed ? (
+              <div
+                ref={patrolPopoverRef}
+                role="presentation"
+                className="relative inline-flex"
+              >
+                <button
+                  ref={patrolButtonRef}
+                  type="button"
+                  aria-label="Patrol & recurring schedule"
+                  aria-haspopup="true"
+                  aria-expanded={patrolPopoverOpen}
+                  data-testid="chat-patrol-button"
+                  data-tip-top={
+                    patrolPopoverOpen
+                      ? undefined
+                      : activePatrolCount > 0
+                        ? `Patrols (${activePatrolCount} active)`
+                        : "Start recurring patrol or timer"
+                  }
+                  className={`${TOOL_BTN} ${
+                    patrolPopoverOpen
+                      ? TOOLS_BTN_OPEN
+                      : activePatrolCount > 0
+                        ? TOOL_BTN_ACTIVE
+                        : ""
+                  }`}
+                  onClick={() => setPatrolPopoverOpen((v) => !v)}
+                >
+                  <Icon name="clock" className="size-3.5" />
+                  {activePatrolCount > 0 ? (
+                    <span
+                      data-testid="chat-patrol-badge"
+                      className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
+                    >
+                      {activePatrolCount}
+                    </span>
+                  ) : null}
+                </button>
+                {patrolPopoverOpen ? (
+                  <PatrolPopover
+                    initialPrompt={prompt}
+                    onStartPatrol={async (input) => {
+                      const ok = await onStartPatrol(input);
+                      if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
+                        setPrompt("");
+                      }
+                      return ok;
+                    }}
+                    onClose={() => {
+                      setPatrolPopoverOpen(false);
+                      patrolButtonRef.current?.focus();
+                    }}
                   />
                 ) : null}
               </div>

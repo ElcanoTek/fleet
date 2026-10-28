@@ -384,6 +384,16 @@ type chatStore interface {
 	UpdateSharedFileMeta(ctx context.Context, id, name, folder, description string) (store.SharedFile, error)
 	DeleteSharedFile(ctx context.Context, id string) (store.SharedFile, error)
 	TotalSharedFileBytes(ctx context.Context) (int64, error)
+
+	// In-chat patrols and timers (migration 086): recurring cron patrols and
+	// one-shot timers bound directly to a conversation.
+	CreateChatSchedule(ctx context.Context, in store.ChatScheduleInput) (*store.ChatSchedule, error)
+	GetChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
+	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
+	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
+	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
+	TriggerChatScheduleNow(ctx context.Context, userEmail, convID, scheduleID string, maxPending int) (*store.ClaimedChatSchedule, error)
+	ClaimDueChatSchedules(ctx context.Context, now time.Time, maxPending int) ([]store.ClaimedChatSchedule, error)
 }
 
 // Compile-time proof that the concrete Postgres store satisfies the interface —

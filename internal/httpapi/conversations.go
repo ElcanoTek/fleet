@@ -362,38 +362,9 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Outputs (ADR-0079) — GET /conversations/{id}/outputs and
-	// POST /conversations/{id}/outputs/share. Owner-only; routed here because
-	// the toggle carries a second path segment the (sub, method) table does
-	// not see.
-	if sub == "outputs" {
-		s.handleConversationOutputs(w, r, user, id, subArg)
-		return
-	}
-
-	// A teammate's download of one shared output (ADR-0079) —
-	// GET /conversations/{id}/team-files/<path>. Deliberately NOT owner-gated:
-	// like team-view, its gate is the team read plus the per-file share state,
-	// enforced inside. HEAD too: the handler serves it (ServeContent answers
-	// the headers alone), and the (sub, method) table below would 405 it.
-	if sub == "team-files" && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
-		s.handleTeamFile(w, r, user, id, subArg)
-		return
-	}
-
-	// Tool-call audit log — `GET /conversations/{id}/audit` returns the
-	// persistent, queryable history of every tool the agent ran in this
-	// conversation (#224). Membership-scoped: 404 for a conversation the
-	// caller doesn't own.
-	if sub == "audit" && r.Method == http.MethodGet {
-		s.handleConversationAudit(w, r, id)
-		return
-	}
-
-	// Input queue (#785): GET snapshot, DELETE {inputID}, POST
-	// {inputID}/send-now. Ownership is validated inside.
-	if sub == "queue" {
-		s.handleQueueRoutes(w, r, user, id, subArg)
+	// Sub-resources that dispatch on (method, subArg) internally:
+	// outputs (ADR-0079), queue (#785), and schedules (migration 086).
+	if s.handleSubresourceWithArg(w, r, user, id, sub, subArg) {
 		return
 	}
 

@@ -1073,10 +1073,12 @@ export type Message = {
    * draws a distinct banner and pre-summary messages collapse behind
    * a "+ N earlier turns" expander. "approval_resume" is a user-role row
    * fleet wrote itself: the input of a turn it started after an approval
-   * card was settled (docs/RESUME-AFTER-APPROVAL.md). It renders as a
-   * notice, never as the user's bubble, and offers no Edit.
+   * card was settled (docs/RESUME-AFTER-APPROVAL.md). "chat_patrol" is a
+   * user-role row triggered automatically by an in-chat recurring patrol or
+   * one-shot timer. Both render as notices, never as the user's bubble, and
+   * offer no Edit.
    */
-  kind?: "text" | "summary" | "approval_resume";
+  kind?: "text" | "summary" | "approval_resume" | "chat_patrol";
   /**
    * Notices fleet wrote into the conversation that are not a turn — e.g. an
    * automatic continue that was skipped or dropped by a restart
@@ -1409,8 +1411,31 @@ export type HistoryEntry = {
  */
 /** TextContent.kind of a turn fleet started after an approval card was settled. */
 export const APPROVAL_RESUME_KIND = "approval_resume";
+/** TextContent.kind of a turn fleet started from an in-chat patrol or timer. */
+export const CHAT_PATROL_KIND = "chat_patrol";
 /** agent.EntryTypeNotice: a UI-only note fleet wrote into the conversation. */
 export const NOTICE_ENTRY_TYPE = "notice";
+
+/** One in-chat recurring patrol or one-shot timer schedule attached to a conversation. */
+export type ChatSchedule = {
+  id: string;
+  conversation_id: string;
+  user_email?: string;
+  title: string;
+  prompt: string;
+  kind: "patrol" | "timer";
+  cron?: string;
+  cron_expr?: string;
+  timezone?: string;
+  duration_seconds?: number;
+  status: "active" | "paused" | "completed" | "cancelled";
+  next_run_at: number;
+  last_run_at?: number;
+  run_count: number;
+  max_runs?: number;
+  created_at?: number;
+  updated_at?: number;
+};
 
 export function historyToMessages(entries: HistoryEntry[]): Message[] {
   const messages: Message[] = [];
@@ -1451,9 +1476,14 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         role: "user",
         content: String(userContent.text ?? ""),
         injectedContext: injected.trim() ? injected : undefined,
-        // A turn fleet started itself after an approval card was settled:
-        // the row is fleet's notice, not the user's words.
-        ...(userContent.kind === APPROVAL_RESUME_KIND ? { kind: APPROVAL_RESUME_KIND } : {}),
+        // A turn fleet started itself after an approval card was settled or
+        // when an in-chat patrol/timer fired: the row is fleet's notice, not
+        // the user's words.
+        ...(userContent.kind === APPROVAL_RESUME_KIND
+          ? { kind: APPROVAL_RESUME_KIND }
+          : userContent.kind === CHAT_PATROL_KIND
+            ? { kind: CHAT_PATROL_KIND }
+            : {}),
         state: "done",
       });
       continue;
@@ -1744,6 +1774,8 @@ export function humanToolLabel(name: string): string {
       return "Searching the web";
     case "spawn_subagent":
       return "Delegating to sub-agent";
+    case "chat_patrol":
+      return "Configuring in-chat patrol";
     case "mcp_email_send_email":
       return "Sending email";
     case "mcp_email_search_emails":
@@ -1787,6 +1819,7 @@ export function toolIcon(name: string): string {
   if (name === "view_file" || name === "write_file" || name === "edit_file") return "📄";
   if (name === "web_fetch" || name === "smart_search") return "🔎";
   if (name === "spawn_subagent") return "🤖";
+  if (name === "chat_patrol") return "⏱";
   if (name.startsWith("mcp_explorer_") || name.startsWith("mcp_email_")) return "📧";
   if (name.startsWith("mcp_sendgrid_")) return "📤";
   return "🛠";

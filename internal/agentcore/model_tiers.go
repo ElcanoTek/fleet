@@ -25,43 +25,48 @@ import (
 var modelTiers = struct {
 	mu       sync.RWMutex
 	def, adv string
-	// task is the task-tier override; "" means "follow adv".
+	// task is the task-tier override; "" means "follow def".
 	task string
 }{def: DefaultCoreModel, adv: DefaultMaxModel}
 
-// CurrentDefaultModel returns the effective everyday-tier slug — what a new
-// conversation starts on and what the web pins first in its picker.
+// CurrentDefaultModel returns the effective default frontier-tier slug — what a
+// new conversation starts on and what the web pins first in its picker.
 func CurrentDefaultModel() string {
 	modelTiers.mu.RLock()
 	defer modelTiers.mu.RUnlock()
 	return modelTiers.def
 }
 
-// CurrentAdvancedModel returns the effective strong-tier slug — the
-// suggest_advanced_model escalation target.
+// CurrentAdvancedModel returns the effective fallback frontier-tier slug — the
+// second pinned picker slot and suggest_advanced_model target.
 func CurrentAdvancedModel() string {
 	modelTiers.mu.RLock()
 	defer modelTiers.mu.RUnlock()
 	return modelTiers.adv
 }
 
+// CurrentFallbackModel returns the effective fallback frontier-tier slug
+// (alias of CurrentAdvancedModel).
+func CurrentFallbackModel() string {
+	return CurrentAdvancedModel()
+}
+
 // CurrentTaskModel returns the effective task-tier slug: what a scheduled task
 // with no pinned model runs on and what the Operations Center create form
 // pre-fills. It is the task-tier override when one is set, otherwise the
-// CURRENT advanced tier, so it is never empty and an advanced-tier change
-// reaches it without a second edit.
+// CURRENT default frontier tier (Opus 5.5 by default), so it is never empty.
 func CurrentTaskModel() string {
 	modelTiers.mu.RLock()
 	defer modelTiers.mu.RUnlock()
 	if modelTiers.task != "" {
 		return modelTiers.task
 	}
-	return modelTiers.adv
+	return modelTiers.def
 }
 
-// SetDefaultModel installs the effective everyday-tier slug. An empty value
-// reverts to the compiled-in DefaultCoreModel, so a hook applying an unset
-// env default cannot blank the tier.
+// SetDefaultModel installs the effective default frontier-tier slug. An empty
+// value reverts to the compiled-in DefaultCoreModel, so a hook applying an
+// unset env default cannot blank the tier.
 func SetDefaultModel(slug string) {
 	v := strings.TrimSpace(slug)
 	if v == "" {
@@ -72,8 +77,8 @@ func SetDefaultModel(slug string) {
 	modelTiers.mu.Unlock()
 }
 
-// SetAdvancedModel installs the effective strong-tier slug. Empty reverts to
-// the compiled-in DefaultMaxModel, mirroring SetDefaultModel.
+// SetAdvancedModel installs the effective fallback frontier-tier slug. Empty
+// reverts to the compiled-in DefaultMaxModel, mirroring SetDefaultModel.
 func SetAdvancedModel(slug string) {
 	v := strings.TrimSpace(slug)
 	if v == "" {
@@ -84,8 +89,14 @@ func SetAdvancedModel(slug string) {
 	modelTiers.mu.Unlock()
 }
 
+// SetFallbackModel installs the effective fallback frontier-tier slug (alias
+// of SetAdvancedModel).
+func SetFallbackModel(slug string) {
+	SetAdvancedModel(slug)
+}
+
 // SetTaskModel installs the task-tier override. Empty clears it, and the task
-// tier then follows the advanced tier (CurrentTaskModel).
+// tier then follows the default tier (CurrentTaskModel).
 func SetTaskModel(slug string) {
 	v := strings.TrimSpace(slug)
 	modelTiers.mu.Lock()

@@ -39,35 +39,35 @@ func TestModelTierHolders(t *testing.T) {
 	}
 }
 
-// The task tier has no seed of its own: unset, it follows the advanced tier
-// live, so moving the advanced model moves scheduled work with it. An override
-// pins it independently, and clearing the override restores the follow.
-func TestTaskModelTierFollowsAdvanced(t *testing.T) {
+// The task tier has no seed of its own: unset, it follows the default frontier
+// tier live, so moving the default model moves scheduled work with it. An
+// override pins it independently, and clearing the override restores the follow.
+func TestTaskModelTierFollowsDefault(t *testing.T) {
 	t.Cleanup(func() {
-		SetAdvancedModel("")
+		SetDefaultModel("")
 		SetTaskModel("")
 	})
 
-	if got := CurrentTaskModel(); got != DefaultMaxModel {
-		t.Fatalf("seed task tier = %q, want the advanced seed %q", got, DefaultMaxModel)
+	if got := CurrentTaskModel(); got != DefaultCoreModel {
+		t.Fatalf("seed task tier = %q, want the default seed %q", got, DefaultCoreModel)
 	}
 
-	SetAdvancedModel("acme/frontier-1-pro")
+	SetDefaultModel("acme/frontier-1-pro")
 	if got := CurrentTaskModel(); got != "acme/frontier-1-pro" {
-		t.Fatalf("task tier after an advanced change = %q, want it to follow", got)
+		t.Fatalf("task tier after a default change = %q, want it to follow", got)
 	}
 
 	SetTaskModel("  acme/long-runner  ")
 	if got := CurrentTaskModel(); got != "acme/long-runner" {
 		t.Fatalf("task tier with an override = %q", got)
 	}
-	SetAdvancedModel("acme/frontier-2-pro")
+	SetDefaultModel("acme/frontier-2-pro")
 	if got := CurrentTaskModel(); got != "acme/long-runner" {
-		t.Fatalf("an override must not follow the advanced tier, got %q", got)
+		t.Fatalf("an override must not follow the default tier, got %q", got)
 	}
 
 	SetTaskModel("")
 	if got := CurrentTaskModel(); got != "acme/frontier-2-pro" {
-		t.Fatalf("task tier after clearing the override = %q, want the advanced tier", got)
+		t.Fatalf("task tier after clearing the override = %q, want the default tier", got)
 	}
 }

@@ -12,7 +12,7 @@ import (
 // tier, and a scheduled task is a long unattended run (docs/TASK-MODEL-TIER.md).
 func TestScheduledTaskModel(t *testing.T) {
 	t.Cleanup(func() {
-		agentcore.SetAdvancedModel("")
+		agentcore.SetDefaultModel("")
 		agentcore.SetTaskModel("")
 	})
 
@@ -20,9 +20,9 @@ func TestScheduledTaskModel(t *testing.T) {
 		t.Errorf("model = %q, want the trimmed explicit slug", got)
 	}
 
-	agentcore.SetAdvancedModel("acme/frontier-pro")
+	agentcore.SetDefaultModel("acme/frontier-pro")
 	if got := scheduledTaskModel(""); got != "acme/frontier-pro" {
-		t.Errorf("model = %q, want the task tier (following the advanced tier)", got)
+		t.Errorf("model = %q, want the task tier (following the default tier)", got)
 	}
 
 	agentcore.SetTaskModel("acme/long-runner")
