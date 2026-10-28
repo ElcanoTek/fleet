@@ -767,7 +767,7 @@ def _sweep_stale_partials(parent_fd, keep):
 
 
 # linkat fails with these where the filesystem has no hard links (some RWX
-# volumes); the commit then falls back to a checked rename.
+# volumes); the commit then falls back to renameat2(RENAME_NOREPLACE).
 _NO_HARDLINK_ERRNOS = {
     errno.EPERM,
     errno.EOPNOTSUPP,
@@ -778,10 +778,49 @@ _NO_HARDLINK_ERRNOS = {
 }
 
 
+_RENAME_NOREPLACE = 1  # linux/fs.h
+
+
+def _renameat2_noreplace(parent_fd, name, final):
+    """renameat2(RENAME_NOREPLACE): an atomic rename that fails with EEXIST
+    instead of replacing. Raises OSError(ENOSYS) where libc or the kernel
+    lacks it."""
+    try:
+        import ctypes
+    except ImportError as exc:
+        raise OSError(errno.ENOSYS, "ctypes not available") from exc
+
+    libc = ctypes.CDLL(None, use_errno=True)
+    fn = getattr(libc, "renameat2", None)
+    if fn is None:
+        raise OSError(errno.ENOSYS, "renameat2 not available")
+    fn.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    if (
+        fn(
+            parent_fd,
+            os.fsencode(name),
+            parent_fd,
+            os.fsencode(final),
+            _RENAME_NOREPLACE,
+        )
+        != 0
+    ):
+        err = ctypes.get_errno()
+        raise OSError(err, os.strerror(err))
+
+
 def _commit_no_replace(parent_fd, name, final):
-    """Rename name to final without replacing an existing entry. False when
-    final exists. link + unlink is atomic about that; a filesystem without hard
-    links gets a rename after an existence check instead."""
+    """Rename name to final without ever replacing an existing entry; False
+    when final exists. link + unlink where the filesystem has hard links,
+    else renameat2(RENAME_NOREPLACE). Both are atomic about the existence of
+    final; with neither available the commit fails rather than risk a
+    replacing rename."""
     try:
         os.link(
             name,
@@ -795,9 +834,18 @@ def _commit_no_replace(parent_fd, name, final):
     except OSError as exc:
         if exc.errno not in _NO_HARDLINK_ERRNOS:
             raise
-        if _lstat_at(parent_fd, final) is not None:
+        try:
+            _renameat2_noreplace(parent_fd, name, final)
+        except FileExistsError:
             return False
-        os.rename(name, final, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        except OSError as exc2:
+            if exc2.errno in (errno.ENOSYS, errno.EINVAL, errno.EOPNOTSUPP):
+                raise OSError(
+                    exc2.errno,
+                    "the workspace filesystem supports neither hard links nor "
+                    "no-replace renames, so the download cannot be committed safely",
+                ) from exc2
+            raise
         return True
     os.unlink(name, dir_fd=parent_fd)
     return True

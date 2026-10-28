@@ -9,9 +9,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -207,18 +209,21 @@ func TestFileOp_StreamSweepsStalePartials(t *testing.T) {
 }
 
 // On a filesystem without hard links (some RWX volumes) the commit falls back
-// to a rename after an existence check, and still never replaces a file.
+// existing file is never replaced.
+// to renameat2(RENAME_NOREPLACE), and with neither the commit fails, so an
 func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 required")
 	}
 	root := t.TempDir()
+	noLink := "import errno, os\n" +
+		"def _nolink(*a, **k):\n    raise OSError(errno.EPERM, 'hard links not supported')\n" +
+		"os.link = _nolink\n"
+	prefix := noLink
 	run := func(req map[string]any) map[string]any {
 		t.Helper()
 		in, _ := json.Marshal(req)
-		script := "import errno, os\n" +
-			"def _nolink(*a, **k):\n    raise OSError(errno.EPERM, 'hard links not supported')\n" +
-			"os.link = _nolink\n" + string(fileOpsScript)
+		script := prefix + string(fileOpsScript)
 		cmd := exec.Command("python3", "-I", "-c", script)
 		cmd.Stdin = bytes.NewReader(in)
 		out, err := cmd.Output()
@@ -247,5 +252,17 @@ func TestFileOpsPy_StreamCommitsWithoutHardLinks(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(filepath.Join(root, "r.csv")); string(got) != "abc" {
 		t.Fatalf("existing file replaced: %q", got)
+	}
+
+	// Neither hard links nor renameat2: the commit fails instead of risking a
+	// replacing rename.
+	prefix = noLink + "import ctypes\nctypes.CDLL = lambda *a, **k: object()\n"
+	name3, _ := StreamPartialName()
+	resp = run(map[string]any{"op": "stream", "path": filepath.Join(root, name3), "root": root, "anchor": root, "offset": 0, "data_b64": "eQ==", "final": "new.csv"})
+	if resp["ok"] == true || !strings.Contains(fmt.Sprint(resp["err"]), "no-replace") {
+		t.Fatalf("commit without any no-replace primitive: %v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, "new.csv")); !os.IsNotExist(err) {
+		t.Fatalf("file committed without a no-replace primitive: %v", err)
 	}
 }

@@ -10,7 +10,8 @@ lands in the conversation workspace through the sandbox FileOp seam.
   the `stream` FileOp: each chunk is appended, at a checked offset, to a hidden
   `.fleet-download-<random>.partial` file beside the destination; the last
   chunk renames it into place with link + unlink, never replacing an existing
-  file (on a filesystem without hard links, a rename after an existence check).
+  file (on a filesystem without hard links, `renameat2(RENAME_NOREPLACE)`;
+  with neither, the download fails rather than risk a replacing rename).
   Every chunk checks the partial file holds exactly the bytes written so far,
   in the executor and again in Fleet, so bytes another process appended are
   never committed. Host memory stays at about one chunk whatever the file size.
