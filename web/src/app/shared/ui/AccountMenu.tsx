@@ -63,6 +63,7 @@ export function AccountMenu({
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const { themePreference, setTheme } = useTheme();
   const close = () => setOpen(false);
+  const shown = email || "Loading…";
 
   // Collapsing the rail dismisses the menu (the design's setCollapsed
   // behavior) — the strip has no room for an anchored stretch menu.
@@ -81,7 +82,6 @@ export function AccountMenu({
         type="button"
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="Account menu"
         data-testid="account-menu-button"
         onClick={() => setOpen((o) => !o)}
         className={[
@@ -99,8 +99,11 @@ export function AccountMenu({
             railCollapsed ? "sm:hidden" : "",
           ].join(" ")}
         >
-          {email || "Loading…"}
+          {shown}
         </span>
+        {/* The name is the button's own text (WCAG 2.5.3 Label in Name): the
+            visible email, then what the button does, for screen readers. */}
+        <span className="sr-only">, account menu</span>
         <Icon
           name="selector"
           className={[
