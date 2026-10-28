@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -10,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -31,42 +33,57 @@ import (
 var downloadURLDialContext = newSSRFGuardedDialer().DialContext
 
 // downloadURLDescription is the prompt-facing description of the
-// download_url tool. The wording is deliberately namespace-neutral
-// ("generic URL → workspace") so the agent reaches for this instead of
-// the email-namespaced `download_link_attachment` when the source is a
-// fast.io signed URL, a public asset, or any other arbitrary URL that
-// just needs to land on disk. The email MCP tool keeps working for
-// back-compat — it just shouldn't be the obvious match for non-email
-// flows anymore.
+// download_url tool: the one generic URL → workspace fetch. It is how agents
+// land a fast.io signed URL, an email attachment or report link an email
+// connector hands out, a public asset, or any other URL that just needs to be
+// on disk. Client connector names stay out of it: they live in bundles.
 const downloadURLDescription = "Download bytes from any HTTP(S) URL straight into your per-conversation workspace. " +
-	"Use this after `mcp_fast_io_download action=file-url` to pull the returned opaque `fleet-download://...` handle's bytes onto disk; Fleet keeps the real signed URL server-side so its bearer token never enters your context. This also accepts ordinary HTTP(S) URLs for other one-call URL→scratch fetches (public CSVs, signed S3 links, generated reports, etc.). " +
-	"This is the namespace-neutral alternative to `mcp_email_download_link_attachment` — same single-call shape (URL in, file path out), but not tied to the email server.\n\n" +
-	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 100 MB.\n\n" +
+	"Use this after `mcp_fast_io_download action=file-url` to pull the returned opaque `fleet-download://...` handle's bytes onto disk; Fleet keeps the real signed URL server-side so its bearer token never enters your context. " +
+	"Use it for email reports too: when an email connector hands you a short-lived download URL for an attachment or a report link, fetch it right away. " +
+	"It also accepts ordinary HTTP(S) URLs for other one-call URL→scratch fetches (public CSVs, signed S3 links, generated reports, etc.).\n\n" +
+	"BEHAVIOR: follows redirects (chain reported as `redirect_chain`), sends a realistic browser User-Agent so CDNs and signed-URL gateways don't reject the request, derives a filename from `Content-Disposition` then the URL path, suffixes a deterministic 8-char hash to avoid collisions in the workspace, and caps responses at 512 MB (a file over the cap is not saved at all). " +
+	"When the link answers with an HTML interstitial (an email click-tracker's \"your download will start\" page, a meta refresh, or a page whose only link is the file) it follows it to the file, up to 3 times, and lists the hops in `html_chase`. " +
+	"The result carries the saved file's `sha256`, and a `warning` when a link that names a data file (.csv, .xlsx, .zip, ...) returned an HTML page instead: usually a login page or an expired link.\n\n" +
 	"REQUIRED: `url` (http, https, or a fleet-download handle returned by mcp_fast_io_download).\n" +
-	"OPTIONAL: `output_dir` (defaults to the per-conversation workspace; a relative path is interpreted against it; an absolute path must be inside the chat-server's allowed dirs), `filename` (override the auto-detected name; the collision suffix is still appended), `timeout_seconds` (default 120, max 600).\n\n" +
-	"NOT FOR: HTML pages you want to read as markdown — use `web_fetch` for that. Email click-trackers that need HTML-chase to reach the real download — use the email MCP's `download_link_attachment` instead (it has the SendGrid/Mailchimp interstitial bypass)."
+	"OPTIONAL: `output_dir` (defaults to the per-conversation workspace; a relative path is interpreted against it; an absolute path must be inside the chat-server's allowed dirs), `filename` (override the auto-detected name; the collision suffix is still appended), `timeout_seconds` (whole download; default 300, max 1800).\n\n" +
+	"NOT FOR: HTML pages you want to read as markdown — use `web_fetch` for that. Private or internal addresses are refused."
 
 // DownloadURLParams is the typed tool surface.
 type DownloadURLParams struct {
 	URL            string `json:"url" description:"HTTP/HTTPS URL, or an opaque fleet-download:// handle returned by mcp_fast_io_download. Required."`
 	OutputDir      string `json:"output_dir,omitempty" description:"Directory to save the file in. Defaults to the per-conversation workspace (same dir bash/run_python land files in). A relative path is interpreted against the workspace; an absolute path must be inside the chat-server's allowed dirs."`
 	Filename       string `json:"filename,omitempty" description:"Override the auto-detected filename. The collision-suffix is still appended so repeated downloads of the same URL don't overwrite each other."`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"Per-request timeout in seconds. Defaults to 120. Capped at 600."`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" description:"Timeout in seconds for the whole download. Defaults to 300. Capped at 1800."`
 }
 
+// downloadURLMaxBytes caps one download. The archive's link cache keeps report
+// files up to 450 MB (production-support ses-s3), so the cap sits above that.
+// The body is never held whole: it streams into the sandbox in
+// downloadURLChunkBytes pieces (FileOpStream), so memory stays at about one
+// chunk however large the file. Variables so tests can shrink them.
+var (
+	downloadURLMaxBytes   int64 = 512 * 1024 * 1024
+	downloadURLChunkBytes       = 16 * 1024 * 1024
+)
+
 const (
-	downloadURLDefaultTimeout = 120 * time.Second
-	downloadURLMaxTimeout     = 600 * time.Second
-	downloadURLMaxBytes       = 100 * 1024 * 1024
+	// downloadURLHTMLScanBytes is how much of an HTML response is scanned for
+	// an interstitial's target. Never a size limit: the page is saved whole.
+	downloadURLHTMLScanBytes = 1 << 20
+	// downloadURLMaxInterstitials bounds the interstitial pages followed.
+	downloadURLMaxInterstitials = 3
+)
+
+const (
+	downloadURLDefaultTimeout = 300 * time.Second
+	downloadURLMaxTimeout     = 1800 * time.Second
 	downloadURLDefaultName    = "download"
 
 	downloadStatusSuccess = "success"
 	downloadStatusError   = "error"
 )
 
-// downloadURLResult is the JSON payload returned to the agent. The
-// field set matches `mcp_email_download_link_attachment` so anything
-// downstream that parses one shape can parse the other.
+// downloadURLResult is the JSON payload returned to the agent.
 type downloadURLResult struct {
 	Status        string   `json:"status"`
 	URL           string   `json:"url"`
@@ -77,7 +94,11 @@ type downloadURLResult struct {
 	ContentType   string   `json:"content_type,omitempty"`
 	HTTPStatus    int      `json:"http_status,omitempty"`
 	RedirectChain []string `json:"redirect_chain,omitempty"`
-	Error         string   `json:"error,omitempty"`
+	// HTMLChase lists the interstitial pages' targets followed to the file.
+	HTMLChase []string `json:"html_chase,omitempty"`
+	SHA256    string   `json:"sha256,omitempty"`
+	Warning   string   `json:"warning,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 // NewDownloadURLTool returns the native download_url tool, bound to the
@@ -148,9 +169,18 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 
 	// CheckRedirect runs before each hop; we use it to capture the chain
 	// of URLs the redirector walks through. The default policy stops at
-	// 10 hops, which matches what httpx does in the email tool.
+	// 10 hops, the same as httpx.
 	var chain []string
+	// A per-call cookie jar: an interstitial that sets a session cookie
+	// usually wants it back on the request for the file.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		res.Status = downloadStatusError
+		res.Error = fmt.Sprintf("cookie jar: %v", err)
+		return res
+	}
 	client := &http.Client{
+		Jar:     jar,
 		Timeout: timeout,
 		// Same SSRF guard as web_fetch: without it this tool could fetch
 		// cloud metadata (169.254.169.254) or internal services and
@@ -171,17 +201,18 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 	// them with the call, as browserbase_live_view does.
 	defer client.CloseIdleConnections()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, raw, nil)
-	if err != nil {
-		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("build request: %v", err)
-		return res
+	get := func(target string) (*http.Response, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return nil, fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("User-Agent", BrowserUserAgent)
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Accept-Language", "en-US,en;q=0.5")
+		return client.Do(req)
 	}
-	req.Header.Set("User-Agent", BrowserUserAgent)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
-	resp, err := client.Do(req)
+	resp, err := get(raw)
 	if err != nil {
 		res.Status = downloadStatusError
 		res.Error = fmt.Sprintf("fetch %s: %v", displayURL, transportErrForDisplay(err, protected))
@@ -240,18 +271,25 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		return res
 	}
 
-	// Read the body host-side (bounded), then land the bytes on disk through
-	// the sandbox FileOp seam — the write inherits the container's runtime,
-	// limits, and confinement instead of running as host os I/O (#1083).
-	body, err := io.ReadAll(io.LimitReader(resp.Body, downloadURLMaxBytes+1))
+	resp, body, closeChased, err := followInterstitials(resp, get, protected, &res) //nolint:bodyclose // closeChased closes every body it opened; the first is closed by the defer above
+	defer closeChased()
 	if err != nil {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("read response body: %v", err)
+		res.Error = err.Error()
 		return res
 	}
-	if int64(len(body)) > downloadURLMaxBytes {
+	finalURL = resp.Request.URL.String()
+	if !protected && len(res.HTMLChase) > 0 {
+		// CheckRedirect kept appending the chased requests' redirects.
+		res.RedirectChain = chain
+	}
+	if isHTMLResponse(resp) && namedADataFile(parsed.Path, resp.Request.URL.Path, res.HTMLChase) {
+		res.Warning = "the server returned an HTML page, not the file the link names: often a login page or an expired link. Check the saved page before parsing it."
+	}
+
+	if resp.ContentLength > downloadURLMaxBytes {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("response exceeded %d-byte cap; refusing to save partial file. Use bash + curl or run_python with a streaming download if the file is genuinely this large.", downloadURLMaxBytes)
+		res.Error = downloadTooLarge()
 		return res
 	}
 
@@ -268,17 +306,102 @@ func runDownloadURL(ctx context.Context, sb *sandbox.Sandbox, params DownloadURL
 		res.Error = fmt.Sprintf("output path validation failed: %v", err)
 		return res
 	}
-	if err := sandboxWriteFile(ctx, sb, outPath, validOut, body); err != nil {
+	// Stream the body into the sandbox through the FileOp seam — the write
+	// inherits the container's runtime, limits, and confinement instead of
+	// running as host os I/O (#1083) — a chunk at a time into a hidden partial
+	// file that is renamed into place only once the whole body arrived.
+	size, digest, err := sandboxStreamWrite(ctx, sb, outPath, validOut, body, downloadURLMaxBytes, downloadURLChunkBytes)
+	if err != nil {
 		res.Status = downloadStatusError
-		res.Error = fmt.Sprintf("write %s: %v", validOut, err)
+		if errors.Is(err, errStreamTooLarge) {
+			res.Error = downloadTooLarge()
+		} else {
+			res.Error = fmt.Sprintf("write %s: %v", validOut, err)
+		}
 		return res
 	}
 
 	res.Status = downloadStatusSuccess
 	res.Filename = filepath.Base(validOut)
 	res.SavedTo = validOut
-	res.SizeBytes = int64(len(body))
+	res.SizeBytes = size
+	res.SHA256 = digest
 	return res
+}
+
+// followInterstitials follows an HTML interstitial (an email click-tracker's
+// "your download will start" page, a meta refresh) to the file it stands in
+// front of, at most downloadURLMaxInterstitials times, recording each hop in
+// res. It returns the response to save, the body to read (an HTML page's
+// scanned head is replayed in front of the rest), and a func closing every
+// body it opened. A page that names no single file is saved as it is, and
+// so is one whose target fails.
+func followInterstitials(resp *http.Response, get func(string) (*http.Response, error), protected bool, res *downloadURLResult) (*http.Response, io.Reader, func(), error) {
+	var opened []*http.Response
+	closeAll := func() {
+		for _, r := range opened {
+			_ = r.Body.Close()
+		}
+	}
+	var body io.Reader = resp.Body
+	for hops := 0; !protected && isHTMLResponse(resp); hops++ {
+		peek, err := io.ReadAll(io.LimitReader(resp.Body, downloadURLHTMLScanBytes))
+		if err != nil {
+			return resp, nil, closeAll, fmt.Errorf("read response body: %w", err)
+		}
+		body = io.MultiReader(bytes.NewReader(peek), resp.Body)
+		target := ""
+		if hops < downloadURLMaxInterstitials {
+			target = interstitialTarget(peek, resp.Request.URL)
+		}
+		if target == "" {
+			break
+		}
+		next := fetchInterstitialTarget(get, target)
+		if next == nil {
+			break
+		}
+		opened = append(opened, next)
+		resp = next
+		body = resp.Body
+		res.HTMLChase = append(res.HTMLChase, target)
+		res.FinalURL = resp.Request.URL.String()
+		res.HTTPStatus = resp.StatusCode
+		res.ContentType = resp.Header.Get("Content-Type")
+	}
+	return resp, body, closeAll, nil
+}
+
+// namedADataFile reports whether the requested URL, the final one, or any
+// interstitial target followed on the way names a data file.
+func namedADataFile(requested, final string, chased []string) bool {
+	if looksLikeDataFile(requested) || looksLikeDataFile(final) {
+		return true
+	}
+	for _, c := range chased {
+		if u, err := url.Parse(c); err == nil && looksLikeDataFile(u.Path) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchInterstitialTarget fetches an interstitial's target, or returns nil
+// when it fails: the interstitial page is then saved instead.
+func fetchInterstitialTarget(get func(string) (*http.Response, error), target string) *http.Response {
+	next, err := get(target)
+	if err != nil {
+		return nil
+	}
+	if next.StatusCode >= 400 {
+		_ = next.Body.Close()
+		return nil
+	}
+	return next
+}
+
+func downloadTooLarge() string {
+	return fmt.Sprintf("response exceeded the %d-byte cap; nothing was saved.", downloadURLMaxBytes)
 }
 
 // resolveDownloadDir returns the absolute directory the download
@@ -303,8 +426,7 @@ func resolveDownloadDir(ctx context.Context, requested string) (string, error) {
 		return resolveForcedDownloadDir(forced, trimmed)
 	}
 
-	// Empty or "." → per-conversation workspace (matches the rewrite
-	// behavior the email MCP relies on).
+	// Empty or "." → per-conversation workspace.
 	if trimmed == "" || trimmed == "." {
 		if convID := ConversationIDFromContext(ctx); convID != "" {
 			return filepath.Abs(WorkspaceDirForConversation(convID))
@@ -487,8 +609,8 @@ func sanitizeDownloadFilename(s string) string {
 	return out
 }
 
-// buildCollisionSafePath mirrors the email tool's filename strategy:
-// append an 8-char hash of the source URL so repeated downloads of the
+// buildCollisionSafePath mirrors the retired Python email server's filename
+// strategy: append an 8-char hash of the source URL so repeated downloads of the
 // same URL into the same dir produce a deterministic, predictable
 // path. If a file at that path already exists (e.g. the same URL was
 // downloaded twice in one conversation), tack on `_1`, `_2`, … until

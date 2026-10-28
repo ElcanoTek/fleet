@@ -3,13 +3,16 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	_ "embed"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -34,9 +37,16 @@ import (
 type FileOpKind string
 
 const (
-	FileOpRead     FileOpKind = "read"
-	FileOpWrite    FileOpKind = "write"
-	FileOpEdit     FileOpKind = "edit"
+	FileOpRead  FileOpKind = "read"
+	FileOpWrite FileOpKind = "write"
+	FileOpEdit  FileOpKind = "edit"
+	// FileOpStream lands a large write chunk by chunk: Data is appended at
+	// Offset (0 creates the file) to a hidden partial file whose name must
+	// match StreamPartialName, which the last chunk renames to Final without
+	// replacing anything. Abort removes the partial file instead. The
+	// executor refuses any other name, so this op can never extend or delete
+	// a file the agent made.
+	FileOpStream   FileOpKind = "stream"
 	fileOpBindRoot FileOpKind = "bind_root"
 )
 
@@ -63,8 +73,13 @@ type FileOpRequest struct {
 	Limit   int64
 	MaxSize int64
 
-	// Write.
+	// Write and stream.
 	Data []byte
+
+	// Stream: the plain file name (same directory) the completed partial file
+	// is renamed to, and whether to delete the partial file instead.
+	Final string
+	Abort bool
 
 	// Edit.
 	OldText    string
@@ -86,6 +101,19 @@ type FileOpRequest struct {
 	expectedDev   uint64
 	expectedIno   uint64
 	rootBound     bool
+}
+
+// streamPartialRE is the only file name FileOpStream touches (fileops.py
+// enforces the same pattern).
+var streamPartialRE = regexp.MustCompile(`^\.fleet-download-[0-9a-f]{24}\.partial$`)
+
+// StreamPartialName returns a fresh hidden partial-file name for FileOpStream.
+func StreamPartialName() (string, error) {
+	var b [12]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return ".fleet-download-" + hex.EncodeToString(b[:]) + ".partial", nil
 }
 
 // ExpectAbsent is the ExpectedSHA256 value that makes a write create-only
@@ -444,6 +472,17 @@ func encodeFileOpWire(req FileOpRequest, anchor string) ([]byte, error) {
 		if req.ExpectedSHA256 != "" {
 			wire["expected_sha256"] = req.ExpectedSHA256
 		}
+	case FileOpStream:
+		if !streamPartialRE.MatchString(filepath.Base(req.Path)) {
+			return nil, fmt.Errorf("stream path must be a %s file: %w", "<dir>/.fleet-download-<24 hex>.partial", ErrFileOpUnsafePath)
+		}
+		if req.Final != "" && (req.Final != filepath.Base(req.Final) || req.Final == "." || req.Final == ".." || strings.HasPrefix(req.Final, ".fleet-")) {
+			return nil, fmt.Errorf("stream final name %q must be a plain file name: %w", req.Final, ErrFileOpUnsafePath)
+		}
+		wire["offset"] = req.Offset
+		wire["data_b64"] = base64.StdEncoding.EncodeToString(req.Data)
+		wire["final"] = req.Final
+		wire["abort"] = req.Abort
 	case FileOpEdit:
 		wire["old_b64"] = base64.StdEncoding.EncodeToString([]byte(req.OldText))
 		wire["new_b64"] = base64.StdEncoding.EncodeToString([]byte(req.NewText))

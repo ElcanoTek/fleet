@@ -20,7 +20,8 @@ import (
 )
 
 // xlsxMaxBytes bounds the workbook the tool will load into memory for its
-// pure-library zip/XML transform. Matches download_url's 100 MB cap.
+// pure-library zip/XML transform (download_url streams to disk and caps
+// downloads separately).
 const xlsxMaxBytes = 100 * 1024 * 1024
 
 type XLSXParams struct {

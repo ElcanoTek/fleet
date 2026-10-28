@@ -3,15 +3,20 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -228,33 +233,97 @@ func TestDownloadURL_NoRedirectChainIsSingleEntry(t *testing.T) {
 	}
 }
 
+func shrinkDownloadLimits(t *testing.T, maxBytes int64, chunk int) {
+	t.Helper()
+	prevMax, prevChunk := downloadURLMaxBytes, downloadURLChunkBytes
+	downloadURLMaxBytes, downloadURLChunkBytes = maxBytes, chunk
+	t.Cleanup(func() { downloadURLMaxBytes, downloadURLChunkBytes = prevMax, prevChunk })
+}
+
+func noPartialFiles(t *testing.T, dir string) {
+	t.Helper()
+	matches, _ := filepath.Glob(filepath.Join(dir, ".fleet-download-*"))
+	if len(matches) > 0 {
+		t.Fatalf("partial download left behind: %v", matches)
+	}
+}
+
 func TestDownloadURL_SizeCapEnforced(t *testing.T) {
+	shrinkDownloadLimits(t, 1<<20, 64<<10)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Stream past the cap, byte by byte cheaply.
-		chunk := make([]byte, 1024*1024)
-		for i := 0; i < 101; i++ {
+		// Stream past the cap without a Content-Length, so the cap is hit
+		// mid-stream after several chunks have landed.
+		chunk := make([]byte, 64<<10)
+		for i := 0; i < 20; i++ {
 			if _, err := w.Write(chunk); err != nil {
 				return
 			}
+			w.(http.Flusher).Flush()
 		}
 	}))
 	defer srv.Close()
 
 	ctx, dir := downloadCtx(t)
 	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/big.bin"})
-	if res.Status != "error" {
-		t.Fatalf("want error past 100MB cap, got %+v", res)
+	if res.Status != "error" || !strings.Contains(res.Error, "cap") {
+		t.Fatalf("want a cap error, got %+v", res)
 	}
-	if !strings.Contains(res.Error, "cap") {
-		t.Fatalf("error should mention cap, got %q", res.Error)
-	}
-	// Partial file should have been cleaned up.
 	matches, _ := filepath.Glob(filepath.Join(dir, "*"))
-	for _, m := range matches {
-		if strings.Contains(filepath.Base(m), "__") {
-			t.Fatalf("partial download was not cleaned up: %s", m)
-		}
+	if len(matches) > 0 {
+		t.Fatalf("an over-cap download left files: %v", matches)
 	}
+	noPartialFiles(t, dir)
+}
+
+func TestDownloadURL_DeclaredOversizeIsRefusedBeforeWriting(t *testing.T) {
+	shrinkDownloadLimits(t, 1<<20, 64<<10)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(2<<20))
+		_, _ = w.Write(make([]byte, 2<<20))
+	}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/big.bin"})
+	if res.Status != "error" || !strings.Contains(res.Error, "cap") {
+		t.Fatalf("want a cap error, got %+v", res)
+	}
+	noPartialFiles(t, dir)
+}
+
+func TestDownloadURL_StreamsManyChunksIntoOneFile(t *testing.T) {
+	shrinkDownloadLimits(t, 1<<20, 4<<10)
+	want := make([]byte, 50_000)
+	for i := range want {
+		want[i] = byte(i % 251)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(want)
+	}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/report.csv"})
+	if res.Status != "success" || res.SizeBytes != int64(len(want)) {
+		t.Fatalf("%+v", res)
+	}
+	got, err := os.ReadFile(res.SavedTo)
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("saved %d bytes (err %v), want %d identical", len(got), err, len(want))
+	}
+	noPartialFiles(t, dir)
+}
+
+func TestDownloadURL_EmptyBodySavesAnEmptyFile(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer srv.Close()
+	ctx, dir := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/empty.csv"})
+	if res.Status != "success" || res.SizeBytes != 0 {
+		t.Fatalf("%+v", res)
+	}
+	if info, err := os.Stat(res.SavedTo); err != nil || info.Size() != 0 {
+		t.Fatalf("%v %v", info, err)
+	}
+	noPartialFiles(t, dir)
 }
 
 func TestDownloadURL_DeduplicatesByURLHash(t *testing.T) {
@@ -585,5 +654,127 @@ func TestDownloadURL_HTTPErrorPreviewIsRuneSafe(t *testing.T) {
 	}
 	if !strings.HasSuffix(res.Error, strings.Repeat("x", 199)+"...") {
 		t.Fatalf("preview should stop before the straddling rune, got %q", res.Error)
+	}
+}
+
+func TestDownloadURL_FollowsAnInterstitialToTheFile(t *testing.T) {
+	var srvURL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			fmt.Fprintf(w, `<html><head><meta http-equiv="refresh" content="0; url=%s/landing"></head></html>`, srvURL)
+		case "/landing":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<p>Your report is ready. <a href="/files/report.csv?sig=a&amp;x=1">Download</a> <a href="/help">Help</a></p>`)
+		case "/files/report.csv":
+			w.Header().Set("Content-Type", "text/csv")
+			fmt.Fprint(w, "a,b\n1,2\n")
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || len(res.HTMLChase) != 2 || !strings.HasSuffix(res.Filename, ".csv") || res.Warning != "" {
+		t.Fatalf("%+v", res)
+	}
+	got, _ := os.ReadFile(res.SavedTo)
+	sum := sha256.Sum256(got)
+	if string(got) != "a,b\n1,2\n" || res.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatalf("saved %q sha %q", got, res.SHA256)
+	}
+	if !strings.Contains(res.HTMLChase[1], "sig=a&x=1") {
+		t.Fatalf("entity-decoded target: %v", res.HTMLChase)
+	}
+}
+
+func TestDownloadURL_SavesAnOrdinaryPageAndWarnsOnHTMLForADataLink(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<form>Sign in</form><a href="/a.csv">a</a><a href="/b.csv">b</a>`)
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/export/report.csv"})
+	if res.Status != "success" || len(res.HTMLChase) != 0 || res.Warning == "" {
+		t.Fatalf("%+v", res)
+	}
+	got, _ := os.ReadFile(res.SavedTo)
+	if !strings.Contains(string(got), "Sign in") {
+		t.Fatalf("page not saved whole: %q", got)
+	}
+}
+
+func TestInterstitialTarget(t *testing.T) {
+	base, _ := url.Parse("https://t.example/c/1")
+	for page, want := range map[string]string{
+		`<meta content="5;URL='https://f.example/r.xlsx'" http-equiv="refresh">`:         "https://f.example/r.xlsx",
+		`<a href="/dl/r.zip">r</a> <a href="/dl/r.zip">again</a>`:                        "https://t.example/dl/r.zip",
+		`<a href="/a.csv">a</a><a href="/b.csv">b</a>`:                                   "",
+		`<a href="javascript:go()">x.csv</a>`:                                            "",
+		`<a href="/about">about</a>`:                                                     "",
+		`<p>Your scan is ready: <a href="/att/scan.JPG">scan</a></p>`:                    "https://t.example/att/scan.JPG",
+		`<a class=btn href=/files/r.csv>Download</a>`:                                    "https://t.example/files/r.csv",
+		`<!-- <a href="/old/r.csv">r</a> --><p>Nothing here</p>`:                         "",
+		`<script>var s = '<meta http-equiv="refresh" content="0;url=/x.csv">';</script>`: "",
+		`<meta http-equiv="Refresh" content="0; URL=/dl/r.csv?a=1&amp;b=2">`:             "https://t.example/dl/r.csv?a=1&b=2",
+	} {
+		if got := interstitialTarget([]byte(page), base); got != want {
+			t.Errorf("%s: got %q want %q", page, got, want)
+		}
+	}
+}
+
+func TestDownloadURL_ChaseKeepsCookiesAndWarnsOnAnExpiredTarget(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "1", Path: "/"})
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<a href="/go/report.csv">Download</a>`)
+		case "/go/report.csv":
+			if c, err := r.Cookie("s"); err != nil || c.Value != "1" {
+				http.Error(w, "no session", http.StatusForbidden)
+				return
+			}
+			http.Redirect(w, r, "/cdn/report.csv", http.StatusFound)
+		case "/cdn/report.csv":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<form>Sign in again</form>`)
+		}
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || len(res.HTMLChase) != 1 {
+		t.Fatalf("cookie not carried to the chased target: %+v", res)
+	}
+	if res.Warning == "" {
+		t.Fatalf("HTML from a chased data link must warn: %+v", res)
+	}
+	if last := res.RedirectChain[len(res.RedirectChain)-1]; !strings.HasSuffix(last, "/cdn/report.csv") {
+		t.Fatalf("redirect chain misses the post-chase hop: %v", res.RedirectChain)
+	}
+}
+
+func TestDownloadURL_WarnsWhenAChasedFileRedirectsToALogin(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/track":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<a href="/report.csv">Download</a>`)
+		case "/report.csv":
+			http.Redirect(w, r, "/login", http.StatusFound)
+		case "/login":
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, `<form>Sign in</form>`)
+		}
+	}))
+	defer srv.Close()
+	ctx, _ := downloadCtx(t)
+	res := runDownloadURL(ctx, fsTestSandbox(t), DownloadURLParams{URL: srv.URL + "/track"})
+	if res.Status != "success" || res.Warning == "" {
+		t.Fatalf("a chased data link that ends on a login page must warn: %+v", res)
 	}
 }

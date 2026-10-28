@@ -260,6 +260,7 @@ above fails otherwise.
 - [`DEPLOYMENT.md`](DEPLOYMENT.md) — Deploying fleet
 - [`DISCUSS-RUN.md`](DISCUSS-RUN.md) — Discuss this run
 - [`DOCTOR.md`](DOCTOR.md) — Doctor — box-level diagnose + repair (`fleet doctor` + Settings → Admin → Doctor)
+- [`DOWNLOAD_URL.md`](DOWNLOAD_URL.md) — download_url: streamed downloads (512 MB cap) and HTML interstitials
 - [`EMAIL-LAST-BATCHES.md`](EMAIL-LAST-BATCHES.md) — Email-last batches: definitive create failures settle, an abort still sends the one summary email (ADR-0081)
 - [`ENV-CLI.md`](ENV-CLI.md) — `fleet env` — inspect + edit the deployment env files
 - [`EVALS.md`](EVALS.md) — Self-hosted evals & regression gating
