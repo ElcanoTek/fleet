@@ -509,6 +509,7 @@ describe("historyToMessages — a stopped turn replayed from history", () => {
 describe("prettyToolName", () => {
   it.each([
     ["mcp_email_search_emails", "email: search_emails"],
+    ["mcp_explorer_get_email", "email: get_email"],
     ["mcp_sendgrid_send_email", "sendgrid: send_email"],
     ["mcp_fastio_download", "fastio_download"],
     ["bash", "bash"],
@@ -530,6 +531,9 @@ describe("humanToolLabel", () => {
     ["smart_search", "Searching the web"],
     ["mcp_email_send_email", "Sending email"],
     ["mcp_email_search_emails", "Searching inbox"],
+    ["mcp_explorer_find_latest_report", "Searching inbox"],
+    ["mcp_explorer_get_download_link", "Getting email file link"],
+    ["mcp_explorer_extract_download_links", "Email extract download links"],
     ["mcp_email_archive_thread", "Email archive thread"],
     ["mcp_sendgrid_send", "SendGrid send"],
     // SSP MCPs strip both `mcp_<server>_` and the redundant tool
@@ -567,6 +571,7 @@ describe("toolIcon", () => {
     expect(toolIcon("web_fetch")).toBe("🔎");
     expect(toolIcon("smart_search")).toBe("🔎");
     expect(toolIcon("mcp_email_search_emails")).toBe("📧");
+    expect(toolIcon("mcp_explorer_get_email")).toBe("📧");
     expect(toolIcon("mcp_sendgrid_send_email")).toBe("📤");
     expect(toolIcon("something_unknown")).toBe("🛠");
   });

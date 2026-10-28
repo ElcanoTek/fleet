@@ -11,8 +11,10 @@
 # #787 layers ambiguity-safe and stale-safe edit semantics on this same seam:
 # full-file hashes, optional expected_sha256, no-op rejection, and a bounded
 # unified diff. #1745 gives write the same guard and makes an overwrite
-# visible (the replaced file's hash, size and a bounded diff). Those semantics
-# must never regress the #784 confinement.
+# visible (the replaced file's hash, size and a bounded diff). "stream" lands
+# a large download chunk by chunk in a hidden partial file and renames it into
+# place without replacing anything. Those semantics must never regress the
+# #784 confinement.
 import base64
 import contextlib
 import difflib
@@ -732,6 +734,119 @@ def do_write(req):
             os.close(parent_fd)
 
 
+# A streamed write lands chunk by chunk in a hidden partial file and is then
+# renamed into place without replacing anything. Only names of this exact form
+# can be streamed, appended to, committed or aborted: the op can never extend
+# or delete a file the agent made.
+STREAM_PARTIAL_RE = re.compile(r"^\.fleet-download-[0-9a-f]{24}\.partial$")
+
+
+def _plain_name(name):
+    return (
+        bool(name) and name not in (".", "..") and "/" not in name and "\0" not in name
+    )
+
+
+def do_stream(req):
+    """One step of a streamed write: append data_b64 at offset (0 creates the
+    partial file), then optionally commit it to final or abort it."""
+    parent_fd = -1
+    fd = -1
+    try:
+        # Only the first chunk may create directories; an abort never does.
+        first = int(req.get("offset", 0)) == 0 and not req.get("abort")
+        parent_fd, name = _open_parent(req, create=first)
+        if not STREAM_PARTIAL_RE.match(name):
+            raise UnsafePath(
+                "streamed writes only touch .fleet-download-*.partial files"
+            )
+        if req.get("abort"):
+            if _lstat_at(parent_fd, name) is not None:
+                os.unlink(name, dir_fd=parent_fd)
+            return {"ok": True, "err_kind": "", "err": "", "data_b64": "", "size": 0}
+        _test_pause(req, parent_fd)
+        offset = int(req.get("offset", 0))
+        data = base64.b64decode(req.get("data_b64", ""))
+        if offset == 0:
+            fd = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                0o600,
+                dir_fd=parent_fd,
+            )
+        else:
+            before = _lstat_at(parent_fd, name)
+            if before is None:
+                return fail("stale", "partial file is gone")
+            fd = os.open(
+                name,
+                os.O_WRONLY
+                | os.O_APPEND
+                | os.O_NOFOLLOW
+                | os.O_CLOEXEC
+                | os.O_NONBLOCK,
+                dir_fd=parent_fd,
+            )
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or not _same_file(before, info):
+                raise UnsafePath("partial file changed while it was being written")
+            if info.st_size != offset:
+                return fail(
+                    "stale",
+                    "partial file holds %d bytes, expected %d" % (info.st_size, offset),
+                )
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+        written_info = os.fstat(fd)
+        size = written_info.st_size
+        final = req.get("final") or ""
+        if final:
+            os.fsync(fd)
+        os.close(fd)
+        fd = -1
+        if final:
+            if not _plain_name(final) or final.startswith(".fleet-"):
+                raise UnsafePath("final name must be a plain file name")
+            # The entry linked must still be the file just written: linkat
+            # never follows, so a swapped-in symlink would otherwise be linked.
+            if not _same_file(_lstat_at(parent_fd, name), written_info):
+                raise UnsafePath("partial file changed before it was committed")
+            # link + unlink commits without replacing: an entry that appeared
+            # at final meanwhile fails the link instead of being overwritten.
+            try:
+                os.link(
+                    name,
+                    final,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                return fail("stale", "a file named %s appeared meanwhile" % final)
+            if not _same_file(_lstat_at(parent_fd, final), written_info):
+                raise UnsafePath("committed file changed during the rename")
+            os.unlink(name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        return {"ok": True, "err_kind": "", "err": "", "data_b64": "", "size": size}
+    except FileExistsError:
+        return fail("stale", "partial file already exists")
+    except IsADirectoryError:
+        return fail("is_dir", "path is a directory")
+    except UnsafePath as exc:
+        return fail("unsafe_path", str(exc))
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return fail("unsafe_path", "partial file changed to a symlink")
+        return fail("", "stream write failed: %s" % exc)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
+
+
 def _changed_window(old, new, context):
     """Drop the lines old and new share at the start and the end, keeping
     context lines around the change: (offset of the window, old, new)."""
@@ -1064,6 +1179,7 @@ def main():
         "read": do_read,
         "write": do_write,
         "edit": do_edit,
+        "stream": do_stream,
         "bind_root": do_bind_root,
     }.get(req.get("op"))
     if handler is None:

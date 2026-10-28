@@ -96,6 +96,12 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   are bound to the per-turn sandbox and move every file byte through the
   `RunFileOp` seam (nil sandbox fails closed, no host fallback), while their
   network halves stay host-side under the brokered-fetch class above.
+  `download_url` streams a large body through the seam's `stream` op: chunks
+  append, at a checked offset, to a hidden `.fleet-download-<random>.partial`
+  file that the last chunk renames into place without replacing anything (or
+  that an abort removes). The executor refuses that op for any other name, so
+  it cannot extend or delete a file the agent made, and the walk, no-follow
+  and bound-root checks are the same as for a write.
 - **Approval/email broker staging**: `email_materialize` reads a size-bounded,
   conversation-confined content file after the send-email approval stager has
   selected it; inline email previews similarly read validated upload/workspace
