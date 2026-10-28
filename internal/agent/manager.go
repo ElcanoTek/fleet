@@ -1969,11 +1969,18 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 // skips it) — and the retried turn re-issued the side effect blind, the exact
 // hazard the #798 journal closes. Best-effort: a commit failure is logged,
 // the original stream error still surfaces.
-func commitPartialSideEffects(runErr error, res agentcore.Result, commit func([]HistoryEntry, bool) error) {
+//
+// The records close with a turn_summary carrying the failure. Without it the
+// reloaded transcript held a turn of tool calls with no answer and no summary,
+// which reads exactly like a model that stopped on its own: the web drew "The
+// assistant finished without a written reply." over a turn that had failed,
+// and lost the turn's cost.
+func commitPartialSideEffects(runErr error, res agentcore.Result, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
 	if !errors.Is(runErr, agentcore.ErrCommittedSideEffects) || len(res.Entries) == 0 || commit == nil {
 		return
 	}
-	if cerr := commit(mapRunEntries(res.Entries), false); cerr != nil {
+	entries := append(mapRunEntries(res.Entries), mustEntry("assistant", "turn_summary", summary))
+	if cerr := commit(entries, false); cerr != nil {
 		log.Printf("RunTurn: committing partial side-effect transcript failed: %v", cerr)
 	}
 }
@@ -2053,8 +2060,22 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 		sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
 		return nil, runErr
 	}
-	commitPartialSideEffects(runErr, res, commitTerminal)
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
+	failure := turnFailureFor(reason, modelSlug, status, runErr)
+	usage := res.Usage
+	commitPartialSideEffects(runErr, res, TurnSummaryContent{
+		CostUSD:              usage.CostUSD,
+		PromptTokens:         usage.PromptTokens,
+		PromptTokensLastStep: usage.LastStepInputTokens,
+		CompletionTokens:     usage.CompletionTokens,
+		CachedTokens:         usage.CachedTokens,
+		CacheCreationTokens:  usage.CacheCreationTokens,
+		DurationMs:           int(time.Since(startedAt).Milliseconds()),
+		Failure:              &failure,
+		Model:                modelSlug,
+		SwappedToFallback:    res.SwappedToFallback,
+		Compactions:          res.Compactions,
+	}, commitTerminal)
 	// modelSlug is a user-selected string and runErr can embed provider
 	// response text — CR/LF-strip both so neither can forge a log entry
 	// (log-injection guard); %q on the slug keeps a hostile value visibly
@@ -2166,6 +2187,20 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 	if streamErr != nil {
 		raw = streamErr.Error()
 	}
+	failure := turnFailureFor(reason, failedModel, status, streamErr)
+	sink.Emit("turn.model_required", map[string]any{
+		"reason":       failure.Reason,
+		"failed_model": failure.FailedModel,
+		"status_code":  failure.StatusCode,
+		"message":      failure.Message,
+		"raw":          truncate(raw, 1000),
+	})
+}
+
+// turnFailureFor resolves the turn.model_required card: the same value is
+// emitted live and persisted on the failed turn's turn_summary, so a reload
+// shows what the live stream showed.
+func turnFailureFor(reason agentcore.StreamErrorReason, failedModel string, status int, streamErr error) TurnFailure {
 	// One resolved status for the payload AND the message. An event whose
 	// message says "rate limiting" while its structured status_code says "no
 	// provider error" is worse than either alone: it corrupts telemetry and any
@@ -2178,13 +2213,12 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 			status = providerStatus
 		}
 	}
-	sink.Emit("turn.model_required", map[string]any{
-		"reason":       string(reason),
-		"failed_model": failedModel,
-		"status_code":  status,
-		"message":      humanMessageForReason(reason, status, streamErr),
-		"raw":          truncate(raw, 1000),
-	})
+	return TurnFailure{
+		Reason:      string(reason),
+		FailedModel: failedModel,
+		StatusCode:  status,
+		Message:     humanMessageForReason(reason, status, streamErr),
+	}
 }
 
 // humanMessageForReason is the one sentence the card shows. streamErr lets the

@@ -1562,6 +1562,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         cache_creation_tokens?: number;
         duration_ms?: number;
         cancelled?: boolean;
+        failure?: ModelRequiredEventPayload;
         model?: string;
       };
       current.summary = {
@@ -1589,6 +1590,12 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // interrupted (recorded server-side as an error): it reads as stopped
       // here, and its "interrupted" note above says why.
       if (c.cancelled === true) current.cancelled = true;
+      // A turn whose provider failed after a tool ran keeps those tool records
+      // and closes with the turn.model_required card it showed live. Without
+      // this the reload read as a finished turn with no reply.
+      if (c.failure && typeof c.failure === "object") {
+        current = applyModelRequired(current, c.failure);
+      }
       continue;
     }
 

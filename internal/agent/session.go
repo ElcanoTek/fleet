@@ -216,6 +216,12 @@ type TurnSummaryContent struct {
 	CacheCreationTokens  int     `json:"cache_creation_tokens"`
 	DurationMs           int     `json:"duration_ms"`
 	Cancelled            bool    `json:"cancelled,omitempty"`
+	// Failure is set when the turn ended on a provider failure after a tool
+	// had already run (ADR-0035): the executed calls commit, and this is the
+	// only durable record that the turn failed rather than finished. It
+	// carries the turn.model_required card so a reload shows that card, not
+	// "The assistant finished without a written reply."
+	Failure *TurnFailure `json:"failure,omitempty"`
 	// Model is the OpenRouter slug that drove this turn (e.g.
 	// "anthropic/claude-sonnet-4.6"). Stored per-turn because the
 	// per-chat model override can change mid-conversation, and a silent
@@ -232,6 +238,15 @@ type TurnSummaryContent struct {
 	// compaction summary instead of reverting to the uncompacted history and
 	// re-running the uncached summarizer on every turn).
 	Compactions []agentcore.CompactionRecord `json:"compactions,omitempty"`
+}
+
+// TurnFailure is the persisted form of a turn.model_required event: the
+// payload minus `raw`, whose provider text is for the live log only.
+type TurnFailure struct {
+	Reason      string `json:"reason"`
+	FailedModel string `json:"failed_model,omitempty"`
+	StatusCode  int    `json:"status_code,omitempty"`
+	Message     string `json:"message"`
 }
 
 type toolResultSelection struct {

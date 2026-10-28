@@ -489,6 +489,40 @@ describe("historyToMessages — a stopped turn replayed from history", () => {
     }
   });
 
+  it("restores the failed-turn card when the provider failed after a tool ran", () => {
+    // The tool ran, then the provider failed: fleet commits the tool records
+    // and a summary carrying the turn.model_required card it showed live.
+    const failure = {
+      reason: "retry_exhausted",
+      failed_model: "google/gemini-4-argon",
+      status_code: 502,
+      message: "The selected model's provider is failing repeatedly. Pick a different model to continue.",
+    };
+    const msgs = historyToMessages([
+      prompt,
+      sleepCall,
+      { ...cancelledResult, content: { id: "call_1", name: "run_python", text: '{"stdout":""}', is_err: false } },
+      summary({ failure }),
+    ]);
+    expect(msgs).toHaveLength(2);
+    const failed = msgs[1];
+    expect(failed).toMatchObject({
+      state: "done",
+      failed: true,
+      content: failure.message,
+      modelRequired: {
+        reason: "retry_exhausted",
+        failedModel: "google/gemini-4-argon",
+        statusCode: 502,
+        message: failure.message,
+      },
+    });
+    expect(failed.cancelled).toBeUndefined();
+    expect(failed.summary?.costUsd).toBe(0.0012);
+    expect(failed.toolCalls?.[0]).toMatchObject({ id: "call_1", state: "done" });
+    expect(showsEmptyReplyNotice(failed)).toBe(false);
+  });
+
   it("keeps the stop on its own turn — the next turn is not cancelled", () => {
     const msgs = historyToMessages([
       prompt,
