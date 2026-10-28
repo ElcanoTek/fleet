@@ -19,6 +19,7 @@ describe("toolMeta", () => {
     expect(toolMeta("bash").category).toBe("shell");
     expect(toolMeta("publish_artifact").category).toBe("files");
     expect(toolMeta("confirm_audit").category).toBe("audit");
+    expect(toolMeta("mcp_explorer_search_emails")).toMatchObject({ category: "email", server: "explorer", action: "search_emails" });
     expect(toolMeta("mcp_email_search_emails")).toMatchObject({ category: "email", server: "email", action: "search_emails" });
     // A multi-word server splits at its own boundary, not the first underscore.
     expect(toolMeta("mcp_ses_outbound_send_email")).toMatchObject({ category: "send", server: "ses_outbound", action: "send_email" });

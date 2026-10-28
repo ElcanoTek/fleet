@@ -93,27 +93,31 @@ func TestAnnotateDateWindow_StaleDateTo(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"sender_contains":"reports@openx.com","subject_contains":"OpenX | Daily","date_from":"2026-08-12","date_to":"2026-08-12","has_payload":true}`
 	result := `{"status":"success","matches_found":0,"emails":[]}`
-	got := AnnotateDateWindow("mcp_email_search_emails", input, result, now)
-	if !strings.Contains(got, "[fleet date-window]") {
-		t.Fatalf("missing stale-window note:\n%s", got)
-	}
-	if !strings.Contains(got, "date_to=2026-08-12") {
-		t.Fatalf("note should name the stale date_to:\n%s", got)
-	}
-	if !strings.Contains(got, "runtime_today=2026-08-13") {
-		t.Fatalf("note should name runtime_today:\n%s", got)
-	}
-	if !strings.Contains(got, "freshness_window=2026-08-11..2026-08-13") {
-		t.Fatalf("note should name the freshness window:\n%s", got)
+	for _, toolName := range []string{"mcp_explorer_search_emails", "mcp_email_search_emails"} {
+		got := AnnotateDateWindow(toolName, input, result, now)
+		if !strings.Contains(got, "[fleet date-window]") {
+			t.Fatalf("%s: missing stale-window note:\n%s", toolName, got)
+		}
+		if !strings.Contains(got, "date_to=2026-08-12") {
+			t.Fatalf("%s: note should name the stale date_to:\n%s", toolName, got)
+		}
+		if !strings.Contains(got, "runtime_today=2026-08-13") {
+			t.Fatalf("%s: note should name runtime_today:\n%s", toolName, got)
+		}
+		if !strings.Contains(got, "freshness_window=2026-08-11..2026-08-13") {
+			t.Fatalf("%s: note should name the freshness window:\n%s", toolName, got)
+		}
 	}
 }
 
 func TestAnnotateDateWindow_OnOrBeforeAlias(t *testing.T) {
 	now := mustUTC(t, "2026-08-13T16:00:00Z")
 	input := `{"sender_contains":"openx.com","on_or_before":"2026-08-12","lookback_days":3}`
-	got := AnnotateDateWindow("mcp_email_find_latest_report", input, `{"status":"success"}`, now)
-	if !strings.Contains(got, "on_or_before=2026-08-12") {
-		t.Fatalf("should treat on_or_before as an upper bound:\n%s", got)
+	for _, toolName := range []string{"mcp_explorer_find_latest_report", "mcp_email_find_latest_report"} {
+		got := AnnotateDateWindow(toolName, input, `{"status":"success"}`, now)
+		if !strings.Contains(got, "on_or_before=2026-08-12") {
+			t.Fatalf("%s: should treat on_or_before as an upper bound:\n%s", toolName, got)
+		}
 	}
 }
 

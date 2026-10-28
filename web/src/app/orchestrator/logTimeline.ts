@@ -118,7 +118,7 @@ export function toolMeta(name: string): ToolMeta {
     let category: ToolCategory = "mcp";
     if (/send_email$|^send_/.test(action) || server === "ses_outbound" || server === "sendgrid") {
       category = "send";
-    } else if (server === "email") {
+    } else if (server === "email" || server === "explorer") {
       category = "email";
     } else if (server === "pages") {
       category = "pages";
