@@ -24,7 +24,7 @@ import (
 // DefaultTimeout bounds one ACP turn unless --timeout says otherwise. It is a
 // hang guard for the ACP client, not a governance ceiling: fleet's own
 // cost/token/iteration ceilings still apply to every turn server-side.
-const DefaultTimeout = 30 * time.Minute
+const DefaultTimeout = 4 * time.Hour
 
 // hangUpWait bounds how long `fleet acp`, once its client has gone, waits for
 // the prompts still in flight to stop their fleet turns before it exits. A
@@ -119,7 +119,7 @@ func run(argv []string, in io.Reader, out, errOut io.Writer, listen func() <-cha
 	timeout := fs.Duration("timeout", DefaultTimeout, "stop a turn that runs longer than this (0 = no bound)")
 	fs.SetOutput(errOut)
 	fs.Usage = func() {
-		fmt.Fprintln(errOut, "usage: fleet acp [--email you@org] [--server URL] [--model slug] [--timeout 30m]")
+		fmt.Fprintln(errOut, "usage: fleet acp [--email you@org] [--server URL] [--model slug] [--timeout 4h]")
 		fmt.Fprintln(errOut, "\nRun fleet as an Agent Client Protocol agent on stdin/stdout, for ACP clients")
 		fmt.Fprintln(errOut, "(Zed, JetBrains, Neovim, Emacs, …) to launch. Each prompt is one governed turn")
 		fmt.Fprintln(errOut, "on the running fleet server, exactly like `fleet chat`. Buzz's buzz-acp needs")
