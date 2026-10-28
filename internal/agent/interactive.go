@@ -192,7 +192,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	// scope, roster) for buildChild to inherit — and to the TURN's
 	// InteractivePolicy as its budget seam, so a child's sliced ceiling and
 	// charge-back run against the same accounting the chat cost chip reads.
-	// Same walls as scheduled: depth 1, fan-out 5, 10% remaining, refuse
+	// Same walls as scheduled: depth 1, fan-out 20, 10% remaining, refuse
 	// over-cap, monotonic privilege.
 	if tc.Subagent.Enabled {
 		// obs is the turn's SSE sink: handing it to the host is what lets a

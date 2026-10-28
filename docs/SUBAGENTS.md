@@ -165,7 +165,7 @@ pre-existing `TestSpawn_TimeoutBranchAndChargeBack`.
 One governed core (`agentcore.Run`); monotonic privilege (inherit sandbox / MCP /
 creds, subtract only); hard budget split (≤10% of remaining per child, refuse
 over-cap, atomic reserve+settle under the parent mutex); depth 1 (children have
-no spawn tool); fan-out 5; credentials host-side.
+no spawn tool); fan-out 20; credentials host-side.
 
 ## Honest scope
 

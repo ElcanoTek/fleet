@@ -119,7 +119,7 @@ func TestLoad_DefaultsApply(t *testing.T) {
 		t.Errorf("ShutdownGraceSeconds default: got %d, want 30", cfg.ShutdownGraceSeconds)
 	}
 	// Sub-agent / delegation defaults (#175 tightened by #264): depth 1
-	// (parent → sub-agent only), fan-out 5, per-child budget fraction 0.10.
+	// (parent → sub-agent only), fan-out 20, per-child budget fraction 0.10.
 	if cfg.SubagentsMaxDepth != 1 {
 		t.Errorf("SubagentsMaxDepth default: got %d, want 1", cfg.SubagentsMaxDepth)
 	}

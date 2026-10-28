@@ -253,7 +253,7 @@ rarely reach their cap — it just makes the number visible at boot rather than 
 | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | `0` (off) | Fail a task awaiting input longer than this. |
 | `FLEET_TASK_WALL_TIMEOUT` | `4h` | Per-run wall-clock ceiling. `0` disables. |
 | `FLEET_PYTHON_REPL_MAX` | `32` | Persistent sandbox session cap (soft). `0` = unbounded. |
-| `FLEET_PYTHON_REPL_IDLE_TTL` | `30m` | Idle time before a persistent sandbox is reaped. |
+| `FLEET_PYTHON_REPL_IDLE_TTL` | `2h` | Idle time before a persistent sandbox is reaped. |
 
 ## Honest scope
 
