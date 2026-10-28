@@ -598,6 +598,20 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError, cause er
 	e.logSession.AddMessageWithMetadata(roleUser, note, nil, nil, &msgType, nil, nil, "")
 }
 
+// waitStreamBlipRetry logs a mid-stream retry and waits streamBlipRetryDelay
+// or returns a context-cancellation error.
+func (e *engine) waitStreamBlipRetry(ctx context.Context, providerErr *fantasy.ProviderError, cause error) error {
+	log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
+		providerErrStatus(providerErr), streamBlipRetryDelay)
+	e.logStreamBlipRetry(providerErr, cause)
+	select {
+	case <-time.After(streamBlipRetryDelay):
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled during stream-blip retry: %w", ctx.Err())
+	}
+}
+
 // logFallbackSwap records a fallback-model promotion triggered by a stream
 // failure.
 func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.ProviderError) {
@@ -856,6 +870,15 @@ func (e *engine) streamRoundWithResilience(
 			sink.rollbackTo(attemptMark)
 			messages = dropTrailingAssistant(messages)
 		}
+		promoteFallback := func() {
+			e.logFallbackSwap(class, providerErr)
+			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
+			activeModel = e.takeFallback()
+			e.noteActiveModel(activeModel)
+			currentAgent = buildAgent(activeModel)
+			swappedToFallback = true
+			rollbackAttempt()
+		}
 		e.recordProviderHealthFailure(activeModel, class, providerErr)
 		switch class {
 		case streamErrorNone:
@@ -880,38 +903,29 @@ func (e *engine) streamRoundWithResilience(
 				continue
 			}
 			if canSwapFallback(e, activeModel, swappedToFallback) {
-				e.logFallbackSwap(class, providerErr)
-				emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
-				activeModel = e.takeFallback()
-				e.noteActiveModel(activeModel)
-				currentAgent = buildAgent(activeModel)
-				swappedToFallback = true
-				rollbackAttempt()
+				promoteFallback()
 				continue
 			}
 			return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (context still too large after forced compaction): %w", err)
 		case streamErrorRetryExhausted:
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
+				if !streamBlipRetryUsed && isUnretriedMidStreamError(err) {
+					streamBlipRetryUsed = true
+					if werr := e.waitStreamBlipRetry(ctx, providerErr, err); werr != nil {
+						return streamRoundOutcome{}, werr
+					}
+					rollbackAttempt()
+					continue
+				}
 				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (retry budget exhausted): %w: %w", ErrRetryBudgetExhausted, err)
 			}
-			e.logFallbackSwap(class, providerErr)
-			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
-			activeModel = e.takeFallback()
-			e.noteActiveModel(activeModel)
-			currentAgent = buildAgent(activeModel)
-			swappedToFallback = true
-			rollbackAttempt()
+			promoteFallback()
 			continue
 		case streamErrorStreamBlip:
 			if !streamBlipRetryUsed {
 				streamBlipRetryUsed = true
-				log.Printf("🔁 Mid-stream provider error (status=%d); retrying same model once after %s",
-					providerErrStatus(providerErr), streamBlipRetryDelay)
-				e.logStreamBlipRetry(providerErr, err)
-				select {
-				case <-time.After(streamBlipRetryDelay):
-				case <-ctx.Done():
-					return streamRoundOutcome{}, fmt.Errorf("context cancelled during stream-blip retry: %w", ctx.Err())
+				if werr := e.waitStreamBlipRetry(ctx, providerErr, err); werr != nil {
+					return streamRoundOutcome{}, werr
 				}
 				rollbackAttempt()
 				continue
@@ -919,13 +933,7 @@ func (e *engine) streamRoundWithResilience(
 			if !canSwapFallback(e, activeModel, swappedToFallback) {
 				return streamRoundOutcome{}, fmt.Errorf("fantasy agent error (stream blip persisted, no fallback available): %w: %w", ErrStreamBlipPersisted, err)
 			}
-			e.logFallbackSwap(class, providerErr)
-			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
-			activeModel = e.takeFallback()
-			e.noteActiveModel(activeModel)
-			currentAgent = buildAgent(activeModel)
-			swappedToFallback = true
-			rollbackAttempt()
+			promoteFallback()
 			continue
 		case streamErrorProviderRejected:
 			// A 4xx the provider returned for this model may not bind the
@@ -936,13 +944,7 @@ func (e *engine) streamRoundWithResilience(
 			if !e.canPromoteOnRejection(sink, attemptMark, activeModel, swappedToFallback) {
 				return streamRoundOutcome{}, fatalProviderError(err, providerErr)
 			}
-			e.logFallbackSwap(class, providerErr)
-			emitProviderFailover(sink, activeModel, e.fallbackModel, class, providerErr)
-			activeModel = e.takeFallback()
-			e.noteActiveModel(activeModel)
-			currentAgent = buildAgent(activeModel)
-			swappedToFallback = true
-			rollbackAttempt()
+			promoteFallback()
 			continue
 		case streamErrorFatal:
 			return streamRoundOutcome{}, fatalProviderError(err, providerErr)

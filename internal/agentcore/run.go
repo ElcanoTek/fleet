@@ -905,12 +905,13 @@ func streamErrorResult(ctx context.Context, serr error, cfg RunConfig, sink *str
 		}
 		return res, nil
 	}
-	if errors.Is(serr, ErrCommittedSideEffects) {
-		// A tool EXECUTED in the failing attempt (ADR-0035): the run must
-		// still fail — the whole-task RetryPolicy / the user owns the re-run
-		// — but the executed call's records must not vanish with the error.
-		// Discarding them here left the side effect visible only in the turn
-		// journal, never in canonical history, so the next attempt re-issued
+	if errors.Is(serr, ErrCommittedSideEffects) || sink.toolEventCount() > 0 {
+		// A tool EXECUTED in the run (either in the failing attempt, ADR-0035,
+		// or in an earlier completed step before a later step failed, ADR-0065):
+		// the run must still fail — the whole-task RetryPolicy / the user owns
+		// the re-run — but the executed call's records must not vanish with the
+		// error. Discarding them here left the side effect visible only in the
+		// turn journal, never in canonical history, so the next attempt re-issued
 		// the call blind (#798's exact hazard). Return the partial transcript
 		// alongside the error for the driver to persist.
 		res := cancelledResult(sink, usageOrch, label, activeModel, swappedToFallback, round)

@@ -1208,11 +1208,12 @@ func (r *roundState) checkpointStep(ctx context.Context, opts fantasy.PrepareSte
 
 func (r *roundState) canResume(class streamErrorClass, attempt sinkMark) bool {
 	if r.recoverySteps == 0 || r.recoveryMark.toolEvents != r.sink.toolEventCount() ||
-		r.recoveryMark.failedToolResults != attempt.failedToolResults {
+		r.recoveryMark.panickedToolResults != attempt.panickedToolResults {
 		return false
 	}
-	// Failed tool results can represent a partially executed mutation (including
-	// contained panics). Keep the existing conservative suppression for those.
+	// Contained tool panics can represent a partially executed mutation at an
+	// abnormal crash boundary. Ordinary tool error responses in already-completed
+	// steps are recorded in recoveryMessages and are not re-executed on resume.
 	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
 		class == streamErrorContextTooLarge || class == streamErrorProviderRejected
 }

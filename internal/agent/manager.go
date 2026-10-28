@@ -1975,8 +1975,17 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 // which reads exactly like a model that stopped on its own: the web drew "The
 // assistant finished without a written reply." over a turn that had failed,
 // and lost the turn's cost.
+func hasToolEntries(entries []agentcore.RunEntry) bool {
+	for _, e := range entries {
+		if e.Type == "tool_call" || e.Type == "tool_result" {
+			return true
+		}
+	}
+	return false
+}
+
 func commitPartialSideEffects(runErr error, res agentcore.Result, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
-	if !errors.Is(runErr, agentcore.ErrCommittedSideEffects) || len(res.Entries) == 0 || commit == nil {
+	if (!errors.Is(runErr, agentcore.ErrCommittedSideEffects) && !hasToolEntries(res.Entries)) || len(res.Entries) == 0 || commit == nil {
 		return
 	}
 	entries := append(mapRunEntries(res.Entries), mustEntry("assistant", "turn_summary", summary))

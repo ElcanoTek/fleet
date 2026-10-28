@@ -332,7 +332,7 @@ sit at the top of the list. Typically the first is fast and inexpensive — the 
 new conversations start on, and the right choice for pulls, checks, and
 formatting — and the second is stronger, for judgment calls, retrospectives, and
 anything where depth matters more than speed. By default those two are
-**Claude Haiku 5.5** (new conversations start on it) and **Gemini 4 Argon** (the
+**Claude Haiku 5.5** (new conversations start on it) and **Claude Opus 5.5** (the
 model a "switch to a stronger model" suggestion offers); your admin can point
 either slot at a different model. Your admin can also pin more models just
 below those two, sometimes under their own name and with a tag such as

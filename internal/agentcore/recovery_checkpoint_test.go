@@ -180,3 +180,53 @@ func (o *previewObserver) Observe(event string, payload map[string]any) {
 		o.text, _ = payload["text"].(string)
 	}
 }
+
+func TestStreamRecoveryContinuesAfterCompletedToolErrorStepWithoutFallback(t *testing.T) {
+	prevDelay := streamBlipRetryDelay
+	streamBlipRetryDelay = 0
+	t.Cleanup(func() { streamBlipRetryDelay = prevDelay })
+
+	var probes atomic.Int32
+	probeTool := fantasy.NewAgentTool("get_page", "check if page exists",
+		func(context.Context, panicTestInput, fantasy.ToolCall) (fantasy.ToolResponse, error) {
+			probes.Add(1)
+			return fantasy.NewTextErrorResponse(`{"ok":false,"error":"page not found: new-slug","code":"page_not_found"}`), nil
+		})
+	primary := &namedMockModel{name: "primary"}
+	var primaryCalls atomic.Int32
+	primary.streamFunc = func(context.Context, fantasy.Call) (fantasy.StreamResponse, error) {
+		switch primaryCalls.Add(1) {
+		case 1:
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeToolCall, ID: "probe-1", ToolCallName: "get_page", ToolCallInput: `{}`})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 20, OutputTokens: 10}})
+			}, nil
+		case 2:
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, ID: "failed", Delta: "partial draft before 504"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: &fantasy.ProviderError{Title: "stream error", Message: "Upstream idle timeout exceeded", ResponseBody: []byte(`{"error":{"code":504,"message":"Upstream idle timeout exceeded"}}`)}})
+			}, nil
+		default:
+			return streamTextThenFinish("published new page after probe"), nil
+		}
+	}
+	e := newMockEngine(t, primary)
+	e.maxIterations = 5
+	sink := newStreamSink(nil)
+	build := func(m fantasy.LanguageModel) fantasy.Agent {
+		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"), fantasy.WithTools(probeTool))
+	}
+	orch := newOrchestrationState(e.logSession, 50)
+	out, err := e.streamRoundWithResilience(context.Background(), orch, sink, 1000,
+		[]fantasy.Message{fantasy.NewUserMessage("create page if missing")}, build(primary), primary, false, build)
+	if err != nil {
+		t.Fatalf("expected completed-step recovery after ordinary tool error and mid-stream 504, got: %v", err)
+	}
+	if out.swappedToFallback || probes.Load() != 1 || primaryCalls.Load() != 3 {
+		t.Fatalf("fallback=%v probes=%d primaryCalls=%d", out.swappedToFallback, probes.Load(), primaryCalls.Load())
+	}
+	_, text := sink.snapshot()
+	if strings.Contains(text, "partial draft") || !strings.Contains(text, "published new page after probe") {
+		t.Fatalf("unexpected final text: %q", text)
+	}
+}
