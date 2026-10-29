@@ -294,29 +294,33 @@ function TeamPicker({
   const showInput = creating || !known;
   return (
     <span className="flex min-w-0 flex-1 items-center gap-[0.35rem]">
-      <select
-        id={id}
-        aria-label={label}
-        value={showInput ? "__new__" : value}
-        onChange={(e) => {
-          if (e.target.value === "__new__") {
-            setCreating(true);
-            onChange("");
-            return;
-          }
-          setCreating(false);
-          onChange(e.target.value);
-        }}
-        className={className}
-      >
-        <option value="">— No team</option>
-        {teams.map((t) => (
-          <option key={t} value={t}>
-            {t}
-          </option>
-        ))}
-        <option value="__new__">New team…</option>
-      </select>
+      {/* select-wrap draws the chevron inside the text inset (globals.css);
+          pr-8 keeps the label clear of it. */}
+      <span className="select-wrap block min-w-0 flex-1">
+        <select
+          id={id}
+          aria-label={label}
+          value={showInput ? "__new__" : value}
+          onChange={(e) => {
+            if (e.target.value === "__new__") {
+              setCreating(true);
+              onChange("");
+              return;
+            }
+            setCreating(false);
+            onChange(e.target.value);
+          }}
+          className={`${className ?? ""} appearance-none pr-8!`}
+        >
+          <option value="">— No team</option>
+          {teams.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+          <option value="__new__">New team…</option>
+        </select>
+      </span>
       {showInput ? (
         <input
           id={`${id}New`}
@@ -922,8 +926,9 @@ export default function AdminUsersPage() {
       ) : (
         <ConnPanel>
           {/* ── discovery toolbar: search on its own bar, filters sharing one
-              row as equal thirds (SETTINGS_INPUT carries w-full, so the
-              selects need the important override to sit side by side). ── */}
+              row as equal thirds. Each select sits in a select-wrap (the
+              chevron inside the text inset, globals.css) that takes the
+              third; the select fills it (SETTINGS_INPUT carries w-full). ── */}
           <div className="mb-3 grid gap-[0.55rem]">
             <input
               id="userSearch"
@@ -934,49 +939,55 @@ export default function AdminUsersPage() {
               className={SETTINGS_INPUT}
             />
             <div className="flex flex-wrap items-center gap-[0.55rem]">
-              <select
-                id="filterChatRole"
-                aria-label="Filter by chat role"
-                value={filterRole}
-                onChange={(e) => setFilterRole(e.target.value)}
-                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
-              >
-                <option value="all">Chat: all</option>
-                {ROLES.map((r) => (
-                  <option key={r} value={r}>
-                    Chat: {CHAT_ROLE_LABELS[r].toLowerCase()}
-                  </option>
-                ))}
-              </select>
-              <select
-                id="filterOpsRole"
-                aria-label="Filter by Ops Center role"
-                value={filterOps}
-                onChange={(e) => setFilterOps(e.target.value)}
-                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
-              >
-                <option value="all">Ops: all</option>
-                {OPS_ROLE_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    Ops: {o.label.toLowerCase()}
-                  </option>
-                ))}
-              </select>
-              <select
-                id="filterTeam"
-                aria-label="Filter by team"
-                value={filterTeam}
-                onChange={(e) => setFilterTeam(e.target.value)}
-                className={`${SETTINGS_INPUT} w-auto! min-w-[7.5rem] flex-1 basis-0`}
-              >
-                <option value="all">Team: all</option>
-                <option value="(none)">Team: none</option>
-                {teams.map((t) => (
-                  <option key={t} value={t}>
-                    Team: {t}
-                  </option>
-                ))}
-              </select>
+              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
+                <select
+                  id="filterChatRole"
+                  aria-label="Filter by chat role"
+                  value={filterRole}
+                  onChange={(e) => setFilterRole(e.target.value)}
+                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
+                >
+                  <option value="all">Chat: all</option>
+                  {ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      Chat: {CHAT_ROLE_LABELS[r].toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+              </span>
+              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
+                <select
+                  id="filterOpsRole"
+                  aria-label="Filter by Ops Center role"
+                  value={filterOps}
+                  onChange={(e) => setFilterOps(e.target.value)}
+                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
+                >
+                  <option value="all">Ops: all</option>
+                  {OPS_ROLE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      Ops: {o.label.toLowerCase()}
+                    </option>
+                  ))}
+                </select>
+              </span>
+              <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
+                <select
+                  id="filterTeam"
+                  aria-label="Filter by team"
+                  value={filterTeam}
+                  onChange={(e) => setFilterTeam(e.target.value)}
+                  className={`${SETTINGS_INPUT} appearance-none pr-8!`}
+                >
+                  <option value="all">Team: all</option>
+                  <option value="(none)">Team: none</option>
+                  {teams.map((t) => (
+                    <option key={t} value={t}>
+                      Team: {t}
+                    </option>
+                  ))}
+                </select>
+              </span>
               {!centralAuth && filterTeam !== "all" && filterTeam !== "(none)" ? (
                 renameDraft === null ? (
                   <button
