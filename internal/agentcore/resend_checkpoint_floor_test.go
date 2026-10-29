@@ -57,6 +57,17 @@ type sizedRun struct {
 	// summarizer, when set, is the run's compaction summarizer; nil keeps the
 	// engine's placeholder.
 	summarizer func(ctx context.Context, in CompactionSummarizeInput) fantasy.Message
+	// arg, when set, is the tick argument of call n; nil gives each call its
+	// own (n). A repeated argument is a re-run.
+	arg func(n int32) int32
+	// window is the model's context window; 0 is one far above anything the
+	// fixture sends, so neither the window-pressure path nor the pre-call
+	// context reducer touches the history.
+	window int
+	// headChars sizes the task message (0 is 400 characters). prefix is a
+	// number only the model reports; a head the in-round guard should count
+	// too goes here instead.
+	headChars int
 
 	mu    sync.Mutex
 	sizes []int // the resent size of each call, in call order
@@ -95,9 +106,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 			ticks.Add(1)
 			return fantasy.NewTextResponse(strings.Repeat("d", sr.resultChars)), nil
 		})
-	// A window far above anything the fixture sends, so neither the window-
-	// pressure path nor the pre-call context reducer touches the history.
-	recordContextMax(slug, 10_000_000)
+	recordContextMax(slug, cmp.Or(sr.window, 10_000_000))
 	model := &namedMockModel{name: slug}
 	var calls atomic.Int32
 	model.streamFunc = func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
@@ -112,7 +121,11 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 		sr.sent = append(sr.sent, sent)
 		sr.mu.Unlock()
 		if int(n) <= sr.toolSteps {
-			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), n), nil
+			arg := n
+			if sr.arg != nil {
+				arg = sr.arg(n)
+			}
+			return toolStep(fantasy.Usage{InputTokens: int64(size), OutputTokens: 10}, fmt.Sprintf("page-%d", n), arg), nil
 		}
 		return streamTextThenFinish("every page refreshed"), nil
 	}
@@ -121,7 +134,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
-			Input:                historyInput{system: "s", msgs: fillerMessages(1, 400), label: "refresh"},
+			Input:                historyInput{system: "s", msgs: fillerMessages(1, cmp.Or(sr.headChars, 400)), label: "refresh"},
 			Observer:             obs,
 			Policy:               finishableScheduledPolicy(session),
 			Model:                model,

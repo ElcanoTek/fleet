@@ -122,6 +122,14 @@ describe("parseRuntimeEvent", () => {
     expect(ev?.detail).toBe("tool results older than the recent window were replaced with short previews; that freed enough, so no summary was needed");
   });
 
+  it("reads the raised-budget breadcrumb as its own event", () => {
+    const ev = parseRuntimeEvent(
+      "[context_budget_raised] tool=mcp_store_metrics_get_store_daily_report budget=80000 raised_budget=240000 — the run re-ran a call whose result an elision had replaced with a preview, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
+    );
+    expect(ev).toMatchObject({ tag: "context_budget_raised", title: "Context budget raised", tone: "info" });
+    expect(ev?.fields).toContainEqual(["raised_budget", "240000"]);
+  });
+
   it("numbers checkpoints and marks a fatal abort", () => {
     expect(parseRuntimeEvent("[context_checkpoint] resent prompt 1 tokens reached X (checkpoint 2)")?.title).toBe("Context checkpoint 2");
     expect(parseRuntimeEvent("[fatal] run aborted by its own self-audit: no send")).toMatchObject({

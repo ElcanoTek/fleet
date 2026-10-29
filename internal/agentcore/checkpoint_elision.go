@@ -384,7 +384,7 @@ func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measur
 //     and each pause stubbed the new ones again before the audit was done.
 //   - For the rest of a run that re-ran a call whose result an elision had
 //     stubbed (noteReruns): the stub cost that run a call, so eliding more is
-//     not saving it anything.
+//     not saving it anything. Its resend budget is raised too (resendBudget).
 func (e *engine) elisionHeld() bool {
 	if e.elisionStopped {
 		return true
@@ -398,8 +398,9 @@ func (e *engine) elisionHeld() bool {
 
 // noteReruns sets elisionStopped once a call the run made since the last
 // context-pressure check repeats one whose result an elision stubbed: the
-// same tool with the same arguments (callKey). It runs at the top of every
-// check, before any rewrite. The new calls are told apart by position, past
+// same tool with the same arguments (callKey). That also raises the run's
+// resend budget (resendBudget), and noteRerunStop says so. It runs at the top
+// of every check, before any rewrite. The new calls are told apart by position, past
 // pressureCheckedLen, not by call ID: some providers reuse IDs. So a
 // duplicate the run made before the elision is not a re-run. Positions hold
 // because the history only grows between checks, except when, inside a
@@ -416,10 +417,29 @@ func (e *engine) noteReruns(messages []fantasy.Message) {
 			tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part)
 			if ok && e.elidedCallKeys[callKey(tc.ToolName, tc.Input)] {
 				e.elisionStopped = true
-				log.Printf("context elision off for the rest of the run: %s was re-run after its result was elided", tc.ToolName)
+				e.noteRerunStop(tc.ToolName)
 				return
 			}
 		}
+	}
+}
+
+// noteRerunStop records the re-run stop: a server log line, and, when the
+// stop raised the run's resend budget (resendBudget), a
+// [context_budget_raised] session-log breadcrumb with the budget it had and
+// the one it has from now on. A run with no resend budget, or on a window
+// too small for any raise, keeps its budget and gets no breadcrumb.
+func (e *engine) noteRerunStop(tool string) {
+	budget, raised := contextResendBudgetTokens(e.envPrefix), e.resendBudget()
+	if raised <= budget {
+		log.Printf("context elision off for the rest of the run: %s was re-run after its result was elided", tool)
+		return
+	}
+	log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was elided", raised, tool)
+	if e.logSession != nil {
+		e.logSession.AddMessage(roleUser, fmt.Sprintf(
+			"[context_budget_raised] tool=%s budget=%d raised_budget=%d — the run re-ran a call whose result an elision had replaced with a preview, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
+			tool, budget, raised), nil, nil)
 	}
 }
 

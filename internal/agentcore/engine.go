@@ -149,7 +149,7 @@ type engine struct {
 	// last context-pressure check handed back: the calls past it are, almost
 	// always, the ones the run made since (noteReruns says when not). One of
 	// those with an elided identity is a re-run, and sets elisionStopped for
-	// the rest of the run.
+	// the rest of the run, which also raises its resend budget (resendBudget).
 	elidedCallKeys     map[string]bool
 	pressureCheckedLen int
 	elisionStopped     bool
@@ -858,7 +858,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// rule applies, compacting at the plain budget would summarize the history
 	// at every round start however little of it there is (#1600).
 	if e.requireCompactionOptIn {
-		if budget := contextResendBudgetTokens(e.envPrefix); budget > 0 && used >= e.effectiveResendBudget(budget) {
+		if budget := e.resendBudget(); budget > 0 && used >= e.effectiveResendBudget(budget) {
 			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
 			// Stale bulky tool results are replaced with stubs first (#1742);
 			// the summary is bought only if that did not free enough.
@@ -877,8 +877,8 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 				out.messages = res.messages
 				out.warned = false
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
-					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s_CONTEXT_RESEND_BUDGET_TOKENS; the oldest half of the history was summarized to cut per-call cost",
-					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.envPrefix.normalize()), nil, nil)
+					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s; the oldest half of the history was summarized to cut per-call cost",
+					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.resendBudgetName()), nil, nil)
 				e.logCompactionSummary(res.summary)
 				sink.emit(evtContextCompacted, e.withResendFloorFields(map[string]any{
 					evtFieldRemovedTurns:  res.removedTurns,
@@ -1311,7 +1311,7 @@ const maxResendCheckpoints = 40
 //     compaction found nothing to summarize (windowCompactionStalled).
 func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
 	if !e.windowCheckpointActive() {
-		budget := contextResendBudgetTokens(e.envPrefix)
+		budget := e.resendBudget()
 		if budget <= 0 {
 			return 0
 		}
@@ -1380,7 +1380,7 @@ func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCon
 	if !e.requireCompactionOptIn {
 		return nil
 	}
-	budget := contextResendBudgetTokens(e.envPrefix)
+	budget := e.resendBudget()
 	if budget <= 0 {
 		return nil
 	}
@@ -1391,6 +1391,63 @@ func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCon
 		}
 		return stepAtResendBudget(steps, e.effectiveResendBudget(budget), inputHistory)
 	}
+}
+
+// resendBudgetRerunFactor is how much resendBudget grows a run's resend
+// budget once the run re-runs a call whose result an elision stubbed, and
+// resendRaiseWindowMargin is how far, as a share of the configured budget, the
+// raised budget stays below the active model's input limit.
+const (
+	resendBudgetRerunFactor = 3
+	resendRaiseWindowMargin = 0.3
+)
+
+// resendBudget is the run's resend budget: FLEET_CONTEXT_RESEND_BUDGET_TOKENS
+// (0 when the operator turned it off), times resendBudgetRerunFactor for the
+// rest of a run that re-ran a call whose result an elision had stubbed
+// (elisionStopped, set by noteReruns).
+//
+// Such a re-run is a sign the run needs more of its data at once than the
+// budget holds. On a recurring task whose model fetched twelve ~25 KB reports
+// to build one table (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md), the re-fetch
+// put the prompt over the budget again, and the next pause's summary dropped
+// other reports, which the model fetched again in turn. Stopping elision alone
+// did not end that loop, because the summaries kept it going: up to 19
+// summaries and 40 re-fetches in one run. The twelve reports together came to
+// about 158K tokens resent, so twice the default budget would pause again just
+// as the last one arrived; three times holds them with room for the answer and
+// its audit.
+//
+// The raise stops short of the active model's input limit (resendWindowLimit)
+// by resendRaiseWindowMargin of the budget. Past the limit the in-round guard
+// trims or refuses a call before the checkpoint could see it, and at the limit
+// itself a call the guard has just trimmed can land under it; the margin
+// leaves room for a call that grows by less than it to reach the pause first.
+// With the default budget, on a 200K window the raise is to about 150K, and on
+// a 1M window the cap does not bind. A raise of less than that same margin is
+// not made: on a window with no more room than that (128K, say) the run keeps
+// the budget it had. A 1M window alone would be no bound, which is why the
+// raise is a multiple of the budget.
+func (e *engine) resendBudget() int {
+	budget := contextResendBudgetTokens(e.envPrefix)
+	if !e.elisionStopped || budget <= 0 {
+		return budget
+	}
+	raised := budget * resendBudgetRerunFactor
+	if limit := e.resendWindowLimit(); limit > 0 {
+		raised = min(raised, raisedThresholdCap(budget, limit))
+	}
+	if raised < budget+int(float64(budget)*resendRaiseWindowMargin) {
+		return budget // no room on this window for a raise worth making
+	}
+	return raised
+}
+
+// raisedThresholdCap is the highest point a raised budget lets a run pause
+// at: the active model's input limit less resendRaiseWindowMargin of the
+// configured budget (resendBudget).
+func raisedThresholdCap(configured, limit int) int {
+	return limit - int(float64(configured)*resendRaiseWindowMargin)
 }
 
 // minResendCheckpointHistory is the fewest non-head messages a checkpoint
@@ -1455,15 +1512,30 @@ func stepAtResendBudget(steps []fantasy.StepResult, threshold, inputHistory int)
 // the in-round context guard would fail the run before the checkpoint it waits
 // for is reachable. Capped there, and never below the plain budget, so a
 // small-window run keeps the pre-#1600 threshold rather than an unreachable one.
+// The plain budget is the configured one; a raised budget is capped further
+// below the limit (raisedThresholdCap).
 func (e *engine) effectiveResendBudget(budget int) int {
-	if !e.resendFloorCrowdsBudget(budget) {
+	if !e.resendFloorCrowdsBudget() {
 		return budget
 	}
-	threshold := e.resendFloor + budget
-	if limit := e.resendWindowLimit(); limit > 0 && threshold > limit {
-		threshold = max(budget, limit)
+	configured := contextResendBudgetTokens(e.envPrefix)
+	limit := e.resendWindowLimit()
+	threshold := e.resendFloor + min(budget, configured)
+	if limit > 0 && threshold > limit {
+		threshold = max(configured, limit)
 	}
-	return threshold
+	if budget <= configured {
+		return threshold
+	}
+	// A raised budget (resendBudget) stops short of the limit by the same
+	// margin as the raise itself, but never below where the configured budget
+	// pauses: once the floor alone is near the limit, that is the limit, as
+	// before the raise.
+	raised := e.resendFloor + budget
+	if limit > 0 {
+		raised = min(raised, raisedThresholdCap(configured, limit))
+	}
+	return max(threshold, raised)
 }
 
 // resendWindowLimit is the largest resent size the checkpoint may wait for on
@@ -1503,8 +1575,12 @@ func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 // prefix (resendPrefix) takes more than half the budget. It is decided on the
 // prefix, never on a post-compaction floor, so a small-prefix run whose kept
 // half happens to be large keeps the plain budget (and the behaviour it had
-// before #1600) for its whole life.
-func (e *engine) resendFloorCrowdsBudget(budget int) bool {
+// before #1600) for its whole life. The budget is the configured one, never
+// the one a re-run raised (resendBudget): judged against the raised budget, a
+// run under the floor rule could leave it for a plain threshold below the one
+// it had, and a raise must never lower the point a run pauses at.
+func (e *engine) resendFloorCrowdsBudget() bool {
+	budget := contextResendBudgetTokens(e.envPrefix)
 	return budget > 0 && e.resendPrefix > 0 && 2*e.resendPrefix > budget
 }
 
@@ -1532,13 +1608,13 @@ func (e *engine) noteResendFloor(usage fantasy.Usage) {
 		e.resendPrefix = resent
 	}
 	budget := contextResendBudgetTokens(e.envPrefix)
-	if e.resendFloorNoted || !e.resendFloorCrowdsBudget(budget) {
+	if e.resendFloorNoted || !e.resendFloorCrowdsBudget() {
 		return
 	}
 	e.resendFloorNoted = true
 	e.logSession.AddMessage(roleUser, fmt.Sprintf(
 		"[context_checkpoint_floor] floor=%d budget=%d effective_budget=%d — what this run resends before any history (system prompt, tool schemas, task prompt) takes more than half of %s_CONTEXT_RESEND_BUDGET_TOKENS, so summarizing cannot bring a call under the budget; the resend-budget checkpoint now fires once the history has grown by a full budget over the floor, re-measured after each compaction",
-		e.resendFloor, budget, e.effectiveResendBudget(budget), e.envPrefix.normalize()), nil, nil)
+		e.resendFloor, budget, e.effectiveResendBudget(e.resendBudget()), e.envPrefix.normalize()), nil, nil)
 }
 
 // withResendFloorFields adds the floor rule's fields to a resend-budget event
@@ -1546,7 +1622,7 @@ func (e *engine) noteResendFloor(usage fantasy.Usage) {
 // the threshold itself. Under the plain budget the payload is left exactly as
 // it was before #1600.
 func (e *engine) withResendFloorFields(payload map[string]any, budget int) map[string]any {
-	if e.resendFloorCrowdsBudget(budget) {
+	if e.resendFloorCrowdsBudget() {
 		payload[evtFieldResendFloor] = e.resendFloor
 		payload[evtFieldEffectiveBudget] = e.effectiveResendBudget(budget)
 	}
@@ -1556,18 +1632,29 @@ func (e *engine) withResendFloorFields(payload map[string]any, budget int) map[s
 // resendFloorCrumb is withResendFloorFields for a session-log breadcrumb: ""
 // under the plain budget, else " floor=… effective_budget=…".
 func (e *engine) resendFloorCrumb(budget int) string {
-	if !e.resendFloorCrowdsBudget(budget) {
+	if !e.resendFloorCrowdsBudget() {
 		return ""
 	}
 	return fmt.Sprintf(" floor=%d effective_budget=%d", e.resendFloor, e.effectiveResendBudget(budget))
 }
 
+// resendBudgetName names the budget for a resend-budget breadcrumb: the knob,
+// or the raised budget once a re-run of an elided call raised it
+// (resendBudget).
+func (e *engine) resendBudgetName() string {
+	name := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
+	if raised := e.resendBudget(); raised > contextResendBudgetTokens(e.envPrefix) {
+		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran an elided call)", raised, name)
+	}
+	return name
+}
+
 // resendCheckpointReached names what a checkpoint's resent prompt reached, for
-// the run loop's [context_checkpoint] breadcrumb: the budget knob, plus the
-// floor and effective budget while the floor rule applies.
+// the run loop's [context_checkpoint] breadcrumb: the budget (resendBudgetName),
+// plus the floor and effective budget while the floor rule applies.
 func (e *engine) resendCheckpointReached(budget int) string {
-	reached := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
-	if !e.resendFloorCrowdsBudget(budget) {
+	reached := e.resendBudgetName()
+	if !e.resendFloorCrowdsBudget() {
 		return reached
 	}
 	return fmt.Sprintf("%s over the prompt floor (floor=%d effective_budget=%d)", reached, e.resendFloor, e.effectiveResendBudget(budget))

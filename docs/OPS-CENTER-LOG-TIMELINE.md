@@ -43,6 +43,7 @@ The view is now a timeline.
   error line. For a traceback that is the last line.
 - **Runtime events.** Bracket-tagged engine lines such as `[context_compacted] …`,
   `[context_elided] …` (#1742, shown as "Older tool results trimmed"),
+  `[context_budget_raised] …` (shown as "Context budget raised"),
   `[context_checkpoint] …` and `[fatal] …` render as slim event rows that show
   their key facts. Compactions and trims also show as gaps in the overview
   strip. `[fatal]` renders as a red banner instead. Session-log

@@ -387,10 +387,54 @@ fewer summarizer calls; making the elided content recallable added nothing.
     - A re-run in a round whose history the overflow recovery compacted can
       be missed; the run then just goes on eliding.
     - A read of something that changed in between also counts, for example a
-      file viewed again after an edit. That only turns elision off for the
-      run.
+      file viewed again after an edit. That turns elision off and raises the
+      budget (next bullet) for that run, nothing more.
 
   The server log says when either applies.
+- **Budget raised after a re-run** (added 2026-10-26, after more Opus runs on
+  the recurring-task bench in [Measured](#with-the-budget-raised-after-a-re-run-2026-10-26)).
+  Stopping elision did not end such a run's pauses. Each re-fetch put the
+  prompt over the budget again, the next summary dropped other results, and
+  the model fetched those again. So from the re-run on, the run's resend
+  budget is three times the configured one (`engine.resendBudget`):
+  - **Why three.** The bench's twelve reports came to about 158K tokens
+    resent, so twice the 80K default would pause again just as the last one
+    arrived. The model's window is no bound on its own: the bench's models
+    all have windows of about 1M tokens.
+  - **The window cap.** The raise stops at most 30% of the configured budget
+    short of the active model's input limit (the limit #1600 caps the floor
+    rule at), so a call that grows by less than that can reach the pause
+    before the in-round guard has to trim it. A step that adds more, such as
+    a large parallel fetch, can still be trimmed first. On a 200K window the
+    raise is to about 150K. A raise of less than 30% of the budget is not
+    made: on a 128K window the run keeps its budget.
+  - **The floor rule.** Whether it applies is still judged against the
+    configured budget, so the raise never lowers the point a run pauses at.
+    Under the rule the run pauses at the floor plus the raised budget, again
+    at most the margin short of the input limit. Once the floor alone nears
+    the limit (after a summary that kept a large recent half, say), the pause
+    is at the limit itself, as it is without a raise, and the in-round guard
+    may trim calls before it is reached.
+  - **When it takes effect.** The run learns of the re-run at the start of its
+    next round: a pause, or a finish the policy sent back. A pause that
+    learns of it compacts nothing unless the prompt is already over the raised
+    threshold; it still counts toward the 40-pause cap.
+  - **The trade-off.** One repeat of an elided call is enough, and not every
+    repeat means missing data: a file viewed again after an edit, the same
+    command run twice, a bulky status polled again. Such a run also gets the
+    raised budget, so for the rest of it each call may resend up to three
+    times as much before the next compaction, though it pauses less often.
+    Not measured.
+  - **What it records.** When the budget rose, the session log gets
+    `[context_budget_raised] tool=… budget=… raised_budget=… — …`, which the
+    Operations Center shows as **Context budget raised**. Later
+    `[context_checkpoint]` and `[context_compacted]` lines name the raised
+    budget, and later events carry it as `resend_budget_tokens`. The cap
+    follows the active model, so a fallback model with another window moves
+    the raised budget without a new breadcrumb; the later lines show the
+    value in force.
+  - Runs with elision off, and runs that never re-fetch an elided result, are
+    unchanged.
 - **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
   across steps, or within one parallel step. Each result is paired with its
   own call: the nearest earlier message with calls under that ID, and within
@@ -553,7 +597,9 @@ The four other models succeeded in every fixed run, as with elision off.
 Their cells correct were the same or better, except one DeepSeek run (65 of 72
 against 72 in both of its off runs).
 - **Opus** cost more fixed than off, but its two off runs alone spanned
-  $2.14–5.50, depending on whether it re-fetched to audit.
+  $2.14–5.50, depending on whether it re-fetched to audit. Three more runs
+  each way showed the gap was not noise
+  ([below](#with-the-budget-raised-after-a-re-run-2026-10-26)).
 - **DeepSeek** re-fetched in loops in both modes: one off run took 34
   minutes, with 40 pauses, 40 summaries and 160 re-fetches. That is the
   model's own pattern. Its fixed runs were shorter on average, but only
@@ -565,6 +611,76 @@ re-fetches came during the audit, when nothing had been elided. In the
 four-model round the server log shows it fire twice (once in a DeepSeek run
 that re-fetched right after its first elision) and the audit hold 10 times.
 The bench cost about $73 in all.
+
+#### With the budget raised after a re-run (2026-10-26)
+
+Three more Opus runs each way, on the same build as the round above, made
+five a side. With elision off Opus cost $4.54 a run (median $3.75); with the
+holds above, $7.08 (median $5.07). Every run got all 72 cells. In each of the
+three new runs with elision, elision fired at the first pause, while Opus was
+still fetching the reports over several steps, before the audit was asked for.
+Opus fetched the stubbed reports again, and the re-run stop turned elision
+off. The run still paused at every 80K: each re-fetch put the prompt over the
+budget, the summary dropped other reports, and Opus fetched those again. One
+run took 19 summaries and 40 re-fetches, for $13.42. Runs with elision off
+fall into the same loop now and then (one took 12 summaries and 19
+re-fetches, $7.91), but less often. With all twelve reports in its history, a
+call resent about 157–158K tokens (the checkpoint breadcrumbs of the runs that
+fetched them in one step), twice the budget.
+
+Then the budget raise ([What shipped](#what-shipped-1)), five Opus runs on a
+build of this branch before the window cap, which does not bind on these
+models' 1M windows. That build also carries what reached main since the round
+above: #1842's call-pairing fixes and four unrelated changes.
+
+| Opus 5.5, 5 runs each | Cost / run | Mean | Median | Summaries (most in a run) | Re-fetches | Minutes |
+|---|---|---|---|---|---|---|
+| Elision off | $5.50, $2.14, $3.75, $3.42, $7.91 | $4.54 | $3.75 | 5.8 (12) | 6.8 | 5.4 |
+| Holds only (#1842) | $4.57, $5.07, $13.42, $4.47, $7.89 | $7.08 | $5.07 | 8.8 (19) | 18.4 | 8.3 |
+| Holds and the raise | $3.78, $4.27, $2.11, $2.22, $2.25 | $2.92 | $2.25 | 1.0 (2) | 3.2 | 3.0 |
+
+- **Where the raise fired.** In two of the five runs, the ones that took the
+  path that looped before: elision at the first pause, then a re-fetch. After
+  the raise neither run bought another summary; they cost $3.78 and $4.27.
+  Every run got all 72 cells.
+- **The other three.** Two fetched all twelve reports at once and never
+  elided. The third elided twice and summarized once, but never fetched a
+  report again.
+- **Opus's path varies run to run**, so five runs are a strong sign, not
+  proof.
+
+The same build on two other models, where the raise never fired:
+- **Sonnet 5.5**, 3 runs: $1.18, $4.31 and $5.21, against $2.95 off and
+  $2.39 with the holds only. Two runs looped on summaries during their audit,
+  while elision is held, with 10 summaries and 24 and 36 re-fetches; one of
+  them got 61 of 72 cells. That loop is in the summary path and happens with
+  elision off too ([Not done](#not-done)).
+- **Luna Pro**, 2 runs: $0.14 and $0.17, against $0.15 off. Elision did not
+  fire.
+
+This round cost about $67, including the three extra runs each way.
+
+On 2026-10-27, two runs each on three more models, on the branch head with the
+window cap (their windows are about 1M too, so it did not bind):
+- **DeepSeek v4.1 Flash**: the raise fired in both runs. Each trimmed the
+  reports at its first pause and fetched six of them again; after the raise
+  neither run summarized. They cost $0.03 and $0.02 in 4 and 2 minutes,
+  against $0.29 off and $0.19 with the holds only (23.5 and 12 summaries a
+  run). Both scored 63 of 72: they gave each store's number of low-stock SKUs
+  where the prompt asks for the SKUs, so the scorer missed nine rows. Every
+  count, the total of 24 and every other cell were right.
+- **GPT-6.1 Sol**, new to the bench, so with no runs with elision off:
+  elision trimmed seven reports at the one pause of each run, that freed
+  enough, and the model fetched nothing again, so the raise did not fire.
+  $0.66 and $0.65, 72 of 72.
+- **Gemini 3.8 Flash**: elision fired (four times in one run, once in the
+  other) with one summary each, but nothing was fetched again, so the raise
+  did not fire and the runs took the same path as with the holds only. $2.59
+  and $2.41, 72 and 70 cells, against $2.02 off and $1.99 with the holds only;
+  the code on that path is unchanged, so the gap is the model's run-to-run
+  spread.
+
+That round cost about $6.
 
 ### Deviations from the issue
 
@@ -590,6 +706,20 @@ The bench cost about $73 in all.
 
 ### Not done
 
+- Noticing a re-fetch of a result a summary dropped. The raise follows only a
+  re-run of an elided call, so a run that loops on summaries alone, as Sonnet
+  did during its audit above, is not helped. That loop happens with elision
+  off too; it is a matter for the summary, not for elision.
+- Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
+  four with elision cost $2.25 a run and five without $1.49. The runs with
+  elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M
+  prompt tokens, against 0.5–2.4M in four of the five without): a trim keeps
+  more history than a summary, Gemini takes many small steps, and only
+  about 15–20% of its prompt is cached. They were also more accurate (69
+  cells against 64 on average; the two cheapest runs without elision stopped
+  early with wrong values). The raise did not fire in any of them. Not yet
+  looked into, and a second round with elision on, on all seven models, is
+  still to run.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.
