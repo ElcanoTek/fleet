@@ -1255,11 +1255,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()
-		s.maybeDrainQueue(conv.ID)
 		if requeued > 0 {
-			// The re-queued row may be the FIFO head the drain just re-claimed
-			// into the same failure; the bounded re-kick breaks livelock.
+			// The re-queued row may be the FIFO head an immediate drain would
+			// re-claim into the same pre-commit failure; waiting out the
+			// bounded re-kick breaks livelock.
 			s.rekickDrainAfter(conv.ID, 3*time.Second)
+		} else {
+			s.maybeDrainQueue(conv.ID)
 		}
 	}()
 

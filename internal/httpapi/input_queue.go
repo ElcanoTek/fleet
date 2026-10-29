@@ -520,6 +520,9 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
+	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
+		conv.Model = agentcore.CurrentDefaultModel()
+	}
 	var attachments []chatAttachment
 	if row.Attachments != "" {
 		_ = json.Unmarshal([]byte(row.Attachments), &attachments)

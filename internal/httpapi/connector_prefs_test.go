@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -204,11 +205,17 @@ func TestCreateConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
 	if strings.Join(conv.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
 		t.Fatalf("response OptionalMCPServersEnabled = %v, want %v", conv.OptionalMCPServersEnabled, want)
 	}
+	if conv.Model != agentcore.CurrentDefaultModel() {
+		t.Fatalf("response Model = %q, want %q", conv.Model, agentcore.CurrentDefaultModel())
+	}
 	stored, err := fs.Get(context.Background(), "u@x.com", conv.ID)
 	if err != nil || stored == nil {
 		t.Fatalf("store.Get(%s): %v", conv.ID, err)
 	}
 	if strings.Join(stored.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
 		t.Fatalf("persisted OptionalMCPServersEnabled = %v, want %v", stored.OptionalMCPServersEnabled, want)
+	}
+	if stored.Model != agentcore.CurrentDefaultModel() {
+		t.Fatalf("persisted Model = %q, want %q", stored.Model, agentcore.CurrentDefaultModel())
 	}
 }
