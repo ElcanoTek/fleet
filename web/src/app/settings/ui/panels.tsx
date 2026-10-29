@@ -125,8 +125,8 @@ export function ConnRow({
 }) {
   return (
     <div className="border-b border-[var(--color-border-subtle)] px-[0.1rem] py-[0.55rem] last:border-b-0">
-      <div className="flex items-center gap-[0.8rem]">
-        <div className="grid min-w-0 flex-1 gap-[0.15rem]">
+      <div className="flex flex-wrap items-center justify-between gap-x-[0.8rem] gap-y-[0.5rem]">
+        <div className="grid min-w-[14rem] flex-1 gap-[0.15rem]">
           <span className="text-[0.83rem] font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere] [&_code]:font-[family-name:var(--font-code)] [&_code]:text-[0.76rem] [&_code]:text-[var(--color-text-secondary)]">
             {name}
           </span>
@@ -137,7 +137,7 @@ export function ConnRow({
           ) : null}
           {children}
         </div>
-        {actions ? <div className="flex shrink-0 items-center gap-[0.35rem]">{actions}</div> : null}
+        {actions ? <div className="flex shrink-0 flex-wrap items-center gap-[0.35rem]">{actions}</div> : null}
       </div>
       {detail}
     </div>
