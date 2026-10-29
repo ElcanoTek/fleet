@@ -1,10 +1,8 @@
 package admincli
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/url"
 	"os"
 	"strings"
@@ -189,29 +187,20 @@ func envOrFile(key string) string {
 	return envFileValues[key]
 }
 
+// loadEnvFile reads the server env file once. A file that is missing or
+// unreadable (root-owned 0600, the CLI run as another user) leaves only the
+// shell environment.
 func loadEnvFile() {
 	envFileOnce.Do(func() {
-		vals, err := creds.ReadEnvValues(serverEnvFile(""))
-		switch {
-		case err == nil:
+		if vals, err := creds.ReadEnvValues(serverEnvFile("")); err == nil {
 			envFileValues = vals
-		case !errors.Is(err, fs.ErrNotExist):
-			errEnvFileRead = err
 		}
 	})
 }
 
-// envFileReadErr is why the server env file could not be read, or nil when it
-// was read or simply does not exist (a dev box, a shell-only deployment).
-func envFileReadErr() error {
-	loadEnvFile()
-	return errEnvFileRead
-}
-
 var (
-	envFileOnce    sync.Once
-	envFileValues  map[string]string
-	errEnvFileRead error
+	envFileOnce   sync.Once
+	envFileValues map[string]string
 )
 
 // resetEnvFileCache re-arms envOrFile's once-per-process env-file read so
@@ -219,7 +208,6 @@ var (
 func resetEnvFileCache() {
 	envFileOnce = sync.Once{}
 	envFileValues = nil
-	errEnvFileRead = nil
 }
 
 // errf prints to stderr and returns the given exit code.

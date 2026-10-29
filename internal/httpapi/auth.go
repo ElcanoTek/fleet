@@ -150,8 +150,6 @@ func (s *Server) providerEventMiddleware(next http.Handler) http.Handler {
 // the web tier: the share-keeping rename an admin's Rename team does, once
 // per version. 204 when applied or already applied (Auth stops sending it),
 // 400 for a malformed one, 500 when it could not be written (Auth retries).
-// Each member's change is published like any change made on the provider's
-// word.
 func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -173,7 +171,6 @@ func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	defer s.beginTeamRename(r, body.From, store.AccountEventSourceIdentityProvider, "")()
 	applied, users, err := renamer.ApplyExternalTeamRename(r.Context(), store.ExternalTeamRename{
 		Issuer: body.Issuer, Version: body.Version, EventID: body.EventID, From: body.From, To: body.To,
 	}, time.Now().Unix())
@@ -499,9 +496,6 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		ChatRole: chatRole, OpsRole: opsRole, Team: team, IssuedAt: body.IssuedAt,
 		TeamRename: teamRename,
 	}
-	// A change Fleet applies on the identity provider's word is still published
-	// (audit sinks want it), tagged so the provider itself can ignore its echo.
-	defer s.beginAccountChange(r, desired.Email, store.AccountEventSourceIdentityProvider, "")()
 	applied, _, err := accessStore.ApplyExternalAccess(r.Context(), desired)
 	if err != nil {
 		http.Error(w, "external access update failed", http.StatusInternalServerError)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, renderHook, waitFor, act } from "@testing-library/react";
+import { cleanup, renderHook, waitFor } from "@testing-library/react";
 import { useOrchestratorSession } from "./useOrchestratorSession";
 
 // Pins the initial /me probe's failure taxonomy: only 401/403 are auth
@@ -75,18 +75,5 @@ describe("useOrchestratorSession initial probe", () => {
     expect(result.current.signedIn).toBe(true);
     expect(result.current.username).toBe("ops");
     expect(result.current.unreachable).toBe(false);
-  });
-
-  it("retires username/password login without writing a token", async () => {
-    const { result } = probeWith(async () =>
-      meResponse(200, { authenticated: true, username: "ops", role: "admin" }),
-    );
-    await waitFor(() => expect(result.current.ready).toBe(true));
-    await act(async () => {
-      await expect(result.current.login("ops", "secret")).resolves.toBe(false);
-    });
-    expect(window.localStorage.getItem("orchestratorToken")).toBeNull();
-    expect(window.localStorage.getItem("userToken")).toBeNull();
-    await waitFor(() => expect(result.current.error).toMatch(/retired/i));
   });
 });

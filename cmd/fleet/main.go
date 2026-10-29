@@ -45,7 +45,6 @@ import (
 	"github.com/google/uuid"
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
-	"github.com/ElcanoTek/fleet/internal/accountevents"
 	"github.com/ElcanoTek/fleet/internal/admincli"
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agent"
@@ -607,8 +606,7 @@ func run() error {
 	// Bootstrap operators (#458): provision/promote the configured emails as
 	// orchestrator admins so they reach the Operations Center seamlessly via the
 	// shared chat session cookie. See seedBootstrapAdmins for the rationale.
-	accountEvents := accountEventsRecorder(cfg, chatStore, schedStorage)
-	if err := seedBootstrapAdmins(schedStorage, accountEvents, cfg.AccountsManagedByAuth); err != nil {
+	if err := seedBootstrapAdmins(schedStorage, cfg.AccountsManagedByAuth); err != nil {
 		return err
 	}
 
@@ -700,8 +698,6 @@ func run() error {
 		// admin alongside chat-role changes) — same composition `fleet admin
 		// add` does, triggered over HTTP.
 		httpapi.WithOpsAdmins(opsAdminsService{st: schedStorage}),
-		// Signed account-events feed (docs/ACCOUNT-EVENTS.md); nil = off.
-		httpapi.WithAccountEvents(accountEvents),
 		// Knowledge-graph extraction (#523): the seam is always wired; whether
 		// anything fires is gated by FLEET_MEMORY_GRAPH_ENABLED (default off).
 		httpapi.WithMemoryGraphExtractor(mgr.ExtractMemoryGraph),
@@ -766,7 +762,7 @@ func run() error {
 	// admin Notifications panel. A persisted admin row hot-swaps the shared
 	// notifier's config at boot and after every edit; no row = the env-derived
 	// config already in taskNotifier keeps serving.
-	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier, reservedAccountEventsSecret(cfg))
+	chatOpts = appendNotifySettingsOption(chatOpts, chatStore, taskNotifier)
 
 	chatSrv := httpapi.New(cfg, mgr, chatStore, chatOpts...)
 
@@ -879,7 +875,7 @@ func run() error {
 	// carries, so no create path can drift.
 	h.SetBudgetGate(budgetEnforcer)
 	notesHandlers := handlers.NewNotesHandlers(notesStore, h)
-	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), accountEvents, cfg.TrustedProxies)
+	orchHandler := buildOrchestratorMux(h, notesHandlers, reloadConfigHandler(cfg), mcpReloadHandler(mgr), cfg.TrustedProxies)
 
 	// ── scheduler ticker (promote scheduled→pending + recover leases) ──
 	sch := scheduler.New(schedStorage, timezone())
@@ -1184,7 +1180,6 @@ func run() error {
 	// it on in Settings → Admin → Notifications; the loop reads that switch
 	// live from the shared notifier.
 	ownerdigest.New(schedStorage, chatStore, taskNotifier).Start(ctx)
-	accountEventsDone := startAccountEventsDelivery(ctx, cfg, chatStore)
 
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
@@ -1197,9 +1192,6 @@ func run() error {
 	// then drain. Extracted so run() stays within the cyclomatic budget.
 	graceful := awaitShutdown(sigCh, errCh, chatSrv, pool, agentLimiter)
 	performShutdown(graceful, grace, cancel, chatSrv, pool, poolDone, chatServer, orchServer, webServer)
-	// performShutdown cancelled ctx; let the deliverer record its last attempt
-	// and hand unsent rows back before the process exits.
-	awaitAccountEventsDelivery(accountEventsDone)
 	return nil
 }
 
@@ -1612,7 +1604,7 @@ func buildA2AConfig(cfg *config.Config, bundle *clientconfig.Bundle, pushEnabled
 //
 // trustedProxies is cfg.TrustedProxies (FLEET_TRUSTED_PROXIES); it decides
 // whether X-Forwarded-For is consulted at all — see the comment at its use.
-func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, accountEvents *accountevents.Recorder, trustedProxies []net.IP) http.Handler {
+func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, reloadConfig, reloadMCP http.HandlerFunc, trustedProxies []net.IP) http.Handler {
 	r := chi.NewRouter()
 	// The client IP keys login and API rate limiting (getClientIP), so it
 	// follows the FLEET_TRUSTED_PROXIES contract, resolved by the same
@@ -1680,9 +1672,7 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// as recorded by the turns this process has run. Admin-gated read;
 		// `fleet mcp schema-issues` and `fleet doctor` consume it.
 		r.Get("/admin/mcp-servers/schema-issues", mcpSchemaIssuesHandler)
-		// An Ops identity named like a Chat account changes its effective
-		// ops_role, so the account-events feed hears about it (nil = off).
-		r.Post("/users", accountEventsCreateUser(h.CreateUser, accountEvents))
+		r.Post("/users", h.CreateUser)
 		r.Post("/keys", h.CreateAPIKey)
 		r.Get("/keys", h.ListAPIKeys)
 		r.Get("/keys/audit", h.GetAuditLog)
@@ -1877,7 +1867,6 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 	// senders, DKIM/SPF, attachments, dedup) run inside the handler.
 	r.With(h.SchedRateLimitMiddleware).Post("/triggers/email/{slug}", h.HandleEmailTrigger)
 	r.Post("/auth/login", h.Login)
-	r.Get("/auth/elcano-login", h.ElcanoLogin)
 	r.Post("/auth/logout", h.ElcanoLogout)
 
 	return r
@@ -1895,9 +1884,6 @@ func logCentralAuth(cfg *config.Config) {
 		if len(cfg.AdminEmails) > 0 {
 			log.Printf("auth: ADMIN_EMAILS is ignored: Fleet Admin comes from central Auth")
 		}
-	}
-	if cfg.AccountEventsFeedToAuthIgnored {
-		log.Printf("account events: FLEET_ACCOUNT_EVENTS_URL points at central Auth and is ignored (membership flows one way, Auth to Fleet); remove FLEET_ACCOUNT_EVENTS_URL and FLEET_ACCOUNT_EVENTS_SECRET from the env file")
 	}
 	if cfg.PasswordLoginDisabled {
 		log.Printf("auth: Fleet passwords are off; people sign in through central Auth only. Root can turn them back on with FLEET_OIDC_ALLOW_PASSWORD=1 and a restart.")
@@ -1984,11 +1970,7 @@ func defaultTaskTimezone() string {
 // clear "ask an admin" page, never silent admin), preserving the deliberate
 // chat/orchestrator membership separation (ADR-0005). Extracted from run() to
 // keep it within the cyclomatic budget.
-//
-// A seed that changes a Chat account's effective Ops role is published on the
-// account-events feed (source "system"); re-asserting an existing grant on
-// every boot is not a change and publishes nothing.
-func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Recorder, managedByAuth bool) error {
+func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) error {
 	admins := bootstrapAdmins()
 	if len(admins) == 0 {
 		return nil
@@ -2002,23 +1984,11 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, events *accountevents.Re
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for _, email := range admins {
-		if err := seedBootstrapAdmin(ctx, schedStorage, events, email); err != nil {
-			return err
+		if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
+			return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
 		}
 	}
 	log.Printf("orchestrator bootstrap admin(s) ensured: %d", len(admins))
-	return nil
-}
-
-// seedBootstrapAdmin seeds one admin. The feed's commit is deferred so it runs
-// on every exit: EnsureAdminUser can commit the role and then fail enabling the
-// row, and a boot that exits there without publishing would leave the change
-// unreported for good — the next boot sees the role already set, no change.
-func seedBootstrapAdmin(ctx context.Context, schedStorage *storage.Storage, events *accountevents.Recorder, email string) error {
-	defer events.Begin(ctx, email).CommitLogged(context.WithoutCancel(ctx), store.AccountEventSourceSystem, "")
-	if err := schedStorage.EnsureAdminUser(ctx, email); err != nil {
-		return fmt.Errorf("seed orchestrator bootstrap admin: %w", err)
-	}
 	return nil
 }
 

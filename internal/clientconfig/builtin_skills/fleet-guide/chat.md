@@ -288,11 +288,10 @@ teams and passwords are changed. **Settings → Team** then shows your team but
 cannot change it. Moving someone between teams in central Auth moves them
 here too, with the same effect as moving them yourself: what they shared with
 their old team stops being shared. Renaming a team in central Auth renames it
-here and keeps everything shared with it shared with the renamed team. Otherwise, when your operator has turned on
-Fleet's account-events feed, role changes, team changes and removals you make
-here are sent to whatever it points at. Renaming a
-team keeps everything shared with it shared with the renamed team; a new team
-that later takes the old name starts with nothing shared.
+here and keeps everything shared with it shared with the renamed team.
+Otherwise, renaming a team here keeps everything shared with it shared with
+the renamed team; a new team that later takes the old name starts with
+nothing shared.
 
 ### The header
 

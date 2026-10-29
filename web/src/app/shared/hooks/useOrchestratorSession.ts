@@ -17,9 +17,7 @@ export type OrchestratorSession = {
   role?: string; // "admin" | "client" | "readonly"; may be absent for an admin-API-key principal
   noAccess: boolean; // authenticated to chat, but not provisioned in the orchestrator (/me → 403 not_a_member)
   unreachable: boolean; // the probe failed with a non-auth verdict (5xx/network) — backend down, session state unknown
-  login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  error: string | null;
 };
 
 export function useOrchestratorSession(): OrchestratorSession {
@@ -29,7 +27,6 @@ export function useOrchestratorSession(): OrchestratorSession {
   const [role, setRole] = useState<string | undefined>(undefined);
   const [noAccess, setNoAccess] = useState(false);
   const [unreachable, setUnreachable] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // Drop leftover moc bearer tokens on first load after upgrade (#1115).
   useEffect(() => {
@@ -84,14 +81,6 @@ export function useOrchestratorSession(): OrchestratorSession {
     };
   }, []);
 
-  // Username/password login is retired (#1115). Kept on the type so a
-  // leftover caller gets a loud no instead of silently minting a
-  // localStorage bearer.
-  const login = useCallback(async (_user: string, _password: string): Promise<boolean> => {
-    setError("Username/password login is retired; sign in through the chat session.");
-    return false;
-  }, []);
-
   const logout = useCallback(async () => {
     try {
       await fetch("/api/orchestrator/auth/logout", {
@@ -108,5 +97,5 @@ export function useOrchestratorSession(): OrchestratorSession {
     setNoAccess(false);
   }, []);
 
-  return { ready, signedIn, username, role, noAccess, unreachable, login, logout, error };
+  return { ready, signedIn, username, role, noAccess, unreachable, logout };
 }

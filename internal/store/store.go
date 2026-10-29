@@ -308,8 +308,9 @@ func (s *Store) Close() error {
 // deletion), so it stopped cascading — which quietly made the usage-analytics
 // tests non-rerunnable (rows accumulated across suite runs). projects,
 // user_connector_prefs, user_skills, user_personas, external_access_state,
-// external_team_renames, and account_events
-// have no FK into any truncated table and are named for the same reason.
+// external_team_renames, and account_events (unused since ADR-0096, until a
+// later migration drops it) have no FK into any truncated table and are named
+// for the same reason.
 // The lock discipline below exists because a bare TRUNCATE here deadlocked in
 // CI (SQLSTATE 40P01), failing PRs whose diffs touched nothing nearby. TRUNCATE
 // takes ACCESS EXCLUSIVE on every listed table plus everything CASCADE reaches,

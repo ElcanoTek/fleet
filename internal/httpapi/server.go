@@ -15,7 +15,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/accountevents"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -257,10 +256,6 @@ type Server struct {
 	// Injected (WithOpsAdmins) so httpapi stays sched-agnostic; nil → role
 	// writes touch the chat plane only and the list reports no annotation.
 	opsAdmins OpsAdmins
-
-	// accountEvents queues the signed account-events feed after every Chat
-	// membership/role change (docs/ACCOUNT-EVENTS.md). nil = the feed is off.
-	accountEvents *accountevents.Recorder
 }
 
 // TaskScheduleRequest is the sched-agnostic payload the chat approval path hands

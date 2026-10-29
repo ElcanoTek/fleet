@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/accountevents"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -127,11 +126,8 @@ type bundleLog struct {
 
 // importStats accumulates per-kind outcomes for the final summary.
 type importStats struct {
-	// imported lists the Chat emails and Ops usernames this run created, for
-	// the account-events feed (publishImportedAccounts).
-	imported []string
-	created  map[string]int
-	skipped  map[string]int
+	created map[string]int
+	skipped map[string]int
 	// filtered counts records excluded by an operator FILTER (--live-only),
 	// kept apart from skipped so the summary never mislabels a deliberate
 	// exclusion as "already present".
@@ -263,9 +259,6 @@ func cmdImport(argv []string) int {
 		_ = st.Close()
 	}
 
-	if !*dryRun {
-		publishImportedAccounts(ctx, *chatDB, *schedDB, stats.imported)
-	}
 	printImportSummary(stats, *dryRun)
 	if stats.errors > 0 {
 		return 3
@@ -343,9 +336,6 @@ func importChatSection(ctx context.Context, chatStore *store.Store, sec *chatSec
 		if err != nil {
 			stats.errorf("%v", err)
 			continue
-		}
-		if created {
-			stats.imported = append(stats.imported, u.Email)
 		}
 		bump(stats, "chat users", created)
 	}
@@ -545,7 +535,6 @@ func importSchedSection(ctx context.Context, st *storage.Storage, sec *schedSect
 				stats.errorf("sched user %q: %v", username, err)
 				continue
 			}
-			stats.imported = append(stats.imported, username)
 		}
 		bump(stats, "sched users", true)
 	}
@@ -840,54 +829,5 @@ func printImportSummary(stats *importStats, dryRun bool) {
 	}
 	if stats.errors > 0 {
 		fmt.Printf("%d record(s) failed — fix and re-run; records already present in fleet are skipped on re-import (pass --overwrite to replace them)\n", stats.errors)
-	}
-}
-
-// publishImportedAccounts puts every account this import created on the
-// account-events feed (source cli), once, with its resulting state across both
-// planes. It runs after both sections rather than per row because an import
-// writes the Chat account and its Ops identity in separate sections — a
-// per-section snapshot would report the half the other section had not
-// written yet. Like every other Fleet-side writer the result is adopted as the
-// identity provider's baseline (PublishChanged), so a redelivered push cannot
-// revert what the import granted. A name that is no Chat account (an Ops-only
-// API user) is skipped, so only Chat accounts emit, as everywhere else. A failure warns and
-// names resync; it never fails the import.
-func publishImportedAccounts(ctx context.Context, chatFlag, schedFlag string, names []string) {
-	if len(names) == 0 || !accountEventsConfigured() {
-		return
-	}
-	cdsn, err := chatDSN(chatFlag)
-	if err != nil {
-		warnAccountEvent(fmt.Errorf("%w: %w", accountevents.ErrNotQueued, err))
-		return
-	}
-	chat, err := store.Open(cdsn, store.DefaultPoolConfig())
-	if err != nil {
-		warnAccountEvent(fmt.Errorf("%w: open chat DB: %w", accountevents.ErrNotQueued, err))
-		return
-	}
-	defer chat.Close()
-	sched := storage.New()
-	sdsn, err := schedDSN(schedFlag)
-	if err == nil {
-		err = sched.Initialize(sdsn, storage.DefaultPoolConfig())
-	}
-	if err != nil {
-		warnAccountEvent(fmt.Errorf("%w: open sched DB: %w", accountevents.ErrNotQueued, err))
-		return
-	}
-	defer sched.Close()
-	rec := accountevents.NewRecorder(chat, sched, chat)
-	seen := map[string]bool{}
-	for _, name := range names {
-		key := strings.ToLower(strings.TrimSpace(name))
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		if _, err := rec.PublishChanged(ctx, key, store.AccountEventSourceCLI, ""); err != nil {
-			warnAccountEvent(err)
-		}
 	}
 }

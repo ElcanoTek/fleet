@@ -78,9 +78,6 @@ func adminAdd(argv []string) int {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	events, closeEvents := openAccountEvents(st, nil, *schedURL)
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 
 	created := false
 	if _, err := st.CreateUser(ctx, email, password); err != nil {
@@ -226,9 +223,6 @@ func adminRm(argv []string) int {
 		return errf(1, "open chat DB: %v", err)
 	}
 	defer st.Close()
-	events, closeEvents := openAccountEvents(st, nil, *schedURL)
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 	if err := st.DeleteUser(ctx, email); err != nil {
 		fmt.Printf("  chat login: %v\n", err)
 	} else {

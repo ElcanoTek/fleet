@@ -4,8 +4,6 @@
 package handlers
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -166,20 +164,6 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 	var user *models.User
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 		user = h.userFromPasswordToken(strings.TrimPrefix(authHeader, "Bearer "))
-	}
-	if user == nil {
-		if sess := h.elcanoSessionFromRequest(r); sess != nil {
-			u, err := h.lookupMember(r.Context(), sess.Email)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, "Membership check failed")
-				return taskCreator{}, false
-			}
-			if u == nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-				return taskCreator{}, false
-			}
-			user = u
-		}
 	}
 	if user == nil {
 		writeError(w, http.StatusUnauthorized, "Unauthorized")

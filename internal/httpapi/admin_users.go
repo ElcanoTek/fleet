@@ -112,7 +112,6 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
 	if err != nil {
 		switch {
@@ -157,7 +156,6 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
-	defer s.beginAccountChange(r, email, store.AccountEventSourceAdminUI, actor)()
 	if err := s.store.DeleteUser(r.Context(), email); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			http.Error(w, "user not found", http.StatusNotFound)
@@ -305,9 +303,6 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
-	// A rename changes every member's team, so it publishes one event per
-	// member through the same per-account path as any other change.
-	defer s.beginTeamRename(r, body.From, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
 	if err != nil {
 		// Only the store's typed input failures (blank/equal names, an

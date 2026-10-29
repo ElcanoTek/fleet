@@ -124,10 +124,6 @@ func schedUserAdd(argv []string) int {
 	if existing, _ := st.GetUserByUsername(username); existing != nil {
 		return errf(3, "username %q already exists", username)
 	}
-	ctx := context.Background()
-	events, closeEvents := openAccountEvents(nil, st, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, username))
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return errf(5, "hash password: %v", err)
@@ -206,10 +202,6 @@ func schedUserSetRole(argv []string) int {
 	if err != nil || user == nil {
 		return errf(2, "user %q not found", username)
 	}
-	ctx := context.Background()
-	events, closeEvents := openAccountEvents(nil, st, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, username))
 	if err := st.UpdateUserRole(user.ID, *role); err != nil {
 		return errf(5, "%v", err)
 	}
@@ -236,13 +228,6 @@ func schedUserRename(argv []string) int {
 	if err != nil || user == nil {
 		return errf(2, "user %q not found", positional[0])
 	}
-	// A rename moves the Ops identity from one email to another: both Chat
-	// accounts (when they exist) change effective Ops role.
-	ctx := context.Background()
-	events, closeEvents := openAccountEvents(nil, st, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, positional[1]))
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, positional[0]))
 	if err := st.RenameUser(user.ID, positional[1]); err != nil {
 		return errf(5, "%v", err)
 	}
@@ -266,10 +251,6 @@ func schedUserDel(argv []string) int {
 	if err != nil || user == nil {
 		return errf(2, "user %q not found", username)
 	}
-	ctx := context.Background()
-	events, closeEvents := openAccountEvents(nil, st, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, username))
 	if err := st.DeleteUser(user.ID); err != nil {
 		return errf(5, "%v", err)
 	}

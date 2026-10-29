@@ -20,7 +20,7 @@
 //	fleet chat                                        (interactive agent TUI, #457; --message for one-shot)
 //	fleet acp                                         (Agent Client Protocol agent on stdio, #984 — for ACP clients to launch)
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
-//	fleet account-events status|export|resync         (the signed membership/role feed, docs/ACCOUNT-EVENTS.md)
+//	fleet account-events export                       (every chat account's membership as JSON Lines, for an identity provider's import)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
@@ -214,10 +214,8 @@ Users, credentials, notes:
   fleet admin add <email>                             (ONE step: web login + chat-admin + Operations Center admin; prompts for password)
   fleet admin list                                    (every chat login + whether it's an Operations Center admin)
   fleet admin rm <email>                              (remove from both planes)
-  fleet account-events status                         (signed membership/role feed: on/off, pending/failed/delivered counts,
-                                                       last error; see docs/ACCOUNT-EVENTS.md)
-  fleet account-events export                         (every chat account's current state as JSON Lines; read-only)
-  fleet account-events resync                         (queue every chat account's current state for delivery; needs the feed on)
+  fleet account-events export                         (every chat account's membership as JSON Lines, read-only; what central
+                                                       Auth's import-teams reads)
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
   fleet config set-browserbase-key                    (hidden prompt; or --key -; upserts BROWSERBASE_API_KEY into the server env file —
                                                        mints hosted-browser live views; see docs/BROWSERBASE.md)

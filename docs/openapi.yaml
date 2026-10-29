@@ -3120,12 +3120,6 @@ paths:
               schema: { $ref: "#/components/schemas/LoginResponse" }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
-  /auth/elcano-login:
-    get:
-      summary: Begin/complete Elcano unified login (sets the elcano_auth cookie).
-      security: []
-      responses:
-        "303": { description: Redirect (See Other) after setting the auth cookie. }
   /auth/logout:
     post:
       summary: Clear the Elcano auth cookie.

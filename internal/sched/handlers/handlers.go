@@ -7,7 +7,6 @@ package handlers
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -44,11 +43,10 @@ import (
 
 // Config holds the handler configuration.
 type Config struct {
-	OrchestratorURL string
-	AdminAPIKey     string
-	Version         string
-	DataDir         string
-	Timezone        string
+	AdminAPIKey string
+	Version     string
+	DataDir     string
+	Timezone    string
 	// UploadMaxBytes caps a single POST /upload task-input file. Mirrors
 	// the chat plane's cfg.UploadMaxBytes (FLEET_UPLOAD_MAX_BYTES, default
 	// 1 GiB) so both upload surfaces enforce the same limit.
@@ -109,12 +107,8 @@ type Config struct {
 	// production (config.Validate makes FLEET_SERVER_TOKEN fatal-if-empty).
 	SharedToken string
 
-	// Elcano unified auth (scoped tier). ElcanoPubKey is the Ed25519 public
-	// key the server verifies the elcano_auth cookie with; nil disables the
-	// cookie path (the button renders but every cookie fails closed). See
-	// elcano.go.
-	ElcanoPubKey       ed25519.PublicKey
-	AuthLoginURL       string // e.g. https://auth.elcanotek.com (no trailing slash)
+	// The shared Elcano cookie ElcanoLogout deletes (elcano.go). The browser
+	// tier verifies it; this server never reads it.
 	ElcanoCookieName   string // default "elcano_auth"
 	ElcanoCookieDomain string // AUTH_COOKIE_DOMAIN (e.g. "elcanotek.com"); "" = host-only. Needed to delete the shared cookie on logout.
 

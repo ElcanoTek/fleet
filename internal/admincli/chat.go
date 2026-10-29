@@ -89,9 +89,6 @@ func chatUserRole(argv []string) int {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	events, closeEvents := openAccountEvents(st, nil, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 
 	u, err := st.SetUserRoleTeam(ctx, email, rolePtr, teamPtr)
 	if err != nil {
@@ -142,9 +139,6 @@ func chatUserUpsert(argv []string, create bool) int {
 	ctx := context.Background()
 
 	if create {
-		events, closeEvents := openAccountEvents(st, nil, "")
-		defer closeEvents()
-		defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 		if _, err := st.CreateUser(ctx, email, password); err != nil {
 			return errf(5, "%v", err)
 		}
@@ -178,9 +172,6 @@ func chatUserDel(argv []string) int {
 	}
 	defer st.Close()
 	ctx := context.Background()
-	events, closeEvents := openAccountEvents(st, nil, "")
-	defer closeEvents()
-	defer commitCLIAccountChange(ctx, events.Begin(ctx, email))
 	if err := st.DeleteUser(ctx, email); err != nil {
 		return errf(5, "%v", err)
 	}

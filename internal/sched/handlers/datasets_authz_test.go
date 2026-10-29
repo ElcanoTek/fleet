@@ -27,9 +27,8 @@ func setupDatasetAuthz(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Manag
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
 	h := New(Config{DefaultTaskModel: "test/model",
-		OrchestratorURL: "http://localhost:8000",
-		AdminAPIKey:     "test-admin-key",
-		Version:         "0.1.0",
+		AdminAPIKey: "test-admin-key",
+		Version:     "0.1.0",
 	}, store, keyMgr)
 	r := chi.NewRouter()
 	r.Use(h.BodySizeLimitMiddleware)
