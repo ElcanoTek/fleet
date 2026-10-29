@@ -29,6 +29,14 @@ import {
 // bootstrap now carries the deployment's real name to every page — ADR-0091.)
 const APP_NAME = "Fleet";
 
+export type ClientSupportContact = {
+  label: string;
+  email: string;
+  title?: string;
+  message?: string;
+  subject?: string;
+};
+
 export type ClientBranding = {
   app_name: string;
   login_title: string;
@@ -40,6 +48,9 @@ export type ClientBranding = {
   // actually backed branding.logo at load, so an empty string means "no logo",
   // never "logo configured but broken".
   logo_url?: string;
+  // Optional support contact button + dialog copy configured in the bundle's
+  // branding.support block.
+  support?: ClientSupportContact;
 };
 
 // Neutral, client-agnostic branding. Mirrors config/default/manifest.yaml's

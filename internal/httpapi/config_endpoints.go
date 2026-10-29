@@ -112,6 +112,9 @@ type clientConfigBranding struct {
 	// is the proxied route. Omitted from JSON when empty so an older web build
 	// sees exactly what it saw before.
 	LogoURL string `json:"logo_url,omitempty"`
+	// Support carries the bundle's optional support contact button and dialog
+	// copy. Omitted when the bundle declares no branding.support block.
+	Support *clientconfig.SupportContact `json:"support,omitempty"`
 }
 
 // brandLogoWebPath is the web-tier-proxied path the browser fetches the bundle mark
@@ -168,6 +171,10 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 		// web never renders an <img> at a route that 404s.
 		if b.BrandLogoPath != "" {
 			resp.Branding.LogoURL = brandLogoWebPath
+		}
+		if b.Branding.Support != nil {
+			sc := *b.Branding.Support
+			resp.Branding.Support = &sc
 		}
 		if len(b.EmptyState.Cards) > 0 {
 			resp.EmptyState.Cards = b.EmptyState.Cards

@@ -48,6 +48,7 @@ package clientconfig
 import (
 	"fmt"
 	"log"
+	"net/mail"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -793,6 +794,22 @@ type Branding struct {
 	// resolution, must be a regular file, and must carry an extension the HTTP
 	// layer knows a content type for.
 	ShareImage string `yaml:"share_image"`
+	// Support configures an optional prominent support/escalation contact
+	// button in the authenticated web shell (e.g. a direct line to an
+	// engineering lead or support team). Nil when omitted by the bundle, in
+	// which case no support button is rendered. Documented in
+	// docs/BRANDING.md ("Support contact").
+	Support *SupportContact `yaml:"support"`
+}
+
+// SupportContact carries the optional bundle-configured support contact button
+// and dialog copy surfaced via the member-gated /client-config endpoint.
+type SupportContact struct {
+	Label   string `yaml:"label" json:"label"`
+	Email   string `yaml:"email" json:"email"`
+	Title   string `yaml:"title,omitempty" json:"title,omitempty"`
+	Message string `yaml:"message,omitempty" json:"message,omitempty"`
+	Subject string `yaml:"subject,omitempty" json:"subject,omitempty"`
 }
 
 // BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
@@ -1564,11 +1581,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPDir:                         filepath.Join(abs, "mcp"),
 		EvalsDir:                       filepath.Join(abs, "evals"),
 	}
-	applyBrandingDefaults(&b.Branding)
-	if err := b.resolveBrandLogo(); err != nil {
-		return nil, err
-	}
-	if err := b.resolveBrandShareImage(); err != nil {
+	if err := b.resolveBranding(); err != nil {
 		return nil, err
 	}
 	if err := b.validate(); err != nil {
@@ -1654,6 +1667,19 @@ func Load(dir string) (*Bundle, error) {
 		log.Printf("clientconfig: warning: %s", p)
 	}
 	return b, nil
+}
+
+// resolveBranding applies branding defaults and validates branding assets and
+// optional support contact configuration.
+func (b *Bundle) resolveBranding() error {
+	applyBrandingDefaults(&b.Branding)
+	if err := b.resolveBrandLogo(); err != nil {
+		return err
+	}
+	if err := b.resolveBrandShareImage(); err != nil {
+		return err
+	}
+	return b.resolveBrandSupport()
 }
 
 // applyBrandingDefaults fills neutral generic strings for any unset branding
@@ -1766,6 +1792,41 @@ func (b *Bundle) resolveBrandShareImage() error {
 		}
 	}
 	b.BrandShareImagePath = resolved
+	return nil
+}
+
+// resolveBrandSupport validates and normalizes branding.support when declared.
+// An omitted or all-blank block resolves to nil (no support button rendered).
+func (b *Bundle) resolveBrandSupport() error {
+	if b.Branding.Support == nil {
+		return nil
+	}
+	sc := b.Branding.Support
+	sc.Label = strings.TrimSpace(sc.Label)
+	sc.Email = strings.TrimSpace(sc.Email)
+	sc.Title = strings.TrimSpace(sc.Title)
+	sc.Message = strings.TrimSpace(sc.Message)
+	sc.Subject = strings.TrimSpace(sc.Subject)
+	if sc.Label == "" && sc.Email == "" && sc.Title == "" && sc.Message == "" && sc.Subject == "" {
+		b.Branding.Support = nil
+		return nil
+	}
+	if sc.Label == "" {
+		return fmt.Errorf("branding.support: label is required")
+	}
+	if sc.Email == "" {
+		return fmt.Errorf("branding.support: email is required")
+	}
+	if strings.ContainsAny(sc.Email, " \t\r\n?&#/:%") {
+		return fmt.Errorf("branding.support.email %q: must be a bare email address", sc.Email)
+	}
+	addr, err := mail.ParseAddress(sc.Email)
+	if err != nil || addr.Address != sc.Email {
+		return fmt.Errorf("branding.support.email %q: invalid email address", sc.Email)
+	}
+	if sc.Title == "" {
+		sc.Title = sc.Label
+	}
 	return nil
 }
 
