@@ -139,6 +139,9 @@ func (a *approvalStager) attachTaskConnectors(rawInput string) (string, error) {
 	staged.Connectors = conns.Selection
 	staged.AlwaysOnConnectors = conns.AlwaysOn
 	staged.ConnectorsResolved = true
+	if err := prevalidateScheduleTaskConnectors(staged); err != nil {
+		return "", err
+	}
 	out, err := json.Marshal(staged)
 	if err != nil {
 		return "", fmt.Errorf("schedule_task: encode staged args: %w", err)

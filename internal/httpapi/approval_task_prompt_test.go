@@ -127,11 +127,7 @@ func TestStageRefusesScheduleTaskWhenExecutionRequirementsConnectorNotEnabled(t 
 
 	// Enabled + always-on connectors pass prevalidation.
 	validRaw := `{"prompt":"Pull audience stats.\n` + models.ExecutionRequirementsMarker + `\n{\"mcp_servers\":[\"pages\",\"memory\"]}","cron":"0 9 * * *"}`
-	enriched, err := stager.attachTaskConnectors(validRaw)
-	if err != nil {
-		t.Fatalf("attachTaskConnectors: %v", err)
-	}
-	if err := prevalidateScheduleTaskConnectors(enriched); err != nil {
-		t.Fatalf("expected enabled + always-on connectors to pass prevalidateScheduleTaskConnectors, got %v", err)
+	if _, err := stager.attachTaskConnectors(validRaw); err != nil {
+		t.Fatalf("expected enabled + always-on connectors to pass attachTaskConnectors, got %v", err)
 	}
 }
