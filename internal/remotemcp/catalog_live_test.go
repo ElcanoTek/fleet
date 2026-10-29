@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -59,6 +60,11 @@ const vendorOutageMarker = "VENDOR OUTAGE"
 //     nonstandard ones a CDN answers for a down origin (Cloudflare's 520–524
 //     and 530). 501 Not Implemented stays rot: the endpoint answered and does
 //     not speak the protocol;
+//   - a JSON-RPC error whose message says the caller is rate-limited
+//     (rpcMessageSaysRateLimited), on any status: some vendors answer a
+//     throttled request with HTTP 200 and a JSON-RPC error, so the 429 never
+//     reaches the transport (#1844: Parallel Search's free tier, shared by
+//     every GitHub runner on the same egress IP);
 //   - otherwise whatever mcp.IsTransientConnectError calls transient: a
 //     timeout, a refused or reset connection, a temporary DNS failure, a
 //     JSON-RPC error that says it is temporary.
@@ -78,7 +84,39 @@ func vendorOutage(err error) bool {
 	case status >= 500 && status <= 599:
 		return status != http.StatusNotImplemented
 	}
+	if rpcMessageSaysRateLimited(rpcMessageOf(err)) {
+		return true
+	}
 	return mcp.IsTransientConnectError(err)
+}
+
+// rpcMessageOf is the message of the JSON-RPC error a probe failure carried,
+// answered to the request or unattributed; "" when there was none.
+func rpcMessageOf(err error) string {
+	var rpcErr *mcp.RPCError
+	var unattributed *mcp.UnattributedResponseError
+	switch {
+	case errors.As(err, &rpcErr):
+		return rpcErr.Message
+	case errors.As(err, &unattributed) && unattributed.Carried != nil:
+		return unattributed.Carried.Message
+	}
+	return ""
+}
+
+// rpcMessageSaysRateLimited reports whether a JSON-RPC error message says
+// the caller hit a rate limit. That is the vendor's capacity tonight, not the
+// listing: an open entry that rate-limits anonymous callers still works for
+// a user within its limits. It is the smoke's rule only — mcp's run-time
+// classifier does not retry on it, since a quota rarely clears in seconds.
+func rpcMessageSaysRateLimited(message string) bool {
+	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	for _, phrase := range []string{"rate limit", "rate-limit", "ratelimit", "too many requests"} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // httpStatusOf is the non-2xx HTTP status a probe failure arrived under, in
@@ -200,6 +238,64 @@ func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credent
 	return report.ToolCount, err
 }
 
+// catalogConfirmDelayEnv overrides how long a failed probe waits before its
+// confirmation probe (a Go duration; "0" turns confirmation off, for a quick
+// local run).
+const catalogConfirmDelayEnv = "FLEET_CATALOG_CONFIRM_DELAY"
+
+// defaultCatalogConfirmDelay is long enough for a vendor's blip, a deploy or
+// a per-minute rate-limit window to pass, and short enough that a red night
+// costs the lane a couple of minutes (the subtests wait in parallel).
+const defaultCatalogConfirmDelay = 2 * time.Minute
+
+// catalogConfirmDelay is the wait before a confirmation probe.
+func catalogConfirmDelay(t *testing.T) time.Duration {
+	t.Helper()
+	v := strings.TrimSpace(os.Getenv(catalogConfirmDelayEnv))
+	if v == "" {
+		return defaultCatalogConfirmDelay
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		t.Fatalf("%s=%q: %v", catalogConfirmDelayEnv, v, err)
+	}
+	return d
+}
+
+// probeConfirmed is probeForTest, except that a failure is only reported if
+// it is still there after a pause: the probe runs once more after
+// catalogConfirmDelay, and that second result is the one that counts.
+//
+// The connect retry inside probeForTest covers seconds; this covers minutes.
+// Rot — a host gone, an endpoint moved, an open entry that now wants a key —
+// is still there two minutes later, while most of what turned the nightly lane
+// red for no catalog reason was not (#1683's 503, #1844's rate limit). It is
+// the in-run form of the consecutive-nights rule the lane has no state for,
+// and it catches the next kind of vendor weather without waiting for someone
+// to teach vendorOutage its wording.
+func (s *Service) probeConfirmed(t *testing.T, url, header, query, prefix, credential string) (int, error) {
+	t.Helper()
+	tools, err := s.probeForTest(t, url, header, query, prefix, credential)
+	if err == nil {
+		return tools, nil
+	}
+	delay := catalogConfirmDelay(t)
+	if delay <= 0 {
+		return tools, err
+	}
+	t.Logf("%s: probe failed (%v); probing once more in %s before calling it", url, err, delay)
+	select {
+	case <-time.After(delay):
+	case <-t.Context().Done():
+		return tools, err
+	}
+	tools, err = s.probeForTest(t, url, header, query, prefix, credential)
+	if err == nil {
+		t.Logf("%s: the confirmation probe succeeded; the first failure was transient", url)
+	}
+	return tools, err
+}
+
 // checkCatalogToolSchemas holds a listed vendor's tools to the schema bar the
 // model boundary applies. An invalid schema fails the entry: Fleet withholds
 // that tool from the model, so the listing overstates what users get and the
@@ -244,7 +340,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 		ran++
 		t.Run(e.Name, func(t *testing.T) {
 			t.Parallel()
-			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
+			tools, err := svc.probeConfirmed(t, e.URL, "", "", "", "")
 			if err != nil {
 				failUnlessOutagef(t, err, "%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
@@ -362,7 +458,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 				t.Skipf("%s not set; skipping the %s fixture", envName, fixtureName(f.Entry, f.Variant))
 			}
 			armed.Add(1)
-			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
+			tools, err := svc.probeConfirmed(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
 				failFixturef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
