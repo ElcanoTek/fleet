@@ -78,7 +78,7 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		if strings.HasPrefix(text, "LOOP_GUARD") {
 			t.loopGuardBlocks++
 		}
-		if strings.HasPrefix(text, "APPROVAL_REQUIRED") {
+		if strings.HasPrefix(text, "APPROVAL_REQUIRED") && strings.Contains(text, "approval_id=") {
 			t.stagedApproval = true
 		}
 		// A call held for the user's approval, or a model-switch suggestion,

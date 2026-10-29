@@ -467,6 +467,9 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 		if err != nil {
 			return "", err
 		}
+		if err := prevalidateScheduleTaskConnectors(enriched); err != nil {
+			return "", err
+		}
 		rawInput = enriched
 	}
 
@@ -494,6 +497,19 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			"tool":  toolName,
 			"count": n,
 		})
+	}
+	// Staging an actionable approval card also supersedes any pending
+	// suggest_advanced_model card in the conversation so the user does not see
+	// both cards side-by-side and accidentally click both.
+	if toolName != previewEmailToolName {
+		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
+			log.Printf("supersede suggest_advanced_model approvals (conv=%s): %v", a.conversationID, err)
+		} else if n > 0 {
+			a.sink.Emit("tool.approval_superseded", map[string]any{
+				"tool":  tools.SuggestAdvancedModelToolName,
+				"count": n,
+			})
+		}
 	}
 
 	seat := a.seatFor(toolName)
@@ -709,7 +725,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	}
 	if pending, err := a.store.ListPendingApprovals(a.ctx, a.userEmail, a.conversationID); err == nil {
 		for _, p := range pending {
-			if p.ToolName != tools.SuggestAdvancedModelToolName {
+			if p.ToolName != tools.SuggestAdvancedModelToolName && p.ToolName != previewEmailToolName {
 				return "", "SUGGESTION_SUPPRESSED: a tool approval card is already pending the user's decision. Do not stage a model-switch suggestion alongside a pending action approval.", nil
 			}
 		}
@@ -1679,6 +1695,52 @@ func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 	return nil
 }
 
+// prevalidateScheduleTaskConnectors refuses a schedule_task call before staging
+// when its prompt's EXECUTION REQUIREMENTS (JSON) declares mcp_servers that are
+// not enabled in the conversation's resolved connector snapshot (or always-on).
+// Without this check, the user approves a schedule card that is guaranteed to
+// fail its pre-flight EXECUTION REQUIREMENTS check on its first scheduled run.
+func prevalidateScheduleTaskConnectors(rawInput string) error {
+	var staged scheduleTaskStagedArgs
+	if err := json.Unmarshal([]byte(rawInput), &staged); err != nil {
+		return nil //nolint:nilerr // intentional: unparseable JSON is handled by the card and executor
+	}
+	if err := validateScheduleTaskExecutionRequirementsConnectors(staged); err != nil {
+		return &agentcore.StageRefusedError{
+			Reason: fmt.Sprintf("%v. Nothing was staged for approval: ask the user to enable the required connector in the Tools picker (or remove it from EXECUTION REQUIREMENTS if the task does not need it) and call %s again", err, tools.ScheduleTaskToolName),
+		}
+	}
+	return nil
+}
+
+func validateScheduleTaskExecutionRequirementsConnectors(staged scheduleTaskStagedArgs) error {
+	if !staged.ConnectorsResolved {
+		return nil
+	}
+	req, err := models.ParseExecutionRequirements(staged.Prompt)
+	if err != nil || req == nil || len(req.Servers) == 0 {
+		return nil
+	}
+	allowed := make(map[string]bool, len(staged.Connectors)+len(staged.AlwaysOnConnectors))
+	for _, c := range staged.Connectors {
+		if name := strings.TrimSpace(c.Server); name != "" {
+			allowed[name] = true
+		}
+	}
+	for _, name := range staged.AlwaysOnConnectors {
+		if name = strings.TrimSpace(name); name != "" {
+			allowed[name] = true
+		}
+	}
+	for _, srv := range req.Servers {
+		srv = strings.TrimSpace(srv)
+		if srv != "" && !allowed[srv] {
+			return fmt.Errorf("prompt's EXECUTION REQUIREMENTS declares mcp_servers %q, which is not enabled in this conversation", srv)
+		}
+	}
+	return nil
+}
+
 // Handler-only tools have no runnable tool body. A session sentinel would be
 // mistaken for an approval id instead of creating a task or changing a model.
 func handlerOnlyApproval(tool string) bool {
@@ -1956,10 +2018,6 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if !claimed {
 		return s.resolvedApprovalDecision(ctx, user, approvalID)
 	}
-	// Approving a tool action supersedes any pending suggest_advanced_model
-	// card in the conversation so the user cannot accidentally click "Switch &
-	// retry" right after approving an action and run the turn twice.
-	_, _ = s.store.SupersedePendingApprovals(execCtx, convID, tools.SuggestAdvancedModelToolName)
 
 	// The user already committed to the action, so it runs on the detached
 	// execCtx — a tab close mid-flight must not abandon a claimed approval
@@ -3127,6 +3185,9 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		}
 	}
 	if err := p.Validate(); err != nil {
+		return "", err
+	}
+	if err := validateScheduleTaskExecutionRequirementsConnectors(p); err != nil {
 		return "", err
 	}
 
