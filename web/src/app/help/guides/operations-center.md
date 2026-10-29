@@ -75,7 +75,10 @@ tooltip is what settles it.
 When a newer version of the app is released while the board is open, a notice
 at the top of the page says the app **was updated**. Press **Reload** to load
 it, or dismiss the notice with **×**; it never reloads the board by itself. A
-page that says **Something went wrong** offers **Reload** too.
+page that says **Something went wrong** offers **Reload** too. When your
+operator configures a support contact in the bundle (`branding.support`), the
+page header also includes that support button, which opens a dialog with the
+support message, **Copy email**, and **Send email** (`mailto:`).
 
 ### The tabs
 

@@ -299,7 +299,12 @@ Above the transcript sit three small controls, left to right: **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
 the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
-or off across the whole conversation. Every conversation also shows who can see it — **Only
+or off across the whole conversation. When your operator configures a support
+contact in the deployment's bundle (`branding.support`), the top bar also shows
+that support button across Chat, the Operations Center, Settings, and Guides;
+pressing it opens a dialog with your operator's message, a **Copy email** button,
+and a **Send email** (`mailto:`) action (omitted by default when not configured).
+Every conversation also shows who can see it — **Only
 you**, **Shared with** your team, or **Public link** — and a **Share** button.
 Both open the share dialog.
 

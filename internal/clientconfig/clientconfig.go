@@ -797,7 +797,8 @@ type Branding struct {
 	// Support configures an optional prominent support/escalation contact
 	// button in the authenticated web shell (e.g. a direct line to an
 	// engineering lead or support team). Nil when omitted by the bundle, in
-	// which case no support button is rendered.
+	// which case no support button is rendered. Documented in
+	// docs/BRANDING.md ("Support contact").
 	Support *SupportContact `yaml:"support"`
 }
 
@@ -1816,7 +1817,7 @@ func (b *Bundle) resolveBrandSupport() error {
 	if sc.Email == "" {
 		return fmt.Errorf("branding.support: email is required")
 	}
-	if strings.ContainsAny(sc.Email, " \t\r\n?&#/:") {
+	if strings.ContainsAny(sc.Email, " \t\r\n?&#/:%") {
 		return fmt.Errorf("branding.support.email %q: must be a bare email address", sc.Email)
 	}
 	addr, err := mail.ParseAddress(sc.Email)

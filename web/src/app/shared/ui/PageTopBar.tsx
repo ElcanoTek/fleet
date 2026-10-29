@@ -30,7 +30,7 @@ export type PageTopBarProps = {
 };
 
 function buildMailtoHref(contact: ClientSupportContact): string {
-  const email = contact.email.trim();
+  const email = contact.email.trim().replaceAll("%", "%25");
   const subject = contact.subject?.trim();
   if (!subject) {
     return `mailto:${email}`;
