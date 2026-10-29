@@ -1136,10 +1136,14 @@ fi
 # PEP-668 externally-managed python; harmless to drop on other distros.
 if [[ "$ENABLE_SERVICE" == "1" && -f "${CLIENT_CONFIG_DIR}/mcp/requirements.txt" ]]; then
   step "Installing the bundle's host-side MCP Python deps (${CLIENT_CONFIG_DIR}/mcp/requirements.txt)"
+  _mcp_state_dir="${FLEET_STATE_DIR:-$REPO_ROOT/.fleet-state}"
   if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${CLIENT_CONFIG_DIR}/mcp/requirements.txt"
+    info "[dry-run] would record the mcp/requirements.txt hash under ${_mcp_state_dir}/mcp-requirements.sha256"
   elif command -v python3 >/dev/null 2>&1; then
     if python3 -m pip install --break-system-packages -r "${CLIENT_CONFIG_DIR}/mcp/requirements.txt"; then
+      mkdir -p "$_mcp_state_dir"
+      sha256sum "${CLIENT_CONFIG_DIR}/mcp/requirements.txt" | awk '{print $1}' > "$_mcp_state_dir/mcp-requirements.sha256" 2>/dev/null || true
       ok "bundle MCP Python deps installed (host-side servers can start)"
     else
       warn "pip install of ${CLIENT_CONFIG_DIR}/mcp/requirements.txt failed — host-side MCP servers may not start."

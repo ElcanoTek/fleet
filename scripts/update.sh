@@ -869,6 +869,11 @@ hash_file() { [[ -f "$1" ]] && sha256sum "$1" | awk '{print $1}' || printf 'abse
 STATE_DIR="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
 STAMP_FILE="$STATE_DIR/sandbox-containerfile.sha256"
 REF_FILE="$STATE_DIR/sandbox-image.ref"
+MCP_REQS_STAMP="$STATE_DIR/mcp-requirements.sha256"
+mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"
+mcp_reqs_now="$(hash_file "$mcp_reqs")"
+mcp_reqs_prev="absent"
+[[ -f "$MCP_REQS_STAMP" ]] && mcp_reqs_prev="$(tr -d '[:space:]' < "$MCP_REQS_STAMP")"
 cf_now="$(hash_file "$sandbox_cf")"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
@@ -1241,6 +1246,41 @@ else
         warn "recover: fix the build error above, then run: sudo FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} FLEET_SERVICE_NAME=${SERVICE_NAME} ${SCRIPT_DIR}/build-sandbox-image.sh"
         warn "finish:  fleet update --no-pull   (runs the remaining update steps + the restart)"
         die "sandbox image build failed and ${ref_now:-the resolved image} is not known to exist in the service user's store — refusing to install an update whose every sandboxed tool call would fail"
+      fi
+    fi
+  fi
+fi
+
+# ── refresh host-side MCP Python deps when mcp/requirements.txt changed ─────
+# fleet runs the bundle's MCP servers host-side as `python3 <bundle>/mcp/*.py`,
+# so their Python deps must be importable by the system python3 the service user
+# runs. bootstrap.sh installs mcp/requirements.txt at box build and records its
+# SHA-256 stamp under $STATE_DIR; re-run pip install here whenever the hash
+# changed, no stamp exists yet, or --no-pull (rebuild-only) was requested.
+if [[ "$mcp_reqs_now" != "absent" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${mcp_reqs} if its hash (${mcp_reqs_now:0:12}) changed from ${MCP_REQS_STAMP}"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    warn "python3 not found — install ${mcp_reqs} manually."
+  else
+    mcp_reqs_reason=""
+    if [[ "$NO_PULL" == "1" ]]; then
+      mcp_reqs_reason="rebuild-only mode"
+    elif [[ "$mcp_reqs_prev" == "absent" ]]; then
+      mcp_reqs_reason="no stored mcp/requirements.txt hash yet — establishing the baseline"
+    elif [[ "$mcp_reqs_now" != "$mcp_reqs_prev" ]]; then
+      mcp_reqs_reason="mcp/requirements.txt changed (${mcp_reqs_prev:0:12} → ${mcp_reqs_now:0:12})"
+    fi
+    if [[ -z "$mcp_reqs_reason" ]]; then
+      ok "bundle MCP Python deps up to date (requirements.txt ${mcp_reqs_now:0:12}) — skipping pip install."
+    else
+      info "${mcp_reqs_reason} — installing host-side MCP Python deps (${mcp_reqs})."
+      if python3 -m pip install --break-system-packages -r "$mcp_reqs"; then
+        mkdir -p "$STATE_DIR"
+        printf '%s\n' "$mcp_reqs_now" > "$MCP_REQS_STAMP"
+        ok "bundle MCP Python deps installed (${mcp_reqs}); recorded hash ${mcp_reqs_now:0:12}"
+      else
+        warn "pip install of ${mcp_reqs} failed — host-side MCP servers may not start."
       fi
     fi
   fi

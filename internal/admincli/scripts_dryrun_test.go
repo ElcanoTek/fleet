@@ -1632,3 +1632,60 @@ func TestUpdateDryRunDoesNotClaimAStaleStagedCopyWasRefreshed(t *testing.T) {
 		t.Fatalf("update did not report the staged copy as not refreshed\n--- output ---\n%s", out)
 	}
 }
+
+// TestUpdateMCPRequirementsGate verifies that bootstrap.sh records the SHA-256
+// stamp of mcp/requirements.txt and update.sh re-runs pip install when the
+// bundle's mcp/requirements.txt hash changes (or has no stored stamp yet).
+func TestUpdateMCPRequirementsGate(t *testing.T) {
+	root := repoRootFromTest(t)
+	updateBody, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateScript := string(updateBody)
+	for _, want := range []string{
+		`MCP_REQS_STAMP="$STATE_DIR/mcp-requirements.sha256"`,
+		`mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"`,
+		`python3 -m pip install --break-system-packages -r "$mcp_reqs"`,
+		`printf '%s\n' "$mcp_reqs_now" > "$MCP_REQS_STAMP"`,
+		`bundle MCP Python deps up to date`,
+	} {
+		if !strings.Contains(updateScript, want) {
+			t.Errorf("update.sh must contain %q", want)
+		}
+	}
+
+	bootstrapBody, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(bootstrapBody), "mcp-requirements.sha256") {
+		t.Errorf("bootstrap.sh must record mcp-requirements.sha256")
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("branding:\n  app_name: Test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "mcp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reqsPath := filepath.Join(dir, "mcp", "requirements.txt")
+	if err := os.WriteFile(reqsPath, []byte("mcp>=1.30.0,<2\nplaywright>=1.64.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	if err := os.WriteFile(envFile, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{
+		"FLEET_ENV_FILE=" + envFile,
+		"FLEET_CLIENT_CONFIG_DIR=" + dir,
+	}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("update --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "python3 -m pip install --break-system-packages -r "+reqsPath) {
+		t.Errorf("update --dry-run plan missing mcp/requirements.txt pip install step\n--- output ---\n%s", out)
+	}
+}
