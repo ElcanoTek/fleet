@@ -1580,14 +1580,7 @@ func Load(dir string) (*Bundle, error) {
 		MCPDir:                         filepath.Join(abs, "mcp"),
 		EvalsDir:                       filepath.Join(abs, "evals"),
 	}
-	applyBrandingDefaults(&b.Branding)
-	if err := b.resolveBrandLogo(); err != nil {
-		return nil, err
-	}
-	if err := b.resolveBrandShareImage(); err != nil {
-		return nil, err
-	}
-	if err := b.resolveBrandSupport(); err != nil {
+	if err := b.resolveBranding(); err != nil {
 		return nil, err
 	}
 	if err := b.validate(); err != nil {
@@ -1673,6 +1666,19 @@ func Load(dir string) (*Bundle, error) {
 		log.Printf("clientconfig: warning: %s", p)
 	}
 	return b, nil
+}
+
+// resolveBranding applies branding defaults and validates branding assets and
+// optional support contact configuration.
+func (b *Bundle) resolveBranding() error {
+	applyBrandingDefaults(&b.Branding)
+	if err := b.resolveBrandLogo(); err != nil {
+		return err
+	}
+	if err := b.resolveBrandShareImage(); err != nil {
+		return err
+	}
+	return b.resolveBrandSupport()
 }
 
 // applyBrandingDefaults fills neutral generic strings for any unset branding

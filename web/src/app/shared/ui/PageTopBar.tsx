@@ -6,6 +6,7 @@ import {
   type ClientSupportContact,
 } from "@/app/lib/useClientConfig";
 import { DialogShell } from "./DialogShell";
+import { Icon } from "./Icon";
 
 // PageTopBar — the shared top header for Chat and the Operations Center (#169).
 // One bordered bar so the two views read identically: a mobile sidebar toggle +
@@ -57,13 +58,16 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
 
   const handleCopyEmail = async () => {
     if (!activeSupport?.email) return;
+    if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") {
+      return;
+    }
     try {
-      await navigator.clipboard?.writeText(activeSupport.email.trim());
+      await navigator.clipboard.writeText(activeSupport.email.trim());
       setCopied(true);
       if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
       copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard API unavailable; email remains selectable in the card.
+      // Clipboard write failed; email remains selectable in the card.
     }
   };
 
@@ -101,34 +105,27 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
           </h1>
         </div>
         {hasSupport || actions ? (
-          <div className="flex items-center gap-1.5">
+          <div className="flex min-w-0 items-center gap-1.5">
             {hasSupport && activeSupport ? (
               <button
                 type="button"
                 data-testid="support-contact-button"
+                aria-label={activeSupport.label}
+                title={activeSupport.label}
                 onClick={() => {
                   setCopied(false);
                   setDialogOpen(true);
                 }}
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-3 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                className="inline-flex h-8 max-w-[9.5rem] shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:max-w-[16rem] sm:px-3"
               >
-                <svg
-                  aria-hidden="true"
-                  className="size-3.5 text-[var(--color-primary)]"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect width="20" height="16" x="2" y="4" rx="2" />
-                  <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
-                </svg>
-                <span>{activeSupport.label}</span>
+                <Icon
+                  name="mail"
+                  className="size-3.5 shrink-0 text-[var(--color-primary)]"
+                />
+                <span className="truncate">{activeSupport.label}</span>
               </button>
             ) : null}
-            {actions ? <div className="flex items-center gap-1">{actions}</div> : null}
+            {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
           </div>
         ) : null}
       </header>
@@ -138,24 +135,12 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
           scrimLabel="Close support dialog"
           onDismiss={() => setDialogOpen(false)}
           testId="support-contact-dialog"
-          className="w-full max-w-md p-6"
+          className="max-h-[calc(100dvh-2rem)] w-full max-w-md overflow-y-auto p-6"
         >
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-[color-mix(in_srgb,var(--color-primary)_35%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_14%,var(--color-surface-2))] text-[var(--color-primary)]">
-                <svg
-                  aria-hidden="true"
-                  className="size-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <rect width="20" height="16" x="2" y="4" rx="2" />
-                  <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
-                </svg>
+                <Icon name="mail" className="size-4" />
               </span>
               <h2 className="text-base font-semibold text-[var(--color-text-primary)]">
                 {activeSupport.title || activeSupport.label}
@@ -167,19 +152,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
               onClick={() => setDialogOpen(false)}
               className="inline-flex size-8 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
             >
-              <svg
-                aria-hidden="true"
-                className="size-4"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M18 6 6 18" />
-                <path d="m6 6 12 12" />
-              </svg>
+              <Icon name="close" className="size-4" />
             </button>
           </div>
           {activeSupport.message ? (

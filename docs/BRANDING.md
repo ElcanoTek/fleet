@@ -16,6 +16,13 @@ branding:
   share_description: "Persistent multi-turn conversations with real tool use."
   logo: "assets/acme-mark.svg"
   share_image: "assets/acme-share.png"
+  support:
+    label: "Contact Support"
+    email: "support@example.com"
+    title: "Direct Support"
+    subject: "Workspace Feedback / Support"
+    message: |-
+      Have a question or want something tuned for your workflow? Reach out anytime.
   colors:
     dark:
       primary: "#e6007e"
@@ -80,6 +87,27 @@ The bar for adding a route to this class is that its response is public **by
 construction** — already visible to anyone who can load the login page or scrape
 a shared link — not merely that it looks non-sensitive. `/client-config` stays
 member-gated because it also carries workspace content.
+
+### Support contact (`branding.support`)
+
+A bundle may optionally declare `branding.support` to render a prominent support
+or escalation pill button in the top bar across every authenticated surface
+(Chat, Operations Center, Settings, and Guides). Clicking the button opens a
+dialog with the configured message, a copyable email address, and a `mailto:`
+action.
+
+| Field | Required | Description |
+|---|---|---|
+| `label` | Yes | Button label shown in the top bar (and fallback dialog title when `title` is omitted). |
+| `email` | Yes | Plain email address (`local@domain`); validated at bundle load (`fleet validate-config`) and rejected if it contains a display name or URL/query characters. |
+| `title` | No | Heading shown at the top of the support dialog (defaults to `label`). |
+| `message` | No | Body copy shown inside the dialog; blank lines split paragraphs. |
+| `subject` | No | Default subject line URL-encoded onto the `mailto:` link. |
+
+`branding.support` is served **only** on the member-gated `/client-config`
+route (never on `/brand/meta`), so operator or escalation contact details are
+not exposed to unauthenticated visitors or link-unfurl scrapers. When omitted,
+no support button is rendered.
 
 ## Applying a change
 

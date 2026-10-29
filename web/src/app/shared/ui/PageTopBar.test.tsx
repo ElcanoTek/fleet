@@ -69,4 +69,25 @@ describe("PageTopBar support contact", () => {
       );
     });
   });
+
+  it("does not report Copied when navigator.clipboard is unavailable", () => {
+    Object.assign(navigator, { clipboard: undefined });
+
+    render(
+      <PageTopBar
+        title="Operations Center"
+        onMenu={() => {}}
+        support={{
+          label: "Direct Support",
+          email: "support@example.com",
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("support-contact-button"));
+    fireEvent.click(screen.getByTestId("support-contact-copy"));
+    expect(screen.getByTestId("support-contact-copy").textContent).toBe(
+      "Copy email",
+    );
+  });
 });
