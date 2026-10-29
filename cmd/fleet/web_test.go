@@ -194,22 +194,12 @@ func countConfigWiring(t *testing.T, f *ast.File, field string) (literals, wired
 
 // buildWebServer also hands the gateway config.Load's account-management
 // decision, so the pages go view-only exactly when chat-server refuses the
-// writes.
+// writes. (The page bootstrap this drives needs a web bundle, which a Go-only
+// build lacks; internal/webui renders it against a test bundle.)
 func TestWebServerTakesAccountManagementFromConfig(t *testing.T) {
-	t.Setenv("APP_SESSION_SECRET", "web-test-session-secret-0123456789")
-	t.Setenv("FLEET_WEB_ADDR", "")
-	t.Setenv("FLEET_OIDC_ISSUER", "https://auth.example.com")
-	t.Setenv("FLEET_OIDC_CLIENT_ID", "fleet")
-	t.Setenv("FLEET_OIDC_CLIENT_SECRET", "s")
 	for _, managed := range []bool{false, true} {
-		srv, err := buildWebServer(&config.Config{SharedToken: "tok", AccountsManagedByAuth: managed}, http.NotFoundHandler(), http.NotFoundHandler())
-		if err != nil || srv == nil {
-			t.Fatalf("buildWebServer: %v", err)
-		}
-		w := httptest.NewRecorder()
-		srv.Handler.ServeHTTP(w, httptest.NewRequest("GET", "/login", nil))
-		if got := strings.Contains(w.Body.String(), `"centralAuth":{"adminUrl":"https://auth.example.com/admin"}`); got != managed {
-			t.Errorf("AccountsManagedByAuth=%v: bootstrap names Auth = %v", managed, got)
+		if got := gatewayConfig(&config.Config{AccountsManagedByAuth: managed}).AccountsManagedByAuth; got != managed {
+			t.Errorf("AccountsManagedByAuth=%v reached the gateway as %v", managed, got)
 		}
 	}
 }

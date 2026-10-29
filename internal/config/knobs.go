@@ -299,8 +299,11 @@ var envKnobs = []envKnob{
 	{key: "FLEET_MOCK_MODE", fleet: true, kind: kindBool},
 
 	// ── central Auth sign-in ── the break-glass that turns Fleet passwords
-	// back on while Auth SSO is configured (Config.PasswordLoginDisabled).
+	// back on while Auth SSO is configured (Config.PasswordLoginDisabled), and
+	// the mark for an OIDC provider that is not central Auth
+	// (CentralAuthConfigured).
 	{key: "FLEET_OIDC_ALLOW_PASSWORD", kind: kindBool},
+	{key: "FLEET_OIDC_GENERIC", kind: kindBool},
 
 	// ─────────────────────────────────────────────────────────────────────
 	// scopeExternal (#1273): parsed at the point of use, NOT by Load. Load

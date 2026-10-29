@@ -1902,6 +1902,9 @@ func logCentralAuth(cfg *config.Config) {
 	if cfg.PasswordLoginDisabled {
 		log.Printf("auth: Fleet passwords are off; people sign in through central Auth only. Root can turn them back on with FLEET_OIDC_ALLOW_PASSWORD=1 and a restart.")
 	}
+	if config.OIDCConfigured() && !cfg.AccountsManagedByAuth {
+		log.Printf("auth: FLEET_OIDC_GENERIC=1: the SSO provider is not central Auth, so Fleet keeps its own passwords and account management.")
+	}
 }
 
 // toDBPoolStats adapts a database/sql pool snapshot into the metrics package's

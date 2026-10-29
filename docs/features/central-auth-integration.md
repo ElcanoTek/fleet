@@ -4,7 +4,8 @@ Fleet has three ways to sign in:
 
 - Fleet email/password, governed by Fleet's user database and
   password-derived session epoch. **Off whenever central Auth is configured**
-  (below), unless `FLEET_OIDC_ALLOW_PASSWORD=1`.
+  (below), unless `FLEET_OIDC_ALLOW_PASSWORD=1`, or `FLEET_OIDC_GENERIC=1`
+  marks the SSO provider as another OIDC identity provider.
 - The legacy `elcano_auth` magic-link cookie, when `AUTH_SIGNING_PUBKEY` is
   configured.
 - A central password Auth deployment, through Fleet's OIDC Authorization
@@ -91,6 +92,14 @@ in to a client's Fleet has an Auth account under the same email with Fleet
 granted. Anyone who does not is locked out until they get one (their Fleet
 data is kept and is theirs at their first SSO sign-in). To give them time,
 set `FLEET_OIDC_ALLOW_PASSWORD=1` before updating and remove it later.
+
+**Another OIDC provider.** `FLEET_OIDC_*` also works with an identity
+provider that is not central Auth (Okta, Entra, ...). Such a provider proves
+who someone is but sends Fleet no accounts, roles or teams, so set
+`FLEET_OIDC_GENERIC=1`: that Fleet keeps its own passwords and account
+management (people are added in Settings → Admin → Users or with
+`fleet admin add`), and none of the above applies. Leave it unset for central
+Auth. Like the break-glass, it is read at startup.
 
 **Break-glass.** When Auth is down nobody can sign in to the web UI. Root sets
 `FLEET_OIDC_ALLOW_PASSWORD=1` in `/etc/fleet/fleet.env`, runs `fleet restart`,

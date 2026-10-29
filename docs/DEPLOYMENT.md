@@ -360,7 +360,10 @@ each piece yourself):
    > passwords of its own, in the web UI or the Operations Center, and its
    > accounts, roles and teams are managed in Auth (with Auth's team sync on).
    > `FLEET_OIDC_ALLOW_PASSWORD=1` is the break-glass that turns passwords
-   > back on (restart to apply); see
+   > back on (restart to apply). An SSO provider that is not central Auth
+   > (Okta, Entra, ...) sends no accounts, so mark it with
+   > `FLEET_OIDC_GENERIC=1` to keep passwords and Fleet's own account
+   > management; see
    > [SSO only](features/central-auth-integration.md#sso-only-auth-signs-people-in-and-manages-them).
    > The default scope is `openid email`; discovery's
    > `client_secret_basic` is honored (including Elcano Auth), with the existing

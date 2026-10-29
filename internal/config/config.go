@@ -413,7 +413,8 @@ var allowedEnvVars = map[string]bool{
 	// AUTH_* keys configure the legacy Elcano magic-link cookie and the
 	// back-channel signing keys; FLEET_OIDC_* is central-Auth SSO, and with it
 	// configured Fleet passwords are off unless FLEET_OIDC_ALLOW_PASSWORD=1
-	// (Config.PasswordLoginDisabled).
+	// (Config.PasswordLoginDisabled); FLEET_OIDC_GENERIC=1 marks another OIDC
+	// provider, which leaves passwords and accounts to Fleet.
 	// NEXT_PUBLIC_PUBLIC_ORIGIN is read only as a fallback for
 	// FLEET_PUBLIC_BASE_URL on a box whose env predates the move.
 	"FLEET_WEB_ADDR":                true,
@@ -433,6 +434,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_OIDC_REDIRECT_URI":       true,
 	"FLEET_OIDC_AUTO_START":         true,
 	"FLEET_OIDC_ALLOW_PASSWORD":     true,
+	"FLEET_OIDC_GENERIC":            true,
 	"CATWALK_URL":                   true,
 	"ORCHESTRATOR_SERVER_TOKEN":     true,
 	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
@@ -1698,6 +1700,11 @@ func Load(envFile string) (*Config, error) {
 	// path and `fleet validate-config` use — so the three paths agree on what
 	// a given environment accepts or rejects.
 	lp := &loadParser{}
+	// Central Auth is OIDC SSO not marked as a generic provider (see
+	// CentralAuthConfigured). Parsed first so a mistyped value refuses boot
+	// even on a box without SSO.
+	generic := lp.getenvBool("FLEET_OIDC_GENERIC", false)
+	centralAuth := OIDCConfigured() && !generic
 
 	cfg := &Config{
 		MCPServers: make(map[string]MCPServerConfig),
@@ -1938,8 +1945,8 @@ func Load(envFile string) (*Config, error) {
 		MockMode:              lp.getenvFleetBool("MOCK_MODE", false),
 
 		// ── central Auth sign-in ──
-		PasswordLoginDisabled: !lp.getenvBool("FLEET_OIDC_ALLOW_PASSWORD", false) && OIDCConfigured(),
-		AccountsManagedByAuth: OIDCConfigured(),
+		PasswordLoginDisabled: !lp.getenvBool("FLEET_OIDC_ALLOW_PASSWORD", false) && centralAuth,
+		AccountsManagedByAuth: centralAuth,
 
 		// ── observability: Sentry error tracking (#193) ──
 		SentryDSN:   stripQuotes(os.Getenv("FLEET_SENTRY_DSN")),
@@ -2444,7 +2451,7 @@ func hasKnownPromptExtension(name string) bool {
 	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".md")
 }
 
-// OIDCConfigured reports whether central Auth SSO is configured: the rule
+// OIDCConfigured reports whether OIDC SSO is configured: the rule
 // internal/webui's oidcFromEnv applies before it offers SSO at all (issuer,
 // client id and client secret all non-empty once trimmed, trailing slashes on
 // the issuer not counting). A test in cmd/fleet pins the two to agree, so
@@ -2467,25 +2474,43 @@ func sameHost(a, b string) bool {
 	return strings.EqualFold(ua.Host, ub.Host)
 }
 
+// CentralAuthConfigured reports whether this Fleet signs in through Elcano's
+// central Auth, which provisions accounts, roles and teams: OIDC SSO is
+// configured and FLEET_OIDC_GENERIC=1 does not mark the provider as another
+// OIDC identity provider (Okta, Entra, ...). Such a provider proves who
+// someone is but sends no provisioning, so with it Fleet keeps its own
+// passwords and account management. Load binds the same rule at boot; a
+// FLEET_OIDC_GENERIC value boot would refuse reads as unset here.
+func CentralAuthConfigured() bool {
+	return OIDCConfigured() && !boolKnobInEnv("FLEET_OIDC_GENERIC")
+}
+
 // centralAuthDecisionsInEnv re-derives AccountsManagedByAuth and
 // PasswordLoginDisabled from the current environment, so a reload can report
 // that either changed (both are bound at boot).
 func centralAuthDecisionsInEnv() string {
-	return fmt.Sprintf("accounts-managed-by-auth=%t password-login-off=%t", OIDCConfigured(), passwordLoginOffInEnv())
+	return fmt.Sprintf("accounts-managed-by-auth=%t password-login-off=%t", CentralAuthConfigured(), passwordLoginOffInEnv())
 }
 
 // passwordLoginOffInEnv re-derives PasswordLoginDisabled from the current
 // environment. A break-glass value boot would refuse reads as unset here.
 func passwordLoginOffInEnv() bool {
-	allow := false
-	if k := envKnobByKey["FLEET_OIDC_ALLOW_PASSWORD"]; k != nil {
-		if raw, ok := k.lookup(); ok {
-			if v, set, err := k.parseBool(raw); err == nil && set {
-				allow = v
-			}
-		}
+	return CentralAuthConfigured() && !boolKnobInEnv("FLEET_OIDC_ALLOW_PASSWORD")
+}
+
+// boolKnobInEnv reads a declared boolean knob from the current environment;
+// unset, or a value boot would refuse, reads as false.
+func boolKnobInEnv(key string) bool {
+	k := envKnobByKey[key]
+	if k == nil {
+		return false
 	}
-	return OIDCConfigured() && !allow
+	raw, ok := k.lookup()
+	if !ok {
+		return false
+	}
+	v, set, err := k.parseBool(raw)
+	return err == nil && set && v
 }
 
 // ── env helpers ──

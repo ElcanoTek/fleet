@@ -27,6 +27,10 @@ with which roles, so the Fleet passwords were the remaining way around it.
 separate setting: the three `FLEET_OIDC_*` values that make Fleet offer SSO
 (issuer, client id, client secret) also make it SSO-only.
 `FLEET_OIDC_ALLOW_PASSWORD=1` is the break-glass that turns passwords back on.
+A Fleet whose SSO provider is another OIDC identity provider (Okta, Entra,
+...) sets `FLEET_OIDC_GENERIC=1`: such a provider proves who someone is but
+sends no accounts, roles or teams, so that Fleet keeps its own passwords and
+account management, as before this decision.
 
 - The decision is made once, in `config.Load`, from configuration alone, and
   handed to the browser gateway, chat-server and the Operations Center. It
@@ -39,7 +43,7 @@ separate setting: the three `FLEET_OIDC_*` values that make Fleet offer SSO
   cookie (with or without its source claim) and an Operations Center bearer
   minted by its login, at every place either is accepted.
 - Auth also manages accounts, roles and teams (`AccountsManagedByAuth`,
-  configured SSO alone, so the break-glass does not reopen it). Settings →
+  central Auth configured, so the break-glass does not reopen it). Settings →
   Admin → Users becomes the view-only usage list and Settings → Team shows a
   person's team read-only; chat-server refuses account creation, role and
   team edits, deletion, password resets, team renames and self-serve team

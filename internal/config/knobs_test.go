@@ -38,6 +38,9 @@ func TestLoad_MalformedKnobFailsLoud(t *testing.T) {
 		// The central-Auth break-glass: a typo must not silently keep
 		// passwords off (or on).
 		{"FLEET_OIDC_ALLOW_PASSWORD", "sometimes", []string{"FLEET_OIDC_ALLOW_PASSWORD", `"sometimes"`, "boolean"}},
+		// The generic-provider mark, likewise: a typo must not hand a Fleet's
+		// accounts to a provider that never provisions them.
+		{"FLEET_OIDC_GENERIC", "okta", []string{"FLEET_OIDC_GENERIC", `"okta"`, "boolean"}},
 		// A legacy alias spelling is parsed just as strictly; the error names
 		// the canonical spelling (matching what the reload path reports).
 		{"CUTLASS_MAX_COST_USD", "free", []string{"FLEET_MAX_COST_USD", `"free"`}},

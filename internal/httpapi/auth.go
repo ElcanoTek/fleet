@@ -186,7 +186,7 @@ func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if applied {
-		log.Printf("central auth: renamed team %q -> %q (%d accounts, version %d)", body.From, body.To, users, body.Version)
+		log.Printf("central auth: renamed team %q -> %q (%d accounts, version %d)", logSafe(body.From), logSafe(body.To), users, body.Version)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
