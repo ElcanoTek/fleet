@@ -1028,7 +1028,24 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 			_ = tx.Rollback()
 		}
 	}()
-	now := time.Now().Unix()
+	usersUpdated, projectsUpdated, err = renameTeamTx(ctx, tx, from, to, time.Now().Unix())
+	if err != nil {
+		return 0, 0, err
+	}
+	if usersUpdated == 0 && projectsUpdated == 0 {
+		err = errInput(fmt.Sprintf("no team named %q", from))
+		return 0, 0, err
+	}
+	err = tx.Commit()
+	return usersUpdated, projectsUpdated, err
+}
+
+// renameTeamTx relabels team `from` as `to` on users and projects and carries
+// its shares over (ADR-0093), inside the caller's transaction. It validates
+// nothing: RenameTeam checks an admin's input, and a central-Auth rename
+// (ApplyExternalTeamRename) arrives already checked. Zero counts mean nothing
+// here was named `from`; the caller decides whether that is an error.
+func renameTeamTx(ctx context.Context, tx *sql.Tx, from, to string, now int64) (usersUpdated, projectsUpdated int64, err error) {
 	// Both names' locks first (sorted inside, so a concurrent rename the
 	// other way round cannot deadlock): a first share for `from` must either
 	// commit before this rename reads the teams rows, or wait for it.
@@ -1054,12 +1071,10 @@ func (s *Store) RenameTeam(ctx context.Context, from, to string) (usersUpdated, 
 	}
 	projectsUpdated, _ = res.RowsAffected()
 	if usersUpdated == 0 && projectsUpdated == 0 {
-		err = errInput(fmt.Sprintf("no team named %q", from))
-		return 0, 0, err
+		return 0, 0, nil
 	}
 	if err = renameTeamSharesTx(ctx, tx, from, to, now); err != nil {
 		return 0, 0, err
 	}
-	err = tx.Commit()
-	return usersUpdated, projectsUpdated, err
+	return usersUpdated, projectsUpdated, nil
 }

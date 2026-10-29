@@ -118,6 +118,22 @@ type Config struct {
 	ElcanoCookieName   string // default "elcano_auth"
 	ElcanoCookieDomain string // AUTH_COOKIE_DOMAIN (e.g. "elcanotek.com"); "" = host-only. Needed to delete the shared cookie on logout.
 
+	// PasswordLoginDisabled mirrors config.Config.PasswordLoginDisabled: this
+	// Fleet signs people in through central Auth only. POST /auth/login then
+	// refuses, and the bearer it used to mint is no longer accepted anywhere
+	// (userFromPasswordToken), so a token issued before the switch stops
+	// working too. API keys, header trust and the elcano_auth cookie are
+	// unaffected.
+	PasswordLoginDisabled bool
+
+	// AccountsManagedByAuth mirrors config.Config.AccountsManagedByAuth:
+	// central Auth owns who is in this Fleet and with which roles, so the
+	// admin-key POST /users (also public as /v1/users) refuses rather than
+	// creating an Operations Center identity, or raising an existing Chat
+	// account's Ops role, outside Auth. The root CLI (`fleet sched user`)
+	// still works.
+	AccountsManagedByAuth bool
+
 	// Per-task sandbox-limit ceilings (#205): the maxima a task's SandboxLimits
 	// override may request (FLEET_SANDBOX_*_MAX). 0 = no ceiling. Mirrors the
 	// config.Config values; threaded here so validateSandboxLimits can enforce them.

@@ -51,12 +51,30 @@ func WithOpsAdmins(svc OpsAdmins) Option {
 	return func(s *Server) { s.opsAdmins = svc }
 }
 
+// The refusals Settings → Admin → Users gets on a Fleet whose accounts central
+// Auth manages (config.Config.AccountsManagedByAuth). The page is view-only
+// there; these are for a caller that does not know it.
+const (
+	errAddUsersInAuth   = "This Fleet's accounts are managed in Auth. Add people in Auth: granting them Fleet there creates their account here."
+	errResetInAuth      = "This Fleet's accounts are managed in Auth. Reset the password in Auth."
+	errRolesTeamsInAuth = "This Fleet's accounts are managed in Auth. Change roles and teams there; Auth sends them here."
+	errDeleteInAuth     = "This Fleet's accounts are managed in Auth. To end someone's access, remove Fleet from their access in Auth (their Fleet data is kept). To erase their Fleet data, run `fleet admin rm <email>` on the server."
+	errTeamRenameInAuth = "This Fleet's teams are managed in Auth. Rename the team there: what is shared with it stays shared."
+	errOwnTeamInAuth    = "Your team is set in Auth by an administrator."
+)
+
 // handleAdminUserCreate serves POST /admin/users — provision a new account.
 // Body: {"email": ..., "password": ..., "role": "member|viewer|admin"?,
 // "ops_role": "none|readonly|client|admin"?, "team_id": ...?}. role defaults
 // to member; role "admin" also ensures the Operations Center admin row
 // (two-plane, like `fleet admin add`).
 func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
+	// Auth's Fleet grant creates the account (ADR-0074); one made here would
+	// have no Auth account to sign in with.
+	if s.accountsManagedByAuth() {
+		http.Error(w, errAddUsersInAuth, http.StatusConflict)
+		return
+	}
 	var body struct {
 		Email    string  `json:"email"`
 		Password string  `json:"password"`
@@ -181,6 +199,10 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 // account's password. Body: {"password": ...}. The new password is never
 // logged; the audit line records only actor + target.
 func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request, email string) {
+	if s.accountsManagedByAuth() {
+		http.Error(w, errResetInAuth, http.StatusConflict)
+		return
+	}
 	var body struct {
 		Password string `json:"password"`
 	}
@@ -271,6 +293,10 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if s.accountsManagedByAuth() {
+		http.Error(w, errTeamRenameInAuth, http.StatusConflict)
+		return
+	}
 	var body struct {
 		From string `json:"from"`
 		To   string `json:"to"`
@@ -281,7 +307,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 	}
 	// A rename changes every member's team, so it publishes one event per
 	// member through the same per-account path as any other change.
-	defer s.beginTeamRename(r, body.From)()
+	defer s.beginTeamRename(r, body.From, store.AccountEventSourceAdminUI, userFromCtx(r.Context()))()
 	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
 	if err != nil {
 		// Only the store's typed input failures (blank/equal names, an

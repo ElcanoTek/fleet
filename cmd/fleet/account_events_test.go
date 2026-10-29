@@ -55,7 +55,7 @@ func TestSeedBootstrapAdminsPublishesOnlyARealChange(t *testing.T) {
 	t.Setenv("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS", email)
 	rec := accountevents.NewRecorder(chat, sched, chat)
 	for range 2 {
-		if err := seedBootstrapAdmins(sched, rec); err != nil {
+		if err := seedBootstrapAdmins(sched, rec, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -65,6 +65,20 @@ func TestSeedBootstrapAdminsPublishesOnlyARealChange(t *testing.T) {
 	}
 	if len(evs) != 1 || evs[0].Source != "system" || evs[0].OpsRole != "admin" || evs[0].ChatRole != "member" {
 		t.Fatalf("events = %+v, want one system event with ops admin", evs)
+	}
+
+	// Where central Auth manages accounts, Auth alone grants the Ops role: a
+	// boot seeds nothing, so access Auth removed is not restored.
+	const managed = "managed@acctev.test"
+	if _, err := sched.DB().Conn().ExecContext(ctx, `DELETE FROM users WHERE username = $1`, managed); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS", managed)
+	if err := seedBootstrapAdmins(sched, rec, true); err != nil {
+		t.Fatal(err)
+	}
+	if u, _ := sched.GetUserByUsername(managed); u != nil {
+		t.Fatalf("seeded an Ops admin while Auth manages accounts: %+v", u)
 	}
 }
 

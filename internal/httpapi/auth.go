@@ -17,8 +17,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -59,6 +62,10 @@ type externalSessionStore interface {
 type externalAccessStore interface {
 	ExternalAccessState(context.Context, string, string) (store.ExternalAccessState, bool, error)
 	ApplyExternalAccess(context.Context, store.ExternalAccessState) (store.ExternalAccessState, bool, error)
+}
+
+type externalTeamRenameStore interface {
+	ApplyExternalTeamRename(context.Context, store.ExternalTeamRename, int64) (bool, int64, error)
 }
 
 type ctxKey string
@@ -120,6 +127,69 @@ func (s *Server) tokenOnlyMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// providerEventMiddleware admits an identity provider's app-wide event the web
+// tier has already verified (central Auth's signature, issuer, audience and
+// freshness: internal/webui/backchannel.go). It checks the shared secret only,
+// since such an event names no person; only the web tier holds the secret, and
+// Caddy strips it from the one chat path it exposes (/webhooks/*).
+func (s *Server) providerEventMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tok := r.Header.Get("X-Chat-Server-Token")
+		if subtle.ConstantTimeCompare([]byte(tok), []byte(s.sharedToken)) != 1 {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// handleExternalTeamRename applies a team rename central Auth sent
+// (docs/CENTRAL-AUTH-PROVISIONING.md, "Team renames"), already verified by
+// the web tier: the share-keeping rename an admin's Rename team does, once
+// per version. 204 when applied or already applied (Auth stops sending it),
+// 400 for a malformed one, 500 when it could not be written (Auth retries).
+// Each member's change is published like any change made on the provider's
+// word.
+func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	renamer, ok := s.store.(externalTeamRenameStore)
+	if !ok {
+		http.Error(w, "team renames unavailable", http.StatusNotImplemented)
+		return
+	}
+	var body struct {
+		EventID string `json:"event_id"`
+		Issuer  string `json:"issuer"`
+		Version int64  `json:"version"`
+		From    string `json:"from"`
+		To      string `json:"to"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&body); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	defer s.beginTeamRename(r, body.From, store.AccountEventSourceIdentityProvider, "")()
+	applied, users, err := renamer.ApplyExternalTeamRename(r.Context(), store.ExternalTeamRename{
+		Issuer: body.Issuer, Version: body.Version, EventID: body.EventID, From: body.From, To: body.To,
+	}, time.Now().Unix())
+	if err != nil {
+		if store.IsInputError(err) {
+			http.Error(w, "invalid team rename", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, "team rename failed", http.StatusInternalServerError)
+		return
+	}
+	if applied {
+		// The version is recorded in external_team_renames, not logged.
+		log.Printf("central auth: renamed team %q -> %q (%d accounts)", logSafe(body.From), logSafe(body.To), users)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // userFromCtx pulls the authenticated email out of the request context.
@@ -329,6 +399,40 @@ type externalAccessRequest struct {
 	Settings map[string]string `json:"settings"`
 }
 
+// parseExternalSettings validates an access event's Fleet settings: exactly
+// {chat_role, ops_role}, those two plus team, or plus team and team_rename;
+// any other key fails closed. team is nil unless the provider manages the
+// account's team (Auth sends it only with team sync on; without it Fleet
+// leaves users.team_id alone). teamRename is the provider's last team rename
+// when it wrote the team (store.ExternalAccessState.TeamRename), only ever
+// next to a team. problem is the 400's text, "" when valid.
+func parseExternalSettings(settings map[string]string) (chatRole, opsRole string, team *string, teamRename *int64, problem string) {
+	chatRole, opsRole = settings["chat_role"], settings["ops_role"]
+	wantKeys := 2
+	if value, ok := settings["team"]; ok {
+		wantKeys = 3
+		value = strings.TrimSpace(value)
+		if !store.ValidExternalTeam(value) {
+			return "", "", nil, nil, "invalid Fleet team"
+		}
+		team = &value
+		if raw, ok := settings["team_rename"]; ok {
+			generation, err := strconv.ParseInt(raw, 10, 64)
+			if err != nil || generation < 0 {
+				return "", "", nil, nil, "invalid Fleet team rename version"
+			}
+			wantKeys = 4
+			teamRename = &generation
+		}
+	}
+	if len(settings) != wantKeys || !store.ValidRole(chatRole) ||
+		(opsRole != "none" && opsRole != "readonly" && opsRole != "client" && opsRole != "admin") ||
+		((chatRole == "admin") != (opsRole == "admin")) {
+		return "", "", nil, nil, "invalid Fleet permissions"
+	}
+	return chatRole, opsRole, team, teamRename, ""
+}
+
 // handleExternalAccess receives only already signature-verified events from
 // the web tier. It applies Chat membership non-destructively, then reconciles
 // the independent Ops database. A failed Ops write returns 503; Auth retries
@@ -364,25 +468,12 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 	// third settings key only with team sync on, and without it Fleet leaves
 	// users.team_id alone (an older Auth, a backfill, team sync off).
 	var team *string
+	var teamRename *int64
 	switch {
 	case body.Settings != nil:
-		chatRole, opsRole = body.Settings["chat_role"], body.Settings["ops_role"]
-		wantKeys := 2
-		if value, ok := body.Settings["team"]; ok {
-			wantKeys = 3
-			value = strings.TrimSpace(value)
-			if !store.ValidExternalTeam(value) {
-				http.Error(w, "invalid Fleet team", http.StatusBadRequest)
-				return
-			}
-			team = &value
-		}
-		// Exactly {chat_role, ops_role} or those two plus team: any other key
-		// still fails closed.
-		if len(body.Settings) != wantKeys || !store.ValidRole(chatRole) ||
-			(opsRole != "none" && opsRole != "readonly" && opsRole != "client" && opsRole != "admin") ||
-			((chatRole == "admin") != (opsRole == "admin")) {
-			http.Error(w, "invalid Fleet permissions", http.StatusBadRequest)
+		var problem string
+		if chatRole, opsRole, team, teamRename, problem = parseExternalSettings(body.Settings); problem != "" {
+			http.Error(w, problem, http.StatusBadRequest)
 			return
 		}
 	case hasPrevious:
@@ -406,6 +497,7 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		Issuer: body.Issuer, Subject: body.Subject, Email: userFromCtx(r.Context()),
 		Version: body.Version, Allowed: allowed, EventID: body.EventID,
 		ChatRole: chatRole, OpsRole: opsRole, Team: team, IssuedAt: body.IssuedAt,
+		TeamRename: teamRename,
 	}
 	// A change Fleet applies on the identity provider's word is still published
 	// (audit sinks want it), tagged so the provider itself can ignore its echo.

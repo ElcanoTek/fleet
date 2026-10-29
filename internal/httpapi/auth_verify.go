@@ -66,6 +66,24 @@ func (l *verifyLimiter) allow(email string, now time.Time) bool {
 	return true
 }
 
+// errPasswordLoginDisabled is the answer a password path gives on a Fleet
+// that signs people in through central Auth only (config.Config.
+// PasswordLoginDisabled).
+const errPasswordLoginDisabled = "Password sign-in is turned off on this Fleet. Sign in through SSO."
+
+// passwordLoginDisabled reports the central-Auth-only switch; a Server built
+// without a config (tests) keeps passwords.
+func (s *Server) passwordLoginDisabled() bool {
+	return s.cfg != nil && s.cfg.PasswordLoginDisabled
+}
+
+// accountsManagedByAuth reports that central Auth owns this Fleet's accounts,
+// roles and teams (config.Config.AccountsManagedByAuth); a Server built without
+// a config (tests) manages its own.
+func (s *Server) accountsManagedByAuth() bool {
+	return s.cfg != nil && s.cfg.AccountsManagedByAuth
+}
+
 type verifyRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -79,6 +97,13 @@ type verifyResponse struct {
 func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Central Auth only: no password is checked at all, so a caller that
+	// reaches this endpoint without the gateway's own refusal (the operator
+	// channel, a future client) still cannot sign in with one.
+	if s.passwordLoginDisabled() {
+		writeJSONStatus(w, http.StatusForbidden, verifyResponse{OK: false, Error: errPasswordLoginDisabled})
 		return
 	}
 	var req verifyRequest

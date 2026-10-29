@@ -411,7 +411,10 @@ var allowedEnvVars = map[string]bool{
 	// What the Next.js tier read from /etc/fleet/fleet-web.env, now read by the
 	// fleet binary itself. APP_SESSION_SECRET signs the session cookie; the
 	// AUTH_* keys configure the legacy Elcano magic-link cookie and the
-	// back-channel signing keys; FLEET_OIDC_* is central-Auth SSO.
+	// back-channel signing keys; FLEET_OIDC_* is central-Auth SSO, and with it
+	// configured Fleet passwords are off unless FLEET_OIDC_ALLOW_PASSWORD=1
+	// (Config.PasswordLoginDisabled); FLEET_OIDC_GENERIC=1 marks another OIDC
+	// provider, which leaves passwords and accounts to Fleet.
 	// NEXT_PUBLIC_PUBLIC_ORIGIN is read only as a fallback for
 	// FLEET_PUBLIC_BASE_URL on a box whose env predates the move.
 	"FLEET_WEB_ADDR":                true,
@@ -430,6 +433,8 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_OIDC_BUTTON_LABEL":       true,
 	"FLEET_OIDC_REDIRECT_URI":       true,
 	"FLEET_OIDC_AUTO_START":         true,
+	"FLEET_OIDC_ALLOW_PASSWORD":     true,
+	"FLEET_OIDC_GENERIC":            true,
 	"CATWALK_URL":                   true,
 	"ORCHESTRATOR_SERVER_TOKEN":     true,
 	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
@@ -1116,6 +1121,12 @@ type Config struct {
 	LogArchiveEncryptionKey []byte
 
 	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
+	// AccountEventsFeedToAuthIgnored: FLEET_ACCOUNT_EVENTS_URL pointed at
+	// central Auth on a Fleet whose accounts Auth manages, so Load cleared
+	// the feed (membership flows one way, ADR-0095) and the boot log says to
+	// remove the two lines.
+	AccountEventsFeedToAuthIgnored bool
+
 	// AccountEventsURL (FLEET_ACCOUNT_EVENTS_URL) is where signed account events
 	// are POSTed; empty = the feed is off and nothing is queued.
 	// AccountEventsSecret (FLEET_ACCOUNT_EVENTS_SECRET) is the HMAC signing key,
@@ -1396,6 +1407,30 @@ type Config struct {
 	// MockMode short-circuits LLM calls (e2e). FLEET_MOCK_MODE / CHAT_MOCK_MODE.
 	MockMode bool
 
+	// PasswordLoginDisabled is true when central Auth SSO is configured
+	// (FLEET_OIDC_ISSUER, _CLIENT_ID and _CLIENT_SECRET all set, the rule the
+	// browser tier uses to offer SSO) and the break-glass
+	// FLEET_OIDC_ALLOW_PASSWORD is not on. People then sign in only through
+	// Auth: every Fleet-native password path refuses, in the browser gateway,
+	// chat-server and the Operations Center alike (docs/features/
+	// central-auth-integration.md). It is decided from configuration alone,
+	// never from whether Auth answers, so an Auth outage cannot reopen
+	// passwords. Machine API keys, the operator's shared-token channel and the
+	// legacy elcano_auth cookie are not password paths and keep working.
+	// Bound at boot; changing it needs a restart.
+	PasswordLoginDisabled bool
+
+	// AccountsManagedByAuth is true whenever central Auth SSO is configured
+	// (OIDCConfigured), whatever FLEET_OIDC_ALLOW_PASSWORD says: Auth then owns
+	// who is in this Fleet, their Chat and Ops roles and their team (Auth's
+	// team sync), so Settings → Admin → Users is view-only and chat-server
+	// refuses its account, role, team, password and delete writes. A change
+	// made here would not reach Auth on a deployment without account reports,
+	// and Auth's next push would quietly undo it. The break-glass reopens
+	// passwords only; the root CLI (`fleet admin`, `fleet chat user`) still
+	// works. Bound at boot.
+	AccountsManagedByAuth bool
+
 	// ── observability: Sentry error tracking (#193) ──
 	// SentryDSN is the OPTIONAL Sentry-protocol ingest endpoint (Sentry or a
 	// Better Stack Errors URL). Empty (the default) leaves Sentry completely
@@ -1665,6 +1700,11 @@ func Load(envFile string) (*Config, error) {
 	// path and `fleet validate-config` use — so the three paths agree on what
 	// a given environment accepts or rejects.
 	lp := &loadParser{}
+	// Central Auth is OIDC SSO not marked as a generic provider (see
+	// CentralAuthConfigured). Parsed first so a mistyped value refuses boot
+	// even on a box without SSO.
+	generic := lp.getenvBool("FLEET_OIDC_GENERIC", false)
+	centralAuth := OIDCConfigured() && !generic
 
 	cfg := &Config{
 		MCPServers: make(map[string]MCPServerConfig),
@@ -1904,6 +1944,10 @@ func Load(envFile string) (*Config, error) {
 		LockdownAllowedModels: splitLockdownModels(getenvFleet("LOCKDOWN_ALLOWED_MODELS")),
 		MockMode:              lp.getenvFleetBool("MOCK_MODE", false),
 
+		// ── central Auth sign-in ──
+		PasswordLoginDisabled: !lp.getenvBool("FLEET_OIDC_ALLOW_PASSWORD", false) && centralAuth,
+		AccountsManagedByAuth: centralAuth,
+
 		// ── observability: Sentry error tracking (#193) ──
 		SentryDSN:   stripQuotes(os.Getenv("FLEET_SENTRY_DSN")),
 		Environment: getenvDefault("FLEET_ENVIRONMENT", "dev"),
@@ -1984,6 +2028,14 @@ func Load(envFile string) (*Config, error) {
 	// which reports a Load error): never publish membership changes unsigned.
 	if err := cfg.validateAccountEvents(os.Getenv("FLEET_WEBHOOK_SECRET")); err != nil {
 		return nil, err
+	}
+	// One way (ADR-0095): a Fleet whose accounts central Auth manages never
+	// reports account changes to that Auth. A feed still pointed at the
+	// issuer's host (set up before membership went one way) is switched off
+	// here, so nothing flows back even before the operator removes it.
+	if cfg.AccountsManagedByAuth && sameHost(cfg.AccountEventsURL, os.Getenv("FLEET_OIDC_ISSUER")) {
+		cfg.AccountEventsURL, cfg.AccountEventsSecret = "", ""
+		cfg.AccountEventsFeedToAuthIgnored = true
 	}
 	// The escalation classifier's mode and model fail boot when mistyped,
 	// here in Load so `fleet serve` refuses them, not only validate-config.
@@ -2397,6 +2449,68 @@ func stripQuotes(value string) string {
 func hasKnownPromptExtension(name string) bool {
 	lower := strings.ToLower(name)
 	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".md")
+}
+
+// OIDCConfigured reports whether OIDC SSO is configured: the rule
+// internal/webui's oidcFromEnv applies before it offers SSO at all (issuer,
+// client id and client secret all non-empty once trimmed, trailing slashes on
+// the issuer not counting). A test in cmd/fleet pins the two to agree, so
+// passwords are never refused on a box that offers no SSO in their place.
+func OIDCConfigured() bool {
+	get := func(k string) string { return strings.TrimSpace(os.Getenv(k)) }
+	return strings.TrimRight(get("FLEET_OIDC_ISSUER"), "/") != "" &&
+		get("FLEET_OIDC_CLIENT_ID") != "" &&
+		get("FLEET_OIDC_CLIENT_SECRET") != ""
+}
+
+// sameHost reports whether two URLs name the same host (case-insensitive,
+// port included). An empty or unparseable URL matches nothing.
+func sameHost(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ua.Host == "" || ub.Host == "" {
+		return false
+	}
+	return strings.EqualFold(ua.Host, ub.Host)
+}
+
+// CentralAuthConfigured reports whether this Fleet signs in through Elcano's
+// central Auth, which provisions accounts, roles and teams: OIDC SSO is
+// configured and FLEET_OIDC_GENERIC=1 does not mark the provider as another
+// OIDC identity provider (Okta, Entra, ...). Such a provider proves who
+// someone is but sends no provisioning, so with it Fleet keeps its own
+// passwords and account management. Load binds the same rule at boot; a
+// FLEET_OIDC_GENERIC value boot would refuse reads as unset here.
+func CentralAuthConfigured() bool {
+	return OIDCConfigured() && !boolKnobInEnv("FLEET_OIDC_GENERIC")
+}
+
+// centralAuthDecisionsInEnv re-derives AccountsManagedByAuth and
+// PasswordLoginDisabled from the current environment, so a reload can report
+// that either changed (both are bound at boot).
+func centralAuthDecisionsInEnv() string {
+	return fmt.Sprintf("accounts-managed-by-auth=%t password-login-off=%t", CentralAuthConfigured(), passwordLoginOffInEnv())
+}
+
+// passwordLoginOffInEnv re-derives PasswordLoginDisabled from the current
+// environment. A break-glass value boot would refuse reads as unset here.
+func passwordLoginOffInEnv() bool {
+	return CentralAuthConfigured() && !boolKnobInEnv("FLEET_OIDC_ALLOW_PASSWORD")
+}
+
+// boolKnobInEnv reads a declared boolean knob from the current environment;
+// unset, or a value boot would refuse, reads as false.
+func boolKnobInEnv(key string) bool {
+	k := envKnobByKey[key]
+	if k == nil {
+		return false
+	}
+	raw, ok := k.lookup()
+	if !ok {
+		return false
+	}
+	v, set, err := k.parseBool(raw)
+	return err == nil && set && v
 }
 
 // ── env helpers ──

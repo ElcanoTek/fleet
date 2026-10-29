@@ -181,12 +181,19 @@ func (g *Gateway) registerAuth(mux *http.ServeMux) {
 //  2. on success, the account's session epoch;
 //  3. mint elcano_session and 303 home.
 //
-// Errors redirect back to /login?e=<code> with a non-enumerating code.
+// Errors redirect back to /login?e=<code> with a non-enumerating code; on a
+// Fleet that signs in through central Auth only the code is password_off.
 func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if !g.verifyOrigin(w, r) {
 		return
 	}
 	back := func(code string) { seeOther(w, g.redirectURL(r, "/login?e="+code)) }
+	// Central Auth only: refused before the body is read, so no password is
+	// ever checked (chat-server's /auth/verify refuses too).
+	if g.cfg.PasswordLoginDisabled {
+		back("password_off")
+		return
+	}
 
 	// An email and a password are a few hundred bytes. Cap the whole body
 	// before parsing so neither encoding can make the gateway buffer much —

@@ -158,8 +158,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		// Check for user Bearer token (username/password login path).
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			user, err := h.storage.GetUserByToken(token)
-			if err == nil && user != nil {
+			if user := h.userFromPasswordToken(token); user != nil {
 				ctx := context.WithValue(r.Context(), userContextKey, user)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return

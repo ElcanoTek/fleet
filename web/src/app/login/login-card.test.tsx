@@ -165,7 +165,7 @@ describe("LoginPage — bootstrap wiring", () => {
   });
 
   it("renders the card with both options when SSO is configured", async () => {
-    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with SSO", teamLink: false } });
+    setBootstrapForTest({ login: { passwordLoginEnabled: true, magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with SSO", teamLink: false } });
     const { default: LoginPage } = await import("./page");
     render(<LoginPage />);
     expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
@@ -173,14 +173,14 @@ describe("LoginPage — bootstrap wiring", () => {
   });
 
   it("uses the operator's SSO button label", async () => {
-    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with Okta", teamLink: false } });
+    setBootstrapForTest({ login: { passwordLoginEnabled: true, magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with Okta", teamLink: false } });
     const { default: LoginPage } = await import("./page");
     render(<LoginPage />);
     expect(screen.getByRole("link", { name: "Sign in with Okta" })).toBeInTheDocument();
   });
 
   it("shows the Elcano button only when the server says the path is configured", async () => {
-    setBootstrapForTest({ login: { magicLinkLoginEnabled: true, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: false } });
+    setBootstrapForTest({ login: { passwordLoginEnabled: true, magicLinkLoginEnabled: true, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: false } });
     const { default: LoginPage } = await import("./page");
     render(<LoginPage />);
     expect(screen.getByRole("link", { name: "Use Elcano email" })).toBeInTheDocument();
@@ -208,7 +208,7 @@ describe("LoginPage — bootstrap wiring", () => {
 
   // B24: the server sends a signed-out team-link visitor to /login?team_link=1.
   it("shows the team-link copy when the bootstrap says so and the bundle copy otherwise", async () => {
-    setBootstrapForTest({ login: { magicLinkLoginEnabled: false, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: true } });
+    setBootstrapForTest({ login: { passwordLoginEnabled: true, magicLinkLoginEnabled: false, oidcEnabled: false, oidcLabel: "Sign in with SSO", teamLink: true } });
     const { default: LoginPage } = await import("./page");
     render(<LoginPage />);
     expect(screen.getByText("Sign in to open this chat")).toBeInTheDocument();
@@ -227,6 +227,68 @@ describe("LoginPage — bootstrap wiring", () => {
     render(<LoginPage />);
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByText("Welcome aboard.")).toBeInTheDocument();
+  });
+});
+
+// A Fleet with central Auth SSO configured has no passwords of its own
+// (FLEET_OIDC_ALLOW_PASSWORD is the break-glass): the card drops the form and
+// its divider, SSO becomes the primary action, and no error tells the visitor
+// to use a password the server would refuse. The server half is pinned in
+// internal/webui/password_off_test.go.
+describe("LoginCard: central Auth only", () => {
+  afterEach(() => {
+    setBootstrapForTest(null);
+    cleanup();
+    window.history.replaceState(null, "", "/login");
+  });
+
+  it("offers only SSO, as the primary action", () => {
+    render(
+      <LoginCard
+        passwordLoginEnabled={false}
+        magicLinkLoginEnabled={false}
+        oidcEnabled
+        oidcLabel="Sign in with Omnicom"
+        {...DEFAULT_COPY}
+      />,
+    );
+    const sso = screen.getByRole("link", { name: "Sign in with Omnicom" });
+    expect(sso).toHaveAttribute("href", "/api/auth/oidc/start");
+    expect(sso.className).toContain("--color-primary-fill");
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
+    expect(screen.queryByLabelText("Password")).toBeNull();
+    expect(screen.queryByLabelText("Email")).toBeNull();
+    expect(screen.queryByText("or")).toBeNull();
+    expect(document.querySelector('form[action="/api/auth/login"]')).toBeNull();
+  });
+
+  it("keeps the Elcano email button as the secondary option", () => {
+    render(<LoginCard passwordLoginEnabled={false} magicLinkLoginEnabled oidcEnabled {...DEFAULT_COPY} />);
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Use Elcano email" })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["password_off", "Password sign-in is turned off here. Sign in with SSO."],
+    ["invalid", "Password sign-in is turned off here. Sign in with SSO."],
+    ["oidc_unavailable", "Single sign-on isn't available right now. Try again in a moment."],
+    ["oidc_error", "Single sign-on failed. Try again."],
+    ["elcano_unavailable", "Elcano email sign-in isn't available right now. Sign in with SSO."],
+  ])("never points at a password for e=%s", async (code, message) => {
+    window.history.replaceState(null, "", `/login?e=${code}`);
+    render(<LoginCard passwordLoginEnabled={false} magicLinkLoginEnabled={false} oidcEnabled {...DEFAULT_COPY} />);
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByText(/password\./i)).toBeNull();
+  });
+
+  it("takes the switch from the bootstrap", async () => {
+    setBootstrapForTest({
+      login: { passwordLoginEnabled: false, magicLinkLoginEnabled: false, oidcEnabled: true, oidcLabel: "Sign in with SSO", teamLink: false },
+    });
+    const { default: LoginPage } = await import("./page");
+    render(<LoginPage />);
+    expect(screen.getByRole("link", { name: "Sign in with SSO" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign in" })).toBeNull();
   });
 });
 

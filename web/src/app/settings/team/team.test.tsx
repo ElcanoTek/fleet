@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import TeamSettingsPage from "./page";
+import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
 // Settings → Team (#1157, copy corrected by ADR-0057): read your own team from
 // GET /api/me/team, create one with PUT, leave one behind a confirm that
@@ -208,5 +209,26 @@ describe("Settings → Team", () => {
     // The wrong "everyone joins the same name" promise is gone for good.
     expect(screen.queryByText(/joins the same name/i)).toBeNull();
     expect(screen.getByRole("button", { name: "Set team" })).toBeInTheDocument();
+  });
+
+  // Where central Auth manages teams (team sync), Auth sends each person's
+  // team: the page shows it and offers no way to change it here.
+  it("shows the team read-only when Auth manages teams", async () => {
+    setBootstrapForTest({ centralAuth: { adminUrl: "https://auth.example.com/admin" } });
+    try {
+      mockFetch(() => me("platform", true));
+      render(<TeamSettingsPage />);
+      expect(await screen.findByTestId("team-current")).toHaveTextContent("platform");
+      expect(screen.getByText(/Teams are set in Auth by an administrator/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Leave team" })).toBeNull();
+      cleanup();
+      mockFetch(() => me("", true));
+      render(<TeamSettingsPage />);
+      expect(await screen.findByText(/You are not in a team\. Teams are set in Auth/)).toBeInTheDocument();
+      expect(screen.queryByLabelText("Team name")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Set team" })).toBeNull();
+    } finally {
+      setBootstrapForTest(null);
+    }
   });
 });

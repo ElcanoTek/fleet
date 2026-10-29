@@ -42,15 +42,7 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		log.Printf("web: browser tier disabled (FLEET_WEB_ADDR=off)")
 		return nil, nil
 	}
-	wc := webui.ConfigFromEnv()
-	// The in-process channel uses the server's own shared secret, which
-	// config.Validate guarantees is set — for BOTH backends, unconditionally:
-	// they verify the header-trust token against that same secret, so any
-	// other value (a leftover ORCHESTRATOR_SERVER_TOKEN from the retired Next
-	// tier's env, which an old bootstrap even set to ADMIN_API_KEY) would make
-	// every orchestrator call a 403.
-	wc.ChatToken = cfg.SharedToken
-	wc.OrchestratorToken = cfg.SharedToken
+	wc := gatewayConfig(cfg)
 	if wc.SessionSecret == "" {
 		log.Printf("WARNING: APP_SESSION_SECRET is not set — password and SSO sign-in are disabled (the session cookie cannot be signed). Set it in the env file; `fleet doctor` repairs it.")
 	}
@@ -61,6 +53,7 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	if !g.BundlePresent() {
 		log.Printf("WARNING: this fleet binary carries no web bundle — pages answer 503 until it is rebuilt with `make build` (the API still works)")
 	}
+	//nolint:gosec // G706: the build id is the embedded bundle's build-id.txt, compiled into this binary, not request input.
 	log.Printf("web: bundle %s", g.BuildID())
 	return &http.Server{
 		Addr:              addr,
@@ -76,6 +69,24 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 		// is read (login: 64 KiB; back-channel logout: maxBackchannelBody);
 		// every forwarded body is capped by the backend handler that reads it.
 	}, nil
+}
+
+// gatewayConfig is the gateway's environment configuration plus what the
+// server itself decided.
+func gatewayConfig(cfg *config.Config) webui.Config {
+	wc := webui.ConfigFromEnv()
+	// The in-process channel uses the server's own shared secret, which
+	// config.Validate guarantees is set — for BOTH backends, unconditionally:
+	// they verify the header-trust token against that same secret, so any
+	// other value (a leftover ORCHESTRATOR_SERVER_TOKEN from the retired Next
+	// tier's env, which an old bootstrap even set to ADMIN_API_KEY) would make
+	// every orchestrator call a 403.
+	wc.ChatToken = cfg.SharedToken
+	wc.OrchestratorToken = cfg.SharedToken
+	// Decided once by config.Load so the gateway and both backends agree.
+	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
+	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth
+	return wc
 }
 
 // serveInBackground runs one plain-HTTP listener (the orchestrator's, the

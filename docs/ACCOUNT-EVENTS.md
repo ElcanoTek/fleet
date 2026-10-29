@@ -2,11 +2,12 @@
 
 Fleet can publish every change to a Chat account's membership, roles or team as
 a signed HTTP event. The feed is generic: Fleet names no receiver, so an identity
-provider, an audit sink or a script can subscribe. Elcano's Central Auth uses
-it to mirror role changes, team changes and removals made in Fleet back into
-its console
-([ADR-0076](adr/0076-fleet-publishes-account-events.md)), but nothing in Fleet
-depends on Auth.
+provider, an audit sink or a script can subscribe
+([ADR-0076](adr/0076-fleet-publishes-account-events.md)); nothing in Fleet
+depends on a receiver. Do not point it at Elcano's Central Auth: a Fleet that
+signs in through Auth leaves accounts to Auth, and membership flows one way,
+from Auth to Fleet
+([ADR-0095](adr/0095-central-auth-fleets-have-no-passwords.md)).
 
 The feed is **off by default**. With `FLEET_ACCOUNT_EVENTS_URL` unset, nothing
 is queued and Fleet behaves exactly as before.

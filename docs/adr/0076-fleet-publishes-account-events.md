@@ -7,6 +7,10 @@
   Central Auth is no longer the only writer of a centrally managed identity's
   roles: a change made in Fleet is published and Auth adopts it, so the most
   recent change on either side wins.
+- **Amended by:** [ADR-0095](0095-central-auth-fleets-have-no-passwords.md).
+  A Fleet that signs in through central Auth leaves accounts to Auth and
+  reports nothing back: membership flows one way, from Auth to Fleet. The
+  feed itself stays, for other receivers.
 
 ## Context
 

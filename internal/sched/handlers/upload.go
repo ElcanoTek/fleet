@@ -78,8 +78,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			} else {
 				token = authHeader
 			}
-			user, err := h.storage.GetUserByToken(token)
-			if err == nil && user != nil {
+			if h.userFromPasswordToken(token) != nil {
 				isAuthed = true
 			}
 		}

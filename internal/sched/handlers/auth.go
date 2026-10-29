@@ -15,8 +15,16 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
+// errPasswordLoginDisabled is the refusal a password login or a password
+// bearer gets on a Fleet that signs in through central Auth only.
+const errPasswordLoginDisabled = "Password sign-in is turned off on this Fleet. Sign in through SSO."
+
 // Login handles user login.
 func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
+	if h.config.PasswordLoginDisabled {
+		writeError(w, http.StatusForbidden, errPasswordLoginDisabled)
+		return
+	}
 	clientIP := getClientIP(r)
 	if !h.loginRateLimiter.Allow(clientIP) {
 		writeError(w, http.StatusTooManyRequests, "Too many login attempts. Try again later.")
@@ -71,6 +79,21 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// userFromPasswordToken resolves a bearer minted by Login. It is the only way
+// the handlers accept one, so the central-Auth-only switch covers every
+// consumer (the auth middleware, task creation and upload): with passwords off
+// no such token authenticates, however recently it was issued.
+func (h *Handlers) userFromPasswordToken(token string) *models.User {
+	if h.config.PasswordLoginDisabled || token == "" {
+		return nil
+	}
+	user, err := h.storage.GetUserByToken(token)
+	if err != nil {
+		return nil
+	}
+	return user
+}
+
 func generateToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
@@ -81,6 +104,10 @@ func generateToken() (string, error) {
 
 // CreateUser handles creating a new user (Admin only).
 func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
+	if h.config.AccountsManagedByAuth {
+		writeError(w, http.StatusConflict, "This Fleet's accounts are managed in Auth. Grant Fleet and its Ops Center role there.")
+		return
+	}
 	var req models.UserCreate
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")

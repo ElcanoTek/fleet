@@ -98,6 +98,7 @@ func New(cfg Config, opts Options) (*Gateway, error) {
 			HMAC:             websession.NewHMAC(cfg.SessionSecret),
 			ElcanoPubKey:     cfg.elcanoPubKey(),
 			ElcanoCookieName: cfg.elcanoCookieName(),
+			RefusePassword:   cfg.PasswordLoginDisabled,
 		},
 	}
 	client := opts.HTTPClient

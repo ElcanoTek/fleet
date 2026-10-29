@@ -165,10 +165,7 @@ func (h *Handlers) authorizeTaskCreator(w http.ResponseWriter, r *http.Request) 
 
 	var user *models.User
 	if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-		token := strings.TrimPrefix(authHeader, "Bearer ")
-		if u, err := h.storage.GetUserByToken(token); err == nil && u != nil {
-			user = u
-		}
+		user = h.userFromPasswordToken(strings.TrimPrefix(authHeader, "Bearer "))
 	}
 	if user == nil {
 		if sess := h.elcanoSessionFromRequest(r); sess != nil {

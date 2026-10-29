@@ -272,6 +272,11 @@ var nonReloadableWatched = []watchedSetting{
 		lookup: func() (string, bool) { return lookupFleet("ACCOUNT_EVENTS_URL") }},
 	{key: "FLEET_ACCOUNT_EVENTS_SECRET", reason: "the account-events signing key is bound at boot; restart to rotate it",
 		lookup: func() (string, bool) { return lookupFleet("ACCOUNT_EVENTS_SECRET") }},
+	// The effective decisions, not one variable: configuring Auth SSO and the
+	// break-glass both move them (Config.AccountsManagedByAuth,
+	// Config.PasswordLoginDisabled).
+	{key: "FLEET_OIDC_* / FLEET_OIDC_ALLOW_PASSWORD", reason: "whether Auth manages this Fleet's accounts and whether Fleet passwords work are decided at startup; restart to apply",
+		lookup: func() (string, bool) { return centralAuthDecisionsInEnv(), true }},
 }
 
 // Reload re-reads the reloadable settings from the env file (if given) and the
