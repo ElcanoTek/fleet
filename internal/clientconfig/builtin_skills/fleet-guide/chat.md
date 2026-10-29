@@ -725,7 +725,9 @@ approve**, one row per action, each with a checkbox, its own plain-words card
 or arguments, and the account it runs as. **Approve all (k)** runs the k checked
 actions and declines the unchecked ones in one decision; **Cancel all**
 declines them all; **One at a time** shows the usual separate cards instead.
-The countdown shows the earliest deadline among them. Once decided, each action
+The countdown shows the earliest deadline among them; if it expires, the banner
+offers **Review one at a time** so you can switch to the individual cards and
+use **Retry** on each. Once decided, each action
 shows its own outcome card (running, applied, declined), exactly as if you had
 decided it on its own card.
 
