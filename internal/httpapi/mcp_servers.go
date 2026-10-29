@@ -98,6 +98,55 @@ func (s *Server) listMCPServerCatalog(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"servers": servers, "categories": s.clientConfig.ConnectorCategories()})
 }
 
+// defaultEnabledOptionalMCPServers returns the canonical (lowercased, sorted,
+// deduplicated) optional MCP server seed for a brand-new conversation created
+// outside the pre-chat composer (e.g. POST /conversations from Settings →
+// Personas "Start patrol" or Orchestrator "Discuss this run"): the bundled
+// optional connectors that are available and default-on under the caller's
+// connector preferences, plus the caller's connected remote MCP servers.
+// Mirrors the `enabled && !always_on` seed that listMCPServerCatalog hands the
+// pre-chat Tools picker.
+func (s *Server) defaultEnabledOptionalMCPServers(ctx context.Context, user string) []string {
+	var prefs map[string]store.ConnectorPref
+	if s.store != nil && user != "" {
+		if list, err := s.store.ListConnectorPrefs(ctx, user); err == nil {
+			prefs = list
+		}
+	}
+	var catalog []agent.OptionalServerInfo
+	if s.agent != nil {
+		catalog = chatVisibleConnectors(s.agent.MCPServerCatalog(), agentcore.InteractiveHiddenTools())
+	}
+	seen := make(map[string]bool, len(catalog))
+	var out []string
+	add := func(name string) {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, key)
+	}
+	for _, info := range catalog {
+		avail, defaultOn, _ := bundledPrefFor(prefs, info)
+		if !avail || !defaultOn {
+			continue
+		}
+		add(info.Name)
+	}
+	if s.remoteMCP != nil && s.remoteMCP.Enabled() && user != "" {
+		if conns, err := s.remoteMCP.ConnectedServersForUser(ctx, user); err == nil {
+			for _, g := range agent.GroupRemoteMCPSeats(conns) {
+				add(g.Name)
+			}
+		} else {
+			log.Printf("mcp defaults: remote server lookup failed for %s: %v", user, err)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Connection statuses for the Tools picker. "available" connectors get a
 // switch (or the always-on lock); the other two never do. "needs_setup" is a
 // manifest connector whose credentials are not set on this box, so it never
