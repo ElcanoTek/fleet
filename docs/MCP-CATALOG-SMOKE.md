@@ -126,8 +126,9 @@ attempts, about seven seconds of waiting).
 
 **A failure is then confirmed two minutes later.** A probe that still fails
 waits two minutes and runs once more (`probeConfirmed`); only that second
-result counts. That covers the open entries, each fixture's real-key probe,
-and the invalid-key control probe. The subtests wait in parallel (the
+result counts. A failure here is anything that would fail the entry: an
+error, an empty tool list, or an invalid tool schema. That covers the open
+entries, each fixture's real-key probe, and the invalid-key control probe. The subtests wait in parallel (the
 workflow passes `-parallel 32` so the waits never queue behind the runner's
 CPU count, and `-timeout 25m`), so a red night costs the lane about two
 minutes, and a green one nothing. Rot (a host gone, an endpoint

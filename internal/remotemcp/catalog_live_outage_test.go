@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -88,6 +89,30 @@ func TestFixtureKeyRefused(t *testing.T) {
 	for _, c := range cases {
 		if got := fixtureKeyRefused(c.err); got != c.want {
 			t.Errorf("%s: fixtureKeyRefused = %v, want %v (err: %v)", c.name, got, c.want, c.err)
+		}
+	}
+}
+
+// TestProbeTrouble pins which probe results earn a confirmation probe: every
+// result the live smoke would fail an entry on, so a transient one cannot
+// file the nightly alarm on its first try. A rewritten (older-draft) schema
+// only logs, so it is not trouble.
+func TestProbeTrouble(t *testing.T) {
+	cases := []struct {
+		name   string
+		report ProbeReport
+		err    error
+		want   bool
+	}{
+		{"healthy", ProbeReport{ToolCount: 3}, nil, false},
+		{"rewritten schema", ProbeReport{ToolCount: 1, SchemaIssues: []agentcore.ToolSchemaIssue{{Tool: "search", Status: agentcore.ToolSchemaRewritten}}}, nil, false},
+		{"error", ProbeReport{}, errors.New("MCP http: unparsable response"), true},
+		{"no tools", ProbeReport{}, nil, true},
+		{"invalid schema", ProbeReport{ToolCount: 1, SchemaIssues: []agentcore.ToolSchemaIssue{{Tool: "search", Status: agentcore.ToolSchemaInvalid}}}, nil, true},
+	}
+	for _, c := range cases {
+		if got := probeTrouble(c.report, c.err) != ""; got != c.want {
+			t.Errorf("%s: probeTrouble != \"\" is %v, want %v", c.name, got, c.want)
 		}
 	}
 }

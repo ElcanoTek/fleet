@@ -213,7 +213,7 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 }
 
 // probeForTest runs one add-time probe under the service's own timeout and
-// returns the tool count; a refused key (at the handshake or at the
+// returns its report; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
 //
 // The probe gets the connect retry a run gets (mcp.RetryTransientConnect
@@ -222,8 +222,7 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // must not file the nightly alarm either (#1683). What still fails is what a
 // run would also fail on — an outage outlasting the retries, a refusal, a
 // dead host — and the last attempt's error is the one reported.
-func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
-	t.Helper()
+func (s *Service) probeForTest(url, header, query, prefix, credential string) (ProbeReport, error) {
 	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), s.cfg.HTTPTimeout+mcp.MaxConnectRetryBudget)
 	defer cancel()
 	var report ProbeReport
@@ -232,10 +231,7 @@ func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credent
 		report, perr = s.probeServer(attemptCtx, url, header, query, prefix, credential)
 		return perr
 	})
-	if err == nil {
-		checkCatalogToolSchemas(t, url, report.SchemaIssues)
-	}
-	return report.ToolCount, err
+	return report, err
 }
 
 // catalogConfirmDelayEnv overrides how long a failed probe waits before its
@@ -264,7 +260,10 @@ func catalogConfirmDelay(t *testing.T) time.Duration {
 
 // probeConfirmed is probeForTest, except that a failure is only reported if
 // it is still there after a pause: the probe runs once more after
-// catalogConfirmDelay, and that second result is the one that counts.
+// catalogConfirmDelay, and that second result is the one that counts. A
+// failure is anything the caller would fail the entry on (probeTrouble):
+// an error, an empty tool list, or an invalid tool schema. The schemas of
+// the counted result are then held to checkCatalogToolSchemas.
 //
 // The connect retry inside probeForTest covers seconds; this covers minutes.
 // Rot — a host gone, an endpoint moved, an open entry that now wants a key —
@@ -275,15 +274,34 @@ func catalogConfirmDelay(t *testing.T) time.Duration {
 // to teach vendorOutage its wording.
 func (s *Service) probeConfirmed(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
-	tools, err := s.probeForTest(t, url, header, query, prefix, credential)
-	if err == nil || !waitToConfirm(t, url, fmt.Sprintf("probe failed (%v)", err)) {
-		return tools, err
+	report, err := s.probeForTest(url, header, query, prefix, credential)
+	if why := probeTrouble(report, err); why != "" && waitToConfirm(t, url, why) {
+		report, err = s.probeForTest(url, header, query, prefix, credential)
+		if probeTrouble(report, err) == "" {
+			t.Logf("%s: the confirmation probe succeeded; the first failure was transient", url)
+		}
 	}
-	tools, err = s.probeForTest(t, url, header, query, prefix, credential)
 	if err == nil {
-		t.Logf("%s: the confirmation probe succeeded; the first failure was transient", url)
+		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
-	return tools, err
+	return report.ToolCount, err
+}
+
+// probeTrouble says why a probe result would fail its entry, or "" when it
+// would not: an error, no tools, or a tool schema Fleet would withhold.
+func probeTrouble(report ProbeReport, err error) string {
+	if err != nil {
+		return fmt.Sprintf("probe failed (%v)", err)
+	}
+	if report.ToolCount == 0 {
+		return "the server listed no tools"
+	}
+	for _, issue := range report.SchemaIssues {
+		if issue.Status == agentcore.ToolSchemaInvalid {
+			return fmt.Sprintf("tool %s has an invalid input schema", issue.Tool)
+		}
+	}
+	return ""
 }
 
 // waitToConfirm waits catalogConfirmDelay before a confirmation probe and
@@ -490,13 +508,14 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 				return
 			}
 			const invalidKey = "fleet-catalog-smoke-invalid-key"
-			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			badReport, badErr := svc.probeForTest(url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
 			// The control is confirmed like the real-key probe: a vendor
 			// mid-deploy that lets one bad key through, or answers it with
 			// something that is not MCP, gets a second look before it fails.
-			if !invalidKeyRefused(badErr) && waitToConfirm(t, url, fmt.Sprintf("the invalid-key probe was not refused (%d tools, err: %v)", badTools, badErr)) {
-				badTools, badErr = svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			if !invalidKeyRefused(badErr) && waitToConfirm(t, url, fmt.Sprintf("the invalid-key probe was not refused (%d tools, err: %v)", badReport.ToolCount, badErr)) {
+				badReport, badErr = svc.probeForTest(url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
 			}
+			badTools := badReport.ToolCount
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
 			}
