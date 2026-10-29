@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -59,6 +60,11 @@ const vendorOutageMarker = "VENDOR OUTAGE"
 //     nonstandard ones a CDN answers for a down origin (Cloudflare's 520–524
 //     and 530). 501 Not Implemented stays rot: the endpoint answered and does
 //     not speak the protocol;
+//   - a JSON-RPC error whose message says the caller is rate-limited
+//     (rpcMessageSaysRateLimited), on any status: some vendors answer a
+//     throttled request with HTTP 200 and a JSON-RPC error, so the 429 never
+//     reaches the transport (#1844: Parallel Search's free tier, shared by
+//     every GitHub runner on the same egress IP);
 //   - otherwise whatever mcp.IsTransientConnectError calls transient: a
 //     timeout, a refused or reset connection, a temporary DNS failure, a
 //     JSON-RPC error that says it is temporary.
@@ -78,7 +84,39 @@ func vendorOutage(err error) bool {
 	case status >= 500 && status <= 599:
 		return status != http.StatusNotImplemented
 	}
+	if rpcMessageSaysRateLimited(rpcMessageOf(err)) {
+		return true
+	}
 	return mcp.IsTransientConnectError(err)
+}
+
+// rpcMessageOf is the message of the JSON-RPC error a probe failure carried,
+// answered to the request or unattributed; "" when there was none.
+func rpcMessageOf(err error) string {
+	var rpcErr *mcp.RPCError
+	var unattributed *mcp.UnattributedResponseError
+	switch {
+	case errors.As(err, &rpcErr):
+		return rpcErr.Message
+	case errors.As(err, &unattributed) && unattributed.Carried != nil:
+		return unattributed.Carried.Message
+	}
+	return ""
+}
+
+// rpcMessageSaysRateLimited reports whether a JSON-RPC error message says
+// the caller hit a rate limit. That is the vendor's capacity tonight, not the
+// listing: an open entry that rate-limits anonymous callers still works for
+// a user within its limits. It is the smoke's rule only — mcp's run-time
+// classifier does not retry on it, since a quota rarely clears in seconds.
+func rpcMessageSaysRateLimited(message string) bool {
+	m := strings.Join(strings.Fields(strings.ToLower(message)), " ")
+	for _, phrase := range []string{"rate limit", "rate-limit", "ratelimit", "too many requests"} {
+		if strings.Contains(m, phrase) {
+			return true
+		}
+	}
+	return false
 }
 
 // httpStatusOf is the non-2xx HTTP status a probe failure arrived under, in
@@ -175,7 +213,7 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 }
 
 // probeForTest runs one add-time probe under the service's own timeout and
-// returns the tool count; a refused key (at the handshake or at the
+// returns its report; a refused key (at the handshake or at the
 // read-only verification call) comes back as the error.
 //
 // The probe gets the connect retry a run gets (mcp.RetryTransientConnect
@@ -184,8 +222,7 @@ func catalogLiveService(t *testing.T) (*Service, []clientconfig.RemoteMCPCatalog
 // must not file the nightly alarm either (#1683). What still fails is what a
 // run would also fail on — an outage outlasting the retries, a refusal, a
 // dead host — and the last attempt's error is the one reported.
-func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credential string) (int, error) {
-	t.Helper()
+func (s *Service) probeForTest(url, header, query, prefix, credential string) (ProbeReport, error) {
 	ctx, cancel := context.WithTimeout(mcp.WithConnectRetry(context.Background()), s.cfg.HTTPTimeout+mcp.MaxConnectRetryBudget)
 	defer cancel()
 	var report ProbeReport
@@ -194,10 +231,106 @@ func (s *Service) probeForTest(t *testing.T, url, header, query, prefix, credent
 		report, perr = s.probeServer(attemptCtx, url, header, query, prefix, credential)
 		return perr
 	})
+	return report, err
+}
+
+// catalogConfirmDelayEnv overrides how long a failed probe waits before its
+// confirmation probe (a Go duration; "0" turns confirmation off, for a quick
+// local run).
+const catalogConfirmDelayEnv = "FLEET_CATALOG_CONFIRM_DELAY"
+
+// defaultCatalogConfirmDelay is long enough for a vendor's blip, a deploy or
+// a per-minute rate-limit window to pass, and short enough that a red night
+// costs the lane a couple of minutes (the subtests wait in parallel).
+const defaultCatalogConfirmDelay = 2 * time.Minute
+
+// catalogConfirmDelay is the wait before a confirmation probe.
+func catalogConfirmDelay(t *testing.T) time.Duration {
+	t.Helper()
+	v := strings.TrimSpace(os.Getenv(catalogConfirmDelayEnv))
+	if v == "" {
+		return defaultCatalogConfirmDelay
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		t.Fatalf("%s=%q: %v", catalogConfirmDelayEnv, v, err)
+	}
+	return d
+}
+
+// probeConfirmed is probeForTest, except that a failure is only reported if
+// it is still there after a pause: the probe runs once more after
+// catalogConfirmDelay, and that second result is the one that counts. A
+// failure is anything the caller would fail the entry on (probeTrouble):
+// an error, an empty tool list, or an invalid tool schema. The schemas of
+// the counted result are then held to checkCatalogToolSchemas.
+//
+// The connect retry inside probeForTest covers seconds; this covers minutes.
+// Rot — a host gone, an endpoint moved, an open entry that now wants a key —
+// is still there two minutes later, while most of what turned the nightly lane
+// red for no catalog reason was not (#1683's 503, #1844's rate limit). It is
+// the in-run form of the consecutive-nights rule the lane has no state for,
+// and it catches the next kind of vendor weather without waiting for someone
+// to teach vendorOutage its wording.
+func (s *Service) probeConfirmed(t *testing.T, url, header, query, prefix, credential string) (int, error) {
+	t.Helper()
+	report, err := s.probeForTest(url, header, query, prefix, credential)
+	if why := probeTrouble(report, err); why != "" && waitToConfirm(t, url, why) {
+		report, err = s.probeForTest(url, header, query, prefix, credential)
+		if probeTrouble(report, err) == "" {
+			t.Logf("%s: the confirmation probe succeeded; the first failure was transient", url)
+		}
+	}
 	if err == nil {
 		checkCatalogToolSchemas(t, url, report.SchemaIssues)
 	}
 	return report.ToolCount, err
+}
+
+// probeTrouble says why a probe result would fail its entry, or "" when it
+// would not: an error, no tools, or a tool schema Fleet would withhold.
+func probeTrouble(report ProbeReport, err error) string {
+	if err != nil {
+		return fmt.Sprintf("probe failed (%v)", err)
+	}
+	if report.ToolCount == 0 {
+		return "the server listed no tools"
+	}
+	for _, issue := range report.SchemaIssues {
+		if issue.Status == agentcore.ToolSchemaInvalid {
+			return fmt.Sprintf("tool %s has an invalid input schema", issue.Tool)
+		}
+	}
+	return ""
+}
+
+// waitToConfirm waits catalogConfirmDelay before a confirmation probe and
+// reports whether to run it: false when confirmation is off or the test is
+// being torn down.
+func waitToConfirm(t *testing.T, url, why string) bool {
+	t.Helper()
+	delay := catalogConfirmDelay(t)
+	if delay <= 0 {
+		return false
+	}
+	t.Logf("%s: %s; probing once more in %s before calling it", url, why, delay)
+	select {
+	case <-time.After(delay):
+		return true
+	case <-t.Context().Done():
+		return false
+	}
+}
+
+// invalidKeyRefused reports whether the invalid-key control probe came back
+// the way a vendor that checks keys answers it: refused, as a credential
+// problem, and not lost to an outage.
+func invalidKeyRefused(err error) bool {
+	if err == nil || vendorOutage(err) {
+		return false
+	}
+	var kr *keyRejectedError
+	return handshakeRefused(err) || errors.As(err, &kr)
 }
 
 // checkCatalogToolSchemas holds a listed vendor's tools to the schema bar the
@@ -244,7 +377,7 @@ func TestCatalogLiveOpenEntries(t *testing.T) {
 		ran++
 		t.Run(e.Name, func(t *testing.T) {
 			t.Parallel()
-			tools, err := svc.probeForTest(t, e.URL, "", "", "", "")
+			tools, err := svc.probeConfirmed(t, e.URL, "", "", "", "")
 			if err != nil {
 				failUnlessOutagef(t, err, "%s: unauthenticated handshake failed (docs: %s): %v", e.URL, e.DocsURL, err)
 			}
@@ -362,7 +495,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 				t.Skipf("%s not set; skipping the %s fixture", envName, fixtureName(f.Entry, f.Variant))
 			}
 			armed.Add(1)
-			tools, err := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
+			tools, err := svc.probeConfirmed(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, key)
 			if err != nil {
 				failFixturef(t, err, "%s: handshake with the fixture key failed: %v", fixtureName(f.Entry, f.Variant), err)
 			}
@@ -374,7 +507,15 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if !f.RejectsBadKey {
 				return
 			}
-			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
+			const invalidKey = "fleet-catalog-smoke-invalid-key"
+			badReport, badErr := svc.probeForTest(url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			// The control is confirmed like the real-key probe: a vendor
+			// mid-deploy that lets one bad key through, or answers it with
+			// something that is not MCP, gets a second look before it fails.
+			if !invalidKeyRefused(badErr) && waitToConfirm(t, url, fmt.Sprintf("the invalid-key probe was not refused (%d tools, err: %v)", badReport.ToolCount, badErr)) {
+				badReport, badErr = svc.probeForTest(url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			}
+			badTools := badReport.ToolCount
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
 			}
@@ -384,8 +525,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if vendorOutage(badErr) {
 				failUnlessOutagef(t, badErr, "%s: the invalid-key probe hit an outage, so the key shape was not checked: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
-			var kr *keyRejectedError
-			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {
+			if !invalidKeyRefused(badErr) {
 				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 		})

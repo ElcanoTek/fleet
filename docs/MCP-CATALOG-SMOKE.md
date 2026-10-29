@@ -122,15 +122,33 @@ was exactly that. Kiwi.com's host answered a single HTTP 503 to
 
 Each probe therefore runs the way a user's run connects: under
 `mcp.RetryTransientConnect` with a fresh `WithConnectRetry` allowance (three
-attempts, about seven seconds of waiting). A failure that survives that is
-then sorted:
+attempts, about seven seconds of waiting).
+
+**A failure is then confirmed two minutes later.** A probe that still fails
+waits two minutes and runs once more (`probeConfirmed`); only that second
+result counts. A failure here is anything that would fail the entry: an
+error, an empty tool list, or an invalid tool schema. That covers the open
+entries, each fixture's real-key probe, and the invalid-key control probe. The subtests wait in parallel (the
+workflow passes `-parallel 32` so the waits never queue behind the runner's
+CPU count, and `-timeout 25m`), so a red night costs the lane about two
+minutes, and a green one nothing. Rot (a host gone, an endpoint
+moved, an open entry that now wants a key) is still there two minutes later.
+Most vendor weather is not. This is the in-run form of a consecutive-nights
+rule, and unlike a new line in the classifier it also covers the next kind of
+weather nobody has seen yet. `FLEET_CATALOG_CONFIRM_DELAY` (a Go duration)
+overrides the wait for a local run; `0` turns confirmation off.
+
+A failure that survives confirmation is then sorted:
 
 - **Outage → warning.** An HTTP 429 or any 5xx except 501, whatever the
   body (plain text or a JSON-RPC error, attributed to the request or not),
   including a CDN's nonstandard ones such as Cloudflare's 520–524 and 530; a
   timeout, a refused or reset connection, a
   temporary DNS failure, or a JSON-RPC error that says it is temporary
-  (`mcp.IsTransientConnectError`). The same applies to an api_key fixture's
+  (`mcp.IsTransientConnectError`). A JSON-RPC error whose message says the
+  caller is rate-limited ("rate limit", "too many requests") is an outage on
+  any status, including a 200. That rule is the smoke's own, not the
+  run-time classifier's: a user's run does not retry on it. The same applies to an api_key fixture's
   invalid-key control probe: an outage there means the key shape was not
   checked, so it is not counted as the vendor refusing the key. The entry's subtest is skipped
   with a `VENDOR OUTAGE` message. The workflow turns each one into a run
@@ -146,6 +164,15 @@ then sorted:
 skipped as an outage, `TestCatalogLiveOpenEntries` fails anyway: twelve vendors
 are not down at once. That is the runner losing its network, DNS failing for
 everyone, or a regression in fleet's own client, and it must alarm.
+
+The third alarm (#1844, 2026-10-25) was a rate limit. Parallel Search's
+open endpoint answered `tools/list` with HTTP 200 and the JSON-RPC error
+"You've hit the free-tier rate limit for Parallel Search MCP". Its free tier
+is metered per caller IP, and GitHub's runners share egress IPs, so other
+people's traffic used up the quota. No 429 reached the transport, so the
+status rule did not see it, and the message did not say "temporary". It
+passed the next three nights unchanged. Both the wording rule above and the
+confirmation probe came out of it.
 
 ### A refused fixture key warns too
 

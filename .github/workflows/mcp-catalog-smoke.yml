@@ -112,8 +112,11 @@ jobs:
         # Same build tag as scripts/go-test.sh so the test tree matches CI's.
         # The key variables are empty when the secret is not configured, and
         # the fixture then skips itself — configure a secret to arm it.
-        # A vendor outage that outlasts the connect retry (5xx, 429, timeout,
-        # refused connection) skips its entry with a VENDOR OUTAGE warning
+        # A probe that fails is probed once more two minutes later and only
+        # the second result counts, so a blip that clears by then never
+        # reaches the alarm (#1844). A vendor outage that outlasts both (5xx,
+        # 429 or a JSON-RPC rate-limit message, timeout, refused connection)
+        # skips its entry with a VENDOR OUTAGE warning
         # instead of failing the job — one third-party service having a bad
         # night is not catalog rot, and an alarm that cries wolf gets ignored
         # (#1683). An api_key fixture whose own key the vendor refuses (401/403)
@@ -134,7 +137,12 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          go test -tags fleet_host_executor -count=1 -v -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
+          # -parallel: the subtests are network-bound and a failing one sleeps
+          # two minutes before its confirmation probe, so every wait must
+          # overlap rather than queue behind GOMAXPROCS. -timeout: above the
+          # waits plus the retry budgets, below the job's 30-minute cap, so a
+          # bad night ends in test output and not a killed job.
+          go test -tags fleet_host_executor -count=1 -v -parallel 32 -timeout 25m -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
           # Each outage warning becomes a run annotation, so it is visible on
           # the run page without opening the log. The marker is
           # vendorOutageMarker in catalog_live_test.go.

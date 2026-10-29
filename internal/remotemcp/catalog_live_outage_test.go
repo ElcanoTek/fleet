@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -42,6 +43,10 @@ func TestVendorOutageSeparatesOutagesFromRot(t *testing.T) {
 		{"JSON-RPC error on a 2xx", handshake(&mcp.RPCError{Code: -32603, Message: "Internal error"}), false},
 		{"JSON-RPC error on a 501", handshake(&mcp.RPCError{Code: -32601, Message: "Method not found", HTTPStatus: 501}), false},
 		{"429 with a JSON-RPC error body", handshake(&mcp.RPCError{Code: -32000, Message: "rate limit exceeded", HTTPStatus: 429}), true},
+		{"rate limit as a JSON-RPC error on a 2xx (Parallel Search, #1844)", handshake(fmt.Errorf("tools/list call failed: %w", &mcp.RPCError{Code: -32000, Message: "You've hit the free-tier rate limit for Parallel Search MCP. To continue with higher limits, add your own API key — set header `x-api-key: YOUR_KEY`. Get a key at https://platform.parallel.ai."})), true},
+		{"Too Many Requests as a JSON-RPC error on a 2xx", handshake(&mcp.RPCError{Code: -32000, Message: "Too Many Requests"}), true},
+		{"unattributed rate-limit JSON-RPC error on a 2xx", handshake(&mcp.UnattributedResponseError{ResponseID: "null", WantID: 1, Raw: `{"code":-32000,"message":"Rate-limited, slow down"}`, Carried: &mcp.RPCError{Code: -32000, Message: "Rate-limited, slow down"}}), true},
+		{"key-required JSON-RPC error on a 2xx (an open entry now wants a key)", handshake(&mcp.RPCError{Code: -32001, Message: "An API key is required to use this server"}), false},
 		{"unattributed JSON-RPC error on a 503", handshake(&mcp.UnattributedResponseError{ResponseID: "null", WantID: 1, Raw: `{"code":-32603,"message":"Internal error"}`, HTTPStatus: 503}), true},
 		{"unattributed JSON-RPC error on a 401", handshake(&mcp.UnattributedResponseError{ResponseID: "null", WantID: 1, Raw: `{"code":-32001,"message":"Unauthorized"}`, HTTPStatus: 401}), false},
 		{"connection refused", dial(os.NewSyscallError("connect", syscall.ECONNREFUSED)), true},
@@ -84,6 +89,30 @@ func TestFixtureKeyRefused(t *testing.T) {
 	for _, c := range cases {
 		if got := fixtureKeyRefused(c.err); got != c.want {
 			t.Errorf("%s: fixtureKeyRefused = %v, want %v (err: %v)", c.name, got, c.want, c.err)
+		}
+	}
+}
+
+// TestProbeTrouble pins which probe results earn a confirmation probe: every
+// result the live smoke would fail an entry on, so a transient one cannot
+// file the nightly alarm on its first try. A rewritten (older-draft) schema
+// only logs, so it is not trouble.
+func TestProbeTrouble(t *testing.T) {
+	cases := []struct {
+		name   string
+		report ProbeReport
+		err    error
+		want   bool
+	}{
+		{"healthy", ProbeReport{ToolCount: 3}, nil, false},
+		{"rewritten schema", ProbeReport{ToolCount: 1, SchemaIssues: []agentcore.ToolSchemaIssue{{Tool: "search", Status: agentcore.ToolSchemaRewritten}}}, nil, false},
+		{"error", ProbeReport{}, errors.New("MCP http: unparsable response"), true},
+		{"no tools", ProbeReport{}, nil, true},
+		{"invalid schema", ProbeReport{ToolCount: 1, SchemaIssues: []agentcore.ToolSchemaIssue{{Tool: "search", Status: agentcore.ToolSchemaInvalid}}}, nil, true},
+	}
+	for _, c := range cases {
+		if got := probeTrouble(c.report, c.err) != ""; got != c.want {
+			t.Errorf("%s: probeTrouble != \"\" is %v, want %v", c.name, got, c.want)
 		}
 	}
 }
