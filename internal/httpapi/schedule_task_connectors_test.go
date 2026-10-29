@@ -99,6 +99,35 @@ func TestAttachTaskConnectors(t *testing.T) {
 			t.Fatalf("out=%q err=%v", out, err)
 		}
 	})
+
+	t.Run("auto-includes available bundled connectors referenced by mcp_<server>_ or EXECUTION REQUIREMENTS in prompt", func(t *testing.T) {
+		stager := &approvalStager{ctx: context.Background(), taskConnectors: func(context.Context) (chatTaskConnectors, error) {
+			return chatTaskConnectors{
+				Selection: []TaskConnector{{Server: "pages"}},
+				AvailableBundled: []TaskConnector{
+					{Server: "explorer"},
+					{Server: "openx_mcp", Account: "reklaim"},
+					{Server: "pages"},
+					{Server: "pubmatic_mcp"},
+				},
+			}, nil
+		}}
+		prompt := "Audit deals via mcp_openx_mcp_ox_list_deals and inbox via mcp_explorer_list_messages.\nEXECUTION REQUIREMENTS (JSON):\n{\"mcp_servers\":[\"pages\"]}"
+		in, _ := json.Marshal(map[string]any{"name": "Audit", "prompt": prompt, "cron": "0 9 * * *"})
+		out, err := stager.attachTaskConnectors(string(in))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var staged scheduleTaskStagedArgs
+		if err := json.Unmarshal([]byte(out), &staged); err != nil {
+			t.Fatal(err)
+		}
+		got := connectorLabels(staged.Connectors)
+		want := []string{"explorer", "openx_mcp (reklaim)", "pages"}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("connectors = %v, want %v", got, want)
+		}
+	})
 }
 
 func TestDescribeTaskConnectors(t *testing.T) {

@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -62,8 +64,9 @@ type scheduleTaskStagedArgs struct {
 // chatTaskConnectors is the conversation's live connector picture at staging
 // time.
 type chatTaskConnectors struct {
-	Selection []TaskConnector
-	AlwaysOn  []string
+	Selection        []TaskConnector
+	AlwaysOn         []string
+	AvailableBundled []TaskConnector
 }
 
 // chatTaskConnectorsFor returns the stager's connector resolver for one
@@ -72,7 +75,10 @@ type chatTaskConnectors struct {
 // began) and applies the same connections-page preferences the turn itself
 // applies, so the task inherits exactly the connectors chat would have run
 // with: the opted-in optional bundle servers with their seats, and the user's
-// hosted connections.
+// hosted connections. It also records the deployment's available bundled
+// optional servers (with the conversation's or user's seat) so a schedule_task
+// prompt that explicitly names mcp_<server>_* tools or EXECUTION REQUIREMENTS
+// mcp_servers automatically binds those bundled connectors.
 func (s *Server) chatTaskConnectorsFor(user, convID string) func(context.Context) (chatTaskConnectors, error) {
 	return func(ctx context.Context) (chatTaskConnectors, error) {
 		conv, err := s.store.Get(ctx, user, convID)
@@ -92,8 +98,40 @@ func (s *Server) chatTaskConnectorsFor(user, convID string) func(context.Context
 			out.Selection = append(out.Selection, TaskConnector{Server: name, Account: accounts[name]})
 		}
 		sort.Slice(out.Selection, func(i, j int) bool { return out.Selection[i].Server < out.Selection[j].Server })
+		out.AvailableBundled = s.availableBundledTaskConnectors(ctx, user, conv.MCPAccounts)
 		return out, nil
 	}
+}
+
+func (s *Server) availableBundledTaskConnectors(ctx context.Context, user string, convAccounts map[string]string) []TaskConnector {
+	if s.agent == nil {
+		return nil
+	}
+	var prefs map[string]store.ConnectorPref
+	if s.store != nil && user != "" {
+		if list, err := s.store.ListConnectorPrefs(ctx, user); err == nil {
+			prefs = list
+		}
+	}
+	cleanAccounts, _ := s.cleanMCPAccounts(ctx, user, convAccounts)
+	var out []TaskConnector
+	for _, info := range s.agent.MCPServerCatalog() {
+		avail, _, defaultSeat := bundledPrefFor(prefs, info)
+		if !avail {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(info.Name))
+		if name == "" {
+			continue
+		}
+		seat := cleanAccounts[info.Name]
+		if seat == "" {
+			seat = defaultSeat
+		}
+		out = append(out, TaskConnector{Server: name, Account: seat})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Server < out[j].Server })
+	return out
 }
 
 // alwaysOnMCPServerNames lists the bundle's non-optional servers that live
@@ -136,7 +174,7 @@ func (a *approvalStager) attachTaskConnectors(rawInput string) (string, error) {
 		// and can retry.
 		return "", fmt.Errorf("schedule_task: could not resolve this conversation's connectors: %w", err)
 	}
-	staged.Connectors = conns.Selection
+	staged.Connectors = mergePromptReferencedConnectors(staged.Prompt, conns.Selection, conns.AlwaysOn, conns.AvailableBundled)
 	staged.AlwaysOnConnectors = conns.AlwaysOn
 	staged.ConnectorsResolved = true
 	out, err := json.Marshal(staged)
@@ -144,6 +182,61 @@ func (a *approvalStager) attachTaskConnectors(rawInput string) (string, error) {
 		return "", fmt.Errorf("schedule_task: encode staged args: %w", err)
 	}
 	return string(out), nil
+}
+
+// mergePromptReferencedConnectors adds any available bundled optional connector
+// that the task prompt explicitly references (via EXECUTION REQUIREMENTS
+// mcp_servers/required_tools or an mcp_<server>_ tool prefix) when it is not
+// already in selection or alwaysOn. Only servers in availableBundled can be
+// added, so model-invented names are never accepted.
+func mergePromptReferencedConnectors(prompt string, selection []TaskConnector, alwaysOn []string, availableBundled []TaskConnector) []TaskConnector {
+	if len(availableBundled) == 0 || strings.TrimSpace(prompt) == "" {
+		return selection
+	}
+	have := make(map[string]bool, len(selection)+len(alwaysOn))
+	for _, c := range selection {
+		have[strings.ToLower(strings.TrimSpace(c.Server))] = true
+	}
+	for _, s := range alwaysOn {
+		have[strings.ToLower(strings.TrimSpace(s))] = true
+	}
+	declared := map[string]bool{}
+	if req, err := models.ParseExecutionRequirements(prompt); err == nil && req != nil {
+		for _, srv := range req.Servers {
+			declared[strings.ToLower(strings.TrimSpace(srv))] = true
+		}
+		for _, tool := range req.Tools {
+			declared[strings.ToLower(strings.TrimSpace(tool))] = true
+		}
+	}
+	lowerPrompt := strings.ToLower(prompt)
+	out := append([]TaskConnector(nil), selection...)
+	added := false
+	for _, cand := range availableBundled {
+		srv := strings.ToLower(strings.TrimSpace(cand.Server))
+		if srv == "" || have[srv] {
+			continue
+		}
+		prefix := "mcp_" + srv + "_"
+		matched := declared[srv] || strings.Contains(lowerPrompt, prefix)
+		if !matched {
+			for reqTool := range declared {
+				if strings.HasPrefix(reqTool, prefix) {
+					matched = true
+					break
+				}
+			}
+		}
+		if matched {
+			out = append(out, cand)
+			have[srv] = true
+			added = true
+		}
+	}
+	if added {
+		sort.Slice(out, func(i, j int) bool { return out[i].Server < out[j].Server })
+	}
+	return out
 }
 
 // connectorLabels renders a selection for the card / confirmation.

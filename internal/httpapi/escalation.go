@@ -57,6 +57,7 @@ type turnStruggle struct {
 	toolErrorStreak int // the longest run of consecutive failed tool calls
 	loopGuardBlocks int
 	compactions     int
+	stagedApproval  bool // true when the turn staged a tool approval card for the user
 }
 
 // struggleFromHistory reads the turn's tool results in order. A result whose
@@ -76,6 +77,9 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		text := strings.TrimSpace(c.Text)
 		if strings.HasPrefix(text, "LOOP_GUARD") {
 			t.loopGuardBlocks++
+		}
+		if strings.HasPrefix(text, "APPROVAL_REQUIRED") {
+			t.stagedApproval = true
 		}
 		// A call held for the user's approval, or a model-switch suggestion,
 		// is marked as an error result but nothing failed: it is not part of
@@ -194,10 +198,15 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		s.discardStruggleCheck(check)
 		return
 	}
+	struggle := struggleFromHistory(res.NewHistory, buf.compactionCount())
 	var stager *approvalStager
 	staged := false
 	stage := func(source, reason string) bool {
-		if staged {
+		// When the turn already staged a tool approval card for the user to
+		// review, never stack a suggest_advanced_model card underneath it:
+		// clicking Approve on both cards runs the turn's action twice in
+		// parallel. The struggle event is still recorded below.
+		if staged || struggle.stagedApproval {
 			return false
 		}
 		if stager == nil {
@@ -230,7 +239,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 
 	// Signals first: they describe this turn, and are free.
 	if s.cfg != nil && s.cfg.LiveEscalationSignalsEnabled() {
-		if signal, reason := struggleFromHistory(res.NewHistory, buf.compactionCount()).strongest(); signal != "" {
+		if signal, reason := struggle.strongest(); signal != "" {
 			record(suggestionSourceSignal, signal, nil, stage(suggestionSourceSignal, reason))
 		}
 	}

@@ -707,6 +707,13 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(advancedModel) {
 		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the advanced model. Do not call suggest_advanced_model again — keep working with the current model.", nil
 	}
+	if pending, err := a.store.ListPendingApprovals(a.ctx, a.userEmail, a.conversationID); err == nil {
+		for _, p := range pending {
+			if p.ToolName != tools.SuggestAdvancedModelToolName {
+				return "", "SUGGESTION_SUPPRESSED: a tool approval card is already pending the user's decision. Do not stage a model-switch suggestion alongside a pending action approval.", nil
+			}
+		}
+	}
 
 	prior, err := a.store.LatestApprovalByTool(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName)
 	if err != nil {
@@ -1949,6 +1956,10 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if !claimed {
 		return s.resolvedApprovalDecision(ctx, user, approvalID)
 	}
+	// Approving a tool action supersedes any pending suggest_advanced_model
+	// card in the conversation so the user cannot accidentally click "Switch &
+	// retry" right after approving an action and run the turn twice.
+	_, _ = s.store.SupersedePendingApprovals(execCtx, convID, tools.SuggestAdvancedModelToolName)
 
 	// The user already committed to the action, so it runs on the detached
 	// execCtx — a tab close mid-flight must not abandon a claimed approval
