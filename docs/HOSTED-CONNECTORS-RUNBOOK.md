@@ -83,12 +83,11 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   keeps the typed URL.
   ```yaml
   display_information:
-    name: Victoria (Fleet MCP)
+    name: Fleet MCP
     description: Personal Slack MCP connection for Fleet
   oauth_config:
     redirect_urls:
-      - https://fleet.elcanotek.com/api/oauth/mcp/callback
-      - https://fleetdev.elcanotek.com/api/oauth/mcp/callback
+      - https://<your-fleet-domain>/api/oauth/mcp/callback
     scopes:
       user:
         - channels:history

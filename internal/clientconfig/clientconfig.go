@@ -2311,6 +2311,21 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	if err := validateRemoteMCPURLVariants(name, e); err != nil {
 		return err
 	}
+	if err := validateRemoteMCPOAuthClient(name, e); err != nil {
+		return err
+	}
+	for _, tag := range e.Tags {
+		if strings.TrimSpace(tag) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: empty tag", name)
+		}
+		if tag != strings.ToLower(tag) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
+		}
+	}
+	return nil
+}
+
+func validateRemoteMCPOAuthClient(name string, e *RemoteMCPCatalogEntry) error {
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
 	}
@@ -2324,27 +2339,20 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	}
 	cid := strings.TrimSpace(e.OAuthClientID)
 	csec := strings.TrimSpace(e.OAuthClientSecret)
-	if cid != "" || csec != "" {
-		if e.Auth != "" && e.Auth != "oauth" && e.Auth != "tenant" {
-			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth or auth: tenant entries", name)
-		}
-		if e.ClientRegistration != "manual" {
-			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only meaningful with client_registration: manual", name)
-		}
-		if cid == "" && !hasManualOAuthIDInEnv(name) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_secret requires oauth_client_id", name)
-		}
-		if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" && !hasManualOAuthSecretInEnv(name) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required needs oauth_client_secret alongside oauth_client_id", name)
-		}
+	if cid == "" && csec == "" {
+		return nil
 	}
-	for _, tag := range e.Tags {
-		if strings.TrimSpace(tag) == "" {
-			return fmt.Errorf("remote_mcp_catalog[%q]: empty tag", name)
-		}
-		if tag != strings.ToLower(tag) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
-		}
+	if e.Auth != "" && e.Auth != "oauth" && e.Auth != "tenant" {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth or auth: tenant entries", name)
+	}
+	if e.ClientRegistration != "manual" {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only meaningful with client_registration: manual", name)
+	}
+	if cid == "" && !hasManualOAuthIDInEnv(name) {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_secret requires oauth_client_id", name)
+	}
+	if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" && !hasManualOAuthSecretInEnv(name) {
+		return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required needs oauth_client_secret alongside oauth_client_id", name)
 	}
 	return nil
 }

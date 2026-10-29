@@ -98,4 +98,7 @@ func TestOperatorOAuthClientFor(t *testing.T) {
 	if cid, csec, ok := operatorOAuthClientFor("azure-devops", "https://evil.example.com/contoso", "oauth", catalog); ok || cid != "" || csec != "" {
 		t.Errorf("tenant template with wrong host must not match, got (%q, %q, %v)", cid, csec, ok)
 	}
+	if tenantTemplateMatchesURL("https://{tenant}example.com/mcp", "https://attackerexample.com/mcp") {
+		t.Error("tenant template without DNS label boundary before literal domain must be rejected")
+	}
 }

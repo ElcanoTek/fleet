@@ -597,6 +597,31 @@ remote_mcp_catalog:
 	if err := load(t, "    client_secret: required\n"); err == nil || !strings.Contains(err.Error(), "only meaningful with client_registration: manual") {
 		t.Errorf("client_secret: required without a manual registration must fail loud, got %v", err)
 	}
+}
+
+func TestRemoteMCPCatalogOperatorOAuthClientValidation(t *testing.T) {
+	load := func(t *testing.T, extra string) error {
+		t.Helper()
+		body := "mcp_servers: []\nremote_mcp_catalog:\n" +
+			"  - name: acme\n" +
+			"    display_name: Acme\n" +
+			"    description: d\n" +
+			"    url: \"https://mcp.acme.example/mcp\"\n" +
+			"    auth: oauth\n" + extra
+		_, err := Load(writeManifest(t, body))
+		return err
+	}
+	loadKey := func(t *testing.T, extra string) error {
+		t.Helper()
+		body := "mcp_servers: []\nremote_mcp_catalog:\n" +
+			"  - name: acme\n" +
+			"    display_name: Acme\n" +
+			"    description: d\n" +
+			"    url: \"https://mcp.acme.example/mcp\"\n" +
+			"    auth: api_key\n" + extra
+		_, err := Load(writeManifest(t, body))
+		return err
+	}
 	if err := load(t, "    client_registration: manual\n    client_secret: required\n    oauth_client_id: cid\n    oauth_client_secret: csec\n"); err != nil {
 		t.Errorf("manual + required with oauth_client_id + oauth_client_secret should load, got %v", err)
 	}

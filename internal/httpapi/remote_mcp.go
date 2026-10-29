@@ -436,10 +436,15 @@ func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
 	if hostTpl == "" || strings.HasSuffix(hostTpl, "}") {
 		return false
 	}
-	// Require a fixed literal domain suffix after any subdomain placeholder.
+	// Require a fixed literal domain suffix after any subdomain placeholder,
+	// separated by a DNS label boundary (".").
 	literalHost := hostTpl
 	if idx := strings.LastIndexByte(hostTpl, '}'); idx >= 0 {
-		literalHost = strings.TrimPrefix(hostTpl[idx+1:], ".")
+		suffix := hostTpl[idx+1:]
+		if !strings.HasPrefix(suffix, ".") {
+			return false
+		}
+		literalHost = strings.TrimPrefix(suffix, ".")
 	}
 	if !strings.Contains(literalHost, ".") {
 		return false
