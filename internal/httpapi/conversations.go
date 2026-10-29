@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -200,9 +199,6 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		model := strings.TrimSpace(req.Model)
-		if model == "" && strings.TrimSpace(req.ProjectID) == "" && !lockdown {
-			model = agentcore.CurrentDefaultModel()
-		}
 		if lockdown && model != "" && !s.cfg.LockdownAllows(model) {
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return

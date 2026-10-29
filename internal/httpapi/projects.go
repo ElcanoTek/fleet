@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -1351,6 +1352,9 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		}
 		conv, err = s.store.CreateProjectConversation(r.Context(), user, title, persona, model, lockdown, p.ID, p.MCPServers)
 	} else {
+		if model == "" && !lockdown {
+			model = agentcore.CurrentDefaultModel()
+		}
 		conv, err = s.store.CreateConversation(r.Context(), user, title, persona, model, lockdown)
 	}
 	if err != nil {
