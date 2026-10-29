@@ -38,6 +38,7 @@ thing · **fixed by** names the fleet PR that had to land first.
 | Plaid | no protected-resource metadata (origin is the AS) | ✓ | ✓ | ✓ | ✓ `list_teams` | — | — | — | — | **PASS on the 2026-09-14 rig build**; on `main` after #1485's final form discovery is refused (the vendor answers 401 under its MCP path). Not fixed — skipped by decision | 2026-09-14 |
 | Cartesia | manual client, **secret required** (since #1665); self-registers only on a loopback callback | ✓ (wrong URL, rig) / ✗ (real deploy: registration refused) | ✓ (rig) | ✗ 404 (rig) | — | — | — | — | — | **catalog URL wrong**, corrected in #1501 (`/mcp`, from #1495); on a real deploy the AS refuses dynamic registration for a hosted https callback, so the entry is a manual client since #1665 | 2026-09-14 / add 2026-09-30 |
 | Intercom | no protected-resource metadata | probe ✓ | — | — | — | — | — | — | — | discovery only; same `main` refusal as Plaid | 2026-09-14 |
+| Fireflies | dynamic registration, public client | ✓ by URL | ✓ two vendor screens: an identity consent, then one naming the callback host and the meeting access granted (read, plus share/move/rename) | ✓ | ✓ `fireflies_get_user` | — | — | — (removed; revocation result not checked) | — | **PASS** (connect + tools) on fleetdev, a real deploy, with a new empty account; the entry was retyped `oauth` on the strength of it | 2026-10-29 |
 
 Cross-cutting checks, all live:
 
@@ -151,7 +152,7 @@ code in `main` plus #1488 and #1495. Findings and their disposition:
 | V2 | GoCardless answers 403 to every unauthenticated request from the audit network (so did Square, which left the directory in Phase 4 — F11); Adobe and Wrike did so on 2026-09-14 and passed discovery on 2026-09-25 | re-probe from another network before calling it broken |
 | V3 | 22 tenant entries have a placeholder in the hostname and cannot be probed | expected |
 | F14 | fleet's add-time validation of an api_key connection (initialize + tools/list) **passes an invalid key** at 25 of the 51 api_key vendors measured on 2026-09-16 (53 listed after Phase 4: Perplexity rejects a wrong key; Composio needs a real server id to measure) — they check the key only at the first tools/call, so a wrong key is saved with a "connected, N tools" confirmation and fails in the first turn. The set moves with the vendors: by 2026-09-25 Braintrust rejected a wrong key and Vultr accepted one — still 25 | **fixed** — the add-time probe now follows the handshake with one read-only tool call (a definite credential rejection fails the add) and a control probe with an invalid key (only a vendor that answers it differently counts as verifying the key); measured live 2026-09-28: a wrong key is refused at 38 of 51 vendors (was 26) and the other 13 are told in the confirmation notice that the key is checked on the first call. `docs/MCP-CATALOG.md`, api-key section |
-| F15 | 20 api_key entries also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop, and Perplexity (added in Phase 4) | observation — each could become a one-click `auth: oauth` entry after a live add; not changed |
+| F15 | 20 entries that were api_key at the audit also publish OAuth protected-resource metadata on the 401 (`resource_metadata` pointer): Braintrust, Brevo, Buffer, Censys, Coda, fal.ai, Fireflies, Instantly, Kong Konnect, Mollie, Paddle, PagerDuty, Parallel, Raygun, Razorpay, Tavily, Upsun, Vultr, Whop, and Perplexity (added in Phase 4) | observation — each could become a one-click `auth: oauth` entry after a live add; Fireflies was retyped `oauth` on 2026-10-29 after a live add on fleetdev (its MCP page now documents OAuth as the way to connect), the rest are unchanged |
 | C10 | Composio's documented URL (`…/v3/mcp/{SERVER_ID}?user_id={USER_ID}`) answers 307 to `…/v3/mcp/{SERVER_ID}/mcp?user_id=…`, which fleet refuses to follow; and Composio's own docs require an `x-api-key` header on every MCP request (the default for new organisations) with no OAuth, so the entry's `tenant` shape could never have connected | **fixed in Phase 4** — retyped `api_key` with `api_key_header: x-api-key` on the URL the vendor redirects to (the guided form collects the placeholder values and the key together). Not live-tested: it needs a real Composio server id. The built-in shape test, which had forbidden a placeholder on an api_key entry although the product supports it, now allows it |
 | C11 | Synter Ads (community, hidden by default) listed `https://syntermedia.ai/mcp`, which serves the vendor's HTML page to an MCP initialize | **fixed in Phase 4** — the server is at `https://mcp.syntermedia.ai` (answers initialize; rejects a wrong `X-Synter-Key` with 401); `setup_url` now points at the developer portal |
 | V4 | `docs_url` answers 403 to a plain GET from the audit box for Coda (Leonardo.Ai's 500 on 2026-09-16 was transient — 200 since); ZoomInfo's was a real 404 | Coda looks like a bot wall, re-check from a browser; ZoomInfo's link replaced with the vendor's current page (the docs moved to its GTM AI rebrand, `docs.gtm.ai`) alongside the nightly smoke |
@@ -225,7 +226,7 @@ package is listed.
 ## Appendix — the inventory: every built-in entry (#986 Phase 1)
 
 All 289 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
-the Phase 4 changes on 2026-09-25, one row each, sorted by name. Columns follow the plan in
+the Phase 4 changes on 2026-09-25 (Fireflies retyped 2026-10-29), one row each, sorted by name. Columns follow the plan in
 #986: **featured** (★) is the Featured-shelf flag; **can CI hit?** says what
 an automated smoke (Phase 2) could do with the entry without a human —
 `yes` the endpoint answers `initialize` with no credentials (open); `key-fixture`
@@ -235,7 +236,7 @@ open entries that carry the key in the URL) — no such fixture exists yet;
 a `{placeholder}` only a customer can fill; `dead-suspect` the endpoint does
 not speak MCP. **last verified** is `live` for a real account — on the rig
 (the table at the top) or, dated 2026-09-30, on the real deploy (its own
-section) — `probe` for a credential-less check — the 2026-09-14
+section; Fireflies, 2026-10-29, on fleetdev) — `probe` for a credential-less check — the 2026-09-14
 discovery probe (fleet's `mcpoauth.Discover` plus the add-time guards, run on
 `main` plus #1488 and #1495; "discovery ✓" means Connect would reach the
 vendor's consent screen and says nothing about tool calls) or the 2026-09-16
@@ -244,10 +245,10 @@ handshake sweep described above — and `—` when nothing could be checked
 templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
 while public DNS is fine). A row is not re-verified by later releases.
 
-Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
-dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
+Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 184 · tenant 40 ·
+dead-suspect 0. Auth: oauth 184 · tenant 39 · api_key 52 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
-verified: live 14 · probe 2026-09-14 182 · probe 2026-09-16 49 · probe
+verified: live 15 · probe 2026-09-14 182 · probe 2026-09-16 48 · probe
 2026-09-25 10 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
@@ -344,7 +345,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | figma | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | financial-datasets | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | firecrawl | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
-| fireflies | api_key | official | communication |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 403 with a bogus key | add-time check rejects a bogus key (HTTP 403); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| fireflies | oauth | official | communication |  | oauth-manual | 2026-10-29 live | live PASS on fleetdev (added by URL, sign-in, `fireflies_get_user`, remove); discovery ✓; registration ✓ | retyped from `api_key` on 2026-10-29 (F15): the vendor's MCP page now names OAuth as the way to connect; self-registering, public client ok, PKCE S256, scopes `profile email`; the revocation endpoint lists only `client_secret_post`, so sign-out may clear locally only; a connection saved with a key keeps it and shows **Directory changed** (F13) |
 | firefly | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
 | freshdesk | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | front | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
