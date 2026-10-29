@@ -520,6 +520,16 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateCancelled)
 		return true
 	}
+	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
+		defaultModel := agentcore.CurrentDefaultModel()
+		if err := s.store.SetModel(lctx, user, convID, defaultModel); err != nil {
+			log.Printf("input queue: conversation %s set default model failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
+			s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
+			s.rekickDrainAfter(convID, 3*time.Second)
+			return true
+		}
+		conv.Model = defaultModel
+	}
 	var attachments []chatAttachment
 	if row.Attachments != "" {
 		_ = json.Unmarshal([]byte(row.Attachments), &attachments)
