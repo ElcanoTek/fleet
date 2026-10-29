@@ -5,10 +5,12 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -121,14 +123,22 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		clientID := req.ClientID
+		clientSecret := req.ClientSecret
+		if strings.TrimSpace(clientID) == "" && s.clientConfig != nil {
+			if cid, csec, ok := operatorOAuthClientFor(req.Name, req.URL, req.AuthMode, s.clientConfig.RemoteMCPCatalog); ok {
+				clientID = cid
+				clientSecret = csec
+			}
+		}
 		server, report, err := s.remoteMCP.AddServer(r.Context(), remotemcp.AddServerInput{
 			Email:        user,
 			Name:         req.Name,
 			Account:      req.Account,
 			URL:          req.URL,
 			AuthMode:     req.AuthMode,
-			ClientID:     req.ClientID,
-			ClientSecret: req.ClientSecret,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
 			APIKey:       req.APIKey,
 			APIKeyHeader: req.APIKeyHeader,
 			APIKeyQuery:  req.APIKeyQuery,
@@ -356,4 +366,126 @@ func (s *Server) remoteMCPError(w http.ResponseWriter, err error) {
 		// without leaking internal detail.
 		http.Error(w, agentcore.RedactSecrets(err.Error()), http.StatusBadRequest)
 	}
+}
+
+// operatorOAuthClientFor looks up an operator-provisioned OAuth client for a
+// directory entry when the user submits a one-click OAuth add (empty ClientID).
+// The requested URL must canonicalize to the catalog entry's own URL (or one of
+// its declared URLVariants) so a custom "Add remote server" request that reuses
+// a catalog name with an arbitrary third-party URL can never receive or seal
+// the operator's OAuth client credentials.
+func operatorOAuthClientFor(name, rawURL, authMode string, catalog []clientconfig.RemoteMCPCatalogEntry) (clientID, clientSecret string, ok bool) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", "", false
+	}
+	auth := strings.ToLower(strings.TrimSpace(authMode))
+	if auth != "" && auth != store.RemoteMCPAuthOAuth {
+		return "", "", false
+	}
+	canonURL, err := mcpoauth.CanonicalResourceURI(strings.TrimSpace(rawURL))
+	if err != nil {
+		return "", "", false
+	}
+	for i := range catalog {
+		e := catalog[i]
+		if strings.TrimSpace(e.Name) != name {
+			continue
+		}
+		cid, csec, found := e.EffectiveOAuthClient()
+		if !found {
+			return "", "", false
+		}
+		if !catalogEntryMatchesURL(e, canonURL) {
+			return "", "", false
+		}
+		return cid, csec, true
+	}
+	return "", "", false
+}
+
+func catalogEntryMatchesURL(e clientconfig.RemoteMCPCatalogEntry, canonURL string) bool {
+	rawTemplate := strings.TrimSpace(e.URL)
+	if strings.Contains(rawTemplate, "{") {
+		if tenantTemplateMatchesURL(rawTemplate, canonURL) {
+			return true
+		}
+	} else if c, err := mcpoauth.CanonicalResourceURI(rawTemplate); err == nil && c == canonURL {
+		return true
+	}
+	return onListedVariant(catalogURLVariants(e.URLVariants), canonURL)
+}
+
+// tenantTemplateMatchesURL reports whether canonURL is a concrete instantiation
+// of an https:// catalog URL template carrying {placeholder} tokens (such as
+// "https://mcp.dev.azure.com/{organization}"). The template's host must end
+// with a literal registrable domain suffix (never a bare "{host}" placeholder)
+// and each {placeholder} matches a single non-empty DNS label or path segment.
+func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
+	if !strings.HasPrefix(rawTemplate, "https://") {
+		return false
+	}
+	rest := strings.TrimPrefix(rawTemplate, "https://")
+	slash := strings.IndexByte(rest, '/')
+	hostTpl := rest
+	pathTpl := ""
+	if slash >= 0 {
+		hostTpl = rest[:slash]
+		pathTpl = strings.TrimRight(rest[slash:], "/")
+	}
+	if hostTpl == "" || strings.HasSuffix(hostTpl, "}") {
+		return false
+	}
+	// Require a fixed literal domain suffix after any subdomain placeholder,
+	// separated by a DNS label boundary (".").
+	literalHost := hostTpl
+	if idx := strings.LastIndexByte(hostTpl, '}'); idx >= 0 {
+		suffix := hostTpl[idx+1:]
+		if !strings.HasPrefix(suffix, ".") {
+			return false
+		}
+		literalHost = strings.TrimPrefix(suffix, ".")
+	}
+	if !strings.Contains(literalHost, ".") {
+		return false
+	}
+	hostPattern, ok := templatePartToRegex(strings.ToLower(hostTpl), `[a-z0-9-]+`)
+	if !ok {
+		return false
+	}
+	pathPattern, ok := templatePartToRegex(pathTpl, `[^/?#@]+`)
+	if !ok {
+		return false
+	}
+	re, err := regexp.Compile(`^https://` + hostPattern + pathPattern + `$`)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(canonURL)
+}
+
+func templatePartToRegex(part, placeholderPattern string) (string, bool) {
+	var sb strings.Builder
+	for len(part) > 0 {
+		open := strings.IndexByte(part, '{')
+		if open < 0 {
+			if strings.ContainsRune(part, '}') {
+				return "", false
+			}
+			sb.WriteString(regexp.QuoteMeta(part))
+			break
+		}
+		if strings.ContainsRune(part[:open], '}') {
+			return "", false
+		}
+		sb.WriteString(regexp.QuoteMeta(part[:open]))
+		part = part[open+1:]
+		closeIdx := strings.IndexByte(part, '}')
+		if closeIdx <= 0 {
+			return "", false
+		}
+		sb.WriteString(placeholderPattern)
+		part = part[closeIdx+1:]
+	}
+	return sb.String(), true
 }

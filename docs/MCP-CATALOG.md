@@ -170,6 +170,8 @@ releases.
                                   # bring-your-own OAuth client ID (+ secret)
   client_secret: required         # manual only: the AS accepts no public
                                   # clients, so the secret field is mandatory
+  oauth_client_id: "${SLACK_MCP_CLIENT_ID:-}"         # optional operator-provisioned
+  oauth_client_secret: "${SLACK_MCP_CLIENT_SECRET:-}" # OAuth client (turns manual into 1-click)
   featured: true                  # curated Featured-shelf pick (kept small:
                                   # 8–20 built-in entries, never community)
 ```

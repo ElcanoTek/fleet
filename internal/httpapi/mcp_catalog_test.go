@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
@@ -162,5 +163,85 @@ func TestMCPCatalogMethodAndEmpty(t *testing.T) {
 	}
 	if resp.Bundled == nil || resp.ThirdParty == nil {
 		t.Errorf("lists must be non-nil empty arrays: %#v", resp)
+	}
+}
+
+func TestMCPCatalogOperatorOAuthClientMakesEntryOneClick(t *testing.T) {
+	t.Setenv("SLACK_MCP_CLIENT_ID", "111.222")
+	t.Setenv("SLACK_MCP_CLIENT_SECRET", "super-secret-value")
+
+	s := &Server{
+		clientConfig: &clientconfig.Bundle{
+			RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
+				{
+					Name:               "slack",
+					DisplayName:        "Slack",
+					Description:        "Search messages and channels.",
+					URL:                "https://mcp.slack.com/mcp",
+					Vendor:             "Slack Technologies, LLC",
+					Provenance:         "official",
+					Auth:               "oauth",
+					SetupHint:          "Register your own Slack app.",
+					ClientRegistration: "manual",
+					ClientSecret:       "required",
+				},
+				{
+					Name:               "github",
+					DisplayName:        "GitHub",
+					Description:        "Repositories and PRs.",
+					URL:                "https://api.githubcopilot.com/mcp/",
+					Vendor:             "GitHub, Inc.",
+					Provenance:         "official",
+					Auth:               "oauth",
+					SetupHint:          "Register a GitHub OAuth app.",
+					ClientRegistration: "manual",
+					ClientSecret:       "required",
+				},
+				{
+					Name:               "azure-devops",
+					DisplayName:        "Azure DevOps",
+					Description:        "Pipelines and repos.",
+					URL:                "https://mcp.dev.azure.com/{organization}",
+					Vendor:             "Microsoft Corporation",
+					Provenance:         "official",
+					Auth:               "tenant",
+					SetupHint:          "{organization} is your Azure DevOps organization name.",
+					ClientRegistration: "manual",
+					ClientSecret:       "required",
+					OAuthClientID:      "entra-cid",
+					OAuthClientSecret:  "entra-csec",
+				},
+			},
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/mcp-catalog", nil)
+	w := httptest.NewRecorder()
+	s.mcpCatalog(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d, want 200", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "111.222") || strings.Contains(body, "super-secret-value") || strings.Contains(body, "entra-cid") || strings.Contains(body, "entra-csec") {
+		t.Fatalf("GET /mcp-catalog leaked operator OAuth credentials in response body: %s", body)
+	}
+	var resp mcpCatalogResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("bad json: %v", err)
+	}
+	if len(resp.ThirdParty) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(resp.ThirdParty))
+	}
+	slack := resp.ThirdParty[0]
+	if slack.ClientRegistration != "" || slack.ClientSecret != "" || slack.SetupHint != "" {
+		t.Errorf("slack with operator OAuth client should project as 1-click (empty client_registration/client_secret/setup_hint), got %+v", slack)
+	}
+	gh := resp.ThirdParty[1]
+	if gh.ClientRegistration != "manual" || gh.ClientSecret != "required" || gh.SetupHint == "" {
+		t.Errorf("unconfigured github entry should retain manual client_registration + required secret + setup_hint, got %+v", gh)
+	}
+	ado := resp.ThirdParty[2]
+	if ado.ClientRegistration != "" || ado.ClientSecret != "" || ado.SetupHint == "" {
+		t.Errorf("tenant entry with operator OAuth client should clear client_registration/client_secret but retain setup_hint for {organization}, got %+v", ado)
 	}
 }

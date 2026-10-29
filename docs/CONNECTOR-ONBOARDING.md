@@ -73,6 +73,20 @@ is the validation.
   RFC 7591 dynamic registration; the card collects a bring-your-own OAuth
   client ID (+ optional secret) up front and passes it to the existing manual
   client path in `AddServer`, instead of letting the add fail mid-discovery.
+- `oauth_client_id` / `oauth_client_secret` (and the conventional environment
+  variables `FLEET_OAUTH_CLIENT_ID_<STEM>` / `<STEM>_MCP_CLIENT_ID` +
+  `FLEET_OAUTH_CLIENT_SECRET_<STEM>` / `<STEM>_MCP_CLIENT_SECRET`, where
+  `<STEM>` is the entry name uppercased with hyphens replaced by underscores,
+  e.g. `SLACK_MCP_CLIENT_ID` and `SLACK_MCP_CLIENT_SECRET`) — lets an operator
+  register one workspace OAuth application once on the server so a
+  `client_registration: manual` entry becomes a **one-click OAuth add** for
+  every user on the box. When configured, `GET /mcp-catalog` clears
+  `client_registration`, `client_secret`, and `setup_hint` on the wire (never
+  exposing the credentials), and `POST /remote-mcp-servers` injects the
+  operator's client ID and secret server-side after verifying the requested URL
+  matches the catalog entry's canonical URL (or one of its `url_variants`).
+  Each user still signs in with their own account at the vendor's OAuth screen
+  and mints their own personal token.
 - `client_secret: required` — the vendor accepts no public clients, so the
   card makes the secret field mandatory instead of "optional". Only
   meaningful with `client_registration: manual`. The rule is the one the

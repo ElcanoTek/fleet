@@ -549,7 +549,15 @@ var allowedEnvVars = map[string]bool{
 // allowlist entry. A client bundle may register additional prefixes via
 // RegisterAllowedEnvPrefixes (e.g. per-user API-key prefixes for its
 // connectors).
-var allowedEnvPrefixes = []string{}
+var allowedEnvPrefixes = []string{
+	// Operator-provisioned OAuth clients for client_registration: manual
+	// directory entries (e.g. FLEET_OAUTH_CLIENT_ID_SLACK /
+	// FLEET_OAUTH_CLIENT_SECRET_SLACK). The companion <STEM>_MCP_CLIENT_ID /
+	// <STEM>_MCP_CLIENT_SECRET spellings are admitted via
+	// RegisterAllowedEnvVars from the catalog at bundle load.
+	"FLEET_OAUTH_CLIENT_ID_",
+	"FLEET_OAUTH_CLIENT_SECRET_",
+}
 
 // registeredEnvVars holds env-var names admitted at runtime from the client
 // bundle's manifest (RegisterAllowedEnvVars). Kept separate from the static

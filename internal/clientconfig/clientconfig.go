@@ -1341,6 +1341,23 @@ type RemoteMCPCatalogEntry struct {
 	// metadata rules out public clients (RFC 8414 §2 default), so this flag
 	// improves the form — it is not the only guard.
 	ClientSecret string `yaml:"client_secret"`
+	// OAuthClientID and OAuthClientSecret let an operator supply a shared
+	// registered OAuth application (e.g. a workspace Slack app or GitHub OAuth
+	// app) for a client_registration: manual directory entry, either in the
+	// bundle manifest (typically as ${SLACK_MCP_CLIENT_ID} /
+	// ${SLACK_MCP_CLIENT_SECRET}) or via the conventional environment
+	// variables FLEET_OAUTH_CLIENT_ID_<STEM> / <STEM>_MCP_CLIENT_ID and
+	// FLEET_OAUTH_CLIENT_SECRET_<STEM> / <STEM>_MCP_CLIENT_SECRET. When
+	// configured, GET /mcp-catalog serves the entry as a one-click OAuth add
+	// and POST /remote-mcp-servers injects the operator's client credentials
+	// server-side so individual users only click Add and sign in at the
+	// vendor. Never serialized to JSON (`json:"-"`).
+	OAuthClientID     string `yaml:"oauth_client_id" json:"-"`
+	OAuthClientSecret string `yaml:"oauth_client_secret" json:"-"`
+	// oauthEnvResolved marks that resolveCatalogOAuthClients has snapshotted
+	// any process-env OAuth client credentials at bundle Load time, so
+	// EffectiveOAuthClient never falls back to os.Getenv at request time.
+	oauthEnvResolved bool `yaml:"-" json:"-"`
 	// Featured surfaces the entry in the directory's Featured section — the
 	// short, curated shelf of household-name connectors shown before the
 	// category listing. Kept small on purpose (a test caps the built-in count)
@@ -1437,9 +1454,10 @@ func Load(dir string) (*Bundle, error) {
 	// exported and the normal interpolation pass below substitutes the tokens
 	// out of the runtime manifest.
 	var rawConnectors struct {
-		MCPServers []ServerDef   `yaml:"mcp_servers"`
-		HTTPTools  []HTTPToolDef `yaml:"http_tools"`
-		A2APeers   []A2APeerDef  `yaml:"a2a_peers"`
+		MCPServers []ServerDef             `yaml:"mcp_servers"`
+		HTTPTools  []HTTPToolDef           `yaml:"http_tools"`
+		A2APeers   []A2APeerDef            `yaml:"a2a_peers"`
+		RemoteMCPs []RemoteMCPCatalogEntry `yaml:"remote_mcp_catalog"`
 	}
 	if err := yaml.Unmarshal(raw, &rawConnectors); err != nil {
 		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
@@ -1461,6 +1479,7 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 	config.RegisterAllowedEnvVars(refNames...)
+	config.RegisterAllowedEnvVars(manualOAuthEnvNamesFor(rawConnectors.RemoteMCPs)...)
 	if err := applyBootEnvFile(); err != nil {
 		return nil, err
 	}
@@ -2154,6 +2173,7 @@ func (b *Bundle) validateWebhookTriggers() error {
 // startup, like the rest of validate.
 func (b *Bundle) validateRemoteMCPCatalog() error {
 	seen := map[string]bool{}
+	manualStems := map[string]string{}
 	for i := range b.RemoteMCPCatalog {
 		e := &b.RemoteMCPCatalog[i]
 		name := strings.TrimSpace(e.Name)
@@ -2184,6 +2204,16 @@ func (b *Bundle) validateRemoteMCPCatalog() error {
 		}
 		if err := validateRemoteMCPEntryMeta(e); err != nil {
 			return err
+		}
+		if e.ClientRegistration == "manual" {
+			stem := manualOAuthStem(name)
+			if stem == "" {
+				return fmt.Errorf("remote_mcp_catalog[%q]: client_registration: manual requires an alphanumeric name stem for OAuth env vars", name)
+			}
+			if prev, dup := manualStems[stem]; dup {
+				return fmt.Errorf("remote_mcp_catalog[%q]: manual OAuth env stem %q collides with %q", name, stem, prev)
+			}
+			manualStems[stem] = name
 		}
 	}
 	return nil
@@ -2281,6 +2311,21 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	if err := validateRemoteMCPURLVariants(name, e); err != nil {
 		return err
 	}
+	if err := validateRemoteMCPOAuthClient(name, e); err != nil {
+		return err
+	}
+	for _, tag := range e.Tags {
+		if strings.TrimSpace(tag) == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: empty tag", name)
+		}
+		if tag != strings.ToLower(tag) {
+			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
+		}
+	}
+	return nil
+}
+
+func validateRemoteMCPOAuthClient(name string, e *RemoteMCPCatalogEntry) error {
 	if e.ClientRegistration != "" && e.ClientRegistration != "manual" {
 		return fmt.Errorf("remote_mcp_catalog[%q]: unknown client_registration %q (want manual or empty)", name, e.ClientRegistration)
 	}
@@ -2292,13 +2337,22 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required is only meaningful with client_registration: manual", name)
 		}
 	}
-	for _, tag := range e.Tags {
-		if strings.TrimSpace(tag) == "" {
-			return fmt.Errorf("remote_mcp_catalog[%q]: empty tag", name)
-		}
-		if tag != strings.ToLower(tag) {
-			return fmt.Errorf("remote_mcp_catalog[%q]: tag %q must be lowercase", name, tag)
-		}
+	cid := strings.TrimSpace(e.OAuthClientID)
+	csec := strings.TrimSpace(e.OAuthClientSecret)
+	if cid == "" && csec == "" {
+		return nil
+	}
+	if e.Auth != "" && e.Auth != "oauth" && e.Auth != "tenant" {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth or auth: tenant entries", name)
+	}
+	if e.ClientRegistration != "manual" {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only meaningful with client_registration: manual", name)
+	}
+	if cid == "" && !hasManualOAuthIDInEnv(name) {
+		return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_secret requires oauth_client_id", name)
+	}
+	if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" && !hasManualOAuthSecretInEnv(name) {
+		return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required needs oauth_client_secret alongside oauth_client_id", name)
 	}
 	return nil
 }
