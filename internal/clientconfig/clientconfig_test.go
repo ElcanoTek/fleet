@@ -600,6 +600,55 @@ func TestDefaultBranding(t *testing.T) {
 	}
 }
 
+func TestBrandingSupportValidation(t *testing.T) {
+	dir := t.TempDir()
+	manifest := `
+branding:
+  app_name: "Acme"
+  support:
+    label: "  Direct Support  "
+    email: "  support@example.com  "
+    message: "  Reach out any time.  "
+    subject: "  Workspace feedback  "
+`
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load valid support: %v", err)
+	}
+	if b.Branding.Support == nil {
+		t.Fatal("Branding.Support is nil")
+	}
+	if b.Branding.Support.Label != "Direct Support" || b.Branding.Support.Title != "Direct Support" {
+		t.Errorf("Label/Title = %q/%q, want Direct Support", b.Branding.Support.Label, b.Branding.Support.Title)
+	}
+	if b.Branding.Support.Email != "support@example.com" {
+		t.Errorf("Email = %q, want support@example.com", b.Branding.Support.Email)
+	}
+
+	for _, tc := range []struct {
+		name string
+		yaml string
+	}{
+		{"missing label", "branding:\n  support:\n    email: a@example.com\n"},
+		{"missing email", "branding:\n  support:\n    label: Help\n"},
+		{"invalid email", "branding:\n  support:\n    label: Help\n    email: not-an-email\n"},
+		{"query in email", "branding:\n  support:\n    label: Help\n    email: a@example.com?bcc=b@example.com\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := t.TempDir()
+			if err := os.WriteFile(filepath.Join(d, "manifest.yaml"), []byte(tc.yaml), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(d); err == nil {
+				t.Errorf("Load(%s) succeeded, want error", tc.name)
+			}
+		})
+	}
+}
+
 func TestMCPCatalogEnableGateAndEnv(t *testing.T) {
 	dir := t.TempDir()
 	manifest := `

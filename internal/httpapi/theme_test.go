@@ -256,6 +256,31 @@ func TestClientConfig_AdvertisesLogoOnlyWhenResolved(t *testing.T) {
 	}
 }
 
+func TestClientConfig_CarriesSupportContact(t *testing.T) {
+	s := newLogoServer(t, "mark.svg", []byte("<svg/>"))
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/client-config", nil)
+
+	w := httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	if strings.Contains(w.Body.String(), `"support"`) {
+		t.Errorf("body %s must omit support when not configured", w.Body.String())
+	}
+
+	s.clientConfig.Branding.Support = &clientconfig.SupportContact{
+		Label:   "Direct Support",
+		Email:   "support@example.com",
+		Title:   "Direct Support Line",
+		Message: "Reach out directly with questions or feedback.",
+		Subject: "Workspace support",
+	}
+	w = httptest.NewRecorder()
+	s.clientConfigHandler(w, req)
+	want := `"support":{"label":"Direct Support","email":"support@example.com","title":"Direct Support Line","message":"Reach out directly with questions or feedback.","subject":"Workspace support"}`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("body %s must carry %s", w.Body.String(), want)
+	}
+}
+
 // /client-config carries the workspace's effective model tiers (#1187): the
 // live agentcore holders, so an admin override is visible to the next shell
 // mount without any rebuild — and the compiled-in pair before any override.
