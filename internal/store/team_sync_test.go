@@ -125,54 +125,8 @@ func TestApplyExternalAccessRejectsInvalidTeam(t *testing.T) {
 	}
 }
 
-// A Fleet-side team change is adopted into a provider row that manages team,
-// and never into one that does not (NULL stays NULL).
-func TestAdoptFleetAccessChangeAdoptsTeamOnlyWhenManaged(t *testing.T) {
-	f := newTeamFixture(t)
-	if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("alice@x.com", "alice", 1, strPtr("quant"))); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := f.s.ApplyExternalAccess(f.ctx, teamGrant("bob@x.com", "bob", 1, nil)); err != nil {
-		t.Fatal(err)
-	}
-	for _, email := range []string{"alice@x.com", "bob@x.com"} {
-		token, err := f.s.ProviderStateToken(f.ctx, email)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if ok, err := f.s.AdoptFleetAccessChange(f.ctx, email, token, true, true, RoleMember, "none", "ops"); err != nil || !ok {
-			t.Fatalf("adopt %s = (%v, %v)", email, ok, err)
-		}
-	}
-	if got := providerTeam(t, f, "alice"); got == nil || *got != "ops" {
-		t.Fatalf("alice provider team = %v, want ops (adopted)", got)
-	}
-	if got := providerTeam(t, f, "bob"); got != nil {
-		t.Fatalf("bob provider team = %q, want NULL (not managed)", *got)
-	}
-	// A deletion adopts allowed=false and leaves the team alone.
-	token, _ := f.s.ProviderStateToken(f.ctx, "alice@x.com")
-	if _, err := f.s.AdoptFleetAccessChange(f.ctx, "alice@x.com", token, false, false, "", "", ""); err != nil {
-		t.Fatal(err)
-	}
-	if got := providerTeam(t, f, "alice"); got == nil || *got != "ops" {
-		t.Fatalf("alice provider team after deletion = %v, want ops", got)
-	}
-}
-
-func TestTeamMemberEmails(t *testing.T) {
-	f := newTeamFixture(t)
-	got, err := f.s.TeamMemberEmails(f.ctx, " quant ")
-	if err != nil || strings.Join(got, ",") != "alice@x.com,bob@x.com" {
-		t.Fatalf("TeamMemberEmails = (%v, %v), want alice, bob", got, err)
-	}
-	if got, _ := f.s.TeamMemberEmails(f.ctx, "Quant"); len(got) != 0 {
-		t.Fatalf("case-differing team matched %v; RenameTeam matches exactly", got)
-	}
-}
-
-// Events carry the team, and the Chat read the Recorder does reports it.
-func TestAccountAccessAndEventsCarryTeam(t *testing.T) {
+// The Chat membership read (`fleet account-events export`) reports the team.
+func TestAccountAccessCarriesTeam(t *testing.T) {
 	f := newTeamFixture(t)
 	a, ok, err := f.s.AccountAccess(f.ctx, "alice@x.com")
 	if err != nil || !ok || a.Team != "quant" {
@@ -186,13 +140,5 @@ func TestAccountAccessAndEventsCarryTeam(t *testing.T) {
 		if a.Email == "carol@x.com" && a.Team != "" {
 			t.Fatalf("carol team = %q, want none", a.Team)
 		}
-	}
-	if _, err := f.s.EnqueueAccountEvent(f.ctx, AccountEvent{Type: AccountEventAccessChanged, Email: "alice@x.com",
-		Enabled: true, ChatRole: RoleMember, OpsRole: "none", Team: "quant", Source: AccountEventSourceAdminUI}); err != nil {
-		t.Fatal(err)
-	}
-	evs, err := f.s.ClaimDueAccountEvents(f.ctx, 1<<40, 10, 60)
-	if err != nil || len(evs) != 1 || evs[0].Team != "quant" {
-		t.Fatalf("claimed = (%+v, %v), want team quant", evs, err)
 	}
 }

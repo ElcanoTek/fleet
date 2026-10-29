@@ -137,7 +137,7 @@ non-negative integer, only next to a team); anything else fails closed.
 
 Membership flows from Auth to Fleet and not back
 ([ADR-0095](adr/0095-central-auth-fleets-have-no-passwords.md)). A Fleet that
-signs in through Auth changes no account, role or team itself, and its
-account-events feed ([ACCOUNT-EVENTS.md](ACCOUNT-EVENTS.md)) is not pointed at
-Auth. ADR-0076's "most recent change on either side wins" applied before
-that; it no longer does for these deployments.
+signs in through Auth changes no account, role or team itself, and reports
+nothing back: Fleet no longer publishes account events
+([ADR-0096](adr/0096-fleet-no-longer-publishes-account-events.md)), so
+ADR-0076's "most recent change on either side wins" is gone.

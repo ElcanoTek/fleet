@@ -439,10 +439,9 @@ var allowedEnvVars = map[string]bool{
 	"ORCHESTRATOR_SERVER_TOKEN":     true,
 	"NEXT_PUBLIC_PUBLIC_ORIGIN":     true,
 
-	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
-	// Signed membership/role change events for an identity provider or audit
-	// sink. OFF unless the URL is set; the secret is then required and is held
-	// host-side, never logged or shipped into the sandbox.
+	// Retired with the account-events feed (ADR-0096). Still loaded from the
+	// env file so Load's boot warning can name a stale value; nothing reads
+	// either key.
 	"FLEET_ACCOUNT_EVENTS_URL":    true,
 	"FLEET_ACCOUNT_EVENTS_SECRET": true,
 
@@ -1119,20 +1118,6 @@ type Config struct {
 	// the base64 FLEET_LOG_ARCHIVE_ENCRYPTION_KEY) used to encrypt archived log
 	// payloads. nil/empty = archives are gzip-only. Held host-side; never logged.
 	LogArchiveEncryptionKey []byte
-
-	// ── account-events feed (docs/ACCOUNT-EVENTS.md) ──
-	// AccountEventsFeedToAuthIgnored: FLEET_ACCOUNT_EVENTS_URL pointed at
-	// central Auth on a Fleet whose accounts Auth manages, so Load cleared
-	// the feed (membership flows one way, ADR-0095) and the boot log says to
-	// remove the two lines.
-	AccountEventsFeedToAuthIgnored bool
-
-	// AccountEventsURL (FLEET_ACCOUNT_EVENTS_URL) is where signed account events
-	// are POSTed; empty = the feed is off and nothing is queued.
-	// AccountEventsSecret (FLEET_ACCOUNT_EVENTS_SECRET) is the HMAC signing key,
-	// required whenever the URL is set. Held host-side; never logged.
-	AccountEventsURL    string
-	AccountEventsSecret string
 
 	// ── remote (hosted) MCP servers + per-user OAuth (#443) ──
 	// PublicBaseURL is the externally-reachable origin of the web app, e.g.
@@ -1856,12 +1841,6 @@ func Load(envFile string) (*Config, error) {
 		LogArchiveAfterDays:     lp.getenvFleetInt("LOG_ARCHIVE_AFTER_DAYS", 0),
 		LogArchiveEncryptionKey: logArchiveEncryptionKey(),
 
-		AccountEventsURL: strings.TrimSpace(getenvFleet("ACCOUNT_EVENTS_URL")),
-		// The signing key is used byte for byte, like FLEET_WEBHOOK_SECRET: the
-		// env-file parser preserves quoted whitespace, and trimming here would
-		// sign under a different key than the receiver holds.
-		AccountEventsSecret: getenvFleet("ACCOUNT_EVENTS_SECRET"),
-
 		PublicBaseURL:              strings.TrimRight(strings.TrimSpace(getenvFleet("PUBLIC_BASE_URL")), "/"),
 		MCPOAuthEncryptionKey:      mcpOAuthEncryptionKey(),
 		RemoteMCPAllowInsecureHTTP: lp.getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
@@ -2024,19 +2003,6 @@ func Load(envFile string) (*Config, error) {
 		return nil, fmt.Errorf("FLEET_DEFAULT_NETWORK_MODE must be one of open|allowlisted|lockdown, got %q", cfg.DefaultNetworkMode)
 	}
 
-	// The account-events feed fails closed at boot (and so in validate-config,
-	// which reports a Load error): never publish membership changes unsigned.
-	if err := cfg.validateAccountEvents(os.Getenv("FLEET_WEBHOOK_SECRET")); err != nil {
-		return nil, err
-	}
-	// One way (ADR-0095): a Fleet whose accounts central Auth manages never
-	// reports account changes to that Auth. A feed still pointed at the
-	// issuer's host (set up before membership went one way) is switched off
-	// here, so nothing flows back even before the operator removes it.
-	if cfg.AccountsManagedByAuth && sameHost(cfg.AccountEventsURL, os.Getenv("FLEET_OIDC_ISSUER")) {
-		cfg.AccountEventsURL, cfg.AccountEventsSecret = "", ""
-		cfg.AccountEventsFeedToAuthIgnored = true
-	}
 	// The escalation classifier's mode and model fail boot when mistyped,
 	// here in Load so `fleet serve` refuses them, not only validate-config.
 	if err := cfg.validateEscalationClassifier(); err != nil {
@@ -2049,6 +2015,12 @@ func Load(envFile string) (*Config, error) {
 	for _, k := range []string{"PII_REDACTION_ENGINE", "PII_RAMPART_URL"} {
 		if strings.TrimSpace(getenvFleet(k)) != "" {
 			log.Printf("Warning: FLEET_%s is set but no longer used — the Rampart PII engine was removed (docs/adr/0063); PII redaction uses the built-in pattern engine", k)
+		}
+	}
+	// Retired knobs (ADR-0096): Fleet no longer publishes account events.
+	for _, k := range []string{"ACCOUNT_EVENTS_URL", "ACCOUNT_EVENTS_SECRET"} {
+		if strings.TrimSpace(getenvFleet(k)) != "" {
+			log.Printf("Warning: FLEET_%s is set but no longer used: Fleet no longer publishes account events (docs/adr/0096); remove it from the env file", k)
 		}
 	}
 
@@ -2151,32 +2123,6 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateTLS(); err != nil {
 		return err
-	}
-	return nil
-}
-
-// validateAccountEvents fails closed on the account-events feed: a URL without
-// a signing secret would publish membership changes unsigned, which a receiver
-// acting on them must never accept.
-//
-// The secret must also differ from the task webhook's (webhookSecret,
-// FLEET_WEBHOOK_SECRET). The two channels share the signing scheme byte for
-// byte and the signed string names no channel, so under one shared key a
-// signed task-notification body replayed inside the receiver's timestamp
-// window would verify at the account-events receiver as well.
-func (c *Config) validateAccountEvents(webhookSecret string) error {
-	if c.AccountEventsURL == "" {
-		return nil
-	}
-	u, err := url.Parse(c.AccountEventsURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL must be an absolute http(s) URL")
-	}
-	if strings.TrimSpace(c.AccountEventsSecret) == "" {
-		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_URL is set but FLEET_ACCOUNT_EVENTS_SECRET is not: account events are always signed")
-	}
-	if c.AccountEventsSecret == webhookSecret {
-		return fmt.Errorf("FLEET_ACCOUNT_EVENTS_SECRET must differ from FLEET_WEBHOOK_SECRET: the two feeds share a signing scheme, so one key would let a task-webhook body verify as an account event")
 	}
 	return nil
 }
@@ -2461,17 +2407,6 @@ func OIDCConfigured() bool {
 	return strings.TrimRight(get("FLEET_OIDC_ISSUER"), "/") != "" &&
 		get("FLEET_OIDC_CLIENT_ID") != "" &&
 		get("FLEET_OIDC_CLIENT_SECRET") != ""
-}
-
-// sameHost reports whether two URLs name the same host (case-insensitive,
-// port included). An empty or unparseable URL matches nothing.
-func sameHost(a, b string) bool {
-	ua, errA := url.Parse(strings.TrimSpace(a))
-	ub, errB := url.Parse(strings.TrimSpace(b))
-	if errA != nil || errB != nil || ua.Host == "" || ub.Host == "" {
-		return false
-	}
-	return strings.EqualFold(ua.Host, ub.Host)
 }
 
 // CentralAuthConfigured reports whether this Fleet signs in through Elcano's

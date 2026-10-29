@@ -67,8 +67,8 @@ chat-server and the Operations Center all apply them:
   A change made here would not reach Auth, and Auth's next push would
   quietly undo it.
 - **One way: Auth to Fleet.** Auth is the single source of truth and pushes
-  to Fleet; nothing flows back. Do not point Fleet's account-events feed
-  ([ACCOUNT-EVENTS.md](../ACCOUNT-EVENTS.md)) at Auth on such a deployment:
+  to Fleet; nothing flows back (Fleet no longer publishes account events,
+  [ADR-0096](../adr/0096-fleet-no-longer-publishes-account-events.md)).
   Fleet's account pages change nothing, and a change root makes with the CLI
   stays local until Auth's next push for that person overwrites it.
 - **Team sync is part of this.** Since Fleet no longer changes teams, Auth's

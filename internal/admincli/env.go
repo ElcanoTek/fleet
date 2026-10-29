@@ -153,8 +153,9 @@ func redactEnvValue(key, value string) string {
 // webhookURLEnvNames are outbound receiver URLs, which commonly carry the
 // receiver's own credential in their path or query (a Slack-style hook path,
 // a ?token=) under a name no secret heuristic matches. They show scheme and
-// host only — the same rule `fleet account-events status` and the delivery
-// errors follow.
+// host only, the same rule the task webhook's delivery errors follow.
+// FLEET_ACCOUNT_EVENTS_URL is retired (ADR-0096) but stays masked while a
+// stale value lingers in an env file.
 var webhookURLEnvNames = map[string]bool{
 	"FLEET_ACCOUNT_EVENTS_URL": true,
 	"FLEET_WEBHOOK_URL":        true,

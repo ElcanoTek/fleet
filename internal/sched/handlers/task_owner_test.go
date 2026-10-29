@@ -49,7 +49,7 @@ func setupOwnershipEnv(t *testing.T) *ownershipEnv {
 	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
-	h := New(Config{DefaultTaskModel: "test/model", OrchestratorURL: "http://localhost:8000", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
 	env := &ownershipEnv{h: h, store: store, keyMgr: keyMgr}
 
 	addUser := func(username, role, token string) *models.User {

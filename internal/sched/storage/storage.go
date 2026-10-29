@@ -816,8 +816,8 @@ func (s *Storage) GetAnyUserByUsernameWithContext(ctx context.Context, username 
 
 // OpsRole is the account's effective Operations Center role: the role of its
 // enabled row, or "none" when it has no enabled row (a centrally disabled
-// identity keeps its row and role but has no access). The account-events feed
-// reports this value.
+// identity keeps its row and role but has no access). `fleet account-events
+// export` reports this value.
 func (s *Storage) OpsRole(ctx context.Context, username string) (string, error) {
 	u, err := s.db.GetUserByUsername(ctx, strings.ToLower(strings.TrimSpace(username)))
 	if errors.Is(err, sql.ErrNoRows) {

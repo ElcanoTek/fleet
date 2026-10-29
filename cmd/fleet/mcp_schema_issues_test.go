@@ -129,7 +129,7 @@ func TestMCPSchemaIssuesHandler(t *testing.T) {
 func TestMCPSchemaIssuesRouteIsAdminGated(t *testing.T) {
 	h := handlers.New(handlers.Config{AdminAPIKey: "test-admin-key"}, nil, nil)
 	notes := handlers.NewNotesHandlers(nil, h)
-	mux := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil, nil)
+	mux := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil)
 	get := func(key string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/admin/mcp-servers/schema-issues", nil)
 		if key != "" {

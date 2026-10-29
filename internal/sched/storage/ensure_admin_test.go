@@ -94,7 +94,7 @@ func TestEnsureAdminUser(t *testing.T) {
 	}
 }
 
-// TestOpsRoleReportsEnabledRoleOnly pins the account-events read-back: a
+// TestOpsRoleReportsEnabledRoleOnly pins the export's Ops role read: a
 // missing row and a centrally disabled row both read as "none".
 func TestOpsRoleReportsEnabledRoleOnly(t *testing.T) {
 	store, _ := newTestStore(t)

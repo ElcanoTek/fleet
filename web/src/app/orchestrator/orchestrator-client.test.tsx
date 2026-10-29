@@ -37,9 +37,7 @@ vi.mock("@/app/shared/hooks/useOrchestratorSession", () => ({
     role: "admin",
     noAccess: false,
     unreachable: false,
-    login: async () => true,
     logout: async () => {},
-    error: null,
   }),
 }));
 

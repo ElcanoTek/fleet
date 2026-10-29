@@ -27,7 +27,7 @@ func TestOrchestratorClientIPHonorsTrustedProxies(t *testing.T) {
 	const host = "fleet.example.com"
 	attempts := func(trusted []net.IP, remoteAddr string) (throttled int) {
 		h := handlers.New(handlers.Config{}, nil, nil)
-		mux := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil, trusted)
+		mux := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), trusted)
 		for i := range 21 {
 			req := httptest.NewRequest("POST", "/auth/login", nil)
 			req.Host = host

@@ -151,7 +151,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
-				// Legacy key without ViewTasks: fall through to bearer/cookie (→ 401).
+				// Legacy key without ViewTasks: fall through to bearer (→ 401).
 			}
 		}
 
@@ -163,26 +163,6 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-			// Invalid bearer token: fall through to the cookie path before 401.
-		}
-
-		// Check for the Elcano unified-auth cookie ("Use Elcano email"). Scoped
-		// tier: the cookie proves identity (verified natively with the Ed25519
-		// public key); the email must also be in the user-list, otherwise
-		// 403 not_a_member — they're signed in, just not provisioned here.
-		if sess := h.elcanoSessionFromRequest(r); sess != nil {
-			user, err := h.lookupMember(r.Context(), sess.Email)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
-				writeError(w, http.StatusInternalServerError, "Membership check failed")
-				return
-			}
-			if user == nil {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-				return
-			}
-			ctx := context.WithValue(r.Context(), userContextKey, user)
-			next.ServeHTTP(w, r.WithContext(ctx))
-			return
 		}
 
 		writeError(w, http.StatusUnauthorized, "Unauthorized")

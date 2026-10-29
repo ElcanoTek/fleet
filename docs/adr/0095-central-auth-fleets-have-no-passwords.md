@@ -5,7 +5,9 @@
 - **Deciders:** Fleet maintainers, Elcano Auth owner
 - **Amends:** [ADR-0076](0076-fleet-publishes-account-events.md) for
   deployments that sign in through central Auth: membership flows one way,
-  from Auth to Fleet.
+  from Auth to Fleet. ADR-0076 is superseded by
+  [ADR-0096](0096-fleet-no-longer-publishes-account-events.md): Fleet no
+  longer publishes account events at all.
 - **Relates to:** [ADR-0074](0074-central-auth-owns-fleet-membership-state.md),
   [ADR-0064](0064-application-session-lifetimes.md)
 - **Design note:** [`features/central-auth-integration.md`](../features/central-auth-integration.md)

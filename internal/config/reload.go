@@ -268,10 +268,6 @@ var nonReloadableWatched = []watchedSetting{
 		lookup: func() (string, bool) { return lookupFleet("MAX_CONCURRENT_AGENTS") }},
 	{key: "FLEET_TLS_MODE", reason: "the TLS listener context is built at startup; restart to change",
 		lookup: func() (string, bool) { v := os.Getenv("FLEET_TLS_MODE"); return v, v != "" }},
-	{key: "FLEET_ACCOUNT_EVENTS_URL", reason: "the account-events deliverer is started at boot; restart to change the feed",
-		lookup: func() (string, bool) { return lookupFleet("ACCOUNT_EVENTS_URL") }},
-	{key: "FLEET_ACCOUNT_EVENTS_SECRET", reason: "the account-events signing key is bound at boot; restart to rotate it",
-		lookup: func() (string, bool) { return lookupFleet("ACCOUNT_EVENTS_SECRET") }},
 	// The effective decisions, not one variable: configuring Auth SSO and the
 	// break-glass both move them (Config.AccountsManagedByAuth,
 	// Config.PasswordLoginDisabled).

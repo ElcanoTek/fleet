@@ -1,6 +1,6 @@
 # ADR-0076: Fleet publishes account events; the most recent change wins
 
-- **Status:** Accepted
+- **Status:** Superseded by [ADR-0096](0096-fleet-no-longer-publishes-account-events.md)
 - **Date:** 2026-09-28
 - **Deciders:** Fleet maintainers, Elcano Auth owner
 - **Amends:** [ADR-0074](0074-central-auth-owns-fleet-membership-state.md).

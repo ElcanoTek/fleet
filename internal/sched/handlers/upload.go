@@ -5,7 +5,6 @@ package handlers
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -79,23 +78,6 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 				token = authHeader
 			}
 			if h.userFromPasswordToken(token) != nil {
-				isAuthed = true
-			}
-		}
-
-		// 3. Elcano unified-auth cookie (scoped tier): verify natively, then
-		// require the email to be a provisioned user. Mirrors CreateTask.
-		if !isAuthed {
-			if sess := h.elcanoSessionFromRequest(r); sess != nil {
-				u, err := h.lookupMember(r.Context(), sess.Email)
-				if err != nil && !errors.Is(err, sql.ErrNoRows) {
-					writeError(w, http.StatusInternalServerError, "Membership check failed")
-					return
-				}
-				if u == nil {
-					writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
-					return
-				}
 				isAuthed = true
 			}
 		}

@@ -60,9 +60,8 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 	}
 
 	h := New(Config{DefaultTaskModel: "test/model",
-		OrchestratorURL: "http://localhost:8000",
-		AdminAPIKey:     "test-admin-key",
-		Version:         "0.1.0",
+		AdminAPIKey: "test-admin-key",
+		Version:     "0.1.0",
 	}, store, keyMgr)
 
 	r := chi.NewRouter()
