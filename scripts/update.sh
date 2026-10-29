@@ -869,6 +869,11 @@ hash_file() { [[ -f "$1" ]] && sha256sum "$1" | awk '{print $1}' || printf 'abse
 STATE_DIR="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
 STAMP_FILE="$STATE_DIR/sandbox-containerfile.sha256"
 REF_FILE="$STATE_DIR/sandbox-image.ref"
+MCP_REQS_STAMP="$STATE_DIR/mcp-requirements.sha256"
+mcp_reqs="$CLIENT_DIR/mcp/requirements.txt"
+mcp_reqs_now="$(hash_file "$mcp_reqs")"
+mcp_reqs_prev="absent"
+[[ -f "$MCP_REQS_STAMP" ]] && mcp_reqs_prev="$(tr -d '[:space:]' < "$MCP_REQS_STAMP")"
 cf_now="$(hash_file "$sandbox_cf")"
 cf_prev="absent"
 [[ -f "$STAMP_FILE" ]] && cf_prev="$(cat "$STAMP_FILE")"
@@ -1278,6 +1283,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
   if [[ -f "$web_env_file" ]]; then
     info "[dry-run] would copy the browser-tier keys (APP_SESSION_SECRET, AUTH_*, FLEET_OIDC_*, CATWALK_URL) absent from ${backend_env_file} out of ${web_env_file} (ADR-0091)"
   fi
+  if [[ "$mcp_reqs_now" != "absent" ]]; then
+    info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${mcp_reqs} if its hash (${mcp_reqs_now:0:12}) changed from ${MCP_REQS_STAMP}"
+  fi
 else
   require_go_toolchain
 
@@ -1358,6 +1366,36 @@ else
   if [[ "$FORCE_UPDATE" != "1" ]]; then
     if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$WAIT_SECONDS" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
       die "refusing to install the new binary and restart ${SERVICE_NAME} while work is still in flight after waiting ${WAIT_SECONDS}s (${_active_summary}) — live binary left in place; retry once idle or pass --force"
+    fi
+  fi
+  # Refresh host-side MCP Python deps AFTER the post-build idle check has
+  # re-established the drain fence, alongside the binary install and restart,
+  # so pip never mutates the live system Python while Fleet is accepting new
+  # turns that could spawn an MCP subprocess mid-upgrade.
+  if [[ "$mcp_reqs_now" != "absent" ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+      warn "python3 not found — install ${mcp_reqs} manually."
+    else
+      mcp_reqs_reason=""
+      if [[ "$NO_PULL" == "1" ]]; then
+        mcp_reqs_reason="rebuild-only mode"
+      elif [[ "$mcp_reqs_prev" == "absent" ]]; then
+        mcp_reqs_reason="no stored mcp/requirements.txt hash yet — establishing the baseline"
+      elif [[ "$mcp_reqs_now" != "$mcp_reqs_prev" ]]; then
+        mcp_reqs_reason="mcp/requirements.txt changed (${mcp_reqs_prev:0:12} → ${mcp_reqs_now:0:12})"
+      fi
+      if [[ -z "$mcp_reqs_reason" ]]; then
+        ok "bundle MCP Python deps up to date (requirements.txt ${mcp_reqs_now:0:12}) — skipping pip install."
+      else
+        info "${mcp_reqs_reason} — installing host-side MCP Python deps (${mcp_reqs})."
+        if python3 -m pip install --break-system-packages -r "$mcp_reqs"; then
+          mkdir -p "$STATE_DIR"
+          printf '%s\n' "$mcp_reqs_now" > "$MCP_REQS_STAMP"
+          ok "bundle MCP Python deps installed (${mcp_reqs}); recorded hash ${mcp_reqs_now:0:12}"
+        else
+          warn "pip install of ${mcp_reqs} failed — host-side MCP servers may not start."
+        fi
+      fi
     fi
   fi
   # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
