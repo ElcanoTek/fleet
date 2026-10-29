@@ -479,10 +479,21 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	cardJSON, cardFallback := a.describeApproval(toolName, rawInput)
 
 	// Supersede any older pending approvals for this same tool in this
-	// conversation (plus any pending suggest_advanced_model card when staging
-	// an actionable approval card).
-	if err := a.supersedePriorPendingApprovals(toolName); err != nil {
-		return "", err
+	// conversation. Keeps the UI clean when the agent retries — e.g.
+	// a preview_email that staged with a broken body, then re-staged
+	// with the real body. Without this, both cards render and the
+	// user sees the broken one linger forever. Best-effort: a failure
+	// here shouldn't block the new approval.
+	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
+		log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
+	} else if n > 0 {
+		// Tell the UI to mark the old card as resolved. The client
+		// already handles rejected approvals — this just nudges any
+		// open stream to refresh its approval state.
+		a.sink.Emit("tool.approval_superseded", map[string]any{
+			"tool":  toolName,
+			"count": n,
+		})
 	}
 
 	seat := a.seatFor(toolName)
@@ -695,15 +706,6 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	}
 	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(advancedModel) {
 		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the advanced model. Do not call suggest_advanced_model again — keep working with the current model.", nil
-	}
-	pending, err := a.store.ListPendingApprovals(a.ctx, a.userEmail, a.conversationID)
-	if err != nil {
-		return "", "", fmt.Errorf("lookup pending approvals: %w", err)
-	}
-	for _, p := range pending {
-		if p.ToolName != tools.SuggestAdvancedModelToolName && p.ToolName != previewEmailToolName {
-			return "", "SUGGESTION_SUPPRESSED: a tool approval card is already pending the user's decision. Do not stage a model-switch suggestion alongside a pending action approval.", nil
-		}
 	}
 
 	prior, err := a.store.LatestApprovalByTool(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName)
@@ -1665,35 +1667,6 @@ func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 	for _, tagSet := range [][]string{args.Tags, args.AddTags, args.RemoveTags} {
 		if _, err := models.NormalizeAndValidateTags(sanitizeTaskTagSlice(tagSet)); err != nil {
 			return &agentcore.StageRefusedError{Reason: fmt.Sprintf("invalid task tags: %v. Nothing was staged for approval: fix the tags (allowed characters: a-z, 0-9, '-', '.') and call %s again", err, toolName)}
-		}
-	}
-	return nil
-}
-
-// supersedePriorPendingApprovals supersedes any older pending approvals for
-// toolName in this conversation, plus any pending suggest_advanced_model card
-// when staging an actionable tool approval card so the user cannot see and
-// click both cards side-by-side. Fails closed when superseding a pending
-// suggest_advanced_model card fails so both cards cannot remain pending at once.
-func (a *approvalStager) supersedePriorPendingApprovals(toolName string) error {
-	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
-		log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
-	} else if n > 0 {
-		a.sink.Emit("tool.approval_superseded", map[string]any{
-			"tool":  toolName,
-			"count": n,
-		})
-	}
-	if toolName != previewEmailToolName && toolName != tools.SuggestAdvancedModelToolName {
-		n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName)
-		if err != nil {
-			return fmt.Errorf("supersede pending model suggestion: %w", err)
-		}
-		if n > 0 {
-			a.sink.Emit("tool.approval_superseded", map[string]any{
-				"tool":  tools.SuggestAdvancedModelToolName,
-				"count": n,
-			})
 		}
 	}
 	return nil
