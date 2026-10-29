@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -100,34 +99,5 @@ func TestStageRefusesInvalidTaskCronAndTagsBeforeStaging(t *testing.T) {
 	got := sanitizeTaskTagSlice([]string{"pages", "pages:merrell-elc07361", "daily_refresh"})
 	if strings.Join(got, ",") != "pages,pages-merrell-elc07361,daily-refresh" {
 		t.Fatalf("sanitizeTaskTagSlice = %v", got)
-	}
-}
-
-func TestStageRefusesScheduleTaskWhenExecutionRequirementsConnectorNotEnabled(t *testing.T) {
-	stager := &approvalStager{
-		taskConnectors: func(_ context.Context) (chatTaskConnectors, error) {
-			return chatTaskConnectors{
-				Selection: []TaskConnector{{Server: "pages"}},
-				AlwaysOn:  []string{"memory"},
-			}, nil
-		},
-	}
-	missingRaw := `{"prompt":"Pull audience stats.\n` + models.ExecutionRequirementsMarker + `\n{\"mcp_servers\":[\"pages\",\"reklaim\"]}","cron":"0 9 * * *"}`
-	id, err := stager.Stage(tools.ScheduleTaskToolName, "call-1", missingRaw)
-	if err == nil || id != "" {
-		t.Fatalf("expected refusal when mcp_servers includes disabled connector, got id=%q err=%v", id, err)
-	}
-	var refused *agentcore.StageRefusedError
-	if !errors.As(err, &refused) {
-		t.Fatalf("expected StageRefusedError, got %T: %v", err, err)
-	}
-	if !strings.Contains(err.Error(), `declares mcp_servers "reklaim", which is not enabled in this conversation`) {
-		t.Fatalf("unexpected refusal message: %v", err)
-	}
-
-	// Enabled + always-on connectors pass prevalidation.
-	validRaw := `{"prompt":"Pull audience stats.\n` + models.ExecutionRequirementsMarker + `\n{\"mcp_servers\":[\"pages\",\"memory\"]}","cron":"0 9 * * *"}`
-	if _, err := stager.attachTaskConnectors(validRaw); err != nil {
-		t.Fatalf("expected enabled + always-on connectors to pass attachTaskConnectors, got %v", err)
 	}
 }

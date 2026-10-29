@@ -1687,48 +1687,6 @@ func (a *approvalStager) supersedePriorPendingApprovals(toolName string) {
 	}
 }
 
-// prevalidateScheduleTaskConnectors refuses a schedule_task call before staging
-// when its prompt's EXECUTION REQUIREMENTS (JSON) declares mcp_servers that are
-// not enabled in the conversation's resolved connector snapshot (or always-on).
-// Without this check, the user approves a schedule card that is guaranteed to
-// fail its pre-flight EXECUTION REQUIREMENTS check on its first scheduled run.
-func prevalidateScheduleTaskConnectors(staged scheduleTaskStagedArgs) error {
-	if err := validateScheduleTaskExecutionRequirementsConnectors(staged); err != nil {
-		return &agentcore.StageRefusedError{
-			Reason: fmt.Sprintf("%v. Nothing was staged for approval: ask the user to enable the required connector in the Tools picker (or remove it from EXECUTION REQUIREMENTS if the task does not need it) and call %s again", err, tools.ScheduleTaskToolName),
-		}
-	}
-	return nil
-}
-
-func validateScheduleTaskExecutionRequirementsConnectors(staged scheduleTaskStagedArgs) error {
-	if !staged.ConnectorsResolved {
-		return nil
-	}
-	req, err := models.ParseExecutionRequirements(staged.Prompt)
-	if err != nil || req == nil || len(req.Servers) == 0 {
-		return nil //nolint:nilerr // malformed prompts are caught earlier by ValidateExecutionRequirements
-	}
-	allowed := make(map[string]bool)
-	for _, c := range staged.Connectors {
-		if name := strings.TrimSpace(c.Server); name != "" {
-			allowed[name] = true
-		}
-	}
-	for _, name := range staged.AlwaysOnConnectors {
-		if name = strings.TrimSpace(name); name != "" {
-			allowed[name] = true
-		}
-	}
-	for _, srv := range req.Servers {
-		srv = strings.TrimSpace(srv)
-		if srv != "" && !allowed[srv] {
-			return fmt.Errorf("prompt's EXECUTION REQUIREMENTS declares mcp_servers %q, which is not enabled in this conversation", srv)
-		}
-	}
-	return nil
-}
-
 // Handler-only tools have no runnable tool body. A session sentinel would be
 // mistaken for an approval id instead of creating a task or changing a model.
 func handlerOnlyApproval(tool string) bool {
@@ -3173,9 +3131,6 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 		}
 	}
 	if err := p.Validate(); err != nil {
-		return "", err
-	}
-	if err := validateScheduleTaskExecutionRequirementsConnectors(p); err != nil {
 		return "", err
 	}
 
