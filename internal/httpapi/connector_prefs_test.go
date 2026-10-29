@@ -155,3 +155,60 @@ func TestBundledPrefResolution(t *testing.T) {
 		t.Error("explicit remote disable ignored")
 	}
 }
+
+// POST /conversations (used by Settings → Personas "Start patrol" and
+// Orchestrator "Discuss this run") creates a conversation before any pre-chat
+// POST /chat carries enabled_optional. It must seed OptionalMCPServersEnabled
+// from the same default-on calculation as GET /mcp-servers so patrol and
+// discussion turns do not run with optional_mcp_servers_enabled = [].
+func TestCreateConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
+	fs := &prefsFakeStore{
+		fakeChatStore: newFakeChatStore(),
+		prefs: map[string]store.ConnectorPref{
+			// Explicit opt-in for a connector whose operator default is off.
+			store.ConnectorPrefKey(store.ConnectorKindBundled, "beta_opt"): {
+				Kind:        store.ConnectorKindBundled,
+				ConnectorID: "beta_opt",
+				Enabled:     true,
+				AutoEnable:  true,
+			},
+			// Explicit disable of a connector whose operator default is on.
+			store.ConnectorPrefKey(store.ConnectorKindBundled, "muted_default"): {
+				Kind:        store.ConnectorKindBundled,
+				ConnectorID: "muted_default",
+				Enabled:     false,
+			},
+		},
+	}
+	engine := &catalogEngine{
+		catalog: []agent.OptionalServerInfo{
+			{Name: "Pages", EnabledByDefault: true},
+			{Name: "explorer", EnabledByDefault: true},
+			{Name: "muted_default", EnabledByDefault: true},
+			{Name: "off_by_default", EnabledByDefault: false},
+			{Name: "beta_opt", EnabledByDefault: false},
+		},
+	}
+	srv := newDefaultChatServer(t, engine, fs)
+
+	w := do(t, srv.Routes(), http.MethodPost, "/conversations",
+		map[string]any{"title": "Morning sweep", "persona": "generic"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /conversations: %d %s", w.Code, w.Body.String())
+	}
+	var conv store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &conv); err != nil {
+		t.Fatalf("decode conversation: %v", err)
+	}
+	want := []string{"beta_opt", "explorer", "pages"}
+	if strings.Join(conv.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
+		t.Fatalf("response OptionalMCPServersEnabled = %v, want %v", conv.OptionalMCPServersEnabled, want)
+	}
+	stored, err := fs.Get(context.Background(), "u@x.com", conv.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("store.Get(%s): %v", conv.ID, err)
+	}
+	if strings.Join(stored.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
+		t.Fatalf("persisted OptionalMCPServersEnabled = %v, want %v", stored.OptionalMCPServersEnabled, want)
+	}
+}

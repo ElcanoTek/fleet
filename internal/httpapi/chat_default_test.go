@@ -396,7 +396,12 @@ func (s *fakeChatStore) SetConversationMCPAccounts(context.Context, string, stri
 	return nil
 }
 
-func (s *fakeChatStore) SetOptionalMCPServers(context.Context, string, string, []string) error {
+func (s *fakeChatStore) SetOptionalMCPServers(_ context.Context, _, convID string, servers []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.OptionalMCPServersEnabled = append([]string(nil), servers...)
+	}
 	return nil
 }
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }

@@ -1361,5 +1361,14 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, false
 	}
+	if projectID == "" {
+		if defaults := s.defaultEnabledOptionalMCPServers(r.Context(), user); len(defaults) > 0 {
+			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, defaults); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return nil, false
+			}
+			conv.OptionalMCPServersEnabled = defaults
+		}
+	}
 	return conv, true
 }

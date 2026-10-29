@@ -210,3 +210,43 @@ func TestConversationMCPServersGETListsRemoteServer(t *testing.T) {
 		t.Errorf("enabled = %v, want true (opt-in list holds the lowercased name)", remote["enabled"])
 	}
 }
+
+// POST /conversations must seed both default-on bundled optional connectors and
+// the caller's connected remote MCP servers into OptionalMCPServersEnabled so
+// patrol chats started from Settings → Personas ("Start patrol") have the
+// user's connected OAuth/API-key servers (Jira, Microsoft 365, GitHub, etc.)
+// enabled on their first scheduled run.
+func TestCreateConversationSeedsConnectedRemoteMCPServer(t *testing.T) {
+	srv, st, row, user := remoteMCPFixture(t)
+	srv.agent = &catalogEngine{
+		catalog: []agent.OptionalServerInfo{
+			{Name: "gamma", EnabledByDefault: true},
+			{Name: "off_by_default", EnabledByDefault: false},
+		},
+	}
+	ctx := context.Background()
+
+	if err := st.SetRemoteMCPStatus(ctx, user, row.ID, store.RemoteMCPStatusConnected, ""); err != nil {
+		t.Fatalf("SetRemoteMCPStatus: %v", err)
+	}
+
+	w := do(t, srv.Routes(), "POST", "/conversations", map[string]any{"title": "Patrol"}, user)
+	if w.Code != 200 {
+		t.Fatalf("POST /conversations: status %d body %s", w.Code, w.Body.String())
+	}
+	var created store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	want := []string{"gamma", "github"}
+	if strings.Join(created.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
+		t.Errorf("created OptionalMCPServersEnabled = %v, want %v", created.OptionalMCPServersEnabled, want)
+	}
+	got, err := st.Get(ctx, user, created.ID)
+	if err != nil || got == nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if strings.Join(got.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
+		t.Errorf("persisted OptionalMCPServersEnabled = %v, want %v", got.OptionalMCPServersEnabled, want)
+	}
+}
