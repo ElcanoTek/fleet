@@ -126,8 +126,11 @@ attempts, about seven seconds of waiting).
 
 **A failure is then confirmed two minutes later.** A probe that still fails
 waits two minutes and runs once more (`probeConfirmed`); only that second
-result counts. The subtests wait in parallel, so a red night costs the lane
-about two minutes, and a green one nothing. Rot (a host gone, an endpoint
+result counts. That covers the open entries, each fixture's real-key probe,
+and the invalid-key control probe. The subtests wait in parallel (the
+workflow passes `-parallel 32` so the waits never queue behind the runner's
+CPU count, and `-timeout 25m`), so a red night costs the lane about two
+minutes, and a green one nothing. Rot (a host gone, an endpoint
 moved, an open entry that now wants a key) is still there two minutes later.
 Most vendor weather is not. This is the in-run form of a consecutive-nights
 rule, and unlike a new line in the classifier it also covers the next kind of

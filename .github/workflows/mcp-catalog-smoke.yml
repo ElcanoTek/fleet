@@ -137,7 +137,12 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          go test -tags fleet_host_executor -count=1 -v -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
+          # -parallel: the subtests are network-bound and a failing one sleeps
+          # two minutes before its confirmation probe, so every wait must
+          # overlap rather than queue behind GOMAXPROCS. -timeout: above the
+          # waits plus the retry budgets, below the job's 30-minute cap, so a
+          # bad night ends in test output and not a killed job.
+          go test -tags fleet_host_executor -count=1 -v -parallel 32 -timeout 25m -run 'TestCatalogLive' ./internal/remotemcp/ 2>&1 | tee catalog-smoke.log || rc=$?
           # Each outage warning becomes a run annotation, so it is visible on
           # the run page without opening the log. The marker is
           # vendorOutageMarker in catalog_live_test.go.

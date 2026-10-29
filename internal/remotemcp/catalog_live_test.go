@@ -276,17 +276,7 @@ func catalogConfirmDelay(t *testing.T) time.Duration {
 func (s *Service) probeConfirmed(t *testing.T, url, header, query, prefix, credential string) (int, error) {
 	t.Helper()
 	tools, err := s.probeForTest(t, url, header, query, prefix, credential)
-	if err == nil {
-		return tools, nil
-	}
-	delay := catalogConfirmDelay(t)
-	if delay <= 0 {
-		return tools, err
-	}
-	t.Logf("%s: probe failed (%v); probing once more in %s before calling it", url, err, delay)
-	select {
-	case <-time.After(delay):
-	case <-t.Context().Done():
+	if err == nil || !waitToConfirm(t, url, fmt.Sprintf("probe failed (%v)", err)) {
 		return tools, err
 	}
 	tools, err = s.probeForTest(t, url, header, query, prefix, credential)
@@ -294,6 +284,35 @@ func (s *Service) probeConfirmed(t *testing.T, url, header, query, prefix, crede
 		t.Logf("%s: the confirmation probe succeeded; the first failure was transient", url)
 	}
 	return tools, err
+}
+
+// waitToConfirm waits catalogConfirmDelay before a confirmation probe and
+// reports whether to run it: false when confirmation is off or the test is
+// being torn down.
+func waitToConfirm(t *testing.T, url, why string) bool {
+	t.Helper()
+	delay := catalogConfirmDelay(t)
+	if delay <= 0 {
+		return false
+	}
+	t.Logf("%s: %s; probing once more in %s before calling it", url, why, delay)
+	select {
+	case <-time.After(delay):
+		return true
+	case <-t.Context().Done():
+		return false
+	}
+}
+
+// invalidKeyRefused reports whether the invalid-key control probe came back
+// the way a vendor that checks keys answers it: refused, as a credential
+// problem, and not lost to an outage.
+func invalidKeyRefused(err error) bool {
+	if err == nil || vendorOutage(err) {
+		return false
+	}
+	var kr *keyRejectedError
+	return handshakeRefused(err) || errors.As(err, &kr)
 }
 
 // checkCatalogToolSchemas holds a listed vendor's tools to the schema bar the
@@ -470,7 +489,14 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if !f.RejectsBadKey {
 				return
 			}
-			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, "fleet-catalog-smoke-invalid-key")
+			const invalidKey = "fleet-catalog-smoke-invalid-key"
+			badTools, badErr := svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			// The control is confirmed like the real-key probe: a vendor
+			// mid-deploy that lets one bad key through, or answers it with
+			// something that is not MCP, gets a second look before it fails.
+			if !invalidKeyRefused(badErr) && waitToConfirm(t, url, fmt.Sprintf("the invalid-key probe was not refused (%d tools, err: %v)", badTools, badErr)) {
+				badTools, badErr = svc.probeForTest(t, url, e.APIKeyHeader, e.APIKeyQuery, e.APIKeyPrefix, invalidKey)
+			}
 			if badErr == nil {
 				t.Fatalf("%s let an invalid key through the handshake and the read-only verification call (%d tools); the vendor changed where it checks keys, or the key is not being sent where it expects it", fixtureName(f.Entry, f.Variant), badTools)
 			}
@@ -480,8 +506,7 @@ func TestCatalogLiveAPIKeyFixtures(t *testing.T) {
 			if vendorOutage(badErr) {
 				failUnlessOutagef(t, badErr, "%s: the invalid-key probe hit an outage, so the key shape was not checked: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
-			var kr *keyRejectedError
-			if !handshakeRefused(badErr) && !errors.As(badErr, &kr) {
+			if !invalidKeyRefused(badErr) {
 				t.Fatalf("%s: the invalid-key probe failed, but not as the vendor refusing it: %v", fixtureName(f.Entry, f.Variant), badErr)
 			}
 		})
