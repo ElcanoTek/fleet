@@ -2117,11 +2117,7 @@ servers:
     category: communication
     tags: [meetings, transcripts, summaries, notes]
     provenance: official
-    auth: api_key
-    setup_hint: >-
-      In your Fireflies.ai account, go to Settings → Developer Settings
-      and copy your API key, then paste it here.
-    setup_url: "https://docs.fireflies.ai/getting-started/mcp-configuration"
+    auth: oauth
   - name: google-chat
     display_name: Google Chat (Workspace MCP)
     description: >-

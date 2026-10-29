@@ -244,8 +244,8 @@ handshake sweep described above — and `—` when nothing could be checked
 templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
 while public DNS is fine). A row is not re-verified by later releases.
 
-Counts — can CI hit?: yes 12 · key-fixture 54 · oauth-manual 183 · tenant 40 ·
-dead-suspect 0. Auth: oauth 183 · tenant 39 · api_key 53 · open 14.
+Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 184 · tenant 40 ·
+dead-suspect 0. Auth: oauth 184 · tenant 39 · api_key 52 · open 14.
 Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
 verified: live 14 · probe 2026-09-14 182 · probe 2026-09-16 49 · probe
 2026-09-25 10 · not probeable 34. These totals are derived from the table
@@ -344,7 +344,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | figma | oauth | official | design-media | ★ | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488) |
 | financial-datasets | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | firecrawl | api_key | official | web-search |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (3 tools listed; the key is checked only at tools/call) (F14) |
-| fireflies | api_key | official | communication |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 403 with a bogus key | add-time check rejects a bogus key (HTTP 403); also publishes OAuth protected-resource metadata; could be `auth: oauth` (F15) |
+| fireflies | oauth | official | communication |  | oauth-manual | 2026-09-16 probe | discovery ✓ | self-registering, public client ok |
 | firefly | api_key | official | cloud-infrastructure |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (JSON-RPC error on the initialize reply) |
 | freshdesk | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | front | oauth | official | customer-support |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
