@@ -35,11 +35,17 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   client itself (Notion, Linear, Stripe, Grafana Cloud, Uptime Robot, Plaid,
   Globalping, …): the user clicks Connect and signs in. *Bring your
   own client* — the vendor has no self-registration for a hosted callback: an
-  admin creates an OAuth app at the vendor with fleet's callback URL and
-  users paste the client ID and, where the directory says **required**, the
-  secret (GitHub, Slack, the Google Workspace servers, Azure DevOps, Sage
-  Intacct, Cartesia — whose server self-registers only a loopback or
-  native-app callback, so its entry is a manual client everywhere, a
+  admin creates an OAuth app at the vendor with fleet's callback URL. If the
+  operator sets the app's client ID and secret on the server (`<STEM>_MCP_CLIENT_ID`
+  + `<STEM>_MCP_CLIENT_SECRET` or `FLEET_OAUTH_CLIENT_ID_<STEM>` +
+  `FLEET_OAUTH_CLIENT_SECRET_<STEM>` in `/etc/fleet/fleet.env`, e.g.
+  `SLACK_MCP_CLIENT_ID` and `SLACK_MCP_CLIENT_SECRET`, or `oauth_client_id` /
+  `oauth_client_secret` on the manifest entry), the card becomes **one-click**
+  for every user on the box and injects the client credentials server-side;
+  otherwise users paste the client ID and, where the directory says
+  **required**, the secret (GitHub, Slack, the Google Workspace servers, Azure
+  DevOps, Sage Intacct, Cartesia — whose server self-registers only a loopback
+  or native-app callback, so its entry is a manual client everywhere, a
   developer box included, …). *Tenant* — the
   URL carries the customer's org or host; the form asks for it, then one of
   the two flows above follows.
@@ -64,12 +70,57 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   personal Gmail account connects but every tool call answers
   `The caller does not have permission`. Test with a Workspace account that is
   enrolled.
-- **Slack** — create the app from a manifest or by hand; under *Features →
-  Agents & AI Apps* turn on **Model Context Protocol** (without it the server
-  answers `App is not enabled for Slack MCP server access`); redirect URL must
-  be HTTPS; secret required. The user token has no expiry and no refresh
-  token; no revocation endpoint. The vendor's metadata names its bare origin
-  as the resource while serving MCP at `/mcp` — fleet keeps the typed URL.
+- **Slack** — create an internal workspace app at `https://api.slack.com/apps`
+  from a manifest (below) or by hand; under *Features → Agents & AI Apps* turn
+  on **Model Context Protocol** (without it the server answers `App is not
+  enabled for Slack MCP server access`); redirect URL must be HTTPS; secret
+  required. Set `SLACK_MCP_CLIENT_ID` and `SLACK_MCP_CLIENT_SECRET` in
+  `/etc/fleet/fleet.env` so every user in the workspace gets a **one-click
+  Add** button in `Settings → Connections` (each user still signs in with their
+  own Slack account and mints their own user token). The user token has no
+  expiry and no refresh token; no revocation endpoint. The vendor's metadata
+  names its bare origin as the resource while serving MCP at `/mcp` — fleet
+  keeps the typed URL.
+  ```yaml
+  display_information:
+    name: Victoria (Fleet MCP)
+    description: Personal Slack MCP connection for Fleet
+  oauth_config:
+    redirect_urls:
+      - https://fleet.elcanotek.com/api/oauth/mcp/callback
+      - https://fleetdev.elcanotek.com/api/oauth/mcp/callback
+    scopes:
+      user:
+        - channels:history
+        - channels:read
+        - chat:write
+        - files:read
+        - groups:history
+        - groups:read
+        - im:history
+        - im:read
+        - im:write
+        - mpim:history
+        - mpim:read
+        - mpim:write
+        - reactions:read
+        - reactions:write
+        - search:read.files
+        - search:read.im
+        - search:read.mpim
+        - search:read.private
+        - search:read.public
+        - search:read.users
+        - users.profile:read
+        - users:read
+        - users:read.email
+        - canvases:read
+        - canvases:write
+  settings:
+    org_deploy_enabled: false
+    socket_mode_enabled: false
+    token_rotation_enabled: false
+  ```
 - **Notion, Linear** — one click. Linear publishes a revocation endpoint, so
   sign-out revokes at the vendor; Notion does not.
 - **Azure DevOps** — the org must be connected to a Microsoft Entra tenant
