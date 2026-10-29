@@ -197,6 +197,20 @@ func TestMCPCatalogOperatorOAuthClientMakesEntryOneClick(t *testing.T) {
 					ClientRegistration: "manual",
 					ClientSecret:       "required",
 				},
+				{
+					Name:               "azure-devops",
+					DisplayName:        "Azure DevOps",
+					Description:        "Pipelines and repos.",
+					URL:                "https://mcp.dev.azure.com/{organization}",
+					Vendor:             "Microsoft Corporation",
+					Provenance:         "official",
+					Auth:               "tenant",
+					SetupHint:          "{organization} is your Azure DevOps organization name.",
+					ClientRegistration: "manual",
+					ClientSecret:       "required",
+					OAuthClientID:      "entra-cid",
+					OAuthClientSecret:  "entra-csec",
+				},
 			},
 		},
 	}
@@ -208,15 +222,15 @@ func TestMCPCatalogOperatorOAuthClientMakesEntryOneClick(t *testing.T) {
 		t.Fatalf("status %d, want 200", w.Code)
 	}
 	body := w.Body.String()
-	if strings.Contains(body, "111.222") || strings.Contains(body, "super-secret-value") {
+	if strings.Contains(body, "111.222") || strings.Contains(body, "super-secret-value") || strings.Contains(body, "entra-cid") || strings.Contains(body, "entra-csec") {
 		t.Fatalf("GET /mcp-catalog leaked operator OAuth credentials in response body: %s", body)
 	}
 	var resp mcpCatalogResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("bad json: %v", err)
 	}
-	if len(resp.ThirdParty) != 2 {
-		t.Fatalf("want 2 entries, got %d", len(resp.ThirdParty))
+	if len(resp.ThirdParty) != 3 {
+		t.Fatalf("want 3 entries, got %d", len(resp.ThirdParty))
 	}
 	slack := resp.ThirdParty[0]
 	if slack.ClientRegistration != "" || slack.ClientSecret != "" || slack.SetupHint != "" {
@@ -225,5 +239,9 @@ func TestMCPCatalogOperatorOAuthClientMakesEntryOneClick(t *testing.T) {
 	gh := resp.ThirdParty[1]
 	if gh.ClientRegistration != "manual" || gh.ClientSecret != "required" || gh.SetupHint == "" {
 		t.Errorf("unconfigured github entry should retain manual client_registration + required secret + setup_hint, got %+v", gh)
+	}
+	ado := resp.ThirdParty[2]
+	if ado.ClientRegistration != "" || ado.ClientSecret != "" || ado.SetupHint == "" {
+		t.Errorf("tenant entry with operator OAuth client should clear client_registration/client_secret but retain setup_hint for {organization}, got %+v", ado)
 	}
 }

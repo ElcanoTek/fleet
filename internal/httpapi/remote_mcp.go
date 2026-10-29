@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -404,8 +405,82 @@ func operatorOAuthClientFor(name, rawURL, authMode string, catalog []clientconfi
 }
 
 func catalogEntryMatchesURL(e clientconfig.RemoteMCPCatalogEntry, canonURL string) bool {
-	if c, err := mcpoauth.CanonicalResourceURI(strings.TrimSpace(e.URL)); err == nil && c == canonURL {
+	rawTemplate := strings.TrimSpace(e.URL)
+	if strings.Contains(rawTemplate, "{") {
+		if tenantTemplateMatchesURL(rawTemplate, canonURL) {
+			return true
+		}
+	} else if c, err := mcpoauth.CanonicalResourceURI(rawTemplate); err == nil && c == canonURL {
 		return true
 	}
 	return onListedVariant(catalogURLVariants(e.URLVariants), canonURL)
+}
+
+// tenantTemplateMatchesURL reports whether canonURL is a concrete instantiation
+// of an https:// catalog URL template carrying {placeholder} tokens (such as
+// "https://mcp.dev.azure.com/{organization}"). The template's host must end
+// with a literal registrable domain suffix (never a bare "{host}" placeholder)
+// and each {placeholder} matches a single non-empty DNS label or path segment.
+func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
+	if !strings.HasPrefix(rawTemplate, "https://") {
+		return false
+	}
+	rest := strings.TrimPrefix(rawTemplate, "https://")
+	slash := strings.IndexByte(rest, '/')
+	hostTpl := rest
+	pathTpl := ""
+	if slash >= 0 {
+		hostTpl = rest[:slash]
+		pathTpl = strings.TrimRight(rest[slash:], "/")
+	}
+	if hostTpl == "" || strings.HasSuffix(hostTpl, "}") {
+		return false
+	}
+	// Require a fixed literal domain suffix after any subdomain placeholder.
+	literalHost := hostTpl
+	if idx := strings.LastIndexByte(hostTpl, '}'); idx >= 0 {
+		literalHost = strings.TrimPrefix(hostTpl[idx+1:], ".")
+	}
+	if !strings.Contains(literalHost, ".") {
+		return false
+	}
+	hostPattern, ok := templatePartToRegex(strings.ToLower(hostTpl), `[a-z0-9-]+`)
+	if !ok {
+		return false
+	}
+	pathPattern, ok := templatePartToRegex(pathTpl, `[^/?#@]+`)
+	if !ok {
+		return false
+	}
+	re, err := regexp.Compile(`^https://` + hostPattern + pathPattern + `$`)
+	if err != nil {
+		return false
+	}
+	return re.MatchString(canonURL)
+}
+
+func templatePartToRegex(part, placeholderPattern string) (string, bool) {
+	var sb strings.Builder
+	for len(part) > 0 {
+		open := strings.IndexByte(part, '{')
+		if open < 0 {
+			if strings.ContainsRune(part, '}') {
+				return "", false
+			}
+			sb.WriteString(regexp.QuoteMeta(part))
+			break
+		}
+		if strings.ContainsRune(part[:open], '}') {
+			return "", false
+		}
+		sb.WriteString(regexp.QuoteMeta(part[:open]))
+		part = part[open+1:]
+		closeIdx := strings.IndexByte(part, '}')
+		if closeIdx <= 0 {
+			return "", false
+		}
+		sb.WriteString(placeholderPattern)
+		part = part[closeIdx+1:]
+	}
+	return sb.String(), true
 }

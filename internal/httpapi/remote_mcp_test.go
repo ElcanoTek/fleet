@@ -56,6 +56,15 @@ func TestOperatorOAuthClientFor(t *testing.T) {
 				{ID: "gov", Label: "GovSlack", URL: "https://mcp.slack-gov.com/mcp"},
 			},
 		},
+		{
+			Name:               "azure-devops",
+			URL:                "https://mcp.dev.azure.com/{organization}",
+			Auth:               "tenant",
+			ClientRegistration: "manual",
+			ClientSecret:       "required",
+			OAuthClientID:      "ado-cid",
+			OAuthClientSecret:  "ado-csec",
+		},
 	}
 
 	// Exact URL match -> injects credentials.
@@ -77,5 +86,16 @@ func TestOperatorOAuthClientFor(t *testing.T) {
 	// Non-oauth auth mode -> MUST NOT inject credentials.
 	if cid, csec, ok := operatorOAuthClientFor("slack", "https://mcp.slack.com/mcp", "api_key", catalog); ok || cid != "" || csec != "" {
 		t.Errorf("api_key mode must not receive operator credentials, got (%q, %q, %v)", cid, csec, ok)
+	}
+	// Tenant template URL match -> injects credentials.
+	if cid, csec, ok := operatorOAuthClientFor("azure-devops", "https://mcp.dev.azure.com/contoso", "oauth", catalog); !ok || cid != "ado-cid" || csec != "ado-csec" {
+		t.Errorf("tenant template match = (%q, %q, %v), want (ado-cid, ado-csec, true)", cid, csec, ok)
+	}
+	// Tenant template extra path segment or wrong host -> MUST NOT inject credentials.
+	if cid, csec, ok := operatorOAuthClientFor("azure-devops", "https://mcp.dev.azure.com/contoso/extra", "oauth", catalog); ok || cid != "" || csec != "" {
+		t.Errorf("tenant template with extra path must not match, got (%q, %q, %v)", cid, csec, ok)
+	}
+	if cid, csec, ok := operatorOAuthClientFor("azure-devops", "https://evil.example.com/contoso", "oauth", catalog); ok || cid != "" || csec != "" {
+		t.Errorf("tenant template with wrong host must not match, got (%q, %q, %v)", cid, csec, ok)
 	}
 }

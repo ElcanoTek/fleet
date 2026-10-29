@@ -603,12 +603,21 @@ carried over. A connection you set up by hand under a directory name shows the
 badge too, and can be kept as it is.
 
 Most directory entries add with one click and then ask you to sign in at the
-vendor. Some vendors do not let Fleet register itself, so their entry opens a
-short form instead: it shows the **Authorization callback URL** to give the
-vendor, then asks for an **OAuth client ID** and, where the vendor needs one,
-an **OAuth client secret** (the form says when the secret is required). The
-client comes from an app registered at the vendor for that callback URL —
-usually by your administrator, and the entry's setup note says how. After the
+vendor. Some vendors (such as Slack, GitHub, or Google Workspace) do not let
+ the platform register itself automatically. When your administrator has already
+configured the workspace's OAuth app on the server, those entries are one-click
+too: click **Add** and sign in with your own account. When no shared app is
+configured on the server yet, the entry opens a short form instead: it shows
+the **Authorization callback URL** to give the vendor, then asks for an
+**OAuth client ID** and, where the vendor needs one, an **OAuth client secret**
+(the form says when the secret is required). The client comes from an app
+registered at the vendor for that callback URL — follow the setup note on the
+card (for example, on Slack at `api.slack.com/apps`: create an internal
+workspace app, add the **Authorization callback URL** under **OAuth &
+Permissions → Redirect URLs** along with the **User Token Scopes** you want,
+and turn on **Model Context Protocol** under **Features → Agents & AI Apps**).
+An administrator can also set that app's client ID and secret once on the
+server so everyone else in the workspace connects with one click. After the
 form, you sign in at the vendor as usual.
 
 Every connector call shows up in the execution trail as a chip. If a figure looks

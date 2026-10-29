@@ -205,7 +205,9 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 	if _, _, ok := e.EffectiveOAuthClient(); ok {
 		clientReg = ""
 		clientSec = ""
-		setupHint = ""
+		if e.Auth != "tenant" && !strings.Contains(e.URL, "{") {
+			setupHint = ""
+		}
 	}
 	return mcpCatalogThirdPartyEntry{
 		Name:               strings.TrimSpace(e.Name),

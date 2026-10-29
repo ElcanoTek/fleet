@@ -612,6 +612,18 @@ remote_mcp_catalog:
 	if err := loadKey(t, "    setup_hint: x\n    oauth_client_id: cid\n"); err == nil || !strings.Contains(err.Error(), "only valid on auth: oauth") {
 		t.Errorf("oauth_client_id on an api_key entry must fail loud, got %v", err)
 	}
+	// Explicit oauth_client_id in manifest + conventional secret in env must load.
+	t.Setenv("ACME_MCP_CLIENT_SECRET", "env-secret")
+	if err := load(t, "    client_registration: manual\n    client_secret: required\n    oauth_client_id: cid\n"); err != nil {
+		t.Errorf("manual + required with manifest oauth_client_id and env ACME_MCP_CLIENT_SECRET should load, got %v", err)
+	}
+	// Duplicate manual OAuth env stems (vendor-a vs vendor_a -> VENDOR_A) must fail loud.
+	dupBody := "mcp_servers: []\nremote_mcp_catalog:\n" +
+		"  - name: vendor-a\n    display_name: A1\n    description: d\n    url: https://a1.example.com/mcp\n    auth: oauth\n    client_registration: manual\n" +
+		"  - name: vendor_a\n    display_name: A2\n    description: d\n    url: https://a2.example.com/mcp\n    auth: oauth\n    client_registration: manual\n"
+	if _, err := Load(writeManifest(t, dupBody)); err == nil || !strings.Contains(err.Error(), "manual OAuth env stem \"VENDOR_A\" collides") {
+		t.Errorf("colliding manual OAuth env stems must fail loud, got %v", err)
+	}
 }
 
 func TestEffectiveOAuthClientAndEnvFileResolution(t *testing.T) {
@@ -651,7 +663,7 @@ func TestEffectiveOAuthClientAndEnvFileResolution(t *testing.T) {
 
 	// Half-configured (client_id without client_secret on a client_secret: required entry) must return ok=false.
 	half := RemoteMCPCatalogEntry{
-		Name:               "slack",
+		Name:               "other-vendor",
 		Auth:               "oauth",
 		ClientRegistration: "manual",
 		ClientSecret:       "required",
@@ -659,6 +671,23 @@ func TestEffectiveOAuthClientAndEnvFileResolution(t *testing.T) {
 	}
 	if _, _, ok := half.EffectiveOAuthClient(); ok {
 		t.Error("EffectiveOAuthClient should return false when client_secret is required but unset")
+	}
+
+	// Entries snapshotted at Load time without credentials must NOT pick up env vars set later at runtime.
+	var ghEntry *RemoteMCPCatalogEntry
+	for i := range b.RemoteMCPCatalog {
+		if b.RemoteMCPCatalog[i].Name == "github" {
+			ghEntry = &b.RemoteMCPCatalog[i]
+			break
+		}
+	}
+	if ghEntry == nil {
+		t.Fatal("github entry missing from merged catalog")
+	}
+	t.Setenv("GITHUB_MCP_CLIENT_ID", "late-id")
+	t.Setenv("GITHUB_MCP_CLIENT_SECRET", "late-secret")
+	if _, _, ok := ghEntry.EffectiveOAuthClient(); ok {
+		t.Error("boot-snapshotted entry must not activate OAuth client from env vars set after Load")
 	}
 }
 

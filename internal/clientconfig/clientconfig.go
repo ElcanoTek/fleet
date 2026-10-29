@@ -1354,6 +1354,10 @@ type RemoteMCPCatalogEntry struct {
 	// vendor. Never serialized to JSON (`json:"-"`).
 	OAuthClientID     string `yaml:"oauth_client_id" json:"-"`
 	OAuthClientSecret string `yaml:"oauth_client_secret" json:"-"`
+	// oauthEnvResolved marks that resolveCatalogOAuthClients has snapshotted
+	// any process-env OAuth client credentials at bundle Load time, so
+	// EffectiveOAuthClient never falls back to os.Getenv at request time.
+	oauthEnvResolved bool `yaml:"-" json:"-"`
 	// Featured surfaces the entry in the directory's Featured section — the
 	// short, curated shelf of household-name connectors shown before the
 	// category listing. Kept small on purpose (a test caps the built-in count)
@@ -2169,6 +2173,7 @@ func (b *Bundle) validateWebhookTriggers() error {
 // startup, like the rest of validate.
 func (b *Bundle) validateRemoteMCPCatalog() error {
 	seen := map[string]bool{}
+	manualStems := map[string]string{}
 	for i := range b.RemoteMCPCatalog {
 		e := &b.RemoteMCPCatalog[i]
 		name := strings.TrimSpace(e.Name)
@@ -2199,6 +2204,16 @@ func (b *Bundle) validateRemoteMCPCatalog() error {
 		}
 		if err := validateRemoteMCPEntryMeta(e); err != nil {
 			return err
+		}
+		if e.ClientRegistration == "manual" {
+			stem := manualOAuthStem(name)
+			if stem == "" {
+				return fmt.Errorf("remote_mcp_catalog[%q]: client_registration: manual requires an alphanumeric name stem for OAuth env vars", name)
+			}
+			if prev, dup := manualStems[stem]; dup {
+				return fmt.Errorf("remote_mcp_catalog[%q]: manual OAuth env stem %q collides with %q", name, stem, prev)
+			}
+			manualStems[stem] = name
 		}
 	}
 	return nil
@@ -2310,16 +2325,16 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 	cid := strings.TrimSpace(e.OAuthClientID)
 	csec := strings.TrimSpace(e.OAuthClientSecret)
 	if cid != "" || csec != "" {
-		if e.Auth != "" && e.Auth != "oauth" {
-			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth entries", name)
+		if e.Auth != "" && e.Auth != "oauth" && e.Auth != "tenant" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth or auth: tenant entries", name)
 		}
 		if e.ClientRegistration != "manual" {
 			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only meaningful with client_registration: manual", name)
 		}
-		if cid == "" {
+		if cid == "" && !hasManualOAuthIDInEnv(name) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_secret requires oauth_client_id", name)
 		}
-		if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" {
+		if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" && !hasManualOAuthSecretInEnv(name) {
 			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required needs oauth_client_secret alongside oauth_client_id", name)
 		}
 	}

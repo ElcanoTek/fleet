@@ -57,6 +57,7 @@ func loadBuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
 			return
 		}
 		seen := map[string]bool{}
+		manualStems := map[string]string{}
 		for i := range f.Servers {
 			e := &f.Servers[i]
 			name := strings.TrimSpace(e.Name)
@@ -96,6 +97,18 @@ func loadBuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
 			if err := validateRemoteMCPEntryMeta(e); err != nil {
 				errBuiltinCatalog = fmt.Errorf("builtin remote MCP catalog: %w", err)
 				return
+			}
+			if e.ClientRegistration == "manual" {
+				stem := manualOAuthStem(name)
+				if stem == "" {
+					errBuiltinCatalog = fmt.Errorf("builtin remote MCP catalog[%q]: client_registration: manual requires an alphanumeric name stem", name)
+					return
+				}
+				if prev, dup := manualStems[stem]; dup {
+					errBuiltinCatalog = fmt.Errorf("builtin remote MCP catalog[%q]: manual OAuth env stem %q collides with %q", name, stem, prev)
+					return
+				}
+				manualStems[stem] = name
 			}
 			e.Builtin = true
 		}
@@ -175,9 +188,30 @@ func ManualOAuthEnvVarNames(entryName string) (idVars, secretVars []string) {
 		[]string{"FLEET_OAUTH_CLIENT_SECRET_" + stem, stem + "_MCP_CLIENT_SECRET"}
 }
 
+func hasManualOAuthIDInEnv(entryName string) bool {
+	idVars, _ := ManualOAuthEnvVarNames(entryName)
+	for _, k := range idVars {
+		if _, found := lookupNonEmpty(k); found {
+			return true
+		}
+	}
+	return false
+}
+
+func hasManualOAuthSecretInEnv(entryName string) bool {
+	_, secVars := ManualOAuthEnvVarNames(entryName)
+	for _, k := range secVars {
+		if _, found := lookupNonEmpty(k); found {
+			return true
+		}
+	}
+	return false
+}
+
 // EffectiveOAuthClient resolves the operator-provisioned OAuth client for a
 // client_registration: manual directory entry, checking explicit manifest/boot
-// fields (OAuthClientID / OAuthClientSecret) first and then the conventional
+// fields (OAuthClientID / OAuthClientSecret) first and then, when the entry has
+// not yet been boot-snapshotted by resolveCatalogOAuthClients, the conventional
 // environment variables (ManualOAuthEnvVarNames). For an entry with
 // client_secret: required, both client ID and secret must be non-empty for ok
 // to be true, so a half-configured environment never hides the manual form
@@ -186,17 +220,19 @@ func (e RemoteMCPCatalogEntry) EffectiveOAuthClient() (clientID, clientSecret st
 	if e.ClientRegistration != "manual" {
 		return "", "", false
 	}
-	if e.Auth != "" && e.Auth != "oauth" {
+	if e.Auth != "" && e.Auth != "oauth" && e.Auth != "tenant" {
 		return "", "", false
 	}
 	clientID = strings.TrimSpace(e.OAuthClientID)
 	clientSecret = strings.TrimSpace(e.OAuthClientSecret)
-	if clientID == "" {
+	if !e.oauthEnvResolved && (clientID == "" || clientSecret == "") {
 		idVars, secVars := ManualOAuthEnvVarNames(e.Name)
-		for _, k := range idVars {
-			if v, found := lookupNonEmpty(k); found {
-				clientID = v
-				break
+		if clientID == "" {
+			for _, k := range idVars {
+				if v, found := lookupNonEmpty(k); found {
+					clientID = v
+					break
+				}
 			}
 		}
 		if clientSecret == "" {
@@ -223,10 +259,15 @@ func (e RemoteMCPCatalogEntry) EffectiveOAuthClient() (clientID, clientSecret st
 // resolved fields without touching os.Getenv concurrently with config.Reload.
 func resolveCatalogOAuthClients(entries []RemoteMCPCatalogEntry) {
 	for i := range entries {
-		if cid, csec, ok := entries[i].EffectiveOAuthClient(); ok {
+		cid, csec, ok := entries[i].EffectiveOAuthClient()
+		if ok {
 			entries[i].OAuthClientID = cid
 			entries[i].OAuthClientSecret = csec
+		} else {
+			entries[i].OAuthClientID = ""
+			entries[i].OAuthClientSecret = ""
 		}
+		entries[i].oauthEnvResolved = true
 	}
 }
 
@@ -267,8 +308,13 @@ func mergeRemoteCatalog(bundle, builtin []RemoteMCPCatalogEntry, mcpServers []Se
 		hiddenSet[strings.TrimSpace(h)] = true
 	}
 	overridden := map[string]bool{}
+	overriddenStems := map[string]bool{}
 	for _, e := range bundle {
-		overridden[strings.TrimSpace(e.Name)] = true
+		name := strings.TrimSpace(e.Name)
+		overridden[name] = true
+		if stem := manualOAuthStem(name); stem != "" {
+			overriddenStems[stem] = true
+		}
 	}
 	sandboxed := map[string]bool{}
 	for _, s := range mcpServers {
@@ -280,6 +326,7 @@ func mergeRemoteCatalog(bundle, builtin []RemoteMCPCatalogEntry, mcpServers []Se
 		known[e.Name] = true
 		switch {
 		case hiddenSet[e.Name], overridden[e.Name]:
+		case e.ClientRegistration == "manual" && overriddenStems[manualOAuthStem(e.Name)]:
 		case e.Provenance == "community" && !community:
 		case sandboxed[e.Name]:
 			// Loud, never silent: the author must be able to see why a
