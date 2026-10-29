@@ -186,7 +186,8 @@ func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if applied {
-		log.Printf("central auth: renamed team %q -> %q (%d accounts, version %d)", logSafe(body.From), logSafe(body.To), users, body.Version)
+		// The version is recorded in external_team_renames, not logged.
+		log.Printf("central auth: renamed team %q -> %q (%d accounts)", logSafe(body.From), logSafe(body.To), users)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
