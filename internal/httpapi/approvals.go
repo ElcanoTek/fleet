@@ -2677,6 +2677,22 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 		// other arguments against what the person reviewed.
 		callCtx = mcp.WithRequestMeta(callCtx, narrowingRequestMeta(narrowing))
 	}
+	// Workspace-file references (ADR-0066/0088) are read now, as the agent
+	// loop reads them just before its own dispatch (agentcore mcpTool.call):
+	// the card and the stored arguments keep the reference, and the bytes
+	// sent are the version its whole-file hash names. The windows stay
+	// charged until the dispatch has let go of args (mcp.WithArgumentHold).
+	resolved, err := s.resolveStagedFileReferences(callCtx, approval, catalogInputSchema(catalog, server, tool), args)
+	if err != nil {
+		return "", err
+	}
+	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
+	defer hold.Done()
+	// Reading may have run past the call's budget. Never dispatch then: an
+	// out-of-process call sends the request before it notices ctx.
+	if err := callCtx.Err(); err != nil {
+		return "", fmt.Errorf("MCP call not sent: %w", err)
+	}
 	// A tool in critical_tool_stop: the person may stop the call while it
 	// runs (approval_stop.go). A Stop pressed before it was sent runs nothing.
 	if approvalStoppable(approval.ToolName) {
@@ -2838,6 +2854,53 @@ func resolveMCPTool(catalog []mcp.ServerTool, fullName string) (string, string, 
 	return "", "", fmt.Errorf("no cataloged MCP tool matches %s", fullName)
 }
 
+// catalogInputSchema returns the input schema of server's tool in catalog:
+// its base64 properties are the arguments a workspace-file reference may
+// stand in for.
+func catalogInputSchema(catalog []mcp.ServerTool, server, tool string) map[string]any {
+	for _, st := range catalog {
+		if st.ServerName == server && st.Tool.Name == tool {
+			return st.Tool.InputSchema
+		}
+	}
+	return nil
+}
+
+// resolveStagedFileReferences replaces each workspace-file reference in an
+// approved MCP call's args with the base64 of its window, read from the
+// workspace of the conversation that staged it. The staging turn's sandbox is
+// gone by now, so this takes one under the same posture approved bash runs
+// under, binds the conversation workspace as its file root (as a turn does,
+// agent.Manager.configureTurnWorkspace) and reads through
+// tools.WorkspaceFileReader: confinement, the whole-file hash check, the caps
+// and the memory budget are the agent loop's
+// (agentcore.ResolveWorkspaceFileReferences). The sandbox is released once
+// the windows are read. A call with no reference takes no sandbox.
+func (s *Server) resolveStagedFileReferences(ctx context.Context, approval *store.Approval, schema, args map[string]any) (func(), error) {
+	if !agentcore.HasWorkspaceFileReferences(schema, args) {
+		return func() {}, nil
+	}
+	// A reference names a file in the staging conversation's own workspace.
+	// An id that is not exactly one path element would resolve elsewhere
+	// (the shared root, or a nested directory).
+	convID := approval.ConversationID
+	if convID == "." || !filepath.IsLocal(convID) || filepath.Base(convID) != convID {
+		return nil, errors.New("workspace file reference: the approval has no conversation workspace")
+	}
+	sb, cleanup, err := s.takeApprovalSandbox(ctx, approval)
+	if err != nil {
+		return nil, fmt.Errorf("workspace file reference: %w", err)
+	}
+	defer cleanup()
+	if sb == nil {
+		return nil, errors.New("workspace file reference: no sandbox to read it from")
+	}
+	if err := sb.BindFileOpRoot(ctx, tools.WorkspaceDirForConversation(convID)); err != nil {
+		return nil, fmt.Errorf("workspace file reference: bind conversation workspace: %w", err)
+	}
+	return agentcore.ResolveWorkspaceFileReferences(tools.WithConversationID(ctx, convID), schema, tools.WorkspaceFileReader(sb), args)
+}
+
 // runStagedBash executes an approved bash invocation directly. We call
 // the tools package rather than going through the fantasy agent loop so
 // the approval is a truly one-shot execution; no new LLM turn runs
@@ -2853,6 +2916,18 @@ func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (s
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
+	sb, cleanup, err := s.takeApprovalSandbox(ctx, approval)
+	if err != nil {
+		return "", err
+	}
+	defer cleanup()
+	return tools.RunBashForApproval(ctx, sb, params)
+}
+
+// takeApprovalSandbox acquires the sandbox an approved action runs in: the
+// command of an approved bash call, or the read of an approved MCP call's
+// workspace-file references.
+func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approval) (*sandbox.Sandbox, func(), error) {
 	// Honor the conversation's lockdown seal (#562). An approval is a
 	// deferred tool call from a specific conversation, so it must run under
 	// the same network posture the turn that staged it would have used —
@@ -2862,13 +2937,13 @@ func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (s
 	// is the second input and is applied inside takeStagedBashSandbox.
 	lockdown, err := s.stagedBashLockdown(ctx, approval)
 	if err != nil {
-		return "", err
+		return nil, func() {}, err
 	}
 	if lockdown && !s.cfg.LockdownAvailable() {
 		// Mirror takeTurnSandbox's fail-closed check: never downgrade a
 		// lockdown conversation to a network-enabled container just because
 		// the sealed backend is misconfigured.
-		return "", fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
+		return nil, func() {}, fmt.Errorf("conversation is in lockdown mode but the server has no sandbox image configured")
 	}
 
 	// Pull a sandbox so the approval runs through the same container
@@ -2879,14 +2954,9 @@ func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (s
 	// reach the chat-server's filesystem and credentials).
 	pool := s.agent.SandboxPool()
 	if pool == nil {
-		return "", fmt.Errorf("approval handler: no sandbox pool wired (chat-server boot misconfigured?)")
+		return nil, func() {}, fmt.Errorf("approval handler: no sandbox pool wired (chat-server boot misconfigured?)")
 	}
-	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
-	if err != nil {
-		return "", err
-	}
-	defer cleanup()
-	return tools.RunBashForApproval(ctx, sb, params)
+	return takeStagedBashSandbox(ctx, pool, lockdown)
 }
 
 // stagedBashLockdown resolves whether an approved bash command must run
