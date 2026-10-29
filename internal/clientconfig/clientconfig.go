@@ -1341,6 +1341,19 @@ type RemoteMCPCatalogEntry struct {
 	// metadata rules out public clients (RFC 8414 §2 default), so this flag
 	// improves the form — it is not the only guard.
 	ClientSecret string `yaml:"client_secret"`
+	// OAuthClientID and OAuthClientSecret let an operator supply a shared
+	// registered OAuth application (e.g. a workspace Slack app or GitHub OAuth
+	// app) for a client_registration: manual directory entry, either in the
+	// bundle manifest (typically as ${SLACK_MCP_CLIENT_ID} /
+	// ${SLACK_MCP_CLIENT_SECRET}) or via the conventional environment
+	// variables FLEET_OAUTH_CLIENT_ID_<STEM> / <STEM>_MCP_CLIENT_ID and
+	// FLEET_OAUTH_CLIENT_SECRET_<STEM> / <STEM>_MCP_CLIENT_SECRET. When
+	// configured, GET /mcp-catalog serves the entry as a one-click OAuth add
+	// and POST /remote-mcp-servers injects the operator's client credentials
+	// server-side so individual users only click Add and sign in at the
+	// vendor. Never serialized to JSON (`json:"-"`).
+	OAuthClientID     string `yaml:"oauth_client_id" json:"-"`
+	OAuthClientSecret string `yaml:"oauth_client_secret" json:"-"`
 	// Featured surfaces the entry in the directory's Featured section — the
 	// short, curated shelf of household-name connectors shown before the
 	// category listing. Kept small on purpose (a test caps the built-in count)
@@ -1437,9 +1450,10 @@ func Load(dir string) (*Bundle, error) {
 	// exported and the normal interpolation pass below substitutes the tokens
 	// out of the runtime manifest.
 	var rawConnectors struct {
-		MCPServers []ServerDef   `yaml:"mcp_servers"`
-		HTTPTools  []HTTPToolDef `yaml:"http_tools"`
-		A2APeers   []A2APeerDef  `yaml:"a2a_peers"`
+		MCPServers []ServerDef             `yaml:"mcp_servers"`
+		HTTPTools  []HTTPToolDef           `yaml:"http_tools"`
+		A2APeers   []A2APeerDef            `yaml:"a2a_peers"`
+		RemoteMCPs []RemoteMCPCatalogEntry `yaml:"remote_mcp_catalog"`
 	}
 	if err := yaml.Unmarshal(raw, &rawConnectors); err != nil {
 		return nil, fmt.Errorf("parse connector env inventory %s: %w", manifestPath, err)
@@ -1461,6 +1475,7 @@ func Load(dir string) (*Bundle, error) {
 		return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
 	}
 	config.RegisterAllowedEnvVars(refNames...)
+	config.RegisterAllowedEnvVars(manualOAuthEnvNamesFor(rawConnectors.RemoteMCPs)...)
 	if err := applyBootEnvFile(); err != nil {
 		return nil, err
 	}
@@ -2290,6 +2305,22 @@ func validateRemoteMCPEntryMeta(e *RemoteMCPCatalogEntry) error {
 		}
 		if e.ClientRegistration != "manual" {
 			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required is only meaningful with client_registration: manual", name)
+		}
+	}
+	cid := strings.TrimSpace(e.OAuthClientID)
+	csec := strings.TrimSpace(e.OAuthClientSecret)
+	if cid != "" || csec != "" {
+		if e.Auth != "" && e.Auth != "oauth" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only valid on auth: oauth entries", name)
+		}
+		if e.ClientRegistration != "manual" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_id / oauth_client_secret are only meaningful with client_registration: manual", name)
+		}
+		if cid == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: oauth_client_secret requires oauth_client_id", name)
+		}
+		if strings.TrimSpace(e.ClientSecret) == "required" && csec == "" {
+			return fmt.Errorf("remote_mcp_catalog[%q]: client_secret: required needs oauth_client_secret alongside oauth_client_id", name)
 		}
 	}
 	for _, tag := range e.Tags {

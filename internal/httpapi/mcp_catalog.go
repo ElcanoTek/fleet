@@ -193,7 +193,20 @@ func (s *Server) alwaysOnDirectoryRows() []clientconfig.AlwaysOnServer {
 
 // thirdPartyCatalogEntry maps a manifest catalog entry to the wire shape,
 // trimming whitespace once at the edge so the UI never renders stray spaces.
+// When an operator has provisioned a shared OAuth client for a
+// client_registration: manual entry (in the manifest or via the process
+// environment), the wire projection clears ClientRegistration, ClientSecret,
+// and SetupHint so the directory card renders a one-click OAuth add instead of
+// asking each user to register their own OAuth app.
 func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThirdPartyEntry {
+	clientReg := strings.TrimSpace(e.ClientRegistration)
+	clientSec := strings.TrimSpace(e.ClientSecret)
+	setupHint := strings.TrimSpace(e.SetupHint)
+	if _, _, ok := e.EffectiveOAuthClient(); ok {
+		clientReg = ""
+		clientSec = ""
+		setupHint = ""
+	}
 	return mcpCatalogThirdPartyEntry{
 		Name:               strings.TrimSpace(e.Name),
 		DisplayName:        strings.TrimSpace(e.DisplayName),
@@ -206,14 +219,14 @@ func thirdPartyCatalogEntry(e clientconfig.RemoteMCPCatalogEntry) mcpCatalogThir
 		Tags:               e.Tags,
 		Provenance:         e.Provenance,
 		Auth:               e.Auth,
-		SetupHint:          strings.TrimSpace(e.SetupHint),
+		SetupHint:          setupHint,
 		SetupURL:           strings.TrimSpace(e.SetupURL),
 		APIKeyHeader:       strings.TrimSpace(e.APIKeyHeader),
 		APIKeyQuery:        strings.TrimSpace(e.APIKeyQuery),
 		APIKeyPrefix:       e.APIKeyPrefix,
 		URLVariants:        catalogURLVariants(e.URLVariants),
-		ClientRegistration: strings.TrimSpace(e.ClientRegistration),
-		ClientSecret:       strings.TrimSpace(e.ClientSecret),
+		ClientRegistration: clientReg,
+		ClientSecret:       clientSec,
 		Featured:           e.Featured,
 		Trust:              "third_party",
 	}

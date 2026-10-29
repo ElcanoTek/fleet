@@ -597,6 +597,69 @@ remote_mcp_catalog:
 	if err := load(t, "    client_secret: required\n"); err == nil || !strings.Contains(err.Error(), "only meaningful with client_registration: manual") {
 		t.Errorf("client_secret: required without a manual registration must fail loud, got %v", err)
 	}
+	if err := load(t, "    client_registration: manual\n    client_secret: required\n    oauth_client_id: cid\n    oauth_client_secret: csec\n"); err != nil {
+		t.Errorf("manual + required with oauth_client_id + oauth_client_secret should load, got %v", err)
+	}
+	if err := load(t, "    oauth_client_id: cid\n"); err == nil || !strings.Contains(err.Error(), "only meaningful with client_registration: manual") {
+		t.Errorf("oauth_client_id without client_registration: manual must fail loud, got %v", err)
+	}
+	if err := load(t, "    client_registration: manual\n    oauth_client_secret: csec\n"); err == nil || !strings.Contains(err.Error(), "requires oauth_client_id") {
+		t.Errorf("oauth_client_secret without oauth_client_id must fail loud, got %v", err)
+	}
+	if err := load(t, "    client_registration: manual\n    client_secret: required\n    oauth_client_id: cid\n"); err == nil || !strings.Contains(err.Error(), "needs oauth_client_secret alongside oauth_client_id") {
+		t.Errorf("client_secret: required with oauth_client_id but no oauth_client_secret must fail loud, got %v", err)
+	}
+	if err := loadKey(t, "    setup_hint: x\n    oauth_client_id: cid\n"); err == nil || !strings.Contains(err.Error(), "only valid on auth: oauth") {
+		t.Errorf("oauth_client_id on an api_key entry must fail loud, got %v", err)
+	}
+}
+
+func TestEffectiveOAuthClientAndEnvFileResolution(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("mcp_servers: []\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	envFile := filepath.Join(dir, "fleet.env")
+	if err := os.WriteFile(envFile, []byte("SLACK_MCP_CLIENT_ID=123.456\nSLACK_MCP_CLIENT_SECRET=shh-slack-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("FLEET_ENV_FILE", envFile)
+	t.Setenv("SLACK_MCP_CLIENT_ID", "")
+	t.Setenv("SLACK_MCP_CLIENT_SECRET", "")
+	_ = os.Unsetenv("SLACK_MCP_CLIENT_ID")
+	_ = os.Unsetenv("SLACK_MCP_CLIENT_SECRET")
+	resetBootEnvFileForTest()
+
+	b, err := Load(dir)
+	if err != nil {
+		t.Fatalf("load with FLEET_ENV_FILE: %v", err)
+	}
+	var slackEntry *RemoteMCPCatalogEntry
+	for i := range b.RemoteMCPCatalog {
+		if b.RemoteMCPCatalog[i].Name == "slack" {
+			slackEntry = &b.RemoteMCPCatalog[i]
+			break
+		}
+	}
+	if slackEntry == nil {
+		t.Fatal("slack entry missing from merged catalog")
+	}
+	cid, csec, ok := slackEntry.EffectiveOAuthClient()
+	if !ok || cid != "123.456" || csec != "shh-slack-secret" {
+		t.Errorf("slack EffectiveOAuthClient = (%q, %q, %v), want (123.456, shh-slack-secret, true)", cid, csec, ok)
+	}
+
+	// Half-configured (client_id without client_secret on a client_secret: required entry) must return ok=false.
+	half := RemoteMCPCatalogEntry{
+		Name:               "slack",
+		Auth:               "oauth",
+		ClientRegistration: "manual",
+		ClientSecret:       "required",
+		OAuthClientID:      "only-id",
+	}
+	if _, _, ok := half.EffectiveOAuthClient(); ok {
+		t.Error("EffectiveOAuthClient should return false when client_secret is required but unset")
+	}
 }
 
 // TestMergeRemoteCatalog exercises the inheritance rules against a fabricated

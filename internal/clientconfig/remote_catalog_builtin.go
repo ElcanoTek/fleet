@@ -123,13 +123,139 @@ func BuiltinRemoteCatalog() ([]RemoteMCPCatalogEntry, error) {
 // pointer — nil means absent, which defaults to inherit.
 func mergeBuiltinRemoteCatalog(bundle []RemoteMCPCatalogEntry, mcpServers []ServerDef, builtinKnob *bool, community bool, hidden []string) ([]RemoteMCPCatalogEntry, error) {
 	if builtinKnob != nil && !*builtinKnob {
+		resolveCatalogOAuthClients(bundle)
 		return bundle, nil
 	}
 	builtin, err := loadBuiltinRemoteCatalog()
 	if err != nil {
 		return nil, err
 	}
-	return mergeRemoteCatalog(bundle, builtin, mcpServers, community, hidden), nil
+	merged := mergeRemoteCatalog(bundle, builtin, mcpServers, community, hidden)
+	resolveCatalogOAuthClients(merged)
+	return merged, nil
+}
+
+// manualOAuthStem normalizes a catalog entry name into an uppercase
+// alphanumeric/underscore stem for environment-variable lookup
+// ("slack" -> "SLACK", "google-drive" -> "GOOGLE_DRIVE").
+func manualOAuthStem(entryName string) string {
+	name := strings.TrimSpace(entryName)
+	if name == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.Grow(len(name))
+	for _, r := range strings.ToUpper(name) {
+		switch {
+		case (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'):
+			sb.WriteRune(r)
+		default:
+			sb.WriteByte('_')
+		}
+	}
+	return strings.Trim(sb.String(), "_")
+}
+
+// ManualOAuthEnvVarNames returns the candidate process-env variable names an
+// operator may set to supply a shared OAuth client ID and secret for a
+// client_registration: manual directory entry (in precedence order):
+//
+//	ID:     FLEET_OAUTH_CLIENT_ID_<STEM>, <STEM>_MCP_CLIENT_ID
+//	Secret: FLEET_OAUTH_CLIENT_SECRET_<STEM>, <STEM>_MCP_CLIENT_SECRET
+//
+// where <STEM> is the entry name uppercased with hyphens turned into
+// underscores (e.g. "slack" -> SLACK_MCP_CLIENT_ID / SLACK_MCP_CLIENT_SECRET,
+// "google-drive" -> GOOGLE_DRIVE_MCP_CLIENT_ID / GOOGLE_DRIVE_MCP_CLIENT_SECRET).
+func ManualOAuthEnvVarNames(entryName string) (idVars, secretVars []string) {
+	stem := manualOAuthStem(entryName)
+	if stem == "" {
+		return nil, nil
+	}
+	return []string{"FLEET_OAUTH_CLIENT_ID_" + stem, stem + "_MCP_CLIENT_ID"},
+		[]string{"FLEET_OAUTH_CLIENT_SECRET_" + stem, stem + "_MCP_CLIENT_SECRET"}
+}
+
+// EffectiveOAuthClient resolves the operator-provisioned OAuth client for a
+// client_registration: manual directory entry, checking explicit manifest/boot
+// fields (OAuthClientID / OAuthClientSecret) first and then the conventional
+// environment variables (ManualOAuthEnvVarNames). For an entry with
+// client_secret: required, both client ID and secret must be non-empty for ok
+// to be true, so a half-configured environment never hides the manual form
+// only to fail at add time with ErrClientSecretRequired.
+func (e RemoteMCPCatalogEntry) EffectiveOAuthClient() (clientID, clientSecret string, ok bool) {
+	if e.ClientRegistration != "manual" {
+		return "", "", false
+	}
+	if e.Auth != "" && e.Auth != "oauth" {
+		return "", "", false
+	}
+	clientID = strings.TrimSpace(e.OAuthClientID)
+	clientSecret = strings.TrimSpace(e.OAuthClientSecret)
+	if clientID == "" {
+		idVars, secVars := ManualOAuthEnvVarNames(e.Name)
+		for _, k := range idVars {
+			if v, found := lookupNonEmpty(k); found {
+				clientID = v
+				break
+			}
+		}
+		if clientSecret == "" {
+			for _, k := range secVars {
+				if v, found := lookupNonEmpty(k); found {
+					clientSecret = v
+					break
+				}
+			}
+		}
+	}
+	if clientID == "" {
+		return "", "", false
+	}
+	if strings.TrimSpace(e.ClientSecret) == "required" && clientSecret == "" {
+		return "", "", false
+	}
+	return clientID, clientSecret, true
+}
+
+// resolveCatalogOAuthClients snapshots any operator-provisioned OAuth client
+// credentials from the process environment onto the per-Bundle catalog slice
+// at Load time (after applyBootEnvFile) so runtime HTTP handlers read the
+// resolved fields without touching os.Getenv concurrently with config.Reload.
+func resolveCatalogOAuthClients(entries []RemoteMCPCatalogEntry) {
+	for i := range entries {
+		if cid, csec, ok := entries[i].EffectiveOAuthClient(); ok {
+			entries[i].OAuthClientID = cid
+			entries[i].OAuthClientSecret = csec
+		}
+	}
+}
+
+// manualOAuthEnvNamesFor returns the <STEM>_MCP_CLIENT_ID and
+// <STEM>_MCP_CLIENT_SECRET env-var names for every manual-registration entry
+// in the built-in catalog plus any bundle-declared remote_mcp_catalog entries,
+// so Load can register them with config.RegisterAllowedEnvVars before reading
+// FLEET_ENV_FILE.
+func manualOAuthEnvNamesFor(bundleEntries []RemoteMCPCatalogEntry) []string {
+	var out []string
+	addEntry := func(e RemoteMCPCatalogEntry) {
+		if e.ClientRegistration != "manual" && strings.TrimSpace(e.Name) == "" {
+			return
+		}
+		ids, secs := ManualOAuthEnvVarNames(e.Name)
+		out = append(out, ids...)
+		out = append(out, secs...)
+	}
+	for _, e := range bundleEntries {
+		addEntry(e)
+	}
+	if builtin, err := loadBuiltinRemoteCatalog(); err == nil {
+		for _, e := range builtin {
+			if e.ClientRegistration == "manual" {
+				addEntry(e)
+			}
+		}
+	}
+	return out
 }
 
 // mergeRemoteCatalog appends the inherited built-in directory after the
