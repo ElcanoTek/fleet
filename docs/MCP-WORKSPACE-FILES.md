@@ -61,7 +61,12 @@ journals retain the reference, not the large binary value. Tool outputs still
 cross redaction, screening and size limits.
 
 This works in interactive and scheduled runs, including sealed sandbox egress:
-only the already-authorized MCP broker transports bytes. It creates no generic
+only the already-authorized MCP broker transports bytes. A critical tool staged
+with a reference keeps the reference on its approval card; the file is read
+when the person clicks Approve, through a fresh sandbox taken under the
+conversation's network posture with that conversation's workspace bound, so
+the same confinement, whole-file hash check, caps and memory budget apply. A
+file changed or removed after staging fails the approval with nothing sent. It creates no generic
 HTTP uploader, exposes no credential to the model or sandbox, and changes no
 approval or connector allowlist. Existing base64 string calls remain valid.
 Client bundles/external servers own upload tool names, sequence, chunk size,

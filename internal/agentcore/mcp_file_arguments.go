@@ -40,9 +40,9 @@ var workspaceFileReferenceDescription = fmt.Sprintf("Send the original base64 st
 // contentEncoding annotation. No connector identity or upload protocol lives in
 // Fleet. The original tool still crosses all gates and the credential broker;
 // only the encoding step moves out of the model's context.
-func (m *mcpTool) binaryFileProperties() map[string]map[string]any {
+func binaryFileProperties(schema map[string]any) map[string]map[string]any {
 	result := map[string]map[string]any{}
-	props, _ := m.tool.InputSchema["properties"].(map[string]any)
+	props, _ := schema["properties"].(map[string]any)
 	for name, value := range props {
 		property, ok := value.(map[string]any)
 		if ok && property["type"] == "string" && property["contentEncoding"] == "base64" {
@@ -56,7 +56,7 @@ func (m *mcpTool) advertiseFileReferences(props map[string]any) {
 	if m.readWorkspaceFile == nil {
 		return
 	}
-	for name := range m.binaryFileProperties() {
+	for name := range binaryFileProperties(m.tool.InputSchema) {
 		props[name] = map[string]any{
 			"description": workspaceFileReferenceDescription,
 			"anyOf": []any{props[name], map[string]any{
@@ -80,27 +80,50 @@ type workspaceFileArgument struct {
 	Length int    `json:"length"`
 }
 
-// resolveFileReferences replaces each workspace-file reference in args with
-// the base64 of its window. Every reference of the call is validated first,
-// then all of them are read and admitted against the workspace-file budget in
-// ONE step (ADR-0088): a call never holds some windows while it waits for the
-// others. On success the caller MUST arrange for the returned done to run
-// once the outbound dispatch has let go of args: it puts the references back
-// (dropping the base64 strings) and releases the windows' charge. On error —
-// or a panic — everything acquired is already released.
 func (m *mcpTool) resolveFileReferences(ctx context.Context, args map[string]any) (done func(), err error) {
+	return ResolveWorkspaceFileReferences(ctx, m.tool.InputSchema, m.readWorkspaceFile, args)
+}
+
+// HasWorkspaceFileReferences reports whether args carries a workspace-file
+// reference in place of one of schema's base64 properties. A call dispatched
+// outside the agent loop (an approved card, httpapi runStagedTool) checks
+// this first, so it acquires a sandbox to read from only when there is a file
+// to read.
+func HasWorkspaceFileReferences(schema, args map[string]any) bool {
+	for name := range binaryFileProperties(schema) {
+		if _, ok := args[name].(map[string]any); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolveWorkspaceFileReferences replaces each workspace-file reference in
+// args with the base64 of its window, for the tool whose input schema is
+// schema. Every reference of the call is validated first, then all of them
+// are read and admitted against the workspace-file budget in ONE step
+// (ADR-0088): a call never holds some windows while it waits for the others.
+// On success the caller MUST arrange for the returned done to run once the
+// outbound dispatch has let go of args (mcp.WithArgumentHold): it puts the
+// references back (dropping the base64 strings) and releases the windows'
+// charge. On error — or a panic — everything acquired is already released.
+//
+// The agent loop calls it before every MCP dispatch (mcpTool.call), and an
+// approved call staged with a reference calls it at execution time
+// (httpapi runStagedTool), so both send the bytes the reference's hash names.
+func ResolveWorkspaceFileReferences(ctx context.Context, schema map[string]any, read fleettools.WorkspaceFileReadFunc, args map[string]any) (done func(), err error) {
 	type pending struct {
 		name string
 		ref  map[string]any
 		file workspaceFileArgument
 	}
 	var refs []pending
-	for name, property := range m.binaryFileProperties() {
+	for name, property := range binaryFileProperties(schema) {
 		ref, ok := args[name].(map[string]any)
 		if !ok {
 			continue
 		}
-		if m.readWorkspaceFile == nil {
+		if read == nil {
 			return nil, fmt.Errorf("workspace file references require a sandbox reader")
 		}
 		file, err := parseWorkspaceFileReference(name, ref, property)
@@ -122,7 +145,7 @@ func (m *mcpTool) resolveFileReferences(ctx context.Context, args map[string]any
 	// the same reference is a slice, not another read. The windows, the files
 	// they are cut from, and every dispatch copy of their base64 stay charged
 	// to the process-wide budget until release.
-	windows, release, err := m.readWorkspaceFile(ctx, request, maxMCPWorkspaceFileBytes)
+	windows, release, err := read(ctx, request, maxMCPWorkspaceFileBytes)
 	if err != nil {
 		names := make([]string, len(refs))
 		for i, r := range refs {
@@ -167,10 +190,26 @@ func parseWorkspaceFileReference(name string, ref, property map[string]any) (wor
 			return file, fmt.Errorf("%s: missing reference field %s", name, field)
 		}
 	}
-	if _, ok := ref["offset"].(float64); !ok {
+	// A model's call decodes numbers as float64; an approved call's staged
+	// arguments decode them as json.Number, so large record IDs elsewhere in
+	// the call survive (httpapi decodeJSONNumbers). Read the reference's
+	// numbers as float64 either way, so both paths accept exactly the same
+	// references (an integral 11.0 included). ref itself is left as staged.
+	fields := make(map[string]any, len(ref))
+	for field, value := range ref {
+		if number, ok := value.(json.Number); ok {
+			f, err := number.Float64()
+			if err != nil {
+				return file, fmt.Errorf("%s: invalid file byte range", name)
+			}
+			value = f
+		}
+		fields[field] = value
+	}
+	if _, ok := fields["offset"].(float64); !ok {
 		return file, fmt.Errorf("%s: offset must be an integer", name)
 	}
-	raw, err := json.Marshal(ref)
+	raw, err := json.Marshal(fields)
 	if err != nil {
 		return file, fmt.Errorf("%s: invalid file reference", name)
 	}

@@ -189,3 +189,70 @@ func mustFileJSON(t *testing.T, value any) string {
 	}
 	return string(raw)
 }
+
+// TestResolveWorkspaceFileReferencesApprovedArguments covers the approved-call
+// form (httpapi runStagedTool): staged arguments decode numbers as
+// json.Number, so an integer offset must be accepted there as it is from a
+// model's call, while a fraction is still refused before any read.
+func TestResolveWorkspaceFileReferencesApprovedArguments(t *testing.T) {
+	data := []byte("domain\nexample.com\n")
+	sum := sha256.Sum256(data)
+	schema := map[string]any{"properties": map[string]any{
+		"content_base64": map[string]any{"type": "string", "contentEncoding": "base64"},
+		"name":           map[string]any{"type": "string"},
+	}}
+	decode := func(raw string) map[string]any {
+		t.Helper()
+		var args map[string]any
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.UseNumber()
+		if err := dec.Decode(&args); err != nil {
+			t.Fatal(err)
+		}
+		return args
+	}
+	ref := func(offset string) string {
+		return fmt.Sprintf(`{"name":"pilot","content_base64":{"workspace_file":"pilot.csv","sha256":%q,"offset":%s,"length":11}}`, hex.EncodeToString(sum[:]), offset)
+	}
+
+	if HasWorkspaceFileReferences(schema, decode(`{"name":"pilot","content_base64":"ZG9tYWluCg=="}`)) {
+		t.Fatal("inline base64 reported as a reference")
+	}
+	reads := 0
+	args := decode(ref("7"))
+	if !HasWorkspaceFileReferences(schema, args) {
+		t.Fatal("reference not detected")
+	}
+	done, err := ResolveWorkspaceFileReferences(context.Background(), schema, fakeWorkspaceReader(t, "pilot.csv", data, &reads), args)
+	if err != nil {
+		t.Fatalf("json.Number offset refused: %v", err)
+	}
+	if got, want := args["content_base64"], base64.StdEncoding.EncodeToString(data[7:18]); got != want {
+		t.Fatalf("content_base64 = %#v, want %q", got, want)
+	}
+	done()
+	if _, ok := args["content_base64"].(map[string]any); !ok {
+		t.Fatal("done did not put the reference back")
+	}
+
+	// An integral number is accepted however it is spelled, as it is from a
+	// model's call; a fraction is refused before any read.
+	for _, offset := range []string{"7.0", "0.7e1"} {
+		args := decode(ref(offset))
+		done, err := ResolveWorkspaceFileReferences(context.Background(), schema, fakeWorkspaceReader(t, "pilot.csv", data, &reads), args)
+		if err != nil {
+			t.Fatalf("integral offset %s refused: %v", offset, err)
+		}
+		if got, want := args["content_base64"], base64.StdEncoding.EncodeToString(data[7:18]); got != want {
+			t.Fatalf("offset %s: content_base64 = %#v, want %q", offset, got, want)
+		}
+		done()
+	}
+	before := reads
+	if _, err := ResolveWorkspaceFileReferences(context.Background(), schema, fakeWorkspaceReader(t, "pilot.csv", data, &reads), decode(ref("0.5"))); err == nil {
+		t.Fatal("fractional json.Number offset accepted")
+	}
+	if reads != before {
+		t.Fatal("an invalid reference was read")
+	}
+}
