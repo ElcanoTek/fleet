@@ -445,7 +445,7 @@ func (s *fakeChatStore) AutoApproveEnableMCPConnectors(_ context.Context, req st
 		ResumeClaimed: claimed,
 	}, nil
 }
-func (s *fakeChatStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, int64, error) {
+func (s *fakeChatStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, _ func(supersededArgsJSON []string) string) (*store.Approval, int64, error) {
 	return &store.Approval{
 		ID:             "appr-staged",
 		ConversationID: convID,

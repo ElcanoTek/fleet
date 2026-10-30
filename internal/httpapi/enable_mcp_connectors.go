@@ -625,6 +625,54 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	}, nil
 }
 
+func mergeStagedEnableMCPConnectorsArgs(current stagedEnableMCPConnectorsArgs, supersededArgsJSON []string) string {
+	seen := make(map[string]bool, len(current.Connectors))
+	var mergedConns []string
+	mergedDisplay := make(map[string]string, len(current.DisplayNames))
+	var reasons []string
+	addEntry := func(conn string, disp map[string]string) {
+		c := strings.TrimSpace(conn)
+		norm := strings.ToLower(c)
+		if norm == "" || seen[norm] {
+			return
+		}
+		seen[norm] = true
+		mergedConns = append(mergedConns, c)
+		if d := strings.TrimSpace(disp[c]); d != "" {
+			mergedDisplay[c] = d
+		} else if d := strings.TrimSpace(disp[norm]); d != "" {
+			mergedDisplay[c] = d
+		}
+	}
+	for _, raw := range supersededArgsJSON {
+		var prev stagedEnableMCPConnectorsArgs
+		if err := json.Unmarshal([]byte(raw), &prev); err != nil {
+			continue
+		}
+		for _, c := range prev.Connectors {
+			addEntry(c, prev.DisplayNames)
+		}
+		if r := strings.TrimSpace(prev.Reason); r != "" && !slices.Contains(reasons, r) {
+			reasons = append(reasons, r)
+		}
+	}
+	for _, c := range current.Connectors {
+		addEntry(c, current.DisplayNames)
+	}
+	if r := strings.TrimSpace(current.Reason); r != "" && !slices.Contains(reasons, r) {
+		reasons = append(reasons, r)
+	}
+	outBytes, err := json.Marshal(stagedEnableMCPConnectorsArgs{
+		Connectors:   mergedConns,
+		DisplayNames: mergedDisplay,
+		Reason:       strings.Join(reasons, "; "),
+	})
+	if err != nil {
+		return ""
+	}
+	return string(outBytes)
+}
+
 func (s *Server) stageEnableMCPConnectorsApproval(
 	ctx context.Context,
 	conv *store.Conversation,
@@ -637,8 +685,13 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	if turnStager != nil {
 		expiry = turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName)
 	}
+	var currentArgs stagedEnableMCPConnectorsArgs
+	_ = json.Unmarshal([]byte(rawInput), &currentArgs)
 	approval, superseded, err := s.store.StageEnableMCPConnectorsApproval(
 		ctx, user, conv.ID, tools.EnableMCPConnectorsToolName, toolCallID, rawInput, expiry,
+		func(supersededArgsJSON []string) string {
+			return mergeStagedEnableMCPConnectorsArgs(currentArgs, supersededArgsJSON)
+		},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("stage connector approval: %w", err)
@@ -651,13 +704,18 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	}
 
 	if buf != nil {
-		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, conv.ID))
+		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
 	}
 	if turnStager != nil {
 		turnStager.firePushNotification(tools.EnableMCPConnectorsToolName)
 	}
 
-	safeAdded := promptSafeSlice(newlyAdded)
+	stagedConns := newlyAdded
+	var finalArgs stagedEnableMCPConnectorsArgs
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &finalArgs); err == nil && len(finalArgs.Connectors) > 0 {
+		stagedConns = finalArgs.Connectors
+	}
+	safeAdded := promptSafeSlice(stagedConns)
 	return &tools.EnableMCPConnectorsResult{
 		Status:     "approval_required",
 		Connectors: safeAdded,

@@ -197,7 +197,7 @@ func (s *enableMCPTestStore) AutoApproveEnableMCPConnectors(ctx context.Context,
 	return out, nil
 }
 
-func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, int64, error) {
+func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failCreateAppr {
@@ -207,13 +207,20 @@ func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context,
 		return nil, 0, fmt.Errorf("arm resume failed")
 	}
 	var superseded int64
+	var supersededArgs []string
 	for _, a := range s.approvals {
 		if a.ConversationID == convID && a.ToolName == toolName && a.Status == "pending" {
 			a.Status = "rejected"
 			if a.ResumeState == store.ApprovalResumeArmed {
 				a.ResumeState = store.ApprovalResumeSuperseded
 			}
+			supersededArgs = append(supersededArgs, a.ArgsJSON)
 			superseded++
+		}
+	}
+	if buildArgs != nil && len(supersededArgs) > 0 {
+		if merged := buildArgs(supersededArgs); merged != "" {
+			argsJSON = merged
 		}
 	}
 	s.nextApproval++
@@ -447,6 +454,13 @@ func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
 				ToolCount:   2,
 				Tools:       []string{"post_message", "list_channels"},
 			},
+			{
+				Name:        "hubspot",
+				DisplayName: "HubSpot",
+				Description: "CRM records",
+				ToolCount:   2,
+				Tools:       []string{"get_contact", "list_deals"},
+			},
 		},
 	}
 	srv := &Server{
@@ -466,18 +480,28 @@ func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
 	}
 
 	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
-	res, err := handler(context.Background(), "call-enable-1", tools.EnableMCPConnectorsParams{
+	res1, err := handler(context.Background(), "call-enable-1", tools.EnableMCPConnectorsParams{
 		Connectors: []string{"slack"},
 		Reason:     "Read the #ops channel",
 	})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if res.Status != "approval_required" || res.StopTurn {
-		t.Fatalf("unexpected result: %+v", res)
+	if res1.Status != "approval_required" || res1.StopTurn {
+		t.Fatalf("unexpected result: %+v", res1)
 	}
-	if !strings.Contains(res.Message, "APPROVAL_REQUIRED") {
-		t.Fatalf("expected APPROVAL_REQUIRED in message, got %q", res.Message)
+
+	// A second enable_mcp_connectors call in the same step for a distinct connector
+	// supersedes the first card while merging its requested connector(s) into the new card.
+	res, err := handler(context.Background(), "call-enable-2", tools.EnableMCPConnectorsParams{
+		Connectors: []string{"hubspot"},
+		Reason:     "Look up the account owner",
+	})
+	if err != nil {
+		t.Fatalf("second handler error: %v", err)
+	}
+	if !slices.Equal(res.Connectors, []string{"slack", "hubspot"}) {
+		t.Fatalf("merged connectors on second staged card = %v, want [slack hubspot]", res.Connectors)
 	}
 
 	// Approval row must be pending and armed for automatic resume.
@@ -486,7 +510,7 @@ func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
 		t.Fatalf("expected armed pending approval row, got %+v", appr)
 	}
 
-	// Approve via decideApproval and verify OptionalMCPServersEnabled updates and resume=true.
+	// Approve via decideApproval and verify OptionalMCPServersEnabled updates with both connectors and resume=true.
 	decision := srv.decideApproval(context.Background(), nil, "alice@example.com", conv.ID, res.ApprovalID, approvalRequest{Approved: true})
 	if decision.status != 0 {
 		t.Fatalf("decideApproval error (%d): %s", decision.status, decision.errText)
@@ -496,8 +520,8 @@ func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {
 	}
 
 	updatedConv, _ := st.Get(context.Background(), "alice@example.com", conv.ID)
-	if !slices.Equal(updatedConv.OptionalMCPServersEnabled, []string{"existing_srv", "slack"}) {
-		t.Fatalf("OptionalMCPServersEnabled = %v, want [existing_srv slack]", updatedConv.OptionalMCPServersEnabled)
+	if !slices.Equal(updatedConv.OptionalMCPServersEnabled, []string{"existing_srv", "hubspot", "slack"}) {
+		t.Fatalf("OptionalMCPServersEnabled = %v, want [existing_srv hubspot slack]", updatedConv.OptionalMCPServersEnabled)
 	}
 }
 
