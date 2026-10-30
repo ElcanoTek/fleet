@@ -154,7 +154,7 @@ Many tools are not listed directly (there are too many to show at once). Use
 tool_search to find the one you need, then tool_describe to see its exact
 parameters, then tool_call to invoke it. Returns matching tool NAMES with a
 short description each.`, len(r.byName))
-	return fantasy.NewAgentTool(toolNameToolSearch, desc,
+	return fantasy.NewParallelAgentTool(toolNameToolSearch, desc,
 		func(_ context.Context, p toolSearchParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			q := strings.TrimSpace(p.Query)
 			if q == "" {
@@ -182,7 +182,7 @@ type toolDescribeParams struct {
 }
 
 func (r *deferredToolRegistry) describeTool() fantasy.AgentTool {
-	return fantasy.NewAgentTool(toolNameToolDescribe,
+	return fantasy.NewParallelAgentTool(toolNameToolDescribe,
 		"Show a deferred tool's full description and JSON parameter schema (from tool_search). Call this before tool_call so you pass the right arguments.",
 		func(_ context.Context, p toolDescribeParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			name := strings.TrimSpace(p.Name)
