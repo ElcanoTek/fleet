@@ -131,18 +131,19 @@ func (s *Server) scheduleApprovalResume(convID string, after time.Duration, atte
 	})
 }
 
-// decideApprovalResume runs the claim and acts on what it decided.
-func (s *Server) decideApprovalResume(convID string, attempt int) {
+// decideApprovalResume runs the claim and acts on what it decided. It reports
+// whether a resume input row was enqueued for the conversation.
+func (s *Server) decideApprovalResume(convID string, attempt int) bool {
 	if s.shuttingDown.Load() {
 		// No new turns while shutting down. The cards stay armed; the next boot
 		// drops them with a note (DropApprovalResumesAtBoot), never runs them.
-		return
+		return false
 	}
 	if UpdateDrainActive() {
 		// External update/lifecycle drain may be cancelled or time out without
 		// restarting the process; re-arm without consuming retry attempts.
 		s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt)
-		return
+		return false
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -166,15 +167,15 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		if attempt < approvalResumeRetries {
 			s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt+1)
 		}
-		return
+		return false
 	}
 	switch {
 	case len(res.Outstanding) > 0:
 		// Another card is still pending or executing; its settlement kicks
 		// again. Nothing was claimed.
-		return
+		return false
 	case len(res.Claimed) == 0:
-		return
+		return false
 	case res.Input == nil:
 		metrics.RecordApprovalResume(res.Skipped)
 		if res.Skipped == store.ApprovalResumeSkipRateLimited || res.Skipped == store.ApprovalResumeSkipQueueFull {
@@ -185,7 +186,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
 		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
 			convID, res.Skipped, res.RecentResumes, maxPerHour, approvalResumeIDs(res.Claimed))
-		return
+		return false
 	}
 	metrics.RecordApprovalResume("queued")
 	//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
@@ -195,6 +196,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 	// Idle → the drain launches it now; a running turn → it waits in the
 	// queue and that turn's completion tail drains it.
 	s.maybeDrainQueue(convID)
+	return true
 }
 
 func approvalResumeIDs(items []store.ApprovalResumeItem) []string {

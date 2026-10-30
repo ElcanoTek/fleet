@@ -44,6 +44,7 @@ type enableMCPTestStore struct {
 	resumeClaimed  int
 	failArmResume  bool
 	failCreateAppr bool
+	skipResume     bool
 }
 
 func newEnableMCPTestStore() *enableMCPTestStore {
@@ -120,6 +121,9 @@ func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string) 
 }
 
 func (s *enableMCPTestStore) ResolveApproval(_ context.Context, _, id, status, resultText string) error {
+	if status != "approved" && status != "rejected" {
+		return fmt.Errorf("invalid approval status %q", status)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if a := s.approvals[id]; a != nil {
@@ -174,6 +178,18 @@ func (s *enableMCPTestStore) ClaimApprovalResume(_ context.Context, req store.Ap
 	}
 	if len(claimed) == 0 {
 		return store.ApprovalResumeResult{}, nil
+	}
+	if s.skipResume {
+		for _, a := range s.approvals {
+			if a.ConversationID == req.ConversationID && a.ResumeState == "claimed" {
+				a.ResumeState = store.ApprovalResumeSkipped
+			}
+		}
+		return store.ApprovalResumeResult{
+			Owner:   owner,
+			Claimed: claimed,
+			Skipped: store.ApprovalResumeSkipRateLimited,
+		}, nil
 	}
 	s.resumeClaimed++
 	return store.ApprovalResumeResult{
@@ -486,6 +502,62 @@ func TestEnableMCPConnectorsHandler_AutoApproveFailsClosedOnResumePersistenceErr
 	updatedConv, _ := st.Get(context.Background(), "alice@example.com", conv.ID)
 	if len(updatedConv.OptionalMCPServersEnabled) != 0 {
 		t.Fatalf("expected OptionalMCPServersEnabled to remain empty on failure, got %v", updatedConv.OptionalMCPServersEnabled)
+	}
+	for id, appr := range st.approvals {
+		if appr.Status != "rejected" {
+			t.Fatalf("approval %s left in status %q on cleanup failure, want rejected", id, appr.Status)
+		}
+	}
+}
+
+func TestEnableMCPConnectors_SkippedResumeDoesNotStopTurnAndEnforces25Cap(t *testing.T) {
+	st := newEnableMCPTestStore()
+	st.skipResume = true
+	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
+
+	var catalog []agent.OptionalServerInfo
+	for i := 0; i < 30; i++ {
+		catalog = append(catalog, agent.OptionalServerInfo{
+			Name:      fmt.Sprintf("conn_%02d", i),
+			ToolCount: 1,
+			Tools:     []string{"ping"},
+		})
+	}
+	engine := &enableMCPTestEngine{
+		fakeEngine: &fakeEngine{},
+		catalog:    catalog,
+	}
+	srv := &Server{
+		cfg:      &config.Config{},
+		agent:    engine,
+		store:    st,
+		inflight: make(map[string]inflightEntry),
+	}
+
+	// Connector #25 (0-indexed: conn_25 is the 26th entry) is outside the 25-entry prompt cap.
+	if _, _, err := srv.validateEnableMCPConnectorsWithEnabled(context.Background(), "alice@example.com", []string{"conn_25"}, nil, nil); err == nil {
+		t.Fatalf("expected conn_25 (26th connector) to be rejected by the 25-connector prompt cap")
+	}
+
+	// Connector #00 is inside the cap; when auto-approved with skipResume=true, StopTurn must be false.
+	buf := newTurnBuffer(conv.ID, "turn-skip-resume")
+	stager := &approvalStager{
+		ctx:               context.Background(),
+		store:             st,
+		conversationID:    conv.ID,
+		userEmail:         "alice@example.com",
+		sink:              buf,
+		autoApproveInTest: true,
+	}
+	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
+	res, err := handler(context.Background(), "call-skip", tools.EnableMCPConnectorsParams{
+		Connectors: []string{"conn_00"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.StopTurn {
+		t.Fatalf("expected StopTurn=false when decideApprovalResume skips enqueueing a continuation")
 	}
 }
 

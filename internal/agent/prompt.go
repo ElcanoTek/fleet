@@ -188,6 +188,12 @@ type Manager struct {
 	openRemoteMCPOverlay RemoteMCPOverlayOpener
 }
 
+// PersonaPolicy returns the per-persona tool allowlist for the named persona,
+// or nil when the persona has no manifest entry or its policy is empty.
+func (m *Manager) PersonaPolicy(persona string) *agentcore.PersonaToolPermissions {
+	return m.personaPolicy(persona)
+}
+
 // personaPolicy returns the per-persona tool allowlist for the named persona
 // (#294), or nil when the persona has no manifest entry or its policy is empty
 // (both cases mean "no narrowing"). nil-safe.
@@ -790,13 +796,16 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name
 	})
+	if len(out) > MaxAvailableOptionalInPrompt {
+		out = out[:MaxAvailableOptionalInPrompt]
+	}
 	return out
 }
 
 const (
 	// MaxAvailableOptionalInPrompt caps how many disabled optional MCP
-	// connectors are listed in the system prompt so a large user/shared
-	// connection catalog cannot bloat the system prompt.
+	// connectors are listed in the system prompt so a large connector
+	// catalog cannot bloat the system prompt.
 	MaxAvailableOptionalInPrompt   = 25
 	maxOptionalConnectorLabelRunes = 64
 	maxOptionalConnectorDescRunes  = 200
@@ -830,6 +839,9 @@ func (m *Manager) appendAvailableOptionalConnectors(sb *strings.Builder, persona
 func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []OptionalServerInfo) {
 	if len(available) == 0 {
 		return
+	}
+	if len(available) > MaxAvailableOptionalInPrompt {
+		available = available[:MaxAvailableOptionalInPrompt]
 	}
 	sb.WriteString("## Available Optional MCP Connectors (not currently enabled)\n\n")
 	sb.WriteString("The following connected Optional MCP connectors are available for this user right now, but are currently toggled **OFF** in this conversation:\n")

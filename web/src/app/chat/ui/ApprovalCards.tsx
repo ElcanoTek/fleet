@@ -1976,13 +1976,17 @@ function EnableMCPConnectorsCard({
           : "MCP connector(s) enabled ✓"
         : approval.status === "rejected"
           ? "Connector enablement declined"
-          : "Connector enablement failed";
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Connector enablement failed";
 
   const statusStyle = executing
     ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
     : approval.status === "pending"
       ? { borderColor: "var(--color-accent)" }
-      : undefined;
+      : approval.status === "execution_unknown"
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+        : undefined;
 
   return (
     <div

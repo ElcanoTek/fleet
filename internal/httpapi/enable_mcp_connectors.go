@@ -116,6 +116,7 @@ type connectorValidationCatalog struct {
 	bundledOptional map[string]agent.OptionalServerInfo
 	needsSetup      map[string]bool
 	available       map[string]agent.OptionalServerInfo
+	availableList   []agent.OptionalServerInfo
 	allRemote       map[string]map[string]bool
 	safeOwners      map[string]map[string]bool
 }
@@ -151,7 +152,8 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 			putWithPromptSafeAlias(cat.needsSetup, nil, m.Name, true)
 		}
 	}
-	for _, info := range s.availableOptionalConnectorsForUser(ctx, user, convAccounts...) {
+	cat.availableList = s.availableOptionalConnectorsForUser(ctx, user, convAccounts...)
+	for _, info := range cat.availableList {
 		putWithPromptSafeAlias(cat.available, cat.safeOwners, info.Name, info)
 	}
 	rawRemote := s.remoteSeatCatalog(ctx, user)
@@ -172,16 +174,78 @@ func (c connectorValidationCatalog) isAmbiguous(lookup string) bool {
 	return false
 }
 
+// displayedPromptSet returns the canonical lowercase connector names that
+// appear in the system prompt's "Available Optional MCP Connectors" section
+// for the current turn (up to agent.MaxAvailableOptionalInPrompt entries,
+// sorted by prompt-safe name after filtering out already-enabled, ambiguous,
+// and policy-hidden connectors).
+func (c connectorValidationCatalog) displayedPromptSet(
+	currentEnabled []string,
+	hidden []string,
+	personaPolicy *agentcore.PersonaToolPermissions,
+) map[string]bool {
+	enabledSet := make(map[string]bool, len(currentEnabled)*2)
+	for _, raw := range currentEnabled {
+		k := strings.ToLower(strings.TrimSpace(raw))
+		if k != "" {
+			enabledSet[k] = true
+			if safe := agentcore.PromptSafeName(k); safe != "" {
+				enabledSet[safe] = true
+			}
+		}
+	}
+	type pair struct {
+		canon string
+		safe  string
+	}
+	eligible := make([]pair, 0, len(c.availableList))
+	seenSafe := make(map[string]bool, len(c.availableList))
+	for _, info := range c.availableList {
+		canon := strings.ToLower(strings.TrimSpace(info.Name))
+		safe := agentcore.PromptSafeName(canon)
+		if canon == "" || safe == "" || enabledSet[canon] || enabledSet[safe] || seenSafe[safe] || c.isAmbiguous(canon) {
+			continue
+		}
+		if !connectorPermittedInChat(info, hidden, personaPolicy) {
+			continue
+		}
+		seenSafe[safe] = true
+		eligible = append(eligible, pair{canon: canon, safe: safe})
+	}
+	sort.Slice(eligible, func(i, j int) bool {
+		return eligible[i].safe < eligible[j].safe
+	})
+	if len(eligible) > agent.MaxAvailableOptionalInPrompt {
+		eligible = eligible[:agent.MaxAvailableOptionalInPrompt]
+	}
+	out := make(map[string]bool, len(eligible))
+	for _, p := range eligible {
+		out[p.canon] = true
+	}
+	return out
+}
+
 // validateEnableMCPConnectors checks that every requested connector name is a
 // valid, connected, prefs-enabled Optional connector (or already-on Always-On
 // connector) whose tools are permitted by interactive_hidden_tools and the
-// active persona policy. Returns the canonical lowercase optional connector
-// names to enable (excluding any that are already always-on) and their display
-// metadata.
+// active persona policy and that falls within the 25-connector system-prompt
+// cap. Returns the canonical lowercase optional connector names to enable
+// (excluding any that are already always-on) and their display metadata.
 func (s *Server) validateEnableMCPConnectors(
 	ctx context.Context,
 	user string,
 	requested []string,
+	personaPolicy *agentcore.PersonaToolPermissions,
+	convAccounts ...map[string]string,
+) (optionalToEnable []string, displayNames map[string]string, err error) {
+	return s.validateEnableMCPConnectorsWithEnabled(ctx, user, requested, nil, personaPolicy, convAccounts...)
+}
+
+func (s *Server) validateEnableMCPConnectorsWithEnabled(
+	ctx context.Context,
+	user string,
+	requested []string,
+	currentEnabled []string,
 	personaPolicy *agentcore.PersonaToolPermissions,
 	convAccounts ...map[string]string,
 ) (optionalToEnable []string, displayNames map[string]string, err error) {
@@ -194,6 +258,13 @@ func (s *Server) validateEnableMCPConnectors(
 		return nil, nil, fmt.Errorf("load connector preferences: %w", cat.prefsErr)
 	}
 	hidden := agentcore.InteractiveHiddenTools()
+	displayed := cat.displayedPromptSet(currentEnabled, hidden, personaPolicy)
+	alreadyEnabled := make(map[string]bool, len(currentEnabled))
+	for _, n := range currentEnabled {
+		if k := strings.ToLower(strings.TrimSpace(n)); k != "" {
+			alreadyEnabled[k] = true
+		}
+	}
 
 	displayNames = make(map[string]string, len(requested))
 	seen := make(map[string]bool, len(requested))
@@ -243,6 +314,9 @@ func (s *Server) validateEnableMCPConnectors(
 
 		if !connectorPermittedInChat(info, hidden, personaPolicy) {
 			return nil, nil, fmt.Errorf("connector %q is not permitted for the current persona or interactive chat policy", agentcore.PromptSafeName(canonName))
+		}
+		if !alreadyEnabled[canonName] && !displayed[canonName] {
+			return nil, nil, fmt.Errorf("connector %q is outside the %d optional connectors listed in the system prompt for this turn; toggle it directly in the Tools picker", agentcore.PromptSafeName(canonName), agent.MaxAvailableOptionalInPrompt)
 		}
 
 		optionalToEnable = append(optionalToEnable, canonName)
@@ -324,13 +398,16 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			policy = turnStager.personaPolicy
 			turnStager.mcpMu.RUnlock()
 		}
+		if policy == nil {
+			policy = s.personaPolicyFor(fresh.Persona)
+		}
 
-		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, policy, fresh.MCPAccounts)
+		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
+		toEnable, displayNames, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts)
 		if err != nil {
 			return nil, err
 		}
 
-		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
 		enabledSet := make(map[string]bool, len(currentEnabled))
 		for _, n := range currentEnabled {
 			enabledSet[strings.ToLower(strings.TrimSpace(n))] = true
@@ -375,6 +452,16 @@ func (s *Server) newEnableMCPConnectorsHandler(
 	}
 }
 
+func (s *Server) personaPolicyFor(persona string) *agentcore.PersonaToolPermissions {
+	type personaPolicyProvider interface {
+		PersonaPolicy(persona string) *agentcore.PersonaToolPermissions
+	}
+	if p, ok := s.agent.(personaPolicyProvider); ok && p != nil {
+		return p.PersonaPolicy(persona)
+	}
+	return nil
+}
+
 func (s *Server) autoApproveEnableMCPConnectors(
 	ctx context.Context,
 	conv *store.Conversation,
@@ -407,7 +494,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 
 	compensateCtx := context.WithoutCancel(ctx)
 	if err := s.store.SetOptionalMCPServers(ctx, user, conv.ID, merged); err != nil {
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", err.Error())
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", err.Error())
 		return nil, fmt.Errorf("enable connectors: %w", err)
 	}
 	armed, armErr := s.store.ArmApprovalResume(ctx, user, approval.ID)
@@ -416,12 +503,13 @@ func (s *Server) autoApproveEnableMCPConnectors(
 			armErr = fmt.Errorf("approval resume state could not be armed")
 		}
 		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", armErr.Error())
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", armErr.Error())
 		return nil, fmt.Errorf("arm auto-approved connector resume: %w", armErr)
 	}
 	if rerr := s.store.ResolveApproval(ctx, user, approval.ID, "approved", recordText); rerr != nil {
 		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", rerr.Error())
+		_, _ = s.store.SupersedePendingApprovals(compensateCtx, conv.ID, tools.EnableMCPConnectorsToolName)
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", rerr.Error())
 		return nil, fmt.Errorf("resolve auto-approved connector record: %w", rerr)
 	}
 	conv.OptionalMCPServersEnabled = merged
@@ -441,7 +529,11 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		})
 	}
 
-	s.decideApprovalResume(conv.ID, 0)
+	resumed := s.decideApprovalResume(conv.ID, 0)
+	msg := fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", "))
+	if !resumed {
+		msg = fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Automatic turn continuation was not queued (resume cap or queue limit reached), so their tools will be mounted on the next turn — finish what you can with your current tools and let the user know.", strings.Join(safeAdded, ", "))
+	}
 
 	return &tools.EnableMCPConnectorsResult{
 		Status:          "enabled",
@@ -449,8 +541,8 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		EnabledOptional: promptSafeSlice(merged),
 		AutoApproved:    true,
 		ApprovalID:      approval.ID,
-		Message:         fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", ")),
-		StopTurn:        true,
+		Message:         msg,
+		StopTurn:        resumed,
 	}, nil
 }
 
@@ -485,7 +577,7 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 		if aerr == nil {
 			aerr = fmt.Errorf("approval resume state could not be armed")
 		}
-		_ = s.store.ResolveApproval(context.WithoutCancel(ctx), user, approval.ID, "failed", aerr.Error())
+		_ = s.store.ResolveApproval(context.WithoutCancel(ctx), user, approval.ID, "rejected", aerr.Error())
 		return nil, fmt.Errorf("arm connector approval resume: %w", aerr)
 	}
 	approval.ResumeState = store.ApprovalResumeArmed
@@ -548,7 +640,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 		return "", fmt.Errorf("load conversation: %w", err)
 	}
 
-	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, nil, conv.MCPAccounts)
+	toEnable, _, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(conv.Persona), conv.MCPAccounts)
 	if err != nil {
 		return "", err
 	}
