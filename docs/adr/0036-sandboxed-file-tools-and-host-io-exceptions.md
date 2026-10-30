@@ -137,15 +137,16 @@ host-brokered credentials/network that by invariant never enter the sandbox:
      approval time); in explicit conversation auto-approve mode (`isAutoApprove()`
      or `autoApproveInTest`), calls `store.AutoApproveEnableMCPConnectors` to
      atomically supersede any pending card, persist `OptionalMCPServersEnabled`,
-     and insert the `approved` + `armed` audit record in a single database
-     transaction so connector state and approval/resume state can never diverge.
-  3. **Resume & credential boundary**: when a continuation turn is queued or
-     deferred (`decideApprovalResume`), returns `StopTurn: true` so the next
-     turn mounts the newly enabled connectors through the standard host-side
-     MCP broker (ADR-0040 / ADR-0042); when the continuation is permanently
-     skipped (hourly resume cap or queue full), returns `StopTurn: false` so
-     the current turn finishes cleanly. No connector credentials ever enter the
-     sandbox or model context.
+     insert the `approved` audit record, and enqueue the `'resume'` input row
+     (`resume_state = 'claimed'`, or `'skipped'` when blocked by another pending
+     card or rate/queue limits) in a single database transaction so connector
+     state, approval state, and resume queueing can never diverge.
+  3. **Resume & credential boundary**: when `AutoApproveEnableMCPConnectors`
+     atomically enqueues the `'resume'` input row, returns `StopTurn: true` so
+     the next turn mounts the newly enabled connectors through the standard
+     host-side MCP broker (ADR-0040 / ADR-0042); when the continuation is not
+     enqueued, returns `StopTurn: false` so the current turn finishes cleanly.
+     No connector credentials ever enter the sandbox or model context.
 - **Admin-authored scheduler gate**: `run_if` executes a shell command before
   task promotion as the Fleet host user. Only an authenticated admin can create
   or change it; the command receives a fixed minimal environment with no Fleet

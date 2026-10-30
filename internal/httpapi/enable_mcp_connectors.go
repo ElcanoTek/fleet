@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -225,31 +226,87 @@ func (c connectorValidationCatalog) displayedPromptSet(
 	return out
 }
 
+func (s *Server) displayedPromptSetFromSnapshot(
+	availableList []agent.OptionalServerInfo,
+	turnStartEnabled []string,
+	hidden []string,
+	personaPolicy *agentcore.PersonaToolPermissions,
+) map[string]bool {
+	safeOwners := make(map[string]map[string]bool, len(availableList)+len(turnStartEnabled))
+	addOwner := func(raw string) {
+		k := strings.ToLower(strings.TrimSpace(raw))
+		safe := agentcore.PromptSafeName(k)
+		if k == "" || safe == "" {
+			return
+		}
+		if safeOwners[safe] == nil {
+			safeOwners[safe] = map[string]bool{}
+		}
+		safeOwners[safe][k] = true
+	}
+	if provider, ok := s.agent.(alwaysOnMCPServerCatalogProvider); ok && provider != nil {
+		for _, info := range provider.AlwaysOnMCPServerCatalog() {
+			addOwner(info.Name)
+		}
+	}
+	for _, raw := range turnStartEnabled {
+		addOwner(raw)
+	}
+	for _, info := range availableList {
+		if strings.ToLower(strings.TrimSpace(info.Name)) == agent.OptionalNativeImageGenName || info.Remote {
+			continue
+		}
+		addOwner(info.Name)
+	}
+	snapCat := connectorValidationCatalog{
+		availableList: availableList,
+		safeOwners:    safeOwners,
+	}
+	return snapCat.displayedPromptSet(turnStartEnabled, hidden, personaPolicy)
+}
+
+func advertisedSetFromNames(names []string) map[string]bool {
+	out := make(map[string]bool, len(names))
+	for _, raw := range names {
+		if k := strings.ToLower(strings.TrimSpace(raw)); k != "" {
+			out[k] = true
+		}
+	}
+	return out
+}
+
 // validateEnableMCPConnectors checks that every requested connector name is a
 // valid, connected, prefs-enabled Optional connector (or already-on Always-On
 // connector) whose tools are permitted by interactive_hidden_tools and the
 // active persona policy and that falls within the 25-connector system-prompt
-// cap. Returns the canonical optional connector names to enable (preserving
-// each connector's catalog Name case while excluding any that are already
-// always-on) and their display metadata.
+// cap (using turnAdvertised when provided so a mid-turn ReloadMCPServers does
+// not shift the advertised 25-entry window). Returns the canonical optional
+// connector names to enable (preserving each connector's catalog Name case
+// while excluding any that are already always-on) and their display metadata.
 func (s *Server) validateEnableMCPConnectors(
 	ctx context.Context,
 	user string,
 	requested []string,
 	currentEnabled []string,
 	personaPolicy *agentcore.PersonaToolPermissions,
-	convAccounts ...map[string]string,
+	convAccounts map[string]string,
+	turnAdvertised ...map[string]bool,
 ) (optionalToEnable []string, displayNames map[string]string, err error) {
 	if len(requested) == 0 {
 		return nil, nil, fmt.Errorf("no connectors specified")
 	}
 
-	cat := s.buildConnectorValidationCatalog(ctx, user, convAccounts...)
+	cat := s.buildConnectorValidationCatalog(ctx, user, convAccounts)
 	if cat.prefsErr != nil {
 		return nil, nil, fmt.Errorf("load connector preferences: %w", cat.prefsErr)
 	}
 	hidden := agentcore.InteractiveHiddenTools()
-	displayed := cat.displayedPromptSet(currentEnabled, hidden, personaPolicy)
+	var displayed map[string]bool
+	if len(turnAdvertised) > 0 && turnAdvertised[0] != nil {
+		displayed = turnAdvertised[0]
+	} else {
+		displayed = cat.displayedPromptSet(currentEnabled, hidden, personaPolicy)
+	}
 	alreadyEnabled := make(map[string]bool, len(currentEnabled))
 	for _, n := range currentEnabled {
 		if k := strings.ToLower(strings.TrimSpace(n)); k != "" {
@@ -367,7 +424,18 @@ func (s *Server) newEnableMCPConnectorsHandler(
 	user string,
 	buf *turnBuffer,
 	turnStager *approvalStager,
+	turnStartOptional ...[]agent.OptionalServerInfo,
 ) tools.EnableMCPConnectorsHandler {
+	var turnSnapshot []agent.OptionalServerInfo
+	hasSnapshot := false
+	if len(turnStartOptional) > 0 && turnStartOptional[0] != nil {
+		turnSnapshot = append([]agent.OptionalServerInfo(nil), turnStartOptional[0]...)
+		hasSnapshot = true
+	}
+	var turnStartEnabled []string
+	if conv != nil {
+		turnStartEnabled = append([]string(nil), conv.OptionalMCPServersEnabled...)
+	}
 	return func(ctx context.Context, toolCallID string, params tools.EnableMCPConnectorsParams) (*tools.EnableMCPConnectorsResult, error) {
 		if s.store == nil {
 			return nil, fmt.Errorf("enable_mcp_connectors requires a conversation store")
@@ -395,8 +463,13 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			policy = s.personaPolicyFor(effectivePersona)
 		}
 
+		var turnAdvertised map[string]bool
+		if hasSnapshot {
+			turnAdvertised = s.displayedPromptSetFromSnapshot(turnSnapshot, turnStartEnabled, agentcore.InteractiveHiddenTools(), policy)
+		}
+
 		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
-		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts)
+		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts, turnAdvertised)
 		if err != nil {
 			return nil, err
 		}
@@ -472,21 +545,36 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	if turnStager != nil {
 		expiry = turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName)
 	}
-	approval, superseded, err := s.store.AutoApproveEnableMCPConnectors(
-		ctx, user, conv.ID,
-		tools.EnableMCPConnectorsToolName, toolCallID, rawInput, recordText,
-		expiry, merged,
-	)
+	allowResume := !s.shuttingDown.Load() && !UpdateDrainActive()
+	maxPerHour := agentcore.ResumeMaxPerHour()
+	autoRes, err := s.store.AutoApproveEnableMCPConnectors(ctx, store.AutoApproveConnectorsRequest{
+		UserEmail:      user,
+		ConversationID: conv.ID,
+		ToolName:       tools.EnableMCPConnectorsToolName,
+		ToolCallID:     toolCallID,
+		ArgsJSON:       rawInput,
+		ResultText:     recordText,
+		ExpiresAt:      expiry,
+		MergedServers:  merged,
+		AllowResume:    allowResume,
+		MaxPerHour:     maxPerHour,
+		MaxPending:     maxPendingInputs,
+		IgnoreOutstanding: func(id string) bool {
+			_, failed := s.approvalPersistenceFailures.Load(id)
+			return failed
+		},
+	})
+	approval := autoRes.Approval
 	if err != nil || approval == nil {
 		if err == nil {
 			err = fmt.Errorf("store returned nil approval")
 		}
 		return nil, fmt.Errorf("auto-approve enable connectors: %w", err)
 	}
-	if superseded > 0 && buf != nil {
+	if autoRes.Superseded > 0 && buf != nil {
 		buf.Emit("tool.approval_superseded", map[string]any{
 			"tool":  tools.EnableMCPConnectorsToolName,
-			"count": superseded,
+			"count": autoRes.Superseded,
 		})
 	}
 	conv.OptionalMCPServersEnabled = merged
@@ -506,10 +594,27 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		})
 	}
 
-	resumed := s.decideApprovalResume(conv.ID, 0)
+	resumed := autoRes.ResumeInput != nil
+	if resumed {
+		metrics.RecordApprovalResume("queued")
+		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
+		log.Printf("audit: approval resume queued for conversation %q as input %q after %q",
+			conv.ID, autoRes.ResumeInput.ID, approvalResumeIDs(autoRes.ResumeClaimed))
+		s.emitQueueUpdate(ctx, autoRes.ResumeInput.UserEmail, conv.ID)
+		s.maybeDrainQueue(conv.ID)
+	} else if autoRes.ResumeSkipped != "" {
+		metrics.RecordApprovalResume(autoRes.ResumeSkipped)
+		if autoRes.ResumeSkipped == store.ApprovalResumeSkipRateLimited || autoRes.ResumeSkipped == store.ApprovalResumeSkipQueueFull {
+			s.notifyResumeSkipped(user, conv.ID)
+		}
+		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
+		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
+			conv.ID, autoRes.ResumeSkipped, autoRes.RecentResumes, maxPerHour, approval.ID)
+	}
+
 	msg := fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", "))
 	if !resumed {
-		msg = fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Automatic turn continuation was not queued (resume cap or queue limit reached), so their tools will be mounted on the next turn — finish what you can with your current tools and let the user know.", strings.Join(safeAdded, ", "))
+		msg = fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Automatic turn continuation was not queued (resume cap, queue limit, or pending state), so their tools will be mounted on the next turn — finish what you can with your current tools and let the user know.", strings.Join(safeAdded, ", "))
 	}
 
 	return &tools.EnableMCPConnectorsResult{
@@ -624,7 +729,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 
 	effectivePersona, _ := s.resolveTurnPersona(ctx, conv)
-	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts)
+	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts, advertisedSetFromNames(args.Connectors))
 	if err != nil {
 		return "", err
 	}

@@ -914,29 +914,70 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	return nil
 }
 
+// AutoApproveConnectorsRequest carries the inputs for AutoApproveEnableMCPConnectors.
+type AutoApproveConnectorsRequest struct {
+	UserEmail         string
+	ConversationID    string
+	ToolName          string
+	ToolCallID        string
+	ArgsJSON          string
+	ResultText        string
+	ExpiresAt         int64
+	MergedServers     []string
+	AllowResume       bool
+	MaxPerHour        int
+	MaxPending        int
+	IgnoreOutstanding func(approvalID string) bool
+}
+
+// AutoApproveConnectorsResult reports what AutoApproveEnableMCPConnectors committed.
+type AutoApproveConnectorsResult struct {
+	Approval      *Approval
+	Superseded    int64
+	ResumeInput   *InputQueueRow
+	ResumeClaimed []ApprovalResumeItem
+	ResumeSkipped string
+	RecentResumes int
+}
+
 // AutoApproveEnableMCPConnectors atomically supersedes any pending connector
-// approvals in convID, persists mergedServers into the conversation's
-// optional_mcp_servers_enabled column, and inserts an approved + armed
-// approval audit row in a single database transaction so connector state,
-// approval outcome, and resume arming can never diverge on partial failure.
+// approvals in ConversationID, persists MergedServers into the conversation's
+// optional_mcp_servers_enabled column, inserts the approved audit row, and (when
+// AllowResume is true and no other approval or rate/queue limit blocks it)
+// enqueues the continuation 'resume' input row in a single database
+// transaction. When the continuation cannot be enqueued immediately, the audit
+// row is committed with resume_state = 'skipped' (never 'armed') so no
+// asynchronous retry or later settlement can launch a duplicate resume turn.
 func (s *Store) AutoApproveEnableMCPConnectors(
 	ctx context.Context,
-	userEmail, convID, toolName, toolCallID, argsJSON, resultText string,
-	expiresAt int64,
-	mergedServers []string,
-) (*Approval, int64, error) {
+	req AutoApproveConnectorsRequest,
+) (AutoApproveConnectorsResult, error) {
+	var out AutoApproveConnectorsResult
+	mergedServers := req.MergedServers
 	if mergedServers == nil {
 		mergedServers = []string{}
 	}
 	payload, err := json.Marshal(mergedServers)
 	if err != nil {
-		return nil, 0, fmt.Errorf("marshal optional mcp servers: %w", err)
+		return out, fmt.Errorf("marshal optional mcp servers: %w", err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, 0, err
+		return out, err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	var owner string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
+		req.ConversationID, req.UserEmail,
+	).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, ErrConversationNotFound
+	}
+	if err != nil {
+		return out, err
+	}
 
 	now := time.Now().Unix()
 	supRes, err := tx.ExecContext(ctx,
@@ -948,49 +989,139 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		  WHERE conversation_id = $2
 		    AND tool_name = $3
 		    AND status = 'pending'`,
-		now, convID, toolName,
+		now, req.ConversationID, req.ToolName,
 	)
 	if err != nil {
-		return nil, 0, err
+		return out, err
 	}
-	superseded, _ := supRes.RowsAffected()
+	out.Superseded, _ = supRes.RowsAffected()
 
-	convRes, err := tx.ExecContext(ctx,
+	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
 		  WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, now, convID, userEmail,
-	)
-	if err != nil {
-		return nil, 0, err
+		payload, now, req.ConversationID, req.UserEmail,
+	); err != nil {
+		return out, err
 	}
-	if n, _ := convRes.RowsAffected(); n == 0 {
-		return nil, 0, ErrConversationNotFound
+
+	canEnqueue := req.AllowResume
+	if canEnqueue {
+		rows, qerr := tx.QueryContext(ctx,
+			`SELECT id FROM approvals
+			  WHERE conversation_id = $1
+			    AND ((status = 'pending' AND tool_name <> 'preview_email')
+			      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
+			  ORDER BY created_at, id`,
+			req.ConversationID, ApprovalExecutingSentinel,
+		)
+		if qerr != nil {
+			return out, qerr
+		}
+		hasOutstanding := false
+		for rows.Next() {
+			var outID string
+			if err := rows.Scan(&outID); err != nil {
+				_ = rows.Close()
+				return out, err
+			}
+			if req.IgnoreOutstanding != nil && req.IgnoreOutstanding(outID) {
+				continue
+			}
+			hasOutstanding = true
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return out, err
+		}
+		_ = rows.Close()
+		if hasOutstanding {
+			canEnqueue = false
+		}
+	}
+
+	if canEnqueue {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM chat_input_queue
+			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2`,
+			req.ConversationID, now-3600,
+		).Scan(&out.RecentResumes); err != nil {
+			return out, err
+		}
+		var pending int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM chat_input_queue WHERE conversation_id = $1 AND state = 'queued'`,
+			req.ConversationID,
+		).Scan(&pending); err != nil {
+			return out, err
+		}
+		switch {
+		case req.MaxPerHour > 0 && out.RecentResumes >= req.MaxPerHour:
+			out.ResumeSkipped = ApprovalResumeSkipRateLimited
+			canEnqueue = false
+		case req.MaxPending > 0 && pending >= req.MaxPending:
+			out.ResumeSkipped = ApprovalResumeSkipQueueFull
+			canEnqueue = false
+		}
 	}
 
 	id := uuid.NewString()
 	var expiresArg any
-	if expiresAt > 0 {
-		expiresArg = expiresAt
+	if req.ExpiresAt > 0 {
+		expiresArg = req.ExpiresAt
+	}
+	resumeState := ApprovalResumeSkipped
+	if canEnqueue {
+		resumeState = ApprovalResumeClaimed
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO approvals (
 			id, conversation_id, user_email, tool_name, tool_call_id, args_json,
 			status, result_text, created_at, resolved_at, expires_at, is_err, resume_state
-		) VALUES ($1, $2, $3, $4, $5, $6, 'approved', $7, $8, $8, $9, FALSE, 'armed')`,
-		id, convID, userEmail, toolName, toolCallID, argsJSON, resultText, now, expiresArg,
+		) VALUES ($1, $2, $3, $4, $5, $6, 'approved', $7, $8, $8, $9, FALSE, $10)`,
+		id, req.ConversationID, req.UserEmail, req.ToolName, req.ToolCallID, req.ArgsJSON,
+		req.ResultText, now, expiresArg, resumeState,
 	); err != nil {
-		return nil, 0, err
+		return out, err
 	}
+
+	if canEnqueue {
+		out.ResumeClaimed = []ApprovalResumeItem{{
+			ID:       id,
+			ToolName: req.ToolName,
+			Outcome:  ApprovalResumeOutcomeApproved,
+		}}
+		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
+			ID:             uuid.NewString(),
+			ConversationID: req.ConversationID,
+			UserEmail:      owner,
+			ClientInputID:  "approval-resume:" + id,
+			Message:        ApprovalResumeInputText(out.ResumeClaimed),
+			Attachments:    "[]",
+			Mode:           InputModeResume,
+			State:          InputStateQueued,
+		})
+		if err != nil {
+			return out, err
+		}
+		out.ResumeInput = &row
+	} else if out.ResumeSkipped != "" {
+		note := ApprovalResumeSkippedNotice(out.ResumeSkipped, req.MaxPerHour)
+		if err := s.appendNoticeTx(ctx, tx, req.ConversationID, NoticeApprovalResumeSkipped, note); err != nil {
+			return out, err
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
-		return nil, 0, err
+		return out, err
 	}
-	return &Approval{
-		ID: id, ConversationID: convID, UserEmail: userEmail,
-		ToolName: toolName, ToolCallID: toolCallID, ArgsJSON: argsJSON,
-		Status: approvalStatusApproved, ResultText: resultText,
-		CreatedAt: now, ResolvedAt: now, ExpiresAt: expiresAt,
-		IsErr: sql.NullBool{Bool: false, Valid: true}, ResumeState: ApprovalResumeArmed,
-	}, superseded, nil
+	out.Approval = &Approval{
+		ID: id, ConversationID: req.ConversationID, UserEmail: req.UserEmail,
+		ToolName: req.ToolName, ToolCallID: req.ToolCallID, ArgsJSON: req.ArgsJSON,
+		Status: approvalStatusApproved, ResultText: req.ResultText,
+		CreatedAt: now, ResolvedAt: now, ExpiresAt: req.ExpiresAt,
+		IsErr: sql.NullBool{Bool: false, Valid: true}, ResumeState: resumeState,
+	}
+	return out, nil
 }
 
 // SetThinkingConfig sets (or clears) a conversation's extended-thinking override

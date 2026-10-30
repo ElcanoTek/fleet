@@ -404,24 +404,46 @@ func (s *fakeChatStore) SetOptionalMCPServers(_ context.Context, _, convID strin
 	}
 	return nil
 }
-func (s *fakeChatStore) AutoApproveEnableMCPConnectors(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON, resultText string, expiresAt int64, mergedServers []string) (*store.Approval, int64, error) {
+func (s *fakeChatStore) AutoApproveEnableMCPConnectors(_ context.Context, req store.AutoApproveConnectorsRequest) (store.AutoApproveConnectorsResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c := s.convs[convID]; c != nil {
-		c.OptionalMCPServersEnabled = append([]string(nil), mergedServers...)
+	if c := s.convs[req.ConversationID]; c != nil {
+		c.OptionalMCPServersEnabled = append([]string(nil), req.MergedServers...)
 	}
-	return &store.Approval{
-		ID:             "appr-auto",
-		ConversationID: convID,
-		UserEmail:      userEmail,
-		ToolName:       toolName,
-		ToolCallID:     toolCallID,
-		ArgsJSON:       argsJSON,
-		Status:         "approved",
-		ResultText:     resultText,
-		ExpiresAt:      expiresAt,
-		ResumeState:    store.ApprovalResumeArmed,
-	}, 0, nil
+	resumeState := store.ApprovalResumeSkipped
+	var resumeInput *store.InputQueueRow
+	var claimed []store.ApprovalResumeItem
+	if req.AllowResume {
+		resumeState = store.ApprovalResumeClaimed
+		claimed = []store.ApprovalResumeItem{{
+			ID:       "appr-auto",
+			ToolName: req.ToolName,
+			Outcome:  store.ApprovalResumeOutcomeApproved,
+		}}
+		resumeInput = &store.InputQueueRow{
+			ID:             "resume-auto",
+			ConversationID: req.ConversationID,
+			UserEmail:      req.UserEmail,
+			Mode:           store.InputModeResume,
+			State:          store.InputStateQueued,
+		}
+	}
+	return store.AutoApproveConnectorsResult{
+		Approval: &store.Approval{
+			ID:             "appr-auto",
+			ConversationID: req.ConversationID,
+			UserEmail:      req.UserEmail,
+			ToolName:       req.ToolName,
+			ToolCallID:     req.ToolCallID,
+			ArgsJSON:       req.ArgsJSON,
+			Status:         "approved",
+			ResultText:     req.ResultText,
+			ExpiresAt:      req.ExpiresAt,
+			ResumeState:    resumeState,
+		},
+		ResumeInput:   resumeInput,
+		ResumeClaimed: claimed,
+	}, nil
 }
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
 

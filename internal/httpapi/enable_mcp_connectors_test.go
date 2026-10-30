@@ -133,47 +133,68 @@ func (s *enableMCPTestStore) ResolveApproval(_ context.Context, _, id, status, r
 	return nil
 }
 
-func (s *enableMCPTestStore) AutoApproveEnableMCPConnectors(ctx context.Context, userEmail, convID, toolName, toolCallID, argsJSON, resultText string, expiresAt int64, mergedServers []string) (*store.Approval, int64, error) {
+func (s *enableMCPTestStore) AutoApproveEnableMCPConnectors(ctx context.Context, req store.AutoApproveConnectorsRequest) (store.AutoApproveConnectorsResult, error) {
+	var out store.AutoApproveConnectorsResult
 	s.mu.Lock()
 	if s.failCreateAppr {
 		s.mu.Unlock()
-		return nil, 0, fmt.Errorf("create approval failed")
+		return out, fmt.Errorf("create approval failed")
 	}
 	if s.failArmResume {
 		s.mu.Unlock()
-		return nil, 0, fmt.Errorf("arm resume failed")
+		return out, fmt.Errorf("arm resume failed")
 	}
-	var superseded int64
 	for _, a := range s.approvals {
-		if a.ConversationID == convID && a.ToolName == toolName && a.Status == "pending" {
+		if a.ConversationID == req.ConversationID && a.ToolName == req.ToolName && a.Status == "pending" {
 			a.Status = "rejected"
 			if a.ResumeState == store.ApprovalResumeArmed {
 				a.ResumeState = store.ApprovalResumeSuperseded
 			}
-			superseded++
+			out.Superseded++
 		}
 	}
 	s.nextApproval++
 	id := fmt.Sprintf("appr-%d", s.nextApproval)
+	resumeState := store.ApprovalResumeClaimed
+	if !req.AllowResume || s.skipResume {
+		resumeState = store.ApprovalResumeSkipped
+		if s.skipResume {
+			out.ResumeSkipped = store.ApprovalResumeSkipRateLimited
+		}
+	} else {
+		s.resumeClaimed++
+		out.ResumeClaimed = []store.ApprovalResumeItem{{
+			ID:       id,
+			ToolName: req.ToolName,
+			Outcome:  store.ApprovalResumeOutcomeApproved,
+		}}
+		out.ResumeInput = &store.InputQueueRow{
+			ID:             fmt.Sprintf("resume-%d", s.resumeClaimed),
+			ConversationID: req.ConversationID,
+			UserEmail:      req.UserEmail,
+			Mode:           "resume",
+		}
+	}
 	a := &store.Approval{
 		ID:             id,
-		ConversationID: convID,
-		UserEmail:      userEmail,
-		ToolName:       toolName,
-		ToolCallID:     toolCallID,
-		ArgsJSON:       argsJSON,
+		ConversationID: req.ConversationID,
+		UserEmail:      req.UserEmail,
+		ToolName:       req.ToolName,
+		ToolCallID:     req.ToolCallID,
+		ArgsJSON:       req.ArgsJSON,
 		Status:         "approved",
-		ResultText:     resultText,
-		ExpiresAt:      expiresAt,
-		ResumeState:    store.ApprovalResumeArmed,
+		ResultText:     req.ResultText,
+		ExpiresAt:      req.ExpiresAt,
+		ResumeState:    resumeState,
 	}
 	s.approvals[id] = a
 	s.mu.Unlock()
 
-	if err := s.SetOptionalMCPServers(ctx, userEmail, convID, mergedServers); err != nil {
-		return nil, 0, err
+	if err := s.SetOptionalMCPServers(ctx, req.UserEmail, req.ConversationID, req.MergedServers); err != nil {
+		return out, err
 	}
-	return a, superseded, nil
+	out.Approval = a
+	return out, nil
 }
 
 func (s *enableMCPTestStore) ClaimApproval(_ context.Context, _, id, newStatus, resultText string) (bool, error) {
@@ -316,7 +337,7 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 	}
 
 	// 1. Valid optional connector + already always-on connector succeeds and returns only the optional connector.
-	toEnable, displayNames, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{" Slack ", "pages"}, nil, policy)
+	toEnable, displayNames, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{" Slack ", "pages"}, nil, policy, nil)
 	if err != nil {
 		t.Fatalf("expected valid connectors to succeed, got: %v", err)
 	}
@@ -328,32 +349,32 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 	}
 
 	// 2. Unknown connector rejected.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"nonexistent"}, nil, policy); err == nil || !strings.Contains(err.Error(), "unknown or unavailable") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"nonexistent"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "unknown or unavailable") {
 		t.Fatalf("expected unknown connector error, got: %v", err)
 	}
 
 	// 3. Unconfigured (needs_setup) connector rejected with clear setup message.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"unconfigured_crm"}, nil, policy); err == nil || !strings.Contains(err.Error(), "not configured on this server") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"unconfigured_crm"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "not configured on this server") {
 		t.Fatalf("expected unconfigured connector error, got: %v", err)
 	}
 
 	// 4. Connector disabled in user preferences rejected.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"disabled_by_user"}, nil, policy); err == nil || !strings.Contains(err.Error(), "Settings → Connections") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"disabled_by_user"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "Settings → Connections") {
 		t.Fatalf("expected user-pref disabled error, got: %v", err)
 	}
 
 	// 5. Unavailable 0-tool connector rejected.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"down_server"}, nil, policy); err == nil || !strings.Contains(err.Error(), "exposed 0 tools") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"down_server"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "exposed 0 tools") {
 		t.Fatalf("expected unavailable 0-tool connector error, got: %v", err)
 	}
 
 	// 6. Persona-blocked connector rejected.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"persona_denied"}, nil, policy); err == nil || !strings.Contains(err.Error(), "not permitted") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"persona_denied"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "not permitted") {
 		t.Fatalf("expected persona-blocked error, got: %v", err)
 	}
 
 	// 7. Prompt-safe name ("google_drive") resolves back to canonical stored connector name ("Google Drive").
-	toEnableSafe, dnSafe, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, nil, policy)
+	toEnableSafe, dnSafe, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, nil, policy, nil)
 	if err != nil {
 		t.Fatalf("expected prompt-safe connector name to resolve, got: %v", err)
 	}
@@ -370,7 +391,7 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 		ToolCount: 1,
 		Tools:     []string{"list"},
 	})
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, nil, policy); err == nil || !strings.Contains(err.Error(), "ambiguous identifier") {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, nil, policy, nil); err == nil || !strings.Contains(err.Error(), "ambiguous identifier") {
 		t.Fatalf("expected ambiguous identifier error, got: %v", err)
 	}
 }
@@ -578,7 +599,7 @@ func TestEnableMCPConnectors_SkippedResumeDoesNotStopTurnAndEnforces25Cap(t *tes
 	}
 
 	// Connector #25 (0-indexed: conn_25 is the 26th entry) is outside the 25-entry prompt cap.
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"conn_25"}, nil, nil); err == nil {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"conn_25"}, nil, nil, nil); err == nil {
 		t.Fatalf("expected conn_25 (26th connector) to be rejected by the 25-connector prompt cap")
 	}
 
@@ -592,15 +613,28 @@ func TestEnableMCPConnectors_SkippedResumeDoesNotStopTurnAndEnforces25Cap(t *tes
 		sink:              buf,
 		autoApproveInTest: true,
 	}
-	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
+	turnSnapshot := srv.availableOptionalConnectorsForUser(context.Background(), "alice@example.com")
+	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager, turnSnapshot)
+	// Simulate a mid-turn ReloadMCPServers that prepends an alphabetically earlier connector ("aaa_new").
+	// conn_24 (the 25th connector in the turn-start snapshot) must STILL be accepted, while aaa_new (never advertised) must be rejected.
+	engine.catalog = append([]agent.OptionalServerInfo{{
+		Name:      "aaa_new",
+		ToolCount: 1,
+		Tools:     []string{"ping"},
+	}}, engine.catalog...)
+	if _, err := handler(context.Background(), "call-unadvertised", tools.EnableMCPConnectorsParams{
+		Connectors: []string{"aaa_new"},
+	}); err == nil {
+		t.Fatalf("expected unadvertised mid-turn connector aaa_new to be rejected")
+	}
 	res, err := handler(context.Background(), "call-skip", tools.EnableMCPConnectorsParams{
-		Connectors: []string{"conn_00"},
+		Connectors: []string{"conn_24"},
 	})
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("unexpected error enabling advertised conn_24 after mid-turn reload: %v", err)
 	}
 	if res.StopTurn {
-		t.Fatalf("expected StopTurn=false when decideApprovalResume skips enqueueing a continuation")
+		t.Fatalf("expected StopTurn=false when AutoApproveEnableMCPConnectors skips enqueueing a continuation")
 	}
 }
 
@@ -687,14 +721,14 @@ func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testin
 			"mcp:Slack/post_message",
 		},
 	}
-	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar", "slack"}, nil, policy)
+	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar", "slack"}, nil, policy, nil)
 	if err != nil {
 		t.Fatalf("unexpected error enabling connected foo_bar + Slack under narrow persona Allow: %v", err)
 	}
 	if !slices.Equal(got, []string{"foo_bar", "Slack"}) {
 		t.Fatalf("got %v, want [foo_bar Slack]", got)
 	}
-	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{agent.OptionalNativeImageGenName}, nil, policy); err == nil {
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{agent.OptionalNativeImageGenName}, nil, policy, nil); err == nil {
 		t.Fatalf("expected image_generation to be rejected by validateEnableMCPConnectors")
 	}
 	if connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, policy) {
