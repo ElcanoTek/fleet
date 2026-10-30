@@ -236,16 +236,6 @@ func (s *Server) validateEnableMCPConnectors(
 	ctx context.Context,
 	user string,
 	requested []string,
-	personaPolicy *agentcore.PersonaToolPermissions,
-	convAccounts ...map[string]string,
-) (optionalToEnable []string, displayNames map[string]string, err error) {
-	return s.validateEnableMCPConnectorsWithEnabled(ctx, user, requested, nil, personaPolicy, convAccounts...)
-}
-
-func (s *Server) validateEnableMCPConnectorsWithEnabled(
-	ctx context.Context,
-	user string,
-	requested []string,
 	currentEnabled []string,
 	personaPolicy *agentcore.PersonaToolPermissions,
 	convAccounts ...map[string]string,
@@ -406,7 +396,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		}
 
 		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
-		toEnable, displayNames, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts)
+		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts)
 		if err != nil {
 			return nil, err
 		}
@@ -451,7 +441,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 
 		autoApprove := turnStager != nil && (turnStager.isAutoApprove() || turnStager.autoApproveInTest)
 		if autoApprove {
-			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, currentEnabled, newlyAdded, merged, buf, turnStager)
+			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, newlyAdded, merged, buf, turnStager)
 		}
 		return s.stageEnableMCPConnectorsApproval(ctx, conv, user, toolCallID, rawInput, newlyAdded, buf, turnStager)
 	}
@@ -471,51 +461,33 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	ctx context.Context,
 	conv *store.Conversation,
 	user, toolCallID, rawInput string,
-	previousEnabled, newlyAdded, merged []string,
+	newlyAdded, merged []string,
 	buf *turnBuffer,
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
-	if n, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
-		return nil, fmt.Errorf("supersede pending connector approvals: %w", err)
-	} else if n > 0 && buf != nil {
-		buf.Emit("tool.approval_superseded", map[string]any{
-			"tool":  tools.EnableMCPConnectorsToolName,
-			"count": n,
-		})
-	}
-
 	safeAdded := promptSafeSlice(newlyAdded)
 	recordText := fmt.Sprintf("%s: auto-approved enabling optional MCP connector(s) %s for this conversation.",
 		notifyRecordResultPrefix, strings.Join(safeAdded, ", "))
-	approval, aerr := s.store.CreateApproval(ctx, conv.ID, user,
-		tools.EnableMCPConnectorsToolName, toolCallID, rawInput,
-		turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName), store.ApprovalSeat{})
-	if aerr != nil || approval == nil {
-		if aerr == nil {
-			aerr = fmt.Errorf("store returned nil approval")
+	expiry := int64(0)
+	if turnStager != nil {
+		expiry = turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName)
+	}
+	approval, superseded, err := s.store.AutoApproveEnableMCPConnectors(
+		ctx, user, conv.ID,
+		tools.EnableMCPConnectorsToolName, toolCallID, rawInput, recordText,
+		expiry, merged,
+	)
+	if err != nil || approval == nil {
+		if err == nil {
+			err = fmt.Errorf("store returned nil approval")
 		}
-		return nil, fmt.Errorf("create auto-approved connector record: %w", aerr)
+		return nil, fmt.Errorf("auto-approve enable connectors: %w", err)
 	}
-
-	compensateCtx := context.WithoutCancel(ctx)
-	if err := s.store.SetOptionalMCPServers(ctx, user, conv.ID, merged); err != nil {
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", err.Error())
-		return nil, fmt.Errorf("enable connectors: %w", err)
-	}
-	armed, armErr := s.store.ArmApprovalResume(ctx, user, approval.ID)
-	if armErr != nil || !armed {
-		if armErr == nil {
-			armErr = fmt.Errorf("approval resume state could not be armed")
-		}
-		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", armErr.Error())
-		return nil, fmt.Errorf("arm auto-approved connector resume: %w", armErr)
-	}
-	if rerr := s.store.ResolveApproval(ctx, user, approval.ID, "approved", recordText); rerr != nil {
-		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
-		_, _ = s.store.SupersedePendingApprovals(compensateCtx, conv.ID, tools.EnableMCPConnectorsToolName)
-		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "rejected", rerr.Error())
-		return nil, fmt.Errorf("resolve auto-approved connector record: %w", rerr)
+	if superseded > 0 && buf != nil {
+		buf.Emit("tool.approval_superseded", map[string]any{
+			"tool":  tools.EnableMCPConnectorsToolName,
+			"count": superseded,
+		})
 	}
 	conv.OptionalMCPServersEnabled = merged
 
@@ -652,7 +624,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 
 	effectivePersona, _ := s.resolveTurnPersona(ctx, conv)
-	toEnable, _, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts)
+	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts)
 	if err != nil {
 		return "", err
 	}

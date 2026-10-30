@@ -914,6 +914,85 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	return nil
 }
 
+// AutoApproveEnableMCPConnectors atomically supersedes any pending connector
+// approvals in convID, persists mergedServers into the conversation's
+// optional_mcp_servers_enabled column, and inserts an approved + armed
+// approval audit row in a single database transaction so connector state,
+// approval outcome, and resume arming can never diverge on partial failure.
+func (s *Store) AutoApproveEnableMCPConnectors(
+	ctx context.Context,
+	userEmail, convID, toolName, toolCallID, argsJSON, resultText string,
+	expiresAt int64,
+	mergedServers []string,
+) (*Approval, int64, error) {
+	if mergedServers == nil {
+		mergedServers = []string{}
+	}
+	payload, err := json.Marshal(mergedServers)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshal optional mcp servers: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	now := time.Now().Unix()
+	supRes, err := tx.ExecContext(ctx,
+		`UPDATE approvals
+		    SET status = 'rejected',
+		        result_text = 'Superseded by a newer call to this tool.',
+		        resolved_at = $1,
+		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
+		  WHERE conversation_id = $2
+		    AND tool_name = $3
+		    AND status = 'pending'`,
+		now, convID, toolName,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	superseded, _ := supRes.RowsAffected()
+
+	convRes, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
+		  WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		payload, now, convID, userEmail,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if n, _ := convRes.RowsAffected(); n == 0 {
+		return nil, 0, ErrConversationNotFound
+	}
+
+	id := uuid.NewString()
+	var expiresArg any
+	if expiresAt > 0 {
+		expiresArg = expiresAt
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO approvals (
+			id, conversation_id, user_email, tool_name, tool_call_id, args_json,
+			status, result_text, created_at, resolved_at, expires_at, is_err, resume_state
+		) VALUES ($1, $2, $3, $4, $5, $6, 'approved', $7, $8, $8, $9, FALSE, 'armed')`,
+		id, convID, userEmail, toolName, toolCallID, argsJSON, resultText, now, expiresArg,
+	); err != nil {
+		return nil, 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return &Approval{
+		ID: id, ConversationID: convID, UserEmail: userEmail,
+		ToolName: toolName, ToolCallID: toolCallID, ArgsJSON: argsJSON,
+		Status: approvalStatusApproved, ResultText: resultText,
+		CreatedAt: now, ResolvedAt: now, ExpiresAt: expiresAt,
+		IsErr: sql.NullBool{Bool: false, Valid: true}, ResumeState: ApprovalResumeArmed,
+	}, superseded, nil
+}
+
 // SetThinkingConfig sets (or clears) a conversation's extended-thinking override
 // (#220). A nil cfg writes SQL NULL, restoring "inherit the global default";
 // a non-nil cfg persists the explicit choice. Owner-scoped (the user_email gate),

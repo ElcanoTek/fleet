@@ -404,6 +404,25 @@ func (s *fakeChatStore) SetOptionalMCPServers(_ context.Context, _, convID strin
 	}
 	return nil
 }
+func (s *fakeChatStore) AutoApproveEnableMCPConnectors(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON, resultText string, expiresAt int64, mergedServers []string) (*store.Approval, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.OptionalMCPServersEnabled = append([]string(nil), mergedServers...)
+	}
+	return &store.Approval{
+		ID:             "appr-auto",
+		ConversationID: convID,
+		UserEmail:      userEmail,
+		ToolName:       toolName,
+		ToolCallID:     toolCallID,
+		ArgsJSON:       argsJSON,
+		Status:         "approved",
+		ResultText:     resultText,
+		ExpiresAt:      expiresAt,
+		ResumeState:    store.ApprovalResumeArmed,
+	}, 0, nil
+}
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path

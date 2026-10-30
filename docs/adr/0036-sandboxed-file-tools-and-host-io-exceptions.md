@@ -130,15 +130,15 @@ host-brokered credentials/network that by invariant never enter the sandbox:
      (`resolveTurnPersona` + `PersonaPolicy`), unambiguous under
      `PromptSafeName`, and within the deterministic 25-connector system-prompt
      cap (`MaxAvailableOptionalInPrompt`).
-  2. **Approval & rollback boundary**: in standard mode, stages a handler-only
-     approval card (`ApprovalResumeArmed`) and performs no connector mutation
-     until the human approves (`runStagedEnableMCPConnectors` re-validates
-     against the current store and effective persona state at approval time);
-     in explicit conversation auto-approve mode (`isAutoApprove()` or
-     `autoApproveInTest`), creates the audit record, persists
-     `OptionalMCPServersEnabled`, arms resume, and resolves the approval row as
-     `approved`, rolling back `OptionalMCPServersEnabled` and resolving/superseding
-     any half-created approval row as `rejected` if any step fails.
+  2. **Approval & atomic persistence boundary**: in standard mode, stages a
+     handler-only approval card (`ApprovalResumeArmed`) and performs no
+     connector mutation until the human approves (`runStagedEnableMCPConnectors`
+     re-validates against the current store and effective persona state at
+     approval time); in explicit conversation auto-approve mode (`isAutoApprove()`
+     or `autoApproveInTest`), calls `store.AutoApproveEnableMCPConnectors` to
+     atomically supersede any pending card, persist `OptionalMCPServersEnabled`,
+     and insert the `approved` + `armed` audit record in a single database
+     transaction so connector state and approval/resume state can never diverge.
   3. **Resume & credential boundary**: when a continuation turn is queued or
      deferred (`decideApprovalResume`), returns `StopTurn: true` so the next
      turn mounts the newly enabled connectors through the standard host-side
