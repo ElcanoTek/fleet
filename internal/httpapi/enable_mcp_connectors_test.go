@@ -536,3 +536,51 @@ func TestEnableMCPConnectorsHandler_MockModeApprovalUpdatesConversation(t *testi
 		t.Fatalf("OptionalMCPServersEnabled in MockMode = %v, want [slack]", updatedConv.OptionalMCPServersEnabled)
 	}
 }
+
+func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testing.T) {
+	st := newEnableMCPTestStore()
+
+	engine := &enableMCPTestEngine{
+		fakeEngine: &fakeEngine{},
+		catalog: []agent.OptionalServerInfo{
+			{
+				Name:      "foo-bar",
+				ToolCount: 0, // unavailable 0-tool bundled server
+			},
+			{
+				Name:      "foo_bar",
+				ToolCount: 2,
+				Tools:     []string{"read_item", "list_items"},
+			},
+		},
+	}
+	srv := &Server{
+		cfg:      &config.Config{},
+		agent:    engine,
+		store:    st,
+		inflight: make(map[string]inflightEntry),
+	}
+
+	policy := &agentcore.PersonaToolPermissions{
+		Allow: []string{
+			"mcp:foo_bar/read_item",
+			"mcp:remote_box/fetch_data",
+		},
+	}
+	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar"}, policy)
+	if err != nil {
+		t.Fatalf("unexpected error enabling connected foo_bar under narrow persona Allow: %v", err)
+	}
+	if !slices.Equal(got, []string{"foo_bar"}) {
+		t.Fatalf("got %v, want [foo_bar]", got)
+	}
+	if !connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, policy) {
+		t.Fatalf("expected remote_box to be permitted under narrow persona Allow mcp:remote_box/fetch_data")
+	}
+	denyRemote := &agentcore.PersonaToolPermissions{
+		Deny: []string{"mcp:remote_box/*"},
+	}
+	if connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, denyRemote) {
+		t.Fatalf("expected remote_box to be rejected when persona Deny covers mcp:remote_box/*")
+	}
+}

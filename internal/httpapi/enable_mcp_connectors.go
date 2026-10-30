@@ -137,17 +137,21 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 	}
 	if provider, ok := s.agent.(alwaysOnMCPServerCatalogProvider); ok && provider != nil {
 		for _, info := range provider.AlwaysOnMCPServerCatalog() {
-			putWithPromptSafeAlias(cat.alwaysOn, cat.safeOwners, info.Name, info)
+			var owners map[string]map[string]bool
+			if info.Available {
+				owners = cat.safeOwners
+			}
+			putWithPromptSafeAlias(cat.alwaysOn, owners, info.Name, info)
 		}
 	}
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
-			putWithPromptSafeAlias(cat.bundledOptional, cat.safeOwners, info.Name, info)
+			putWithPromptSafeAlias(cat.bundledOptional, nil, info.Name, info)
 		}
 	}
 	for _, m := range s.connectorMeta() {
 		if !m.Configured {
-			putWithPromptSafeAlias(cat.needsSetup, cat.safeOwners, m.Name, true)
+			putWithPromptSafeAlias(cat.needsSetup, nil, m.Name, true)
 		}
 	}
 	for _, info := range s.availableOptionalConnectorsForUser(ctx, user) {
@@ -156,7 +160,7 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 	rawRemote := s.remoteSeatCatalog(ctx, user)
 	cat.allRemote = make(map[string]map[string]bool, len(rawRemote))
 	for k, v := range rawRemote {
-		putWithPromptSafeAlias(cat.allRemote, cat.safeOwners, k, v)
+		putWithPromptSafeAlias(cat.allRemote, nil, k, v)
 	}
 	return cat
 }
@@ -202,24 +206,23 @@ func (s *Server) validateEnableMCPConnectors(
 			return nil, nil, fmt.Errorf("connector %q has an ambiguous identifier that collides with another connector; toggle the intended connector directly in the Tools picker", safeLookup)
 		}
 
-		if ao, ok := cat.alwaysOn[lookup]; ok {
-			if !ao.Available {
-				return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", safeLookup)
-			}
+		if ao, ok := cat.alwaysOn[lookup]; ok && ao.Available {
 			continue
-		}
-
-		if bInfo, isBundled := cat.bundledOptional[lookup]; isBundled {
-			if optionalConnectorStatus(bInfo) != connectorStatusAvailable {
-				return nil, nil, fmt.Errorf("connector %q is currently unavailable (exposed 0 tools at startup) and cannot be enabled", safeLookup)
-			}
-			if avail, _, _ := bundledPrefFor(cat.prefs, bInfo); !avail {
-				return nil, nil, fmt.Errorf("connector %q is disabled in the user's Settings → Connections preferences; ask the user to enable it there first", safeLookup)
-			}
 		}
 
 		info, ok := cat.available[lookup]
 		if !ok {
+			if ao, isAO := cat.alwaysOn[lookup]; isAO && !ao.Available {
+				return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", safeLookup)
+			}
+			if bInfo, isBundled := cat.bundledOptional[lookup]; isBundled {
+				if optionalConnectorStatus(bInfo) != connectorStatusAvailable {
+					return nil, nil, fmt.Errorf("connector %q is currently unavailable (exposed 0 tools at startup) and cannot be enabled", safeLookup)
+				}
+				if avail, _, _ := bundledPrefFor(cat.prefs, bInfo); !avail {
+					return nil, nil, fmt.Errorf("connector %q is disabled in the user's Settings → Connections preferences; ask the user to enable it there first", safeLookup)
+				}
+			}
 			if cat.needsSetup[lookup] {
 				return nil, nil, fmt.Errorf("connector %q is not configured on this server (needs administrator credential setup) and cannot be enabled", safeLookup)
 			}
@@ -263,8 +266,10 @@ func connectorPermittedInChat(info agent.OptionalServerInfo, hidden []string, po
 		}
 		return false
 	}
-	probe := agentcore.MCPToolName(info.Name, "probe")
-	return !agentcore.InteractiveHiddenIn(hidden, probe) && agentcore.PersonaPermitsTool(policy, probe)
+	if !info.Remote {
+		return false
+	}
+	return agentcore.PersonaPermitsMCPServer(policy, info.Name)
 }
 
 type stagedEnableMCPConnectorsArgs struct {
@@ -319,12 +324,14 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		}
 
 		// Load fresh conversation state so we merge against the latest enabled list.
-		currentEnabled := append([]string(nil), conv.OptionalMCPServersEnabled...)
-		if s.store != nil {
-			if fresh, gerr := s.store.Get(ctx, user, conv.ID); gerr == nil && fresh != nil {
-				currentEnabled = fresh.OptionalMCPServersEnabled
+		fresh, gerr := s.store.Get(ctx, user, conv.ID)
+		if gerr != nil || fresh == nil {
+			if gerr == nil {
+				gerr = fmt.Errorf("conversation not found")
 			}
+			return nil, fmt.Errorf("load conversation: %w", gerr)
 		}
+		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
 		enabledSet := make(map[string]bool, len(currentEnabled))
 		for _, n := range currentEnabled {
 			enabledSet[strings.ToLower(strings.TrimSpace(n))] = true

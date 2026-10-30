@@ -782,11 +782,10 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 				continue
 			}
 		} else {
-			if !srv.Remote && srv.ToolCount <= 0 {
+			if !srv.Remote {
 				continue
 			}
-			probe := agentcore.MCPToolName(srv.Name, "probe")
-			if agentcore.InteractiveHiddenIn(hidden, probe) || !agentcore.PersonaPermitsTool(policy, probe) {
+			if !agentcore.PersonaPermitsMCPServer(policy, srv.Name) {
 				continue
 			}
 			visibleTools = srv.ToolCount
