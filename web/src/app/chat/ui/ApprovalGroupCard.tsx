@@ -369,9 +369,20 @@ export function ApprovalGroupCard({
         ) : null}
         <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
         {countdown.expired ? (
-          <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">
-            The earliest of these actions timed out. Use One at a time to see each one.
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[0.72rem] text-[var(--color-card-text-muted)]">
+              The earliest of these actions timed out. Use One at a time to see each one.
+            </p>
+            <button
+              type="button"
+              data-testid="approval-group-expired-one-at-a-time"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={submitting !== null}
+              onClick={onOneAtATime}
+            >
+              Review one at a time
+            </button>
+          </div>
         ) : null}
         <ApprovalSubmitError message={submitError} />
       </div>

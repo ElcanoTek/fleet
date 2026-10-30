@@ -31,6 +31,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 const (
@@ -57,6 +58,7 @@ type turnStruggle struct {
 	toolErrorStreak int // the longest run of consecutive failed tool calls
 	loopGuardBlocks int
 	compactions     int
+	stagedApproval  bool // true when the turn staged a tool approval card for the user
 }
 
 // struggleFromHistory reads the turn's tool results in order. A result whose
@@ -76,6 +78,9 @@ func struggleFromHistory(history []agent.HistoryEntry, compactions int) turnStru
 		text := strings.TrimSpace(c.Text)
 		if strings.HasPrefix(text, "LOOP_GUARD") {
 			t.loopGuardBlocks++
+		}
+		if strings.HasPrefix(text, "APPROVAL_REQUIRED") && strings.Contains(text, "approval_id=") {
+			t.stagedApproval = true
 		}
 		// A call held for the user's approval, or a model-switch suggestion,
 		// is marked as an error result but nothing failed: it is not part of
@@ -194,10 +199,16 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		s.discardStruggleCheck(check)
 		return
 	}
+	struggle := struggleFromHistory(res.NewHistory, buf.compactionCount())
+	pendingActionApproval := struggle.stagedApproval && s.hasPendingActionApproval(ctx, user, conv.ID)
 	var stager *approvalStager
 	staged := false
 	stage := func(source, reason string) bool {
-		if staged {
+		// When the turn already staged a tool approval card that is still
+		// pending the user's decision, never stack a suggest_advanced_model
+		// card underneath it: clicking Approve on both cards runs the turn's
+		// action twice in parallel. The struggle event is still recorded below.
+		if staged || pendingActionApproval {
 			return false
 		}
 		if stager == nil {
@@ -230,7 +241,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 
 	// Signals first: they describe this turn, and are free.
 	if s.cfg != nil && s.cfg.LiveEscalationSignalsEnabled() {
-		if signal, reason := struggleFromHistory(res.NewHistory, buf.compactionCount()).strongest(); signal != "" {
+		if signal, reason := struggle.strongest(); signal != "" {
 			record(suggestionSourceSignal, signal, nil, stage(suggestionSourceSignal, reason))
 		}
 	}
@@ -367,4 +378,17 @@ func (s *Server) startSteerCheck(conv *store.Conversation, history, turn []agent
 	}
 	prior := append(append([]agent.HistoryEntry{}, history...), turn[:last]...)
 	return s.startStruggleCheck(conv, prior, tc.Text, "")
+}
+
+func (s *Server) hasPendingActionApproval(ctx context.Context, user, convID string) bool {
+	pending, err := s.store.ListPendingApprovals(ctx, user, convID)
+	if err != nil {
+		return true
+	}
+	for _, p := range pending {
+		if p.ToolName != tools.SuggestAdvancedModelToolName && p.ToolName != previewEmailToolName {
+			return true
+		}
+	}
+	return false
 }

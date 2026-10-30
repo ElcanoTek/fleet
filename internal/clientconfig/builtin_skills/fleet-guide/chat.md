@@ -725,7 +725,9 @@ approve**, one row per action, each with a checkbox, its own plain-words card
 or arguments, and the account it runs as. **Approve all (k)** runs the k checked
 actions and declines the unchecked ones in one decision; **Cancel all**
 declines them all; **One at a time** shows the usual separate cards instead.
-The countdown shows the earliest deadline among them. Once decided, each action
+The countdown shows the earliest deadline among them; if it expires, the banner
+offers **Review one at a time** so you can switch to the individual cards,
+retry any expired actions, and decide any that are still pending. Once decided, each action
 shows its own outcome card (running, applied, declined), exactly as if you had
 decided it on its own card.
 
@@ -802,7 +804,8 @@ preselected and you can flip it. See [Memory and projects](#7-memory-and-project
 
 **Model suggestions.** When a question is heavier than the current model handles
 well, or a reply clearly struggled, a card offers **Switch & retry**, **Just
-switch**, or **Dismiss**. Declining costs nothing, and after you dismiss one you
+switch**, or **Dismiss** (unless the reply is already waiting on an action
+approval card). Declining costs nothing, and after you dismiss one you
 won't see another for a few messages. If you switch and later move back to the
 fast model, a suggestion can appear again.
 

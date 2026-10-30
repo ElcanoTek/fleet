@@ -487,3 +487,31 @@ func TestFailedTurnCountsStartedClassifierCheck(t *testing.T) {
 		})
 	}
 }
+
+// A long turn that staged a tool approval card (e.g. schedule_task) records
+// the struggle signal for admin stats without stacking a suggest_advanced_model
+// card underneath the pending tool approval card.
+func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	s.cfg.EscalationSignalsEnabled = true
+	const user = "jeanne@x.com"
+	conv := seedConv(t, s, user)
+	if _, err := s.store.CreateApproval(context.Background(), conv.ID, user, "schedule_task", "call-1", `{"prompt":"x"}`, time.Now().Unix()+3600, store.ApprovalSeat{}); err != nil {
+		t.Fatal(err)
+	}
+	buf := newTurnBuffer(conv.ID, "turn-long-approval")
+	history := append(repeat(toolResult(t, "ok", false), escalationLongTurnToolCalls),
+		toolResult(t, "APPROVAL_REQUIRED: schedule_task — staged for user approval (approval_id=a1)", true))
+	res := &TurnResult{Model: "openrouter/auto", NewHistory: history}
+
+	s.escalateAfterTurn(context.Background(), buf, conv, user, nil, res, nil)
+
+	if pendingSuggestion(t, s, user, conv.ID) != nil {
+		t.Fatal("must not stage a suggest_advanced_model card alongside a staged tool approval card")
+	}
+	ev := escalationEvents(t, s, conv.ID)
+	if len(ev) != 1 || ev[0].Signal != escalationSignalLongTurn || ev[0].Suggested {
+		t.Fatalf("events = %+v, want one recorded long_turn signal with Suggested=false", ev)
+	}
+}
