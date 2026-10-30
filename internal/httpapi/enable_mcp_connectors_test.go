@@ -37,11 +37,13 @@ func (e *enableMCPTestEngine) ConnectorMeta() []clientconfig.ConnectorMeta {
 
 type enableMCPTestStore struct {
 	*fakeChatStore
-	mu            sync.Mutex
-	prefs         map[string]store.ConnectorPref
-	approvals     map[string]*store.Approval
-	nextApproval  int
-	resumeClaimed int
+	mu             sync.Mutex
+	prefs          map[string]store.ConnectorPref
+	approvals      map[string]*store.Approval
+	nextApproval   int
+	resumeClaimed  int
+	failArmResume  bool
+	failCreateAppr bool
 }
 
 func newEnableMCPTestStore() *enableMCPTestStore {
@@ -73,6 +75,9 @@ func (s *enableMCPTestStore) SupersedePendingApprovals(_ context.Context, convID
 func (s *enableMCPTestStore) CreateApproval(_ context.Context, convID, user, toolName, callID, argsJSON string, expiry int64, _ store.ApprovalSeat) (*store.Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failCreateAppr {
+		return nil, fmt.Errorf("create approval failed")
+	}
 	s.nextApproval++
 	id := fmt.Sprintf("appr-%d", s.nextApproval)
 	a := &store.Approval{
@@ -103,6 +108,9 @@ func (s *enableMCPTestStore) GetApproval(_ context.Context, user, id string) (*s
 func (s *enableMCPTestStore) ArmApprovalResume(_ context.Context, _, id string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failArmResume {
+		return false, fmt.Errorf("arm resume failed")
+	}
 	a := s.approvals[id]
 	if a == nil {
 		return false, nil
@@ -224,6 +232,12 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 				ToolCount:   1,
 				Tools:       []string{"secret_op"},
 			},
+			{
+				Name:        "Google Drive",
+				DisplayName: "Google Drive",
+				ToolCount:   2,
+				Tools:       []string{"search_files", "read_file"},
+			},
 		},
 		alwaysOn: []agent.AlwaysOnServerInfo{
 			{Name: "pages", Available: true, ToolCount: 4},
@@ -277,6 +291,18 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 	// 6. Persona-blocked connector rejected.
 	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"persona_denied"}, policy); err == nil || !strings.Contains(err.Error(), "not permitted") {
 		t.Fatalf("expected persona-blocked error, got: %v", err)
+	}
+
+	// 7. Prompt-safe name ("google_drive") resolves back to canonical stored connector name ("google drive").
+	toEnableSafe, dnSafe, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, policy)
+	if err != nil {
+		t.Fatalf("expected prompt-safe connector name to resolve, got: %v", err)
+	}
+	if !slices.Equal(toEnableSafe, []string{"google drive"}) {
+		t.Fatalf("toEnableSafe = %v, want [\"google drive\"]", toEnableSafe)
+	}
+	if dnSafe["google drive"] != "Google Drive" {
+		t.Fatalf("dnSafe[\"google drive\"] = %q, want Google Drive", dnSafe["google drive"])
 	}
 }
 
@@ -404,5 +430,99 @@ func TestEnableMCPConnectorsHandler_AutoApprove(t *testing.T) {
 	st.mu.Unlock()
 	if claimedCount != 1 {
 		t.Fatalf("expected decideApprovalResume to claim 1 armed resume input, got %d", claimedCount)
+	}
+}
+
+func TestEnableMCPConnectorsHandler_AutoApproveFailsClosedOnResumePersistenceError(t *testing.T) {
+	st := newEnableMCPTestStore()
+	st.failArmResume = true
+	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
+
+	engine := &enableMCPTestEngine{
+		fakeEngine: &fakeEngine{},
+		catalog: []agent.OptionalServerInfo{
+			{
+				Name:        "slack",
+				DisplayName: "Slack",
+				ToolCount:   2,
+				Tools:       []string{"post_message", "list_channels"},
+			},
+		},
+	}
+	srv := &Server{
+		cfg:      &config.Config{},
+		agent:    engine,
+		store:    st,
+		inflight: make(map[string]inflightEntry),
+	}
+
+	buf := newTurnBuffer(conv.ID, "turn-auto-fail")
+	stager := &approvalStager{
+		ctx:               context.Background(),
+		store:             st,
+		conversationID:    conv.ID,
+		userEmail:         "alice@example.com",
+		sink:              buf,
+		autoApproveInTest: true,
+	}
+
+	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
+	res, err := handler(context.Background(), "call-enable-auto-fail", tools.EnableMCPConnectorsParams{
+		Connectors: []string{"slack"},
+	})
+	if err == nil {
+		t.Fatalf("expected error when ArmApprovalResume fails, got res=%+v", res)
+	}
+	updatedConv, _ := st.Get(context.Background(), "alice@example.com", conv.ID)
+	if len(updatedConv.OptionalMCPServersEnabled) != 0 {
+		t.Fatalf("expected OptionalMCPServersEnabled to remain empty on failure, got %v", updatedConv.OptionalMCPServersEnabled)
+	}
+}
+
+func TestEnableMCPConnectorsHandler_MockModeApprovalUpdatesConversation(t *testing.T) {
+	st := newEnableMCPTestStore()
+	conv, _ := st.CreateConversation(context.Background(), "alice@example.com", "Test", "victoria", "anthropic/claude-opus-4.8", false)
+
+	engine := &enableMCPTestEngine{
+		fakeEngine: &fakeEngine{},
+		catalog: []agent.OptionalServerInfo{
+			{
+				Name:        "slack",
+				DisplayName: "Slack",
+				ToolCount:   2,
+				Tools:       []string{"post_message", "list_channels"},
+			},
+		},
+	}
+	srv := &Server{
+		cfg:      &config.Config{MockMode: true},
+		agent:    engine,
+		store:    st,
+		inflight: make(map[string]inflightEntry),
+	}
+
+	buf := newTurnBuffer(conv.ID, "turn-mock")
+	stager := &approvalStager{
+		ctx:            context.Background(),
+		store:          st,
+		conversationID: conv.ID,
+		userEmail:      "alice@example.com",
+		sink:           buf,
+	}
+
+	handler := srv.newEnableMCPConnectorsHandler(conv, "alice@example.com", buf, stager)
+	res, err := handler(context.Background(), "call-enable-mock", tools.EnableMCPConnectorsParams{
+		Connectors: []string{"slack"},
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	decision := srv.decideApproval(context.Background(), nil, "alice@example.com", conv.ID, res.ApprovalID, approvalRequest{Approved: true})
+	if decision.status != 0 {
+		t.Fatalf("decideApproval error (%d): %s", decision.status, decision.errText)
+	}
+	updatedConv, _ := st.Get(context.Background(), "alice@example.com", conv.ID)
+	if !slices.Equal(updatedConv.OptionalMCPServersEnabled, []string{"slack"}) {
+		t.Fatalf("OptionalMCPServersEnabled in MockMode = %v, want [slack]", updatedConv.OptionalMCPServersEnabled)
 	}
 }

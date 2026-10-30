@@ -366,14 +366,14 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: remote server lookup failed for %s: %v", user, err)
+		log.Printf("mcp seats: remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 	}
 	if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 		for _, srv := range shared {
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: shared remote server lookup failed for %s: %v", user, err)
+		log.Printf("mcp seats: shared remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 	}
 	return out
 }

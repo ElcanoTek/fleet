@@ -266,6 +266,17 @@ func filterNativeToolsByOptIn(all []fantasy.AgentTool, enabled []string) []fanta
 	return out
 }
 
+func dropToolByName(all []fantasy.AgentTool, dropName string) []fantasy.AgentTool {
+	out := make([]fantasy.AgentTool, 0, len(all))
+	for _, tool := range all {
+		if tool == nil || tool.Info().Name == dropName {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
 // optionalNativeImageGenInfo is the catalog entry that surfaces the
 // generate_image tool in the same Tools picker users already use to toggle
 // gamma / DSP MCPs. Image gen costs ~$0.14/call on Nano Banana Pro, so it's

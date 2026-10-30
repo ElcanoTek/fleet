@@ -37,6 +37,7 @@ import {
   useNarrowing,
 } from "./approvalNarrowing";
 import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
+import { Icon } from "./Icon";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
@@ -1991,7 +1992,7 @@ function EnableMCPConnectorsCard({
       style={statusStyle}
     >
       <div className="mb-2 flex items-center gap-2">
-        <span aria-hidden>🔌</span>
+        <Icon name="tools" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
         <span className="font-medium">{title}</span>
       </div>
 
@@ -2025,7 +2026,7 @@ function EnableMCPConnectorsCard({
               type="button"
               disabled={submitting !== null || countdown.expired}
               onClick={() => onResolve(true)}
-              className="rounded-[var(--radius-md)] bg-[var(--color-accent)] px-3 py-1.5 text-[0.75rem] font-medium text-white transition hover:opacity-90 disabled:opacity-50"
+              className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
             >
               {submitting === "send" ? "Enabling…" : "Approve & continue"}
             </button>

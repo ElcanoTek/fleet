@@ -1834,6 +1834,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	turnTools := tools.NewTurnTools(sb, m.browserbaseKeyFunc(ctx, in.UserEmail, in.OptionalMCPServersEnabled))
 	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
+	enableConnectorsWired := tools.HasEnableMCPConnectorsHandler(ctx)
+	if !enableConnectorsWired {
+		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
+	}
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
@@ -1884,7 +1888,9 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// the two cannot split them).
 	hiddenTools := agentcore.InteractiveHiddenTools()
 	hosted := hostedRosterFromOverlay(overlay)
-	hosted.availableOptional = in.AvailableOptionalMCPServers
+	if enableConnectorsWired {
+		hosted.availableOptional = in.AvailableOptionalMCPServers
+	}
 	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hosted, hiddenTools)
 	if err != nil {
 		return nil, err

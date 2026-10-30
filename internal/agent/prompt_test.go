@@ -656,4 +656,3 @@ func TestBuildSystemPrompt_AvailableOptionalMCPConnectors(t *testing.T) {
 		t.Errorf("expected section to be omitted when enable_mcp_connectors is hidden")
 	}
 }
-

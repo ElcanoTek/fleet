@@ -48,6 +48,12 @@ func WithEnableMCPConnectorsHandler(ctx context.Context, h EnableMCPConnectorsHa
 	return context.WithValue(ctx, enableMCPConnectorsHandlerKey{}, h)
 }
 
+// HasEnableMCPConnectorsHandler reports whether ctx carries an
+// EnableMCPConnectorsHandler installed by the interactive HTTP chat layer.
+func HasEnableMCPConnectorsHandler(ctx context.Context) bool {
+	return enableMCPConnectorsHandlerFromContext(ctx) != nil
+}
+
 func enableMCPConnectorsHandlerFromContext(ctx context.Context) EnableMCPConnectorsHandler {
 	if ctx == nil {
 		return nil

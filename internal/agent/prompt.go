@@ -559,9 +559,7 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 	//    nothing, so the model is told to say the connector is unavailable
 	//    right now instead.
 	writeHostedSkipNotice(&sb, hosted.skipped)
-	if !agentcore.InteractiveHiddenIn(hidden, tools.EnableMCPConnectorsToolName) && agentcore.PersonaPermitsTool(m.personaPolicy(persona), tools.EnableMCPConnectorsToolName) {
-		writeAvailableOptionalConnectorsSection(&sb, m.availableOptionalForPrompt(persona, enabledOptionalMCPServers, hosted, hidden))
-	}
+	m.appendAvailableOptionalConnectors(&sb, persona, enabledOptionalMCPServers, hosted, hidden)
 
 	// 5. protocol listing — skip fastio-mcp.md when fast.io is off
 	// so the agent doesn't try to read it for tools it can't call.
@@ -727,9 +725,6 @@ func writeHostedSkipNotice(sb *strings.Builder, skipped []skippedConnector) {
 // stability (docs/PROMPT-CACHE-CONTRACT.md).
 func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []string, hosted hostedMCPRoster, hidden []string) []OptionalServerInfo {
 	source := hosted.availableOptional
-	if source == nil && m != nil {
-		source = m.MCPServerCatalog()
-	}
 	if len(source) == 0 {
 		return nil
 	}
@@ -751,7 +746,7 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 			continue
 		}
 		safeName := promptSafeName(rawName)
-		if safeName == "" || seen[safeName] {
+		if safeName == "" || enabled[safeName] || seen[safeName] {
 			continue
 		}
 		visibleTools := 0
@@ -794,7 +789,16 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 	return out
 }
 
-func sanitizeSingleLinePromptText(s string) string {
+const (
+	// MaxAvailableOptionalInPrompt caps how many disabled optional MCP
+	// connectors are listed in the system prompt so a large user/shared
+	// connection catalog cannot bloat the system prompt.
+	MaxAvailableOptionalInPrompt   = 25
+	maxOptionalConnectorLabelRunes = 64
+	maxOptionalConnectorDescRunes  = 200
+)
+
+func clampPromptRunes(s string, maxRunes int) string {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return ""
@@ -802,7 +806,21 @@ func sanitizeSingleLinePromptText(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
-	return strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if r := []rune(s); len(r) > maxRunes {
+		return string(r[:maxRunes]) + "…"
+	}
+	return s
+}
+
+func (m *Manager) appendAvailableOptionalConnectors(sb *strings.Builder, persona string, enabledOptIns []string, hosted hostedMCPRoster, hidden []string) {
+	if agentcore.InteractiveHiddenIn(hidden, tools.EnableMCPConnectorsToolName) {
+		return
+	}
+	if !agentcore.PersonaPermitsTool(m.personaPolicy(persona), tools.EnableMCPConnectorsToolName) {
+		return
+	}
+	writeAvailableOptionalConnectorsSection(sb, m.availableOptionalForPrompt(persona, enabledOptIns, hosted, hidden))
 }
 
 func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []OptionalServerInfo) {
@@ -811,9 +829,18 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 	}
 	sb.WriteString("## Available Optional MCP Connectors (not currently enabled)\n\n")
 	sb.WriteString("The following connected Optional MCP connectors are available for this user right now, but are currently toggled **OFF** in this conversation:\n")
-	for _, srv := range available {
-		label := sanitizeSingleLinePromptText(srv.DisplayName)
-		desc := sanitizeSingleLinePromptText(srv.Description)
+	shown := available
+	overflow := 0
+	if len(shown) > MaxAvailableOptionalInPrompt {
+		overflow = len(shown) - MaxAvailableOptionalInPrompt
+		shown = shown[:MaxAvailableOptionalInPrompt]
+	}
+	for _, srv := range shown {
+		var label, desc string
+		if !srv.Remote {
+			label = clampPromptRunes(srv.DisplayName, maxOptionalConnectorLabelRunes)
+			desc = clampPromptRunes(srv.Description, maxOptionalConnectorDescRunes)
+		}
 		var metaParts []string
 		if label != "" && !strings.EqualFold(label, srv.Name) {
 			metaParts = append(metaParts, label)
@@ -837,9 +864,11 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 			fmt.Fprintf(sb, "- **`%s`**%s\n", srv.Name, meta)
 		}
 	}
+	if overflow > 0 {
+		fmt.Fprintf(sb, "- …and %d more connected optional connectors.\n", overflow)
+	}
 	sb.WriteString("\nIf the user's request needs data or actions from one of these connectors:\n")
 	sb.WriteString("- Do **NOT** flail with `tool_search`, `bash`, or `run_python` workarounds trying to reach a connector that is turned off.\n")
 	sb.WriteString("- Call `enable_mcp_connectors(connectors=[\"<name>\"], reason=\"<why it is needed>\")` right away.\n")
 	sb.WriteString("- When auto-approve is on, Fleet enables the connector(s) immediately and automatically continues your turn with their tools mounted. When auto-approve is off, Fleet shows an approval card and automatically continues your turn as soon as the user clicks **Approve**.\n\n")
 }
-

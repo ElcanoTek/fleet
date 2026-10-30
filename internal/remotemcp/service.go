@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
@@ -296,6 +297,11 @@ type AddServerInput struct {
 	APIKeyPrefix string
 }
 
+// MaxRemoteMCPNameRunes bounds the length of a user-configured remote MCP
+// server name so untrusted connector labels cannot bloat system prompts or UI
+// cards.
+const MaxRemoteMCPNameRunes = 64
+
 // AddServer validates + canonicalizes the URL and persists the server. OAuth
 // adds walk the discovery chain + dynamic client registration (or use manual
 // credentials) and land in status login_required — the login flow itself
@@ -316,6 +322,9 @@ func (s *Service) AddServer(ctx context.Context, in AddServerInput) (*store.Remo
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return nil, noProbe, errors.New("a name is required")
+	}
+	if utf8.RuneCountInString(name) > MaxRemoteMCPNameRunes {
+		return nil, noProbe, fmt.Errorf("name must be %d characters or fewer", MaxRemoteMCPNameRunes)
 	}
 	// Validate the seat label up front: an OAuth add registers a client at
 	// the vendor before the row exists, and a label rejected only at insert
