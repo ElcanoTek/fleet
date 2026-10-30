@@ -604,9 +604,6 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		s.maybeDrainQueue(conv.ID)
 	} else if autoRes.ResumeSkipped != "" {
 		metrics.RecordApprovalResume(autoRes.ResumeSkipped)
-		if autoRes.ResumeSkipped == store.ApprovalResumeSkipRateLimited || autoRes.ResumeSkipped == store.ApprovalResumeSkipQueueFull {
-			s.notifyResumeSkipped(user, conv.ID)
-		}
 		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
 		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
 			conv.ID, autoRes.ResumeSkipped, autoRes.RecentResumes, maxPerHour, approval.ID)
