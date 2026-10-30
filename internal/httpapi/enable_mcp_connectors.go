@@ -229,8 +229,9 @@ func (c connectorValidationCatalog) displayedPromptSet(
 // valid, connected, prefs-enabled Optional connector (or already-on Always-On
 // connector) whose tools are permitted by interactive_hidden_tools and the
 // active persona policy and that falls within the 25-connector system-prompt
-// cap. Returns the canonical lowercase optional connector names to enable
-// (excluding any that are already always-on) and their display metadata.
+// cap. Returns the canonical optional connector names to enable (preserving
+// each connector's catalog Name case while excluding any that are already
+// always-on) and their display metadata.
 func (s *Server) validateEnableMCPConnectors(
 	ctx context.Context,
 	user string,
@@ -306,17 +307,18 @@ func (s *Server) validateEnableMCPConnectorsWithEnabled(
 			return nil, nil, fmt.Errorf("unknown or unavailable optional MCP connector %q — only connectors listed under 'Available Optional MCP Connectors' can be enabled", safeLookup)
 		}
 
-		canonName := strings.ToLower(strings.TrimSpace(info.Name))
-		if canonName == "" || seen[canonName] {
+		canonName := strings.TrimSpace(info.Name)
+		normName := strings.ToLower(canonName)
+		if normName == "" || seen[normName] {
 			continue
 		}
-		seen[canonName] = true
+		seen[normName] = true
 
 		if !connectorPermittedInChat(info, hidden, personaPolicy) {
-			return nil, nil, fmt.Errorf("connector %q is not permitted for the current persona or interactive chat policy", agentcore.PromptSafeName(canonName))
+			return nil, nil, fmt.Errorf("connector %q is not permitted for the current persona or interactive chat policy", agentcore.PromptSafeName(normName))
 		}
-		if !alreadyEnabled[canonName] && !displayed[canonName] {
-			return nil, nil, fmt.Errorf("connector %q is outside the %d optional connectors listed in the system prompt for this turn; toggle it directly in the Tools picker", agentcore.PromptSafeName(canonName), agent.MaxAvailableOptionalInPrompt)
+		if !alreadyEnabled[normName] && !displayed[normName] {
+			return nil, nil, fmt.Errorf("connector %q is outside the %d optional connectors listed in the system prompt for this turn; toggle it directly in the Tools picker", agentcore.PromptSafeName(normName), agent.MaxAvailableOptionalInPrompt)
 		}
 
 		optionalToEnable = append(optionalToEnable, canonName)
@@ -416,7 +418,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 
 		var newlyAdded []string
 		for _, n := range toEnable {
-			if !enabledSet[n] {
+			if !enabledSet[strings.ToLower(strings.TrimSpace(n))] {
 				newlyAdded = append(newlyAdded, n)
 			}
 		}
@@ -432,7 +434,9 @@ func (s *Server) newEnableMCPConnectorsHandler(
 
 		merged := append([]string(nil), currentEnabled...)
 		for _, n := range newlyAdded {
-			if !slices.Contains(merged, n) {
+			norm := strings.ToLower(strings.TrimSpace(n))
+			if norm != "" && !enabledSet[norm] {
+				enabledSet[norm] = true
 				merged = append(merged, n)
 			}
 		}
@@ -624,9 +628,15 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	if s.cfg != nil && s.cfg.MockMode {
 		if conv, err := s.store.Get(ctx, user, convID); err == nil && conv != nil {
 			merged := append([]string(nil), conv.OptionalMCPServersEnabled...)
+			seen := make(map[string]bool, len(merged))
+			for _, m := range merged {
+				seen[strings.ToLower(strings.TrimSpace(m))] = true
+			}
 			for _, c := range args.Connectors {
-				c = strings.ToLower(strings.TrimSpace(c))
-				if c != "" && !slices.Contains(merged, c) {
+				c = strings.TrimSpace(c)
+				norm := strings.ToLower(c)
+				if norm != "" && !seen[norm] {
+					seen[norm] = true
 					merged = append(merged, c)
 				}
 			}
@@ -648,8 +658,14 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 
 	merged := append([]string(nil), conv.OptionalMCPServersEnabled...)
+	seen := make(map[string]bool, len(merged))
+	for _, m := range merged {
+		seen[strings.ToLower(strings.TrimSpace(m))] = true
+	}
 	for _, c := range toEnable {
-		if !slices.Contains(merged, c) {
+		norm := strings.ToLower(strings.TrimSpace(c))
+		if norm != "" && !seen[norm] {
+			seen[norm] = true
 			merged = append(merged, c)
 		}
 	}

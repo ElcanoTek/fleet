@@ -624,6 +624,11 @@ func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testin
 				ToolCount: 2,
 				Tools:     []string{"read_item", "list_items"},
 			},
+			{
+				Name:      "Slack",
+				ToolCount: 1,
+				Tools:     []string{"post_message"},
+			},
 		},
 	}
 	srv := &Server{
@@ -636,14 +641,15 @@ func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testin
 	policy := &agentcore.PersonaToolPermissions{
 		Allow: []string{
 			"mcp:foo_bar/read_item",
+			"mcp:Slack/post_message",
 		},
 	}
-	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar"}, policy)
+	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar", "slack"}, policy)
 	if err != nil {
-		t.Fatalf("unexpected error enabling connected foo_bar under narrow persona Allow: %v", err)
+		t.Fatalf("unexpected error enabling connected foo_bar + Slack under narrow persona Allow: %v", err)
 	}
-	if !slices.Equal(got, []string{"foo_bar"}) {
-		t.Fatalf("got %v, want [foo_bar]", got)
+	if !slices.Equal(got, []string{"foo_bar", "Slack"}) {
+		t.Fatalf("got %v, want [foo_bar Slack]", got)
 	}
 	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{agent.OptionalNativeImageGenName}, policy); err == nil {
 		t.Fatalf("expected image_generation to be rejected by validateEnableMCPConnectors")
