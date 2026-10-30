@@ -137,11 +137,7 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 	}
 	if provider, ok := s.agent.(alwaysOnMCPServerCatalogProvider); ok && provider != nil {
 		for _, info := range provider.AlwaysOnMCPServerCatalog() {
-			var owners map[string]map[string]bool
-			if info.Available {
-				owners = cat.safeOwners
-			}
-			putWithPromptSafeAlias(cat.alwaysOn, owners, info.Name, info)
+			putWithPromptSafeAlias(cat.alwaysOn, nil, info.Name, info)
 		}
 	}
 	if s.agent != nil {
@@ -206,14 +202,13 @@ func (s *Server) validateEnableMCPConnectors(
 			return nil, nil, fmt.Errorf("connector %q has an ambiguous identifier that collides with another connector; toggle the intended connector directly in the Tools picker", safeLookup)
 		}
 
-		if ao, ok := cat.alwaysOn[lookup]; ok && ao.Available {
-			continue
-		}
-
 		info, ok := cat.available[lookup]
 		if !ok {
-			if ao, isAO := cat.alwaysOn[lookup]; isAO && !ao.Available {
-				return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", safeLookup)
+			if ao, isAO := cat.alwaysOn[lookup]; isAO {
+				if !ao.Available {
+					return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", safeLookup)
+				}
+				continue
 			}
 			if bInfo, isBundled := cat.bundledOptional[lookup]; isBundled {
 				if optionalConnectorStatus(bInfo) != connectorStatusAvailable {
@@ -385,7 +380,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
 	if _, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
-		log.Printf("supersede enable_mcp_connectors (conv=%s): %s", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+		return nil, fmt.Errorf("supersede pending connector approvals: %w", err)
 	}
 
 	safeAdded := promptSafeSlice(newlyAdded)
@@ -459,7 +454,7 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
 	if n, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
-		log.Printf("supersede enable_mcp_connectors (conv=%s): %s", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+		return nil, fmt.Errorf("supersede pending connector approvals: %w", err)
 	} else if n > 0 && buf != nil {
 		buf.Emit("tool.approval_superseded", map[string]any{
 			"tool":  tools.EnableMCPConnectorsToolName,
