@@ -512,6 +512,16 @@ func mcpToolsFrom(sts []mcp.ServerTool, broker MCPBroker) []fantasy.AgentTool {
 	return out
 }
 
+func TestDisclosureSearchAndDescribeAreParallelSafe(t *testing.T) {
+	reg := newDeferredToolRegistry(mcpToolsFrom(discMCPTools(3), &fakeBroker{}))
+	if !reg.searchTool().Info().Parallel {
+		t.Fatal("tool_search should be parallel-safe")
+	}
+	if !reg.describeTool().Info().Parallel {
+		t.Fatal("tool_describe should be parallel-safe")
+	}
+}
+
 func firstStripe(listing string) string {
 	for _, line := range strings.Split(listing, "\n") {
 		line = strings.TrimSpace(strings.TrimPrefix(line, "- "))
