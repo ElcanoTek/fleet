@@ -445,6 +445,19 @@ func (s *fakeChatStore) AutoApproveEnableMCPConnectors(_ context.Context, req st
 		ResumeClaimed: claimed,
 	}, nil
 }
+func (s *fakeChatStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, int64, error) {
+	return &store.Approval{
+		ID:             "appr-staged",
+		ConversationID: convID,
+		UserEmail:      userEmail,
+		ToolName:       toolName,
+		ToolCallID:     toolCallID,
+		ArgsJSON:       argsJSON,
+		Status:         "pending",
+		ExpiresAt:      expiresAt,
+		ResumeState:    store.ApprovalResumeArmed,
+	}, 0, nil
+}
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path

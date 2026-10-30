@@ -197,6 +197,42 @@ func (s *enableMCPTestStore) AutoApproveEnableMCPConnectors(ctx context.Context,
 	return out, nil
 }
 
+func (s *enableMCPTestStore) StageEnableMCPConnectorsApproval(_ context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64) (*store.Approval, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failCreateAppr {
+		return nil, 0, fmt.Errorf("create approval failed")
+	}
+	if s.failArmResume {
+		return nil, 0, fmt.Errorf("arm resume failed")
+	}
+	var superseded int64
+	for _, a := range s.approvals {
+		if a.ConversationID == convID && a.ToolName == toolName && a.Status == "pending" {
+			a.Status = "rejected"
+			if a.ResumeState == store.ApprovalResumeArmed {
+				a.ResumeState = store.ApprovalResumeSuperseded
+			}
+			superseded++
+		}
+	}
+	s.nextApproval++
+	id := fmt.Sprintf("appr-%d", s.nextApproval)
+	a := &store.Approval{
+		ID:             id,
+		ConversationID: convID,
+		UserEmail:      userEmail,
+		ToolName:       toolName,
+		ToolCallID:     toolCallID,
+		ArgsJSON:       argsJSON,
+		Status:         "pending",
+		ExpiresAt:      expiresAt,
+		ResumeState:    store.ApprovalResumeArmed,
+	}
+	s.approvals[id] = a
+	return a, superseded, nil
+}
+
 func (s *enableMCPTestStore) ClaimApproval(_ context.Context, _, id, newStatus, resultText string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

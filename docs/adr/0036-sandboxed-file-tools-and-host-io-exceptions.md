@@ -130,8 +130,10 @@ host-brokered credentials/network that by invariant never enter the sandbox:
      (`resolveTurnPersona` + `PersonaPolicy`), unambiguous under
      `PromptSafeName`, and within the deterministic 25-connector system-prompt
      cap (`MaxAvailableOptionalInPrompt`).
-  2. **Approval & atomic persistence boundary**: in standard mode, stages a
-     handler-only approval card (`ApprovalResumeArmed`) and performs no
+  2. **Approval & atomic persistence boundary**: in standard mode, calls
+     `store.StageEnableMCPConnectorsApproval` to atomically supersede any
+     pending card and insert a handler-only pending approval card with
+     `resume_state = 'armed'` in a single database transaction, performing no
      connector mutation until the human approves (`runStagedEnableMCPConnectors`
      re-validates against the current store and effective persona state at
      approval time); in explicit conversation auto-approve mode (`isAutoApprove()`

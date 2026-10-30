@@ -633,33 +633,22 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	buf *turnBuffer,
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
-	if n, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
-		return nil, fmt.Errorf("supersede pending connector approvals: %w", err)
-	} else if n > 0 && buf != nil {
-		buf.Emit("tool.approval_superseded", map[string]any{
-			"tool":  tools.EnableMCPConnectorsToolName,
-			"count": n,
-		})
-	}
-
 	expiry := int64(0)
 	if turnStager != nil {
 		expiry = turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName)
 	}
-	approval, err := s.store.CreateApproval(ctx, conv.ID, user,
-		tools.EnableMCPConnectorsToolName, toolCallID, rawInput, expiry, store.ApprovalSeat{})
+	approval, superseded, err := s.store.StageEnableMCPConnectorsApproval(
+		ctx, user, conv.ID, tools.EnableMCPConnectorsToolName, toolCallID, rawInput, expiry,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("stage connector approval: %w", err)
 	}
-	ok, aerr := s.store.ArmApprovalResume(ctx, user, approval.ID)
-	if aerr != nil || !ok {
-		if aerr == nil {
-			aerr = fmt.Errorf("approval resume state could not be armed")
-		}
-		_ = s.store.ResolveApproval(context.WithoutCancel(ctx), user, approval.ID, "rejected", aerr.Error())
-		return nil, fmt.Errorf("arm connector approval resume: %w", aerr)
+	if superseded > 0 && buf != nil {
+		buf.Emit("tool.approval_superseded", map[string]any{
+			"tool":  tools.EnableMCPConnectorsToolName,
+			"count": superseded,
+		})
 	}
-	approval.ResumeState = store.ApprovalResumeArmed
 
 	if buf != nil {
 		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, conv.ID))

@@ -33,7 +33,7 @@ During interactive chat turns where an `enable_mcp_connectors` handler is wired 
 ### 3. User-Approval Flow vs. Auto-Approve Flow
 
 - **Standard (User Approval) Mode**:
-  - Stages a handler-only `enable_mcp_connectors` approval row (`SupersedePendingApprovals` supersedes any older pending card in the conversation) and arms `ApprovalResumeArmed` (resolving the row as `rejected` if arming fails).
+  - Calls `store.StageEnableMCPConnectorsApproval`, which in a single database transaction locks the conversation, supersedes any older pending `enable_mcp_connectors` card, and inserts a new pending `enable_mcp_connectors` approval row directly with `resume_state = 'armed'`.
   - Emits `tool.approval_required` to the live stream and returns `Status: "approval_required"` instructing the model to explain why the connector is needed and wait.
   - When the user clicks **Approve & continue** on `EnableMCPConnectorsCard` (`web/src/app/chat/ui/ApprovalCards.tsx`), `runStagedEnableMCPConnectors` resolves the conversation's effective bundle persona (`resolveTurnPersona` + `PersonaPolicy`), re-validates against the 25-connector prompt window and user preferences, persists `OptionalMCPServersEnabled`, returns `enabled_optional` to update the client's Tools picker state immediately, and `decideApprovalResume` launches the continuation turn with the newly enabled MCP connectors mounted.
 - **Auto-Approve Mode** (conversation **⚡ Auto-approve** or `autoApproveInTest`):
