@@ -564,7 +564,6 @@ func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testin
 	policy := &agentcore.PersonaToolPermissions{
 		Allow: []string{
 			"mcp:foo_bar/read_item",
-			"mcp:remote_box/fetch_data",
 		},
 	}
 	got, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"foo_bar"}, policy)
@@ -574,13 +573,10 @@ func TestEnableMCPConnectors_UnavailableCollisionAndRemotePersonaAllow(t *testin
 	if !slices.Equal(got, []string{"foo_bar"}) {
 		t.Fatalf("got %v, want [foo_bar]", got)
 	}
-	if !connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, policy) {
-		t.Fatalf("expected remote_box to be permitted under narrow persona Allow mcp:remote_box/fetch_data")
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{agent.OptionalNativeImageGenName}, policy); err == nil {
+		t.Fatalf("expected image_generation to be rejected by validateEnableMCPConnectors")
 	}
-	denyRemote := &agentcore.PersonaToolPermissions{
-		Deny: []string{"mcp:remote_box/*"},
-	}
-	if connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, denyRemote) {
-		t.Fatalf("expected remote_box to be rejected when persona Deny covers mcp:remote_box/*")
+	if connectorPermittedInChat(agent.OptionalServerInfo{Name: "remote_box", Remote: true}, nil, policy) {
+		t.Fatalf("expected remote_box to be rejected by connectorPermittedInChat")
 	}
 }

@@ -15,12 +15,14 @@ import (
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
-// availableOptionalConnectorsForUser returns the catalog of connected Optional
-// MCP connectors available to user right now:
-//  1. Bundled optional MCP servers from s.agent.MCPServerCatalog() whose live
-//     discovery status is available and that are not disabled in the user's
-//     ConnectorPrefs.
-//  2. The user's connected remote (hosted) MCP servers from s.remoteMCP.
+// availableOptionalConnectorsForUser returns the catalog of connected bundled
+// Optional MCP connectors available to user right now:
+//   - Bundled optional MCP servers from s.agent.MCPServerCatalog() (excluding
+//     the synthetic image_generation toggle) whose live discovery status is
+//     available and that are not disabled in the user's ConnectorPrefs.
+//   - Fails closed (returns an empty slice) if the user's ConnectorPrefs
+//     cannot be loaded from the store so a preference-read error never
+//     advertises or enables a connector the user disabled.
 //
 // Used both to populate TurnInput.AvailableOptionalMCPServers (for the system
 // prompt's "Available Optional MCP Connectors" section) and to validate
@@ -31,14 +33,21 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 	}
 	var prefs map[string]store.ConnectorPref
 	if s.store != nil && user != "" {
-		if list, err := s.store.ListConnectorPrefs(ctx, user); err == nil {
-			prefs = list
+		list, err := s.store.ListConnectorPrefs(ctx, user)
+		if err != nil {
+			log.Printf("availableOptionalConnectorsForUser: load connector prefs failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			return []agent.OptionalServerInfo{}
 		}
+		prefs = list
 	}
 	catalog := s.agent.MCPServerCatalog()
 	out := make([]agent.OptionalServerInfo, 0, len(catalog))
 	seen := make(map[string]bool, len(catalog))
 	for _, info := range catalog {
+		key := strings.ToLower(strings.TrimSpace(info.Name))
+		if key == "" || key == agent.OptionalNativeImageGenName || info.Remote || seen[key] {
+			continue
+		}
 		if optionalConnectorStatus(info) != connectorStatusAvailable {
 			continue
 		}
@@ -46,30 +55,8 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 		if !avail {
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(info.Name))
-		if key == "" || seen[key] {
-			continue
-		}
 		seen[key] = true
 		out = append(out, info)
-	}
-	if s.remoteMCP != nil && s.remoteMCP.Enabled() && user != "" {
-		if conns, err := s.remoteMCP.ConnectedServersForUser(ctx, user); err == nil {
-			for _, g := range agent.GroupRemoteMCPSeats(conns) {
-				key := strings.ToLower(strings.TrimSpace(g.Name))
-				if key == "" || seen[key] {
-					continue
-				}
-				seen[key] = true
-				out = append(out, agent.OptionalServerInfo{
-					Name:     key,
-					Accounts: g.Accounts,
-					Remote:   true,
-				})
-			}
-		} else {
-			log.Printf("availableOptionalConnectorsForUser: remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
-		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].Name < out[j].Name
@@ -114,6 +101,7 @@ func promptSafeSlice(names []string) []string {
 
 type connectorValidationCatalog struct {
 	prefs           map[string]store.ConnectorPref
+	prefsErr        error
 	alwaysOn        map[string]agent.AlwaysOnServerInfo
 	bundledOptional map[string]agent.OptionalServerInfo
 	needsSetup      map[string]bool
@@ -131,7 +119,10 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 		safeOwners:      map[string]map[string]bool{},
 	}
 	if s.store != nil && user != "" {
-		if list, perr := s.store.ListConnectorPrefs(ctx, user); perr == nil {
+		list, perr := s.store.ListConnectorPrefs(ctx, user)
+		if perr != nil {
+			cat.prefsErr = perr
+		} else {
 			cat.prefs = list
 		}
 	}
@@ -188,6 +179,9 @@ func (s *Server) validateEnableMCPConnectors(
 	}
 
 	cat := s.buildConnectorValidationCatalog(ctx, user)
+	if cat.prefsErr != nil {
+		return nil, nil, fmt.Errorf("load connector preferences: %w", cat.prefsErr)
+	}
 	hidden := agentcore.InteractiveHiddenTools()
 
 	displayNames = make(map[string]string, len(requested))
@@ -198,6 +192,9 @@ func (s *Server) validateEnableMCPConnectors(
 			continue
 		}
 		safeLookup := agentcore.PromptSafeName(lookup)
+		if lookup == agent.OptionalNativeImageGenName || safeLookup == agent.OptionalNativeImageGenName {
+			return nil, nil, fmt.Errorf("connector %q is the native image generation toggle, not an MCP connector; toggle it directly in the Tools picker", safeLookup)
+		}
 		if cat.isAmbiguous(lookup) {
 			return nil, nil, fmt.Errorf("connector %q has an ambiguous identifier that collides with another connector; toggle the intended connector directly in the Tools picker", safeLookup)
 		}
@@ -222,7 +219,7 @@ func (s *Server) validateEnableMCPConnectors(
 				return nil, nil, fmt.Errorf("connector %q is not configured on this server (needs administrator credential setup) and cannot be enabled", safeLookup)
 			}
 			if _, hasRemote := cat.allRemote[lookup]; hasRemote {
-				return nil, nil, fmt.Errorf("remote connector %q is not currently connected (it may need re-authentication or be disabled under Settings → Connections)", safeLookup)
+				return nil, nil, fmt.Errorf("remote connector %q must be enabled directly in the Tools picker", safeLookup)
 			}
 			return nil, nil, fmt.Errorf("unknown or unavailable optional MCP connector %q — only connectors listed under 'Available Optional MCP Connectors' can be enabled", safeLookup)
 		}
@@ -249,22 +246,16 @@ func (s *Server) validateEnableMCPConnectors(
 
 func connectorPermittedInChat(info agent.OptionalServerInfo, hidden []string, policy *agentcore.PersonaToolPermissions) bool {
 	name := strings.ToLower(strings.TrimSpace(info.Name))
-	if name == agent.OptionalNativeImageGenName {
-		return !agentcore.InteractiveHiddenIn(hidden, "generate_image") && agentcore.PersonaPermitsTool(policy, "generate_image")
+	if name == "" || name == agent.OptionalNativeImageGenName || info.Remote {
+		return false
 	}
-	if len(info.Tools) > 0 {
-		for _, t := range info.Tools {
-			full := agentcore.MCPToolName(info.Name, t)
-			if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
-				return true
-			}
+	for _, t := range info.Tools {
+		full := agentcore.MCPToolName(info.Name, t)
+		if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
+			return true
 		}
-		return false
 	}
-	if !info.Remote {
-		return false
-	}
-	return agentcore.PersonaPermitsMCPServer(policy, info.Name)
+	return false
 }
 
 type stagedEnableMCPConnectorsArgs struct {
@@ -379,8 +370,13 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	buf *turnBuffer,
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
-	if _, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
+	if n, err := s.store.SupersedePendingApprovals(ctx, conv.ID, tools.EnableMCPConnectorsToolName); err != nil {
 		return nil, fmt.Errorf("supersede pending connector approvals: %w", err)
+	} else if n > 0 && buf != nil {
+		buf.Emit("tool.approval_superseded", map[string]any{
+			"tool":  tools.EnableMCPConnectorsToolName,
+			"count": n,
+		})
 	}
 
 	safeAdded := promptSafeSlice(newlyAdded)

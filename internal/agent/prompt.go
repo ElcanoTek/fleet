@@ -759,7 +759,7 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 	seen := make(map[string]bool, len(source))
 	for _, srv := range source {
 		rawName := strings.ToLower(strings.TrimSpace(srv.Name))
-		if rawName == "" || rawName == OptionalNativeImageGenName || enabled[rawName] {
+		if rawName == "" || rawName == OptionalNativeImageGenName || srv.Remote || len(srv.Tools) == 0 || enabled[rawName] {
 			continue
 		}
 		safeName := promptSafeName(rawName)
@@ -767,28 +767,18 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 			continue
 		}
 		visibleTools := 0
-		if len(srv.Tools) > 0 {
-			for _, t := range srv.Tools {
-				full := agentcore.MCPToolName(srv.Name, t)
-				if agentcore.InteractiveHiddenIn(hidden, full) {
-					continue
-				}
-				if !agentcore.PersonaPermitsTool(policy, full) {
-					continue
-				}
-				visibleTools++
-			}
-			if visibleTools == 0 {
+		for _, t := range srv.Tools {
+			full := agentcore.MCPToolName(srv.Name, t)
+			if agentcore.InteractiveHiddenIn(hidden, full) {
 				continue
 			}
-		} else {
-			if !srv.Remote {
+			if !agentcore.PersonaPermitsTool(policy, full) {
 				continue
 			}
-			if !agentcore.PersonaPermitsMCPServer(policy, srv.Name) {
-				continue
-			}
-			visibleTools = srv.ToolCount
+			visibleTools++
+		}
+		if visibleTools == 0 {
+			continue
 		}
 		seen[safeName] = true
 		entry := srv

@@ -13,9 +13,7 @@ Previously, when a user asked for something handled by a connected Optional MCP 
 ### 1. System Prompt Catalog (`Available Optional MCP Connectors`)
 
 During interactive chat turns where an `enable_mcp_connectors` handler is wired (`tools.HasEnableMCPConnectorsHandler(ctx)`):
-- `Server.availableOptionalConnectorsForUser` builds the user's connected optional connector catalog by combining:
-  - **Bundled optional MCP servers** (`MCPServerCatalog()`) whose live discovery status is available (`ToolCount > 0`) and that are not disabled in the user's `ConnectorPrefs`.
-  - **Connected remote (hosted) MCP servers** (`remoteMCP.ConnectedServersForUser`) for the user.
+- `Server.availableOptionalConnectorsForUser` builds the user's connected bundled optional connector catalog from **bundled optional MCP servers** (`MCPServerCatalog()`, excluding the synthetic `image_generation` toggle and third-party remote MCP connections) whose live discovery status is available (`ToolCount > 0`) and that are not disabled in the user's `ConnectorPrefs` (failing closed if preferences cannot be loaded).
 - `buildSystemPrompt` (`internal/agent/prompt.go`) renders an **`Available Optional MCP Connectors (not currently enabled)`** section listing connectors that are not yet in `OptionalMCPServersEnabled` and that have at least one tool permitted by `interactive_hidden_tools` and the active persona policy (checked against the runtime tool name `agentcore.MCPToolName`).
 - **Prompt-cache & prompt-injection invariants**:
   - Entries are sorted deterministically by canonical `promptSafeName`, showing the tool count (e.g. `3 tools`) and capped at `MaxAvailableOptionalInPrompt = 25` servers total to uphold `docs/PROMPT-CACHE-CONTRACT.md`.
