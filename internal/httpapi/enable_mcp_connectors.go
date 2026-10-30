@@ -27,9 +27,13 @@ import (
 // Used both to populate TurnInput.AvailableOptionalMCPServers (for the system
 // prompt's "Available Optional MCP Connectors" section) and to validate
 // enable_mcp_connectors requests.
-func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user string) []agent.OptionalServerInfo {
+func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user string, convAccounts ...map[string]string) []agent.OptionalServerInfo {
 	if s.agent == nil {
 		return []agent.OptionalServerInfo{}
+	}
+	var overrides map[string]string
+	if len(convAccounts) > 0 {
+		overrides = convAccounts[0]
 	}
 	var prefs map[string]store.ConnectorPref
 	if s.store != nil && user != "" {
@@ -51,10 +55,16 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 		if optionalConnectorStatus(info) != connectorStatusAvailable {
 			continue
 		}
-		avail, _, _ := bundledPrefFor(prefs, info)
+		avail, _, seat := bundledPrefFor(prefs, info)
 		if !avail {
 			continue
 		}
+		if o := strings.TrimSpace(overrides[info.Name]); o != "" && slices.Contains(info.Accounts, o) {
+			seat = o
+		} else if o := strings.TrimSpace(overrides[key]); o != "" && slices.Contains(info.Accounts, o) {
+			seat = o
+		}
+		info.SelectedAccount = seat
 		seen[key] = true
 		out = append(out, info)
 	}
@@ -110,7 +120,7 @@ type connectorValidationCatalog struct {
 	safeOwners      map[string]map[string]bool
 }
 
-func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user string) connectorValidationCatalog {
+func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user string, convAccounts ...map[string]string) connectorValidationCatalog {
 	cat := connectorValidationCatalog{
 		alwaysOn:        map[string]agent.AlwaysOnServerInfo{},
 		bundledOptional: map[string]agent.OptionalServerInfo{},
@@ -141,7 +151,7 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 			putWithPromptSafeAlias(cat.needsSetup, nil, m.Name, true)
 		}
 	}
-	for _, info := range s.availableOptionalConnectorsForUser(ctx, user) {
+	for _, info := range s.availableOptionalConnectorsForUser(ctx, user, convAccounts...) {
 		putWithPromptSafeAlias(cat.available, cat.safeOwners, info.Name, info)
 	}
 	rawRemote := s.remoteSeatCatalog(ctx, user)
@@ -173,12 +183,13 @@ func (s *Server) validateEnableMCPConnectors(
 	user string,
 	requested []string,
 	personaPolicy *agentcore.PersonaToolPermissions,
+	convAccounts ...map[string]string,
 ) (optionalToEnable []string, displayNames map[string]string, err error) {
 	if len(requested) == 0 {
 		return nil, nil, fmt.Errorf("no connectors specified")
 	}
 
-	cat := s.buildConnectorValidationCatalog(ctx, user)
+	cat := s.buildConnectorValidationCatalog(ctx, user, convAccounts...)
 	if cat.prefsErr != nil {
 		return nil, nil, fmt.Errorf("load connector preferences: %w", cat.prefsErr)
 	}
@@ -249,8 +260,9 @@ func connectorPermittedInChat(info agent.OptionalServerInfo, hidden []string, po
 	if name == "" || name == agent.OptionalNativeImageGenName || info.Remote {
 		return false
 	}
+	regServer := agentcore.RegisteredMCPName(info.Name, info.SelectedAccount)
 	for _, t := range info.Tools {
-		full := agentcore.MCPToolName(info.Name, t)
+		full := agentcore.MCPToolName(regServer, t)
 		if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
 			return true
 		}
@@ -294,8 +306,17 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		if s.store == nil {
 			return nil, fmt.Errorf("enable_mcp_connectors requires a conversation store")
 		}
-		unlock := s.connectorLocks.lock(conv.ID)
+		unlock := s.connectorLocks.lock(user + "\x00" + conv.ID)
 		defer unlock()
+
+		// Load fresh conversation state so we validate against its seat overrides and merge against the latest enabled list.
+		fresh, gerr := s.store.Get(ctx, user, conv.ID)
+		if gerr != nil || fresh == nil {
+			if gerr == nil {
+				gerr = fmt.Errorf("conversation not found")
+			}
+			return nil, fmt.Errorf("load conversation: %w", gerr)
+		}
 
 		var policy *agentcore.PersonaToolPermissions
 		if turnStager != nil {
@@ -304,19 +325,11 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			turnStager.mcpMu.RUnlock()
 		}
 
-		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, policy)
+		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, policy, fresh.MCPAccounts)
 		if err != nil {
 			return nil, err
 		}
 
-		// Load fresh conversation state so we merge against the latest enabled list.
-		fresh, gerr := s.store.Get(ctx, user, conv.ID)
-		if gerr != nil || fresh == nil {
-			if gerr == nil {
-				gerr = fmt.Errorf("conversation not found")
-			}
-			return nil, fmt.Errorf("load conversation: %w", gerr)
-		}
 		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
 		enabledSet := make(map[string]bool, len(currentEnabled))
 		for _, n := range currentEnabled {
@@ -504,7 +517,7 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 // conversation's OptionalMCPServersEnabled list, persists the update, and
 // returns the model-visible tool_result text.
 func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID string, approval *store.Approval) (string, error) {
-	unlock := s.connectorLocks.lock(convID)
+	unlock := s.connectorLocks.lock(user + "\x00" + convID)
 	defer unlock()
 
 	var args stagedEnableMCPConnectorsArgs
@@ -535,7 +548,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 		return "", fmt.Errorf("load conversation: %w", err)
 	}
 
-	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, nil)
+	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, nil, conv.MCPAccounts)
 	if err != nil {
 		return "", err
 	}

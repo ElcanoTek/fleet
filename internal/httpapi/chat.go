@@ -1445,7 +1445,7 @@ func (s *Server) runTurnAsync(
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager))
-	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user)
+	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
 		InjectedContext:             injectedContext,

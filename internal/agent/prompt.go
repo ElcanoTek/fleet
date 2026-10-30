@@ -767,8 +767,9 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 			continue
 		}
 		visibleTools := 0
+		regServer := agentcore.RegisteredMCPName(srv.Name, srv.SelectedAccount)
 		for _, t := range srv.Tools {
-			full := agentcore.MCPToolName(srv.Name, t)
+			full := agentcore.MCPToolName(regServer, t)
 			if agentcore.InteractiveHiddenIn(hidden, full) {
 				continue
 			}
@@ -832,13 +833,7 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 	}
 	sb.WriteString("## Available Optional MCP Connectors (not currently enabled)\n\n")
 	sb.WriteString("The following connected Optional MCP connectors are available for this user right now, but are currently toggled **OFF** in this conversation:\n")
-	shown := available
-	overflow := 0
-	if len(shown) > MaxAvailableOptionalInPrompt {
-		overflow = len(shown) - MaxAvailableOptionalInPrompt
-		shown = shown[:MaxAvailableOptionalInPrompt]
-	}
-	for _, srv := range shown {
+	for _, srv := range available {
 		var label, desc string
 		if !srv.Remote {
 			label = clampPromptRunes(srv.DisplayName, maxOptionalConnectorLabelRunes)
@@ -866,9 +861,6 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 		} else {
 			fmt.Fprintf(sb, "- **`%s`**%s\n", srv.Name, meta)
 		}
-	}
-	if overflow > 0 {
-		fmt.Fprintf(sb, "- …and %d more connected optional connectors.\n", overflow)
 	}
 	sb.WriteString("\nIf the user's request needs data or actions from one of these connectors:\n")
 	sb.WriteString("- Do **NOT** flail with `tool_search`, `bash`, or `run_python` workarounds trying to reach a connector that is turned off.\n")

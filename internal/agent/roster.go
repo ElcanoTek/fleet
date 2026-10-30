@@ -51,6 +51,9 @@ type OptionalServerInfo struct {
 	// Remote marks a user-connected hosted (remote) MCP server whose tool list
 	// is discovered on per-turn overlay mount rather than at boot.
 	Remote bool `json:"remote,omitempty"`
+	// SelectedAccount is the resolved credential seat for this conversation/user
+	// when evaluating account-qualified runtime tool names.
+	SelectedAccount string `json:"-"`
 }
 
 // AlwaysOnServerInfo is the public status row for an enabled non-optional MCP

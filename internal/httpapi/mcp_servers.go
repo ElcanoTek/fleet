@@ -565,7 +565,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	unlock := s.connectorLocks.lock(id)
+	unlock := s.connectorLocks.lock(user + "\x00" + id)
 	defer unlock()
 
 	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)

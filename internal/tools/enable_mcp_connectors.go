@@ -67,7 +67,7 @@ const enableMCPConnectorsDescription = `Enable one or more connected Optional MC
 Check the "Available Optional MCP Connectors (not currently enabled)" section in your system prompt before searching for tools or attempting bash/python workarounds. When a user's request requires an optional MCP connector listed there:
 1. Call enable_mcp_connectors with the connector name(s) and a clear one-sentence reason.
 2. Only request connectors that are listed as available/connected.
-3. If auto-approve is enabled for this conversation (or during an unattended patrol turn), the connector(s) are enabled immediately and your turn automatically resumes with their tools mounted.
+3. If auto-approve is enabled for this conversation, the connector(s) are enabled immediately and your turn automatically resumes with their tools mounted.
 4. If auto-approve is off, an approval card is shown to the user; explain briefly which connector(s) you suggested and wait — as soon as the user clicks Approve, your turn automatically resumes with those connectors enabled.`
 
 // NewEnableMCPConnectorsTool constructs the interactive enable_mcp_connectors tool.
