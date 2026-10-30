@@ -497,6 +497,9 @@ func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
 	s.cfg.EscalationSignalsEnabled = true
 	const user = "jeanne@x.com"
 	conv := seedConv(t, s, user)
+	if _, err := s.store.CreateApproval(context.Background(), conv.ID, user, "schedule_task", "call-1", `{"prompt":"x"}`, time.Now().Unix()+3600, store.ApprovalSeat{}); err != nil {
+		t.Fatal(err)
+	}
 	buf := newTurnBuffer(conv.ID, "turn-long-approval")
 	history := append(repeat(toolResult(t, "ok", false), escalationLongTurnToolCalls),
 		toolResult(t, "APPROVAL_REQUIRED: schedule_task — staged for user approval (approval_id=a1)", true))

@@ -31,6 +31,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 const (
@@ -199,14 +200,15 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		return
 	}
 	struggle := struggleFromHistory(res.NewHistory, buf.compactionCount())
+	pendingActionApproval := struggle.stagedApproval && s.hasPendingActionApproval(ctx, user, conv.ID)
 	var stager *approvalStager
 	staged := false
 	stage := func(source, reason string) bool {
-		// When the turn already staged a tool approval card for the user to
-		// review, never stack a suggest_advanced_model card underneath it:
-		// clicking Approve on both cards runs the turn's action twice in
-		// parallel. The struggle event is still recorded below.
-		if staged || struggle.stagedApproval {
+		// When the turn already staged a tool approval card that is still
+		// pending the user's decision, never stack a suggest_advanced_model
+		// card underneath it: clicking Approve on both cards runs the turn's
+		// action twice in parallel. The struggle event is still recorded below.
+		if staged || pendingActionApproval {
 			return false
 		}
 		if stager == nil {
@@ -376,4 +378,17 @@ func (s *Server) startSteerCheck(conv *store.Conversation, history, turn []agent
 	}
 	prior := append(append([]agent.HistoryEntry{}, history...), turn[:last]...)
 	return s.startStruggleCheck(conv, prior, tc.Text, "")
+}
+
+func (s *Server) hasPendingActionApproval(ctx context.Context, user, convID string) bool {
+	pending, err := s.store.ListPendingApprovals(ctx, user, convID)
+	if err != nil {
+		return true
+	}
+	for _, p := range pending {
+		if p.ToolName != tools.SuggestAdvancedModelToolName && p.ToolName != previewEmailToolName {
+			return true
+		}
+	}
+	return false
 }

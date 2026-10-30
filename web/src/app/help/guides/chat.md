@@ -804,7 +804,8 @@ preselected and you can flip it. See [Memory and projects](#7-memory-and-project
 
 **Model suggestions.** When a question is heavier than the current model handles
 well, or a reply clearly struggled, a card offers **Switch & retry**, **Just
-switch**, or **Dismiss**. Declining costs nothing, and after you dismiss one you
+switch**, or **Dismiss** (unless the reply is already waiting on an action
+approval card). Declining costs nothing, and after you dismiss one you
 won't see another for a few messages. If you switch and later move back to the
 fast model, a suggestion can appear again.
 

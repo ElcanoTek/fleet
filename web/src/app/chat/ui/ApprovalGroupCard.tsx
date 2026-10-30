@@ -376,7 +376,8 @@ export function ApprovalGroupCard({
             <button
               type="button"
               data-testid="approval-group-expired-one-at-a-time"
-              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-muted)]"
+              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-2.5 py-1 text-[0.72rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-bg-muted)] disabled:cursor-not-allowed disabled:opacity-50"
+              disabled={submitting !== null}
               onClick={onOneAtATime}
             >
               Review one at a time
