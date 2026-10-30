@@ -886,5 +886,5 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 	sb.WriteString("\nIf the user's request needs data or actions from one of these connectors:\n")
 	sb.WriteString("- Do **NOT** flail with `tool_search`, `bash`, or `run_python` workarounds trying to reach a connector that is turned off.\n")
 	sb.WriteString("- Call `enable_mcp_connectors(connectors=[\"<name>\"], reason=\"<why it is needed>\")` right away.\n")
-	sb.WriteString("- When auto-approve is on, Fleet enables the connector(s) immediately and automatically continues your turn with their tools mounted. When auto-approve is off, Fleet shows an approval card and automatically continues your turn as soon as the user clicks **Approve**.\n\n")
+	sb.WriteString("- When auto-approve is on, Fleet enables the connector(s) immediately and automatically continues your turn with their tools mounted (or, if the conversation's hourly auto-resume cap or queue limit is reached, mounts them on the next turn). When auto-approve is off, Fleet shows an approval card and automatically continues your turn when the user clicks **Approve** (within those same resume limits).\n\n")
 }
