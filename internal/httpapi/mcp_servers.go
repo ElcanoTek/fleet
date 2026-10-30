@@ -565,6 +565,9 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	unlock := s.connectorLocks.lock(id)
+	defer unlock()
+
 	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

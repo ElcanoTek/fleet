@@ -16,10 +16,12 @@ During interactive chat turns where an `enable_mcp_connectors` handler is wired 
 - `Server.availableOptionalConnectorsForUser` builds the user's connected optional connector catalog by combining:
   - **Bundled optional MCP servers** (`MCPServerCatalog()`) whose live discovery status is available (`ToolCount > 0`) and that are not disabled in the user's `ConnectorPrefs`.
   - **Connected remote (hosted) MCP servers** (`remoteMCP.ConnectedServersForUser`) for the user.
-- `buildSystemPrompt` (`internal/agent/prompt.go`) renders an **`Available Optional MCP Connectors (Connected — Not Yet Enabled in This Chat)`** section listing connectors that are not yet in `OptionalMCPServersEnabled` and that have at least one tool permitted by `interactive_hidden_tools` and the active persona policy.
+- `buildSystemPrompt` (`internal/agent/prompt.go`) renders an **`Available Optional MCP Connectors (not currently enabled)`** section listing connectors that are not yet in `OptionalMCPServersEnabled` and that have at least one tool permitted by `interactive_hidden_tools` and the active persona policy (checked against the runtime tool name `agentcore.MCPToolName`).
 - **Prompt-cache & prompt-injection invariants**:
-  - Entries are sorted deterministically by canonical name (and tool names sorted alphabetically, capped at 12 previewed tool names per server and `MaxAvailableOptionalInPrompt = 25` servers total) to uphold `docs/PROMPT-CACHE-CONTRACT.md`.
-  - User- or sharer-controlled remote MCP display labels and descriptions are omitted from prompt assembly (`Remote: true` renders only the sanitized `promptSafeName`), and bundled display names/descriptions are clamped via `clampPromptRunes`.
+  - Entries are sorted deterministically by canonical `promptSafeName`, showing the tool count (e.g. `3 tools`) and capped at `MaxAvailableOptionalInPrompt = 25` servers total to uphold `docs/PROMPT-CACHE-CONTRACT.md`.
+  - User- or sharer-controlled remote MCP display labels and descriptions are omitted from prompt assembly (`Remote: true` renders only the sanitized `promptSafeName`), and bundled display names (`maxOptionalConnectorLabelRunes = 64`) and descriptions (`maxOptionalConnectorDescRunes = 200`) are clamped via `clampPromptRunes`.
+  - If two distinct connectors map to the same `promptSafeName`, the ambiguous alias is omitted from the prompt roster and refused by `validateEnableMCPConnectors`.
+  - Every model-visible tool result and error string uses `agentcore.PromptSafeName` so untrusted remote connector labels never enter model context.
   - Remote MCP server names are bounded to `MaxRemoteMCPNameRunes = 64` runes at registration time (`internal/remotemcp/service.go`).
   - Turn callers that do not wire an `enable_mcp_connectors` handler (scheduled jobs, dataset runs, eval harnesses) neither advertise `enable_mcp_connectors` in the tool roster nor render the prompt section.
 

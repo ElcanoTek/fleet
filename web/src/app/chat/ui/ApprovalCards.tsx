@@ -2021,23 +2021,26 @@ function EnableMCPConnectorsCard({
             <span>Enabling connector(s) and continuing turn…</span>
           </div>
         ) : (
-          <div className="mt-2.5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              disabled={submitting !== null || countdown.expired}
-              onClick={() => onResolve(true)}
-              className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
-            >
-              {submitting === "send" ? "Enabling…" : "Approve & continue"}
-            </button>
-            <button
-              type="button"
-              disabled={submitting !== null || countdown.expired}
-              onClick={() => onResolve(false)}
-              className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
-            >
-              {submitting === "cancel" ? "Declining…" : "Decline"}
-            </button>
+          <div className="mt-2.5 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={submitting !== null || countdown.expired}
+                onClick={() => onResolve(true)}
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
+              >
+                {submitting === "send" ? "Enabling…" : "Approve & continue"}
+              </button>
+              <button
+                type="button"
+                disabled={submitting !== null || countdown.expired}
+                onClick={() => onResolve(false)}
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+              >
+                {submitting === "cancel" ? "Declining…" : "Decline"}
+              </button>
+            </div>
+            <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
             {submitError ? <ApprovalSubmitError message={submitError} /> : null}
             {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
           </div>

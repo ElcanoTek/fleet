@@ -729,9 +729,26 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 		return nil
 	}
 	enabled := make(map[string]bool, len(enabledOptIns))
+	safeOwners := make(map[string]map[string]bool, len(source)+len(enabledOptIns))
+	noteSafeOwner := func(raw string) {
+		safe := promptSafeName(raw)
+		if safe == "" {
+			return
+		}
+		if safeOwners[safe] == nil {
+			safeOwners[safe] = map[string]bool{}
+		}
+		safeOwners[safe][raw] = true
+	}
 	for _, n := range enabledOptIns {
 		if clean := strings.ToLower(strings.TrimSpace(n)); clean != "" {
 			enabled[clean] = true
+			noteSafeOwner(clean)
+		}
+	}
+	for _, srv := range source {
+		if raw := strings.ToLower(strings.TrimSpace(srv.Name)); raw != "" {
+			noteSafeOwner(raw)
 		}
 	}
 	var policy *agentcore.PersonaToolPermissions
@@ -746,16 +763,13 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 			continue
 		}
 		safeName := promptSafeName(rawName)
-		if safeName == "" || enabled[safeName] || seen[safeName] {
+		if safeName == "" || enabled[safeName] || seen[safeName] || len(safeOwners[safeName]) > 1 {
 			continue
 		}
 		visibleTools := 0
 		if len(srv.Tools) > 0 {
 			for _, t := range srv.Tools {
-				full := t
-				if !strings.HasPrefix(full, "mcp_") {
-					full = "mcp_" + safeName + "_" + t
-				}
+				full := agentcore.MCPToolName(srv.Name, t)
 				if agentcore.InteractiveHiddenIn(hidden, full) {
 					continue
 				}
@@ -771,7 +785,7 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 			if !srv.Remote && srv.ToolCount <= 0 {
 				continue
 			}
-			probe := "mcp_" + safeName + "_probe"
+			probe := agentcore.MCPToolName(srv.Name, "probe")
 			if agentcore.InteractiveHiddenIn(hidden, probe) || !agentcore.PersonaPermitsTool(policy, probe) {
 				continue
 			}

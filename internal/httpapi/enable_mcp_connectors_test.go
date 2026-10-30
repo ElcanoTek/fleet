@@ -304,6 +304,16 @@ func TestValidateEnableMCPConnectors(t *testing.T) {
 	if dnSafe["google drive"] != "Google Drive" {
 		t.Fatalf("dnSafe[\"google drive\"] = %q, want Google Drive", dnSafe["google drive"])
 	}
+
+	// 8. Ambiguous prompt-safe alias ("Google Drive" vs "google_drive") is rejected.
+	engine.catalog = append(engine.catalog, agent.OptionalServerInfo{
+		Name:      "google_drive",
+		ToolCount: 1,
+		Tools:     []string{"list"},
+	})
+	if _, _, err := srv.validateEnableMCPConnectors(context.Background(), "alice@example.com", []string{"google_drive"}, policy); err == nil || !strings.Contains(err.Error(), "ambiguous identifier") {
+		t.Fatalf("expected ambiguous identifier error, got: %v", err)
+	}
 }
 
 func TestEnableMCPConnectorsHandler_UserApprovalAndExecution(t *testing.T) {

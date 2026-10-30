@@ -77,17 +77,39 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 	return out
 }
 
-func putWithPromptSafeAlias[V any](m map[string]V, rawName string, val V) {
+func putWithPromptSafeAlias[V any](m map[string]V, safeOwners map[string]map[string]bool, rawName string, val V) {
 	k := strings.ToLower(strings.TrimSpace(rawName))
 	if k == "" {
 		return
 	}
-	m[k] = val
-	if safe := agentcore.PromptSafeName(k); safe != "" && safe != k {
+	if _, exists := m[k]; !exists {
+		m[k] = val
+	}
+	safe := agentcore.PromptSafeName(k)
+	if safe == "" {
+		return
+	}
+	if safeOwners != nil {
+		if safeOwners[safe] == nil {
+			safeOwners[safe] = map[string]bool{}
+		}
+		safeOwners[safe][k] = true
+	}
+	if safe != k {
 		if _, exists := m[safe]; !exists {
 			m[safe] = val
 		}
 	}
+}
+
+func promptSafeSlice(names []string) []string {
+	out := make([]string, 0, len(names))
+	for _, n := range names {
+		if safe := agentcore.PromptSafeName(strings.ToLower(strings.TrimSpace(n))); safe != "" {
+			out = append(out, safe)
+		}
+	}
+	return out
 }
 
 type connectorValidationCatalog struct {
@@ -97,6 +119,7 @@ type connectorValidationCatalog struct {
 	needsSetup      map[string]bool
 	available       map[string]agent.OptionalServerInfo
 	allRemote       map[string]map[string]bool
+	safeOwners      map[string]map[string]bool
 }
 
 func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user string) connectorValidationCatalog {
@@ -105,6 +128,7 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 		bundledOptional: map[string]agent.OptionalServerInfo{},
 		needsSetup:      map[string]bool{},
 		available:       map[string]agent.OptionalServerInfo{},
+		safeOwners:      map[string]map[string]bool{},
 	}
 	if s.store != nil && user != "" {
 		if list, perr := s.store.ListConnectorPrefs(ctx, user); perr == nil {
@@ -113,27 +137,38 @@ func (s *Server) buildConnectorValidationCatalog(ctx context.Context, user strin
 	}
 	if provider, ok := s.agent.(alwaysOnMCPServerCatalogProvider); ok && provider != nil {
 		for _, info := range provider.AlwaysOnMCPServerCatalog() {
-			putWithPromptSafeAlias(cat.alwaysOn, info.Name, info)
+			putWithPromptSafeAlias(cat.alwaysOn, cat.safeOwners, info.Name, info)
 		}
 	}
 	if s.agent != nil {
 		for _, info := range s.agent.MCPServerCatalog() {
-			putWithPromptSafeAlias(cat.bundledOptional, info.Name, info)
+			putWithPromptSafeAlias(cat.bundledOptional, cat.safeOwners, info.Name, info)
 		}
 	}
 	for _, m := range s.connectorMeta() {
 		if !m.Configured {
-			putWithPromptSafeAlias(cat.needsSetup, m.Name, true)
+			putWithPromptSafeAlias(cat.needsSetup, cat.safeOwners, m.Name, true)
 		}
 	}
 	for _, info := range s.availableOptionalConnectorsForUser(ctx, user) {
-		putWithPromptSafeAlias(cat.available, info.Name, info)
+		putWithPromptSafeAlias(cat.available, cat.safeOwners, info.Name, info)
 	}
-	cat.allRemote = s.remoteSeatCatalog(ctx, user)
-	for k, v := range cat.allRemote {
-		putWithPromptSafeAlias(cat.allRemote, k, v)
+	rawRemote := s.remoteSeatCatalog(ctx, user)
+	cat.allRemote = make(map[string]map[string]bool, len(rawRemote))
+	for k, v := range rawRemote {
+		putWithPromptSafeAlias(cat.allRemote, cat.safeOwners, k, v)
 	}
 	return cat
+}
+
+func (c connectorValidationCatalog) isAmbiguous(lookup string) bool {
+	if len(c.safeOwners[lookup]) > 1 {
+		return true
+	}
+	if safe := agentcore.PromptSafeName(lookup); safe != "" && len(c.safeOwners[safe]) > 1 {
+		return true
+	}
+	return false
 }
 
 // validateEnableMCPConnectors checks that every requested connector name is a
@@ -162,32 +197,36 @@ func (s *Server) validateEnableMCPConnectors(
 		if lookup == "" {
 			continue
 		}
+		safeLookup := agentcore.PromptSafeName(lookup)
+		if cat.isAmbiguous(lookup) {
+			return nil, nil, fmt.Errorf("connector %q has an ambiguous identifier that collides with another connector; toggle the intended connector directly in the Tools picker", safeLookup)
+		}
 
 		if ao, ok := cat.alwaysOn[lookup]; ok {
 			if !ao.Available {
-				return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", lookup)
+				return nil, nil, fmt.Errorf("connector %q is an always-on connector that is currently unavailable on this server", safeLookup)
 			}
 			continue
 		}
 
 		if bInfo, isBundled := cat.bundledOptional[lookup]; isBundled {
 			if optionalConnectorStatus(bInfo) != connectorStatusAvailable {
-				return nil, nil, fmt.Errorf("connector %q is currently unavailable (exposed 0 tools at startup) and cannot be enabled", lookup)
+				return nil, nil, fmt.Errorf("connector %q is currently unavailable (exposed 0 tools at startup) and cannot be enabled", safeLookup)
 			}
 			if avail, _, _ := bundledPrefFor(cat.prefs, bInfo); !avail {
-				return nil, nil, fmt.Errorf("connector %q is disabled in the user's Settings → Connections preferences; ask the user to enable it there first", lookup)
+				return nil, nil, fmt.Errorf("connector %q is disabled in the user's Settings → Connections preferences; ask the user to enable it there first", safeLookup)
 			}
 		}
 
 		info, ok := cat.available[lookup]
 		if !ok {
 			if cat.needsSetup[lookup] {
-				return nil, nil, fmt.Errorf("connector %q is not configured on this server (needs administrator credential setup) and cannot be enabled", lookup)
+				return nil, nil, fmt.Errorf("connector %q is not configured on this server (needs administrator credential setup) and cannot be enabled", safeLookup)
 			}
 			if _, hasRemote := cat.allRemote[lookup]; hasRemote {
-				return nil, nil, fmt.Errorf("remote connector %q is not currently connected (it may need re-authentication or be disabled under Settings → Connections)", lookup)
+				return nil, nil, fmt.Errorf("remote connector %q is not currently connected (it may need re-authentication or be disabled under Settings → Connections)", safeLookup)
 			}
-			return nil, nil, fmt.Errorf("unknown or unavailable optional MCP connector %q — only connectors listed under 'Available Optional MCP Connectors' can be enabled", lookup)
+			return nil, nil, fmt.Errorf("unknown or unavailable optional MCP connector %q — only connectors listed under 'Available Optional MCP Connectors' can be enabled", safeLookup)
 		}
 
 		canonName := strings.ToLower(strings.TrimSpace(info.Name))
@@ -197,7 +236,7 @@ func (s *Server) validateEnableMCPConnectors(
 		seen[canonName] = true
 
 		if !connectorPermittedInChat(info, hidden, personaPolicy) {
-			return nil, nil, fmt.Errorf("connector %q is not permitted for the current persona or interactive chat policy", canonName)
+			return nil, nil, fmt.Errorf("connector %q is not permitted for the current persona or interactive chat policy", agentcore.PromptSafeName(canonName))
 		}
 
 		optionalToEnable = append(optionalToEnable, canonName)
@@ -215,20 +254,16 @@ func connectorPermittedInChat(info agent.OptionalServerInfo, hidden []string, po
 	if name == agent.OptionalNativeImageGenName {
 		return !agentcore.InteractiveHiddenIn(hidden, "generate_image") && agentcore.PersonaPermitsTool(policy, "generate_image")
 	}
-	safeName := agentcore.PromptSafeName(name)
 	if len(info.Tools) > 0 {
 		for _, t := range info.Tools {
-			full := t
-			if !strings.HasPrefix(full, "mcp_") {
-				full = "mcp_" + safeName + "_" + t
-			}
+			full := agentcore.MCPToolName(info.Name, t)
 			if !agentcore.InteractiveHiddenIn(hidden, full) && agentcore.PersonaPermitsTool(policy, full) {
 				return true
 			}
 		}
 		return false
 	}
-	probe := "mcp_" + safeName + "_probe"
+	probe := agentcore.MCPToolName(info.Name, "probe")
 	return !agentcore.InteractiveHiddenIn(hidden, probe) && agentcore.PersonaPermitsTool(policy, probe)
 }
 
@@ -302,11 +337,12 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			}
 		}
 		if len(newlyAdded) == 0 {
+			safeReq := promptSafeSlice(params.Connectors)
 			return &tools.EnableMCPConnectorsResult{
 				Status:          "already_enabled",
-				Connectors:      params.Connectors,
-				EnabledOptional: currentEnabled,
-				Message:         fmt.Sprintf("Connector(s) %s are already enabled in this conversation — their tools are already active.", strings.Join(params.Connectors, ", ")),
+				Connectors:      safeReq,
+				EnabledOptional: promptSafeSlice(currentEnabled),
+				Message:         fmt.Sprintf("Connector(s) %s are already enabled in this conversation — their tools are already active.", strings.Join(safeReq, ", ")),
 			}, nil
 		}
 
@@ -327,7 +363,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 
 		autoApprove := turnStager != nil && (turnStager.isAutoApprove() || turnStager.isPatrolOrPatrolResume() || turnStager.autoApproveInTest)
 		if autoApprove {
-			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, newlyAdded, merged, buf, turnStager)
+			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, currentEnabled, newlyAdded, merged, buf, turnStager)
 		}
 		return s.stageEnableMCPConnectorsApproval(ctx, conv, user, toolCallID, rawInput, newlyAdded, buf, turnStager)
 	}
@@ -337,7 +373,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	ctx context.Context,
 	conv *store.Conversation,
 	user, toolCallID, rawInput string,
-	newlyAdded, merged []string,
+	previousEnabled, newlyAdded, merged []string,
 	buf *turnBuffer,
 	turnStager *approvalStager,
 ) (*tools.EnableMCPConnectorsResult, error) {
@@ -345,8 +381,9 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		log.Printf("supersede enable_mcp_connectors (conv=%s): %s", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 	}
 
+	safeAdded := promptSafeSlice(newlyAdded)
 	recordText := fmt.Sprintf("%s: auto-approved enabling optional MCP connector(s) %s for this conversation.",
-		notifyRecordResultPrefix, strings.Join(newlyAdded, ", "))
+		notifyRecordResultPrefix, strings.Join(safeAdded, ", "))
 	approval, aerr := s.store.CreateApproval(ctx, conv.ID, user,
 		tools.EnableMCPConnectorsToolName, toolCallID, rawInput,
 		turnStager.expiryUnixFor(tools.EnableMCPConnectorsToolName), store.ApprovalSeat{})
@@ -356,18 +393,25 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		}
 		return nil, fmt.Errorf("create auto-approved connector record: %w", aerr)
 	}
+
+	compensateCtx := context.WithoutCancel(ctx)
+	if err := s.store.SetOptionalMCPServers(ctx, user, conv.ID, merged); err != nil {
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", err.Error())
+		return nil, fmt.Errorf("enable connectors: %w", err)
+	}
 	armed, armErr := s.store.ArmApprovalResume(ctx, user, approval.ID)
 	if armErr != nil || !armed {
 		if armErr == nil {
 			armErr = fmt.Errorf("approval resume state could not be armed")
 		}
+		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", armErr.Error())
 		return nil, fmt.Errorf("arm auto-approved connector resume: %w", armErr)
 	}
 	if rerr := s.store.ResolveApproval(ctx, user, approval.ID, "approved", recordText); rerr != nil {
+		_ = s.store.SetOptionalMCPServers(compensateCtx, user, conv.ID, previousEnabled)
+		_ = s.store.ResolveApproval(compensateCtx, user, approval.ID, "failed", rerr.Error())
 		return nil, fmt.Errorf("resolve auto-approved connector record: %w", rerr)
-	}
-	if err := s.store.SetOptionalMCPServers(ctx, user, conv.ID, merged); err != nil {
-		return nil, fmt.Errorf("enable connectors: %w", err)
 	}
 	conv.OptionalMCPServersEnabled = merged
 
@@ -390,11 +434,11 @@ func (s *Server) autoApproveEnableMCPConnectors(
 
 	return &tools.EnableMCPConnectorsResult{
 		Status:          "enabled",
-		Connectors:      newlyAdded,
-		EnabledOptional: merged,
+		Connectors:      safeAdded,
+		EnabledOptional: promptSafeSlice(merged),
 		AutoApproved:    true,
 		ApprovalID:      approval.ID,
-		Message:         fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(newlyAdded, ", ")),
+		Message:         fmt.Sprintf("Auto-approved and enabled optional MCP connector(s) [%s] for this conversation. Stopping this step now so your turn automatically continues with their tools mounted.", strings.Join(safeAdded, ", ")),
 		StopTurn:        true,
 	}, nil
 }
@@ -425,9 +469,16 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	if err != nil {
 		return nil, fmt.Errorf("stage connector approval: %w", err)
 	}
-	if ok, aerr := s.store.ArmApprovalResume(ctx, user, approval.ID); aerr == nil && ok {
-		approval.ResumeState = store.ApprovalResumeArmed
+	ok, aerr := s.store.ArmApprovalResume(ctx, user, approval.ID)
+	if aerr != nil || !ok {
+		if aerr == nil {
+			aerr = fmt.Errorf("approval resume state could not be armed")
+		}
+		_ = s.store.ResolveApproval(context.WithoutCancel(ctx), user, approval.ID, "failed", aerr.Error())
+		return nil, fmt.Errorf("arm connector approval resume: %w", aerr)
 	}
+	approval.ResumeState = store.ApprovalResumeArmed
+
 	if buf != nil {
 		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, conv.ID))
 	}
@@ -435,16 +486,17 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 		turnStager.firePushNotification(tools.EnableMCPConnectorsToolName)
 	}
 
+	safeAdded := promptSafeSlice(newlyAdded)
 	return &tools.EnableMCPConnectorsResult{
 		Status:     "approval_required",
-		Connectors: newlyAdded,
+		Connectors: safeAdded,
 		ApprovalID: approval.ID,
 		Message: fmt.Sprintf(
 			"APPROVAL_REQUIRED: Enabling optional MCP connector(s) [%s] has been staged for explicit user approval (approval_id=%s). "+
 				"Do NOT call enable_mcp_connectors again and do NOT try to work around the missing connector with bash or other tools. "+
 				"Briefly explain to the user which connector(s) you suggested enabling and why, and wait for them to click Approve — "+
 				"your turn will resume automatically with those connectors mounted as soon as they approve.",
-			strings.Join(newlyAdded, ", "), approval.ID,
+			strings.Join(safeAdded, ", "), approval.ID,
 		),
 	}, nil
 }
@@ -477,7 +529,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 			sort.Strings(merged)
 			_ = s.store.SetOptionalMCPServers(ctx, user, convID, merged)
 		}
-		return fmt.Sprintf("Enabled optional MCP connector(s) for this conversation: %s. Their tools are now active and mounted in your roster — proceed with the user's request.", strings.Join(args.Connectors, ", ")), nil
+		return fmt.Sprintf("Enabled optional MCP connector(s) for this conversation: %s. Their tools are now active and mounted in your roster — proceed with the user's request.", strings.Join(promptSafeSlice(args.Connectors), ", ")), nil
 	}
 
 	conv, err := s.store.Get(ctx, user, convID)
@@ -503,6 +555,6 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 	return fmt.Sprintf(
 		"Enabled optional MCP connector(s) for this conversation: %s. Their tools are now active and mounted in your roster — proceed with the user's request.",
-		strings.Join(toEnable, ", "),
+		strings.Join(promptSafeSlice(toEnable), ", "),
 	), nil
 }
