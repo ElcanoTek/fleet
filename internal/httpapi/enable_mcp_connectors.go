@@ -354,7 +354,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		})
 		rawInput := string(rawBytes)
 
-		autoApprove := turnStager != nil && (turnStager.isAutoApprove() || turnStager.isPatrolOrPatrolResume() || turnStager.autoApproveInTest)
+		autoApprove := turnStager != nil && (turnStager.isAutoApprove() || turnStager.autoApproveInTest)
 		if autoApprove {
 			return s.autoApproveEnableMCPConnectors(ctx, conv, user, toolCallID, rawInput, currentEnabled, newlyAdded, merged, buf, turnStager)
 		}
