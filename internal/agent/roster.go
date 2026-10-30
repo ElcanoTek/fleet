@@ -48,6 +48,12 @@ type OptionalServerInfo struct {
 	// touches ("s3://bucket", "jmap://host"). Display-only inventory for the
 	// settings connections page; the credential's scope stays the authority.
 	DataSources []string `json:"data_sources,omitempty"`
+	// Remote marks a user-connected hosted (remote) MCP server whose tool list
+	// is discovered on per-turn overlay mount rather than at boot.
+	Remote bool `json:"remote,omitempty"`
+	// SelectedAccount is the resolved credential seat for this conversation/user
+	// when evaluating account-qualified runtime tool names.
+	SelectedAccount string `json:"-"`
 }
 
 // AlwaysOnServerInfo is the public status row for an enabled non-optional MCP
@@ -256,6 +262,17 @@ func filterNativeToolsByOptIn(all []fantasy.AgentTool, enabled []string) []fanta
 		}
 		gate := nativeOptInGate(tool.Info().Name)
 		if gate != "" && !optedIn[gate] {
+			continue
+		}
+		out = append(out, tool)
+	}
+	return out
+}
+
+func dropToolByName(all []fantasy.AgentTool, dropName string) []fantasy.AgentTool {
+	out := make([]fantasy.AgentTool, 0, len(all))
+	for _, tool := range all {
+		if tool == nil || tool.Info().Name == dropName {
 			continue
 		}
 		out = append(out, tool)

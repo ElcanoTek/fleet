@@ -914,6 +914,392 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	return nil
 }
 
+// AutoApproveConnectorsRequest carries the inputs for AutoApproveEnableMCPConnectors.
+type AutoApproveConnectorsRequest struct {
+	UserEmail         string
+	ConversationID    string
+	ToolName          string
+	ToolCallID        string
+	ArgsJSON          string
+	ResultText        string
+	ExpiresAt         int64
+	MergedServers     []string
+	AllowResume       bool
+	MaxPerHour        int
+	MaxPending        int
+	IgnoreOutstanding func(approvalID string) bool
+}
+
+// AutoApproveConnectorsResult reports what AutoApproveEnableMCPConnectors committed.
+type AutoApproveConnectorsResult struct {
+	Approval      *Approval
+	Superseded    int64
+	ResumeInput   *InputQueueRow
+	ResumeClaimed []ApprovalResumeItem
+	ResumeSkipped string
+	RecentResumes int
+}
+
+// AutoApproveEnableMCPConnectors atomically supersedes any pending connector
+// approvals in ConversationID, persists MergedServers into the conversation's
+// optional_mcp_servers_enabled column, inserts the approved audit row, and (when
+// AllowResume is true and no other approval or rate/queue limit blocks it)
+// enqueues the continuation 'resume' input row in a single database
+// transaction. When the continuation cannot be enqueued immediately, the audit
+// row is committed with resume_state = 'skipped' (never 'armed') so no
+// asynchronous retry or later settlement can launch a duplicate resume turn.
+func (s *Store) AutoApproveEnableMCPConnectors(
+	ctx context.Context,
+	req AutoApproveConnectorsRequest,
+) (AutoApproveConnectorsResult, error) {
+	var out AutoApproveConnectorsResult
+	mergedServers := req.MergedServers
+	if mergedServers == nil {
+		mergedServers = []string{}
+	}
+	payload, err := json.Marshal(mergedServers)
+	if err != nil {
+		return out, fmt.Errorf("marshal optional mcp servers: %w", err)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var owner string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
+		req.ConversationID, req.UserEmail,
+	).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, ErrConversationNotFound
+	}
+	if err != nil {
+		return out, err
+	}
+
+	now := time.Now().Unix()
+	supRes, err := tx.ExecContext(ctx,
+		`UPDATE approvals
+		    SET status = 'rejected',
+		        result_text = 'Superseded by a newer call to this tool.',
+		        resolved_at = $1,
+		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
+		  WHERE conversation_id = $2
+		    AND tool_name = $3
+		    AND status = 'pending'`,
+		now, req.ConversationID, req.ToolName,
+	)
+	if err != nil {
+		return out, err
+	}
+	out.Superseded, _ = supRes.RowsAffected()
+
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
+		  WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
+		payload, now, req.ConversationID, req.UserEmail,
+	); err != nil {
+		return out, err
+	}
+
+	canEnqueue := req.AllowResume
+	if canEnqueue {
+		hasOutstanding, qerr := hasOutstandingApprovalsTx(ctx, tx, req.ConversationID, req.IgnoreOutstanding)
+		if qerr != nil {
+			return out, qerr
+		}
+		if hasOutstanding {
+			canEnqueue = false
+		}
+	}
+
+	if canEnqueue {
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM chat_input_queue
+			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2`,
+			req.ConversationID, now-3600,
+		).Scan(&out.RecentResumes); err != nil {
+			return out, err
+		}
+		var pending int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM chat_input_queue WHERE conversation_id = $1 AND state = 'queued'`,
+			req.ConversationID,
+		).Scan(&pending); err != nil {
+			return out, err
+		}
+		switch {
+		case req.MaxPerHour > 0 && out.RecentResumes >= req.MaxPerHour:
+			out.ResumeSkipped = ApprovalResumeSkipRateLimited
+			canEnqueue = false
+		case req.MaxPending > 0 && pending >= req.MaxPending:
+			out.ResumeSkipped = ApprovalResumeSkipQueueFull
+			canEnqueue = false
+		}
+	}
+
+	id := uuid.NewString()
+	var expiresArg any
+	if req.ExpiresAt > 0 {
+		expiresArg = req.ExpiresAt
+	}
+	resumeState := ApprovalResumeSkipped
+	if canEnqueue {
+		resumeState = ApprovalResumeClaimed
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO approvals (
+			id, conversation_id, user_email, tool_name, tool_call_id, args_json,
+			status, result_text, created_at, resolved_at, expires_at, is_err, resume_state
+		) VALUES ($1, $2, $3, $4, $5, $6, 'approved', $7, $8, $8, $9, FALSE, $10)`,
+		id, req.ConversationID, req.UserEmail, req.ToolName, req.ToolCallID, req.ArgsJSON,
+		req.ResultText, now, expiresArg, resumeState,
+	); err != nil {
+		return out, err
+	}
+
+	var priorClaimed []ApprovalResumeItem
+	var priorIDs []string
+	if canEnqueue || out.ResumeSkipped != "" {
+		var cerr error
+		priorClaimed, priorIDs, cerr = claimSettledArmedApprovalsTx(ctx, tx, req.ConversationID)
+		if cerr != nil {
+			return out, cerr
+		}
+	}
+
+	if canEnqueue {
+		priorClaimed = append(priorClaimed, ApprovalResumeItem{
+			ID:       id,
+			ToolName: req.ToolName,
+			Outcome:  ApprovalResumeOutcomeApproved,
+		})
+		out.ResumeClaimed = priorClaimed
+		firstID := id
+		if len(priorIDs) > 0 {
+			firstID = priorIDs[0]
+		}
+		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
+			ID:             uuid.NewString(),
+			ConversationID: req.ConversationID,
+			UserEmail:      owner,
+			ClientInputID:  "approval-resume:" + firstID,
+			Message:        ApprovalResumeInputText(out.ResumeClaimed),
+			Attachments:    "[]",
+			Mode:           InputModeResume,
+			State:          InputStateQueued,
+		})
+		if err != nil {
+			return out, err
+		}
+		out.ResumeInput = &row
+	} else if out.ResumeSkipped != "" {
+		if len(priorIDs) > 0 {
+			if err := markApprovalResumeTx(ctx, tx, priorIDs, ApprovalResumeSkipped); err != nil {
+				return out, err
+			}
+		}
+		note := ApprovalResumeSkippedNotice(out.ResumeSkipped, req.MaxPerHour)
+		if err := s.appendNoticeTx(ctx, tx, req.ConversationID, NoticeApprovalResumeSkipped, note); err != nil {
+			return out, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return out, err
+	}
+	out.Approval = &Approval{
+		ID: id, ConversationID: req.ConversationID, UserEmail: req.UserEmail,
+		ToolName: req.ToolName, ToolCallID: req.ToolCallID, ArgsJSON: req.ArgsJSON,
+		Status: approvalStatusApproved, ResultText: req.ResultText,
+		CreatedAt: now, ResolvedAt: now, ExpiresAt: req.ExpiresAt,
+		IsErr: sql.NullBool{Bool: false, Valid: true}, ResumeState: resumeState,
+	}
+	return out, nil
+}
+
+func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID string, ignore func(string) bool) (bool, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id FROM approvals
+		  WHERE conversation_id = $1
+		    AND ((status = 'pending' AND tool_name <> 'preview_email')
+		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
+		  ORDER BY created_at, id`,
+		convID, ApprovalExecutingSentinel,
+	)
+	if err != nil {
+		return false, err
+	}
+	hasOutstanding := false
+	for rows.Next() {
+		var outID string
+		if err := rows.Scan(&outID); err != nil {
+			_ = rows.Close()
+			return false, err
+		}
+		if ignore != nil && ignore(outID) {
+			continue
+		}
+		hasOutstanding = true
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, err
+	}
+	_ = rows.Close()
+	return hasOutstanding, nil
+}
+
+func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID string) ([]ApprovalResumeItem, []string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`UPDATE approvals SET resume_state = 'claimed'
+		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
+		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
+		  RETURNING id, tool_name, status, COALESCE(result_text, ''), is_err, COALESCE(resolved_at, 0), created_at`,
+		convID, ApprovalExecutingSentinel,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	type claimedRow struct {
+		item       ApprovalResumeItem
+		resolvedAt int64
+		createdAt  int64
+	}
+	var claimed []claimedRow
+	for rows.Next() {
+		var (
+			c          claimedRow
+			status, rt string
+			isErr      sql.NullBool
+		)
+		if err := rows.Scan(&c.item.ID, &c.item.ToolName, &status, &rt, &isErr, &c.resolvedAt, &c.createdAt); err != nil {
+			_ = rows.Close()
+			return nil, nil, err
+		}
+		c.item.Outcome = approvalResumeOutcome(status, rt)
+		c.item.IsErr = status == "approved" && isErr.Valid && isErr.Bool
+		claimed = append(claimed, c)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, nil, err
+	}
+	_ = rows.Close()
+	sort.Slice(claimed, func(i, j int) bool {
+		if claimed[i].resolvedAt != claimed[j].resolvedAt {
+			return claimed[i].resolvedAt < claimed[j].resolvedAt
+		}
+		if claimed[i].createdAt != claimed[j].createdAt {
+			return claimed[i].createdAt < claimed[j].createdAt
+		}
+		return claimed[i].item.ID < claimed[j].item.ID
+	})
+	items := make([]ApprovalResumeItem, len(claimed))
+	ids := make([]string, len(claimed))
+	for i, c := range claimed {
+		items[i] = c.item
+		ids[i] = c.item.ID
+	}
+	return items, ids, nil
+}
+
+// StageEnableMCPConnectorsApproval atomically supersedes any pending connector
+// approvals for (convID, toolName) and inserts a new pending approval row with
+// resume_state = 'armed' in a single database transaction. If buildArgs is
+// non-nil, it receives the JSON payloads of any pending rows being superseded
+// so the caller can merge earlier pending connector requests from the same step
+// into the newly staged card's payload before inserting it.
+func (s *Store) StageEnableMCPConnectorsApproval(
+	ctx context.Context,
+	userEmail, convID, toolName, toolCallID, argsJSON string,
+	expiresAt int64,
+	buildArgs func(supersededArgsJSON []string) string,
+) (*Approval, int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var owner string
+	err = tx.QueryRowContext(ctx,
+		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
+		convID, userEmail,
+	).Scan(&owner)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, 0, ErrConversationNotFound
+	}
+	if err != nil {
+		return nil, 0, err
+	}
+
+	now := time.Now().Unix()
+	rows, err := tx.QueryContext(ctx,
+		`UPDATE approvals
+		    SET status = 'rejected',
+		        result_text = 'Superseded by a newer call to this tool.',
+		        resolved_at = $1,
+		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
+		  WHERE conversation_id = $2
+		    AND tool_name = $3
+		    AND status = 'pending'
+		  RETURNING COALESCE(args_json, '')`,
+		now, convID, toolName,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	var supersededArgs []string
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			_ = rows.Close()
+			return nil, 0, err
+		}
+		supersededArgs = append(supersededArgs, raw)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, 0, err
+	}
+	_ = rows.Close()
+	superseded := int64(len(supersededArgs))
+	if buildArgs != nil && len(supersededArgs) > 0 {
+		if mergedJSON := buildArgs(supersededArgs); mergedJSON != "" {
+			argsJSON = mergedJSON
+		}
+	}
+
+	id := uuid.NewString()
+	var expiresArg any
+	if expiresAt > 0 {
+		expiresArg = expiresAt
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO approvals (
+			id, conversation_id, user_email, tool_name, tool_call_id, args_json,
+			status, created_at, expires_at, resume_state
+		) VALUES ($1, $2, $3, $4, $5, $6, 'pending', $7, $8, $9)`,
+		id, convID, userEmail, toolName, toolCallID, argsJSON,
+		now, expiresArg, ApprovalResumeArmed,
+	); err != nil {
+		return nil, 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, 0, err
+	}
+	return &Approval{
+		ID: id, ConversationID: convID, UserEmail: userEmail,
+		ToolName: toolName, ToolCallID: toolCallID, ArgsJSON: argsJSON,
+		Status: approvalStatusPending, CreatedAt: now, ExpiresAt: expiresAt,
+		ResumeState: ApprovalResumeArmed,
+	}, superseded, nil
+}
+
 // SetThinkingConfig sets (or clears) a conversation's extended-thinking override
 // (#220). A nil cfg writes SQL NULL, restoring "inherit the global default";
 // a non-nil cfg persists the explicit choice. Owner-scoped (the user_email gate),

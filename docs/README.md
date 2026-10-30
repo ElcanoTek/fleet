@@ -262,6 +262,7 @@ above fails otherwise.
 - [`DOCTOR.md`](DOCTOR.md) — Doctor — box-level diagnose + repair (`fleet doctor` + Settings → Admin → Doctor)
 - [`DOWNLOAD_URL.md`](DOWNLOAD_URL.md) — download_url: streamed downloads (512 MB cap) and HTML interstitials
 - [`EMAIL-LAST-BATCHES.md`](EMAIL-LAST-BATCHES.md) — Email-last batches: definitive create failures settle, an abort still sends the one summary email (ADR-0081)
+- [`ENABLE-MCP-CONNECTORS.md`](ENABLE-MCP-CONNECTORS.md) — In-chat Optional MCP connector enablement (`enable_mcp_connectors`)
 - [`ENV-CLI.md`](ENV-CLI.md) — `fleet env` — inspect + edit the deployment env files
 - [`EVALS.md`](EVALS.md) — Self-hosted evals & regression gating
 - [`EVENT-TRIGGERS.md`](EVENT-TRIGGERS.md) — Event-driven triggers — email ingress (#511)

@@ -53,6 +53,8 @@ type chatStore interface {
 	SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error
 	SetThinkingConfig(ctx context.Context, userEmail, convID string, cfg *store.ThinkingConfig) error
 	SetOptionalMCPServers(ctx context.Context, userEmail, convID string, servers []string) error
+	AutoApproveEnableMCPConnectors(ctx context.Context, req store.AutoApproveConnectorsRequest) (store.AutoApproveConnectorsResult, error)
+	StageEnableMCPConnectorsApproval(ctx context.Context, userEmail, convID, toolName, toolCallID, argsJSON string, expiresAt int64, buildArgs func(supersededArgsJSON []string) string) (*store.Approval, int64, error)
 	SetConversationMCPAccounts(ctx context.Context, userEmail, convID string, accounts map[string]string) error
 	// Per-user connector availability preferences (unified connector UX).
 	SetConnectorPref(ctx context.Context, userEmail string, p store.ConnectorPref) error

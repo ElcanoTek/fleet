@@ -83,6 +83,13 @@ type TurnInput struct {
 	// MCP servers (e.g. gamma). nil/empty means "no optional servers".
 	OptionalMCPServersEnabled []string
 
+	// AvailableOptionalMCPServers, when non-nil, is the caller-resolved catalog
+	// of connected Optional MCP connectors available to this user (bundled
+	// optional servers not disabled in ConnectorPrefs + connected user remote
+	// MCP servers). Used to populate the "Available Optional MCP Connectors"
+	// system-prompt section; when nil, RunTurn falls back to MCPServerCatalog().
+	AvailableOptionalMCPServers []OptionalServerInfo
+
 	// UserSkills is the caller's user-authored skill roster for this turn
 	// (docs/SKILLS.md phase 2): the HTTP layer materializes each ACTIVE skill
 	// into the conversation workspace (user-skills/<name>/SKILL.md) before the
@@ -1827,6 +1834,10 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	turnTools := tools.NewTurnTools(sb, m.browserbaseKeyFunc(ctx, in.UserEmail, in.OptionalMCPServersEnabled))
 	turnTools.Tools = filterNativeToolsByOptIn(turnTools.Tools, in.OptionalMCPServersEnabled)
+	enableConnectorsWired := tools.HasEnableMCPConnectorsHandler(ctx)
+	if !enableConnectorsWired {
+		turnTools.Tools = dropToolByName(turnTools.Tools, tools.EnableMCPConnectorsToolName)
+	}
 
 	model, providerFallbacks, err := m.modelResolver().ResolveWithFallbacks(ctx, in.Model)
 	if err != nil {
@@ -1876,7 +1887,11 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	// sections and the run gate read the same list (a policy reload between
 	// the two cannot split them).
 	hiddenTools := agentcore.InteractiveHiddenTools()
-	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hostedRosterFromOverlay(overlay), hiddenTools)
+	hosted := hostedRosterFromOverlay(overlay)
+	if enableConnectorsWired {
+		hosted.availableOptional = in.AvailableOptionalMCPServers
+	}
+	systemPrompt, err := m.composeTurnSystemPrompt(ctx, in, persona, hosted, hiddenTools)
 	if err != nil {
 		return nil, err
 	}

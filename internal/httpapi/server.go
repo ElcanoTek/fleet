@@ -159,6 +159,10 @@ type Server struct {
 	// inputKeyLocks serializes the first submissions of one (user, key)
 	// (recoverFirstSubmission).
 	inputKeyLocks keyedLocks
+	// connectorLocks serializes per-conversation enable_mcp_connectors
+	// mutations so parallel tool calls or approval executions never clobber
+	// OptionalMCPServersEnabled or race SupersedePendingApprovals.
+	connectorLocks keyedLocks
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;

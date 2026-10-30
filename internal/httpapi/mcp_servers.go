@@ -366,14 +366,14 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: remote server lookup failed for %s: %v", user, err)
+		log.Printf("mcp seats: remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 	}
 	if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 		for _, srv := range shared {
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: shared remote server lookup failed for %s: %v", user, err)
+		log.Printf("mcp seats: shared remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 	}
 	return out
 }
@@ -565,6 +565,9 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
+	unlock := s.connectorLocks.lock(user + "\x00" + id)
+	defer unlock()
+
 	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

@@ -37,6 +37,7 @@ import {
   useNarrowing,
 } from "./approvalNarrowing";
 import { applyAllText, approvalToolLabel, ConnectorNamesContext, knownConnectorLabel, mcpToolServer } from "./approvalToolLabel";
+import { Icon } from "./Icon";
 import { useApprovalProgressPoll } from "./useApprovalProgressPoll";
 import { EmailSendResult, parseEmailSendPayload } from "./ToolChips";
 import {
@@ -444,6 +445,7 @@ export function ApprovalCard({
   onAskAgain,
   onResumeExpected,
   onRetryFailed,
+  onMcpServersUpdated,
 }: {
   approval: Approval;
   conversationId: string;
@@ -470,6 +472,9 @@ export function ApprovalCard({
   // Fired when the user clicks Ask again on a timed-out card. The caller
   // submits askAgainPrompt(approval) as a user turn so the agent re-stages.
   onAskAgain?: (approval: Approval) => void;
+  // enable_mcp_connectors only: sync the conversation's enabled optional MCP
+  // connectors into the Tools picker when the user approves the card.
+  onMcpServersUpdated?: (enabledOptional: string[]) => void;
 }) {
   const [submitting, setSubmitting] = useState<"send" | "cancel" | null>(null);
   // Why the last resolve attempt did not reach the server, shown inline under
@@ -569,9 +574,13 @@ export function ApprovalCard({
         narrowed?: unknown;
         stoppable?: boolean;
         stopped?: boolean;
+        enabled_optional?: string[];
       };
       const nextStatus = approvalStatusFromOutcome(data);
       const narrowed = parseApprovalNarrowed(data.narrowed) ?? approval.narrowed;
+      if (Array.isArray(data.enabled_optional)) {
+        onMcpServersUpdated?.(data.enabled_optional);
+      }
       if (data.resume === true) onResumeExpected?.(nextStatus === null);
       if (nextStatus === null) {
         setHeldExecuting(true);
@@ -693,6 +702,18 @@ export function ApprovalCard({
   if (approval.tool === "manage_tasks") {
     return (
       <ManageTasksCard
+        approval={card}
+        submitting={submitting}
+        submitError={submitError}
+        onResolve={resolve}
+        onAskAgain={onAskAgain}
+      />
+    );
+  }
+
+  if (approval.tool === "enable_mcp_connectors") {
+    return (
+      <EnableMCPConnectorsCard
         approval={card}
         submitting={submitting}
         submitError={submitError}
@@ -1909,6 +1930,124 @@ function ManageTasksCard({
           <ApprovalSubmitError message={submitError} />
           {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
         </div>
+        )
+      ) : (
+        <>
+          {approval.resultText ? <ApprovalResult text={approval.resultText} /> : null}
+          {isTimedOutApproval(approval) ? (
+            <AskAgainButton approval={approval} onAskAgain={onAskAgain} />
+          ) : null}
+        </>
+      )}
+    </div>
+  );
+}
+
+function EnableMCPConnectorsCard({
+  approval,
+  submitting,
+  submitError,
+  onResolve,
+  onAskAgain,
+}: {
+  approval: Approval;
+  submitting: "send" | "cancel" | null;
+  submitError: string | null;
+  onResolve: (approved: boolean) => void;
+  onAskAgain?: (approval: Approval) => void;
+}) {
+  const executing = approval.status === "pending" && approvalIsExecuting(approval);
+  const countdown = useApprovalCountdown(approval.expiresAt, approval.status, executing);
+  const s = approval.summary as Record<string, unknown>;
+  const labels = Array.isArray(s.labels)
+    ? (s.labels as unknown[]).filter((x): x is string => typeof x === "string")
+    : Array.isArray(s.connectors)
+      ? (s.connectors as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+  const reason = typeof s.reason === "string" ? s.reason.trim() : "";
+
+  const title = executing
+    ? "Enabling connector(s)…"
+    : approval.status === "pending"
+      ? `ACTION REQUIRED · Enable ${labels.length === 1 ? "MCP connector" : "MCP connectors"}?`
+      : approval.status === "approved"
+        ? approval.recorded
+          ? "Auto-enabled MCP connector(s) ✓"
+          : "MCP connector(s) enabled ✓"
+        : approval.status === "rejected"
+          ? "Connector enablement declined"
+          : approval.status === "execution_unknown"
+            ? "Approved — outcome not recorded"
+            : "Connector enablement failed";
+
+  const statusStyle = executing
+    ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+    : approval.status === "pending"
+      ? { borderColor: "var(--color-accent)" }
+      : approval.status === "execution_unknown"
+        ? { borderColor: "var(--color-border-strong)", color: "var(--color-text-secondary)" }
+        : undefined;
+
+  return (
+    <div
+      data-approval-id={approval.id}
+      data-tool="enable_mcp_connectors"
+      className="rounded-[var(--radius-lg)] border bg-[var(--color-card-bg)] px-3 py-2.5 text-[0.8125rem] leading-[1.5]"
+      style={statusStyle}
+    >
+      <div className="mb-2 flex items-center gap-2">
+        <Icon name="tools" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-secondary)]" />
+        <span className="font-medium">{title}</span>
+      </div>
+
+      <div className="grid gap-1 break-words text-[0.78rem] text-[var(--color-text-secondary)]">
+        {labels.length > 0 ? (
+          <div>
+            <span className="text-[var(--color-card-text-muted)]">
+              {labels.length === 1 ? "Connector: " : `Connectors (${labels.length}): `}
+            </span>
+            <span className="font-medium text-[var(--color-text-primary)]">
+              {labels.join(", ")}
+            </span>
+          </div>
+        ) : null}
+        {reason ? (
+          <div>
+            <span className="text-[var(--color-card-text-muted)]">Why: </span>
+            {reason}
+          </div>
+        ) : null}
+      </div>
+
+      {approval.status === "pending" ? (
+        executing ? (
+          <div className="mt-2.5 flex items-center gap-2 text-[0.75rem] text-[var(--color-text-secondary)]">
+            <span>Enabling connector(s) and continuing turn…</span>
+          </div>
+        ) : (
+          <div className="mt-2.5 flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={submitting !== null || countdown.expired}
+                onClick={() => onResolve(true)}
+                className="rounded-[var(--radius-md)] bg-[var(--color-primary-fill)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[var(--color-primary-fill-hover)] disabled:opacity-50"
+              >
+                {submitting === "send" ? "Enabling…" : "Approve & continue"}
+              </button>
+              <button
+                type="button"
+                disabled={submitting !== null || countdown.expired}
+                onClick={() => onResolve(false)}
+                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
+              >
+                {submitting === "cancel" ? "Declining…" : "Decline"}
+              </button>
+            </div>
+            <ApprovalCountdown remaining={countdown.remaining} expired={countdown.expired} />
+            {submitError ? <ApprovalSubmitError message={submitError} /> : null}
+            {countdown.expired ? <AskAgainButton approval={approval} onAskAgain={onAskAgain} /> : null}
+          </div>
         )
       ) : (
         <>

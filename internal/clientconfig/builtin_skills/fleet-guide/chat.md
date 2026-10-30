@@ -32,7 +32,8 @@ connectors a new web chat would: the ones you have on by default under
 Settings → Connections. `--connector NAME` (repeatable) replaces that set for
 the new thread, for example `--connector email --connector lens`; an unknown or
 unavailable name is refused before anything is sent. `--connector` does not
-change an existing thread: use the web Tools picker for that.
+change an existing thread: use the web Tools picker (or ask the assistant in chat
+to enable a bundled optional MCP connector for that conversation).
 
 Routine server updates, restarts, and stops (`fleet update`, `fleet restart`, `fleet stop`) refuse by default while a chat turn, approved action, dataset run, or scheduled task is in flight, and quiesce new work admission while draining when `--wait` is used (`--wait-timeout` sets the limit, 10 minutes by default; `--force` bypasses the check). If the server restarts during an approved action, its outcome is shown as unknown;
 verify the external result before trying another action.
@@ -510,7 +511,7 @@ Four ways data reaches a conversation. Most days you will use the first two.
 | **Attach a file** | Click **Attach files** or drop a file onto the conversation, then ask about it in the same message. Spreadsheets, CSVs, PDFs, documents, and images all work. Files that are too large are refused when you pick them, with the limit stated, rather than failing later. An attachment belongs to the conversation it was sent in, and a note beside your message records what was added. |
 | **Connected sources** | Mailboxes, reporting APIs, and other systems your deployment has connected. The assistant reads from them when you ask, using only the connectors turned on for this conversation. Name the source in your ask; see [the next section](#5-connectors-in-a-conversation) for how connectors are switched on. |
 | **Shared file library** | Reference files an admin has published once for every conversation to read: historical data, price lists, lookup tables. They live under **Settings → Shared files**, and the assistant sees them in every chat without anyone re-attaching them. |
-| **Files the assistant makes** | Anything it produces in a conversation — a spreadsheet, a chart, an HTML report — stays in that conversation's working space. Download it from the transcript, preview HTML in place, and ask about it in later turns by name. |
+| **Files the assistant makes** | Anything it produces in a conversation — a spreadsheet, a chart, an HTML report, or an image generated when the optional **Image generation** (`image_generation`) connector is on (**Google Nano Banana 2.1**, `google/gemini-nano-banana-2.1` by default) — stays in that conversation's working space. Download it from the transcript, preview HTML in place, and ask about it in later turns by name. |
 
 > **Inline handles, if enabled.** Some deployments allow typed handles in a
 > message: `@url:` followed by a web address pulls that page into the turn, and
@@ -548,7 +549,7 @@ Center.
 | Layer | Where | What it decides |
 | --- | --- | --- |
 | Availability | **Settings → Connections** | Which connectors exist for you at all, whether each is on by default in new chats, and which account it uses when a connector has more than one. Set once, lasts. |
-| Selection | The **Tools** menu (the wrench) in the composer, and its library | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; the assistant cannot reach what is not selected. |
+| Selection | The **Tools** menu (the wrench) in the composer, its library, or an **Enable MCP connector?** card in chat | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; if a task needs a connected bundled optional MCP connector that is currently off in the conversation, the assistant can suggest turning it on for you to approve (or turn it on itself when **Auto-approve** is active). |
 | Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
 The Tools menu opens with its search field ready: type to filter by a
@@ -654,6 +655,7 @@ about the first kind.
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
 | Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
 | Change a task | The assistant wants to stop or update an existing scheduled task. | **Approve & stop** or **Approve & update** · **Cancel** |
+| Enable MCP connector? | The assistant needs one or more connected bundled optional MCP connectors that are not yet turned on in this conversation. Approving turns them on for this conversation and continues the reply with their tools mounted (unless the conversation's hourly auto-resume cap or input queue limit has been reached, in which case a notice is posted and the newly enabled tools take effect on your next message); when **Auto-approve** is active in the conversation, the assistant enables connected bundled optional connectors without stopping on a card and continues automatically when within those limits. | **Approve & continue** · **Decline** |
 | Run an action | Any other connector action that changes something, such as updating a record in an external system. The card names the action, the system it runs against, and the arguments it was called with. A deployment can make it read in plain words instead: **APPROVAL NEEDED** with the countdown, a title, the record with its id and a link (**Open in …**), each change as before → after, and warnings such as "Deal is Active" as badges, with the raw arguments under **Details**. Long lists show the first 10 with **Show N more**, and a search box when there are more than 25. | **Approve & run** (**Approve** on a plain-words card) · **Cancel** |
 
 Three rules for every card. **Read what is about to happen**, not just the

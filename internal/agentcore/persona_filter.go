@@ -142,6 +142,72 @@ func PersonaPermitsTool(policy *PersonaToolPermissions, toolName string) bool {
 	return !blocked
 }
 
+// PersonaPermitsMCPServer reports whether policy could permit at least one tool
+// on the MCP server named serverName when its concrete tool list is not yet
+// known (for example, a remote MCP server whose tools are discovered only when
+// a turn opens the connection). It returns false if any Deny pattern covers the
+// entire "mcp_<safeServer>_" prefix, or if Allow is non-empty and no Allow
+// pattern can match any tool under "mcp_<safeServer>_" that survives Deny.
+func PersonaPermitsMCPServer(policy *PersonaToolPermissions, serverName string) bool {
+	safe := PromptSafeName(serverName)
+	if safe == "" {
+		return false
+	}
+	if policy == nil || policy.empty() {
+		return true
+	}
+	serverPrefix := "mcp_" + safe + "_"
+	probeA := serverPrefix + "a"
+	probeB := serverPrefix + "b"
+	for _, d := range policy.Deny {
+		if matchesToolPattern(probeA, d) && matchesToolPattern(probeB, d) {
+			return false
+		}
+	}
+	if len(policy.Allow) == 0 {
+		return true
+	}
+	for _, a := range policy.Allow {
+		a = strings.TrimSpace(a)
+		if a == "" {
+			continue
+		}
+		if matchesToolPattern(probeA, a) && matchesToolPattern(probeB, a) {
+			return true
+		}
+		if rest, ok := strings.CutPrefix(a, "mcp:"); ok {
+			if srv, tool, found := strings.Cut(rest, "/"); found && tool != "*" && tool != "" {
+				cand := "mcp_" + srv + "_" + tool
+				if strings.HasPrefix(cand, serverPrefix) && PersonaPermitsTool(policy, cand) {
+					return true
+				}
+			}
+			continue
+		}
+		if prefix, ok := strings.CutSuffix(a, "/*"); ok {
+			if strings.HasPrefix(prefix, serverPrefix) {
+				subA := prefix + "a"
+				subB := prefix + "b"
+				deniedAll := false
+				for _, d := range policy.Deny {
+					if matchesToolPattern(subA, d) && matchesToolPattern(subB, d) {
+						deniedAll = true
+						break
+					}
+				}
+				if !deniedAll {
+					return true
+				}
+			}
+			continue
+		}
+		if strings.HasPrefix(a, serverPrefix) && len(a) > len(serverPrefix) && PersonaPermitsTool(policy, a) {
+			return true
+		}
+	}
+	return false
+}
+
 // emitPersonaToolBlocked records a single suppressed-tool audit event. nil-safe.
 func emitPersonaToolBlocked(obs Observer, persona, tool, reason string) {
 	if obs == nil {

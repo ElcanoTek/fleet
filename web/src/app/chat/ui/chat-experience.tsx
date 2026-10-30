@@ -5022,6 +5022,16 @@ export function ChatExperience({
         );
       }
     },
+    onMcpServersUpdated: (convId, enabledOptional) => {
+      if (convId === activeConversationIdRef.current) {
+        const enabledSet = new Set(enabledOptional.map((n) => n.toLowerCase()));
+        setMcpServers((curr) =>
+          curr.map((s) =>
+            s.always_on ? s : { ...s, enabled: enabledSet.has(s.name.toLowerCase()) },
+          ),
+        );
+      }
+    },
   } satisfies TurnStreamDeps;
   const {
     reattachToConv,
@@ -7053,6 +7063,14 @@ export function ChatExperience({
               setModelSearchQuery={setModelSearchQuery}
               loadRankedModels={loadRankedModels}
               loadCatalogModels={loadCatalogModels}
+              onMcpServersUpdated={(enabledOptional) => {
+                const enabledSet = new Set(enabledOptional.map((n) => n.toLowerCase()));
+                setMcpServers((curr) =>
+                  curr.map((s) =>
+                    s.always_on ? s : { ...s, enabled: enabledSet.has(s.name.toLowerCase()) },
+                  ),
+                );
+              }}
             />
             </ConnectorNamesContext.Provider>
             </WithheldFilesContext.Provider>

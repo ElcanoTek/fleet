@@ -227,10 +227,13 @@ const defaultApprovalTimeoutSeconds = 86400
 // drops a change the user asked for.
 const stagedTaskApprovalTimeoutSeconds = 86400
 
-// stagesTaskChangeOnly reports whether toolName's card only stages a task
-// change: the two task tools, whose tool bodies never run (handler-only).
+// stagesTaskChangeOnly reports whether toolName's card only stages a task or
+// connector configuration change: tools whose bodies never execute external
+// side effects while pending (handler-only).
 func stagesTaskChangeOnly(toolName string) bool {
-	return toolName == tools.ScheduleTaskToolName || toolName == tools.ManageTasksToolName
+	return toolName == tools.ScheduleTaskToolName ||
+		toolName == tools.ManageTasksToolName ||
+		toolName == tools.EnableMCPConnectorsToolName
 }
 
 // resolveTimeoutSeconds applies the #225 resolution chain for toolName, highest
@@ -557,7 +560,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
-			log.Printf("push: approval notification (tool=%s conv=%s): %v", toolName, convID, err)
+			log.Printf("push: approval notification (tool=%s conv=%s): %s", logSafe(toolName), logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 		}
 	}
 	if a.bg != nil {
@@ -985,8 +988,13 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 }
 
 // resumesAfterApproval reports whether a settled card for toolName starts a
-// resume turn under the running policy (handler-only cards never do).
+// resume turn under the running policy (handler-only cards never do, except
+// enable_mcp_connectors which always resumes so the agent can use the newly
+// enabled connectors immediately).
 func resumesAfterApproval(toolName string) bool {
+	if toolName == tools.EnableMCPConnectorsToolName {
+		return true
+	}
 	return agentcore.ResumeAfterApproval(toolName) && !handlerOnlyApproval(toolName)
 }
 
@@ -1018,6 +1026,9 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	}
 	if toolName == tools.ManageTasksToolName {
 		return summarizeManageTasksInput(toolName, rawInput)
+	}
+	if toolName == tools.EnableMCPConnectorsToolName {
+		return summarizeEnableMCPConnectorsInput(toolName, rawInput)
 	}
 	// preview_email uses the exact same summary shape as send_email
 	// so ApprovalCard's existing email-preview render path just works;
@@ -1676,7 +1687,7 @@ func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 // mistaken for an approval id instead of creating a task or changing a model.
 func handlerOnlyApproval(tool string) bool {
 	switch tool {
-	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, "preview_email", tools.SuggestAdvancedModelToolName:
+	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, tools.EnableMCPConnectorsToolName, "preview_email", tools.SuggestAdvancedModelToolName:
 		return true
 	default:
 		return false
@@ -2083,30 +2094,41 @@ func (s *Server) approvalEarlyReplyWait(approval *store.Approval) (time.Duration
 // request, so it completes the same way whether or not anyone is still
 // waiting for its reply. Mock mode short-circuits so Playwright can exercise
 // the approval UX without real SendGrid credentials.
-func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, approvalID string, approval *store.Approval, req approvalRequest) map[string]any {
-	var (
-		text    string
-		toolErr error
-	)
+func (s *Server) runClaimedApprovalAction(execCtx context.Context, user, convID string, approval *store.Approval, req approvalRequest) (string, error) {
 	switch {
+	case approval.ToolName == tools.EnableMCPConnectorsToolName:
+		return s.runStagedEnableMCPConnectors(execCtx, user, convID, approval)
 	case s.cfg != nil && s.cfg.MockMode && approval.ToolName == tools.ManageTasksToolName:
-		text = "Scheduled tasks updated (mock mode — nothing persisted)."
+		return "Scheduled tasks updated (mock mode — nothing persisted).", nil
 	case s.cfg != nil && s.cfg.MockMode && approval.ToolName == tools.ScheduleTaskToolName:
 		// Playwright/mock mode has no real sched store wired; report a canned
 		// success so the approval UX is exercisable without a database.
-		text = "Scheduled task created (mock mode — no task persisted)."
+		return "Scheduled task created (mock mode — no task persisted).", nil
 	case s.cfg != nil && s.cfg.MockMode:
-		text = `{"status_code":202,"message":"mock send ok"}`
+		return `{"status_code":202,"message":"mock send ok"}`, nil
 	case approval.ToolName == tools.ScheduleTaskToolName:
 		// schedule_task creates an orchestrator task in-process via the injected
 		// seam (#239) — not an MCP send — so it gets its own one-shot path.
-		text, toolErr = s.runStagedScheduleTask(execCtx, approval, req.Edits)
+		return s.runStagedScheduleTask(execCtx, approval, req.Edits)
 	case approval.ToolName == tools.ManageTasksToolName:
 		// manage_tasks is the same shape for tasks that already exist (#1152).
-		text, toolErr = s.runStagedManageTasks(execCtx, approval)
+		return s.runStagedManageTasks(execCtx, approval)
 	default:
-		text, toolErr = s.runStagedTool(execCtx, approval)
+		return s.runStagedTool(execCtx, approval)
 	}
+}
+
+func (s *Server) attachApprovedOptionalMCPServers(execCtx context.Context, reply map[string]any, user, convID string, approval *store.Approval, toolErr error, isErr bool) {
+	if approval.ToolName != tools.EnableMCPConnectorsToolName || toolErr != nil || isErr {
+		return
+	}
+	if conv, gerr := s.store.Get(execCtx, user, convID); gerr == nil && conv != nil {
+		reply["enabled_optional"] = conv.OptionalMCPServersEnabled
+	}
+}
+
+func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, approvalID string, approval *store.Approval, req approvalRequest) map[string]any {
+	text, toolErr := s.runClaimedApprovalAction(execCtx, user, convID, approval, req)
 	// The call has returned, so nothing listens to its stop signal any more:
 	// close the stop window now (approval_stop.go). A Stop accepted before
 	// this point is recorded AND in the stop line below; one after it is
@@ -2188,6 +2210,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	if resultCard != nil {
 		reply["result_card"] = resultCard
 	}
+	s.attachApprovedOptionalMCPServers(execCtx, reply, user, convID, approval, toolErr, isErr)
 	withApprovalNarrowed(reply, approval)
 	if stopped {
 		reply["stoppable"], reply["stopped"] = true, true
@@ -2383,6 +2406,11 @@ func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID 
 			return approvalError(http.StatusInternalServerError, "could not load conversation model")
 		}
 		state["model"] = conv.Model
+	}
+	if latest.ToolName == tools.EnableMCPConnectorsToolName && latest.Status == "approved" {
+		if conv, err := s.store.Get(ctx, user, latest.ConversationID); err == nil && conv != nil {
+			state["enabled_optional"] = conv.OptionalMCPServersEnabled
+		}
 	}
 	return approvalBody(state)
 }
@@ -3189,6 +3217,9 @@ func rejectionMessages(toolName string) (claim, history string) {
 	case toolName == tools.ManageTasksToolName:
 		return "User declined the task change.",
 			"User declined the task change. No tasks were modified."
+	case toolName == tools.EnableMCPConnectorsToolName:
+		return "User declined to enable the suggested MCP connector(s).",
+			"User declined to enable the suggested MCP connector(s). Do not retry enable_mcp_connectors for these connectors unless the user asks."
 	case tools.IsEmailToolName(toolName):
 		return "User declined to send.", "User declined to send this email."
 	default:
@@ -3205,6 +3236,8 @@ func actionVerb(toolName string) string {
 		return "schedule"
 	case toolName == tools.ManageTasksToolName:
 		return "task change"
+	case toolName == tools.EnableMCPConnectorsToolName:
+		return "enable connectors"
 	case tools.IsEmailToolName(toolName):
 		return "send"
 	default:
