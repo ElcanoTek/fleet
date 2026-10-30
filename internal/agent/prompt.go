@@ -530,9 +530,9 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 	if imageGenEnabled {
 		sb.WriteString("## Image Generation\n\n")
 		sb.WriteString("The `generate_image` tool is enabled for this conversation. Use it for photorealistic / illustrative output the user explicitly asks for — banner ads, brand creative, mockups, hero images. ")
-		sb.WriteString("You DO NOT pick the file extension — the model decides the output format (Nano Banana Pro returns JPEG; there is no API parameter to override) and the tool saves with the matching extension. ")
+		sb.WriteString("You DO NOT pick the file extension — the model decides the output format (Nano Banana 2.1 returns JPEG/PNG; there is no API parameter to override) and the tool saves with the matching extension. ")
 		sb.WriteString("Pass an optional `filename` slug WITHOUT an extension (e.g. `lumen-banner`); when omitted, the tool defaults to `image-<timestamp>`. Always reference the `path` returned by the tool when embedding the image in your reply via `![alt](path)` — the chat UI rewrites that to a workspace URL and renders inline. ")
-		sb.WriteString("Default model is Google Nano Banana Pro (`google/gemini-3-pro-image-preview`, ~$0.14/image); cheaper alternatives: `model=google/gemini-3.1-flash-image-preview` (Nano Banana 2) or `model=google/gemini-2.5-flash-image` (Nano Banana). ")
+		sb.WriteString("Default model is Google Nano Banana 2.1 (`google/gemini-nano-banana-2.1`); alternatives: `model=google/gemini-3-pro-image` (Nano Banana Pro), `model=google/gemini-3.1-flash-image` (Nano Banana 2), `model=google/gemini-3.1-flash-lite-image` (Nano Banana 2 Lite), or `model=openai/gpt-5.4-image-2` (GPT-5.4 Image 2). ")
 		sb.WriteString("Use `reference_images` to edit / restyle existing images (including images the user attached this turn). ")
 		sb.WriteString("Do NOT use this tool for charts, plots, or data visualizations — use `run_python` with matplotlib instead (free, deterministic, can read your data).\n\n")
 	}
@@ -559,6 +559,9 @@ func (m *Manager) buildSystemPrompt(persona string, layer *UserPersonaLayer, con
 	//    nothing, so the model is told to say the connector is unavailable
 	//    right now instead.
 	writeHostedSkipNotice(&sb, hosted.skipped)
+	if !agentcore.InteractiveHiddenIn(hidden, tools.EnableMCPConnectorsToolName) && agentcore.PersonaPermitsTool(m.personaPolicy(persona), tools.EnableMCPConnectorsToolName) {
+		writeAvailableOptionalConnectorsSection(&sb, m.availableOptionalForPrompt(persona, enabledOptionalMCPServers, hosted, hidden))
+	}
 
 	// 5. protocol listing — skip fastio-mcp.md when fast.io is off
 	// so the agent doesn't try to read it for tools it can't call.
@@ -716,3 +719,127 @@ func writeHostedSkipNotice(sb *strings.Builder, skipped []skippedConnector) {
 	}
 	sb.WriteString("\n")
 }
+
+// availableOptionalForPrompt filters the turn's connected optional MCP catalog
+// to the connectors that are NOT yet enabled in this conversation and have at
+// least one tool permitted by interactive_hidden_tools and the persona policy.
+// Sorted deterministically by prompt-safe server name for prompt-cache byte
+// stability (docs/PROMPT-CACHE-CONTRACT.md).
+func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []string, hosted hostedMCPRoster, hidden []string) []OptionalServerInfo {
+	source := hosted.availableOptional
+	if source == nil && m != nil {
+		source = m.MCPServerCatalog()
+	}
+	if len(source) == 0 {
+		return nil
+	}
+	enabled := make(map[string]bool, len(enabledOptIns))
+	for _, n := range enabledOptIns {
+		if clean := strings.ToLower(strings.TrimSpace(n)); clean != "" {
+			enabled[clean] = true
+		}
+	}
+	var policy *agentcore.PersonaToolPermissions
+	if m != nil {
+		policy = m.personaPolicy(persona)
+	}
+	out := make([]OptionalServerInfo, 0, len(source))
+	seen := make(map[string]bool, len(source))
+	for _, srv := range source {
+		rawName := strings.ToLower(strings.TrimSpace(srv.Name))
+		if rawName == "" || rawName == OptionalNativeImageGenName || enabled[rawName] {
+			continue
+		}
+		safeName := promptSafeName(rawName)
+		if safeName == "" || seen[safeName] {
+			continue
+		}
+		visibleTools := 0
+		if len(srv.Tools) > 0 {
+			for _, t := range srv.Tools {
+				full := t
+				if !strings.HasPrefix(full, "mcp_") {
+					full = "mcp_" + safeName + "_" + t
+				}
+				if agentcore.InteractiveHiddenIn(hidden, full) {
+					continue
+				}
+				if !agentcore.PersonaPermitsTool(policy, full) {
+					continue
+				}
+				visibleTools++
+			}
+			if visibleTools == 0 {
+				continue
+			}
+		} else {
+			if !srv.Remote && srv.ToolCount <= 0 {
+				continue
+			}
+			probe := "mcp_" + safeName + "_probe"
+			if agentcore.InteractiveHiddenIn(hidden, probe) || !agentcore.PersonaPermitsTool(policy, probe) {
+				continue
+			}
+			visibleTools = srv.ToolCount
+		}
+		seen[safeName] = true
+		entry := srv
+		entry.Name = safeName
+		entry.ToolCount = visibleTools
+		out = append(out, entry)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
+	return out
+}
+
+func sanitizeSingleLinePromptText(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []OptionalServerInfo) {
+	if len(available) == 0 {
+		return
+	}
+	sb.WriteString("## Available Optional MCP Connectors (not currently enabled)\n\n")
+	sb.WriteString("The following connected Optional MCP connectors are available for this user right now, but are currently toggled **OFF** in this conversation:\n")
+	for _, srv := range available {
+		label := sanitizeSingleLinePromptText(srv.DisplayName)
+		desc := sanitizeSingleLinePromptText(srv.Description)
+		var metaParts []string
+		if label != "" && !strings.EqualFold(label, srv.Name) {
+			metaParts = append(metaParts, label)
+		}
+		if srv.ToolCount > 0 {
+			unit := "tools"
+			if srv.ToolCount == 1 {
+				unit = "tool"
+			}
+			metaParts = append(metaParts, fmt.Sprintf("%d %s", srv.ToolCount, unit))
+		} else if srv.Remote {
+			metaParts = append(metaParts, "connected remote MCP")
+		}
+		meta := ""
+		if len(metaParts) > 0 {
+			meta = " (" + strings.Join(metaParts, ", ") + ")"
+		}
+		if desc != "" {
+			fmt.Fprintf(sb, "- **`%s`**%s: %s\n", srv.Name, meta, desc)
+		} else {
+			fmt.Fprintf(sb, "- **`%s`**%s\n", srv.Name, meta)
+		}
+	}
+	sb.WriteString("\nIf the user's request needs data or actions from one of these connectors:\n")
+	sb.WriteString("- Do **NOT** flail with `tool_search`, `bash`, or `run_python` workarounds trying to reach a connector that is turned off.\n")
+	sb.WriteString("- Call `enable_mcp_connectors(connectors=[\"<name>\"], reason=\"<why it is needed>\")` right away.\n")
+	sb.WriteString("- When auto-approve is on, Fleet enables the connector(s) immediately and automatically continues your turn with their tools mounted. When auto-approve is off, Fleet shows an approval card and automatically continues your turn as soon as the user clicks **Approve**.\n\n")
+}
+

@@ -551,3 +551,109 @@ func TestSkippedWithReasonsIsBounded(t *testing.T) {
 		t.Errorf("formatting changed the skip list (%d entries)", len(o.Skipped))
 	}
 }
+
+func TestBuildSystemPrompt_AvailableOptionalMCPConnectors(t *testing.T) {
+	m := fixtureManager(t)
+	m.personaPolicies = map[string]agentcore.PersonaToolPermissions{
+		"victoria": {
+			Deny: []string{"mcp:blocked_srv/*"},
+		},
+	}
+
+	available := []OptionalServerInfo{
+		{
+			Name:        "slack",
+			DisplayName: "Slack",
+			Description: "Post messages\nand read channels",
+			ToolCount:   3,
+			Tools:       []string{"post_message", "list_channels", "read_thread"},
+		},
+		{
+			Name:        "google_sheets",
+			DisplayName: "Google Sheets",
+			Description: "Read and write spreadsheets",
+			ToolCount:   2,
+			Tools:       []string{"read_sheet", "write_sheet"},
+		},
+		{
+			Name:        "already_on",
+			DisplayName: "Already On",
+			Description: "Already enabled in this chat",
+			ToolCount:   1,
+			Tools:       []string{"ping"},
+		},
+		{
+			Name:        "blocked_srv",
+			DisplayName: "Blocked Server",
+			Description: "Denied by persona policy",
+			ToolCount:   1,
+			Tools:       []string{"secret"},
+		},
+		{
+			Name:        OptionalNativeImageGenName,
+			DisplayName: "Image generation",
+			Description: "Native image tool",
+			ToolCount:   1,
+			Tools:       []string{"generate_image"},
+		},
+	}
+
+	prompt, err := m.buildSystemPrompt(
+		"victoria",
+		nil,
+		"conv-1",
+		nil,
+		"",
+		nil,
+		[]string{"already_on"},
+		nil,
+		hostedMCPRoster{availableOptional: available},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+
+	for _, want := range []string{
+		"## Available Optional MCP Connectors (not currently enabled)",
+		"- **`google_sheets`** (Google Sheets, 2 tools): Read and write spreadsheets",
+		"- **`slack`** (3 tools): Post messages and read channels",
+		"enable_mcp_connectors",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+
+	// Deterministic alphabetical order: google_sheets must appear before slack.
+	if strings.Index(prompt, "`google_sheets`") > strings.Index(prompt, "`slack`") {
+		t.Errorf("expected google_sheets before slack for prompt-cache stability")
+	}
+
+	for _, forbidden := range []string{"`already_on`", "`blocked_srv`", "`image_generation`"} {
+		if strings.Contains(prompt, forbidden) {
+			t.Errorf("prompt should not list %s under available optional MCP connectors:\n%s", forbidden, prompt)
+		}
+	}
+
+	// When enable_mcp_connectors is hidden via interactive_hidden_tools, the section is omitted.
+	hiddenPrompt, err := m.buildSystemPrompt(
+		"victoria",
+		nil,
+		"conv-1",
+		nil,
+		"",
+		nil,
+		nil,
+		nil,
+		hostedMCPRoster{availableOptional: available},
+		[]string{"enable_mcp_connectors"},
+	)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt (hidden): %v", err)
+	}
+	if strings.Contains(hiddenPrompt, "Available Optional MCP Connectors") {
+		t.Errorf("expected section to be omitted when enable_mcp_connectors is hidden")
+	}
+}
+

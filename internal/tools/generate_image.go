@@ -35,16 +35,15 @@ import (
 const (
 	// defaultImageGenModel is the model the tool uses when the agent doesn't
 	// pass `model` and FLEET_IMAGE_MODEL (legacy: CHAT_IMAGE_MODEL) isn't set.
-	// Nano Banana Pro
-	// (Gemini 3 Pro Image Preview) is Google's flagship image-generation
-	// model — best real-world grounding, supports 2K/4K and aspect-ratio
-	// controls, ~$0.14/image as of 2026-05. For cheaper drafts the agent
-	// can pass:
-	//   google/gemini-3.1-flash-image-preview  (Nano Banana 2, ~$0.04/img)
-	//   google/gemini-2.5-flash-image          (Nano Banana, ~$0.04/img)
-	//   openai/gpt-5-image-mini                (GPT-5 Image Mini)
-	//   openai/gpt-5-image                     (GPT-5 Image, larger)
-	defaultImageGenModel       = "google/gemini-3-pro-image-preview"
+	// Nano Banana 2.1 (google/gemini-nano-banana-2.1) is Google's latest-generation
+	// image generation and editing model (2026-10), succeeding Nano Banana 2 and
+	// Nano Banana Pro with strong real-world grounding, recontextualization, and
+	// fast Flash-tier latency. Other supported latest-gen models the agent can pass:
+	//   google/gemini-3-pro-image         (Nano Banana Pro GA)
+	//   google/gemini-3.1-flash-image     (Nano Banana 2 GA)
+	//   google/gemini-3.1-flash-lite-image (Nano Banana 2 Lite)
+	//   openai/gpt-5.4-image-2            (OpenAI GPT-5.4 Image 2)
+	defaultImageGenModel       = "google/gemini-nano-banana-2.1"
 	defaultImageGenTimeout     = 180 * time.Second
 	maxImageGenReferenceImages = 4
 	maxImageGenReferenceBytes  = 8 * 1024 * 1024
@@ -87,7 +86,7 @@ func ImageMIMEFromName(name string) string {
 type GenerateImageParams struct {
 	Prompt          string   `json:"prompt" description:"Description of the image to generate. Be concrete: subject, style, composition, colors, aspect."`
 	Filename        string   `json:"filename,omitempty" description:"Optional basename for the saved file (NO extension — the tool picks the right one from the model's actual output format). Letters, numbers, dashes, underscores only; path separators are stripped. If omitted, defaults to image-<timestamp>. The tool returns the actual path; reference THAT in your reply."`
-	Model           string   `json:"model,omitempty" description:"OpenRouter image-output model slug. Defaults to google/gemini-3-pro-image-preview (Nano Banana Pro). Other supported: google/gemini-3.1-flash-image-preview, google/gemini-2.5-flash-image, openai/gpt-5-image-mini, openai/gpt-5-image."`
+	Model           string   `json:"model,omitempty" description:"OpenRouter image-output model slug. Defaults to google/gemini-nano-banana-2.1 (Nano Banana 2.1). Other supported: google/gemini-3-pro-image, google/gemini-3.1-flash-image, google/gemini-3.1-flash-lite-image, openai/gpt-5.4-image-2."`
 	ReferenceImages []string `json:"reference_images,omitempty" description:"Optional paths to existing images to send as input (for editing, restyling, or composition). Up to 4 files; each <= 8 MB."`
 }
 
@@ -105,9 +104,9 @@ type imageGenResult struct {
 }
 
 const generateImageDescription = "Generates a photorealistic / illustrative image from a text prompt and saves it under your per-conversation workspace. " +
-	"You DO NOT pick the file extension — the model decides the output format (Nano Banana Pro returns JPEG; there's no API param to override) and the tool saves with the matching extension. " +
+	"You DO NOT pick the file extension — the model decides the output format (Nano Banana 2.1 returns JPEG/PNG; there's no API param to override) and the tool saves with the matching extension. " +
 	"Pass an optional `filename` slug (no extension) to control the basename, otherwise it defaults to image-<timestamp>. The tool returns the actual `path` written; reference that exact path in your reply via ![alt](path) — the chat UI rewrites it to a workspace URL and renders the image inline. " +
-	"Default model is Google Nano Banana Pro (google/gemini-3-pro-image-preview, ~$0.14/image); cheaper drafts: model=google/gemini-3.1-flash-image-preview (Nano Banana 2) or model=google/gemini-2.5-flash-image (Nano Banana). " +
+	"Default model is Google Nano Banana 2.1 (google/gemini-nano-banana-2.1); other latest-generation options: model=google/gemini-3-pro-image (Nano Banana Pro), model=google/gemini-3.1-flash-image (Nano Banana 2), model=google/gemini-3.1-flash-lite-image (Nano Banana 2 Lite), or model=openai/gpt-5.4-image-2 (GPT-5.4 Image 2). " +
 	"Use `reference_images` to edit / restyle existing images (including ones the user attached this turn — their absolute paths are in the attachments block). " +
 	"Do NOT use this for charts, plots, or data visualizations — use run_python with matplotlib instead (free, deterministic, can read your data). Requires OPENROUTER_API_KEY."
 

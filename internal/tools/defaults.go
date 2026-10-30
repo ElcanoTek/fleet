@@ -38,7 +38,8 @@ var interactiveOnlyToolNames = map[string]bool{
 	ChatPatrolToolName: true,
 	// persona_studio drafts a persona for the person at the keyboard to
 	// review; a headless run has no owner reviewing in the moment.
-	PersonaStudioToolName: true,
+	PersonaStudioToolName:       true,
+	EnableMCPConnectorsToolName: true,
 }
 
 // ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
@@ -88,6 +89,7 @@ func DefaultTools() []fantasy.AgentTool {
 		NewShowUITool(),
 		NewChatPatrolTool(),
 		NewPersonaStudioTool(),
+		NewEnableMCPConnectorsTool(),
 	}
 }
 
@@ -125,6 +127,7 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewShowUITool(),
 		NewChatPatrolTool(),
 		NewPersonaStudioTool(),
+		NewEnableMCPConnectorsTool(),
 	}
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)

@@ -589,6 +589,7 @@ export interface TurnStreamDeps {
     schedules: ChatSchedule[],
     autoApprove?: boolean,
   ) => void;
+  onMcpServersUpdated?: (convId: string, enabledOptional: string[]) => void;
   // Cross-tab election for the recovery chain's beat (#1595). Omitted, the
   // hook builds its own from the platform — `navigator.locks` plus a
   // BroadcastChannel where both exist, and today's independent per-tab chain
@@ -2682,7 +2683,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         result_text?: string;
         mcp_server?: string;
         mcp_account?: string;
+        enabled_optional?: string[];
       };
+      if (Array.isArray(p.enabled_optional)) {
+        deps.onMcpServersUpdated?.(ctx.target, p.enabled_optional);
+      }
       // Prefer the server's persisted record text so the live card reads
       // byte-identically to the reloaded one; the undo-hint synthesis stays
       // as the fallback for a server one release behind this client.
@@ -2837,6 +2842,16 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         auto_approve?: boolean;
       };
       deps.onPatrolUpdated?.(ctx.target, p.schedules ?? [], p.auto_approve);
+      return;
+    }
+
+    if (event.event === "mcp.servers_updated") {
+      const p = payload as {
+        enabled_optional?: string[];
+      };
+      if (Array.isArray(p.enabled_optional)) {
+        deps.onMcpServersUpdated?.(ctx.target, p.enabled_optional);
+      }
       return;
     }
 

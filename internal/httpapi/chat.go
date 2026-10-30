@@ -1444,19 +1444,22 @@ func (s *Server) runTurnAsync(
 
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
+	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager))
+	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user)
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
-		UserMessage:               userInput,
-		InjectedContext:           injectedContext,
-		Persona:                   turnPersona,
-		UserPersona:               personaLayer,
-		Model:                     conv.Model,
-		History:                   history,
-		Memories:                  memories,
-		ProjectInstructions:       projectInstructions,
-		ConversationID:            conv.ID,
-		UserEmail:                 user,
-		OptionalMCPServersEnabled: optionalEnabled,
-		MCPAccountDefaults:        accountDefaults,
+		UserMessage:                 userInput,
+		InjectedContext:             injectedContext,
+		Persona:                     turnPersona,
+		UserPersona:                 personaLayer,
+		Model:                       conv.Model,
+		History:                     history,
+		Memories:                    memories,
+		ProjectInstructions:         projectInstructions,
+		ConversationID:              conv.ID,
+		UserEmail:                   user,
+		OptionalMCPServersEnabled:   optionalEnabled,
+		AvailableOptionalMCPServers: availableOptional,
+		MCPAccountDefaults:          accountDefaults,
 		UserSkills:                userSkills,
 		SkillProposer:             &skillProposer{ctx: turnCtx, store: s.store, user: user},
 		Lockdown:                  conv.Lockdown,

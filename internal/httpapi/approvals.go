@@ -227,10 +227,13 @@ const defaultApprovalTimeoutSeconds = 86400
 // drops a change the user asked for.
 const stagedTaskApprovalTimeoutSeconds = 86400
 
-// stagesTaskChangeOnly reports whether toolName's card only stages a task
-// change: the two task tools, whose tool bodies never run (handler-only).
+// stagesTaskChangeOnly reports whether toolName's card only stages a task or
+// connector configuration change: tools whose bodies never execute external
+// side effects while pending (handler-only).
 func stagesTaskChangeOnly(toolName string) bool {
-	return toolName == tools.ScheduleTaskToolName || toolName == tools.ManageTasksToolName
+	return toolName == tools.ScheduleTaskToolName ||
+		toolName == tools.ManageTasksToolName ||
+		toolName == tools.EnableMCPConnectorsToolName
 }
 
 // resolveTimeoutSeconds applies the #225 resolution chain for toolName, highest
@@ -985,8 +988,13 @@ func approvalClientFields(toolName, rawInput, convID string) map[string]any {
 }
 
 // resumesAfterApproval reports whether a settled card for toolName starts a
-// resume turn under the running policy (handler-only cards never do).
+// resume turn under the running policy (handler-only cards never do, except
+// enable_mcp_connectors which always resumes so the agent can use the newly
+// enabled connectors immediately).
 func resumesAfterApproval(toolName string) bool {
+	if toolName == tools.EnableMCPConnectorsToolName {
+		return true
+	}
 	return agentcore.ResumeAfterApproval(toolName) && !handlerOnlyApproval(toolName)
 }
 
@@ -1018,6 +1026,9 @@ func summarizeApprovalInput(toolName, rawInput, convID string) map[string]any {
 	}
 	if toolName == tools.ManageTasksToolName {
 		return summarizeManageTasksInput(toolName, rawInput)
+	}
+	if toolName == tools.EnableMCPConnectorsToolName {
+		return summarizeEnableMCPConnectorsInput(toolName, rawInput)
 	}
 	// preview_email uses the exact same summary shape as send_email
 	// so ApprovalCard's existing email-preview render path just works;
@@ -1676,7 +1687,7 @@ func prevalidateStagedTaskPrompt(toolName, rawInput string) error {
 // mistaken for an approval id instead of creating a task or changing a model.
 func handlerOnlyApproval(tool string) bool {
 	switch tool {
-	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, "preview_email", tools.SuggestAdvancedModelToolName:
+	case tools.ScheduleTaskToolName, tools.ManageTasksToolName, tools.EnableMCPConnectorsToolName, "preview_email", tools.SuggestAdvancedModelToolName:
 		return true
 	default:
 		return false
@@ -2104,6 +2115,8 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	case approval.ToolName == tools.ManageTasksToolName:
 		// manage_tasks is the same shape for tasks that already exist (#1152).
 		text, toolErr = s.runStagedManageTasks(execCtx, approval)
+	case approval.ToolName == tools.EnableMCPConnectorsToolName:
+		text, toolErr = s.runStagedEnableMCPConnectors(execCtx, user, convID, approval)
 	default:
 		text, toolErr = s.runStagedTool(execCtx, approval)
 	}
@@ -2187,6 +2200,11 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 	}
 	if resultCard != nil {
 		reply["result_card"] = resultCard
+	}
+	if approval.ToolName == tools.EnableMCPConnectorsToolName && toolErr == nil && !isErr {
+		if conv, gerr := s.store.Get(execCtx, user, convID); gerr == nil && conv != nil {
+			reply["enabled_optional"] = conv.OptionalMCPServersEnabled
+		}
 	}
 	withApprovalNarrowed(reply, approval)
 	if stopped {
@@ -2383,6 +2401,11 @@ func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID 
 			return approvalError(http.StatusInternalServerError, "could not load conversation model")
 		}
 		state["model"] = conv.Model
+	}
+	if latest.ToolName == tools.EnableMCPConnectorsToolName && latest.Status == "approved" {
+		if conv, err := s.store.Get(ctx, user, latest.ConversationID); err == nil && conv != nil {
+			state["enabled_optional"] = conv.OptionalMCPServersEnabled
+		}
 	}
 	return approvalBody(state)
 }
@@ -3189,6 +3212,9 @@ func rejectionMessages(toolName string) (claim, history string) {
 	case toolName == tools.ManageTasksToolName:
 		return "User declined the task change.",
 			"User declined the task change. No tasks were modified."
+	case toolName == tools.EnableMCPConnectorsToolName:
+		return "User declined to enable the suggested MCP connector(s).",
+			"User declined to enable the suggested MCP connector(s). Do not retry enable_mcp_connectors for these connectors unless the user asks."
 	case tools.IsEmailToolName(toolName):
 		return "User declined to send.", "User declined to send this email."
 	default:
@@ -3205,6 +3231,8 @@ func actionVerb(toolName string) string {
 		return "schedule"
 	case toolName == tools.ManageTasksToolName:
 		return "task change"
+	case toolName == tools.EnableMCPConnectorsToolName:
+		return "enable connectors"
 	case tools.IsEmailToolName(toolName):
 		return "send"
 	default:

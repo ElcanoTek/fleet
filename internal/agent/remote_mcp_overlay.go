@@ -716,6 +716,10 @@ type hostedMCPRoster struct {
 	// tell the user the right thing: reconnect for a dead login, wait or retry
 	// for a vendor that did not answer — never "reconnect" for the latter (F10).
 	skipped []skippedConnector
+	// availableOptional, when non-nil, is the turn's user-filtered catalog of
+	// connected optional MCP connectors (bundled + remote) supplied by httpapi.
+	// When nil, buildSystemPrompt falls back to m.MCPServerCatalog().
+	availableOptional []OptionalServerInfo
 }
 
 // skippedConnector is one entry of hostedMCPRoster.skipped.

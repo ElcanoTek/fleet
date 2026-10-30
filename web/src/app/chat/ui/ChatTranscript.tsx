@@ -190,6 +190,7 @@ export type ChatTranscriptProps = {
   setModelSearchQuery: Dispatch<SetStateAction<string>>;
   loadRankedModels: () => void | Promise<void>;
   loadCatalogModels: () => void | Promise<void>;
+  onMcpServersUpdated?: (enabledOptional: string[]) => void;
 };
 
 // The transcript is virtualized (@tanstack/react-virtual): only the rows near
@@ -296,6 +297,7 @@ export function ChatTranscript({
   setModelSearchQuery,
   loadRankedModels,
   loadCatalogModels,
+  onMcpServersUpdated,
 }: ChatTranscriptProps) {
   "use no memo";
   // TanStack Virtual returns imperative functions whose identities cannot be
@@ -1124,6 +1126,7 @@ export function ChatTranscript({
                                         conversationId={realConvId(currentConvKey) ?? ""}
                                         onResolved={onResolved}
                                         onModelSwitched={(model) => setSelectedModel(model)}
+                                        onMcpServersUpdated={onMcpServersUpdated}
                                         onResumeExpected={onResumeExpected}
                                         onSwitchAndRetry={switchAndRetry}
                                         onAskAgain={(timedOut) => void submitPrompt(askAgainPrompt(timedOut, connectorNameMap))}
