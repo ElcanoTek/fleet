@@ -598,9 +598,8 @@ func buildFantasyToolsWithRoster(
 	log.Printf("Fantasy tools registered: %d (%d native + %d loader + %d MCP, %d MCP skipped optional, %d MCP skipped allowlist, %d MCP skipped persona, %d MCP skipped schema, %d MCP hidden from chat)",
 		len(allTools), len(nativeTools), len(cfg.loaderTools), len(mcpTools), mcpSkippedOptional, mcpSkippedAllowlist, mcpSkippedPersona, mcpSkippedSchema, mcpSkippedHidden)
 
-	directCeiling := max(maxToolsPerRequest, threshold)
-	if len(allTools) > directCeiling {
-		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), directCeiling)
+	if len(allTools) > maxToolsPerRequest {
+		return nil, toolRoster{}, fmt.Errorf("registered %d tools, exceeds the %d-tool ceiling", len(allTools), maxToolsPerRequest)
 	}
 	sort.Strings(mcpNames)
 	roster.directMCP = mcpNames

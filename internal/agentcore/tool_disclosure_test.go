@@ -512,22 +512,6 @@ func mcpToolsFrom(sts []mcp.ServerTool, broker MCPBroker) []fantasy.AgentTool {
 	return out
 }
 
-func TestDisclosureThresholdAboveDefaultRegistersDirectly(t *testing.T) {
-	t.Cleanup(func() { SetToolDisclosureThreshold(0) })
-	SetToolDisclosureThreshold(200)
-	got, err := buildFantasyTools(discNative(3), discMCPTools(150), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
-	if err != nil {
-		t.Fatalf("a 153-tool catalog under threshold=200 must register directly without ceiling error: %v", err)
-	}
-	if len(got) != 153 {
-		t.Fatalf("want 153 direct tools, got %d", len(got))
-	}
-	names := toolNamesOf(got)
-	if names["tool_search"] || names["tool_describe"] || names["tool_call"] {
-		t.Fatal("bridges must NOT register when roster is at or below raised threshold")
-	}
-}
-
 func TestDisclosureSearchAndDescribeAreParallelSafe(t *testing.T) {
 	reg := newDeferredToolRegistry(mcpToolsFrom(discMCPTools(3), &fakeBroker{}))
 	if !reg.searchTool().Info().Parallel {
