@@ -112,9 +112,40 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   attachments. These reads are fixed broker code needed before an approved host
   send, not a general file API. They remain a documented check-then-read host
   exception and are candidates for FileOp migration.
-- **Host datastore / control state**: `task_tracker`, `notes`, `memory`, and
-  `publish_artifact` write governed database/control records, not arbitrary
-  model-selected host files.
+- **Host datastore / control state**: `task_tracker`, `notes`, `memory`,
+  `publish_artifact`, and `enable_mcp_connectors` write governed
+  database/control records, not arbitrary model-selected host files.
+  `enable_mcp_connectors` (`internal/tools/enable_mcp_connectors.go`,
+  `internal/httpapi/enable_mcp_connectors.go`) is the interactive chat
+  connector-selection control-plane tool: it mutates only the conversation's
+  `OptionalMCPServersEnabled` datastore column and stages/resolves approval and
+  `approval_resume` rows, serialized per `(user, conversationID)` under
+  `connectorLocks`. Its threat model and authorization boundaries:
+  1. **Catalog & preference boundary**: accepts only bundled optional MCP
+     servers from `MCPServerCatalog()` (excluding the native `image_generation`
+     toggle and third-party remote MCP connections) that are live (`ToolCount > 0`),
+     enabled in the user's `ConnectorPrefs` (failing closed if preferences
+     cannot be loaded), permitted by `interactive_hidden_tools` and the
+     conversation's resolved effective bundle persona policy
+     (`resolveTurnPersona` + `PersonaPolicy`), unambiguous under
+     `PromptSafeName`, and within the deterministic 25-connector system-prompt
+     cap (`MaxAvailableOptionalInPrompt`).
+  2. **Approval & rollback boundary**: in standard mode, stages a handler-only
+     approval card (`ApprovalResumeArmed`) and performs no connector mutation
+     until the human approves (`runStagedEnableMCPConnectors` re-validates
+     against the current store and effective persona state at approval time);
+     in explicit conversation auto-approve mode (`isAutoApprove()` or
+     `autoApproveInTest`), creates the audit record, persists
+     `OptionalMCPServersEnabled`, arms resume, and resolves the approval row as
+     `approved`, rolling back `OptionalMCPServersEnabled` and resolving/superseding
+     any half-created approval row as `rejected` if any step fails.
+  3. **Resume & credential boundary**: when a continuation turn is queued or
+     deferred (`decideApprovalResume`), returns `StopTurn: true` so the next
+     turn mounts the newly enabled connectors through the standard host-side
+     MCP broker (ADR-0040 / ADR-0042); when the continuation is permanently
+     skipped (hourly resume cap or queue full), returns `StopTurn: false` so
+     the current turn finishes cleanly. No connector credentials ever enter the
+     sandbox or model context.
 - **Admin-authored scheduler gate**: `run_if` executes a shell command before
   task promotion as the Fleet host user. Only an authenticated admin can create
   or change it; the command receives a fixed minimal environment with no Fleet

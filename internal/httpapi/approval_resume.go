@@ -132,7 +132,10 @@ func (s *Server) scheduleApprovalResume(convID string, after time.Duration, atte
 }
 
 // decideApprovalResume runs the claim and acts on what it decided. It reports
-// whether a resume input row was enqueued for the conversation.
+// whether a resume continuation is queued or deferred (so the caller should
+// stop the current turn and let the continuation run) versus permanently
+// skipped or dropped (where no continuation turn will ever be launched for
+// this settlement).
 func (s *Server) decideApprovalResume(convID string, attempt int) bool {
 	if s.shuttingDown.Load() {
 		// No new turns while shutting down. The cards stay armed; the next boot
@@ -143,7 +146,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) bool {
 		// External update/lifecycle drain may be cancelled or time out without
 		// restarting the process; re-arm without consuming retry attempts.
 		s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt)
-		return false
+		return true
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -166,14 +169,16 @@ func (s *Server) decideApprovalResume(convID string, attempt int) bool {
 		log.Printf("approval resume (conv=%s): claim failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
 		if attempt < approvalResumeRetries {
 			s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt+1)
+			return true
 		}
 		return false
 	}
 	switch {
 	case len(res.Outstanding) > 0:
 		// Another card is still pending or executing; its settlement kicks
-		// again. Nothing was claimed.
-		return false
+		// again. Nothing was claimed yet, and the resume remains armed for
+		// when the outstanding card settles.
+		return true
 	case len(res.Claimed) == 0:
 		return false
 	case res.Input == nil:

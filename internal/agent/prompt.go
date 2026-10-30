@@ -189,9 +189,18 @@ type Manager struct {
 }
 
 // PersonaPolicy returns the per-persona tool allowlist for the named persona,
-// or nil when the persona has no manifest entry or its policy is empty.
+// falling back to the deployment default persona when persona is empty or an
+// unresolved "user:<name>" reference, or nil when the resolved persona has no
+// manifest entry or its policy is empty.
 func (m *Manager) PersonaPolicy(persona string) *agentcore.PersonaToolPermissions {
-	return m.personaPolicy(persona)
+	if m == nil {
+		return nil
+	}
+	p := strings.TrimSpace(persona)
+	if (p == "" || IsUserPersonaRef(p)) && m.config != nil {
+		p = m.config.PersonaDefault
+	}
+	return m.personaPolicy(p)
 }
 
 // personaPolicy returns the per-persona tool allowlist for the named persona

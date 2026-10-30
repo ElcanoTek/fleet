@@ -399,7 +399,8 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			turnStager.mcpMu.RUnlock()
 		}
 		if policy == nil {
-			policy = s.personaPolicyFor(fresh.Persona)
+			effectivePersona, _ := s.resolveTurnPersona(ctx, fresh)
+			policy = s.personaPolicyFor(effectivePersona)
 		}
 
 		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
@@ -640,7 +641,8 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 		return "", fmt.Errorf("load conversation: %w", err)
 	}
 
-	toEnable, _, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(conv.Persona), conv.MCPAccounts)
+	effectivePersona, _ := s.resolveTurnPersona(ctx, conv)
+	toEnable, _, err := s.validateEnableMCPConnectorsWithEnabled(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts)
 	if err != nil {
 		return "", err
 	}
