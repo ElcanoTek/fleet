@@ -164,6 +164,8 @@ func connectorLabels(connectors []TaskConnector) []string {
 func describeTaskConnectors(connectors []TaskConnector, alwaysOn []string) string {
 	labels := connectorLabels(connectors)
 	switch {
+	case len(labels) > 0 && len(alwaysOn) > 0:
+		return "Connectors: " + strings.Join(labels, ", ") + " (plus always-on: " + strings.Join(alwaysOn, ", ") + ")"
 	case len(labels) > 0:
 		return "Connectors: " + strings.Join(labels, ", ")
 	case len(alwaysOn) > 0:

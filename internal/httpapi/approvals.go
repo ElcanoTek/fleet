@@ -487,16 +487,23 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// with the real body. Without this, both cards render and the
 	// user sees the broken one linger forever. Best-effort: a failure
 	// here shouldn't block the new approval.
-	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
-		log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
-	} else if n > 0 {
-		// Tell the UI to mark the old card as resolved. The client
-		// already handles rejected approvals — this just nudges any
-		// open stream to refresh its approval state.
-		a.sink.Emit("tool.approval_superseded", map[string]any{
-			"tool":  toolName,
-			"count": n,
-		})
+	//
+	// For schedule_task, each call proposes creating an independent scheduled
+	// task (Name is optional and non-unique, and tool.approval_superseded
+	// clears all pending cards for the tool on live clients), so pending
+	// schedule_task cards are never auto-superseded by subsequent calls.
+	if toolName != tools.ScheduleTaskToolName {
+		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
+			log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
+		} else if n > 0 {
+			// Tell the UI to mark the old card as resolved. The client
+			// already handles rejected approvals — this just nudges any
+			// open stream to refresh its approval state.
+			a.sink.Emit("tool.approval_superseded", map[string]any{
+				"tool":  toolName,
+				"count": n,
+			})
+		}
 	}
 
 	seat := a.seatFor(toolName)

@@ -102,8 +102,11 @@ func TestAttachTaskConnectors(t *testing.T) {
 }
 
 func TestDescribeTaskConnectors(t *testing.T) {
-	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, []string{"mailbox"}); got != "Connectors: email, gamma (work)" {
-		t.Errorf("selected: %q", got)
+	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, []string{"mailbox"}); got != "Connectors: email, gamma (work) (plus always-on: mailbox)" {
+		t.Errorf("selected + always-on: %q", got)
+	}
+	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, nil); got != "Connectors: email, gamma (work)" {
+		t.Errorf("selected only: %q", got)
 	}
 	if got := describeTaskConnectors(nil, []string{"mailbox", "pages"}); !strings.Contains(got, "always-on connectors (mailbox, pages)") {
 		t.Errorf("always-on only: %q", got)
@@ -113,6 +116,55 @@ func TestDescribeTaskConnectors(t *testing.T) {
 	}
 	if got := connectorLabels([]TaskConnector{{Server: " "}, {Server: "x", Account: "a"}}); len(got) != 1 || got[0] != "x (a)" {
 		t.Errorf("labels = %v", got)
+	}
+}
+
+func TestScheduleTaskMultipleCardsDoNotSupersedeEachOther(t *testing.T) {
+	ctx := context.Background()
+	fs := newEnableMCPTestStore()
+	const user = "jeanne@elcanotek.com"
+	conv, err := fs.CreateConversation(ctx, user, "meeting prep", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink := &eventSink{}
+	stager := &approvalStager{
+		ctx:            ctx,
+		store:          fs,
+		conversationID: conv.ID,
+		userEmail:      user,
+		sink:           sink,
+	}
+
+	idTWC, err := stager.Stage(tools.ScheduleTaskToolName, "call-1", `{"name":"Meeting prep: TWC","prompt":"prep TWC","cron":"0 15 * * 2"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idReklaim, err := stager.Stage(tools.ScheduleTaskToolName, "call-2", `{"name":"Meeting prep: Reklaim","prompt":"prep Reklaim","cron":"0 15 * * 4"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Even unnamed or same-title schedule_task calls create independent tasks
+	// and must not supersede earlier pending cards or emit tool.approval_superseded.
+	idUnnamed1, err := stager.Stage(tools.ScheduleTaskToolName, "call-3", `{"prompt":"prep LoKnow","cron":"0 15 * * 3"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idUnnamed2, err := stager.Stage(tools.ScheduleTaskToolName, "call-4", `{"prompt":"prep Grain Group","cron":"0 15 * * 3"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{idTWC, idReklaim, idUnnamed1, idUnnamed2} {
+		ap, _ := fs.GetApproval(ctx, user, id)
+		if ap == nil || ap.Status != "pending" {
+			t.Fatalf("card %s status = %v, want pending", id, ap)
+		}
+	}
+	for _, ev := range sink.names {
+		if ev == "tool.approval_superseded" {
+			t.Fatalf("schedule_task must not emit tool.approval_superseded (got events %v)", sink.names)
+		}
 	}
 }
 
