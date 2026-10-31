@@ -73,6 +73,24 @@ func (s *enableMCPTestStore) SupersedePendingApprovals(_ context.Context, convID
 	return n, nil
 }
 
+func (s *enableMCPTestStore) SupersedePendingScheduleTaskApprovals(_ context.Context, convID, taskName string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	want := strings.TrimSpace(taskName)
+	var n int64
+	for _, a := range s.approvals {
+		if a.ConversationID == convID && a.ToolName == tools.ScheduleTaskToolName && a.Status == "pending" && scheduleTaskStagedName(a.ArgsJSON) == want {
+			a.Status = "rejected"
+			a.ResultText = "Superseded by a newer call to this tool."
+			if a.ResumeState == store.ApprovalResumeArmed {
+				a.ResumeState = store.ApprovalResumeSuperseded
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (s *enableMCPTestStore) CreateApproval(_ context.Context, convID, user, toolName, callID, argsJSON string, expiry int64, _ store.ApprovalSeat) (*store.Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

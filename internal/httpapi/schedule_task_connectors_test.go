@@ -102,8 +102,11 @@ func TestAttachTaskConnectors(t *testing.T) {
 }
 
 func TestDescribeTaskConnectors(t *testing.T) {
-	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, []string{"mailbox"}); got != "Connectors: email, gamma (work)" {
-		t.Errorf("selected: %q", got)
+	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, []string{"mailbox"}); got != "Connectors: email, gamma (work) (plus always-on: mailbox)" {
+		t.Errorf("selected + always-on: %q", got)
+	}
+	if got := describeTaskConnectors([]TaskConnector{{Server: "email"}, {Server: "gamma", Account: "work"}}, nil); got != "Connectors: email, gamma (work)" {
+		t.Errorf("selected only: %q", got)
 	}
 	if got := describeTaskConnectors(nil, []string{"mailbox", "pages"}); !strings.Contains(got, "always-on connectors (mailbox, pages)") {
 		t.Errorf("always-on only: %q", got)
@@ -113,6 +116,60 @@ func TestDescribeTaskConnectors(t *testing.T) {
 	}
 	if got := connectorLabels([]TaskConnector{{Server: " "}, {Server: "x", Account: "a"}}); len(got) != 1 || got[0] != "x (a)" {
 		t.Errorf("labels = %v", got)
+	}
+}
+
+func TestScheduleTaskSupersedeByNameOnly(t *testing.T) {
+	ctx := context.Background()
+	fs := newEnableMCPTestStore()
+	const user = "jeanne@elcanotek.com"
+	conv, err := fs.CreateConversation(ctx, user, "meeting prep", "victoria", "openrouter/auto", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stager := &approvalStager{
+		ctx:            ctx,
+		store:          fs,
+		conversationID: conv.ID,
+		userEmail:      user,
+		sink:           &eventSink{},
+	}
+
+	idTWC, err := stager.Stage(tools.ScheduleTaskToolName, "call-1", `{"name":"Meeting prep: TWC","prompt":"prep TWC","cron":"0 15 * * 2"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idReklaim, err := stager.Stage(tools.ScheduleTaskToolName, "call-2", `{"name":"Meeting prep: Reklaim","prompt":"prep Reklaim","cron":"0 15 * * 4"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both distinct-name schedule_task cards must remain pending.
+	aTWC, _ := fs.GetApproval(ctx, user, idTWC)
+	aRek, _ := fs.GetApproval(ctx, user, idReklaim)
+	if aTWC == nil || aTWC.Status != "pending" {
+		t.Fatalf("TWC card status = %v, want pending (must not be superseded by Reklaim)", aTWC)
+	}
+	if aRek == nil || aRek.Status != "pending" {
+		t.Fatalf("Reklaim card status = %v, want pending", aRek)
+	}
+
+	// Re-staging the same task name ("Meeting prep: TWC") supersedes only the old TWC card.
+	idTWC2, err := stager.Stage(tools.ScheduleTaskToolName, "call-3", `{"name":"Meeting prep: TWC","prompt":"prep TWC updated","cron":"0 15 * * 2"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	aTWC, _ = fs.GetApproval(ctx, user, idTWC)
+	aTWC2, _ := fs.GetApproval(ctx, user, idTWC2)
+	aRek, _ = fs.GetApproval(ctx, user, idReklaim)
+	if aTWC.Status != "rejected" {
+		t.Fatalf("old TWC card status = %q, want rejected (superseded)", aTWC.Status)
+	}
+	if aTWC2.Status != "pending" {
+		t.Fatalf("new TWC card status = %q, want pending", aTWC2.Status)
+	}
+	if aRek.Status != "pending" {
+		t.Fatalf("Reklaim card status = %q, want still pending", aRek.Status)
 	}
 }
 

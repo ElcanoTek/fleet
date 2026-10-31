@@ -487,7 +487,12 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// with the real body. Without this, both cards render and the
 	// user sees the broken one linger forever. Best-effort: a failure
 	// here shouldn't block the new approval.
-	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
+	//
+	// For schedule_task, only supersede a pending card when it targets the
+	// same task name (or when all pending schedule_task cards share this
+	// call's name), so staging multiple distinct scheduled tasks in one turn
+	// (e.g. six partner meeting-prep briefs) leaves every card pending.
+	if n, err := a.supersedePendingApprovals(toolName, rawInput); err != nil {
 		log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
 	} else if n > 0 {
 		// Tell the UI to mark the old card as resolved. The client

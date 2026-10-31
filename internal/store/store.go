@@ -3251,6 +3251,68 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName 
 	return n, nil
 }
 
+// SupersedePendingScheduleTaskApprovals supersedes pending schedule_task
+// approvals in convID whose trimmed "name" argument matches taskName, leaving
+// pending schedule_task approvals for distinct task names untouched so an
+// agent can stage multiple distinct scheduled tasks in a single turn.
+func (s *Store) SupersedePendingScheduleTaskApprovals(ctx context.Context, convID, taskName string) (int64, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, args_json FROM approvals
+		  WHERE conversation_id = $1
+		    AND tool_name = 'schedule_task'
+		    AND status = 'pending'`,
+		convID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	want := strings.TrimSpace(taskName)
+	var ids []string
+	for rows.Next() {
+		var id, argsJSON string
+		if err := rows.Scan(&id, &argsJSON); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		var p struct {
+			Name string `json:"name"`
+		}
+		_ = json.Unmarshal([]byte(argsJSON), &p)
+		if strings.TrimSpace(p.Name) == want {
+			ids = append(ids, id)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return 0, err
+	}
+	_ = rows.Close()
+
+	now := time.Now().Unix()
+	var total int64
+	for _, id := range ids {
+		res, err := s.db.ExecContext(ctx,
+			`UPDATE approvals
+			    SET status = 'rejected',
+			        result_text = 'Superseded by a newer call to this tool.',
+			        resolved_at = $1,
+			        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
+			  WHERE id = $2
+			    AND status = 'pending'`,
+			now, id,
+		)
+		if err != nil {
+			return total, err
+		}
+		n, _ := res.RowsAffected()
+		total += n
+	}
+	return total, nil
+}
+
 // MaxMessageIDForRole returns the DB row id of the latest message for this
 // conversation that matches role. Used by the frontend's retry flow, which
 // references messages by their UI-side id (a monotonically increasing
