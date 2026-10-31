@@ -158,39 +158,6 @@ func connectorLabels(connectors []TaskConnector) []string {
 	return labels
 }
 
-// scheduleTaskStagedName extracts the trimmed task name from a schedule_task
-// args JSON payload. Returns "" when unparseable or unset.
-func scheduleTaskStagedName(rawInput string) string {
-	var p struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(rawInput), &p); err != nil {
-		return ""
-	}
-	return strings.TrimSpace(p.Name)
-}
-
-// scheduleTaskSuperseder is implemented by stores that support superseding
-// pending schedule_task approvals scoped by task name rather than blanket
-// tool_name.
-type scheduleTaskSuperseder interface {
-	SupersedePendingScheduleTaskApprovals(ctx context.Context, convID, taskName string) (int64, error)
-}
-
-// supersedePendingApprovals supersedes older pending approvals for toolName in
-// this conversation. For schedule_task, distinct task names staged in the same
-// conversation (for example, splitting a weekly check into N partner briefs in
-// one turn) must not supersede one another; only a pending schedule_task card
-// with the same trimmed task name is superseded.
-func (a *approvalStager) supersedePendingApprovals(toolName, rawInput string) (int64, error) {
-	if toolName == tools.ScheduleTaskToolName {
-		if s, ok := a.store.(scheduleTaskSuperseder); ok {
-			return s.SupersedePendingScheduleTaskApprovals(a.ctx, a.conversationID, scheduleTaskStagedName(rawInput))
-		}
-	}
-	return a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName)
-}
-
 // describeTaskConnectors is the one-line "Connectors:" statement the chat
 // confirmation carries after a task is created, so the user learns what the
 // task can reach — and where to change it — without opening the run log.

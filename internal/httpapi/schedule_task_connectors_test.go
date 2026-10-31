@@ -119,7 +119,7 @@ func TestDescribeTaskConnectors(t *testing.T) {
 	}
 }
 
-func TestScheduleTaskSupersedeByNameOnly(t *testing.T) {
+func TestScheduleTaskMultipleCardsDoNotSupersedeEachOther(t *testing.T) {
 	ctx := context.Background()
 	fs := newEnableMCPTestStore()
 	const user = "jeanne@elcanotek.com"
@@ -127,12 +127,13 @@ func TestScheduleTaskSupersedeByNameOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sink := &eventSink{}
 	stager := &approvalStager{
 		ctx:            ctx,
 		store:          fs,
 		conversationID: conv.ID,
 		userEmail:      user,
-		sink:           &eventSink{},
+		sink:           sink,
 	}
 
 	idTWC, err := stager.Stage(tools.ScheduleTaskToolName, "call-1", `{"name":"Meeting prep: TWC","prompt":"prep TWC","cron":"0 15 * * 2"}`)
@@ -143,33 +144,27 @@ func TestScheduleTaskSupersedeByNameOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Both distinct-name schedule_task cards must remain pending.
-	aTWC, _ := fs.GetApproval(ctx, user, idTWC)
-	aRek, _ := fs.GetApproval(ctx, user, idReklaim)
-	if aTWC == nil || aTWC.Status != "pending" {
-		t.Fatalf("TWC card status = %v, want pending (must not be superseded by Reklaim)", aTWC)
-	}
-	if aRek == nil || aRek.Status != "pending" {
-		t.Fatalf("Reklaim card status = %v, want pending", aRek)
-	}
-
-	// Re-staging the same task name ("Meeting prep: TWC") supersedes only the old TWC card.
-	idTWC2, err := stager.Stage(tools.ScheduleTaskToolName, "call-3", `{"name":"Meeting prep: TWC","prompt":"prep TWC updated","cron":"0 15 * * 2"}`)
+	// Even unnamed or same-title schedule_task calls create independent tasks
+	// and must not supersede earlier pending cards or emit tool.approval_superseded.
+	idUnnamed1, err := stager.Stage(tools.ScheduleTaskToolName, "call-3", `{"prompt":"prep LoKnow","cron":"0 15 * * 3"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	aTWC, _ = fs.GetApproval(ctx, user, idTWC)
-	aTWC2, _ := fs.GetApproval(ctx, user, idTWC2)
-	aRek, _ = fs.GetApproval(ctx, user, idReklaim)
-	if aTWC.Status != "rejected" {
-		t.Fatalf("old TWC card status = %q, want rejected (superseded)", aTWC.Status)
+	idUnnamed2, err := stager.Stage(tools.ScheduleTaskToolName, "call-4", `{"prompt":"prep Grain Group","cron":"0 15 * * 3"}`)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if aTWC2.Status != "pending" {
-		t.Fatalf("new TWC card status = %q, want pending", aTWC2.Status)
+
+	for _, id := range []string{idTWC, idReklaim, idUnnamed1, idUnnamed2} {
+		ap, _ := fs.GetApproval(ctx, user, id)
+		if ap == nil || ap.Status != "pending" {
+			t.Fatalf("card %s status = %v, want pending", id, ap)
+		}
 	}
-	if aRek.Status != "pending" {
-		t.Fatalf("Reklaim card status = %q, want still pending", aRek.Status)
+	for _, ev := range sink.names {
+		if ev == "tool.approval_superseded" {
+			t.Fatalf("schedule_task must not emit tool.approval_superseded (got events %v)", sink.names)
+		}
 	}
 }
 
