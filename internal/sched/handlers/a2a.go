@@ -672,6 +672,17 @@ func (h *Handlers) a2aListTasks(w http.ResponseWriter, _ *http.Request, p princi
 			a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "params must be a ListTasksRequest: "+err.Error(), nil))
 			return
 		}
+		// wire.TaskState.UnmarshalJSON (a2a-go v2.7.0+) maps unknown strings
+		// and "TASK_STATE_UNSPECIFIED" to TaskStateUnspecified (""). Preserve
+		// the caller's raw status string so FleetStatusesFor rejects unknown
+		// status filters with InvalidParams (-32602) instead of silently
+		// ignoring them.
+		var raw struct {
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(req.Params, &raw); err == nil && raw.Status != "" {
+			params.Status = wire.TaskState(raw.Status)
+		}
 	}
 	if params.Tenant != "" {
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInvalidParams, "this agent declares no tenant; omit the tenant field", nil))
