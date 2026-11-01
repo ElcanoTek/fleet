@@ -612,10 +612,11 @@ So when a scheduled run's resend-budget compaction fires, or its window
 compaction on the `FLEET_SCHEDULED_AUTO_COMPACT` opt-in, the run first replaces
 every tool result older than a recent window with a stub: the start and end of
 the output, its size, and how to get it back (`view_file` on the saved output
-when there is one; otherwise a note that the call is done, that a tool that
-only reads data is called again to get the data back, with the same arguments
-or narrower ones, rather than searched for elsewhere, and that a call that
-changed something is not repeated just to see its result). The recent window is the newest 30% of the budget, and
+when there is one; otherwise a note that the call is done, that a call that
+only read data is made again to get the data back, with the same arguments or
+narrower ones, rather than looked for in the environment, `/tmp` or other
+tasks' directories, and that a call that changed something is not repeated
+just to see its result). The recent window is the newest 30% of the budget, and
 never fewer than the last two assistant turns. Both it and the savings are
 measured in the provider's tokens: each elision first takes the run's own rate
 of provider tokens per estimated token from the call that fired, against the

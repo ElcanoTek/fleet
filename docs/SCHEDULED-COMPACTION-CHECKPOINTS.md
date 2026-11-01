@@ -302,15 +302,18 @@ fewer summarizer calls; making the elided content recallable added nothing.
   and a recovery action. A result whose full output the tool output boundary
   saved keeps its `artifact_path`, and its recovery is `view_file` on it. Any
   other says the call itself is done; that if the model needs what was cut and
-  the tool only reads data, calling it again (with the same arguments, or
-  narrower ones if it takes any) is how to get it back, not a search of files,
-  the environment or other directories; and that a call that changed
-  something is not repeated just to see its result. The in-round guard's plain
-  "Re-run <tool>" is wrong advice for a call with side effects, and elision
-  stubs results routinely, not only near overflow. The first wording led with
-  "do not repeat it just to see this again" and offered only narrower output;
-  a model whose tool took no narrower arguments then searched for the data
-  instead ([Measured](#off-and-on-on-seven-models-2026-10-27-and-2026-11-01)).
+  the call only read data, making it again (with the same arguments, or
+  narrower ones if the tool takes them) is how to get it back; that the data
+  is not in the environment, `/tmp` or other tasks' directories, though a
+  file the run wrote itself is fine to read; and that a call that changed
+  something is not repeated just to see its result. The in-round guard's
+  plain "Re-run <tool>" is wrong advice for a call with side effects, and
+  elision stubs results routinely, not only near overflow. A repeat with the
+  same arguments stops elision and raises the budget (below); one with
+  narrower arguments is a new call and does neither. The first wording led
+  with "do not repeat it just to see this again" and offered only narrower
+  output; a model whose tool took no narrower arguments then searched for the
+  data instead ([Measured](#off-and-on-on-seven-models-2026-10-27-and-2026-11-01)).
   The recent window is the newest messages that fit 30% of the budget as they
   are sent, extended to at least the last two assistant turns and moved back so
   it never starts on a tool message.
@@ -691,11 +694,12 @@ That round cost about $6.
 #### Off and on, on seven models (2026-10-27 and 2026-11-01)
 
 Three runs each with elision off (2026-10-27, business date 2026-10-26) and
-on (2026-11-01, business date 2026-10-31; the twelve reports came to 324 KB
-and 321 KB), all on #1862's code. Two runs with elision off died on provider
-errors (a 502 and a 504) and were replaced; the on phase was first started on
-2026-10-27 and stopped by the bench key's monthly spending limit, and was run
-again whole.
+on (2026-11-01, business date 2026-10-31), all on #1862's code with the first
+stub wording. The twelve reports came to 296 KB and 292 KB as the connector
+sends them. Two runs with elision off died on provider errors (a 502 and a
+504) and were replaced. The on phase was first started on 2026-10-27, stopped
+by the bench key's monthly spending limit after $5.23, and was run again
+whole.
 
 | Model | Off: cost / run | Mean | On: cost / run | Mean | Cells, off | Cells, on | Raise fired |
 |---|---|---|---|---|---|---|---|
@@ -707,15 +711,23 @@ again whole.
 | Luna Pro | $0.13, $0.14, $0.13 | $0.13 | $0.13, $0.13, $0.14 | $0.13 | 72, 72, 72 | 72, 72, 71 | 0 |
 | GPT-6.1 Sol | $0.83, $0.77, $2.25 | $1.28 | $0.80, $0.74, $0.71 | $0.75 | 72, 72, 72 | 72, 72, 72 | 3 |
 
-A 62 or 63 is a run that gave each store's number of low-stock SKUs where the
-prompt asks for the SKUs; every such count was right. Gemini's 51 also missed
-every top discount, and its 0 gave no answer (below). The round cost about
-$68.
+- **Scores.** A 62 or 63 is a run that gave each store's number of low-stock
+  SKUs where the prompt asks for the SKUs; every such count was right.
+  Gemini's 51 also missed every top discount, and its 0 gave no answer
+  (below).
+- **Shared workspace.** The three runs of a recurring task share its
+  workspace, and on the bench they share a business date too, so a later run
+  can find an earlier one's results there. Of the 58 runs on the bench since
+  2026-10-26, 56 fetched all twelve reports themselves. Two DeepSeek runs
+  fetched 10 and 6 and took the rest from those files: the off run at $0.11
+  and the on run at $0.02. Without them DeepSeek cost $0.045 off and $0.03 on.
+- **Cost.** The round cost about $74 with the stopped phase.
 
 Each run's trace shows which pause every re-fetch followed:
-- **GPT-6.1 Sol and DeepSeek** cost less with elision: GPT never summarized
-  and finished in 1.5 minutes against 5.2. **Opus and Luna Pro** cost the
-  same; Luna Pro never elided.
+- **GPT-6.1 Sol and DeepSeek** cost less with elision. GPT never summarized
+  and finished in 1.5 minutes against 5.2, though its mean off rests on one
+  $2.25 run: the other two cost about what the runs with elision did.
+  **Opus and Luna Pro** cost the same; Luna Pro never elided.
 - **Sonnet's** extra cost is not elision. Every re-fetch in its runs with
   elision followed a summary, and elision fired only at a run's last pause,
   or never: the $14.24 run took 34 summaries and 97 re-fetches without one
@@ -725,23 +737,24 @@ Each run's trace shows which pause every re-fetch followed:
   them, and the model fetches all twelve again. Sonnet fell into it in all
   three runs with elision and one without (all three without on 2026-10-22).
 - **Haiku's** is mostly the same loop, in two runs of three each way. In the
-  $1.36 run, elision first fired after four summaries; Haiku then fetched
-  seven trimmed reports again and started eleven sub-agents, 20 of its 77
-  steps. The raise did not follow because the run ended before its next
-  pause.
-- **Gemini's** is elision. In all three runs it did not call the report tool
-  again after the reports were trimmed; it read the stub's "do not repeat it
-  just to see this again" and searched for the data instead: the
-  environment, the process list, `/tmp`, its workspace, for 10 to 60 steps,
-  with six sub-agents in one run. One run listed the workspace root, read
-  other bench tasks' result files, copied two into its own workspace,
-  confirmed its audit and gave no answer: the task succeeded with no table.
-  The 2026-10-27 run above that scored 72 had read them too. Every sandbox
-  can read the whole workspace root, a known limit
-  ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix),
-  ADR-0058); it is the stub's wording that sent the model looking. The stub
-  now says to call a reading tool again, which is how the data comes back
-  ([What shipped](#what-shipped-1)).
+  $1.36 run, elision fired only after four summaries; Haiku then fetched
+  seven trimmed reports again and started eleven sub-agents, 19 of the run's
+  76 tool calls. The raise did not follow because the run ended before its
+  next pause.
+- **Gemini's** is elision. In all three runs, once the reports were trimmed,
+  it searched for the data instead of calling the report tool for it: the
+  environment, the process list, `/tmp`, its workspace, for 10 to 60 calls,
+  with six sub-agents in one run; that run fetched one report again after
+  15 calls of searching (the raise that fired). The searches began by
+  quoting the stub's "do not repeat it just to see this again". One run
+  listed the workspace root, read other bench tasks' result files, copied
+  two into its own workspace, confirmed its audit and gave no answer: the
+  task succeeded with no table. The 2026-10-27 run above that scored 72 had
+  read them too. Every sandbox can read the whole workspace root, a known
+  limit ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix),
+  ADR-0058). The stub's wording has changed since ([What
+  shipped](#what-shipped-1)); how the new one does is under [Not
+  done](#not-done) until it is measured.
 
 ### Deviations from the issue
 
@@ -771,6 +784,12 @@ Each run's trace shows which pause every re-fetch followed:
   re-run of an elided call, so a run that loops on summaries alone, as Sonnet
   did during its audit above, is not helped. That loop happens with elision
   off too; it is a matter for the summary, not for elision.
+- Measuring the stub's second wording. Every round above used the first.
+  Whether Gemini now calls the report tool again instead of searching, and
+  what that does to its cost, is not yet measured, and neither is the effect
+  on the other models' re-fetches: the new text invites them, and on a window
+  too small for a raise (128K, say) a re-fetch can feed the summary loop
+  above.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.

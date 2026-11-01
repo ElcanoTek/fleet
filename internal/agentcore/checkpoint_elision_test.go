@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -164,31 +165,56 @@ func TestElideStaleToolResults_NeverThePinnedHead(t *testing.T) {
 	}
 }
 
-// A stub tells the model to call a reading tool again to get the data back,
-// with the same arguments when the tool takes no narrower ones, and not to
-// look elsewhere. Told only "do not repeat it" and "narrower output", a model
-// whose report tool took no narrower arguments searched the environment and
-// the workspace for the data instead (the store-KPI bench, Gemini 3.8 Flash).
+// A stub tells the model that making a call that only read data again is how
+// to get the data back, with the same arguments when the tool takes no
+// narrower ones, and where the data is not. Told only "do not repeat it" and
+// "narrower output", Gemini 3.8 Flash, whose report tool took no narrower
+// arguments, searched the environment and the workspace for the data instead
+// (the store-KPI bench). The longer text must not cost a report-shaped JSON
+// result any of its preview.
 func TestElisionStub_SaysToCallAReadingToolAgain(t *testing.T) {
-	stub, _, ok := elisionStub(elisionText(9000), "mcp_store_metrics_get_store_daily_report")
-	if !ok {
-		t.Fatal("fixture: the result was not elided")
+	items := make([]string, 0, 300)
+	for i := range 300 {
+		items = append(items, fmt.Sprintf(`{"txn_id":"S01-20261031-%04d","sku":"NW-PACK-%03d","qty":%d,"unit_price":89.99,"discount_pct":12.5}`, i, i%40, i%5+1))
 	}
-	for _, want := range []string{
-		"the call itself is done",
-		"only reads data, call it again with the same arguments, or narrower ones if it takes any",
-		"do not search files, the environment or other directories for it",
-		"Do not repeat a call that changed something",
+	report := `{"store_id":"S01","date":"2026-10-31","line_items":[` + strings.Join(items, ",") + `]}`
+	for name, output := range map[string]fantasy.ToolResultOutputContent{
+		"text": elisionText(9000),
+		"json": fantasy.ToolResultOutputContentText{Text: report},
 	} {
-		if !strings.Contains(stub, want) {
-			t.Errorf("stub lacks %q:\n%s", want, stub)
+		stub, _, ok := elisionStub(output, "mcp_store_metrics_get_store_daily_report")
+		if !ok {
+			t.Fatalf("%s: fixture: the result was not elided", name)
 		}
-	}
-	if strings.Contains(stub, "do not repeat it just to see this again") {
-		t.Errorf("stub still tells the model not to call a reading tool again:\n%s", stub)
-	}
-	if len(stub) > elisionStubBytes {
-		t.Errorf("stub is %d bytes, want at most %d", len(stub), elisionStubBytes)
+		for _, want := range []string{
+			"the call itself is done",
+			"the call only read data, make it again with the same arguments (or narrower ones, if the tool takes them)",
+			"Do not look for it in the environment, /tmp or other tasks' directories; a file this run wrote is fine to read.",
+			"Do not repeat a call that changed something",
+		} {
+			if !strings.Contains(stub, want) {
+				t.Errorf("%s: stub lacks %q:\n%s", name, want, stub)
+			}
+		}
+		if strings.Contains(stub, "do not repeat it just to see this again") {
+			t.Errorf("%s: stub still tells the model not to make a reading call again:\n%s", name, stub)
+		}
+		if len(stub) > elisionStubBytes {
+			t.Errorf("%s: stub is %d bytes, want at most %d", name, len(stub), elisionStubBytes)
+		}
+		if name != "json" {
+			continue
+		}
+		var env toolOutputEnvelope
+		if err := json.Unmarshal([]byte(stub), &env); err != nil {
+			t.Fatalf("json stub is not JSON: %v\n%s", err, stub)
+		}
+		if env.RecoveryAction != elisionRecovery {
+			t.Errorf("json stub recovery = %q, want elisionRecovery", env.RecoveryAction)
+		}
+		if want := initialPreviewBudget(elisionStubBytes); env.ShownBytes != want {
+			t.Errorf("json stub shows %d bytes of the report, want the full preview, %d", env.ShownBytes, want)
+		}
 	}
 }
 
@@ -536,6 +562,9 @@ func TestElideStaleToolResults_KeepsTheArtifactPath(t *testing.T) {
 	if !strings.Contains(stub, "artifact_path: "+path) || !strings.Contains(stub, fmt.Sprintf("Use view_file with path %q", path)) ||
 		!strings.Contains(stub, "original_bytes: 500000") {
 		t.Fatalf("stub = %q, want the artifact path, its view_file recovery and the original size", stub)
+	}
+	if strings.Contains(stub, elisionRecovery) {
+		t.Fatalf("stub = %q, want only the view_file recovery: the saved file is where the output is", stub)
 	}
 }
 
