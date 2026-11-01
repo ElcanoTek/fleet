@@ -301,10 +301,16 @@ fewer summarizer calls; making the elided content recallable added nothing.
   of the output (about 1 KiB, the whole stub at most 2 KiB), its original size,
   and a recovery action. A result whose full output the tool output boundary
   saved keeps its `artifact_path`, and its recovery is `view_file` on it. Any
-  other says the call is done and should not be repeated just to see it again,
-  and that only a tool that reads data should be re-run, with narrower output:
-  the in-round guard's plain "Re-run <tool>" is wrong advice for a call with
-  side effects, and elision stubs results routinely, not only near overflow.
+  other says the call itself is done; that if the model needs what was cut and
+  the tool only reads data, calling it again (with the same arguments, or
+  narrower ones if it takes any) is how to get it back, not a search of files,
+  the environment or other directories; and that a call that changed
+  something is not repeated just to see its result. The in-round guard's plain
+  "Re-run <tool>" is wrong advice for a call with side effects, and elision
+  stubs results routinely, not only near overflow. The first wording led with
+  "do not repeat it just to see this again" and offered only narrower output;
+  a model whose tool took no narrower arguments then searched for the data
+  instead ([Measured](#off-and-on-on-seven-models-2026-10-27-and-2026-11-01)).
   The recent window is the newest messages that fit 30% of the budget as they
   are sent, extended to at least the last two assistant turns and moved back so
   it never starts on a tool message.
@@ -675,12 +681,67 @@ window cap (their windows are about 1M too, so it did not bind):
   $0.66 and $0.65, 72 of 72.
 - **Gemini 3.8 Flash**: elision fired (four times in one run, once in the
   other) with one summary each, but nothing was fetched again, so the raise
-  did not fire and the runs took the same path as with the holds only. $2.59
-  and $2.41, 72 and 70 cells, against $2.02 off and $1.99 with the holds only;
-  the code on that path is unchanged, so the gap is the model's run-to-run
-  spread.
+  did not fire. $2.59 and $2.41, 72 and 70 cells, against $2.02 off and $1.99
+  with the holds only. The round below found why it costs more, and that the
+  72 is not a measurement: that run read the other bench tasks' answers out
+  of their workspaces.
 
 That round cost about $6.
+
+#### Off and on, on seven models (2026-10-27 and 2026-11-01)
+
+Three runs each with elision off (2026-10-27, business date 2026-10-26) and
+on (2026-11-01, business date 2026-10-31; the twelve reports came to 324 KB
+and 321 KB), all on #1862's code. Two runs with elision off died on provider
+errors (a 502 and a 504) and were replaced; the on phase was first started on
+2026-10-27 and stopped by the bench key's monthly spending limit, and was run
+again whole.
+
+| Model | Off: cost / run | Mean | On: cost / run | Mean | Cells, off | Cells, on | Raise fired |
+|---|---|---|---|---|---|---|---|
+| Haiku 5.5 | $0.63, $0.39, $0.52 | $0.52 | $1.36, $0.32, $0.83 | $0.84 | 72, 72, 71 | 62, 72, 72 | 0 |
+| Sonnet 5.5 | $1.10, $1.19, $2.28 | $1.52 | $14.24, $2.11, $2.53 | $6.29 | 72, 72, 72 | 72, 72, 72 | 0 |
+| Opus 5.5 | $5.44, $3.37, $2.36 | $3.72 | $2.60, $5.14, $3.75 | $3.83 | 72, 63, 72 | 72, 72, 72 | 1 |
+| DeepSeek v4.1 Flash | $0.04, $0.05, $0.11 | $0.07 | $0.03, $0.02, $0.03 | $0.02 | 63, 63, 63 | 62, 62, 72 | 2 |
+| Gemini 3.8 Flash | $1.45, $1.68, $0.31 | $1.14 | $2.75, $2.92, $0.62 | $2.10 | 72, 72, 51 | 0, 62, 62 | 1 |
+| Luna Pro | $0.13, $0.14, $0.13 | $0.13 | $0.13, $0.13, $0.14 | $0.13 | 72, 72, 72 | 72, 72, 71 | 0 |
+| GPT-6.1 Sol | $0.83, $0.77, $2.25 | $1.28 | $0.80, $0.74, $0.71 | $0.75 | 72, 72, 72 | 72, 72, 72 | 3 |
+
+A 62 or 63 is a run that gave each store's number of low-stock SKUs where the
+prompt asks for the SKUs; every such count was right. Gemini's 51 also missed
+every top discount, and its 0 gave no answer (below). The round cost about
+$68.
+
+Each run's trace shows which pause every re-fetch followed:
+- **GPT-6.1 Sol and DeepSeek** cost less with elision: GPT never summarized
+  and finished in 1.5 minutes against 5.2. **Opus and Luna Pro** cost the
+  same; Luna Pro never elided.
+- **Sonnet's** extra cost is not elision. Every re-fetch in its runs with
+  elision followed a summary, and elision fired only at a run's last pause,
+  or never: the $14.24 run took 34 summaries and 97 re-fetches without one
+  elision, so it ran exactly as with elision off. It is the summary loop
+  under [Not done](#not-done): the twelve reports arrive in one step, the
+  pause cannot elide them (they are the recent window), the summary drops
+  them, and the model fetches all twelve again. Sonnet fell into it in all
+  three runs with elision and one without (all three without on 2026-10-22).
+- **Haiku's** is mostly the same loop, in two runs of three each way. In the
+  $1.36 run, elision first fired after four summaries; Haiku then fetched
+  seven trimmed reports again and started eleven sub-agents, 20 of its 77
+  steps. The raise did not follow because the run ended before its next
+  pause.
+- **Gemini's** is elision. In all three runs it did not call the report tool
+  again after the reports were trimmed; it read the stub's "do not repeat it
+  just to see this again" and searched for the data instead: the
+  environment, the process list, `/tmp`, its workspace, for 10 to 60 steps,
+  with six sub-agents in one run. One run listed the workspace root, read
+  other bench tasks' result files, copied two into its own workspace,
+  confirmed its audit and gave no answer: the task succeeded with no table.
+  The 2026-10-27 run above that scored 72 had read them too. Every sandbox
+  can read the whole workspace root, a known limit
+  ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix),
+  ADR-0058); it is the stub's wording that sent the model looking. The stub
+  now says to call a reading tool again, which is how the data comes back
+  ([What shipped](#what-shipped-1)).
 
 ### Deviations from the issue
 
@@ -710,16 +771,6 @@ That round cost about $6.
   re-run of an elided call, so a run that loops on summaries alone, as Sonnet
   did during its audit above, is not helped. That loop happens with elision
   off too; it is a matter for the summary, not for elision.
-- Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
-  four with elision cost $2.25 a run and five without $1.49. The runs with
-  elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M
-  prompt tokens, against 0.5–2.4M in four of the five without): a trim keeps
-  more history than a summary, Gemini takes many small steps, and only
-  about 15–20% of its prompt is cached. They were also more accurate (69
-  cells against 64 on average; the two cheapest runs without elision stopped
-  early with wrong values). The raise did not fire in any of them. Not yet
-  looked into, and a second round with elision on, on all seven models, is
-  still to run.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.
