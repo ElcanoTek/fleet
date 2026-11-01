@@ -2,7 +2,9 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
@@ -77,10 +79,10 @@ const (
 	ProviderTypeAzure ProviderType = "azure"
 	// ProviderTypeGoogle calls the Gemini API (Google AI Studio) with a Gemini
 	// API key, through fantasy's google provider. Model ids are Gemini's own
-	// (gemini-3.8-flash). Vertex AI is not supported: it signs in with Google
-	// credentials found on the host, never with a stored key, so fleet always
-	// uses the Gemini API backend and refuses the model ids fantasy would send
-	// to Vertex instead (geminiOnlyProvider).
+	// (gemini-3.8-flash). Vertex AI is not supported: fantasy's Vertex path
+	// drops a stored key and signs in with Google credentials found on the
+	// host, so fleet always uses the Gemini API backend and refuses the model
+	// ids fantasy would send to Vertex instead (geminiOnlyProvider).
 	ProviderTypeGoogle ProviderType = "google"
 )
 
@@ -388,19 +390,35 @@ func googleOptions(apiKey, base string) []google.Option {
 	if base == "" {
 		base = defaultGeminiBaseURL
 	}
-	return []google.Option{google.WithGeminiAPIKey(apiKey), google.WithBaseURL(base)}
+	return []google.Option{google.WithGeminiAPIKey(apiKey), google.WithBaseURL(base), google.WithHTTPClient(googleHTTPClient)}
 }
+
+// googleHTTPClient carries a google entry's requests. Like the connection
+// test it follows a redirect only within the endpoint's origin, as the OpenAI
+// SDK does for the azure type. Without it fantasy uses http.DefaultClient,
+// which follows one anywhere and copies x-goog-api-key along.
+var googleHTTPClient = &http.Client{CheckRedirect: sameOriginRedirect}
 
 // geminiOnlyProvider refuses the model ids fantasy's google provider sends to
 // Anthropic on Vertex AI instead of the Gemini API: any id containing "claude"
 // or "anthropic". That path signs in with the Google credentials it finds on
 // the host, which a google entry never configures, so such an id (an
-// OpenRouter slug reaching a google catch-all, say) fails here instead.
+// OpenRouter slug reaching a google catch-all, say) fails here instead. The
+// models it returns pass Gemini only tool schemas it accepts
+// (geminiSchemaModel).
 type geminiOnlyProvider struct{ fantasy.Provider }
+
+// errNotAGeminiModel is geminiOnlyProvider's refusal. A fallback chain skips
+// a google entry that refuses the slug instead of failing the whole resolve.
+var errNotAGeminiModel = errors.New("not a Gemini API model")
 
 func (p geminiOnlyProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
 	if id := strings.ToLower(modelID); strings.Contains(id, "claude") || strings.Contains(id, "anthropic") {
-		return nil, fmt.Errorf("model %q is not a Gemini API model: a google provider does not reach Claude models", modelID)
+		return nil, fmt.Errorf("model %q is %w: a google provider does not reach Claude models", modelID, errNotAGeminiModel)
 	}
-	return p.Provider.LanguageModel(ctx, modelID)
+	lm, err := p.Provider.LanguageModel(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	return geminiSchemaModel{lm}, nil
 }

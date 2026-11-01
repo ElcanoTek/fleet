@@ -342,6 +342,36 @@ func TestResolveWithFallbackChainAndExplicitPin(t *testing.T) {
 	}
 }
 
+// A google catch-all in a fallback chain refuses a Claude slug; the chain
+// skips it and keeps the providers after it, instead of failing the whole
+// resolve and with it the primary turn that would have worked.
+func TestResolveWithFallbacksSkipsAGoogleEntryThatRefusesTheSlug(t *testing.T) {
+	providers := []ProviderConfig{
+		{Name: "primary", Type: ProviderTypeOpenAI, APIKey: "p", Models: []string{"claude-test"}, FallbackProviders: []string{"primary", "gemini", "secondary"}},
+		{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10"},
+		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
+	}
+	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, fallbacks, err := r.ResolveWithFallbacks(context.Background(), "claude-test")
+	if err != nil || primary == nil {
+		t.Fatalf("primary=%v err=%v", primary, err)
+	}
+	if len(fallbacks) != 1 || fallbacks[0].Provider() == "google" {
+		t.Fatalf("fallbacks = %v, want only the secondary openai entry", fallbacks)
+	}
+	// A slug the google entry does serve stays in the chain.
+	providers[0].Models = []string{"gemini-test"}
+	if r, err = NewModelResolverWithProviders(providers, DefaultProviderHeaders); err != nil {
+		t.Fatal(err)
+	}
+	if _, fallbacks, err = r.ResolveWithFallbacks(context.Background(), "gemini-test"); err != nil || len(fallbacks) != 2 || fallbacks[0].Provider() != "google" {
+		t.Fatalf("gemini-test fallbacks = %v, err = %v, want the google entry then secondary", fallbacks, err)
+	}
+}
+
 func TestResolverRejectsUnknownFallbackProvider(t *testing.T) {
 	_, err := NewModelResolverWithProviders([]ProviderConfig{{
 		Name: "primary", Type: ProviderTypeOpenAI, APIKey: "p", FallbackProviders: []string{"primary", "missing"},

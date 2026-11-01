@@ -488,6 +488,14 @@ var ambientGoogleEnv = map[string]string{
 // the Gemini API, and records each call's path and headers.
 func geminiServer(t *testing.T) (*httptest.Server, func() (paths []string, headers []http.Header)) {
 	t.Helper()
+	h, calls := geminiHandler()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+// geminiHandler is geminiServer's handler.
+func geminiHandler() (http.Handler, func() (paths []string, headers []http.Header)) {
 	var mu sync.Mutex
 	var paths []string
 	var headers []http.Header
@@ -501,7 +509,7 @@ func geminiServer(t *testing.T) (*httptest.Server, func() (paths []string, heade
 		b, _ := json.Marshal(resp)
 		return string(b)
 	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
 		headers = append(headers, r.Header.Clone())
@@ -514,9 +522,8 @@ func geminiServer(t *testing.T) (*httptest.Server, func() (paths []string, heade
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, chunk("pong", true))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, func() ([]string, []http.Header) {
+	})
+	return h, func() ([]string, []http.Header) {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), paths...), append([]http.Header(nil), headers...)
@@ -579,15 +586,15 @@ func TestGoogleReachesTheConfiguredEndpoint(t *testing.T) {
 }
 
 // With no base_url a google entry still names the Gemini API itself, so the
-// host's GOOGLE_GEMINI_BASE_URL cannot redirect its key. buildProvider gives
-// fantasy no HTTP client, so fantasy wraps http.DefaultClient, whose transport
-// is http.DefaultTransport: recording there keeps the request offline.
+// host's GOOGLE_GEMINI_BASE_URL cannot redirect its key. Recording on
+// googleHTTPClient's transport keeps the request offline; fantasy reads it
+// when the provider is built.
 func TestGoogleDefaultEndpointIgnoresHostBaseURL(t *testing.T) {
 	t.Setenv("GOOGLE_GEMINI_BASE_URL", "http://203.0.113.10/trap")
 	rec := &recordingDoer{}
-	prev := http.DefaultTransport
-	http.DefaultTransport = rec
-	t.Cleanup(func() { http.DefaultTransport = prev })
+	prev := googleHTTPClient.Transport
+	googleHTTPClient.Transport = rec
+	t.Cleanup(func() { googleHTTPClient.Transport = prev })
 	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key"}, DefaultProviderHeaders)
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
@@ -604,6 +611,68 @@ func TestGoogleDefaultEndpointIgnoresHostBaseURL(t *testing.T) {
 	}
 	if got := rec.reqs[0].URL.String(); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" {
 		t.Fatalf("request URL = %q, want the Gemini API", got)
+	}
+}
+
+// Turns refuse a redirect to another host, as the connection test does. Go
+// copies x-goog-api-key to the host a redirect names (it drops only
+// Authorization and cookies), so with fantasy's default http.DefaultClient
+// an endpoint that redirected elsewhere would hand that host the key.
+func TestGoogleTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
+	other, calls := geminiServer(t)
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: redirecting.URL}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gemini-3.8-flash")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	call := fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}
+	if _, err := lm.Generate(context.Background(), call); err == nil {
+		t.Error("Generate succeeded through a redirect to another host")
+	}
+	if stream, err := lm.Stream(context.Background(), call); err == nil {
+		for part := range stream {
+			if part.Type == fantasy.StreamPartTypeTextDelta {
+				t.Error("Stream got text through a redirect to another host")
+			}
+		}
+	}
+	if paths, _ := calls(); len(paths) != 0 {
+		t.Fatalf("a turn followed a redirect to another host: %v", paths)
+	}
+}
+
+// A redirect within the endpoint's origin is still followed, key and body
+// included, on both paths.
+func TestGoogleTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
+	gemini, calls := geminiHandler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, moved := strings.CutPrefix(r.URL.RequestURI(), "/old"); moved {
+			http.Redirect(w, r, rest, http.StatusTemporaryRedirect)
+			return
+		}
+		gemini.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	cfg := ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: srv.URL + "/old"}
+	if generated, streamed := callBothWays(t, cfg, "gemini-3.8-flash"); generated != "pong" || streamed != "pong" {
+		t.Fatalf("Generate text = %q, Stream text = %q, want pong for both", generated, streamed)
+	}
+	paths, headers := calls()
+	want := []string{"/v1beta/models/gemini-3.8-flash:generateContent", "/v1beta/models/gemini-3.8-flash:streamGenerateContent"}
+	if strings.Join(paths, " ") != strings.Join(want, " ") {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+	for i, h := range headers {
+		if got := h.Get("X-Goog-Api-Key"); got != "gemini-row-key" {
+			t.Errorf("call %d: x-goog-api-key = %q, want the entry's key", i, got)
+		}
 	}
 }
 
@@ -695,20 +764,32 @@ func TestGoogleReplayedCallCarriesItsSignature(t *testing.T) {
 
 // An object-rooted output_schema arrives JSON-decoded, its required list an
 // []any, and fantasy's Gemini conversion keeps a tool's required list only as
-// []string. The terminal structured-output tool must still reach Gemini with
-// its required fields, and the caller's schema must not change.
+// []string. The tool the terminal structured-output path hands a google model
+// must still reach Gemini with its required fields, and the caller's schema
+// must not change.
 func TestGoogleStructuredOutputKeepsRequired(t *testing.T) {
+	const schema = `{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"}},"required":["answer"]}`
 	var decoded map[string]any
-	if err := json.Unmarshal([]byte(`{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"}},"required":["answer"]}`), &decoded); err != nil {
+	if err := json.Unmarshal([]byte(schema), &decoded); err != nil {
 		t.Fatal(err)
 	}
-	providerSchema, enveloped := terminalProviderSchema(decoded)
-	if enveloped {
+	if _, enveloped := terminalProviderSchema(decoded); enveloped {
 		t.Fatal("an object-rooted schema was enveloped")
 	}
 	if _, still := decoded["required"].([]any); !still {
 		t.Fatalf("terminalProviderSchema changed the caller's schema: %#v", decoded["required"])
 	}
+	// The tool the terminal path builds for a google model...
+	captured := &terminalTestModel{provider: google.Name, model: "gemini-3.8-flash", responses: []*fantasy.Response{terminalToolResponse(`{"answer":"x"}`)}}
+	eng, orch := testTerminalEngine(captured)
+	if _, err := eng.generateTerminalStructuredOutput(t.Context(), captured, "", nil, json.RawMessage(schema), 1000, orch); err != nil {
+		t.Fatalf("generateTerminalStructuredOutput: %v", err)
+	}
+	calls := captured.calls()
+	if len(calls) != 1 || len(calls[0].Tools) != 1 {
+		t.Fatalf("terminal path made %d call(s), want one with one tool", len(calls))
+	}
+	// ...sent to the Gemini API through a google entry.
 	var body []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ = io.ReadAll(r.Body)
@@ -721,15 +802,14 @@ func TestGoogleStructuredOutputKeepsRequired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
-	lm, err := p.LanguageModel(context.Background(), "gemini-2.5-pro")
+	lm, err := p.LanguageModel(context.Background(), "gemini-3.8-flash")
 	if err != nil {
 		t.Fatalf("LanguageModel: %v", err)
 	}
-	choice := fantasy.SpecificToolChoice(structuredOutputToolName)
 	if _, err := lm.Generate(context.Background(), fantasy.Call{
 		Prompt:     fantasy.Prompt{fantasy.NewUserMessage("answer")},
-		Tools:      []fantasy.Tool{fantasy.FunctionTool{Name: structuredOutputToolName, InputSchema: providerSchema}},
-		ToolChoice: &choice,
+		Tools:      calls[0].Tools,
+		ToolChoice: calls[0].ToolChoice,
 	}); err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

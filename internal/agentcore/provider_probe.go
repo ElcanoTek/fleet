@@ -73,12 +73,16 @@ const probeTimeout = 8 * time.Second
 // at something huge can't balloon memory.
 const probeBodyCap = 4 << 20
 
-// probeClient follows a redirect only within the endpoint's origin (scheme
-// and host), as the provider SDKs do on turns. Go drops Authorization on a
-// redirect to another host but copies every other header, so a key sent as
-// Api-Key or x-api-key would otherwise reach whatever host the endpoint
-// redirects to. A redirect elsewhere comes back as the 3xx it is.
-var probeClient = &http.Client{CheckRedirect: func(req *http.Request, via []*http.Request) error {
+// probeClient follows a redirect only within the endpoint's origin, as turns
+// do. Go drops Authorization on a redirect to another host but copies every
+// other header, so a key sent as Api-Key, x-api-key or x-goog-api-key would
+// otherwise reach whatever host the endpoint redirects to.
+var probeClient = &http.Client{CheckRedirect: sameOriginRedirect}
+
+// sameOriginRedirect is an http.Client CheckRedirect that follows a redirect
+// only within the first request's origin (scheme and host). A redirect
+// elsewhere comes back as the 3xx it is.
+func sameOriginRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) >= 10 {
 		return errors.New("stopped after 10 redirects")
 	}
@@ -86,7 +90,7 @@ var probeClient = &http.Client{CheckRedirect: func(req *http.Request, via []*htt
 		return http.ErrUseLastResponse
 	}
 	return nil
-}}
+}
 
 // ProbeProvider tests cfg against its live endpoint. It never returns an
 // error — every failure mode is folded into a !OK result with a key-free

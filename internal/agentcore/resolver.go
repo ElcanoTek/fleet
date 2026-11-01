@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -197,6 +198,11 @@ func (r *ModelResolver) ResolveWithFallbacks(ctx context.Context, slug string) (
 			continue
 		}
 		fallback, loadErr := r.resolveProviderModel(ctx, *candidate, modelSlug)
+		if errors.Is(loadErr, errNotAGeminiModel) {
+			// A google catch-all in the chain cannot serve a Claude slug; the
+			// rest of the chain still can.
+			continue
+		}
 		if loadErr != nil {
 			return nil, nil, loadErr
 		}
