@@ -164,6 +164,34 @@ func TestElideStaleToolResults_NeverThePinnedHead(t *testing.T) {
 	}
 }
 
+// A stub tells the model to call a reading tool again to get the data back,
+// with the same arguments when the tool takes no narrower ones, and not to
+// look elsewhere. Told only "do not repeat it" and "narrower output", a model
+// whose report tool took no narrower arguments searched the environment and
+// the workspace for the data instead (the store-KPI bench, Gemini 3.8 Flash).
+func TestElisionStub_SaysToCallAReadingToolAgain(t *testing.T) {
+	stub, _, ok := elisionStub(elisionText(9000), "mcp_store_metrics_get_store_daily_report")
+	if !ok {
+		t.Fatal("fixture: the result was not elided")
+	}
+	for _, want := range []string{
+		"the call itself is done",
+		"only reads data, call it again with the same arguments, or narrower ones if it takes any",
+		"do not search files, the environment or other directories for it",
+		"Do not repeat a call that changed something",
+	} {
+		if !strings.Contains(stub, want) {
+			t.Errorf("stub lacks %q:\n%s", want, stub)
+		}
+	}
+	if strings.Contains(stub, "do not repeat it just to see this again") {
+		t.Errorf("stub still tells the model not to call a reading tool again:\n%s", stub)
+	}
+	if len(stub) > elisionStubBytes {
+		t.Errorf("stub is %d bytes, want at most %d", len(stub), elisionStubBytes)
+	}
+}
+
 func TestRecentWindowStart(t *testing.T) {
 	msgs := elisionHistory(4, 4000) // head, summary, then 4 exchanges at indexes 2..9
 	exchange := estimateModelMessagesTokens(msgs[2:4])

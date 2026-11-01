@@ -163,10 +163,23 @@ func callBefore(messages []fantasy.Message, mi, pi int, id string) (fantasy.Tool
 // elisionRecovery is a stub's recovery action when the output was not saved
 // to a governed artifact. The near-overflow reducer's "Re-run <tool> with
 // narrower output" is wrong advice for a call with side effects, and elision
-// stubs results routinely, so the stub says the call is done and to re-run
+// stubs results routinely, so the stub says the call is done and to repeat
 // only a tool that reads.
-const elisionRecovery = "This earlier result was shortened to save context, and the call is done: do not repeat it just to see this again. " +
-	"If you need more of it and the tool only reads data, re-run it with narrower output."
+//
+// It says plainly that calling a reading tool again is how to get the data
+// back, with the same arguments when the tool takes no narrower ones, and not
+// to look for it elsewhere. The first wording led with "do not repeat it just
+// to see this again" and offered only narrower output: on the store-KPI bench
+// (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md) a report tool that takes no
+// narrower arguments was then not called again, and Gemini 3.8 Flash went
+// through the environment, the process list, /tmp and the workspace for the
+// data instead, dozens of steps a run, once ending with no answer. A repeated
+// call is also what turns elision off and raises the run's resend budget
+// (noteRerunStop), so the run does not lose the data a second time.
+const elisionRecovery = "This earlier result was shortened to save context; the call itself is done. " +
+	"If you need what was cut and the tool only reads data, call it again with the same arguments, or narrower ones if it takes any: " +
+	"that is how to get it back, so do not search files, the environment or other directories for it. " +
+	"Do not repeat a call that changed something just to see its result."
 
 // elisionStub is the stub for one tool-result output and the text it replaces,
 // or ok=false when the output is left as it is: media, a result the in-round
