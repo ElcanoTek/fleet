@@ -7,6 +7,8 @@ package agentcore
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"testing"
 
 	"charm.land/fantasy"
@@ -166,6 +168,48 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 		if hasCacheMarker(out.Messages[i]) != want {
 			t.Errorf("gemini with summary: msg[%d] marker = %v, want %v", i, !want, want)
 		}
+	}
+}
+
+// Once the rest of the prompt outgrows the stable prefix, Gemini gets no
+// breakpoint at all: an explicit cache would be read back only up to it, and
+// Google's implicit cache, which reads the whole earlier prompt back, adds
+// nothing past an explicit one. Anthropic keeps its breakpoints.
+func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.T) {
+	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
+	t.Setenv("CHAT_DISABLE_PROMPT_CACHE", "")
+	t.Setenv("CUTLASS_DISABLE_PROMPT_CACHE", "")
+	system := fantasy.NewSystemMessage(strings.Repeat("s", 4000))
+	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] " + strings.Repeat("m", 2000))
+	marked := func(model string, msgs []fantasy.Message) []bool {
+		_, out, err := promptCachingStep(model, WithCompactionSummaryBreakpoint(nil))(
+			context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]bool, len(out.Messages))
+		for i, m := range out.Messages {
+			got[i] = hasCacheMarker(m)
+		}
+		return got
+	}
+	for _, tc := range []struct {
+		name string
+		msgs []fantasy.Message
+		want []bool
+	}{
+		{"tail smaller than the system prompt", []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 3000))}, []bool{true, false}},
+		{"tail larger than the system prompt", []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 5000))}, []bool{false, false}},
+		{"tail smaller than system and summary", []fantasy.Message{system, summary, fantasy.NewUserMessage(strings.Repeat("u", 5000))}, []bool{true, true, false}},
+		{"tail larger than system and summary", []fantasy.Message{system, summary, fantasy.NewUserMessage(strings.Repeat("u", 7000))}, []bool{false, false, false}},
+	} {
+		if got := marked("google/gemini-3.8-flash", tc.msgs); !slices.Equal(got, tc.want) {
+			t.Errorf("gemini, %s: markers = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	big := []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 50_000))}
+	if got := marked("anthropic/claude-haiku-5.5", big); !got[0] || !got[1] {
+		t.Errorf("anthropic with a large tail: markers = %v, want the system prompt and the tail marked", got)
 	}
 }
 

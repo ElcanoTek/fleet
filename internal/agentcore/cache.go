@@ -85,6 +85,10 @@ func supportsExplicitBreakpoints(model string) bool {
 // once and is read back on every later request. Gemini 4 Argon has no explicit
 // caching (implicit only), so the placement neither helps nor hurts it; the
 // same rule keeps the family consistent. See docs/PROMPT-CACHE-CONTRACT.md.
+//
+// Once what follows the stable prefix outgrows it, such a model gets no
+// breakpoint at all (tailOutgrowsMarkedPrefix): a request that uses an
+// explicit cache gets nothing past it from Google's implicit cache.
 func stablePrefixOnly(model string) bool {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "~")
 	return strings.HasPrefix(m, "google/gemini") || strings.HasPrefix(m, "gemini-")
@@ -143,6 +147,9 @@ func WithCompactionSummaryBreakpoint(isSummary func(fantasy.Message) bool) Cache
 //  3. Last two non-system messages — rolling recency window. Skipped for
 //     Gemini (stablePrefixOnly), where only the last breakpoint counts and a
 //     moving one re-writes the whole prompt every request.
+//
+// Gemini drops 1 and 2 as well once the rest of the prompt is larger than the
+// prefix they mark (tailOutgrowsMarkedPrefix).
 func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFunction {
 	cfg := cacheOption{}
 	for _, o := range opts {
@@ -200,6 +207,11 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 		// breakpoint there can never hit (see isBudgetWindDownNotice).
 		rolling := 2
 		if stablePrefixOnly(model) {
+			if tailOutgrowsMarkedPrefix(msgs, max(lastSystemIdx, summaryIdx)) {
+				for i := range msgs {
+					msgs[i].ProviderOptions = nil
+				}
+			}
 			rolling = 0
 		}
 		marked := 0
@@ -216,6 +228,26 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
 	}
+}
+
+// tailOutgrowsMarkedPrefix reports whether the messages after index last (the
+// last stable breakpoint) are estimated larger than those up to and including
+// it. For Gemini the stable breakpoint becomes an explicit cache, and a request
+// that uses one is read back only up to it: Google's implicit cache adds
+// nothing past it. While the marked prefix is most of the prompt (a chat's
+// system prompt and a few turns) the explicit cache is the cheaper way, about
+// a third of the cost of none over a short conversation; once the rest is
+// larger (a scheduled run's tool results) the implicit cache, which reads the
+// whole earlier prompt back, is several times cheaper (google/gemini-3.8-flash,
+// 2026-11-02, docs/PROMPT-CACHE-CONTRACT.md). The tool definitions, sent with
+// every request and cached with the prefix, are not counted, so the switch
+// comes a little early. Moving back after a compaction costs one fresh cache
+// write; leaving the explicit cache costs one request without a cache read.
+func tailOutgrowsMarkedPrefix(msgs []fantasy.Message, last int) bool {
+	if last < 0 {
+		return false
+	}
+	return estimateModelMessagesTokens(msgs[last+1:]) > estimateModelMessagesTokens(msgs[:last+1])
 }
 
 // PromptCachingStep is the exported prompt-caching PrepareStep the DRIVERS
