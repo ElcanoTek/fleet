@@ -140,7 +140,8 @@ request):
    shared loop) — a stable boundary between the cached head and the evolving
    tail after a compaction pass.
 3. The **last two non-system messages** — a rolling recency window. **Not for
-   Gemini** (`stablePrefixOnly`, below).
+   Gemini** (`stablePrefixOnly`, below), which also drops 1 and 2 once the
+   rest of the prompt outgrows them.
 
 **Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
 of a Gemini request into an explicit context cache — a billed write with a
@@ -154,6 +155,54 @@ $0.025 to $0.0053. With a compaction summary present it is the last (and so the
 used) breakpoint, which is stable until the next compaction. Gemini 4 Argon has
 no explicit caching (implicit only, Google's docs) and was measured to ignore
 `cache_control` entirely, so the rule neither helps nor hurts it.
+
+**…until the rest of the prompt outgrows that prefix.** A Gemini request that
+uses an explicit cache gets nothing past it from Google's implicit cache. So
+with the marker on the system prompt, a long run's history was never cached:
+on the store-KPI bench (`docs/SCHEDULED-COMPACTION-CHECKPOINTS.md`) a
+scheduled `google/gemini-3.8-flash` run's requests were strictly append-only
+between pauses, yet every one read back 9,068 or 10,511 tokens, the system
+prompt, while it grew past 100K. Once the tokens after the last stable
+breakpoint (the system prompt, or the compaction summary when there is one)
+are estimated larger than the tokens up to it, Gemini gets no breakpoint at
+all (`tailOutgrowsMarkedPrefix`), and the implicit cache reads the earlier
+prompt back. Measured on `google/gemini-3.8-flash` (2026-11-02, Google pin):
+
+| Request | Prompt | Cached, system marker | Cached, no marker |
+|---|---|---|---|
+| 1 | 32K | 11K (the write) | 0 |
+| 2 | 52K | 11K | 0 |
+| 3 | 71K | 11K | 31K |
+| 4 | 91K | 11K | 49K |
+| 5 | 111K | 11K | 70K |
+| 6 | 130K | 11K | 111K |
+| **Cost, all six** | | **$0.32** | **$0.19** |
+
+The sixth request alone cost $0.090 with the marker and $0.023 without. The
+marker still pays while it covers most of the prompt: on the live check's
+short conversation (below), no marker at all cost $0.0158 against $0.0057,
+since the implicit cache read back about 6K of the 8.5K prefix, and nothing on
+the first request; with the rule, the marker stays and the run cost $0.0052.
+The estimate counts messages only, not the tool definitions sent and cached
+with the prefix, so the switch comes a little early. Leaving the explicit cache
+costs one request without a cache read; coming back to it after a compaction,
+one fresh write.
+
+End to end, on the bench's scheduled task (twelve ~25 KB connector reports,
+2026-10-27 to 2026-11-01), Gemini 3.8 Flash runs read back from cache:
+
+| Elision before the summary | Marker on the system prompt | With the rule |
+|---|---|---|
+| On (history append-only between pauses) | 7%, 8%, 9% | 82%, 83% |
+| Off (a summary at every pause) | 15%, 17%, 27% | 29%, 37%, 53% |
+
+The runs with elision on cost $3.42 to $4.95 with the marker and $0.74 and
+$1.23 with the rule; the runs with elision off looped on summaries more than
+the earlier ones did, so their cost compares nothing. Both elision-on rows ran
+the second elision stub wording (`docs/SCHEDULED-COMPACTION-CHECKPOINTS.md`),
+which asks the model to fetch trimmed data again rather than search for it; a
+third run with the rule, which searched instead and copied another task's
+answer, is left out.
 
 Breakpoint placement is itself part of the contract: the last-system-message
 breakpoint is what makes the prefix cacheable, so the system prompt must be the
