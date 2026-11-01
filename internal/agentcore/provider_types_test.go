@@ -3,6 +3,7 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/azure"
@@ -460,5 +462,145 @@ func TestAzureTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 	defer mu.Unlock()
 	if elsewhere != 0 {
 		t.Fatalf("a turn followed a redirect to another host %d times", elsewhere)
+	}
+}
+
+// anthropicHandler answers the Messages API like Anthropic, plain JSON or an
+// SSE stream, and records each call's method and path, headers and body.
+func anthropicHandler() (http.Handler, func() (calls []string, headers []http.Header, bodies []string)) {
+	var mu sync.Mutex
+	var calls, bodies []string
+	var headers []http.Header
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		headers = append(headers, r.Header.Clone())
+		bodies = append(bodies, string(body))
+		mu.Unlock()
+		if strings.Contains(string(body), `"stream":true`) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			for _, ev := range []string{
+				"event: message_start\n" + `data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":null,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"event: content_block_start\n" + `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				"event: content_block_delta\n" + `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pong"}}`,
+				"event: content_block_stop\n" + `data: {"type":"content_block_stop","index":0}`,
+				"event: message_delta\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+				"event: message_stop\n" + `data: {"type":"message_stop"}`,
+			} {
+				_, _ = io.WriteString(w, ev+"\n\n")
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude","content":[{"type":"text","text":"pong"}],`+
+			`"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+	})
+	return h, func() ([]string, []http.Header, []string) {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), calls...), append([]http.Header(nil), headers...), append([]string(nil), bodies...)
+	}
+}
+
+// Turns on an anthropic entry refuse a redirect to another host, as the
+// connection test does. Go copies x-api-key (it drops only Authorization and
+// cookies) to the host a redirect names, and a 307 or 308 re-sends the body,
+// so with the SDK's default http.DefaultClient an endpoint that redirected
+// elsewhere would hand that host the key and the conversation.
+func TestAnthropicTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
+	for _, status := range []int{http.StatusFound, http.StatusTemporaryRedirect, http.StatusPermanentRedirect} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			h, calls := anthropicHandler()
+			other := httptest.NewServer(h)
+			defer other.Close()
+			redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, other.URL+r.URL.RequestURI(), status)
+			}))
+			defer redirecting.Close()
+			p, err := buildProvider(ProviderConfig{Name: "claude", Type: ProviderTypeAnthropic, APIKey: "anthropic-row-key", BaseURL: redirecting.URL}, DefaultProviderHeaders)
+			if err != nil {
+				t.Fatalf("buildProvider: %v", err)
+			}
+			lm, err := p.LanguageModel(context.Background(), "claude-sonnet-4-6")
+			if err != nil {
+				t.Fatalf("LanguageModel: %v", err)
+			}
+			call := fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}
+			const refusal = "refused a redirect to another origin"
+			_, err = lm.Generate(context.Background(), call)
+			if err == nil || !strings.Contains(err.Error(), refusal) {
+				t.Errorf("Generate err = %v, want one naming the refused redirect", err)
+			}
+			// Not retryable, so neither fantasy's retry nor fleet's resilience
+			// loop sends it again; classified as a fatal provider error.
+			var providerErr *fantasy.ProviderError
+			if !errors.As(err, &providerErr) || providerErr.IsRetryable() || providerErr.StatusCode != status {
+				t.Errorf("Generate err = %#v, want a non-retryable ProviderError with status %d", providerErr, status)
+			}
+			if class, _ := classifyStreamError(err); class != streamErrorFatal {
+				t.Errorf("classifyStreamError = %v, want fatal", class)
+			}
+			stream, streamErr := lm.Stream(context.Background(), call)
+			if streamErr == nil {
+				for part := range stream {
+					if part.Type == fantasy.StreamPartTypeTextDelta {
+						t.Error("Stream got text through a redirect to another host")
+					}
+					if part.Type == fantasy.StreamPartTypeError {
+						streamErr = part.Error
+					}
+				}
+			}
+			if streamErr == nil || !strings.Contains(streamErr.Error(), refusal) {
+				t.Errorf("Stream err = %v, want one naming the refused redirect", streamErr)
+			}
+			if got, _, _ := calls(); len(got) != 0 {
+				t.Fatalf("a turn followed a redirect to another host: %v", got)
+			}
+		})
+	}
+}
+
+// The anthropic client keeps the response-header timeout the Anthropic SDK's
+// own default client sets, so an endpoint that accepts a request and never
+// answers still fails the call instead of hanging it.
+func TestAnthropicClientKeepsTheSDKHeaderTimeout(t *testing.T) {
+	transport, ok := anthropicHTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("anthropicHTTPClient.Transport is %T, want *http.Transport", anthropicHTTPClient.Transport)
+	}
+	if transport.ResponseHeaderTimeout != 10*time.Minute {
+		t.Fatalf("ResponseHeaderTimeout = %v, want 10m", transport.ResponseHeaderTimeout)
+	}
+}
+
+// A redirect within the endpoint's origin is still followed, key and body
+// included, on both paths.
+func TestAnthropicTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
+	anthropicAPI, calls := anthropicHandler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, moved := strings.CutPrefix(r.URL.RequestURI(), "/old"); moved {
+			http.Redirect(w, r, rest, http.StatusTemporaryRedirect)
+			return
+		}
+		anthropicAPI.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	cfg := ProviderConfig{Name: "claude", Type: ProviderTypeAnthropic, APIKey: "anthropic-row-key", BaseURL: srv.URL + "/old"}
+	if generated, streamed := callBothWays(t, cfg, "claude-sonnet-4-6"); generated != "pong" || streamed != "pong" {
+		t.Fatalf("Generate text = %q, Stream text = %q, want pong for both", generated, streamed)
+	}
+	got, headers, bodies := calls()
+	if want := "POST /v1/messages POST /v1/messages"; strings.Join(got, " ") != want {
+		t.Fatalf("calls = %v, want %s", got, want)
+	}
+	for i := range headers {
+		if key := headers[i].Get("X-Api-Key"); key != "anthropic-row-key" {
+			t.Errorf("call %d: x-api-key = %q, want the entry's key", i, key)
+		}
+		if !strings.Contains(bodies[i], "ping") {
+			t.Errorf("call %d: the redirected request lost its body: %s", i, bodies[i])
+		}
 	}
 }

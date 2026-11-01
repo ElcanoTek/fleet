@@ -1,11 +1,14 @@
 package agentcore
 
 import (
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
@@ -306,7 +309,7 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 	case ProviderTypeOpenRouter:
 		return newOpenRouterProvider(cfg.APIKey, headers)
 	case ProviderTypeAnthropic:
-		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.APIKey)}
+		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.APIKey), anthropic.WithHTTPClient(anthropicHTTPClient)}
 		if base != "" {
 			opts = append(opts, anthropic.WithBaseURL(base))
 		}
@@ -354,5 +357,50 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 		// A type in providerTypeSpecs with no case here; the build test fails
 		// on this before it can ship.
 		return nil, fmt.Errorf("provider type %q has no constructor", cfg.Type)
+	}
+}
+
+// anthropicHTTPClient carries an anthropic entry's requests. It is the
+// Anthropic SDK's own default client (anthropicTransport) with one change: it
+// follows a redirect only within the endpoint's origin, as the connection
+// test does and as the OpenAI SDK does for the OpenAI-wire types. The SDK's
+// client follows one to any host, and Go copies x-api-key along (it drops
+// only Authorization and cookies), the request body too on a 307 or 308.
+var anthropicHTTPClient = &http.Client{Transport: anthropicTransport(), CheckRedirect: refuseCrossOriginRedirect}
+
+// anthropicTransport is http.DefaultTransport with the response-header
+// timeout the Anthropic SDK's default client sets, so a server that accepts
+// the connection but never answers still fails after 10 minutes instead of
+// hanging the call. Response bodies, and so long streams, are not bounded.
+func anthropicTransport() http.RoundTripper {
+	t, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultTransport
+	}
+	t = t.Clone()
+	t.ResponseHeaderTimeout = 10 * time.Minute
+	return t
+}
+
+// refuseCrossOriginRedirect is sameOriginRedirect for turns: a redirect to
+// another origin fails the request with an error that names it, where the
+// SDK would otherwise take the 3xx itself for the reply and fail on its body.
+// The error is a ProviderError that is not retryable, carrying the redirect's
+// status: the url.Error Go wraps it in is a net.Error, which fantasy's retry
+// and fleet's resilience loop would otherwise retry, against the same
+// endpoint, before failing the turn.
+func refuseCrossOriginRedirect(req *http.Request, via []*http.Request) error {
+	err := sameOriginRedirect(req, via)
+	if !errors.Is(err, http.ErrUseLastResponse) {
+		return err
+	}
+	status := 0
+	if req.Response != nil {
+		status = req.Response.StatusCode
+	}
+	return &fantasy.ProviderError{
+		Title:      "endpoint redirected to another host",
+		Message:    fmt.Sprintf("refused a redirect to another origin (%s://%s): turns follow a redirect only within the base_url's origin", req.URL.Scheme, req.URL.Host),
+		StatusCode: status,
 	}
 }
