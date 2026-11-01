@@ -717,9 +717,12 @@ That round cost about $6.
   more history than a summary, Gemini takes many small steps, and only
   about 15–20% of its prompt is cached. They were also more accurate (69
   cells against 64 on average; the two cheapest runs without elision stopped
-  early with wrong values). The raise did not fire in any of them. Not yet
-  looked into, and a second round with elision on, on all seven models, is
-  still to run.
+  early with wrong values). The raise did not fire in any of them. The low
+  cached share was fleet's cache marker: on Gemini it held the cache read to
+  the system prompt however long the history grew. It now gives way to
+  Google's implicit cache once the history outgrows the system prompt
+  ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#where-the-breakpoints-are-placed));
+  what elision costs Gemini since then is not measured on this build.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.

@@ -1905,6 +1905,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 				// the cached head and the evolving tail. nil = default prefix
 				// matcher (isCompactionSummaryMessage).
 				WithCompactionSummaryBreakpoint(nil),
+				// Gemini weighs the marked prefix against the rest of the
+				// prompt; the tool definitions are cached with the prefix.
+				WithStablePrefixTokens(r.engine.modelContextPrefix.toolTokens),
 			),
 		)),
 	})

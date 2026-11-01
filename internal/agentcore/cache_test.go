@@ -140,7 +140,9 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 	}
 	// Gemini on OpenRouter makes the LAST breakpoint an explicit cache write,
 	// so only the stable prefix is marked: a rolling tail marker would write a
-	// fresh cache of the whole prompt on every request (stablePrefixOnly).
+	// fresh cache of the whole prompt on every request (stablePrefixOnly). The
+	// fixtures keep the tail no larger than the prefix, where the marker stays
+	// (TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt).
 	for _, slug := range []string{"google/gemini-3-flash-preview", "google/gemini-4-argon", "~google/gemini-flash-latest", "gemini-3-flash-preview"} {
 		step := promptCachingStep(slug)
 		_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
@@ -173,7 +175,7 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 
 // Once the rest of the prompt outgrows the stable prefix, Gemini gets no
 // breakpoint at all: an explicit cache would be read back only up to it, and
-// Google's implicit cache, which reads the whole earlier prompt back, adds
+// Google's implicit cache, which reads most of the earlier prompt back, adds
 // nothing past an explicit one. Anthropic keeps its breakpoints.
 func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.T) {
 	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
@@ -181,8 +183,8 @@ func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.
 	t.Setenv("CUTLASS_DISABLE_PROMPT_CACHE", "")
 	system := fantasy.NewSystemMessage(strings.Repeat("s", 4000))
 	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] " + strings.Repeat("m", 2000))
-	marked := func(model string, msgs []fantasy.Message) []bool {
-		_, out, err := promptCachingStep(model, WithCompactionSummaryBreakpoint(nil))(
+	marked := func(model string, msgs []fantasy.Message, opts ...CacheOption) []bool {
+		_, out, err := promptCachingStep(model, append(opts, WithCompactionSummaryBreakpoint(nil))...)(
 			context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 		if err != nil {
 			t.Fatal(err)
@@ -193,21 +195,36 @@ func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.
 		}
 		return got
 	}
-	for _, tc := range []struct {
-		name string
-		msgs []fantasy.Message
-		want []bool
-	}{
-		{"tail smaller than the system prompt", []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 3000))}, []bool{true, false}},
-		{"tail larger than the system prompt", []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 5000))}, []bool{false, false}},
-		{"tail smaller than system and summary", []fantasy.Message{system, summary, fantasy.NewUserMessage(strings.Repeat("u", 5000))}, []bool{true, true, false}},
-		{"tail larger than system and summary", []fantasy.Message{system, summary, fantasy.NewUserMessage(strings.Repeat("u", 7000))}, []bool{false, false, false}},
-	} {
-		if got := marked("google/gemini-3.8-flash", tc.msgs); !slices.Equal(got, tc.want) {
-			t.Errorf("gemini, %s: markers = %v, want %v", tc.name, got, tc.want)
+	user := func(chars int) fantasy.Message { return fantasy.NewUserMessage(strings.Repeat("u", chars)) }
+	for _, slug := range []string{"google/gemini-3.8-flash", "google/gemini-4-argon", "~google/gemini-flash-latest", "gemini-3-flash-preview"} {
+		for _, tc := range []struct {
+			name string
+			msgs []fantasy.Message
+			opts []CacheOption
+			want []bool
+		}{
+			{"tail smaller than the system prompt", []fantasy.Message{system, user(3000)}, nil, []bool{true, false}},
+			{"tail as large as the system prompt", []fantasy.Message{system, user(4000)}, nil, []bool{true, false}},
+			{"tail larger than the system prompt", []fantasy.Message{system, user(5000)}, nil, []bool{false, false}},
+			{"tail larger than the system prompt, smaller than it with the tools", []fantasy.Message{system, user(5000)}, []CacheOption{WithStablePrefixTokens(1000)}, []bool{true, false}},
+			{"tail smaller than system and summary", []fantasy.Message{system, summary, user(5000)}, nil, []bool{true, true, false}},
+			{"tail larger than system and summary", []fantasy.Message{system, summary, user(7000)}, nil, []bool{false, false, false}},
+			// A screenshot counts at about what Gemini bills for it, not at
+			// its base64 length (33K estimated tokens for this one).
+			{"an image in the tail", []fantasy.Message{fantasy.NewSystemMessage(strings.Repeat("s", 8000)), {
+				Role: fantasy.MessageRoleUser,
+				Content: []fantasy.MessagePart{
+					fantasy.TextPart{Text: "what is on this screen?"},
+					fantasy.FilePart{Filename: "shot.png", MediaType: "image/png", Data: make([]byte, 100_000)},
+				},
+			}}, nil, []bool{true, false}},
+		} {
+			if got := marked(slug, tc.msgs, tc.opts...); !slices.Equal(got, tc.want) {
+				t.Errorf("%s, %s: markers = %v, want %v", slug, tc.name, got, tc.want)
+			}
 		}
 	}
-	big := []fantasy.Message{system, fantasy.NewUserMessage(strings.Repeat("u", 50_000))}
+	big := []fantasy.Message{system, user(50_000)}
 	if got := marked("anthropic/claude-haiku-5.5", big); !got[0] || !got[1] {
 		t.Errorf("anthropic with a large tail: markers = %v, want the system prompt and the tail marked", got)
 	}

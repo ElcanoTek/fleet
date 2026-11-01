@@ -301,10 +301,17 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	// same request shape reads on one run and misses on the next (Gemini 4
 	// Argon: 15/15 over five runs, then a turn-2 miss) — so one miss is
 	// tolerated there. The deterministic guard for the request shape itself is
-	// agent.TestTurnRequestIsAPrefixOfTheNext.
+	// agent.TestTurnRequestIsAPrefixOfTheNext. So is one for a Gemini request
+	// that went out with no breakpoint, its history having outgrown the marked
+	// prefix (tailOutgrowsMarkedPrefix): it is the implicit cache's to read.
 	allowed := 0
 	if !supportsExplicitBreakpoints(slug) {
 		allowed = 1
+	}
+	for _, r := range transport.records[min(1, len(transport.records)):] {
+		if r.Breakpoints == 0 {
+			allowed = 1
+		}
 	}
 	if laterReqs > 0 && reads < laterReqs-allowed {
 		t.Errorf("%s: only %d of %d requests after the first read from cache (%d miss allowed)", slug, reads, laterReqs, allowed)
