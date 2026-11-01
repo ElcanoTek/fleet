@@ -756,6 +756,30 @@ Each run's trace shows which pause every re-fetch followed:
   shipped](#what-shipped-1)); how the new one does is under [Not
   done](#not-done) until it is measured.
 
+#### The second stub wording (2026-11-01)
+
+The same task on the branch with the second wording, elision on:
+- **Gemini 3.8 Flash**, 3 runs: **$4.06, $3.42 and $4.95, all 72 of 72**,
+  against $2.75, $2.92 and $0.62 (0, 62 and 62 cells) with the first
+  wording and $1.14 a run with elision off. In each run Gemini fetched five
+  to eight trimmed reports again at once, which raised the budget, and
+  fetched all twelve stores itself. One run probed `ps aux` and `env` first,
+  two calls; none read another task's files or searched further. What costs
+  more is what follows: with the budget raised, Gemini made 25 to 35
+  `run_python` calls with all twelve reports in the history, each resending
+  about 150K to 200K tokens of which 7% to 9% was cached.
+- **Haiku 5.5**, 2 runs: elision never fired in either; both looped on
+  summaries, so the wording did not reach them. One aborted in its own
+  self-audit over arithmetic it had not re-checked.
+- A run on a draft of the wording (Gemini, $3.05; Haiku, $0.84) went the same
+  way. This round cost about $18.
+
+So the second wording ends the search and the lost answer, and Gemini
+answers in full, but on this task it costs Gemini more than either elision
+with the first wording or no elision: the raise lets the history grow to the
+whole data set, and Gemini resends it, mostly uncached, on every step. See [Not
+done](#not-done).
+
 ### Deviations from the issue
 
 - The before/after numbers come from local instances, not a production
@@ -784,12 +808,19 @@ Each run's trace shows which pause every re-fetch followed:
   re-run of an elided call, so a run that loops on summaries alone, as Sonnet
   did during its audit above, is not helped. That loop happens with elision
   off too; it is a matter for the summary, not for elision.
-- Measuring the stub's second wording. Every round above used the first.
-  Whether Gemini now calls the report tool again instead of searching, and
-  what that does to its cost, is not yet measured, and neither is the effect
-  on the other models' re-fetches: the new text invites them, and on a window
-  too small for a raise (128K, say) a re-fetch can feed the summary loop
-  above.
+- Gemini's cost after a raise. With the second wording Gemini fetches
+  trimmed data again instead of searching for it, and then works through it
+  in many small steps over a raised budget with 7% to 9% of the prompt
+  cached: $4.14 a run against $1.14 with elision off ([the second
+  wording](#the-second-stub-wording-2026-11-01)). On this task its cached
+  share is low with elision off too (15% to 27%), as on the Anthropic models
+  (11% to 59%), against 58% to 87% on GPT-6.1 Sol and DeepSeek. Why, and
+  whether the raise should be smaller for a model that caches little, is not
+  looked into.
+- The second wording on the other models. It was measured on Gemini and on
+  two Haiku runs that never elided; its effect on the other models'
+  re-fetches is not measured. The text invites them, and on a window too
+  small for a raise (128K, say) a re-fetch can feed the summary loop above.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.
