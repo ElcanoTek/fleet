@@ -161,17 +161,39 @@ func (r *ModelResolver) ResolveWithFallback(ctx context.Context, slug string) (f
 // chain order. The resilience loop consumes them one at a time.
 func (r *ModelResolver) ResolveWithFallbacks(ctx context.Context, slug string) (fantasy.LanguageModel, []fantasy.LanguageModel, error) {
 	primary, err := r.Resolve(ctx, slug)
-	if err != nil {
+	refused := errors.Is(err, errNotAGeminiModel)
+	if err != nil && !refused {
 		return nil, nil, err
 	}
+	fallbacks, chainErr := r.fallbacksFor(ctx, slug)
+	if chainErr != nil {
+		return nil, nil, chainErr
+	}
+	if refused {
+		// A google catch-all that routing picked for a Claude slug refuses it
+		// before any call. The providers after it in the chain take over, as
+		// they would from any primary that failed the turn; an explicit pin or
+		// an entry with no chain keeps the refusal.
+		if len(fallbacks) == 0 {
+			return nil, nil, err
+		}
+		return fallbacks[0], fallbacks[1:], nil
+	}
+	return primary, fallbacks, nil
+}
+
+// fallbacksFor returns the backends after slug's primary provider in the
+// configured chain: none for an explicit provider pin or a provider outside
+// the chain.
+func (r *ModelResolver) fallbacksFor(ctx context.Context, slug string) ([]fantasy.LanguageModel, error) {
 	pc, modelSlug, err := selectProvider(r.providers, strings.TrimSpace(slug))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if name, rest, ok := strings.Cut(strings.TrimSpace(slug), "/"); ok && rest != "" {
 		for i := range r.providers {
 			if r.providers[i].Name == name {
-				return primary, nil, nil
+				return nil, nil
 			}
 		}
 	}
@@ -183,7 +205,7 @@ func (r *ModelResolver) ResolveWithFallbacks(ctx context.Context, slug string) (
 		}
 	}
 	if start < 0 {
-		return primary, nil, nil
+		return nil, nil
 	}
 	var fallbacks []fantasy.LanguageModel
 	for _, name := range r.fallbackProviders[start+1:] {
@@ -204,11 +226,11 @@ func (r *ModelResolver) ResolveWithFallbacks(ctx context.Context, slug string) (
 			continue
 		}
 		if loadErr != nil {
-			return nil, nil, loadErr
+			return nil, loadErr
 		}
 		fallbacks = append(fallbacks, fallback)
 	}
-	return primary, fallbacks, nil
+	return fallbacks, nil
 }
 
 func (r *ModelResolver) resolveProviderModel(ctx context.Context, pc ProviderConfig, modelSlug string) (fantasy.LanguageModel, error) {

@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -369,6 +370,38 @@ func TestResolveWithFallbacksSkipsAGoogleEntryThatRefusesTheSlug(t *testing.T) {
 	}
 	if _, fallbacks, err = r.ResolveWithFallbacks(context.Background(), "gemini-test"); err != nil || len(fallbacks) != 2 || fallbacks[0].Provider() != "google" {
 		t.Fatalf("gemini-test fallbacks = %v, err = %v, want the google entry then secondary", fallbacks, err)
+	}
+}
+
+// A google catch-all that routing picks first refuses a Claude slug before
+// any call; the next provider in its chain becomes the primary. An explicit
+// pin to the google entry, or an entry with no chain, keeps the refusal.
+func TestResolveWithFallbacksPassesARefusingGooglePrimary(t *testing.T) {
+	providers := []ProviderConfig{
+		{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10", FallbackProviders: []string{"gemini", "secondary", "tertiary"}},
+		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
+		{Name: "tertiary", Type: ProviderTypeOpenAI, APIKey: "t"},
+	}
+	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, fallbacks, err := r.ResolveWithFallbacks(context.Background(), "claude-test")
+	if err != nil || primary == nil || primary.Provider() == "google" || len(fallbacks) != 1 {
+		t.Fatalf("primary=%v fallbacks=%d err=%v, want secondary then tertiary", primary, len(fallbacks), err)
+	}
+	if primary, fallbacks, err = r.ResolveWithFallbacks(context.Background(), "gemini-test"); err != nil || primary.Provider() != "google" || len(fallbacks) != 2 {
+		t.Fatalf("gemini-test: primary=%v fallbacks=%d err=%v, want the google entry then two", primary, len(fallbacks), err)
+	}
+	if _, _, err := r.ResolveWithFallbacks(context.Background(), "gemini/claude-test"); !errors.Is(err, errNotAGeminiModel) {
+		t.Fatalf("explicit pin err = %v, want the refusal", err)
+	}
+	alone, err := NewModelResolverWithProviders([]ProviderConfig{{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10"}}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := alone.ResolveWithFallbacks(context.Background(), "claude-test"); !errors.Is(err, errNotAGeminiModel) {
+		t.Fatalf("no chain: err = %v, want the refusal", err)
 	}
 }
 
