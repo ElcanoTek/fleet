@@ -365,7 +365,7 @@ remote_mcp_catalog: []
 #   - name: gemini              # the Gemini API (not named "google": that
 #     type: google              # would take OpenRouter's google/… slugs)
 #     api_key_env: GEMINI_API_KEY
-#     models: ["gemini-2.5-pro"]
+#     models: ["gemini-3.8-flash"]
 #     context_window_tokens: 1048576
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared

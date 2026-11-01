@@ -77,7 +77,7 @@ const (
 	ProviderTypeAzure ProviderType = "azure"
 	// ProviderTypeGoogle calls the Gemini API (Google AI Studio) with a Gemini
 	// API key, through fantasy's google provider. Model ids are Gemini's own
-	// (gemini-2.5-pro). Vertex AI is not supported: it signs in with Google
+	// (gemini-3.8-flash). Vertex AI is not supported: it signs in with Google
 	// credentials found on the host, never with a stored key, so fleet always
 	// uses the Gemini API backend and refuses the model ids fantasy would send
 	// to Vertex instead (geminiOnlyProvider).

@@ -151,7 +151,7 @@ const PROVIDER_TYPES: Record<
   },
   google: {
     label: "Google Gemini",
-    hint: "The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-2.5-pro. Don't name it google: that name would also take OpenRouter's google/… models.",
+    hint: "The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-3.8-flash. Don't name it google: that name would also take OpenRouter's google/… models.",
     urlLabel: "Base URL (optional)",
     urlPlaceholder: "(default: generativelanguage.googleapis.com)",
     urlNeeded: false,
