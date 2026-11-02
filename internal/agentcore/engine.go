@@ -1405,7 +1405,8 @@ func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCon
 }
 
 // resendBudgetRerunFactor is how much resendBudget grows a run's resend
-// budget once the run re-runs a call whose result an elision stubbed, and
+// budget once the run re-runs a call whose result an elision stubbed or a
+// resend-budget summary dropped, and
 // resendRaiseWindowMargin is how far, as a share of the configured budget, the
 // raised budget stays below the active model's input limit.
 const (

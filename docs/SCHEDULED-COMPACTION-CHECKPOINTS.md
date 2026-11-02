@@ -440,8 +440,9 @@ fewer summarizer calls; making the elided content recallable added nothing.
     pause summarized the new copy away too, and the run fetched it again. On
     this bench on 2026-11-01 (#1862's code, elision on) one Sonnet run took 34
     summaries and 97 re-fetches that way, $14.24, without a single elision:
-    twelve reports arrive in one step, the pause cannot elide them (they are
-    the recent window), and each summary drops them.
+    the twelve reports arrive in one step, the pause cannot elide them (they
+    are the recent window), and the summary drops them; after the audit Sonnet
+    fetched them four at a time, and each batch was summarized away again.
     - **What counts.** A resend-budget summary records the calls whose
       results it dropped (`noteSummarizedCalls`), but only a result elision
       would have stubbed: more than a stub's size, not media, and not from a
@@ -451,7 +452,8 @@ fewer summarizer calls; making the elided content recallable added nothing.
       does not count.
     - **Elision stays on.** Unlike an elided re-run, it raises the budget only:
       no stub cost the run anything, and on a window too small for a raise it
-      changes nothing.
+      changes nothing. From then on elision works against the raised budget:
+      at a pause past it, the older results are trimmed first, sized to it.
     - **What it records.** The breadcrumb says "a call whose result a summary
       had dropped" and, as elision goes on, not that the run stops eliding;
       later lines say the run "re-ran a summarized call". A summary in the
@@ -466,7 +468,8 @@ fewer summarizer calls; making the elided content recallable added nothing.
   the last call with that ID, so a stub could name the wrong tool or stub a
   `spawn_subagent` answer.
 - **Knob.** `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY`, on by default; `0` or `false`
-  turns it off and restores the summary-only behaviour. It takes
+  turns it off and restores the summary-only behaviour, apart from the
+  raise after a summarized call, which has no knob of its own. It takes
   `strconv.ParseBool` tokens and is registered with `fleet validate-config`.
 
 On the #1600 fixture (a 140K prefix, an 80K budget, ~10K-token results), the
@@ -727,8 +730,8 @@ final one. Against them, runs of #1862's code on the same task:
 - **The other five** did not fetch again, or fetched one report in their last
   round, with no pause left to raise.
 - **Elision never fired** in any of the twelve: the reports arrive in one step
-  and the audit holds elision after it. Every recorded call was a ~25 KB
-  report, so the two versions behaved alike here.
+  and the audit holds elision after it. All seven raises named the report
+  tool, so the two versions behaved alike here.
 - **Cells.** A 60 or 61 gave each store's number of low-stock SKUs where the
   prompt asks for the SKUs (every count right); Haiku missed one to three top
   discounts in three runs. The reports' data was right in all twelve.

@@ -428,10 +428,15 @@ const (
 // summary is not a re-run. Positions hold because the history only grows
 // between checks, except when, inside a round, the overflow recovery compacts
 // it or a failed attempt's trailing message is dropped. A re-run there can be
-// missed, and the run then goes on eliding, as it would without this stop.
+// missed, and the run then goes on eliding, or keeps the configured budget, as
+// it would without this stop.
 func (e *engine) noteReruns(messages []fantasy.Message) {
 	from := e.pressureCheckedLen
-	if e.elisionStopped || len(e.elidedCallKeys)+len(e.summarizedCallKeys) == 0 || from > len(messages) {
+	summarized := len(e.summarizedCallKeys)
+	if e.summaryRerun {
+		summarized = 0 // already raised; only an elided re-run is left to find
+	}
+	if e.elisionStopped || len(e.elidedCallKeys)+summarized == 0 || from > len(messages) {
 		return
 	}
 	for _, m := range messages[from:] {
@@ -492,11 +497,16 @@ func (e *engine) noteRerunStop(tool, kind string, raise bool) {
 // resend-budget summary dropped from dropped, and kept is the history it
 // left. Only a result the summary dropped that elision would have stubbed
 // counts: more than a stub's size of data from a tool elision does not keep
-// (not a sub-agent's answer or the plan), and not media. A repeat of a small
-// call is no sign of data the run lacks. A call that still appears in kept
-// (the run made it twice, and one copy stayed) is struck off, since its
-// result is still there.
+// (not a sub-agent's answer or the plan). Media come out of
+// toolResultOutputText as a short envelope, so they do not count either. A
+// repeat of a small call is no sign of data the run lacks. A call that still
+// appears in kept (the run made it twice, and one copy stayed) is struck off,
+// since its result is still there. Once the budget is raised there is nothing
+// left to record.
 func (e *engine) noteSummarizedCalls(dropped, kept []fantasy.Message) {
+	if e.summaryRerun || e.elisionStopped {
+		return
+	}
 	for mi, m := range dropped {
 		for pi, part := range m.Content {
 			tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part)
@@ -505,9 +515,6 @@ func (e *engine) noteSummarizedCalls(dropped, kept []fantasy.Message) {
 			}
 			call, found := callBefore(dropped, mi, pi, tr.ToolCallID)
 			if !found || elisionKeptTools[call.ToolName] {
-				continue
-			}
-			if _, media := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentMedia](tr.Output); media {
 				continue
 			}
 			if text, ok := toolResultOutputText(tr.Output); !ok || len(text) <= elisionStubBytes {

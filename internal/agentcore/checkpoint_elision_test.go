@@ -1315,6 +1315,67 @@ func TestNoteReruns_SummarizedLeavesElisionOnElidedWins(t *testing.T) {
 	}
 }
 
+// The order of the kinds: the first re-run raises the budget and writes the
+// one breadcrumb, whichever kind it is, in one check or across two; a later
+// elided re-run still stops elision, and the budget keeps the kind that raised
+// it. Two summarized re-runs in one check raise it once.
+func TestNoteReruns_TheFirstKindRaisesOnce(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	call := func(page string) []fantasy.Message {
+		return elisionExchange(page+"-again", `{"page":"`+page+`"}`, elisionText(10))
+	}
+	fresh := func() *engine {
+		e := heldEngine(t, "rerun-kinds", nil)
+		recordContextMax("rerun-kinds", 10_000_000)
+		e.summarizedCallKeys = map[string]bool{callKey("fetch", `{"page":"a"}`): true, callKey("fetch", `{"page":"c"}`): true}
+		e.noteElidedCalls([]string{callKey("fetch", `{"page":"b"}`)})
+		return e
+	}
+	check := func(name string, e *engine, wantStopped bool) {
+		t.Helper()
+		crumbs := sessionLines(e.logSession, "[context_budget_raised]")
+		if len(crumbs) != 1 || !strings.Contains(crumbs[0], "whose result a summary had dropped, ") || e.raisedBy != rerunSummarized ||
+			e.elisionStopped != wantStopped || !strings.Contains(e.resendBudgetName(), "after it re-ran a summarized call") {
+			t.Errorf("%s: crumbs=%v raisedBy=%q stopped=%t name=%q", name, crumbs, e.raisedBy, e.elisionStopped, e.resendBudgetName())
+		}
+	}
+
+	e := fresh()
+	e.noteReruns(append(call("a"), call("b")...))
+	check("summarized then elided, one check", e, true)
+
+	e = fresh()
+	first := call("a")
+	e.noteReruns(first)
+	e.pressureCheckedLen = len(first)
+	e.noteReruns(append(slices.Clone(first), call("b")...))
+	check("summarized then elided, two checks", e, true)
+
+	e = fresh()
+	e.noteReruns(append(call("a"), call("c")...))
+	check("two summarized re-runs, one check", e, false)
+}
+
+// Elision stays on after a summarized re-run, and from then on works against
+// the raised budget: past it, the pause trims the older results first, as it
+// would at the configured budget, instead of buying a summary.
+func TestCheckContextPressure_ElisionAgainstTheRaisedBudget(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	e := heldEngine(t, "summary-rerun-elide", nil)
+	recordContextMax("summary-rerun-elide", 10_000_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	e.summaryRerun, e.raisedBy = true, rerunSummarized
+	e.logSession.LastStepPromptTokens = 250_000
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), elisionHistory(20, 40_000), e.model, newStreamSink(obs), false)
+	c := payloadsOf(obs, evtContextCompacted)
+	if len(c) == 0 || c[0][evtFieldTrigger] != "elision" || c[0][evtFieldResendBudget] != 240_000 {
+		t.Fatalf("past the raised budget, want an elision against 240000 first, got %v", c)
+	}
+}
+
 // The window compaction (a run with no resend budget) records nothing: there
 // is no budget to raise.
 func TestCheckContextPressure_WindowSummaryRecordsNothing(t *testing.T) {
