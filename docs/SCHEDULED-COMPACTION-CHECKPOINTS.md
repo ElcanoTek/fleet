@@ -707,6 +707,35 @@ window cap (their windows are about 1M too, so it did not bind):
 
 That round cost about $6.
 
+#### With the raise after a summarized call (2026-11-02)
+
+Twelve runs, six each on Sonnet 5.5 and Haiku 5.5, elision on, each run its
+own task: three on a first version of the change,
+which counted every dropped call and turned elision off, and three on the
+final one. Against them, runs of #1862's code on the same task:
+
+| | Sonnet 5.5 | Haiku 5.5 |
+|---|---|---|
+| With the raise after a summarized call | $1.17, $2.07, $2.03, $1.93, $1.19, $2.03 (mean $1.74) | $0.56, $0.50, $0.43, $0.43, $0.54, $0.43 (mean $0.48) |
+| Without it, elision on (2026-11-01) | $14.24, $2.11, $2.53 (mean $6.29) | $1.36, $0.32, $0.83 (mean $0.84) |
+| Elision off (2026-10-27) | $1.10, $1.19, $2.28 (mean $1.52) | $0.63, $0.39, $0.52 (mean $0.52) |
+
+- **Where it fired.** In every run that fetched the twelve reports again after
+  a summary: four Sonnet runs and three Haiku runs of six. Each then finished
+  without another summary. No run took more than three summaries, against 34
+  (Sonnet) and nine (Haiku) without the change.
+- **The other five** did not fetch again, or fetched one report in their last
+  round, with no pause left to raise.
+- **Elision never fired** in any of the twelve: the reports arrive in one step
+  and the audit holds elision after it. Every recorded call was a ~25 KB
+  report, so the two versions behaved alike here.
+- **Cells.** A 60 or 61 gave each store's number of low-stock SKUs where the
+  prompt asks for the SKUs (every count right); Haiku missed one to three top
+  discounts in three runs. The reports' data was right in all twelve.
+- The rows ran on different business dates (2026-11-01, 2026-10-31 and
+  2026-10-26, top to bottom); the twelve reports came to 293, 292 and 296 KB
+  as sent. This round cost about $13.
+
 ### Deviations from the issue
 
 - The before/after numbers come from local instances, not a production
@@ -731,9 +760,9 @@ That round cost about $6.
 
 ### Not done
 
-- Measuring the raise after a summarized call on a real model. It is tested
-  on the fake-model loop only; the bench's key had too little left this
-  month for a round on Sonnet and Haiku, whose runs loop on summaries most.
+- The raise after a summarized call on other models. It was measured on
+  Sonnet and Haiku, whose runs loop on summaries most
+  ([above](#with-the-raise-after-a-summarized-call-2026-11-02)).
 - Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
   four with elision cost $2.25 a run and five without $1.49. The runs with
   elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M
