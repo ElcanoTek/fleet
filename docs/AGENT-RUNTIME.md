@@ -239,8 +239,10 @@ carried: fantasy reports no status for a transport failure, and the events keep
 the watchdog's own wording there rather than inventing an HTTP code.
 
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
-evicts the implicit prompt cache a long run has been riding on and answers the
-next step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
+evicts a context cache a long run has been riding on (for a Gemini model with
+a breakpoint, the explicit cache OpenRouter makes from it, whose five-minute
+TTL does not refresh: docs/PROMPT-CACHE-CONTRACT.md) and answers the next
+step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
 which OpenRouter relays as a 400 "Provider returned error". The request is
 well-formed — re-sending the same messages builds a fresh cache and succeeds —
 so fleet classes it with the transient blips (one same-model retry, then the

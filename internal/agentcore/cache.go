@@ -17,6 +17,9 @@
 //     window). Anthropic allows 4 cache breakpoints per request; chat uses 3,
 //     and the additive compaction breakpoint brings the cutlass path to 4.
 //
+// Gemini (stablePrefixOnly) gets 1 and 2 only, and none at all once the rest
+// of the prompt outgrows the prefix they mark (tailOutgrowsMarkedPrefix).
+//
 // Divergence reconciliation:
 //   - supportsExplicitBreakpoints is chat's version: it strips a leading `~`
 //     (OpenRouter floating-alias sigil) before prefix-matching, so an alias
@@ -31,6 +34,7 @@ package agentcore
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -85,6 +89,10 @@ func supportsExplicitBreakpoints(model string) bool {
 // once and is read back on every later request. Gemini 4 Argon has no explicit
 // caching (implicit only), so the placement neither helps nor hurts it; the
 // same rule keeps the family consistent. See docs/PROMPT-CACHE-CONTRACT.md.
+//
+// Once what follows the stable prefix outgrows it, such a model gets no
+// breakpoint at all (tailOutgrowsMarkedPrefix): a request that uses an
+// explicit cache gets nothing past it from Google's implicit cache.
 func stablePrefixOnly(model string) bool {
 	m := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(model)), "~")
 	return strings.HasPrefix(m, "google/gemini") || strings.HasPrefix(m, "gemini-")
@@ -111,6 +119,7 @@ type cacheOption struct {
 	envPrefix          EnvPrefix
 	compactionSummary  bool
 	compactionPrefixFn func(fantasy.Message) bool
+	stablePrefixTokens int
 }
 
 // CacheOption mutates the cache step configuration.
@@ -119,6 +128,13 @@ type CacheOption func(*cacheOption)
 // WithCacheEnvPrefix selects the env-var family for the kill-switch.
 func WithCacheEnvPrefix(p EnvPrefix) CacheOption {
 	return func(c *cacheOption) { c.envPrefix = p }
+}
+
+// WithStablePrefixTokens adds tokens the provider caches with the marked
+// prefix but that are not in the messages, the tool definitions, to the prefix
+// side of Gemini's comparison (tailOutgrowsMarkedPrefix).
+func WithStablePrefixTokens(n int) CacheOption {
+	return func(c *cacheOption) { c.stablePrefixTokens = n }
 }
 
 // WithCompactionSummaryBreakpoint enables cutlass's additive 4th breakpoint on
@@ -143,6 +159,9 @@ func WithCompactionSummaryBreakpoint(isSummary func(fantasy.Message) bool) Cache
 //  3. Last two non-system messages — rolling recency window. Skipped for
 //     Gemini (stablePrefixOnly), where only the last breakpoint counts and a
 //     moving one re-writes the whole prompt every request.
+//
+// Gemini drops 1 and 2 as well once the rest of the prompt is estimated larger
+// than the prefix they mark (tailOutgrowsMarkedPrefix).
 func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFunction {
 	cfg := cacheOption{}
 	for _, o := range opts {
@@ -168,18 +187,12 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 
 		cc := cacheControlOptions()
 
-		// Breakpoint 1: last system message, if any.
 		lastSystemIdx := -1
 		for i, msg := range msgs {
 			if msg.Role == fantasy.MessageRoleSystem {
 				lastSystemIdx = i
 			}
 		}
-		if lastSystemIdx >= 0 {
-			msgs[lastSystemIdx].ProviderOptions = cc
-		}
-
-		// Breakpoint 2 (additive): compaction summary, if enabled and present.
 		summaryIdx := -1
 		if cfg.compactionSummary {
 			for i := len(msgs) - 1; i >= 0; i-- {
@@ -188,9 +201,22 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 					break
 				}
 			}
-			if summaryIdx >= 0 {
-				msgs[summaryIdx].ProviderOptions = cc
-			}
+		}
+
+		// Gemini past its stable prefix: no breakpoint at all, so Google's
+		// implicit cache can read back more than the prefix.
+		if stablePrefixOnly(model) && tailOutgrowsMarkedPrefix(msgs, max(lastSystemIdx, summaryIdx), cfg.stablePrefixTokens) {
+			return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
+		}
+
+		// Breakpoint 1: last system message, if any.
+		if lastSystemIdx >= 0 {
+			msgs[lastSystemIdx].ProviderOptions = cc
+		}
+
+		// Breakpoint 2 (additive): compaction summary, if enabled and present.
+		if summaryIdx >= 0 {
+			msgs[summaryIdx].ProviderOptions = cc
 		}
 
 		// Breakpoints 3 & 4: the last two non-system messages, skipping the
@@ -216,6 +242,73 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
 	}
+}
+
+// tailOutgrowsMarkedPrefix reports whether the messages after index last (the
+// last stable breakpoint) are estimated larger than those up to and including
+// it plus extraPrefix, the tokens cached with them that are not in the
+// messages (the tool definitions; WithStablePrefixTokens).
+//
+// For Gemini the stable breakpoint becomes an explicit cache, and a request
+// that uses one is read back only up to it: Google's implicit cache adds
+// nothing past it. While the marked prefix is most of the prompt (a chat's
+// system prompt and a few turns) the explicit cache is the cheaper way: on a
+// short conversation it cost about a third of no marker. Once the rest is
+// larger (a scheduled run's tool results) the implicit cache, which reads most
+// of the earlier prompt back a request or two behind, is: at 130K tokens a
+// request cost a quarter as much (google/gemini-3.8-flash, 2026-11-01,
+// docs/PROMPT-CACHE-CONTRACT.md). Leaving the explicit cache, the implicit one
+// reads nothing until it has warmed (two requests from cold in that probe);
+// coming back to it after a compaction costs one fresh cache write.
+func tailOutgrowsMarkedPrefix(msgs []fantasy.Message, last, extraPrefix int) bool {
+	if last < 0 {
+		return false
+	}
+	return cacheWeightTokens(msgs[last+1:]) > cacheWeightTokens(msgs[:last+1])+extraPrefix
+}
+
+// mediaCacheTokens is what tailOutgrowsMarkedPrefix counts for an image or
+// other file part, about what Gemini bills for one image (a few hundred to
+// about a thousand tokens). estimateModelMessagesTokens counts its base64
+// length, an overflow guard's overcount that would make one attached
+// screenshot outweigh a whole system prompt and drop the marker a short chat
+// needs. A long PDF is counted low instead, which keeps the marker, as before
+// this rule.
+const mediaCacheTokens = 1000
+
+// cacheWeightTokens is estimateModelMessagesTokens with every file part and
+// media tool result counted at mediaCacheTokens.
+func cacheWeightTokens(msgs []fantasy.Message) int {
+	total := 0
+	for _, m := range msgs {
+		if !slices.ContainsFunc(m.Content, isMediaPart) {
+			total += estimateModelMessagesTokens([]fantasy.Message{m})
+			continue
+		}
+		media := 0
+		rest := m
+		rest.Content = make([]fantasy.MessagePart, 0, len(m.Content))
+		for _, part := range m.Content {
+			if isMediaPart(part) {
+				media++
+				continue
+			}
+			rest.Content = append(rest.Content, part)
+		}
+		total += estimateModelMessagesTokens([]fantasy.Message{rest}) + media*mediaCacheTokens
+	}
+	return total
+}
+
+func isMediaPart(part fantasy.MessagePart) bool {
+	if _, ok := fantasy.AsMessagePart[fantasy.FilePart](part); ok {
+		return true
+	}
+	if tr, ok := fantasy.AsMessagePart[fantasy.ToolResultPart](part); ok {
+		_, isMedia := fantasy.AsToolResultOutputType[fantasy.ToolResultOutputContentMedia](tr.Output)
+		return isMedia
+	}
+	return false
 }
 
 // PromptCachingStep is the exported prompt-caching PrepareStep the DRIVERS
