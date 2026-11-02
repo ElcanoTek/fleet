@@ -56,7 +56,7 @@ const (
 // whole new child run could reproduce; task_tracker returns the plan the
 // finish gate holds the run to (a summary re-announces it after a compaction,
 // an elision does not). A2A peer tools are named per peer (<peer>_<op>), so
-// they are not listed: their stubs say to re-run only a tool that reads data.
+// they are not listed: their stubs say to repeat only a call that read data.
 var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTracker: true}
 
 // elisionResult is what elideStaleToolResults did.
@@ -164,10 +164,28 @@ func callBefore(messages []fantasy.Message, mi, pi int, id string) (fantasy.Tool
 // elisionRecovery is a stub's recovery action when the output was not saved
 // to a governed artifact. The near-overflow reducer's "Re-run <tool> with
 // narrower output" is wrong advice for a call with side effects, and elision
-// stubs results routinely, so the stub says the call is done and to re-run
-// only a tool that reads.
-const elisionRecovery = "This earlier result was shortened to save context, and the call is done: do not repeat it just to see this again. " +
-	"If you need more of it and the tool only reads data, re-run it with narrower output."
+// stubs results routinely, so the stub says the call is done and to repeat
+// only a call that read data.
+//
+// It says plainly that making a call that only read data again is how to get
+// the data back, with the same arguments when the tool takes no narrower ones,
+// and where the data is not. The first wording led with "do not repeat it just
+// to see this again" and offered only narrower output: on the store-KPI bench
+// (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md) Gemini 3.8 Flash, whose report
+// tool takes no narrower arguments, cited it and went through the
+// environment, the process list, /tmp and the workspace for the data instead,
+// 10 to 60 calls a run, once reading other tasks' results and ending with no
+// answer. A file the run wrote itself stays fair game: it may be the cheapest
+// way back to the output of a call that changed something.
+//
+// A repeat with the same arguments also stops elision for the run
+// (noteReruns) and raises its resend budget (resendBudget), so a later pause
+// does not trim that result again. A call with narrower arguments is a new
+// call and does neither.
+const elisionRecovery = "This earlier result was shortened to save context; the call itself is done. " +
+	"If you need what was cut and the call only read data, make it again with the same arguments (or narrower ones, if the tool takes them): " +
+	"that is how to get it back. Do not look for it in the environment, /tmp or other tasks' directories; a file this run wrote is fine to read. " +
+	"Do not repeat a call that changed something just to see its result."
 
 // elisionStub is the stub for one tool-result output and the text it replaces,
 // or ok=false when the output is left as it is: media, a result the in-round
