@@ -218,6 +218,15 @@ func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.
 					fantasy.FilePart{Filename: "shot.png", MediaType: "image/png", Data: make([]byte, 100_000)},
 				},
 			}}, nil, []bool{true, false}},
+			{"a screenshot tool result in the tail", []fantasy.Message{fantasy.NewSystemMessage(strings.Repeat("s", 8000)), {
+				Role:    fantasy.MessageRoleAssistant,
+				Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "screenshot", Input: `{}`}},
+			}, {
+				Role: fantasy.MessageRoleTool,
+				Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentMedia{
+					Data: strings.Repeat("A", 130_000), MediaType: "image/png",
+				}}},
+			}}, nil, []bool{true, false, false}},
 		} {
 			if got := marked(slug, tc.msgs, tc.opts...); !slices.Equal(got, tc.want) {
 				t.Errorf("%s, %s: markers = %v, want %v", slug, tc.name, got, tc.want)

@@ -34,6 +34,7 @@ package agentcore
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"charm.land/fantasy"
@@ -255,10 +256,10 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 // short conversation it cost about a third of no marker. Once the rest is
 // larger (a scheduled run's tool results) the implicit cache, which reads most
 // of the earlier prompt back a request or two behind, is: at 130K tokens a
-// request cost a quarter as much (google/gemini-3.8-flash, 2026-11-02,
+// request cost a quarter as much (google/gemini-3.8-flash, 2026-11-01,
 // docs/PROMPT-CACHE-CONTRACT.md). Leaving the explicit cache, the implicit one
-// reads nothing until it has warmed (two requests in that probe); coming back
-// to it after a compaction costs one fresh cache write.
+// reads nothing until it has warmed (two requests from cold in that probe);
+// coming back to it after a compaction costs one fresh cache write.
 func tailOutgrowsMarkedPrefix(msgs []fantasy.Message, last, extraPrefix int) bool {
 	if last < 0 {
 		return false
@@ -267,11 +268,12 @@ func tailOutgrowsMarkedPrefix(msgs []fantasy.Message, last, extraPrefix int) boo
 }
 
 // mediaCacheTokens is what tailOutgrowsMarkedPrefix counts for an image or
-// other file part, about what Gemini bills for one image (258 tokens a
-// 768-pixel tile). estimateModelMessagesTokens counts its base64 length, an
-// overflow guard's overcount that would make one attached screenshot outweigh
-// a whole system prompt and drop the marker a short chat needs. A long PDF is
-// counted low instead, which keeps the marker, as before this rule.
+// other file part, about what Gemini bills for one image (a few hundred to
+// about a thousand tokens). estimateModelMessagesTokens counts its base64
+// length, an overflow guard's overcount that would make one attached
+// screenshot outweigh a whole system prompt and drop the marker a short chat
+// needs. A long PDF is counted low instead, which keeps the marker, as before
+// this rule.
 const mediaCacheTokens = 1000
 
 // cacheWeightTokens is estimateModelMessagesTokens with every file part and
@@ -279,6 +281,10 @@ const mediaCacheTokens = 1000
 func cacheWeightTokens(msgs []fantasy.Message) int {
 	total := 0
 	for _, m := range msgs {
+		if !slices.ContainsFunc(m.Content, isMediaPart) {
+			total += estimateModelMessagesTokens([]fantasy.Message{m})
+			continue
+		}
 		media := 0
 		rest := m
 		rest.Content = make([]fantasy.MessagePart, 0, len(m.Content))

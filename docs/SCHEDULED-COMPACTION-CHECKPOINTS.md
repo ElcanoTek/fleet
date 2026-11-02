@@ -719,8 +719,9 @@ That round cost about $6.
   cells against 64 on average; the two cheapest runs without elision stopped
   early with wrong values). The raise did not fire in any of them. The low
   cached share was fleet's cache marker: on Gemini it held the cache read to
-  the system prompt however long the history grew. It now gives way to
-  Google's implicit cache once the history outgrows the system prompt
+  the marked prefix (the system prompt and tools, and the compaction summary
+  when there is one) however long the history grew. It now gives way to
+  Google's implicit cache once the history outgrows that prefix
   ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#where-the-breakpoints-are-placed));
   what elision costs Gemini since then is not measured on this build.
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
