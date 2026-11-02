@@ -119,8 +119,8 @@ test("Sign out asks first in a centred dialog, then signs out", async ({ page })
 // the 640-900px overlay (scrim z-[380], rail z-[390]) and the <640px drawer.
 // The hit test proves a click on Sign out reaches the button, not the scrim.
 for (const layout of [
-  { name: "the expanded overlay rail at 800px", width: 800, height: 900, open: "Expand sidebar" },
-  { name: "the phone drawer", width: 390, height: 844, open: "Open sidebar" },
+  { name: "the expanded overlay rail at 800px", width: 800, height: 900, open: "Expand sidebar", openState: "Collapse sidebar" },
+  { name: "the phone drawer", width: 390, height: 844, open: "Open sidebar", openState: "Close sidebar" },
 ]) {
   test(`the Sign out confirm sits above ${layout.name}`, async ({ page }) => {
     await page.setViewportSize({ width: layout.width, height: layout.height });
@@ -147,6 +147,10 @@ for (const layout of [
     await expect(dialog).toHaveCount(0);
     await expect(page.getByTestId("account-menu-button")).toBeFocused();
     await expect(page.getByTestId("account-menu-button")).toBeInViewport();
+    await expect(page.getByRole("button", { name: layout.openState, exact: true })).toBeVisible();
+    if (layout.openState === "Collapse sidebar") {
+      await expect(page.getByRole("button", { name: layout.openState, exact: true })).toHaveAttribute("aria-expanded", "true");
+    }
 
     await page.getByTestId("account-menu-button").click();
     await page.getByRole("menuitem", { name: "Sign out" }).click();
