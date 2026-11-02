@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { UserTurn } from "./ChatTranscript";
+import { fireEvent, render, screen } from "@testing-library/react";
+import {
+  USER_BUBBLE_COLLAPSE_CHARS,
+  USER_BUBBLE_PREVIEW_CHARS,
+  UserTurn,
+} from "./ChatTranscript";
 import type { Message } from "./history";
 import { buildReplyMessage, buildSubmissionMessage } from "./genui/model";
 
@@ -85,5 +89,33 @@ describe("UserTurn for a card answer the server refused", () => {
   it("marks a refused quick reply too", () => {
     renderTurn(turn({ content: buildReplyMessage("c1", "nah", "Never mind"), notSent: true }));
     expect(screen.getByTestId("genui-not-sent")).toBeTruthy();
+  });
+
+  it("collapses huge pasted user messages by default and toggles full text on demand", async () => {
+    const tailMarker = "TAIL_BUNDLE_MARKER_999";
+    const hugePaste =
+      "What about this one? Does it match the depop custom list?\n" +
+      "com.samsung.tv.bundle_id_1234.".repeat(200) +
+      tailMarker;
+    expect(hugePaste.length).toBeGreaterThan(USER_BUBBLE_COLLAPSE_CHARS);
+
+    renderTurn(turn({ content: hugePaste }));
+
+    const bubble = await screen.findByTestId("user-message-bubble");
+    expect(bubble.textContent?.length).toBeLessThanOrEqual(
+      USER_BUBBLE_PREVIEW_CHARS + 10,
+    );
+    expect(bubble.textContent).not.toContain(tailMarker);
+
+    const toggle = screen.getByTestId("user-message-expand");
+    expect(toggle).toHaveTextContent(/Show full message/);
+    expect(bubble.contains(toggle)).toBe(false);
+
+    fireEvent.click(toggle);
+    expect(bubble.textContent).toContain(tailMarker);
+    expect(toggle).toHaveTextContent("Show less");
+
+    fireEvent.click(toggle);
+    expect(bubble.textContent).not.toContain(tailMarker);
   });
 });

@@ -14,7 +14,7 @@
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
@@ -44,7 +44,7 @@ import { MessageMinimap, MINIMAP_MAX, type MinimapEntry } from "./MessageMinimap
 // whitespace — same box, same type metrics — then upgrade in place.
 const AssistantMarkdown = lazy(() => import("./AssistantContent"));
 
-function MessageMarkdown({
+const MessageMarkdown = memo(function MessageMarkdown({
   content,
   isStreaming,
   conversationId,
@@ -63,7 +63,7 @@ function MessageMarkdown({
       />
     </Suspense>
   );
-}
+});
 import {
   APPROVAL_RESUME_KIND,
   CHAT_PATROL_KIND,
@@ -342,6 +342,19 @@ export function ChatTranscript({
   useEffect(() => {
     for (const message of messages) animatedIdsRef.current.add(message.id);
   }, [messages]);
+
+  // Stable callback reference so memoized UserTurn rows do not re-render on
+  // parent keystrokes when ChatExperience re-creates resendUserMessage.
+  const resendUserMessageRef = useRef(resendUserMessage);
+  useEffect(() => {
+    resendUserMessageRef.current = resendUserMessage;
+  });
+  const handleResendUserMessage = useCallback(
+    (messageId: number, edited: string) => {
+      void resendUserMessageRef.current(messageId, edited);
+    },
+    [],
+  );
 
   // Inter-row gap, matched to the former `gap-5 sm:gap-6` grid (20px / 24px at
   // the 640px `sm` breakpoint). Fed to the virtualizer so measured offsets and
@@ -750,7 +763,7 @@ export function ChatTranscript({
                                   ? editLastUserSignal.nonce
                                   : 0
                               }
-                              onResend={(edited) => void resendUserMessage(message.id, edited)}
+                              onResendMessage={handleResendUserMessage}
                             />
                           ) : (
                             <div className="relative min-h-[1.75rem] min-w-0">
@@ -1271,18 +1284,26 @@ export function ChatTranscript({
 //
 // Exported for tests: the transcript itself is virtualized, and jsdom performs
 // no layout, so the row that would render this never mounts there.
-export function UserTurn({
+// Huge pasted user messages (e.g. a 164 KB single-line bundle ID list) are
+// collapsed by default so the transcript doesn't mount a 50,000px-tall broken
+// word block or pay to parse 100+ KB of GFM inline delimiters until requested.
+export const USER_BUBBLE_COLLAPSE_CHARS = 4_000;
+export const USER_BUBBLE_PREVIEW_CHARS = 1_200;
+
+export const UserTurn = memo(function UserTurn({
   message,
   isLastUser,
   isStreaming,
   editRequestSignal,
   onResend,
+  onResendMessage,
 }: {
   message: Message;
   isLastUser: boolean;
   isStreaming: boolean;
   editRequestSignal: number;
-  onResend: (edited: string) => void;
+  onResend?: (edited: string) => void;
+  onResendMessage?: (messageId: number, edited: string) => void | Promise<void>;
 }) {
   if (message.kind === APPROVAL_RESUME_KIND) {
     // fleet's own input for a turn it started after an approval card was
@@ -1333,6 +1354,7 @@ export function UserTurn({
         isStreaming={isStreaming}
         editRequestSignal={editRequestSignal}
         onResend={onResend}
+        onResendMessage={onResendMessage}
       />
       {/* Below the bubble because that is where it sat in the prompt: fleet
           appends its context after the user's text. Renders nothing at all
@@ -1344,7 +1366,7 @@ export function UserTurn({
       <InjectedContextNote text={message.injectedContext} />
     </>
   );
-}
+});
 
 // ── User bubble with inline edit ─────────────────────────────────────────
 //
@@ -1359,6 +1381,7 @@ function UserBubble({
   isStreaming,
   editRequestSignal,
   onResend,
+  onResendMessage,
 }: {
   message: Message;
   isLastUser: boolean;
@@ -1367,10 +1390,12 @@ function UserBubble({
   // mode. Only the last user message ever receives a non-zero value. 0 = no
   // request.
   editRequestSignal: number;
-  onResend: (edited: string) => void;
+  onResend?: (edited: string) => void;
+  onResendMessage?: (messageId: number, edited: string) => void | Promise<void>;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
+  const [expanded, setExpanded] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Keep the draft in sync with the canonical message content whenever we're
@@ -1385,6 +1410,9 @@ function UserBubble({
   const [lastSyncedContent, setLastSyncedContent] = useState(message.content);
   const [wasEditing, setWasEditing] = useState(editing);
   if (!editing && (message.content !== lastSyncedContent || wasEditing)) {
+    if (message.content !== lastSyncedContent) {
+      setExpanded(false);
+    }
     setDraft(message.content);
     setLastSyncedContent(message.content);
     setWasEditing(false);
@@ -1429,7 +1457,11 @@ function UserBubble({
       return;
     }
     setEditing(false);
-    onResend(draft);
+    if (onResendMessage) {
+      void onResendMessage(message.id, draft);
+    } else if (onResend) {
+      onResend(draft);
+    }
   };
 
   if (editing) {
@@ -1503,6 +1535,12 @@ function UserBubble({
     );
   }
 
+  const isCollapsible = message.content.length > USER_BUBBLE_COLLAPSE_CHARS;
+  const displayedContent =
+    isCollapsible && !expanded
+      ? `${message.content.slice(0, USER_BUBBLE_PREVIEW_CHARS)}…`
+      : message.content;
+
   return (
     <div>
       {/* [overflow-wrap:anywhere] (not Tailwind's break-words = break-word)
@@ -1516,30 +1554,44 @@ function UserBubble({
         data-testid="user-message-bubble"
         className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]"
       >
-        <MessageMarkdown content={message.content} />
+        <MessageMarkdown content={displayedContent} />
       </div>
-      {isLastUser && !isStreaming ? (
-        // "Edit" text action in an in-flow footer row, mirroring the
-        // assistant side's Copy / Regenerate footer (same text-[0.7rem]
-        // + touch-target style). justify-end keeps it right-anchored
-        // under the right-aligned user bubble. Being in normal flow —
-        // not absolute — is deliberate: the old absolute pencil drifted
-        // over the next message on mobile because its offset competed
-        // with the inter-message gap. A flow element just sits under its
-        // own bubble at every viewport. The 40px touch-target min-height
-        // gives a reliable tap area on phones.
-        // aria-label is the bare verb "Edit" so the accessible name
-        // stays a single canonical token (e2e tests + screen readers).
-        <div className="mt-1.5 flex items-center justify-end text-[0.7rem]">
-          <button
-            type="button"
-            aria-label="Edit"
-            title="Edit message"
-            className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-            onClick={startEdit}
-          >
-            Edit
-          </button>
+      {isCollapsible || (isLastUser && !isStreaming) ? (
+        // "Edit" (and "Show full message" for huge pastes) in an in-flow
+        // footer row, mirroring the assistant side's Copy / Regenerate footer
+        // (same text-[0.7rem] + touch-target style). justify-end keeps it
+        // right-anchored under the right-aligned user bubble. Being in normal
+        // flow — not absolute — is deliberate: the old absolute pencil drifted
+        // over the next message on mobile because its offset competed with the
+        // inter-message gap. A flow element just sits under its own bubble at
+        // every viewport. The 40px touch-target min-height gives a reliable
+        // tap area on phones.
+        // aria-label is the bare verb "Edit" so the accessible name stays a
+        // single canonical token (e2e tests + screen readers).
+        <div className="mt-1.5 flex items-center justify-end gap-3 text-[0.7rem]">
+          {isCollapsible ? (
+            <button
+              type="button"
+              data-testid="user-message-expand"
+              className="touch-target font-medium text-[var(--color-accent)] hover:underline"
+              onClick={() => setExpanded((prev) => !prev)}
+            >
+              {expanded
+                ? "Show less"
+                : `Show full message (${message.content.length.toLocaleString()} chars)`}
+            </button>
+          ) : null}
+          {isLastUser && !isStreaming ? (
+            <button
+              type="button"
+              aria-label="Edit"
+              title="Edit message"
+              className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+              onClick={startEdit}
+            >
+              Edit
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
