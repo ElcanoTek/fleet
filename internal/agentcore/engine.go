@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -145,14 +146,21 @@ type engine struct {
 	resendFloorStale bool
 	resendFloorNoted bool
 	// elidedCallKeys holds the identity (callKey) of every call whose result
-	// an elision stubbed. pressureCheckedLen is the length of the history the
-	// last context-pressure check handed back: the calls past it are, almost
+	// an elision stubbed, and summarizedCallKeys of every call whose bulky
+	// result a resend-budget summary dropped (noteSummarizedCalls).
+	// pressureCheckedLen is the length of the history the last
+	// context-pressure check handed back: the calls past it are, almost
 	// always, the ones the run made since (noteReruns says when not). One of
 	// those with an elided identity is a re-run, and sets elisionStopped for
-	// the rest of the run, which also raises its resend budget (resendBudget).
+	// the rest of the run; one with a summarized identity sets summaryRerun.
+	// Either raises its resend budget (resendBudget); raisedBy names the kind
+	// that did (rerunElided, rerunSummarized).
 	elidedCallKeys     map[string]bool
+	summarizedCallKeys map[string]bool
 	pressureCheckedLen int
 	elisionStopped     bool
+	summaryRerun       bool
+	raisedBy           string
 	// activeModel is the model the run loop is currently driving — the primary,
 	// or the fallback after a resilience swap. Compaction summaries follow it
 	// (a swapped run must not keep summarizing on a model that just failed or
@@ -637,10 +645,11 @@ func firstPart(m fantasy.Message) fantasy.MessagePart {
 // emit a fleet.context_compacted event with the right metadata.
 type proactiveCompactResult struct {
 	messages      []fantasy.Message
-	removedTurns  int             // how many old messages were summarized away
-	summaryTokens int             // estimated token size of the inserted summary
-	summary       fantasy.Message // the inserted summary, for the session log
-	compacted     bool            // false when there was nothing worth compacting
+	removedTurns  int               // how many old messages were summarized away
+	summaryTokens int               // estimated token size of the inserted summary
+	summary       fantasy.Message   // the inserted summary, for the session log
+	compacted     bool              // false when there was nothing worth compacting
+	dropped       []fantasy.Message // the messages summarized away
 }
 
 // proactiveCompact summarizes the OLDEST HALF of the conversation history BEFORE
@@ -735,6 +744,7 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 		summaryTokens: estimateMessageTokens(summary),
 		summary:       summary,
 		compacted:     true,
+		dropped:       droppable,
 	}
 }
 
@@ -876,6 +886,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			if res := e.proactiveCompactKeeping(ctx, summarize, messages); res.compacted {
 				out.messages = res.messages
 				out.warned = false
+				e.noteSummarizedCalls(res.dropped, res.messages)
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s; the oldest half of the history was summarized to cut per-call cost",
 					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.resendBudgetName()), nil, nil)
@@ -1394,7 +1405,8 @@ func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCon
 }
 
 // resendBudgetRerunFactor is how much resendBudget grows a run's resend
-// budget once the run re-runs a call whose result an elision stubbed, and
+// budget once the run re-runs a call whose result an elision stubbed or a
+// resend-budget summary dropped, and
 // resendRaiseWindowMargin is how far, as a share of the configured budget, the
 // raised budget stays below the active model's input limit.
 const (
@@ -1404,8 +1416,9 @@ const (
 
 // resendBudget is the run's resend budget: FLEET_CONTEXT_RESEND_BUDGET_TOKENS
 // (0 when the operator turned it off), times resendBudgetRerunFactor for the
-// rest of a run that re-ran a call whose result an elision had stubbed
-// (elisionStopped, set by noteReruns).
+// rest of a run that re-ran a call whose result an elision had stubbed or a
+// resend-budget summary had dropped (elisionStopped or summaryRerun, set by
+// noteReruns).
 //
 // Such a re-run is a sign the run needs more of its data at once than the
 // budget holds. On a recurring task whose model fetched twelve ~25 KB reports
@@ -1430,7 +1443,7 @@ const (
 // raise is a multiple of the budget.
 func (e *engine) resendBudget() int {
 	budget := contextResendBudgetTokens(e.envPrefix)
-	if !e.elisionStopped || budget <= 0 {
+	if (!e.elisionStopped && !e.summaryRerun) || budget <= 0 {
 		return budget
 	}
 	raised := budget * resendBudgetRerunFactor
@@ -1639,12 +1652,12 @@ func (e *engine) resendFloorCrumb(budget int) string {
 }
 
 // resendBudgetName names the budget for a resend-budget breadcrumb: the knob,
-// or the raised budget once a re-run of an elided call raised it
+// or the raised budget once a re-run of an elided or summarized call raised it
 // (resendBudget).
 func (e *engine) resendBudgetName() string {
 	name := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
 	if raised := e.resendBudget(); raised > contextResendBudgetTokens(e.envPrefix) {
-		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran an elided call)", raised, name)
+		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran %s call)", raised, name, cmp.Or(e.raisedBy, rerunElided))
 	}
 	return name
 }
