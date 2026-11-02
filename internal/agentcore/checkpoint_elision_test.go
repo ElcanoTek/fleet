@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -1190,11 +1191,10 @@ func TestRun_Elision_RerunRaisesTheBudget(t *testing.T) {
 	}
 }
 
-// A re-run of a call whose result a resend-budget summary dropped raises the
-// budget the same way, with elision off: the run fetched again what the
-// summary took, and at the configured budget the next pause would take it
-// again. A repeat of a call whose result the summary kept, and a new call,
-// change nothing.
+// A re-run of a call whose bulky result a resend-budget summary dropped raises
+// the budget, with elision off: the run fetched again what the summary took,
+// and at the configured budget the next pause would take it again. A repeat
+// of a call whose result the summary kept, and a new call, change nothing.
 func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "summary-rerun-pressure", nil)
@@ -1205,12 +1205,28 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 	}
 	e.logSession.LastStepPromptTokens = 100_000
 	obs := &payloadObserver{}
-	res := e.checkContextPressure(context.Background(), elisionHistory(14, 40_000), e.model, newStreamSink(obs), false)
+	history := elisionHistory(14, 40_000)
+	res := e.checkContextPressure(context.Background(), history, e.model, newStreamSink(obs), false)
 	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "resend_budget" {
 		t.Fatalf("fixture: want one resend_budget summary, got %v", c)
 	}
-	if !e.summarizedCallKeys[callKey("fetch", `{"page":"page-a"}`)] || e.summarizedCallKeys[callKey("fetch", `{"page":"page-n"}`)] {
-		t.Fatalf("summarized calls = %v, want page-a's (dropped) and not page-n's (kept)", e.summarizedCallKeys)
+	// Exactly the pages whose exchanges the summary dropped are recorded.
+	keptCalls := map[string]bool{}
+	for _, m := range res.messages {
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+				keptCalls[callKey(tc.ToolName, tc.Input)] = true
+			}
+		}
+	}
+	want := map[string]bool{}
+	for i := range 14 {
+		if k := callKey("fetch", `{"page":"page-`+string(rune('a'+i))+`"}`); !keptCalls[k] {
+			want[k] = true
+		}
+	}
+	if len(want) == 0 || len(want) == 14 || !maps.Equal(e.summarizedCallKeys, want) {
+		t.Fatalf("summarized calls = %v, want the dropped pages %v", e.summarizedCallKeys, want)
 	}
 
 	kept := elisionExchange("kept-again", `{"page":"page-n"}`, elisionText(40_000))
@@ -1219,8 +1235,8 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 	next := append(slices.Clone(res.messages), kept...)
 	next = append(next, fresh...)
 	res = e.checkContextPressure(context.Background(), next, e.model, newStreamSink(obs), false)
-	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || e.elisionStopped {
-		t.Fatalf("with no re-run of a summarized call, want another summary, got %v (stopped=%t)", c, e.elisionStopped)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || e.summaryRerun {
+		t.Fatalf("with no re-run of a summarized call, want another summary, got %v (raised=%t)", c, e.summaryRerun)
 	}
 	if crumbs := sessionLines(e.logSession, "[context_budget_raised]"); len(crumbs) != 0 {
 		t.Fatalf("budget raised with no re-run of a summarized call: %v", crumbs)
@@ -1230,11 +1246,12 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 	rerun := append(slices.Clone(res.messages), again...)
 	obs = &payloadObserver{}
 	res = e.checkContextPressure(context.Background(), rerun, e.model, newStreamSink(obs), false)
-	if c := payloadsOf(obs, evtContextCompacted); len(c) != 0 || !e.elisionStopped || len(res.messages) != len(rerun) {
-		t.Fatalf("after a re-run, 100K is under the raised budget: want no compaction, got %v (stopped=%t)", c, e.elisionStopped)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 0 || !e.summaryRerun || e.elisionStopped || len(res.messages) != len(rerun) {
+		t.Fatalf("after a re-run, 100K is under the raised budget: want no compaction and elision left alone, got %v (raised=%t, stopped=%t)", c, e.summaryRerun, e.elisionStopped)
 	}
 	crumbs := sessionLines(e.logSession, "[context_budget_raised]")
-	if len(crumbs) != 1 || !strings.HasPrefix(crumbs[0], "[context_budget_raised] tool=fetch budget=80000 raised_budget=240000 — the run re-ran a call whose result a summary had dropped, ") {
+	if len(crumbs) != 1 || crumbs[0] != "[context_budget_raised] tool=fetch budget=80000 raised_budget=240000 — the run re-ran a call whose result a summary had dropped, "+
+		"a sign it needs more of its data at once than the budget holds: its resend budget is raised for the rest of the run" {
 		t.Fatalf("[context_budget_raised] breadcrumbs = %v", crumbs)
 	}
 
@@ -1247,6 +1264,76 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 	summaries := sessionLines(e.logSession, "[context_compacted]")
 	if last := summaries[len(summaries)-1]; !strings.Contains(last, "exceeded the run's resend budget (240000, raised from FLEET_CONTEXT_RESEND_BUDGET_TOKENS after it re-ran a summarized call)") {
 		t.Fatalf("the last [context_compacted] does not name the raised budget: %q", last)
+	}
+}
+
+// What a summary records: only a dropped result elision would have stubbed,
+// so not a small one, a kept tool's (the plan), media, or one whose call
+// still appears in what the summary kept.
+func TestNoteSummarizedCalls_OnlyBulkyDataWhoseCopiesAllWent(t *testing.T) {
+	e := heldEngine(t, "summary-record", nil)
+	media := elisionExchange("shot", `{"page":"shot"}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("A", 40_000), MediaType: "image/png"})
+	plan := elisionExchange("plan", `{"command":"view"}`, elisionText(40_000))
+	plan[0].Content[0] = fantasy.ToolCallPart{ToolCallID: "plan", ToolName: toolNameTaskTracker, Input: `{"command":"view"}`}
+	var dropped []fantasy.Message
+	for _, ex := range [][]fantasy.Message{
+		elisionExchange("big", `{"page":"big"}`, elisionText(40_000)),
+		elisionExchange("small", `{"page":"small"}`, elisionText(elisionStubBytes)),
+		elisionExchange("twin", `{"page":"twin"}`, elisionText(40_000)),
+		media, plan,
+	} {
+		dropped = append(dropped, ex...)
+	}
+	kept := elisionExchange("twin-2", `{"page":"twin"}`, elisionText(40_000))
+	e.noteSummarizedCalls(dropped, kept)
+	if want := map[string]bool{callKey("fetch", `{"page":"big"}`): true}; !maps.Equal(e.summarizedCallKeys, want) {
+		t.Fatalf("summarized calls = %v, want only the big page's", e.summarizedCallKeys)
+	}
+}
+
+// With elision on, a summarized re-run leaves elision on (no stub cost the
+// run anything) and the elided kind wins when a call was both: the crumb then
+// says elision stops.
+func TestNoteReruns_SummarizedLeavesElisionOnElidedWins(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
+	e := heldEngine(t, "summary-rerun-kinds", nil)
+	recordContextMax("summary-rerun-kinds", 10_000_000)
+	e.summarizedCallKeys = map[string]bool{callKey("fetch", `{"page":"a"}`): true, callKey("fetch", `{"page":"b"}`): true}
+	e.noteReruns(elisionExchange("a2", `{"page":"a"}`, elisionText(10)))
+	if !e.summaryRerun || e.elisionStopped || e.elisionHeld() {
+		t.Fatalf("after a summarized re-run: raised=%t stopped=%t held=%t, want raised and elision on", e.summaryRerun, e.elisionStopped, e.elisionHeld())
+	}
+
+	e = heldEngine(t, "summary-rerun-kinds", nil)
+	e.summarizedCallKeys = map[string]bool{callKey("fetch", `{"page":"b"}`): true}
+	e.noteElidedCalls([]string{callKey("fetch", `{"page":"b"}`)})
+	e.noteReruns(elisionExchange("b2", `{"page":"b"}`, elisionText(10)))
+	crumbs := sessionLines(e.logSession, "[context_budget_raised]")
+	if !e.elisionStopped || len(crumbs) != 1 || !strings.Contains(crumbs[0], "whose result an elision had replaced with a preview, ") ||
+		!strings.HasSuffix(crumbs[0], "it stops eliding, and its resend budget is raised for the rest of the run") {
+		t.Fatalf("a call both elided and summarized: stopped=%t crumbs=%v, want the elided kind", e.elisionStopped, crumbs)
+	}
+}
+
+// The window compaction (a run with no resend budget) records nothing: there
+// is no budget to raise.
+func TestCheckContextPressure_WindowSummaryRecordsNothing(t *testing.T) {
+	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
+	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
+	e := heldEngine(t, "summary-window", nil)
+	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "false")
+	recordContextMax("summary-window", 200_000)
+	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
+		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
+	}
+	e.logSession.LastStepPromptTokens = 190_000
+	obs := &payloadObserver{}
+	e.checkContextPressure(context.Background(), elisionHistory(14, 40_000), e.model, newStreamSink(obs), false)
+	if c := payloadsOf(obs, evtContextCompacted); len(c) != 1 || c[0][evtFieldTrigger] != "window" {
+		t.Fatalf("fixture: want one window summary, got %v", c)
+	}
+	if len(e.summarizedCallKeys) != 0 {
+		t.Fatalf("the window summary recorded %v, want nothing", e.summarizedCallKeys)
 	}
 }
 

@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -145,18 +146,21 @@ type engine struct {
 	resendFloorStale bool
 	resendFloorNoted bool
 	// elidedCallKeys holds the identity (callKey) of every call whose result
-	// an elision stubbed, and summarizedCallKeys of every call a resend-budget
-	// summary dropped. pressureCheckedLen is the length of the history the
-	// last context-pressure check handed back: the calls past it are, almost
+	// an elision stubbed, and summarizedCallKeys of every call whose bulky
+	// result a resend-budget summary dropped (noteSummarizedCalls).
+	// pressureCheckedLen is the length of the history the last
+	// context-pressure check handed back: the calls past it are, almost
 	// always, the ones the run made since (noteReruns says when not). One of
-	// those with an elided or summarized identity is a re-run, and sets
-	// elisionStopped for the rest of the run, which also raises its resend
-	// budget (resendBudget); rerunOf says which kind it was.
+	// those with an elided identity is a re-run, and sets elisionStopped for
+	// the rest of the run; one with a summarized identity sets summaryRerun.
+	// Either raises its resend budget (resendBudget); raisedBy names the kind
+	// that did (rerunElided, rerunSummarized).
 	elidedCallKeys     map[string]bool
 	summarizedCallKeys map[string]bool
 	pressureCheckedLen int
 	elisionStopped     bool
-	rerunOf            string
+	summaryRerun       bool
+	raisedBy           string
 	// activeModel is the model the run loop is currently driving — the primary,
 	// or the fallback after a resilience swap. Compaction summaries follow it
 	// (a swapped run must not keep summarizing on a model that just failed or
@@ -882,7 +886,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			if res := e.proactiveCompactKeeping(ctx, summarize, messages); res.compacted {
 				out.messages = res.messages
 				out.warned = false
-				e.noteSummarizedCalls(res.dropped)
+				e.noteSummarizedCalls(res.dropped, res.messages)
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_compacted] trigger=resend_budget used=%d budget=%d%s removed_turns=%d — the resent prompt exceeded %s; the oldest half of the history was summarized to cut per-call cost",
 					used, budget, e.resendFloorCrumb(budget), res.removedTurns, e.resendBudgetName()), nil, nil)
@@ -1412,7 +1416,8 @@ const (
 // resendBudget is the run's resend budget: FLEET_CONTEXT_RESEND_BUDGET_TOKENS
 // (0 when the operator turned it off), times resendBudgetRerunFactor for the
 // rest of a run that re-ran a call whose result an elision had stubbed or a
-// resend-budget summary had dropped (elisionStopped, set by noteReruns).
+// resend-budget summary had dropped (elisionStopped or summaryRerun, set by
+// noteReruns).
 //
 // Such a re-run is a sign the run needs more of its data at once than the
 // budget holds. On a recurring task whose model fetched twelve ~25 KB reports
@@ -1437,7 +1442,7 @@ const (
 // raise is a multiple of the budget.
 func (e *engine) resendBudget() int {
 	budget := contextResendBudgetTokens(e.envPrefix)
-	if !e.elisionStopped || budget <= 0 {
+	if (!e.elisionStopped && !e.summaryRerun) || budget <= 0 {
 		return budget
 	}
 	raised := budget * resendBudgetRerunFactor
@@ -1651,7 +1656,7 @@ func (e *engine) resendFloorCrumb(budget int) string {
 func (e *engine) resendBudgetName() string {
 	name := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
 	if raised := e.resendBudget(); raised > contextResendBudgetTokens(e.envPrefix) {
-		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran %s call)", raised, name, e.rerunOf)
+		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran %s call)", raised, name, cmp.Or(e.raisedBy, rerunElided))
 	}
 	return name
 }

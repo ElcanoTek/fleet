@@ -300,8 +300,8 @@ and output show their first lines with **Show all**. The task prompt is clipped
 behind **Show full prompt**. The runtime's own notes appear as slim rows between
 steps: a context checkpoint, history compacted, older tool results trimmed
 (their long output shortened to a preview so the run resends less), or context
-budget raised (the run fetched a trimmed or summarized result again, so it
-stops trimming and may resend more before compacting). Where the
+budget raised (the run fetched data again that was trimmed or summarized
+away, so it may resend more before compacting). Where the
 run recorded it, the summary the run continued from after a compaction appears
 too. A run that aborted ends with a red banner saying why. Above the
 timeline, a strip with one tick per step shows the whole run at a glance, with

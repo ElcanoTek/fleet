@@ -419,9 +419,10 @@ fewer summarizer calls; making the elided content recallable added nothing.
     next round: a pause, or a finish the policy sent back. A pause that
     learns of it compacts nothing unless the prompt is already over the raised
     threshold; it still counts toward the 40-pause cap.
-  - **The trade-off.** One repeat of an elided call is enough, and not every
-    repeat means missing data: a file viewed again after an edit, the same
-    command run twice, a bulky status polled again. Such a run also gets the
+  - **The trade-off.** One repeat of an elided call, or of a call whose bulky
+    result a summary dropped, is enough, and not every repeat means missing
+    data: a file viewed again after an edit, the same command run twice, a
+    bulky status polled again. Such a run also gets the
     raised budget, so for the rest of it each call may resend up to three
     times as much before the next compaction, though it pauses less often.
     Not measured.
@@ -434,17 +435,30 @@ fewer summarizer calls; making the elided content recallable added nothing.
     the raised budget without a new breadcrumb; the later lines show the
     value in force.
   - **A re-run of a summarized call** (added 2026-11-02) raises it the same
-    way, elision on or off. A resend-budget summary records the calls whose
-    results it dropped (`noteSummarizedCalls`); repeating one is the same
-    sign as repeating an elided one, and without the raise the next pause
-    summarized the new copy away too, and the run fetched it again: the
-    seven-model round below has a Sonnet run with 34 summaries and 97
-    re-fetches and no elision at all. The breadcrumb then says "a call whose
-    result a summary had dropped", and later lines that the run "re-ran a
-    summarized call". A summary in the in-round overflow recovery records
-    nothing, and the window compaction of a run with no resend budget has no
-    budget to raise.
-  - Runs that never re-fetch an elided or summarized result are unchanged.
+    way, elision on or off. Repeating a call whose data a summary dropped is
+    the same sign as repeating an elided one, and without the raise the next
+    pause summarized the new copy away too, and the run fetched it again. On
+    this bench on 2026-11-01 (#1862's code, elision on) one Sonnet run took 34
+    summaries and 97 re-fetches that way, $14.24, without a single elision:
+    twelve reports arrive in one step, the pause cannot elide them (they are
+    the recent window), and each summary drops them.
+    - **What counts.** A resend-budget summary records the calls whose
+      results it dropped (`noteSummarizedCalls`), but only a result elision
+      would have stubbed: more than a stub's size, not media, and not from a
+      tool elision keeps (a sub-agent's answer, the plan). A call that still
+      appears in what the summary kept is struck off, its result being
+      there. So a repeated small call (a plan view, a list, a status poll)
+      does not count.
+    - **Elision stays on.** Unlike an elided re-run, it raises the budget only:
+      no stub cost the run anything, and on a window too small for a raise it
+      changes nothing.
+    - **What it records.** The breadcrumb says "a call whose result a summary
+      had dropped" and, as elision goes on, not that the run stops eliding;
+      later lines say the run "re-ran a summarized call". A summary in the
+      in-round overflow recovery records nothing, and the window compaction of
+      a run with no resend budget has no budget to raise.
+  - Runs that never repeat a call whose result was elided, or whose bulky
+    result a resend-budget summary dropped, are unchanged.
 - **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
   across steps, or within one parallel step. Each result is paired with its
   own call: the nearest earlier message with calls under that ID, and within
@@ -664,7 +678,8 @@ The same build on two other models, where the raise never fired:
   $2.39 with the holds only. Two runs looped on summaries during their audit,
   while elision is held, with 10 summaries and 24 and 36 re-fetches; one of
   them got 61 of 72 cells. That loop is in the summary path and happens with
-  elision off too ([Not done](#not-done)).
+  elision off too; a re-run of a summarized call now raises the budget as well
+  ([What shipped](#what-shipped-1)).
 - **Luna Pro**, 2 runs: $0.14 and $0.17, against $0.15 off. Elision did not
   fire.
 
