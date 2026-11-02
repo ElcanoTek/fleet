@@ -10,7 +10,7 @@
 // (including the markdown unit tests) keep working.
 
 import type { ReactElement, ReactNode } from "react";
-import { Children, isValidElement, useContext, useMemo, useState } from "react";
+import { Children, isValidElement, memo, useContext, useMemo, useState } from "react";
 import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { CopyButton } from "./ChatChips";
@@ -92,6 +92,12 @@ export function autoFenceRawHtmlDocument(content: string): string {
   return out.join("\n");
 }
 
+// Hoisted so ReactMarkdown never sees a fresh plugins array or urlTransform
+// closure identity on parent re-renders.
+const REMARK_PLUGINS = [remarkGfm];
+const SANDBOX_SAFE_URL_TRANSFORM = (url: string): string =>
+  /^sandbox:/i.test(url) ? url : defaultUrlTransform(url);
+
 // Exported for unit tests in chat-experience.markdown.test.tsx; production
 // callers continue to use it through the in-module references below.
 export function renderAssistantContent(
@@ -102,7 +108,7 @@ export function renderAssistantContent(
   return <AssistantMarkdown content={content} isStreaming={isStreaming} conversationId={conversationId} />;
 }
 
-export default function AssistantMarkdown({
+const AssistantMarkdown = memo(function AssistantMarkdown({
   content,
   isStreaming = false,
   conversationId = null,
@@ -304,21 +310,25 @@ export default function AssistantMarkdown({
     ),
   }), [conversationId, isStreaming]);
 
-  if (!content.trim()) {
-    return null;
-  }
-
   // The same pre-parse rewrites the read-only views apply before rewriting
   // file references (normalizeAssistantMarkdown), and that the server's output
   // discovery mirrors (outputs.go) — one definition, so the three agree on
   // what renders as a link.
-  const normalizedContent = autoFenceRawHtmlDocument(
-    normalizeAssistantMarkdown(content),
+  const normalizedContent = useMemo(
+    () =>
+      content.trim()
+        ? autoFenceRawHtmlDocument(normalizeAssistantMarkdown(content))
+        : "",
+    [content],
   );
+
+  if (!normalizedContent) {
+    return null;
+  }
 
   return (
     <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={REMARK_PLUGINS}
       // Preserve the `sandbox:` scheme so the <a>/<img> interceptors below
       // can rewrite it to the workspace API. ReactMarkdown's
       // defaultUrlTransform strips any scheme outside its safe list
@@ -329,15 +339,15 @@ export default function AssistantMarkdown({
       // still emit these hallucinated sandbox paths, so let them through
       // here and resolve them downstream; every other URL keeps the default
       // sanitization.
-      urlTransform={(url) =>
-        /^sandbox:/i.test(url) ? url : defaultUrlTransform(url)
-      }
+      urlTransform={SANDBOX_SAFE_URL_TRANSFORM}
       components={components}
     >
       {normalizedContent}
     </ReactMarkdown>
   );
-}
+});
+
+export default AssistantMarkdown;
 
 // renderLiveLink is the `a` override's ordinary rendering: rewrite a relative
 // href to the per-conversation workspace API. When the agent writes

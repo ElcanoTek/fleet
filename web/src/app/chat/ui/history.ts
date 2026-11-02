@@ -1836,3 +1836,24 @@ export function safePretty(raw: string): string {
     return raw;
   }
 }
+
+// Huge pasted user messages (e.g. a 164 KB single-line bundle ID list) are
+// collapsed by default so the transcript doesn't mount a 50,000px-tall broken
+// word block or pay to parse 100+ KB of GFM inline delimiters until requested.
+export const USER_BUBBLE_COLLAPSE_CHARS = 4_000;
+export const USER_BUBBLE_PREVIEW_CHARS = 1_200;
+
+/**
+ * Truncates a large user message preview to `maxUnits` UTF-16 code units
+ * without splitting a surrogate pair at the boundary.
+ */
+export function truncateUserPreview(
+  content: string,
+  maxUnits = USER_BUBBLE_PREVIEW_CHARS,
+): string {
+  if (content.length <= maxUnits) return content;
+  const lastCode = content.charCodeAt(maxUnits - 1);
+  const end =
+    lastCode >= 0xd800 && lastCode <= 0xdbff ? maxUnits - 1 : maxUnits;
+  return `${content.slice(0, end)}…`;
+}

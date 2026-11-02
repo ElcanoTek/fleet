@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { renderAssistantContent } from "./AssistantContent";
+import { USER_BUBBLE_COLLAPSE_CHARS } from "./history";
 import { ReadOnlyTranscript, toBubbles, type ReadOnlyAudience } from "./ReadOnlyTranscript";
 import { ReadOnlyFilesContext, WithheldFilesContext } from "./LockedFiles";
 
@@ -502,5 +503,26 @@ describe("toBubbles and card messages", () => {
       "[UI submission] card=c1 action=go",
       "[UI reply] card=c1 action=no",
     ]);
+  });
+
+  it("collapses huge user messages in read-only views and toggles full text", () => {
+    const tailMarker = "READONLY_TAIL_MARKER";
+    const huge = "x".repeat(USER_BUBBLE_COLLAPSE_CHARS + 100) + tailMarker;
+    render(
+      <ReadOnlyTranscript
+        bubbles={[{ role: "user", text: huge }]}
+        audience="team"
+        renderAssistant={(t) => renderAssistantContent(t, false, null)}
+      />,
+    );
+    const bubble = screen.getByTestId("readonly-user-bubble");
+    const toggle = screen.getByTestId("user-message-expand");
+    expect(bubble.textContent).not.toContain(tailMarker);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", bubble.getAttribute("id"));
+
+    fireEvent.click(toggle);
+    expect(bubble.textContent).toContain(tailMarker);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
   });
 });

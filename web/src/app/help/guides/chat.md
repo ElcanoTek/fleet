@@ -311,7 +311,9 @@ Both open the share dialog.
 
 ### The transcript
 
-Your own messages appear as you typed them. When the platform adds something to a
+Your own messages appear as you typed them; very long messages (over 4,000
+characters) collapse to a preview by default with a **Show full message** /
+**Show less** toggle underneath. When the platform adds something to a
 message that you did not type, such as an attached file or a note from the shared
 file library, it appears as a collapsed note beside your message rather than
 inside it, so what you wrote and what was added stay visibly separate.

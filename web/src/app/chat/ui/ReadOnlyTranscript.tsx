@@ -41,8 +41,12 @@
 // belt-and-braces layer; the render-time policy is what guarantees no
 // workspace link or image reaches its DOM.
 
-import { useMemo, type ReactNode } from "react";
-import { SUMMARY_BOUNDARY } from "./history";
+import { useId, useMemo, useState, type ReactNode } from "react";
+import {
+  SUMMARY_BOUNDARY,
+  truncateUserPreview,
+  USER_BUBBLE_COLLAPSE_CHARS,
+} from "./history";
 import { parseReplyMessage, parseSubmissionMessage, UI_REPLY_PREFIX, UI_SUBMISSION_PREFIX } from "./genui/model";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { ReadOnlyFilesContext } from "./LockedFiles";
@@ -182,9 +186,7 @@ export function ReadOnlyTranscript({
                     <ReplyBubble reply={reply} />
                   </div>
                 ) : (
-                  <div className="max-w-[85%] whitespace-pre-wrap rounded-[1rem] bg-[var(--color-overlay-soft)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]">
-                    {b.text}
-                  </div>
+                  <ReadOnlyUserTextBubble text={b.text} />
                 );
               })()}
             </div>
@@ -208,5 +210,40 @@ export function ReadOnlyTranscript({
         )}
       </div>
     </ReadOnlyFilesContext.Provider>
+  );
+}
+
+function ReadOnlyUserTextBubble({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const bubbleId = useId();
+  const isCollapsible = text.length > USER_BUBBLE_COLLAPSE_CHARS;
+  const displayed =
+    isCollapsible && !expanded ? truncateUserPreview(text) : text;
+  return (
+    <div className="max-w-[85%]">
+      <div
+        id={bubbleId}
+        data-testid="readonly-user-bubble"
+        className="whitespace-pre-wrap [overflow-wrap:anywhere] rounded-[1rem] bg-[var(--color-overlay-soft)] px-4 py-2.5 text-[0.9375rem] leading-[1.55]"
+      >
+        {displayed}
+      </div>
+      {isCollapsible ? (
+        <div className="mt-1.5 flex items-center justify-end text-[0.7rem]">
+          <button
+            type="button"
+            data-testid="user-message-expand"
+            aria-expanded={expanded}
+            aria-controls={bubbleId}
+            className="touch-target font-medium text-[var(--color-accent)] hover:underline"
+            onClick={() => setExpanded((prev) => !prev)}
+          >
+            {expanded
+              ? "Show less"
+              : `Show full message (${text.length.toLocaleString()} chars)`}
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
