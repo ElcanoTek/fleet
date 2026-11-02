@@ -1268,8 +1268,9 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 }
 
 // What a summary records: only a dropped result elision would have stubbed,
-// so not a small one, a kept tool's (the plan), media, or one whose call
-// still appears in what the summary kept.
+// so not a small one, one past the hard cap (always sent as a preview), a
+// kept tool's (the plan), media, or one whose call still appears in what the
+// summary kept.
 func TestNoteSummarizedCalls_OnlyBulkyDataWhoseCopiesAllWent(t *testing.T) {
 	e := heldEngine(t, "summary-record", nil)
 	media := elisionExchange("shot", `{"page":"shot"}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("A", 40_000), MediaType: "image/png"})
@@ -1279,6 +1280,7 @@ func TestNoteSummarizedCalls_OnlyBulkyDataWhoseCopiesAllWent(t *testing.T) {
 	for _, ex := range [][]fantasy.Message{
 		elisionExchange("big", `{"page":"big"}`, elisionText(40_000)),
 		elisionExchange("small", `{"page":"small"}`, elisionText(elisionStubBytes)),
+		elisionExchange("huge", `{"page":"huge"}`, elisionText(HardMaxToolOutputBytes+1)),
 		elisionExchange("twin", `{"page":"twin"}`, elisionText(40_000)),
 		media, plan,
 	} {

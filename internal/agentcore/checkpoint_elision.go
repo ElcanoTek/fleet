@@ -497,7 +497,9 @@ func (e *engine) noteRerunStop(tool, kind string, raise bool) {
 // resend-budget summary dropped from dropped, and kept is the history it
 // left. Only a result the summary dropped that elision would have stubbed
 // counts: more than a stub's size of data from a tool elision does not keep
-// (not a sub-agent's answer or the plan). Media come out of
+// (not a sub-agent's answer or the plan), and no more than the hard cap,
+// past which every request carries only a preview of it anyway
+// (reduceHistoricalPayloadsToHardCap), so no budget keeps it. Media come out of
 // toolResultOutputText as a short envelope, so they do not count either. A
 // repeat of a small call is no sign of data the run lacks. A call that still
 // appears in kept (the run made it twice, and one copy stayed) is struck off,
@@ -517,7 +519,7 @@ func (e *engine) noteSummarizedCalls(dropped, kept []fantasy.Message) {
 			if !found || elisionKeptTools[call.ToolName] {
 				continue
 			}
-			if text, ok := toolResultOutputText(tr.Output); !ok || len(text) <= elisionStubBytes {
+			if text, ok := toolResultOutputText(tr.Output); !ok || len(text) <= elisionStubBytes || len(text) > HardMaxToolOutputBytes {
 				continue
 			}
 			if e.summarizedCallKeys == nil {

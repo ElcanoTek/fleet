@@ -445,8 +445,10 @@ fewer summarizer calls; making the elided content recallable added nothing.
     fetched them four at a time, and each batch was summarized away again.
     - **What counts.** A resend-budget summary records the calls whose
       results it dropped (`noteSummarizedCalls`), but only a result elision
-      would have stubbed: more than a stub's size, not media, and not from a
-      tool elision keeps (a sub-agent's answer, the plan). A call that still
+      would have stubbed: more than a stub's size, no more than the 128 KiB
+      hard cap (past it every request carries only a preview anyway), not
+      media, and not from a tool elision keeps (a sub-agent's answer, the
+      plan). A call that still
       appears in what the summary kept is struck off, its result being
       there. So a repeated small call (a plan view, a list, a status poll)
       does not count.
