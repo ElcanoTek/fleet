@@ -4,9 +4,9 @@ By default fleet routes every model through **OpenRouter**. A client bundle can
 instead declare a `providers:` block in `manifest.yaml` to route inference
 natively to **Anthropic**, **OpenAI**, a self-hosted **Ollama**, any other
 **OpenAI-compatible** server (vLLM, LM Studio, llama.cpp, a hosted gateway), the
-**Vercel AI Gateway**, an **Azure OpenAI** resource, or any mix — for failover,
-data residency, or to avoid the OpenRouter markup. Admins can add the same
-provider types from the web UI without a restart; see
+**Vercel AI Gateway**, an **Azure OpenAI** resource, Google's **Gemini API**, or
+any mix — for failover, data residency, or to avoid the OpenRouter markup.
+Admins can add the same provider types from the web UI without a restart; see
 [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md).
 
 **A bundle with no `providers:` block is unchanged** — a single catch-all
@@ -67,6 +67,13 @@ providers:
     models: ["gpt-5-prod"]
     context_window_tokens: 272000
 
+  # The Gemini API, with a key from Google AI Studio.
+  - name: gemini
+    type: google
+    api_key_env: GEMINI_API_KEY
+    models: ["gemini-3.8-flash"]
+    context_window_tokens: 1048576
+
 # Optional ordered availability chain. Each target must serve the same slug.
 fallback_providers: ["anthropic-direct", "openrouter"]
 ```
@@ -80,6 +87,7 @@ ANTHROPIC_API_KEY=…
 OPENAI_API_KEY=…
 AI_GATEWAY_API_KEY=…
 AZURE_OPENAI_API_KEY=…
+GEMINI_API_KEY=…
 ```
 
 ### Fields
@@ -112,6 +120,7 @@ once the row is enabled.
 | `openaicompat` | Any OpenAI-compatible server | optional | **required** | Uses fantasy's OpenAI-compatible provider, which also reads the non-OpenAI fields such servers send, like `reasoning_content`. With no key, the request carries no `Authorization` header. |
 | `vercel` | The Vercel AI Gateway | required | optional, default `https://ai-gateway.vercel.sh/v1` | Model ids are `<creator>/<model>` (`anthropic/claude-opus-4.8`), the same shape as OpenRouter slugs, so listing one takes it over from OpenRouter (see [Vercel and OpenRouter slugs](#vercel-and-openrouter-slugs)). Fleet does not read the gateway's per-model context limits, so declare `context_window_tokens`. |
 | `azure` | An Azure OpenAI resource | required | **required**: the resource's endpoint | Calls the resource's v1 API, with the key in the `Api-Key` header. An endpoint on one of Azure's public-cloud hosts (`https://<resource>.openai.azure.com`, `.cognitiveservices.azure.com` or `.services.ai.azure.com`, with any path) becomes `https://<resource>.openai.azure.com/openai/v1`. Any other URL is used as given, so for a proxy in front of the resource, or an Azure cloud other than the public one, give the full API root, ending in `/openai/v1`. That includes an Azure host written another way than the portal shows it (capital letters, an explicit `:443`, a `privatelink` name): it is used as given and answers 404, which the connection test shows. Model ids are the resource's deployment names. fantasy recognises a reasoning model by its id alone: an id that contains `gpt-5` in any case, or that starts with `o1`, `o3`, `o4` or `oss` or contains `-o1`, `-o3`, `-o4` or `-oss`. So name a GPT-5, o-series or gpt-oss deployment after its model, in lower case (`gpt-5-prod`, `o4-mini`): under another name it is sent `max_tokens` and a temperature, which Azure rejects for those models, so every turn on it fails. A newer reasoning model outside that match, such as GPT-6, is sent the same parameters whatever its deployment is called, so it may not run on an `azure` entry at all yet. Keys only: Microsoft Entra ID sign-in is not supported. The connection test checks the endpoint and the key, not the deployment names, so it does not catch a misnamed reasoning deployment. |
+| `google` | The Gemini API (Google AI Studio) | required | optional, default `https://generativelanguage.googleapis.com` | A Gemini API key from Google AI Studio, sent as `x-goog-api-key`. Model ids are Gemini's own (`gemini-3.8-flash`). A `base_url` is the API's root, without `/v1beta`. Vertex AI is not supported: fantasy's Vertex path drops a stored key and signs in with Google credentials found on the host. A model id containing `claude` or `anthropic`, which fantasy would send to Anthropic on Vertex, is refused; when the entry is in a `fallback_providers` chain, the providers after it take such a slug instead. Do not name the entry `google`: a provider name is an explicit route, so it would also take every OpenRouter `google/…` slug. When fleet re-sends a turn (after a context checkpoint, or to resume after a stream error) it keeps Gemini's thought signatures, which newer Gemini models require on a turn's tool calls. See the limits below for tool schemas. |
 
 The OpenAI Go client under `openaicompat`, `vercel` and `azure` copies the
 host's own OpenAI settings onto every request: `OPENAI_API_KEY` or
@@ -127,8 +136,18 @@ types still send the organization, project and custom headers, as before; an
 `ollama` entry without a key sends the placeholder key `ollama`, which keeps
 `OPENAI_API_KEY` off it.
 
-fantasy also ships `bedrock`, `google` and `kronk` providers. They are not
-configurable yet; issue #1703 tracks them.
+The Google client also reads the host's own Google settings, for any one a
+client leaves unset: `GOOGLE_API_KEY` and `GEMINI_API_KEY`,
+`GOOGLE_GENAI_USE_VERTEXAI` and `GOOGLE_GENAI_USE_ENTERPRISE`,
+`GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` and `GOOGLE_CLOUD_REGION`, and
+`GOOGLE_GEMINI_BASE_URL` and `GOOGLE_VERTEX_BASE_URL`. A `google` entry always
+sets its own key, the Gemini API backend and a base URL, so none of them
+applies to it. One trace is left: with both `GOOGLE_API_KEY` and
+`GEMINI_API_KEY` set, the client still logs that it is using
+`GOOGLE_API_KEY` each time it loads a model, though the entry uses its own.
+
+fantasy also ships `bedrock` and `kronk` providers. They are not configurable
+yet; issue #1703 tracks them.
 
 ## How a model slug is routed
 
@@ -139,7 +158,10 @@ For each requested slug, in order:
    `anthropic-direct/claude-opus-4-8` to force the native Anthropic path.
    > Note: a plain OpenRouter slug like `anthropic/claude-opus-4.8` is **not**
    > explicit routing — `anthropic` there is an OpenRouter upstream, not a
-   > provider `name`. It falls through to the catch-all (OpenRouter).
+   > provider `name`. It falls through to the catch-all (OpenRouter). Name a
+   > provider after such an upstream (`anthropic`, `google`) and every
+   > OpenRouter slug that starts with it becomes an explicit route to that
+   > provider.
 2. **`models:` list match** — the first provider whose `models` list contains the
    slug. A listed model always wins over a catch-all, wherever the catch-all sits.
 3. **Catch-all** — the first provider with no `models` list.
@@ -149,7 +171,7 @@ So in the example above: `gpt-4o` → `openai-direct`; `claude-opus-4-8` →
 (explicit); `anthropic/claude-sonnet-4.6` → `openrouter` (catch-all);
 `anthropic/claude-opus-4.8` → `gateway` (its `models` list beats the
 catch-all); `qwen3-coder` → `gpu-box`; `gpt-5-prod` → `azure-east`;
-`llama3.2` → `local`.
+`gemini-3.8-flash` → `gemini`; `llama3.2` → `local`.
 
 ### Vercel and OpenRouter slugs
 
@@ -170,15 +192,15 @@ and place it after the OpenRouter catch-all: only explicit routes such as
 
 - **OpenRouter-only features on native providers.** Upstream pinning, the
   1M-context Anthropic beta header, and extended thinking (#220) are OpenRouter
-  provider options; a request routed through any other type (Anthropic,
-  OpenAI, Ollama, OpenAI-compatible, Vercel, Azure) gets the base request without them
-  (a documented follow-on). Vercel model ids look like OpenRouter slugs, but
-  the OpenRouter options do not apply to them.
+  provider options; a request routed through any other type (Anthropic, OpenAI,
+  Ollama, OpenAI-compatible, Vercel, Azure, Google) gets the base request
+  without them (a documented follow-on). Vercel model ids look like OpenRouter
+  slugs, but the OpenRouter options do not apply to them.
 - **Native-provider cost accrues as $0** at runtime unless a #297 manifest
   pricing override prices the slug (a native response carries no OpenRouter cost
   metadata; the price table feeds only the pre-submission forecast). This
-  includes `openaicompat`, `vercel` and `azure`: fleet does not read a cost
-  from the Vercel AI Gateway's or Azure's responses. Because
+  includes `openaicompat`, `vercel`, `azure` and `google`: fleet does not read
+  a cost from the Vercel AI Gateway's, Azure's or Gemini's responses. Because
   native runtime cost stays $0, **`FLEET_MAX_COST_USD` does not bound native
   runs** — only the token ceiling (`FLEET_MAX_TOTAL_TOKENS`) does. Add a pricing
   override to track native USD cost and re-enable the USD ceiling.
@@ -192,6 +214,16 @@ and place it after the OpenRouter catch-all: only explicit routes such as
   remains a separate model substitution and takes precedence.
 - **No per-task `preferred_provider` field.** Per-task pinning is available via
   the explicit `provider-name/model` slug form.
+- **Gemini sees looser tool schemas.** fantasy's Gemini conversion keeps each
+  property's name, type and description, and each tool's top-level required
+  list. It drops `enum` and the required lists of nested objects, and it sends
+  a property described only by `anyOf`, `oneOf` or `$ref`, or by a union type
+  such as `["integer","null"]`, as a string. A `google` model can therefore
+  send arguments another provider's schema would have ruled out. Gemini
+  refuses a whole request whose tools include an array with no item schema or
+  a required name with no property, so fleet gives such an array string items
+  and drops such a name before a `google` request goes out; an MCP tool
+  declaring a bare `{"type":"array"}` therefore gets strings from Gemini.
 - A **misconfigured provider fails at boot**, not on first use.
 - **Declare native context limits.** Native and OpenAI-compatible model handles
   do not advertise a reliable context window. Set `context_window_tokens` to the

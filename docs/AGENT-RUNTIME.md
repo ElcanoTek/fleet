@@ -239,8 +239,10 @@ carried: fantasy reports no status for a transport failure, and the events keep
 the watchdog's own wording there rather than inventing an HTTP code.
 
 **An expired provider prompt cache is a stream blip, not a rejection.** Google
-evicts the implicit prompt cache a long run has been riding on and answers the
-next step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
+evicts a context cache a long run has been riding on (for a Gemini model with
+a breakpoint, the explicit cache OpenRouter makes from it, whose five-minute
+TTL does not refresh: docs/PROMPT-CACHE-CONTRACT.md) and answers the next
+step with a 400 `Cache content <id> is expired.` (INVALID_ARGUMENT),
 which OpenRouter relays as a 400 "Provider returned error". The request is
 well-formed — re-sending the same messages builds a fresh cache and succeeds —
 so fleet classes it with the transient blips (one same-model retry, then the
@@ -642,9 +644,11 @@ consecutive-compaction cap. It is held back, so the pause buys the summary,
 while the run's self-audit is pending (asked for, no `confirm_audit` accepted
 yet: the audit re-reads the evidence a stub would hide), and for the rest of a
 run that re-ran a call whose result it had stubbed. Such a run also gets three
-times the resend budget from then on, capped at 30% of the budget short of the
-model's input limit (no raise where that leaves less than 30% of the budget to
-add): the re-run is a sign it needs more of its data at once
+times the resend budget from then on, and so does one that re-ran a call whose
+bulky data a resend-budget summary had dropped, whether or not elision is
+enabled; that does not stop elision. The raise is capped at 30% of the budget
+short of the model's input limit (no raise where that leaves less than 30% of
+the budget to add): the re-run is a sign it needs more of its data at once
 than the budget holds, and with the plain budget each re-fetch had sent it over
 again, and the next summary dropped other results for it to fetch again. A
 `[context_budget_raised]` breadcrumb records the raise; the floor rule is still

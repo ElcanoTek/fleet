@@ -41,7 +41,7 @@ type CatwalkResponse = {
 // catalog fetch, and "ollama" and "openaicompat" serve whatever that server
 // has loaded — no public catalog can know that. "azure" serves the
 // deployments its resource defines, under names the admin chose. "vercel" is
-// in catwalk but not wired up here yet.
+// in catwalk but not wired up here yet, and neither is "google".
 const CATWALK_EXPANDABLE_TYPES = new Set(["anthropic", "openai"]);
 
 export type WorkspaceModelCatalog = { models: WorkspaceModel[]; routing: ModelRouting };
