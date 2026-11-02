@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import {
+  truncateUserPreview,
   USER_BUBBLE_COLLAPSE_CHARS,
   USER_BUBBLE_PREVIEW_CHARS,
   UserTurn,
@@ -109,13 +110,28 @@ describe("UserTurn for a card answer the server refused", () => {
 
     const toggle = screen.getByTestId("user-message-expand");
     expect(toggle).toHaveTextContent(/Show full message/);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", bubble.getAttribute("id"));
     expect(bubble.contains(toggle)).toBe(false);
 
     fireEvent.click(toggle);
     expect(bubble.textContent).toContain(tailMarker);
     expect(toggle).toHaveTextContent("Show less");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
 
     fireEvent.click(toggle);
     expect(bubble.textContent).not.toContain(tailMarker);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("never splits a UTF-16 surrogate pair when truncating a preview", () => {
+    // Place an astral-plane emoji (2 UTF-16 code units) spanning index 1199..1200.
+    const prefix = "a".repeat(USER_BUBBLE_PREVIEW_CHARS - 1);
+    const emoji = "🚀";
+    const text = prefix + emoji + "b".repeat(USER_BUBBLE_COLLAPSE_CHARS);
+    const preview = truncateUserPreview(text, USER_BUBBLE_PREVIEW_CHARS);
+    expect(preview).toBe(`${prefix}…`);
+    // Ensure no lone surrogate exists in the preview string.
+    expect(/[\uD800-\uDFFF]/.test(preview)).toBe(false);
   });
 });

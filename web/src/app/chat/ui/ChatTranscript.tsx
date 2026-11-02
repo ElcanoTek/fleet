@@ -14,7 +14,7 @@
 // SummarizeProgressCard — were module-level functions in chat-experience whose
 // only callers are this transcript JSX, so they move here verbatim (the
 // originals are removed from chat-experience to keep one definition each).
-import { lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useContext, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Dispatch, ReactNode, RefObject, SetStateAction } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { LoadingLogo } from "./LoadingLogo";
@@ -70,9 +70,17 @@ import {
   humanToolLabel,
   liveSubagentLabel,
   shortModelName,
+  truncateUserPreview,
+  USER_BUBBLE_COLLAPSE_CHARS,
+  USER_BUBBLE_PREVIEW_CHARS,
   type Approval,
   type Message,
 } from "./history";
+export {
+  truncateUserPreview,
+  USER_BUBBLE_COLLAPSE_CHARS,
+  USER_BUBBLE_PREVIEW_CHARS,
+};
 import { currentAdvancedModel } from "@/app/lib/modelAliases";
 import { advancedRetryAllowed, anySwitchSuggestionPending, useQueuedSwitchRetry } from "./useQueuedSwitchRetry";
 import { AutoContinueNotice, FleetNotices, PatrolTurnNotice } from "./FleetNotices";
@@ -1284,12 +1292,6 @@ export function ChatTranscript({
 //
 // Exported for tests: the transcript itself is virtualized, and jsdom performs
 // no layout, so the row that would render this never mounts there.
-// Huge pasted user messages (e.g. a 164 KB single-line bundle ID list) are
-// collapsed by default so the transcript doesn't mount a 50,000px-tall broken
-// word block or pay to parse 100+ KB of GFM inline delimiters until requested.
-export const USER_BUBBLE_COLLAPSE_CHARS = 4_000;
-export const USER_BUBBLE_PREVIEW_CHARS = 1_200;
-
 export const UserTurn = memo(function UserTurn({
   message,
   isLastUser,
@@ -1396,6 +1398,7 @@ function UserBubble({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [expanded, setExpanded] = useState(false);
+  const bubbleId = useId();
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Keep the draft in sync with the canonical message content whenever we're
@@ -1538,7 +1541,7 @@ function UserBubble({
   const isCollapsible = message.content.length > USER_BUBBLE_COLLAPSE_CHARS;
   const displayedContent =
     isCollapsible && !expanded
-      ? `${message.content.slice(0, USER_BUBBLE_PREVIEW_CHARS)}…`
+      ? truncateUserPreview(message.content)
       : message.content;
 
   return (
@@ -1551,6 +1554,7 @@ function UserBubble({
         // The sender's words, and nothing else. The testid exists so that
         // invariant is assertable: injected context must never be inside this
         // element (QA finding #6).
+        id={bubbleId}
         data-testid="user-message-bubble"
         className="min-w-0 [overflow-wrap:anywhere] rounded-[1.1rem] bg-[var(--color-overlay-soft)] px-3 py-2.5 text-[0.875rem] leading-[1.55] text-[var(--color-text-primary)] sm:rounded-[1.25rem] sm:px-4 sm:py-3 sm:text-[0.9375rem] sm:leading-[1.65]"
       >
@@ -1573,6 +1577,8 @@ function UserBubble({
             <button
               type="button"
               data-testid="user-message-expand"
+              aria-expanded={expanded}
+              aria-controls={bubbleId}
               className="touch-target font-medium text-[var(--color-accent)] hover:underline"
               onClick={() => setExpanded((prev) => !prev)}
             >
