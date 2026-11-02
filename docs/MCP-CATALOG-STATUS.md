@@ -491,7 +491,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | servicenow | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | shopify-storefront | tenant | official | commerce-payments |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | shortcut | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
-| sigma | oauth | official | data-analytics |  | oauth-manual | 2026-11-02 probe | discovery ✓ on all 15 regional hosts | self-registering, public client ok; added 2026-11-02 with the GCP (US) host as the default and the other 14 Sigma clouds as `url_variants`; the 401 asks for `mcp:access`; live add pending a real Sigma account |
+| sigma | oauth | official | data-analytics |  | oauth-manual | 2026-11-02 probe | discovery ✓ on all 16 regional hosts | self-registering, public client ok; added 2026-11-02 with the GCP (US) host as the default and the other 15 Sigma clouds (every host in Sigma's supported-regions table) as `url_variants`; the 401 asks for `mcp:access`; live add pending a real Sigma account |
 | signoz | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | similarweb | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | slack | oauth | official | communication | ★ | oauth-manual | 2026-09-10 live | live PASS with caveats; discovery ✓ | manual client, secret |

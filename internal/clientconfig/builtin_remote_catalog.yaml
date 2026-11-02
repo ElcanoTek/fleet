@@ -1299,6 +1299,9 @@ servers:
       - id: gcp-uk
         label: "GCP UK: api.uk.gcp.sigmacomputing.com"
         url: "https://api.uk.gcp.sigmacomputing.com/mcp/v2"
+      - id: gcp-sa
+        label: "GCP Saudi Arabia: api.sa.gcp.sigmacomputing.com"
+        url: "https://api.sa.gcp.sigmacomputing.com/mcp/v2"
     vendor: Sigma Computing, Inc.
     docs_url: "https://help.sigmacomputing.com/docs/use-sigma-mcp-server"
     category: data-analytics
