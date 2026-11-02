@@ -339,7 +339,7 @@ fewer summarizer calls; making the elided content recallable added nothing.
   answer, which only a whole new child run could reproduce) and `task_tracker`
   (the plan the finish gate holds the run to, which a summary re-announces and
   an elision does not). A2A peer tools are named per peer, so they are not kept
-  by name; their stubs say to re-run only a tool that reads data. Assistant
+  by name; their stubs say to repeat only a call that read data. Assistant
   text, tool-call inputs, the pinned head and any summary are byte-identical,
   every result keeps its call ID (#1106), and the history is copied, never
   written in place. An elision that would save less than 2% of the budget is
@@ -717,10 +717,11 @@ whole.
   (below).
 - **Shared workspace.** The three runs of a recurring task share its
   workspace, and on the bench they share a business date too, so a later run
-  can find an earlier one's results there. Of the 58 runs on the bench since
-  2026-10-26, 56 fetched all twelve reports themselves. Two DeepSeek runs
-  fetched 10 and 6 and took the rest from those files: the off run at $0.11
-  and the on run at $0.02. Without them DeepSeek cost $0.045 off and $0.03 on.
+  can find an earlier one's results there. Of the 58 runs on the bench from
+  2026-10-26 to this round, 56 fetched all twelve reports themselves. Two
+  DeepSeek runs fetched 10 and 6 and took the rest from those files: the off
+  run at $0.11 and the on run at $0.02. Without them DeepSeek cost $0.045 off
+  and $0.03 on.
 - **Cost.** The round cost about $74 with the stopped phase.
 
 Each run's trace shows which pause every re-fetch followed:
@@ -738,9 +739,9 @@ Each run's trace shows which pause every re-fetch followed:
   three runs with elision and one without (all three without on 2026-10-22).
 - **Haiku's** is mostly the same loop, in two runs of three each way. In the
   $1.36 run, elision fired only after four summaries; Haiku then fetched
-  seven trimmed reports again and started eleven sub-agents, 19 of the run's
-  76 tool calls. The raise did not follow because the run ended before its
-  next pause.
+  seven trimmed reports again and started eleven sub-agents, which with one
+  `run_python` call made 19 of the run's 76 tool calls. The raise did not
+  follow because the run ended before its next pause.
 - **Gemini's** is elision. In all three runs, once the reports were trimmed,
   it searched for the data instead of calling the report tool for it: the
   environment, the process list, `/tmp`, its workspace, for 10 to 60 calls,
@@ -753,8 +754,8 @@ Each run's trace shows which pause every re-fetch followed:
   read them too. Every sandbox can read the whole workspace root, a known
   limit ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix),
   ADR-0058). The stub's wording has changed since ([What
-  shipped](#what-shipped-1)); how the new one does is under [Not
-  done](#not-done) until it is measured.
+  shipped](#what-shipped-1)), measured
+  [below](#the-second-stub-wording-2026-11-01).
 
 #### The second stub wording (2026-11-01)
 
@@ -771,15 +772,17 @@ The same task on the branch with the second wording, elision on:
 - **Haiku 5.5**, 2 runs: elision never fired in either; both looped on
   summaries, so the wording did not reach them. One aborted in its own
   self-audit over arithmetic it had not re-checked.
-- A run on a draft of the wording (Gemini, $3.05; Haiku, $0.84) went the same
-  way. This round cost about $18.
+- A run each on a draft of the wording: Gemini ($3.05) went the same way,
+  six reports fetched again, the raise, then 20 `run_python` calls; Haiku
+  ($0.84) elided once, at its last pause, then fetched one report again and
+  started eleven sub-agents. This round cost about $18.
 
-On this branch alone the second wording costs Gemini more than either the
-first wording or no elision: the raise lets the history grow to the whole data
-set, and Gemini resends it, mostly uncached, on every step. The cause of the
-low cached share was fleet's cache marker, which kept Gemini's cache read to
-the marked prefix however long the history grew; #1889 lets Google's implicit
-cache take over once the history outgrows that prefix
+With the cache marker as it was before #1889, the second wording costs Gemini
+more than either the first wording or no elision: the raise lets the history
+grow to the whole data set, and Gemini resends it, mostly uncached, on every
+step. The low cached share was that marker, which kept Gemini's cache read to
+the marked prefix however long the history grew; #1889, a separate change,
+lets Google's implicit cache take over once the history outgrows that prefix
 ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#where-the-breakpoints-are-placed)).
 On a local build carrying both changes (2026-11-01, an earlier version of
 #1889's rule, the history counted without the tool definitions):
@@ -790,13 +793,16 @@ On a local build carrying both changes (2026-11-01, an earlier version of
   answered from it: $0.32, not counted.
 - **Elision off**, 3 runs, each its own task: $2.06, $4.11 and $2.34, 49, 72
   and 72 cells, 29% to 53% read back. They looped on summaries (12, 28 and 16
-  of them), the loop under [Not done](#not-done).
+  of them), the loop under [Not done](#not-done), far more than the runs
+  without elision on 2026-10-27 (2 to 7 summaries, $1.14 a run).
 
-Two runs with elision on are a small sample. With them, elision costs Gemini
-about a third of no elision on this task, and the second wording makes Gemini
-fetch the data again in five runs of six, against one run of three with the
-first, and that one only after 15 calls of searching. It does not stop the
-search: once in six runs, Gemini looked and found another task's answer.
+Two runs with elision on against three without is a small sample, and the
+runs without looped unusually often, so the gap (about $0.99 a run against
+$2.84) is as much that loop as elision. The second wording made Gemini fetch
+the data again in five runs of six, against one run of three with the first,
+and that one only after 15 calls of searching. It does not stop the search:
+three of the six probed the environment or the process list first, and one
+searched the sandbox and answered from another task's file.
 
 ### Deviations from the issue
 
@@ -827,17 +833,21 @@ search: once in six runs, Gemini looked and found another task's answer.
   did during its audit above, is not helped. That loop happens with elision
   off too; it is a matter for the summary, not for elision.
 - Stopping the search for trimmed data. The second wording asks for a
-  repeated call and names where the data is not, but in one run of six
-  Gemini still searched the sandbox and answered from another task's result
-  file. Every sandbox can read the whole workspace root
+  repeated call and names where the data is not, but in three runs of six
+  Gemini still probed the environment or the process list first, and in one
+  it searched the sandbox and answered from another task's result file.
+  Every sandbox can read the whole workspace root
   ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix));
   the wording cannot close that.
-- Gemini's cost after a raise without #1889. With the second wording alone
-  Gemini cost $4.14 a run against $1.14 with elision off, its history
-  uncached ([the second wording](#the-second-stub-wording-2026-11-01)); this
-  change should merge after #1889. On this task the Anthropic models read
-  back only 11% to 59% of their prompt too, against 58% to 87% on GPT-6.1 Sol
-  and DeepSeek. Why is not looked into.
+- Gemini on #1889's final rule. With the second wording and the cache
+  marker as before #1889, Gemini cost $4.14 a run against $1.14 with elision
+  off, its history mostly uncached ([the second
+  wording](#the-second-stub-wording-2026-11-01)). The runs with both changes
+  used an earlier version of #1889's rule; its final rule also counts the
+  tool definitions, so the marker gives way a little later. Elision with the
+  second wording on that rule is not measured. On this task the Anthropic
+  models read back only 11% to 59% of their prompt too, against 58% to 87%
+  on GPT-6.1 Sol and DeepSeek. Why is not looked into.
 - The second wording on the other models. It was measured on Gemini and on
   two Haiku runs that never elided; its effect on the other models'
   re-fetches is not measured. The text invites them, and on a window too

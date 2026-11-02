@@ -55,7 +55,7 @@ const (
 // whole new child run could reproduce; task_tracker returns the plan the
 // finish gate holds the run to (a summary re-announces it after a compaction,
 // an elision does not). A2A peer tools are named per peer (<peer>_<op>), so
-// they are not listed: their stubs say to re-run only a tool that reads data.
+// they are not listed: their stubs say to repeat only a call that read data.
 var elisionKeptTools = map[string]bool{"spawn_subagent": true, toolNameTaskTracker: true}
 
 // elisionResult is what elideStaleToolResults did.
@@ -164,7 +164,7 @@ func callBefore(messages []fantasy.Message, mi, pi int, id string) (fantasy.Tool
 // to a governed artifact. The near-overflow reducer's "Re-run <tool> with
 // narrower output" is wrong advice for a call with side effects, and elision
 // stubs results routinely, so the stub says the call is done and to repeat
-// only a tool that reads.
+// only a call that read data.
 //
 // It says plainly that making a call that only read data again is how to get
 // the data back, with the same arguments when the tool takes no narrower ones,
