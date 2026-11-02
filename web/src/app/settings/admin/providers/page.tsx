@@ -290,6 +290,11 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (t?.regionShown && d.region.trim() && !AWS_REGION.test(d.region.trim())) {
     return "Region must be an AWS Region name, such as us-east-1.";
   }
+  // A China or ISO Region's endpoints are not under amazonaws.com, where the
+  // server would build the default one.
+  if (t?.regionShown && !d.base_url.trim() && /^cn-|-iso/.test(d.region.trim())) {
+    return "A China or ISO Region's endpoints are not under amazonaws.com: set the Base URL to its Bedrock Runtime endpoint.";
+  }
   if (d.type === "bedrock" && d.base_url.trim() && !isOrigin(d.base_url.trim())) {
     return "A Bedrock Base URL is an endpoint's origin with no path, query or credentials, such as https://bedrock-runtime.us-east-1.amazonaws.com.";
   }

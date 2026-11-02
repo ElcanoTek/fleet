@@ -326,6 +326,11 @@ func TestCheckProviderFields(t *testing.T) {
 		{"region that is a host", bedrock, "", "evil.example/x", "not an AWS Region name"},
 		{"region that ends a host", bedrock, "", "us-east-1.example.com#", "not an AWS Region name"},
 		{"region on another type", openai, "", "us-east-1", "applies only to a bedrock provider"},
+		// A China or ISO Region's endpoints are not under amazonaws.com, where
+		// the default endpoint would be built.
+		{"China region with no base", bedrock, "", "cn-north-1", "outside amazonaws.com"},
+		{"ISO region with no base", bedrock, "", "us-isob-east-1", "outside amazonaws.com"},
+		{"China region with its endpoint", bedrock, "https://bedrock-runtime.cn-north-1.amazonaws.com.cn", "cn-north-1", ""},
 		{"bedrock origin", bedrock, "https://bedrock-runtime.us-east-1.amazonaws.com", "", ""},
 		{"bedrock origin with a slash and a port", bedrock, "http://203.0.113.10:8080/", "", ""},
 		{"bedrock base with a path", bedrock, "https://gateway.example/bedrock", "", "no path"},

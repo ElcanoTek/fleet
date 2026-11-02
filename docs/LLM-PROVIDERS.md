@@ -62,7 +62,8 @@ only be configured from the client bundle's `providers:` block.
   endpoint the row calls (`bedrock-runtime.<region>.amazonaws.com`, unless the
   row sets a base URL); empty means `us-east-1`. The store refuses a region on
   any other type, and one that is not a Region name, since it becomes part of a
-  host name, even on a disabled row. It also refuses a `bedrock` base URL with
+  host name, even on a disabled row. A China or ISO Region also needs a base
+  URL, since its endpoints are not under `amazonaws.com`. It also refuses a `bedrock` base URL with
   a path, a query or credentials. An update that omits the field keeps the
   stored value, unless it changes the row to a type that takes no region. The
   form shows the field for Amazon Bedrock only, and the row's line shows the

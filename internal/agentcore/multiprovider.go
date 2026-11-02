@@ -165,9 +165,20 @@ func ProviderTypeChoices() string {
 // bedrock-runtime.<region>.amazonaws.com is built from (us-east-1,
 // us-gov-west-1, ap-southeast-4). The Region becomes part of that host name,
 // so nothing else may pass. A Region whose endpoints are not under
-// amazonaws.com (China, the European Sovereign Cloud) is reached through a
-// base_url instead, with no region.
+// amazonaws.com is reached through a base_url instead: a China or ISO Region
+// name is accepted only with one (regionOutsideAmazonawsCom), and a European
+// Sovereign Cloud one (eusc-…) does not match at all, so such an entry names
+// no region.
 var awsRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+
+// regionOutsideAmazonawsCom reports whether a Region's endpoints are not
+// under amazonaws.com: China's (cn-north-1, cn-northwest-1, under
+// amazonaws.com.cn) and the isolated ISO Regions' (us-iso-east-1,
+// us-isob-east-1, eu-isoe-west-1…). The endpoint bedrockRuntimeURL builds for
+// one would name a host that is not that Region's.
+func regionOutsideAmazonawsCom(region string) bool {
+	return strings.HasPrefix(region, "cn-") || strings.Contains(region, "-iso")
+}
 
 // CheckProviderFields checks an entry's region and base_url against what its
 // type accepts, beyond the presence rules of its spec. The bundle loader, the
@@ -175,7 +186,9 @@ var awsRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
 // way wherever it is written:
 //
 //   - a region is accepted only by a type that takes one (bedrock), and must
-//     be an AWS Region name, since it is put into the endpoint's host name;
+//     be an AWS Region name, since it is put into the endpoint's host name. A
+//     China or ISO Region needs a base_url, since its endpoints are not under
+//     amazonaws.com;
 //   - a bedrock base_url is an origin only. The Bedrock client rewrites a
 //     request's path to /model/<id>/invoke only when that path is exactly
 //     /v1/messages, so behind a path prefix it would send the Anthropic API's
@@ -189,6 +202,8 @@ func CheckProviderFields(spec ProviderTypeSpec, baseURL, region string) error {
 		return fmt.Errorf("region applies only to a bedrock provider, not to type %s", spec.Type)
 	case region != "" && !awsRegionPattern.MatchString(region):
 		return fmt.Errorf("region %q is not an AWS Region name, such as us-east-1", region)
+	case region != "" && baseURL == "" && regionOutsideAmazonawsCom(region):
+		return fmt.Errorf("region %q has its endpoints outside amazonaws.com: set base_url to its Bedrock Runtime endpoint", region)
 	}
 	if spec.Type == ProviderTypeBedrock && baseURL != "" {
 		u, err := url.Parse(baseURL)

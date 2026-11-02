@@ -410,6 +410,9 @@ describe("ProvidersAdminPage", () => {
     fireEvent.change(screen.getByLabelText(regionLabel), { target: { value: "eu-west-1.example.com" } });
     save();
     expect(await screen.findByText("Region must be an AWS Region name, such as us-east-1.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(regionLabel), { target: { value: "cn-north-1" } });
+    save();
+    expect(await screen.findByText(/A China or ISO Region's endpoints are not under amazonaws.com/)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(regionLabel), { target: { value: " eu-west-1 " } });
     for (const base of ["https://gateway.example.com/bedrock", "https://gateway.example.com?", "https://u:p@gateway.example.com"]) {
       fireEvent.change(screen.getByLabelText("Base URL (optional)"), { target: { value: base } });
