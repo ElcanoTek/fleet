@@ -1314,8 +1314,9 @@ servers:
       to AI tools (or the API base URL under Administration > Developer
       Access). A Sigma admin must first give your account type the "Use
       Sigma MCP with OAuth" permission; if your organization restricts
-      access by IP, the address of this fleet's server must be allowlisted
-      with Scope set to API.
+      access by IP, the outbound (egress) IP address this fleet connects
+      from must be allowlisted with Scope set to API — behind NAT or a
+      load balancer that can differ from the address you open fleet at.
     setup_url: "https://help.sigmacomputing.com/docs/use-sigma-mcp-server"
 
   # ── web-search ──────────────────────────────────────────────────
