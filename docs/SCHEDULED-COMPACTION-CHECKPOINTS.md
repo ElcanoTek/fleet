@@ -433,8 +433,18 @@ fewer summarizer calls; making the elided content recallable added nothing.
     follows the active model, so a fallback model with another window moves
     the raised budget without a new breadcrumb; the later lines show the
     value in force.
-  - Runs with elision off, and runs that never re-fetch an elided result, are
-    unchanged.
+  - **A re-run of a summarized call** (added 2026-11-02) raises it the same
+    way, elision on or off. A resend-budget summary records the calls whose
+    results it dropped (`noteSummarizedCalls`); repeating one is the same
+    sign as repeating an elided one, and without the raise the next pause
+    summarized the new copy away too, and the run fetched it again: the
+    seven-model round below has a Sonnet run with 34 summaries and 97
+    re-fetches and no elision at all. The breadcrumb then says "a call whose
+    result a summary had dropped", and later lines that the run "re-ran a
+    summarized call". A summary in the in-round overflow recovery records
+    nothing, and the window compaction of a run with no resend budget has no
+    budget to raise.
+  - Runs that never re-fetch an elided or summarized result are unchanged.
 - **Reused call IDs** (fixed 2026-10-22). Some providers reuse one call ID
   across steps, or within one parallel step. Each result is paired with its
   own call: the nearest earlier message with calls under that ID, and within
@@ -706,10 +716,9 @@ That round cost about $6.
 
 ### Not done
 
-- Noticing a re-fetch of a result a summary dropped. The raise follows only a
-  re-run of an elided call, so a run that loops on summaries alone, as Sonnet
-  did during its audit above, is not helped. That loop happens with elision
-  off too; it is a matter for the summary, not for elision.
+- Measuring the raise after a summarized call on a real model. It is tested
+  on the fake-model loop only; the bench's key had too little left this
+  month for a round on Sonnet and Haiku, whose runs loop on summaries most.
 - Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
   four with elision cost $2.25 a run and five without $1.49. The runs with
   elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M

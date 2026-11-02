@@ -397,9 +397,15 @@ func (e *engine) elisionHeld() bool {
 }
 
 // noteReruns sets elisionStopped once a call the run made since the last
-// context-pressure check repeats one whose result an elision stubbed: the
-// same tool with the same arguments (callKey). That also raises the run's
-// resend budget (resendBudget), and noteRerunStop says so. It runs at the top
+// context-pressure check repeats one whose result an elision stubbed or a
+// resend-budget summary dropped: the same tool with the same arguments
+// (callKey). That also raises the run's resend budget (resendBudget), and
+// noteRerunStop says so. Fetching again what a summary dropped is the same
+// sign as fetching again what an elision trimmed: the run needs more of its
+// data at once than the budget holds. Left alone, the next pause summarizes
+// the new copy away too, and the run fetches it again: on the store-KPI bench
+// (docs/SCHEDULED-COMPACTION-CHECKPOINTS.md) one Sonnet run took 34 summaries
+// and 97 re-fetches that way, with or without elision. It runs at the top
 // of every check, before any rewrite. The new calls are told apart by position, past
 // pressureCheckedLen, not by call ID: some providers reuse IDs. So a
 // duplicate the run made before the elision is not a re-run. Positions hold
@@ -409,17 +415,27 @@ func (e *engine) elisionHeld() bool {
 // eliding, as it would without this stop.
 func (e *engine) noteReruns(messages []fantasy.Message) {
 	from := e.pressureCheckedLen
-	if e.elisionStopped || len(e.elidedCallKeys) == 0 || from > len(messages) {
+	if e.elisionStopped || len(e.elidedCallKeys)+len(e.summarizedCallKeys) == 0 || from > len(messages) {
 		return
 	}
 	for _, m := range messages[from:] {
 		for _, part := range m.Content {
 			tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part)
-			if ok && e.elidedCallKeys[callKey(tc.ToolName, tc.Input)] {
-				e.elisionStopped = true
-				e.noteRerunStop(tc.ToolName)
-				return
+			if !ok {
+				continue
 			}
+			key := callKey(tc.ToolName, tc.Input)
+			switch {
+			case e.elidedCallKeys[key]:
+				e.rerunOf = "an elided"
+			case e.summarizedCallKeys[key]:
+				e.rerunOf = "a summarized"
+			default:
+				continue
+			}
+			e.elisionStopped = true
+			e.noteRerunStop(tc.ToolName)
+			return
 		}
 	}
 }
@@ -431,15 +447,36 @@ func (e *engine) noteReruns(messages []fantasy.Message) {
 // too small for any raise, keeps its budget and gets no breadcrumb.
 func (e *engine) noteRerunStop(tool string) {
 	budget, raised := contextResendBudgetTokens(e.envPrefix), e.resendBudget()
+	how, lost := "elided", "an elision had replaced with a preview"
+	if e.rerunOf == "a summarized" {
+		how, lost = "summarized away", "a summary had dropped"
+	}
 	if raised <= budget {
-		log.Printf("context elision off for the rest of the run: %s was re-run after its result was elided", tool)
+		log.Printf("context elision off for the rest of the run: %s was re-run after its result was %s", tool, how)
 		return
 	}
-	log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was elided", raised, tool)
+	log.Printf("context elision off and the resend budget raised to %d for the rest of the run: %s was re-run after its result was %s", raised, tool, how)
 	if e.logSession != nil {
 		e.logSession.AddMessage(roleUser, fmt.Sprintf(
-			"[context_budget_raised] tool=%s budget=%d raised_budget=%d — the run re-ran a call whose result an elision had replaced with a preview, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
-			tool, budget, raised), nil, nil)
+			"[context_budget_raised] tool=%s budget=%d raised_budget=%d — the run re-ran a call whose result %s, a sign it needs more of its data at once than the budget holds: it stops eliding, and its resend budget is raised for the rest of the run",
+			tool, budget, raised, lost), nil, nil)
+	}
+}
+
+// noteSummarizedCalls records the identities of the calls in the messages a
+// resend-budget summary dropped, for noteReruns. A result kept past the
+// summary still has its call in the kept half, so only a call whose result
+// went with it is recorded.
+func (e *engine) noteSummarizedCalls(dropped []fantasy.Message) {
+	for _, m := range dropped {
+		for _, part := range m.Content {
+			if tc, ok := fantasy.AsMessagePart[fantasy.ToolCallPart](part); ok {
+				if e.summarizedCallKeys == nil {
+					e.summarizedCallKeys = map[string]bool{}
+				}
+				e.summarizedCallKeys[callKey(tc.ToolName, tc.Input)] = true
+			}
+		}
 	}
 }
 
