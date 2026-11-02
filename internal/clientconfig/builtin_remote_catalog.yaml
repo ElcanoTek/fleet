@@ -1247,6 +1247,77 @@ servers:
     tags: [bi, superset, dashboards, sql]
     provenance: official
     auth: oauth
+  - name: sigma
+    display_name: Sigma
+    description: >-
+      Sigma Computing's hosted MCP server: search, explore and query the
+      workbooks, data models and warehouse connections the signed-in user
+      can see in Sigma, build workbooks and take screenshots of them. Served
+      from the API host of the Sigma cloud your organization runs on — pick
+      the endpoint on the card.
+    url: "https://api.sigmacomputing.com/mcp/v2"
+    url_variants:
+      - id: aws-us-west
+        label: "AWS US (West): aws-api.sigmacomputing.com"
+        url: "https://aws-api.sigmacomputing.com/mcp/v2"
+      - id: aws-us-east
+        label: "AWS US (East): api.us-a.aws.sigmacomputing.com"
+        url: "https://api.us-a.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-ca
+        label: "AWS Canada: api.ca.aws.sigmacomputing.com"
+        url: "https://api.ca.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-eu
+        label: "AWS EU: api.eu.aws.sigmacomputing.com"
+        url: "https://api.eu.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-uk
+        label: "AWS UK: api.uk.aws.sigmacomputing.com"
+        url: "https://api.uk.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-au
+        label: "AWS Australia: api.au.aws.sigmacomputing.com"
+        url: "https://api.au.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-in
+        label: "AWS India: api.in.aws.sigmacomputing.com"
+        url: "https://api.in.aws.sigmacomputing.com/mcp/v2"
+      - id: aws-ch
+        label: "AWS Switzerland: api.ch.aws.sigmacomputing.com"
+        url: "https://api.ch.aws.sigmacomputing.com/mcp/v2"
+      - id: azure-us
+        label: "Azure US: api.us.azure.sigmacomputing.com"
+        url: "https://api.us.azure.sigmacomputing.com/mcp/v2"
+      - id: azure-eu
+        label: "Azure EU: api.eu.azure.sigmacomputing.com"
+        url: "https://api.eu.azure.sigmacomputing.com/mcp/v2"
+      - id: azure-ca
+        label: "Azure Canada: api.ca.azure.sigmacomputing.com"
+        url: "https://api.ca.azure.sigmacomputing.com/mcp/v2"
+      - id: azure-uk
+        label: "Azure UK: api.uk.azure.sigmacomputing.com"
+        url: "https://api.uk.azure.sigmacomputing.com/mcp/v2"
+      - id: azure-au
+        label: "Azure Australia: api.au.azure.sigmacomputing.com"
+        url: "https://api.au.azure.sigmacomputing.com/mcp/v2"
+      - id: gcp-uk
+        label: "GCP UK: api.uk.gcp.sigmacomputing.com"
+        url: "https://api.uk.gcp.sigmacomputing.com/mcp/v2"
+      - id: gcp-sa
+        label: "GCP Saudi Arabia: api.sa.gcp.sigmacomputing.com"
+        url: "https://api.sa.gcp.sigmacomputing.com/mcp/v2"
+    vendor: Sigma Computing, Inc.
+    docs_url: "https://help.sigmacomputing.com/docs/use-sigma-mcp-server"
+    category: data-analytics
+    tags: [bi, warehouse, workbooks, sql, dashboards]
+    provenance: official
+    auth: oauth
+    setup_hint: >-
+      The default endpoint is Sigma's GCP (US) cloud; pick the one whose host
+      matches the Sigma MCP URL under Profile > Integrations > Connect Sigma
+      to AI tools (or the API base URL under Administration > Developer
+      Access). A Sigma admin must first give your account type the "Use
+      Sigma MCP with OAuth" permission; if your organization restricts
+      access by IP, the outbound (egress) IP address this fleet connects
+      from must be allowlisted with Scope set to API — behind NAT or a
+      load balancer that can differ from the address you open fleet at.
+    setup_url: "https://help.sigmacomputing.com/docs/use-sigma-mcp-server"
 
   # ── web-search ──────────────────────────────────────────────────
   - name: apify

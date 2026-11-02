@@ -225,8 +225,8 @@ package is listed.
 
 ## Appendix — the inventory: every built-in entry (#986 Phase 1)
 
-All 289 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
-the Phase 4 changes on 2026-09-25 (Fireflies retyped 2026-10-29), one row each, sorted by name. Columns follow the plan in
+All 290 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
+the Phase 4 changes on 2026-09-25 (Fireflies retyped 2026-10-29, Sigma added 2026-11-02), one row each, sorted by name. Columns follow the plan in
 #986: **featured** (★) is the Featured-shelf flag; **can CI hit?** says what
 an automated smoke (Phase 2) could do with the entry without a human —
 `yes` the endpoint answers `initialize` with no credentials (open); `key-fixture`
@@ -245,11 +245,11 @@ handshake sweep described above — and `—` when nothing could be checked
 templates, and Render, whose hostname resolves to 127.0.0.1 on the audit box
 while public DNS is fine). A row is not re-verified by later releases.
 
-Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 184 · tenant 40 ·
-dead-suspect 0. Auth: oauth 184 · tenant 39 · api_key 52 · open 14.
-Provenance: official 281 · third_party 5 · community 3. Featured: 20. Last
+Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 185 · tenant 40 ·
+dead-suspect 0. Auth: oauth 185 · tenant 39 · api_key 52 · open 14.
+Provenance: official 282 · third_party 5 · community 3. Featured: 20. Last
 verified: live 15 · probe 2026-09-14 182 · probe 2026-09-16 48 · probe
-2026-09-25 10 · not probeable 34. These totals are derived from the table
+2026-09-25 10 · probe 2026-11-02 1 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -491,6 +491,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | servicenow | tenant | official | customer-support |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | shopify-storefront | tenant | official | commerce-payments |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | shortcut | oauth | official | productivity |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
+| sigma | oauth | official | data-analytics |  | oauth-manual | 2026-11-02 probe | discovery ✓ on all 16 regional hosts | self-registering, public client ok; added 2026-11-02 with the GCP (US) host as the default and the other 15 Sigma clouds (every host in Sigma's supported-regions table) as `url_variants`; the 401 asks for `mcp:access`; live add pending a real Sigma account |
 | signoz | tenant | official | observability |  | tenant | — | tenant — not probeable without a real tenant value |  |
 | similarweb | api_key | official | marketing-social |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 401 without a key, 401 with a bogus key | add-time check rejects a bogus key (HTTP 401) |
 | slack | oauth | official | communication | ★ | oauth-manual | 2026-09-10 live | live PASS with caveats; discovery ✓ | manual client, secret |
