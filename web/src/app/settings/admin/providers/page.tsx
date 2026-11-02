@@ -2,7 +2,7 @@
 
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
 // surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
-// Vercel AI Gateway API key, an Azure OpenAI resource, or point at any
+// Vercel AI Gateway/Gemini API key, an Azure OpenAI resource, or point at any
 // OpenAI-compatible endpoint (Ollama, vLLM, LM Studio…); rows overlay the
 // client bundle's providers: table and take effect on the next turn, no
 // restart. Multiple providers run simultaneously — routing picks per model
@@ -148,6 +148,17 @@ const PROVIDER_TYPES: Record<
     keyNeeded: true,
     windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
+  },
+  google: {
+    label: "Google Gemini",
+    hint: "The Gemini API, with a key from Google AI Studio. Model ids are Gemini's own, like gemini-3.8-flash. Don't name it google: that name would also take OpenRouter's google/… models.",
+    urlLabel: "Base URL (optional)",
+    urlPlaceholder: "(default: generativelanguage.googleapis.com)",
+    urlNeeded: false,
+    keyLabel: "API key",
+    keyNeeded: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 1048576",
   },
 };
 
@@ -537,7 +548,7 @@ function ProvidersAdmin() {
           />
         </ConnPanelHead>
         <ClampInfo>
-          An OpenRouter, Anthropic, OpenAI or Vercel AI Gateway key, an Azure OpenAI resource, or any
+          An OpenRouter, Anthropic, OpenAI, Vercel AI Gateway or Gemini key, an Azure OpenAI resource, or any
           OpenAI-compatible endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
           <CodeChip>provider/model</CodeChip> prefix or by its models list; a provider with an
           empty models list is a catch-all serving any slug. Changes apply on the next message —
@@ -786,8 +797,8 @@ function ProvidersAdmin() {
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment
-            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI or Vercel
-            key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
+            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI, Vercel or
+            Gemini key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
           </ConnEmpty>
         ) : (
           <ConnRows>

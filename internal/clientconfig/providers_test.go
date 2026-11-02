@@ -32,7 +32,9 @@ func TestValidateProviders(t *testing.T) {
 		{"valid azure", []ProviderDef{{Name: "az", Type: "azure", APIKeyEnv: "AZURE_OPENAI_API_KEY", BaseURL: "https://res.openai.azure.com"}}, ""},
 		{"azure without api_key_env", []ProviderDef{{Name: "az", Type: "azure", BaseURL: "https://res.openai.azure.com"}}, "api_key_env is required"},
 		{"azure without base_url", []ProviderDef{{Name: "az", Type: "azure", APIKeyEnv: "AZURE_OPENAI_API_KEY"}}, "requires base_url"},
-		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel|azure"},
+		{"valid google", []ProviderDef{{Name: "gemini", Type: "google", APIKeyEnv: "GEMINI_API_KEY"}}, ""},
+		{"google without api_key_env", []ProviderDef{{Name: "gemini", Type: "google"}}, "api_key_env is required"},
+		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

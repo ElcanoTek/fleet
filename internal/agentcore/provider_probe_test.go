@@ -252,6 +252,41 @@ func TestProbeProviderFollowsRedirectsOnlyWithinTheOrigin(t *testing.T) {
 	}
 }
 
+// The Gemini API lists models as {"models":[{"name":"models/<id>"}]} and
+// answers a wrong key with 400 API_KEY_INVALID, not 401.
+func TestProbeProviderGoogle(t *testing.T) {
+	var path, query, key string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, query, key = r.URL.Path, r.URL.RawQuery, r.Header.Get("X-Goog-Api-Key")
+		if key != "good-key" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.",` +
+				`"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"models":[{"name":"models/gemini-2.5-pro"},{"name":"models/gemini-2.5-flash"}]}`))
+	}))
+	defer srv.Close()
+	cfg := ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "good-key", BaseURL: srv.URL,
+		Models: []string{"gemini-2.5-pro", "gemini-9-ultra"}}
+	res := ProbeProvider(context.Background(), cfg)
+	if !res.OK || res.ServedModelCount != 2 || len(res.MissingModels) != 1 || res.MissingModels[0] != "gemini-9-ultra" {
+		t.Fatalf("res = %+v, want OK, 2 served, gemini-9-ultra missing", res)
+	}
+	if path != "/v1beta/models" || query != "pageSize=1000" || key != "good-key" {
+		t.Fatalf("path=%q query=%q key set=%v — want /v1beta/models?pageSize=1000 with the key", path, query, key != "")
+	}
+	cfg.APIKey = "wrong-key"
+	if res = ProbeProvider(context.Background(), cfg); res.OK || res.Status != http.StatusBadRequest ||
+		!strings.Contains(res.Detail, "authentication failed") {
+		t.Fatalf("wrong key res = %+v, want an authentication failure", res)
+	}
+	if endpoint, _, _ := probeTarget(ProviderConfig{Type: ProviderTypeGoogle, APIKey: "k"}); endpoint !=
+		"https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000" {
+		t.Fatalf("default google probe endpoint = %q", endpoint)
+	}
+}
+
 // A row missing a field its type requires is reported without a network call.
 // For vercel this is what keeps a keyless row from testing as connected: the
 // gateway serves its public catalog to an empty Bearer token.
@@ -271,6 +306,7 @@ func TestProbeProviderMissingRequiredFieldMakesNoCall(t *testing.T) {
 		{ProviderConfig{Name: "c", Type: ProviderTypeOpenAICompat}, "no base_url is set"},
 		{ProviderConfig{Name: "az", Type: ProviderTypeAzure, BaseURL: srv.URL}, "no API key is stored"},
 		{ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "k"}, "no base_url is set"},
+		{ProviderConfig{Name: "g", Type: ProviderTypeGoogle, BaseURL: srv.URL}, "no API key is stored"},
 		{ProviderConfig{Name: "x", Type: ProviderType("bogus"), BaseURL: srv.URL}, "unknown provider type"},
 	} {
 		res := ProbeProvider(context.Background(), tc.cfg)

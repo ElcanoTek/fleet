@@ -10,20 +10,23 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/azure"
+	"charm.land/fantasy/providers/google"
 	"charm.land/fantasy/providers/openai"
 )
 
 // The provider type table (#1703) is the one list of supported types. The
 // load-bearing assertions: every listed type can be built and probed (so a
 // type cannot be added to the table without a constructor), the required
-// fields are enforced from the table, and the OpenAI-SDK-backed types added
-// with it (openaicompat, vercel, azure) send the configured key, and nothing
-// from the host's own OPENAI_* environment, to the configured endpoint, on both
-// the Generate and the Stream path.
+// fields are enforced from the table, and the types added with it send the
+// configured key, and nothing from the host's own environment, to the
+// configured endpoint, on both the Generate and the Stream path: the OpenAI-SDK
+// types (openaicompat, vercel, azure) nothing from OPENAI_*, and google nothing
+// from the GOOGLE_*/GEMINI_* settings, never reaching Vertex AI.
 
 func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 	for _, typ := range ProviderTypes() {
@@ -41,7 +44,7 @@ func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 
 func TestProviderTypeTable(t *testing.T) {
 	got := ProviderTypeChoices()
-	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel|azure" {
+	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google" {
 		t.Fatalf("ProviderTypeChoices() = %q", got)
 	}
 	for _, tc := range []struct {
@@ -55,6 +58,7 @@ func TestProviderTypeTable(t *testing.T) {
 		{ProviderTypeOpenAICompat, false, true},
 		{ProviderTypeVercel, true, false},
 		{ProviderTypeAzure, true, true},
+		{ProviderTypeGoogle, true, false},
 	} {
 		spec, ok := LookupProviderType(string(tc.typ))
 		if !ok || spec.APIKeyRequired != tc.needsKey || spec.BaseURLRequired != tc.needsURL {
@@ -204,9 +208,9 @@ func TestOpenAISDKTypesReachTheConfiguredEndpoint(t *testing.T) {
 	for _, env := range []string{"the host's OPENAI_* env set", "no OPENAI_* env"} {
 		for _, tc := range cases {
 			t.Run(env+"/"+tc.name, func(t *testing.T) {
-				trapHits := 0
+				var trapHits atomic.Int32
 				trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					trapHits++
+					trapHits.Add(1)
 					w.WriteHeader(http.StatusTeapot)
 				}))
 				t.Cleanup(trap.Close)
@@ -250,8 +254,8 @@ func TestOpenAISDKTypesReachTheConfiguredEndpoint(t *testing.T) {
 						}
 					}
 				}
-				if trapHits != 0 {
-					t.Errorf("OPENAI_BASE_URL's server got %d request(s); the configured base_url must win", trapHits)
+				if n := trapHits.Load(); n != 0 {
+					t.Errorf("OPENAI_BASE_URL's server got %d request(s); the configured base_url must win", n)
 				}
 			})
 		}
@@ -282,6 +286,10 @@ func (d *recordingDoer) Do(r *http.Request) (*http.Response, error) {
 		Request:    r,
 	}, nil
 }
+
+// RoundTrip lets the same recorder stand in as an http.Client transport, for
+// providers that take a client rather than a Doer (google).
+func (d *recordingDoer) RoundTrip(r *http.Request) (*http.Response, error) { return d.Do(r) }
 
 // generateOnce makes one call on deployment with a token limit and a
 // temperature, the two parameters fantasy sends differently to a reasoning
@@ -460,5 +468,364 @@ func TestAzureTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 	defer mu.Unlock()
 	if elsewhere != 0 {
 		t.Fatalf("a turn followed a redirect to another host %d times", elsewhere)
+	}
+}
+
+// ambientGoogleEnv is what a host can carry for its own Google setup, which
+// the genai SDK reads when a client leaves the matching setting empty. Two of
+// them point at a server that must never be called, set per test.
+var ambientGoogleEnv = map[string]string{
+	"GOOGLE_API_KEY":                 "google-env-must-not-leak",
+	"GEMINI_API_KEY":                 "gemini-env-must-not-leak",
+	"GOOGLE_GENAI_USE_VERTEXAI":      "true",
+	"GOOGLE_GENAI_USE_ENTERPRISE":    "true",
+	"GOOGLE_CLOUD_PROJECT":           "project-env-must-not-leak",
+	"GOOGLE_CLOUD_LOCATION":          "location-env-must-not-leak",
+	"GOOGLE_APPLICATION_CREDENTIALS": "/nonexistent/fleet-1703-adc.json",
+}
+
+// geminiServer answers generateContent and streamGenerateContent (SSE) like
+// the Gemini API, and records each call's path and headers.
+func geminiServer(t *testing.T) (*httptest.Server, func() (paths []string, headers []http.Header)) {
+	t.Helper()
+	h, calls := geminiHandler()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+// geminiHandler is geminiServer's handler.
+func geminiHandler() (http.Handler, func() (paths []string, headers []http.Header)) {
+	var mu sync.Mutex
+	var paths []string
+	var headers []http.Header
+	chunk := func(text string, last bool) string {
+		c := map[string]any{"content": map[string]any{"role": "model", "parts": []map[string]any{{"text": text}}}, "index": 0}
+		resp := map[string]any{"candidates": []map[string]any{c}, "modelVersion": "gemini-2.5-flash"}
+		if last {
+			c["finishReason"] = "STOP"
+			resp["usageMetadata"] = map[string]any{"promptTokenCount": 3, "candidatesTokenCount": 1, "totalTokenCount": 4}
+		}
+		b, _ := json.Marshal(resp)
+		return string(b)
+	}
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		headers = append(headers, r.Header.Clone())
+		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, ":streamGenerateContent") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: "+chunk("po", false)+"\r\n\r\n")
+			_, _ = io.WriteString(w, "data: "+chunk("ng", true)+"\r\n\r\n")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chunk("pong", true))
+	})
+	return h, func() ([]string, []http.Header) {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), paths...), append([]http.Header(nil), headers...)
+	}
+}
+
+// A google entry sends its own key to the Gemini API at its base_url, on
+// both paths, and nothing from the host's own Google environment: not its
+// keys, not its Vertex switch or project, and not GOOGLE_GEMINI_BASE_URL.
+func TestGoogleReachesTheConfiguredEndpoint(t *testing.T) {
+	for _, env := range []string{"the host's Google env set", "no Google env"} {
+		t.Run(env, func(t *testing.T) {
+			var trapHits atomic.Int32
+			trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				trapHits.Add(1)
+				w.WriteHeader(http.StatusTeapot)
+			}))
+			t.Cleanup(trap.Close)
+			vars := map[string]string{"GOOGLE_GEMINI_BASE_URL": trap.URL, "GOOGLE_VERTEX_BASE_URL": trap.URL}
+			for k, v := range ambientGoogleEnv {
+				vars[k] = v
+			}
+			for k, v := range vars {
+				t.Setenv(k, v)
+				if env == "no Google env" {
+					_ = os.Unsetenv(k)
+				}
+			}
+			srv, calls := geminiServer(t)
+			cfg := ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: srv.URL}
+			generated, streamed := callBothWays(t, cfg, "gemini-2.5-flash")
+			if generated != "pong" || streamed != "pong" {
+				t.Fatalf("Generate text = %q, Stream text = %q, want pong for both", generated, streamed)
+			}
+			paths, headers := calls()
+			want := []string{"/v1beta/models/gemini-2.5-flash:generateContent", "/v1beta/models/gemini-2.5-flash:streamGenerateContent"}
+			if strings.Join(paths, " ") != strings.Join(want, " ") {
+				t.Fatalf("paths = %v, want %v", paths, want)
+			}
+			for i, h := range headers {
+				if got := h.Values("X-Goog-Api-Key"); strings.Join(got, ",") != "gemini-row-key" {
+					t.Errorf("call %d: x-goog-api-key = %q, want the entry's key", i, got)
+				}
+				if got := h.Get("Authorization"); got != "" {
+					t.Errorf("call %d: Authorization = %q, want none", i, got)
+				}
+				for name, values := range h {
+					for _, v := range values {
+						if strings.Contains(v, "must-not-leak") {
+							t.Errorf("call %d: header %s carries the host's Google env value %q", i, name, v)
+						}
+					}
+				}
+			}
+			if n := trapHits.Load(); n != 0 {
+				t.Errorf("GOOGLE_GEMINI_BASE_URL's server got %d request(s); the entry's base_url must win", n)
+			}
+		})
+	}
+}
+
+// With no base_url a google entry still names the Gemini API itself, so the
+// host's GOOGLE_GEMINI_BASE_URL cannot redirect its key. Recording on
+// googleHTTPClient's transport keeps the request offline; fantasy reads it
+// when the provider is built.
+func TestGoogleDefaultEndpointIgnoresHostBaseURL(t *testing.T) {
+	t.Setenv("GOOGLE_GEMINI_BASE_URL", "http://203.0.113.10/trap")
+	rec := &recordingDoer{}
+	prev := googleHTTPClient.Transport
+	googleHTTPClient.Transport = rec
+	t.Cleanup(func() { googleHTTPClient.Transport = prev })
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key"}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gemini-2.5-flash")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	// The canned reply is not Gemini's shape, so Generate fails; only the URL
+	// the request went to matters here.
+	_, _ = lm.Generate(context.Background(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}})
+	if len(rec.reqs) != 1 {
+		t.Fatalf("requests = %d, want 1", len(rec.reqs))
+	}
+	if got := rec.reqs[0].URL.String(); got != "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent" {
+		t.Fatalf("request URL = %q, want the Gemini API", got)
+	}
+}
+
+// Turns refuse a redirect to another host, as the connection test does. Go
+// copies x-goog-api-key to the host a redirect names (it drops only
+// Authorization and cookies), so with fantasy's default http.DefaultClient
+// an endpoint that redirected elsewhere would hand that host the key.
+func TestGoogleTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
+	other, calls := geminiServer(t)
+	redirecting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	}))
+	defer redirecting.Close()
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: redirecting.URL}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gemini-3.8-flash")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	call := fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}}
+	if _, err := lm.Generate(context.Background(), call); err == nil {
+		t.Error("Generate succeeded through a redirect to another host")
+	}
+	if stream, err := lm.Stream(context.Background(), call); err == nil {
+		for part := range stream {
+			if part.Type == fantasy.StreamPartTypeTextDelta {
+				t.Error("Stream got text through a redirect to another host")
+			}
+		}
+	}
+	if paths, _ := calls(); len(paths) != 0 {
+		t.Fatalf("a turn followed a redirect to another host: %v", paths)
+	}
+}
+
+// A redirect within the endpoint's origin is still followed, key and body
+// included, on both paths.
+func TestGoogleTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
+	gemini, calls := geminiHandler()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if rest, moved := strings.CutPrefix(r.URL.RequestURI(), "/old"); moved {
+			http.Redirect(w, r, rest, http.StatusTemporaryRedirect)
+			return
+		}
+		gemini.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	cfg := ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: srv.URL + "/old"}
+	if generated, streamed := callBothWays(t, cfg, "gemini-3.8-flash"); generated != "pong" || streamed != "pong" {
+		t.Fatalf("Generate text = %q, Stream text = %q, want pong for both", generated, streamed)
+	}
+	paths, headers := calls()
+	want := []string{"/v1beta/models/gemini-3.8-flash:generateContent", "/v1beta/models/gemini-3.8-flash:streamGenerateContent"}
+	if strings.Join(paths, " ") != strings.Join(want, " ") {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+	for i, h := range headers {
+		if got := h.Get("X-Goog-Api-Key"); got != "gemini-row-key" {
+			t.Errorf("call %d: x-goog-api-key = %q, want the entry's key", i, got)
+		}
+	}
+}
+
+// fantasy's google provider sends a model id naming Claude to Anthropic on
+// Vertex AI, signed in with the host's Google credentials. A google entry
+// refuses such an id before that lookup, whatever case it is written in.
+func TestGoogleRefusesClaudeModelIDs(t *testing.T) {
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/fleet-1703-adc.json")
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: "http://203.0.113.10"}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	for _, id := range []string{"anthropic/claude-opus-4.8", "claude-sonnet-4-6", "Claude-Opus"} {
+		if _, err := p.LanguageModel(context.Background(), id); err == nil || !strings.Contains(err.Error(), "not a Gemini API model") {
+			t.Errorf("LanguageModel(%q) err = %v, want the not-a-Gemini-model refusal", id, err)
+		}
+	}
+	if _, err := p.LanguageModel(context.Background(), "gemini-2.5-pro"); err != nil {
+		t.Errorf("LanguageModel(gemini-2.5-pro): %v", err)
+	}
+}
+
+// The signature that replay keeps reaches Gemini on the replayed call: a turn
+// resumed from replayed messages (a context checkpoint, say) sends the call
+// with its thoughtSignature, as the same turn's next step would have. The
+// replay goes through geminiSignatureStep as a run's does, so a google model
+// that step did not take for Gemini would lose the signature here.
+func TestGoogleReplayedCallCarriesItsSignature(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"pong"}]},"finishReason":"STOP","index":0}],`+
+			`"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}`)
+	}))
+	defer srv.Close()
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gemini-3-pro")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	replayed := messagesForReplay([]fantasy.Message{
+		fantasy.NewUserMessage("task"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
+			fantasy.ReasoningPart{ProviderOptions: fantasy.ProviderOptions{google.Name: &google.ReasoningMetadata{Signature: "sig-1", ToolID: "c1"}}},
+			fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "bash", Input: `{"command":"ls"}`},
+		}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{
+			fantasy.ToolResultPart{ToolCallID: "c1", Output: fantasy.ToolResultOutputContentText{Text: "ok"}},
+		}},
+	})
+	_, step, err := geminiSignatureStep(context.Background(), fantasy.PrepareStepFunctionOptions{Model: lm, Messages: replayed})
+	if err != nil {
+		t.Fatalf("geminiSignatureStep: %v", err)
+	}
+	if step.Messages != nil {
+		replayed = step.Messages
+	}
+	if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: replayed}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var req struct {
+		Contents []struct {
+			Role  string `json:"role"`
+			Parts []struct {
+				FunctionCall     *struct{ Name string } `json:"functionCall"`
+				ThoughtSignature string                 `json:"thoughtSignature"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		t.Fatalf("request body: %v", err)
+	}
+	signed := false
+	for _, c := range req.Contents {
+		for _, part := range c.Parts {
+			if part.FunctionCall != nil && part.FunctionCall.Name == "bash" {
+				signed = part.ThoughtSignature == "c2lnLTE=" // base64("sig-1")
+			}
+		}
+	}
+	if !signed {
+		t.Fatalf("the replayed bash call went out without its thought signature: %s", body)
+	}
+}
+
+// An object-rooted output_schema arrives JSON-decoded, its required list an
+// []any, and fantasy's Gemini conversion keeps a tool's required list only as
+// []string. The tool the terminal structured-output path hands a google model
+// must still reach Gemini with its required fields, and the caller's schema
+// must not change.
+func TestGoogleStructuredOutputKeepsRequired(t *testing.T) {
+	const schema = `{"type":"object","properties":{"answer":{"type":"string"},"note":{"type":"string"}},"required":["answer"]}`
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(schema), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, enveloped := terminalProviderSchema(decoded); enveloped {
+		t.Fatal("an object-rooted schema was enveloped")
+	}
+	if _, still := decoded["required"].([]any); !still {
+		t.Fatalf("terminalProviderSchema changed the caller's schema: %#v", decoded["required"])
+	}
+	// The tool the terminal path builds for a google model...
+	captured := &terminalTestModel{provider: google.Name, model: "gemini-3.8-flash", responses: []*fantasy.Response{terminalToolResponse(`{"answer":"x"}`)}}
+	eng, orch := testTerminalEngine(captured)
+	if _, err := eng.generateTerminalStructuredOutput(t.Context(), captured, "", nil, json.RawMessage(schema), 1000, orch); err != nil {
+		t.Fatalf("generateTerminalStructuredOutput: %v", err)
+	}
+	calls := captured.calls()
+	if len(calls) != 1 || len(calls[0].Tools) != 1 {
+		t.Fatalf("terminal path made %d call(s), want one with one tool", len(calls))
+	}
+	// ...sent to the Gemini API through a google entry.
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"text":"x"}]},"finishReason":"STOP","index":0}],`+
+			`"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}`)
+	}))
+	defer srv.Close()
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), "gemini-3.8-flash")
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	if _, err := lm.Generate(context.Background(), fantasy.Call{
+		Prompt:     fantasy.Prompt{fantasy.NewUserMessage("answer")},
+		Tools:      calls[0].Tools,
+		ToolChoice: calls[0].ToolChoice,
+	}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	var req struct {
+		Tools []struct {
+			FunctionDeclarations []struct {
+				Parameters struct {
+					Required []string `json:"required"`
+				} `json:"parameters"`
+			} `json:"functionDeclarations"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil || len(req.Tools) == 0 || len(req.Tools[0].FunctionDeclarations) == 0 {
+		t.Fatalf("request body %s: %v", body, err)
+	}
+	if got := req.Tools[0].FunctionDeclarations[0].Parameters.Required; strings.Join(got, ",") != "answer" {
+		t.Fatalf("Gemini got required = %v, want [answer]", got)
 	}
 }
