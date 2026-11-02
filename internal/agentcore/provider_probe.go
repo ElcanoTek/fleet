@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -34,6 +35,9 @@ import (
 //     API root turns use (azureBaseURL). That list names models, not the
 //     resource's deployments, which are what a row lists, so it is not
 //     compared against the row: the probe tests the endpoint and the key.
+//   - google:     GET {base}/v1beta/models with the x-goog-api-key header (base
+//     defaults to the Gemini API). Gemini answers a wrong key with 400 and
+//     reason API_KEY_INVALID, which is reported as an authentication failure.
 //
 // For types whose probe returns a model catalog, the row's listed models are
 // checked against it: absences are reported as a WARNING (MissingModels), not
@@ -71,8 +75,8 @@ const probeBodyCap = 4 << 20
 
 // probeClient follows a redirect only within the endpoint's origin, as turns
 // do. Go drops Authorization on a redirect to another host but copies every
-// other header, so a key sent as Api-Key or x-api-key would otherwise reach
-// whatever host the endpoint redirects to.
+// other header, so a key sent as Api-Key, x-api-key or x-goog-api-key would
+// otherwise reach whatever host the endpoint redirects to.
 var probeClient = &http.Client{CheckRedirect: sameOriginRedirect}
 
 // sameOriginRedirect is an http.Client CheckRedirect that follows a redirect
@@ -131,7 +135,8 @@ func ProbeProvider(ctx context.Context, cfg ProviderConfig) ProbeResult {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, probeBodyCap))
 
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden,
+		resp.StatusCode == http.StatusBadRequest && bytes.Contains(body, []byte("API_KEY_INVALID")):
 		return ProbeResult{
 			Status: resp.StatusCode, LatencyMS: latency,
 			Detail: "authentication failed — the endpoint rejected the API key",
@@ -221,26 +226,41 @@ func probeTarget(cfg ProviderConfig) (endpoint string, header map[string]string,
 		return base + "/models", map[string]string{"Authorization": "Bearer " + cfg.APIKey}, true
 	case ProviderTypeAzure:
 		return azureBaseURL(base) + "/models", map[string]string{"Api-Key": cfg.APIKey}, false
+	case ProviderTypeGoogle:
+		if base == "" {
+			base = defaultGeminiBaseURL
+		}
+		// pageSize: the default page (50) can end before a listed model.
+		return base + "/v1beta/models?pageSize=1000", map[string]string{"x-goog-api-key": cfg.APIKey}, true
 	default:
 		return "", nil, false
 	}
 }
 
 // parseProbeModelIDs extracts model ids from the OpenAI-compatible (and
-// Anthropic, same shape) catalog envelope {"data":[{"id":...}]}.
+// Anthropic, same shape) catalog envelope {"data":[{"id":...}]}, or from the
+// Gemini API's {"models":[{"name":"models/..."}]}.
 func parseProbeModelIDs(body []byte) []string {
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
 		} `json:"data"`
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil
 	}
-	out := make([]string, 0, len(payload.Data))
+	out := make([]string, 0, len(payload.Data)+len(payload.Models))
 	for _, d := range payload.Data {
 		if d.ID != "" {
 			out = append(out, d.ID)
+		}
+	}
+	for _, m := range payload.Models {
+		if id := strings.TrimPrefix(m.Name, "models/"); id != "" {
+			out = append(out, id)
 		}
 	}
 	return out

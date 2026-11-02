@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/azure"
+	"charm.land/fantasy/providers/google"
 	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/providers/vercel"
@@ -22,11 +24,11 @@ import (
 // Multi-provider LLM support (#289). Fleet routed every model through OpenRouter
 // as a singleton gateway. This adds native provider backends — Anthropic,
 // OpenAI, Ollama (via its OpenAI-compatible API), and since #1703 any
-// OpenAI-compatible endpoint, the Vercel AI Gateway and Azure OpenAI —
-// alongside OpenRouter, selected by a client-bundle `providers:` block or
-// admin-managed rows. The engine itself is already provider-agnostic (it holds
-// fantasy.LanguageModel interfaces); the coupling was entirely in how those
-// models were constructed (always the OpenRouter provider).
+// OpenAI-compatible endpoint, the Vercel AI Gateway, Azure OpenAI and the
+// Gemini API — alongside OpenRouter, selected by a client-bundle `providers:`
+// block or admin-managed rows. The engine itself is already provider-agnostic
+// (it holds fantasy.LanguageModel interfaces); the coupling was entirely in
+// how those models were constructed (always the OpenRouter provider).
 // This layer resolves the RIGHT provider for a given model slug and builds the
 // model through it.
 //
@@ -76,6 +78,13 @@ const (
 	// Azure rejects every turn on it, and a newer reasoning family outside that
 	// match (GPT-6) is sent max_tokens and a temperature whatever its name.
 	ProviderTypeAzure ProviderType = "azure"
+	// ProviderTypeGoogle calls the Gemini API (Google AI Studio) with a Gemini
+	// API key, through fantasy's google provider. Model ids are Gemini's own
+	// (gemini-3.8-flash). Vertex AI is not supported: fantasy's Vertex path
+	// drops a stored key and signs in with Google credentials found on the
+	// host, so fleet always uses the Gemini API backend and refuses the model
+	// ids fantasy would send to Vertex instead (geminiOnlyProvider).
+	ProviderTypeGoogle ProviderType = "google"
 )
 
 // ProviderTypeSpec is what every configuration surface needs to know about one
@@ -103,6 +112,7 @@ var providerTypeSpecs = []ProviderTypeSpec{
 	{Type: ProviderTypeOpenAICompat, BaseURLRequired: true},
 	{Type: ProviderTypeVercel, APIKeyRequired: true},
 	{Type: ProviderTypeAzure, APIKeyRequired: true, BaseURLRequired: true},
+	{Type: ProviderTypeGoogle, APIKeyRequired: true},
 }
 
 // LookupProviderType returns the spec for a provider type name (exact match;
@@ -138,6 +148,11 @@ func ProviderTypeChoices() string {
 // defaultOllamaBaseURL is the OpenAI-compatible endpoint a local Ollama server
 // exposes when a provider entry omits base_url.
 const defaultOllamaBaseURL = "http://localhost:11434/v1"
+
+// defaultGeminiBaseURL is the Gemini API's root (the SDK adds /v1beta). A
+// google entry always passes a base URL: given none, the genai SDK would take
+// one from the host's GOOGLE_GEMINI_BASE_URL and send the entry's key there.
+const defaultGeminiBaseURL = "https://generativelanguage.googleapis.com"
 
 // providerOwnedOpenAIOptions undoes what the OpenAI Go SDK under fantasy's
 // openaicompat and vercel providers copies from fleet's own environment onto
@@ -353,11 +368,60 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 		return vercel.New(opts...)
 	case ProviderTypeAzure:
 		return openai.New(azureOpenAIOptions(key, base)...)
+	case ProviderTypeGoogle:
+		p, err := google.New(googleOptions(key, base)...)
+		if err != nil {
+			return nil, err
+		}
+		return geminiOnlyProvider{p}, nil
 	default:
 		// A type in providerTypeSpecs with no case here; the build test fails
 		// on this before it can ship.
 		return nil, fmt.Errorf("provider type %q has no constructor", cfg.Type)
 	}
+}
+
+// googleOptions select the Gemini API backend with the entry's key and always
+// name a base URL. The explicit key and backend make the genai SDK ignore the
+// host's GOOGLE_API_KEY, GEMINI_API_KEY, GOOGLE_GENAI_USE_VERTEXAI,
+// GOOGLE_GENAI_USE_ENTERPRISE, GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION and
+// GOOGLE_CLOUD_REGION; the explicit base URL keeps GOOGLE_GEMINI_BASE_URL and
+// GOOGLE_VERTEX_BASE_URL out too (see defaultGeminiBaseURL).
+func googleOptions(apiKey, base string) []google.Option {
+	if base == "" {
+		base = defaultGeminiBaseURL
+	}
+	return []google.Option{google.WithGeminiAPIKey(apiKey), google.WithBaseURL(base), google.WithHTTPClient(googleHTTPClient)}
+}
+
+// googleHTTPClient carries a google entry's requests. Like the connection
+// test it follows a redirect only within the endpoint's origin, as the OpenAI
+// SDK does for the azure type. Without it fantasy uses http.DefaultClient,
+// which follows one anywhere and copies x-goog-api-key along.
+var googleHTTPClient = &http.Client{CheckRedirect: sameOriginRedirect}
+
+// geminiOnlyProvider refuses the model ids fantasy's google provider sends to
+// Anthropic on Vertex AI instead of the Gemini API: any id containing "claude"
+// or "anthropic". That path signs in with the Google credentials it finds on
+// the host, which a google entry never configures, so such an id (an
+// OpenRouter slug reaching a google catch-all, say) fails here instead. The
+// models it returns pass Gemini only tool schemas it accepts
+// (geminiSchemaModel).
+type geminiOnlyProvider struct{ fantasy.Provider }
+
+// errNotAGeminiModel is geminiOnlyProvider's refusal. A fallback chain skips
+// a google entry that refuses the slug instead of failing the whole resolve.
+var errNotAGeminiModel = errors.New("not a Gemini API model")
+
+func (p geminiOnlyProvider) LanguageModel(ctx context.Context, modelID string) (fantasy.LanguageModel, error) {
+	if id := strings.ToLower(modelID); strings.Contains(id, "claude") || strings.Contains(id, "anthropic") {
+		return nil, fmt.Errorf("model %q is %w: a google provider does not reach Claude models", modelID, errNotAGeminiModel)
+	}
+	lm, err := p.Provider.LanguageModel(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	return geminiSchemaModel{lm}, nil
 }
 
 // anthropicHTTPClient carries an anthropic entry's requests. It is the

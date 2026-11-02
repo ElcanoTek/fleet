@@ -130,6 +130,7 @@ func TestLLMProviderValidation(t *testing.T) {
 		{Name: "vllm", Type: "openaicompat", BaseURL: "http://gpu-box:8000/v1", Enabled: true},
 		{Name: "gateway", Type: "vercel", Enabled: false},
 		{Name: "az", Type: "azure", BaseURL: "https://res.openai.azure.com", Enabled: false},
+		{Name: "gemini", Type: "google", Enabled: false},
 	} {
 		if _, err := s.CreateLLMProvider(ctx, in); err != nil {
 			t.Errorf("create %+v: %v", in, err)

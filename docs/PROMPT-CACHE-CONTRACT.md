@@ -90,7 +90,8 @@ nothing the model saw may be dropped, reordered or rewritten when the next turn
 replays history. Anthropic's lookback and OpenAI's block cache tolerate a small
 divergence near the tail; an implicit-only cache does not — Gemini 4 Argon
 carries a cache over only when the next request appends to the previous one
-(measured 2026-10-14, below).
+(measured 2026-10-14, below) — and Gemini 3.8 Flash relies on that implicit
+cache once its history outgrows the marked prefix (below).
 
 So per-turn model-facing context belongs IN the turn, persisted, not in a
 request-local tail:
@@ -140,7 +141,8 @@ request):
    shared loop) — a stable boundary between the cached head and the evolving
    tail after a compaction pass.
 3. The **last two non-system messages** — a rolling recency window. **Not for
-   Gemini** (`stablePrefixOnly`, below).
+   Gemini** (`stablePrefixOnly`, below), which also drops 1 and 2 once the
+   rest of the prompt outgrows them.
 
 **Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
 of a Gemini request into an explicit context cache — a billed write with a
@@ -155,9 +157,61 @@ used) breakpoint, which is stable until the next compaction. Gemini 4 Argon has
 no explicit caching (implicit only, Google's docs) and was measured to ignore
 `cache_control` entirely, so the rule neither helps nor hurts it.
 
+**…until the rest of the prompt outgrows that prefix.** A Gemini request that
+uses an explicit cache gets nothing past it from Google's implicit cache, so
+with the marker on the system prompt a long run's history was never cached.
+Two measurements on `google/gemini-3.8-flash` through OpenRouter's Google
+endpoint (2026-11-01):
+
+- A scheduled run captured through a logging proxy (the store-KPI task in
+  `docs/SCHEDULED-COMPACTION-CHECKPOINTS.md`): its requests were strictly
+  append-only between pauses, yet each read back only its marked prefix,
+  9,068 tokens (the system prompt and tools) and after the first pause 10,511
+  (with the compaction summary), while the prompt grew past 100K.
+- A raw-HTTP probe outside fleet: an ~11K-token system prompt, then six
+  requests three seconds apart, each adding a one-word assistant reply and a
+  user turn of two ~25 KB JSON reports:
+
+| Request | Prompt | Read from cache, system marker | Read from cache, no marker |
+|---|---|---|---|
+| 1 | 32K | 0 (11K written) | 0 |
+| 2 | 52K | 11K | 0 |
+| 3 | 71K | 11K | 31K |
+| 4 | 91K | 11K | 49K |
+| 5 | 111K | 11K | 70K |
+| 6 | 130K | 11K | 111K |
+| **Cost, all six** | | **$0.32** | **$0.19** |
+
+Without a marker the implicit cache read most of the earlier prompt back, a
+request or two behind: at 130K a request cost a quarter as much ($0.023
+against $0.090), and the six together 40% less. The marker still pays while it
+covers most of the prompt: on the live check's short conversation (below), no
+marker at all cost $0.0158 against $0.0057, since the implicit cache read back
+about 6K of the 8.5K prefix, and nothing on the first request.
+
+So Gemini keeps the marker while the tokens after the last stable breakpoint
+(the system prompt, or the compaction summary when there is one) are
+estimated no larger than those up to it, and gets no breakpoint at all once
+they are (`tailOutgrowsMarkedPrefix`). With the rule the live check's short
+conversation keeps its marker; it cost $0.0052.
+
+- **The tool definitions** are sent and cached with the prefix, so the shared
+  loop adds them to its side (`WithStablePrefixTokens`). The interactive
+  driver's leaked-call retry counts messages only, so for it the switch comes
+  up to a tool roster early; its forced final summary sends no tools.
+- **An image or other file** counts at 1,000 tokens (`mediaCacheTokens`),
+  about what Gemini bills for an image, not at the base64 length the overflow
+  estimator counts, which would drop the marker for any chat with a
+  screenshot. A long PDF is counted low, which keeps the marker.
+- **Switching.** Leaving the explicit cache, the implicit one reads nothing
+  until it has warmed (two requests from cold in the probe); coming back to it
+  after a compaction costs one fresh write. History is append-only between
+  compactions, so the switch happens at most once a compaction cycle.
+
 Breakpoint placement is itself part of the contract: the last-system-message
 breakpoint is what makes the prefix cacheable, so the system prompt must be the
-leading, stable content.
+leading, stable content. For Gemini past the switch there is no breakpoint, and
+the append-only history above is what its implicit cache reads.
 
 ## Live check (`TestPromptCacheLive`)
 
@@ -173,8 +227,9 @@ FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemin
 ```
 
 It fails when a request after the first reads nothing from cache (one miss is
-allowed for implicit-cache families, which are the upstream's best effort;
-explicit-breakpoint families must read every time), or when fleet's recorded
+allowed among the requests left to the implicit cache, the upstream's best
+effort: an implicit-cache family's, and a Gemini request sent with no
+breakpoint; every other request must read), or when fleet's recorded
 cached tokens disagree with the wire. The response stream is teed, not
 buffered, so the first-chunk watchdog behaves as in production, and each turn
 replays the previous turn's text, tool calls and tool results the way

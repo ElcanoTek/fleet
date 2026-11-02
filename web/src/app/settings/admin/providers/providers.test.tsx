@@ -352,6 +352,40 @@ describe("ProvidersAdminPage", () => {
     });
   });
 
+  it("asks a Google Gemini provider for its key and window; its Base URL is optional", async () => {
+    const fetchMock = mockFetch([]);
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ProvidersAdminPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Add provider" }));
+    fireEvent.change(screen.getByPlaceholderText("my-provider"), { target: { value: "gemini" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "google" } });
+    expect(screen.getByText(/Don't name it google/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Base URL (optional)")).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText(/claude-sonnet-4-5/), { target: { value: "gemini-2.5-pro" } });
+    const posts = () =>
+      fetchMock.mock.calls.filter(([, init]) => init && (init as RequestInit).method === "POST");
+    const save = () => fireEvent.click(screen.getByRole("button", { name: "Create provider" }));
+
+    save();
+    expect(await screen.findByText("Google Gemini needs an API key.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("API key"), { target: { value: "gemini-secret" } });
+    save();
+    expect(await screen.findByText(/Google Gemini needs its context window/)).toBeInTheDocument();
+    expect(posts()).toHaveLength(0);
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 1048576"), { target: { value: "1048576" } });
+    save();
+    await waitFor(() => expect(posts()).toHaveLength(1));
+    expect(JSON.parse(String((posts()[0][1] as RequestInit).body))).toMatchObject({
+      name: "gemini",
+      type: "google",
+      base_url: "",
+      api_key: "gemini-secret",
+      models: ["gemini-2.5-pro"],
+      context_window_tokens: 1048576,
+    });
+  });
+
   it("lets an optional-key row drop its stored key, and only such a row", async () => {
     const compat: LLMProvider = {
       ...ROW,

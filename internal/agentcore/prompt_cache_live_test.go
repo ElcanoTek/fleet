@@ -296,18 +296,31 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	if fleetWrite != wireWrite {
 		t.Logf("%s: fleet recorded %d cache-write tokens, the wire reported %d (fantasy does not parse cache_write_tokens)", slug, fleetWrite, wireWrite)
 	}
-	// A family fleet sends explicit breakpoints to must read on every request
-	// after the first. An implicit cache is the upstream's best effort — the
-	// same request shape reads on one run and misses on the next (Gemini 4
-	// Argon: 15/15 over five runs, then a turn-2 miss) — so one miss is
-	// tolerated there. The deterministic guard for the request shape itself is
+	// A request fleet sends explicit breakpoints with must read from cache,
+	// every one after the first, and so must one of an explicit-breakpoint
+	// family that went out without any (Anthropic losing its markers is a
+	// regression). An implicit cache is the upstream's best effort — the same
+	// request shape reads on one run and misses on the next (Gemini 4 Argon:
+	// 15/15 over five runs, then a turn-2 miss) — so one miss is tolerated
+	// among the requests left to it: every request of an implicit-cache
+	// family, and a Gemini request that went out with no breakpoint, its
+	// history having outgrown the marked prefix (tailOutgrowsMarkedPrefix).
+	// The deterministic guard for the request shape itself is
 	// agent.TestTurnRequestIsAPrefixOfTheNext.
-	allowed := 0
-	if !supportsExplicitBreakpoints(slug) {
-		allowed = 1
+	explicit := supportsExplicitBreakpoints(slug)
+	implicitMisses := 0
+	for i, r := range transport.records {
+		if i == 0 || r.CachedTokens > 0 {
+			continue
+		}
+		if explicit && (r.Breakpoints > 0 || !stablePrefixOnly(slug)) {
+			t.Errorf("%s: request %d carried %d breakpoint(s) for an explicit-cache family and read nothing from cache", slug, i+1, r.Breakpoints)
+			continue
+		}
+		implicitMisses++
 	}
-	if laterReqs > 0 && reads < laterReqs-allowed {
-		t.Errorf("%s: only %d of %d requests after the first read from cache (%d miss allowed)", slug, reads, laterReqs, allowed)
+	if implicitMisses > 1 {
+		t.Errorf("%s: %d requests left to the implicit cache read nothing from it (1 miss allowed)", slug, implicitMisses)
 	}
 }
 
