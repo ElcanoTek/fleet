@@ -227,9 +227,9 @@ FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemin
 ```
 
 It fails when a request after the first reads nothing from cache (one miss is
-allowed for implicit-cache families, which are the upstream's best effort, and
-for a Gemini conversation once a later request goes out with no breakpoint;
-explicit-breakpoint families must otherwise read every time), or when fleet's recorded
+allowed among the requests left to the implicit cache, the upstream's best
+effort: an implicit-cache family's, and a Gemini request sent with no
+breakpoint; every other request must read), or when fleet's recorded
 cached tokens disagree with the wire. The response stream is teed, not
 buffered, so the first-chunk watchdog behaves as in production, and each turn
 replays the previous turn's text, tool calls and tool results the way
