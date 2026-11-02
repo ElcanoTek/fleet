@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { AccountMenu } from "./AccountMenu";
 
 afterEach(() => {
@@ -24,12 +24,46 @@ describe("AccountMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
   });
 
-  it("invokes onSignOut from the menu", () => {
-    const onSignOut = vi.fn();
-    render(<AccountMenu email="sam@elcanotek.com" onSignOut={onSignOut} />);
+  // Sign out asks first: the item opens a centred confirm (portalled out of
+  // the rail, whose transform would otherwise pin the overlay to it) and only
+  // the confirm's Sign out button signs out.
+  function openSignOutConfirm(onSignOut: () => void) {
+    const view = render(<AccountMenu email="sam@elcanotek.com" onSignOut={onSignOut} />);
     fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
+    return { ...view, dialog: screen.getByRole("dialog", { name: "Sign out?" }) };
+  }
+
+  it("asks before signing out, in a dialog outside the rail", () => {
+    const onSignOut = vi.fn();
+    const { container, dialog } = openSignOutConfirm(onSignOut);
+    expect(onSignOut).not.toHaveBeenCalled();
+    expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
+    expect(dialog).toHaveTextContent("every app that shares your sign-in");
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+  });
+
+  it("signs out once from the confirm's Sign out button", () => {
+    const onSignOut = vi.fn();
+    const { dialog } = openSignOutConfirm(onSignOut);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Sign out" }));
     expect(onSignOut).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("dialog", { name: "Sign out?" })).toBeNull();
+  });
+
+  it("Cancel and Escape close the confirm without signing out", () => {
+    const onSignOut = vi.fn();
+    const { dialog } = openSignOutConfirm(onSignOut);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Sign out?" })).toBeNull();
+    // Focus goes back to the account button, not the page.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: /account menu/i }));
+    fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Sign out?" })).toBeNull();
+    expect(onSignOut).not.toHaveBeenCalled();
   });
 
   it("drives the theme via the System/Light/Dark segmented control", () => {

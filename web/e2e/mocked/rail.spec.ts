@@ -75,6 +75,46 @@ test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", 
   await expect(page.getByRole("menuitem", { name: "Admin", exact: true })).toHaveCount(0);
 });
 
+test("Sign out asks first in a centred dialog, then signs out", async ({ page }) => {
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const openConfirm = async () => {
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    const dialog = page.getByRole("dialog", { name: "Sign out?" });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+
+  // Centred in the viewport, not pinned to the rail it was opened from.
+  const dialog = await openConfirm();
+  // Measured after the enter animation, which slides the panel in.
+  await dialog.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+  const box = await dialog.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport).toBeTruthy();
+  if (box && viewport) {
+    expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(2);
+    expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(2);
+  }
+
+  // Cancel keeps the session.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("dialog", { name: "Sign out?" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Confirming posts the logout form; with no central Auth configured the
+  // gateway lands on the manual sign-in page.
+  const confirm = await openConfirm();
+  await Promise.all([
+    page.waitForURL(/\/login\?manual=1/),
+    confirm.getByRole("button", { name: "Sign out" }).click(),
+  ]);
+});
+
 test("the rail derives the Labels section and filters by label", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
