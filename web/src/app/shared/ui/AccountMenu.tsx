@@ -17,6 +17,9 @@
 //     the sign-in. The confirm is portalled to <body>: the rail is
 //     transformed and backdrop-filtered, which would otherwise make it the
 //     containing block of the dialog's fixed overlay and pin it to the rail.
+//     It takes DialogShell's "rail" layer, so it also paints above the rail
+//     where the rail floats over the page (the 640–900px overlay) and Cancel
+//     returns to the rail as it was.
 //   - Theme is driven by the shared useTheme hook via a System/Light/Dark
 //     segmented control (System follows the OS preference live).
 //   - `current` marks the settings surface: the anchor button and the
@@ -177,6 +180,7 @@ export function AccountMenu({
             <ConfirmDialog
               title="Sign out?"
               confirmLabel="Sign out"
+              layer="rail"
               testId="sign-out-confirm"
               onCancel={() => setConfirmingSignOut(false)}
               onConfirm={() => {

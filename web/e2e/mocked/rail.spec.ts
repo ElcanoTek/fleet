@@ -115,6 +115,48 @@ test("Sign out asks first in a centred dialog, then signs out", async ({ page })
   ]);
 });
 
+// The confirm must sit above the rail wherever the rail floats over the page:
+// the 640-900px overlay (scrim z-[380], rail z-[390]) and the <640px drawer.
+// The hit test proves a click on Sign out reaches the button, not the scrim.
+for (const layout of [
+  { name: "the expanded overlay rail at 800px", width: 800, height: 900, open: "Expand sidebar" },
+  { name: "the phone drawer", width: 390, height: 844, open: "Open sidebar" },
+]) {
+  test(`the Sign out confirm sits above ${layout.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await mockChatBoot(page);
+    await mockConversations(page);
+    await page.goto("/chat");
+    await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+    await page.getByRole("button", { name: layout.open, exact: true }).click();
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    const dialog = page.getByRole("dialog", { name: "Sign out?" });
+    await expect(dialog).toBeVisible();
+    await dialog.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+
+    const confirm = dialog.getByRole("button", { name: "Sign out" });
+    const hit = await confirm.evaluate((button) => {
+      const r = button.getBoundingClientRect();
+      return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
+    });
+    expect(hit).toBe(true);
+
+    // Escape closes only the confirm; the rail it came from stays open.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("account-menu-button")).toBeFocused();
+    await expect(page.getByTestId("account-menu-button")).toBeInViewport();
+
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    await Promise.all([
+      page.waitForURL(/\/login\?manual=1/),
+      page.getByRole("dialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click(),
+    ]);
+  });
+}
+
 test("the rail derives the Labels section and filters by label", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);

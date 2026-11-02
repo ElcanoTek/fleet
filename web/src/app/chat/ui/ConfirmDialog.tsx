@@ -64,8 +64,9 @@ export function ConfirmDialog({
   // the transfer confirm shipped with; "danger" tints a destructive confirm
   // and never the cancel beside it.
   confirmTone?: "default" | "accent" | "danger";
-  // "stacked" for a confirm summoned from inside another dialog.
-  layer?: "modal" | "stacked";
+  // "stacked" for a confirm summoned from inside another dialog; "rail" for
+  // one summoned from the navigation rail (see DialogShell).
+  layer?: "modal" | "stacked" | "rail";
   onCancel: () => void;
   onConfirm: () => void;
   // An optional second way forward — not a second confirm, a different

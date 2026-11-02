@@ -42,6 +42,8 @@ describe("AccountMenu", () => {
     expect(dialog).toHaveTextContent("every app that shares your sign-in");
     expect(container.contains(dialog)).toBe(false);
     expect(document.body.contains(dialog)).toBe(true);
+    // Above the rail where it floats over the page (DialogShell's "rail").
+    expect(dialog.parentElement?.className).toContain("z-[420]");
   });
 
   it("signs out once from the confirm's Sign out button", () => {
