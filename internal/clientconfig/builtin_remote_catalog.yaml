@@ -494,7 +494,7 @@ servers:
       2026).
     url: "https://mcpv2.firefly.ai/mcp"
     vendor: Firefly (Infralight Ltd.)
-    docs_url: "https://docs.firefly.ai/integrations/integrating-mcp-v2"
+    docs_url: "https://docs.firefly.ai/integrations/mcp"
     category: cloud-infrastructure
     tags: [firefly, iac, cloud-inventory, codification, governance]
     provenance: official
@@ -504,7 +504,7 @@ servers:
       Access Management (save the secret immediately; it is shown once).
       The access key goes in X-access-Key; the secret must also be sent as
       X-secret-Key.
-    setup_url: "https://docs.firefly.ai/integrations/integrating-mcp-v2"
+    setup_url: "https://docs.firefly.ai/integrations/mcp"
     api_key_header: X-access-Key
   - name: google-cloud
     display_name: Google Cloud & Workspace (per-product)
