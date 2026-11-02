@@ -138,7 +138,8 @@ only be configured from the client bundle's `providers:` block.
   Bedrock API keys are for, and the policy a long-term key gets by default
   allows it. The Gemini API answers a wrong key with HTTP 400, which the
   test reports as an authentication failure like a 401. Bedrock answered a
-  malformed key with 403 when this shipped, and answers a key without the
+  malformed key with 403 in a check against real AWS (us-east-1 and
+  eu-central-1, October 2026), and answers a key without the
   permission with 403 AccessDeniedException. AWS documents no status for an
   expired key, and for a key from another Region only its message ("Credential
   should be scoped to a valid region"), which the test matches in any 4xx. So

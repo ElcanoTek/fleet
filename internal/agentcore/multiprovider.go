@@ -527,7 +527,7 @@ func refuseCrossOriginRedirect(req *http.Request, via []*http.Request) error {
 	}
 	return &fantasy.ProviderError{
 		Title:      "endpoint redirected to another host",
-		Message:    fmt.Sprintf("refused a redirect to another origin (%s://%s): turns follow a redirect only within the base_url's origin", req.URL.Scheme, req.URL.Host),
+		Message:    fmt.Sprintf("refused a redirect to another origin (%s://%s): turns follow a redirect only within the endpoint's origin", req.URL.Scheme, req.URL.Host),
 		StatusCode: status,
 	}
 }

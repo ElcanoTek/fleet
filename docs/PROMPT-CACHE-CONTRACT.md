@@ -133,8 +133,9 @@ to a provider honoring explicit breakpoints** — OpenRouter-form `anthropic/` a
 `google/`, plus the provider-local `claude-`/`gemini-` forms a native provider
 (#289) reports (see `explicitBreakpointPrefixes`), and any slug containing
 `anthropic.claude-`, which every Bedrock Claude id does, inference profiles
-included (`bedrockClaudeMarker`; a Bedrock ARN does not match); a leading `~`
-floating-alias sigil is stripped first. Everything else relies on the
+included (`bedrockClaudeMarker`; an ARN matches only when it contains such an
+id, so an application-inference-profile or provisioned-throughput ARN does
+not); a leading `~` floating-alias sigil is stripped first. Everything else relies on the
 upstream's implicit caching and gets no markers. Placement (Anthropic allows 4 breakpoints per
 request):
 

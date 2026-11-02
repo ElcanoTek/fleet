@@ -46,15 +46,27 @@ var ambientBedrockEnv = map[string]string{
 	"ANTHROPIC_CUSTOM_HEADERS": "X-Proxy-Auth: proxy-env-must-not-leak",
 }
 
-// bedrockStreamFrame encodes one message of AWS's event-stream framing, which
-// InvokeModelWithResponseStream answers in: a "chunk" event whose payload
-// carries one Anthropic stream event, base64-encoded. The frame is the total
-// and header lengths, a CRC32 of those, the headers, the payload and a CRC32
-// of everything before it.
+// bedrockStreamFrame encodes a "chunk" event of the AWS event-stream framing
+// InvokeModelWithResponseStream answers in, whose payload carries one
+// Anthropic stream event, base64-encoded.
 func bedrockStreamFrame(event string) []byte {
 	payload, _ := json.Marshal(map[string]string{"bytes": base64.StdEncoding.EncodeToString([]byte(event))})
+	return eventStreamFrame([][2]string{{":event-type", "chunk"}, {":content-type", "application/json"}, {":message-type", "event"}}, payload)
+}
+
+// bedrockExceptionFrame encodes an exception Bedrock sends inside a stream,
+// such as a throttlingException.
+func bedrockExceptionFrame(exception, message string) []byte {
+	payload, _ := json.Marshal(map[string]string{"message": message})
+	return eventStreamFrame([][2]string{{":exception-type", exception}, {":content-type", "application/json"}, {":message-type", "exception"}}, payload)
+}
+
+// eventStreamFrame encodes one message of AWS's event-stream framing: the
+// total and header lengths, a CRC32 of those, the headers (string values), the
+// payload and a CRC32 of everything before it.
+func eventStreamFrame(hs [][2]string, payload []byte) []byte {
 	var headers bytes.Buffer
-	for _, h := range [][2]string{{":event-type", "chunk"}, {":content-type", "application/json"}, {":message-type", "event"}} {
+	for _, h := range hs {
 		headers.WriteByte(byte(len(h[0])))
 		headers.WriteString(h[0])
 		headers.WriteByte(7) // string value
@@ -78,13 +90,21 @@ type bedrockCall struct {
 	body   map[string]any
 }
 
-// bedrockServer answers InvokeModel and InvokeModelWithResponseStream like
-// Bedrock does for a Claude model, and records every call.
+// bedrockServer serves bedrockHandler.
 func bedrockServer(t *testing.T) (*httptest.Server, func() []bedrockCall) {
 	t.Helper()
+	h, calls := bedrockHandler()
+	srv := httptest.NewServer(h)
+	t.Cleanup(srv.Close)
+	return srv, calls
+}
+
+// bedrockHandler answers InvokeModel and InvokeModelWithResponseStream like
+// Bedrock does for a Claude model, and records every call.
+func bedrockHandler() (http.Handler, func() []bedrockCall) {
 	var mu sync.Mutex
 	var calls []bedrockCall
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		mu.Lock()
@@ -109,9 +129,8 @@ func bedrockServer(t *testing.T) (*httptest.Server, func() []bedrockCall) {
 		_, _ = io.WriteString(w, `{"id":"msg_1","type":"message","role":"assistant","model":"claude",`+
 			`"content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","stop_sequence":null,`+
 			`"usage":{"input_tokens":3,"output_tokens":1}}`)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, func() []bedrockCall {
+	})
+	return h, func() []bedrockCall {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]bedrockCall(nil), calls...)
@@ -122,10 +141,12 @@ func bedrockServer(t *testing.T) (*httptest.Server, func() []bedrockCall) {
 // base_url, on both paths, in Bedrock's shape (the model in the path, an
 // anthropic_version in the body), with or without the host's environment:
 // the host's AWS_BEARER_TOKEN_BEDROCK in particular must not replace the
-// entry's key.
+// entry's key. Without ANTHROPIC_API_KEY, the Anthropic SDK's environment
+// defaults would go on to read ANTHROPIC_AUTH_TOKEN and
+// ANTHROPIC_CUSTOM_HEADERS, so that case runs on its own.
 func TestBedrockReachesTheConfiguredEndpoint(t *testing.T) {
 	const model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
-	for _, env := range []string{"the host's AWS and Anthropic env set", "no such env"} {
+	for _, env := range []string{"the host's AWS and Anthropic env set", "the same without ANTHROPIC_API_KEY", "no such env"} {
 		t.Run(env, func(t *testing.T) {
 			var trapHits atomic.Int32
 			trap := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -139,7 +160,7 @@ func TestBedrockReachesTheConfiguredEndpoint(t *testing.T) {
 			}
 			for k, v := range vars {
 				t.Setenv(k, v)
-				if env == "no such env" {
+				if env == "no such env" || env == "the same without ANTHROPIC_API_KEY" && k == "ANTHROPIC_API_KEY" {
 					_ = os.Unsetenv(k)
 				}
 			}
@@ -337,15 +358,19 @@ func TestCheckProviderFields(t *testing.T) {
 	}
 }
 
-// A redirect within the endpoint's origin is followed, with the entry's key
-// (not the host's AWS_BEARER_TOKEN_BEDROCK) and the request body sent again.
+// A redirect within the endpoint's origin is followed on both paths, with the
+// entry's key (not the host's AWS_BEARER_TOKEN_BEDROCK) and the request body
+// sent again.
 func TestBedrockTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
 	t.Setenv("AWS_BEARER_TOKEN_BEDROCK", "bearer-env-must-not-leak")
+	const model = "anthropic.claude-haiku-4-5-20251001-v1:0"
+	h, _ := bedrockHandler()
 	var mu sync.Mutex
 	var hops []bedrockCall
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
 		var body map[string]any
-		_ = json.NewDecoder(r.Body).Decode(&body)
+		_ = json.Unmarshal(raw, &body)
 		mu.Lock()
 		hops = append(hops, bedrockCall{path: r.URL.Path, header: r.Header.Clone(), body: body})
 		mu.Unlock()
@@ -353,33 +378,119 @@ func TestBedrockTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
 			http.Redirect(w, r, "/moved"+r.URL.EscapedPath(), http.StatusTemporaryRedirect)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude",`+
-			`"content":[{"type":"text","text":"pong"}],"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		h.ServeHTTP(w, r)
 	}))
 	t.Cleanup(srv.Close)
-	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-row-key", BaseURL: srv.URL}, DefaultProviderHeaders)
-	if err != nil {
-		t.Fatalf("buildProvider: %v", err)
+	generated, streamed := callBothWays(t, ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-row-key", BaseURL: srv.URL}, model)
+	if generated != "pong" || streamed != "pong" {
+		t.Fatalf("Generate text = %q, Stream text = %q, want pong for both through the redirect", generated, streamed)
 	}
-	lm, err := p.LanguageModel(context.Background(), "anthropic.claude-haiku-4-5-20251001-v1:0")
-	if err != nil {
-		t.Fatalf("LanguageModel: %v", err)
+	want := []string{
+		"/model/" + model + "/invoke", "/moved/model/" + model + "/invoke",
+		"/model/" + model + "/invoke-with-response-stream", "/moved/model/" + model + "/invoke-with-response-stream",
 	}
-	resp, err := lm.Generate(context.Background(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}})
-	if err != nil || resp.Content.Text() != "pong" {
-		t.Fatalf("Generate = %v, %v; want pong through the redirect", resp, err)
-	}
-	if len(hops) != 2 || hops[1].path != "/moved/model/anthropic.claude-haiku-4-5-20251001-v1:0/invoke" {
-		t.Fatalf("hops = %+v, want the invoke call and its redirect", hops)
+	if len(hops) != len(want) {
+		t.Fatalf("hops = %+v, want %v", hops, want)
 	}
 	for i, h := range hops {
+		if h.path != want[i] {
+			t.Errorf("hop %d: path = %q, want %q", i, h.path, want[i])
+		}
 		if got := h.header.Get("Authorization"); got != "Bearer bedrock-row-key" {
 			t.Errorf("hop %d: Authorization = %q, want the entry's key", i, got)
 		}
 		if h.body["anthropic_version"] != "bedrock-2023-05-31" || h.body["messages"] == nil {
 			t.Errorf("hop %d: body = %v, want the request sent again", i, h.body)
 		}
+	}
+}
+
+// An exception Bedrock sends inside a stream for a temporary condition is
+// retryable, so a configured fallback takes the turn over, as it does for an
+// overloaded Anthropic stream. A validationException stays fatal.
+func TestBedrockStreamExceptionsAreTransient(t *testing.T) {
+	for _, tc := range []struct {
+		exception string
+		want      streamErrorClass
+	}{
+		{"throttlingException", streamErrorRetryExhausted},
+		{"serviceUnavailableException", streamErrorRetryExhausted},
+		{"internalServerException", streamErrorRetryExhausted},
+		{"modelStreamErrorException", streamErrorRetryExhausted},
+		{"modelTimeoutException", streamErrorRetryExhausted},
+		{"validationException", streamErrorFatal},
+	} {
+		t.Run(tc.exception, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+				_, _ = w.Write(bedrockStreamFrame(`{"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"claude","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":1,"output_tokens":1}}}`))
+				_, _ = w.Write(bedrockExceptionFrame(tc.exception, "Too many requests, please wait before trying again."))
+			}))
+			t.Cleanup(srv.Close)
+			p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+			if err != nil {
+				t.Fatalf("buildProvider: %v", err)
+			}
+			lm, err := p.LanguageModel(context.Background(), "anthropic.claude-haiku-4-5-20251001-v1:0")
+			if err != nil {
+				t.Fatalf("LanguageModel: %v", err)
+			}
+			stream, err := lm.Stream(context.Background(), fantasy.Call{Prompt: fantasy.Prompt{fantasy.NewUserMessage("ping")}})
+			if err == nil {
+				for part := range stream {
+					if part.Type == fantasy.StreamPartTypeError {
+						err = part.Error
+					}
+				}
+			}
+			if err == nil {
+				t.Fatal("the stream ended without the exception")
+			}
+			if class, _ := classifyStreamError(err); class != tc.want {
+				t.Fatalf("classifyStreamError(%v) = %v, want %v", err, class, tc.want)
+			}
+		})
+	}
+}
+
+// Fleet's prompt-cache markers reach a Bedrock request: the cache step marks a
+// Bedrock Claude id, and fantasy's bedrock provider, being its anthropic
+// provider, writes them into Bedrock's body as cache_control blocks.
+func TestBedrockRequestsCarryCacheMarkers(t *testing.T) {
+	const model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+	srv, calls := bedrockServer(t)
+	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	if err != nil {
+		t.Fatalf("buildProvider: %v", err)
+	}
+	lm, err := p.LanguageModel(context.Background(), model)
+	if err != nil {
+		t.Fatalf("LanguageModel: %v", err)
+	}
+	msgs := []fantasy.Message{fantasy.NewSystemMessage("You are a test."), fantasy.NewUserMessage("ping")}
+	_, prepared, err := promptCachingStep(model)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	if err != nil {
+		t.Fatalf("promptCachingStep: %v", err)
+	}
+	for _, prompt := range []fantasy.Prompt{msgs, prepared.Messages} {
+		if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: prompt}); err != nil {
+			t.Fatalf("Generate: %v", err)
+		}
+	}
+	got := calls()
+	if len(got) != 2 {
+		t.Fatalf("calls = %d, want 2", len(got))
+	}
+	count := func(c bedrockCall) int {
+		b, _ := json.Marshal(c.body)
+		return strings.Count(string(b), `"cache_control"`)
+	}
+	if n := count(got[0]); n != 0 {
+		t.Fatalf("an unmarked prompt carried %d cache_control block(s)", n)
+	}
+	if n := count(got[1]); n < 2 {
+		t.Fatalf("the marked prompt carried %d cache_control block(s), want the system and the last user message", n)
 	}
 }
 
