@@ -165,6 +165,11 @@ const META: Record<string, SettingMeta> = {
     label: "Composer context handles",
     description: "Let users @-reference files and past conversations from the chat composer.",
   },
+  team_chats_shared_by_default: {
+    label: "Multiplayer team chats by default",
+    description:
+      "When on, every new non-lockdown chat automatically starts in Multiplayer mode so everyone on the team can open it from the sidebar and send messages directly using their own email, credentials, and MCP connectors. Owners can still turn Multiplayer off or remove specific people per chat.",
+  },
   default_model: {
     label: "Default model",
     description:
@@ -244,6 +249,7 @@ const GROUPS: { title: string; keys: string[] }[] = [
   {
     title: "Workspace features",
     keys: [
+      "team_chats_shared_by_default",
       "memory_autoindex_enabled",
       "error_analysis_enabled",
       "auto_title_enabled",

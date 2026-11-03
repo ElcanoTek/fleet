@@ -72,6 +72,7 @@ func testDefaults() map[string]string {
 		"auto_title_enabled":                "true",
 		"connector_recommendations_enabled": "false",
 		"context_handles_enabled":           "false",
+		"team_chats_shared_by_default":      "false",
 		"shared_files_max_total_mb":         "10240",
 	}
 }

@@ -495,6 +495,7 @@ var allowedEnvVars = map[string]bool{
 	"FLEET_GUARDRAIL_URL":                     true,
 	"FLEET_CONTEXT_HANDLES_ENABLED":           true,
 	"FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED": true,
+	"FLEET_TEAM_CHATS_SHARED_BY_DEFAULT":      true,
 
 	// ── A2A protocol server (#1279) ──
 	"FLEET_A2A_ENABLED":            true,
@@ -1268,6 +1269,12 @@ type Config struct {
 	// (via the existing /settings/connections OAuth flow — never auto-connecting).
 	// FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED, default false.
 	ConnectorRecommendationsEnabled bool
+	// TeamChatsSharedByDefault gates per-instance default team chat sharing: when
+	// enabled, non-lockdown conversations created by team members automatically
+	// start shared with their team (and unfiled chats can be shared directly with
+	// the team without requiring a project). FLEET_TEAM_CHATS_SHARED_BY_DEFAULT,
+	// default false.
+	TeamChatsSharedByDefault bool
 	// A2AEnabled gates the A2A (Agent2Agent) protocol server (#1279): the Agent
 	// Card at /.well-known/agent-card.json and the JSON-RPC endpoint at /a2a on
 	// the orchestrator. FLEET_A2A_ENABLED, default false — the routes stay
@@ -1898,6 +1905,9 @@ func Load(envFile string) (*Config, error) {
 
 		// Connector auto-recommendation (#512) — optional, default off.
 		ConnectorRecommendationsEnabled: lp.getenvFleetBool("CONNECTOR_RECOMMENDATIONS_ENABLED", false),
+
+		// Per-instance default team chat sharing — optional, default off.
+		TeamChatsSharedByDefault: lp.getenvFleetBool("TEAM_CHATS_SHARED_BY_DEFAULT", false),
 
 		// A2A protocol server (#1279) — optional, default off; the routes
 		// answer 501 until enabled.

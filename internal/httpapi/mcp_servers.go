@@ -8,6 +8,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -588,11 +589,19 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		clean = append(clean, n)
 	}
 	sort.Strings(clean)
-	if err := s.store.SetOptionalMCPServers(r.Context(), user, id, clean); err != nil {
+	ownerEmail := user
+	err = s.store.SetOptionalMCPServers(r.Context(), ownerEmail, id, clean)
+	if errors.Is(err, store.ErrConversationNotFound) {
+		if mpConv, mpErr := s.store.GetMultiplayerConversation(r.Context(), user, id); mpErr == nil && mpConv != nil {
+			ownerEmail = mpConv.UserEmail
+			err = s.store.SetOptionalMCPServers(r.Context(), ownerEmail, id, clean)
+		}
+	}
+	if err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
-	if err := s.store.SetConversationMCPAccounts(r.Context(), user, id, accounts); err != nil {
+	if err := s.store.SetConversationMCPAccounts(r.Context(), ownerEmail, id, accounts); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

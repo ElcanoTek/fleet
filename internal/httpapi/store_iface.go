@@ -343,6 +343,15 @@ type chatStore interface {
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
 	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)
+	SetConversationTeamVisibleWithOptions(ctx context.Context, ownerEmail, convID string, visible, allowUnfiled bool) (bool, error)
+	// Multiplayer conversation sharing (migration 092): live multi-user team
+	// chats where participants can send messages directly using their own
+	// identity, credentials, and MCP seats.
+	SetConversationMultiplayer(ctx context.Context, ownerEmail, convID string, multiplayer bool, participants, excluded []string) (*store.Conversation, error)
+	UpdateConversationMultiplayerAccess(ctx context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*store.Conversation, error)
+	GetMultiplayerConversation(ctx context.Context, callerEmail, convID string) (*store.Conversation, error)
+	ListMultiplayerRoster(ctx context.Context, callerEmail, convID string) ([]string, error)
+	ListSharedAndMultiplayerConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
 	// Files in a team share (ADR-0079). Per-file share state is stored as
 	// exclusions (default shared); a teammate branch records its origin and
 	// the shared files copied into it; the team link resolves to a status

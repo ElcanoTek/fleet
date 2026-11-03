@@ -51,7 +51,7 @@ type turnEventPageResponse struct {
 //     (forward from cursor, for reconnect/catch-up).
 func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

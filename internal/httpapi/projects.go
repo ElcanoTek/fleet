@@ -1374,5 +1374,6 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 			conv.OptionalMCPServersEnabled = defaults
 		}
 	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	return conv, true
 }

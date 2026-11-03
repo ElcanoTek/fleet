@@ -1546,6 +1546,14 @@ function UserBubble({
 
   return (
     <div>
+      {message.senderEmail ? (
+        <div
+          data-testid="user-message-sender"
+          className="mb-1 flex justify-end text-[0.68rem] font-medium text-[var(--color-text-muted)]"
+        >
+          <span>{message.senderEmail}</span>
+        </div>
+      ) : null}
       {/* [overflow-wrap:anywhere] (not Tailwind's break-words = break-word)
           lets the bubble's intrinsic min-width drop to a single character,
           so a pasted long URL/token wraps inside the max-w-[88%] cap

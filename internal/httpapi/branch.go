@@ -115,6 +115,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		// message of this source, so it is a real source id.)
 		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, body.BranchPointMessageID)
 	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, branch)
 	writeJSONStatus(w, http.StatusCreated, branch)
 }
 

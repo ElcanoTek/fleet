@@ -83,6 +83,18 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"conversations": list})
 			return
 		}
+		// ?scope=shared returns all conversations shared with the caller via
+		// Multiplayer mode or team visibility (migration 092), even when the
+		// caller has not joined a named team.
+		if q.Get("scope") == "shared" {
+			list, err := s.store.ListSharedAndMultiplayerConversations(r.Context(), user)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			writeJSON(w, map[string]any{"conversations": list})
+			return
+		}
 		list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
 			ArchivedOnly: q.Get("archived") == "true",
 			Labels:       q["label"],
@@ -425,6 +437,24 @@ func withOwnedConversation(notFound string, handler ownedConversationHandler) co
 	}
 }
 
+// withOwnedOrMultiplayerConversation adapts an ownedConversationHandler for
+// routes that both the conversation owner and allowed Multiplayer participants
+// (migration 092) may use.
+func withOwnedOrMultiplayerConversation(notFound string, handler ownedConversationHandler) conversationSubrouteHandler {
+	return func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if conv == nil {
+			http.Error(w, notFound, http.StatusNotFound)
+			return
+		}
+		handler(s, w, r, user, id, conv)
+	}
+}
+
 // writeConversationMutationError answers a failed per-conversation store
 // mutation (delete, pin, archive, rename, model, …). The store reports "no
 // such conversation for this caller" with store.ErrConversationNotFound; that
@@ -478,7 +508,7 @@ func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) boo
 // switch matched to its action. Entries reference only functions (method
 // expressions or literals), so initialization is file-order-independent.
 var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler{
-	{sub: "", method: http.MethodGet}:                   withOwnedConversation("not found", (*Server).handleConversationGet),
+	{sub: "", method: http.MethodGet}:                   withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationGet),
 	{sub: "", method: http.MethodDelete}:                (*Server).handleConversationDelete,
 	{sub: "truncate", method: http.MethodPost}:          (*Server).handleConversationTruncate,
 	{sub: "pin", method: http.MethodPost}:               (*Server).handleConversationPin,
@@ -486,11 +516,11 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "project", method: http.MethodPost}:           (*Server).handleConversationRefile,
 	{sub: "rename", method: http.MethodPost}:            (*Server).handleConversationRename,
 	{sub: "model", method: http.MethodPost}:             (*Server).handleConversationModel,
-	{sub: "approval-timeout", method: http.MethodGet}:   withOwnedConversation("not found", (*Server).handleApprovalTimeoutGet),
+	{sub: "approval-timeout", method: http.MethodGet}:   withOwnedOrMultiplayerConversation("not found", (*Server).handleApprovalTimeoutGet),
 	{sub: "approval-timeout", method: http.MethodPost}:  (*Server).handleApprovalTimeoutSet,
-	{sub: "auto-approve", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleAutoApproveGet),
+	{sub: "auto-approve", method: http.MethodGet}:       withOwnedOrMultiplayerConversation("not found", (*Server).handleAutoApproveGet),
 	{sub: "auto-approve", method: http.MethodPost}:      (*Server).handleAutoApproveSet,
-	{sub: "thinking_config", method: http.MethodGet}:    withOwnedConversation("not found", (*Server).handleThinkingConfigGet),
+	{sub: "thinking_config", method: http.MethodGet}:    withOwnedOrMultiplayerConversation("not found", (*Server).handleThinkingConfigGet),
 	{sub: "thinking_config", method: http.MethodPut}:    (*Server).handleThinkingConfigPut,
 	{sub: "thinking_config", method: http.MethodDelete}: (*Server).handleThinkingConfigDelete,
 	// Fork this conversation at a chosen message into a new conversation (#454).
@@ -519,6 +549,13 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "share-with-team", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleConversationShareWithTeam(w, r, id, user)
 	},
+	// Multiplayer mode & participant management (migration 092).
+	{sub: "multiplayer", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationMultiplayerGet(w, r, id, user)
+	},
+	{sub: "multiplayer", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationMultiplayerSet(w, r, id, user)
+	},
 	// Read a TEAMMATE's team-shared chat, read-only (ADR-0057). Deliberately
 	// NOT behind withOwnedConversation: this is the one conversation route a
 	// non-owner may reach, and its own two gates (shared team_id + the
@@ -532,10 +569,10 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "team-link", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleTeamLink(w, r, user, id)
 	},
-	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedConversation("not found", (*Server).handleConversationMCPServersGet),
+	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationMCPServersGet),
 	{sub: "mcp-servers", method: http.MethodPost}: (*Server).handleConversationMCPServersSet,
-	{sub: "export", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleConversationExport),
-	{sub: "cancel", method: http.MethodPost}:      withOwnedConversation("conversation not found", (*Server).handleConversationCancel),
+	{sub: "export", method: http.MethodGet}:       withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationExport),
+	{sub: "cancel", method: http.MethodPost}:      withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationCancel),
 	{sub: "summarize", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleSummarize(w, r, user, id)
 	},

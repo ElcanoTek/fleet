@@ -506,7 +506,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	user := row.UserEmail
 	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	conv, err := s.store.Get(lctx, user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(lctx, user, convID)
 	if err != nil {
 		// TRANSIENT store failure: the 202-acknowledged input must survive.
 		// Back to queued + a bounded re-kick; never cancelled for weather.
@@ -522,7 +522,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	}
 	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
 		defaultModel := agentcore.CurrentDefaultModel()
-		if err := s.store.SetModel(lctx, user, convID, defaultModel); err != nil {
+		if err := s.store.SetModel(lctx, convOwnerEmail(conv, user), convID, defaultModel); err != nil {
 			log.Printf("input queue: conversation %s set default model failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
 			s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 			s.rekickDrainAfter(convID, 3*time.Second)
@@ -624,7 +624,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 // GET (snapshot), DELETE {inputID} (remove), POST {inputID}/send-now
 // (promote; offered to the running turn when the row is steerable).
 func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user, convID, subArg string) {
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

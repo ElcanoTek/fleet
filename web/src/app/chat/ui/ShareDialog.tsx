@@ -103,15 +103,81 @@ export function teamShareState({
 
 /** "In Knowertech · Shared with Elcano" — the subline under the title. */
 function visibilityLabel(
-  conversation: Pick<ConversationSummary, "team_visible" | "share_token">,
+  conversation: Pick<
+    ConversationSummary,
+    "team_visible" | "share_token" | "multiplayer"
+  >,
   team: string,
 ): string {
+  if (conversation.multiplayer) {
+    return conversation.share_token ? "Multiplayer and by link" : "Multiplayer";
+  }
   if (conversation.team_visible) {
     return conversation.share_token
       ? `Shared with ${team} and by link`
       : `Shared with ${team}`;
   }
   return conversation.share_token ? "Public link" : "Only you";
+}
+
+export type MultiplayerState = {
+  multiplayer: boolean;
+  team_visible: boolean;
+  participants: string[];
+  excluded: string[];
+  roster: string[];
+  owner_email: string;
+  is_owner: boolean;
+};
+
+async function fetchMultiplayerState(
+  conversationId: string,
+): Promise<MultiplayerState | null> {
+  if (typeof fetch !== "function" || !conversationId) return null;
+  try {
+    const res = await fetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}/multiplayer`,
+      { cache: "no-store" },
+    );
+    if (!res || !res.ok) return null;
+    const data = (await res.json()) as Partial<MultiplayerState>;
+    if (!data || typeof data.multiplayer !== "boolean") return null;
+    return {
+      multiplayer: data.multiplayer,
+      team_visible: Boolean(data.team_visible),
+      participants: Array.isArray(data.participants) ? data.participants : [],
+      excluded: Array.isArray(data.excluded) ? data.excluded : [],
+      roster: Array.isArray(data.roster) ? data.roster : [],
+      owner_email: typeof data.owner_email === "string" ? data.owner_email : "",
+      is_owner: data.is_owner !== false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function updateMultiplayerState(
+  conversationId: string,
+  payload: {
+    multiplayer?: boolean;
+    add?: string[];
+    remove?: string[];
+  },
+): Promise<MultiplayerState | null> {
+  if (typeof fetch !== "function" || !conversationId) return null;
+  const res = await fetch(
+    `/api/conversations/${encodeURIComponent(conversationId)}/multiplayer`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new Error(text || `Couldn't update multiplayer mode (HTTP ${res.status}).`);
+  }
+  return (await res.json()) as MultiplayerState;
 }
 
 export type ShareDialogProps = {
@@ -173,6 +239,11 @@ export type ShareDialogProps = {
   ) => void;
   /** Test seam; defaults to GET /conversations/{id}/outputs. */
   loadOutputs?: (conversationId: string) => Promise<ConversationOutputs>;
+  /** Called when Multiplayer mode or participant access is updated. */
+  onMultiplayerChange?: (
+    conversationId: string,
+    state: MultiplayerState,
+  ) => void;
   onClose: () => void;
 };
 
@@ -196,6 +267,7 @@ export function ShareDialog({
   onShareProjectFirst,
   onManageInSources,
   loadOutputs = fetchConversationOutputs,
+  onMultiplayerChange,
   onClose,
 }: ShareDialogProps) {
   const toast = useChatToast();
@@ -279,6 +351,64 @@ export function ShareDialog({
   const [confirmStopLink, setConfirmStopLink] = useState(false);
   const [pending, setPending] = useState(false);
   const working = busy || pending;
+
+  // Multiplayer state & participant management.
+  const [mpState, setMpState] = useState<{
+    id: string;
+    data: MultiplayerState;
+  } | null>(null);
+  const [mpError, setMpError] = useState<string | null>(null);
+  const [addEmailInput, setAddEmailInput] = useState("");
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    fetchMultiplayerState(conversationId).then((data) => {
+      if (!cancelled && data) {
+        setMpState({ id: conversationId, data });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
+  const liveMp =
+    mpState?.id === conversationId ? mpState.data : null;
+  const isMultiplayer =
+    liveMp !== null ? liveMp.multiplayer : Boolean(conversation?.multiplayer);
+  const isOwnerForMp = liveMp !== null ? liveMp.is_owner : true;
+  const mpExcluded =
+    liveMp?.excluded ?? conversation?.multiplayer_excluded ?? [];
+  const mpParticipants =
+    liveMp?.participants ?? conversation?.multiplayer_participants ?? [];
+  const mpRoster = (() => {
+    const base = liveMp?.roster ?? [];
+    const excludedSet = new Set(mpExcluded.map((e) => e.toLowerCase()));
+    const combined = Array.from(
+      new Set([...base, ...mpParticipants].map((e) => e.trim().toLowerCase()).filter(Boolean)),
+    );
+    return combined.filter((e) => !excludedSet.has(e));
+  })();
+
+  const applyMpUpdate = (c: ConversationSummary, payload: {
+    multiplayer?: boolean;
+    add?: string[];
+    remove?: string[];
+  }) =>
+    run(async () => {
+      setMpError(null);
+      try {
+        const updated = await updateMultiplayerState(c.id, payload);
+        if (!updated) return;
+        setMpState({ id: c.id, data: updated });
+        onMultiplayerChange?.(c.id, updated);
+      } catch (err) {
+        setMpError(
+          err instanceof Error
+            ? err.message
+            : "Couldn't update multiplayer settings.",
+        );
+      }
+    });
 
   const linkRowId = useId();
   const pickerId = useId();
@@ -828,6 +958,167 @@ export function ShareDialog({
             ) : null}
           </section>
 
+          {/* ── Multiplayer mode: live collaborative chat with add/remove people ── */}
+          {!conversation.lockdown ? (
+            <section
+              aria-label="Multiplayer mode"
+              data-testid="share-multiplayer-block"
+              className="flex flex-col gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-accent)_8%,transparent)] p-3.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="m-0 flex items-center gap-2 text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
+                  <TeamGlyph className="size-4 shrink-0 text-[var(--color-accent)]" />
+                  Multiplayer mode
+                  {isMultiplayer ? (
+                    <span className="rounded-full bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] px-2 py-0.5 text-[0.68rem] font-semibold text-[var(--color-accent)]">
+                      Active
+                    </span>
+                  ) : null}
+                </h3>
+                {isOwnerForMp ? (
+                  <button
+                    type="button"
+                    data-testid="multiplayer-toggle-btn"
+                    disabled={working}
+                    onClick={() =>
+                      void applyMpUpdate(conversation, {
+                        multiplayer: !isMultiplayer,
+                      })
+                    }
+                    className={isMultiplayer ? DANGER_OUTLINE_BTN : PRIMARY_BTN}
+                  >
+                    {isMultiplayer ? "Turn off" : "Turn on Multiplayer"}
+                  </button>
+                ) : null}
+              </div>
+              <p className={BODY}>
+                {isMultiplayer
+                  ? "Anyone with access can jump into this chat and send messages directly using their own email and connected tools."
+                  : "Let teammates open this chat and send messages together in real time. Each person's turns use their own email and per-user MCP connections."}
+              </p>
+              {mpError ? (
+                <p
+                  role="alert"
+                  className="m-0 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] px-2.5 py-1.5 text-[0.75rem] text-[var(--color-danger)]"
+                >
+                  {mpError}
+                </p>
+              ) : null}
+              {isMultiplayer ? (
+                <div className="flex flex-col gap-2 pt-1">
+                  <div className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]">
+                    People who can participate ({mpRoster.length || "whole team"})
+                  </div>
+                  {mpRoster.length > 0 ? (
+                    <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-1.5">
+                      {mpRoster.map((email) => {
+                        const isOwnerRow =
+                          Boolean(liveMp?.owner_email) &&
+                          email.toLowerCase() ===
+                            liveMp?.owner_email.toLowerCase();
+                        return (
+                          <div
+                            key={email}
+                            className="flex items-center justify-between gap-2 rounded px-2 py-1 text-[0.78rem] text-[var(--color-text-primary)]"
+                          >
+                            <span className="truncate font-mono text-[0.74rem]">
+                              {email}
+                              {isOwnerRow ? (
+                                <span className="ml-1.5 font-sans text-[0.68rem] text-[var(--color-text-muted)]">
+                                  (owner)
+                                </span>
+                              ) : null}
+                            </span>
+                            {isOwnerForMp && !isOwnerRow ? (
+                              <button
+                                type="button"
+                                disabled={working}
+                                onClick={() =>
+                                  void applyMpUpdate(conversation, {
+                                    remove: [email],
+                                  })
+                                }
+                                className="shrink-0 rounded px-1.5 py-0.5 text-[0.72rem] text-[var(--color-danger)] transition hover:bg-[var(--color-overlay-strong)] disabled:opacity-50"
+                              >
+                                Remove
+                              </button>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {mpExcluded.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-1.5 text-[0.74rem] text-[var(--color-text-muted)]">
+                      <span>Removed:</span>
+                      {mpExcluded.map((email) => (
+                        <span
+                          key={email}
+                          className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] px-2 py-0.5 text-[0.72rem]"
+                        >
+                          {email}
+                          {isOwnerForMp ? (
+                            <button
+                              type="button"
+                              disabled={working}
+                              onClick={() =>
+                                void applyMpUpdate(conversation, {
+                                  add: [email],
+                                })
+                              }
+                              className="ml-0.5 text-[var(--color-accent)] hover:underline"
+                            >
+                              Add back
+                            </button>
+                          ) : null}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {isOwnerForMp ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="email"
+                        aria-label="Add person by email"
+                        placeholder="Add person by email…"
+                        value={addEmailInput}
+                        disabled={working}
+                        onChange={(e) => setAddEmailInput(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            const trimmed = addEmailInput.trim().toLowerCase();
+                            if (!trimmed) return;
+                            setAddEmailInput("");
+                            void applyMpUpdate(conversation, {
+                              add: [trimmed],
+                            });
+                          }
+                        }}
+                        className="h-8 min-w-0 flex-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      />
+                      <button
+                        type="button"
+                        disabled={working || !addEmailInput.trim()}
+                        onClick={() => {
+                          const trimmed = addEmailInput.trim().toLowerCase();
+                          if (!trimmed) return;
+                          setAddEmailInput("");
+                          void applyMpUpdate(conversation, {
+                            add: [trimmed],
+                          });
+                        }}
+                        className={SECONDARY_BTN}
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
           {/* ── Public link: one collapsed row, behavior unchanged ── */}
           <section
             aria-label="Share outside your team"
@@ -962,10 +1253,13 @@ function VisibilityPill({
   conversation,
   team,
 }: {
-  conversation: Pick<ConversationSummary, "team_visible" | "share_token">;
+  conversation: Pick<
+    ConversationSummary,
+    "team_visible" | "share_token" | "multiplayer"
+  >;
   team: string;
 }) {
-  const shared = Boolean(conversation.team_visible);
+  const shared = Boolean(conversation.team_visible || conversation.multiplayer);
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full border px-2 py-px text-[0.72rem] ${
@@ -997,12 +1291,15 @@ export function ChatShareControls({
   team,
   onOpen,
 }: {
-  conversation: Pick<ConversationSummary, "team_visible" | "share_token">;
+  conversation: Pick<
+    ConversationSummary,
+    "team_visible" | "share_token" | "multiplayer"
+  >;
   team?: string;
   onOpen: () => void;
 }) {
   const label = visibilityLabel(conversation, team || "your team");
-  const shared = Boolean(conversation.team_visible);
+  const shared = Boolean(conversation.team_visible || conversation.multiplayer);
   return (
     <span className="ml-auto inline-flex shrink-0 items-center gap-2">
       <button

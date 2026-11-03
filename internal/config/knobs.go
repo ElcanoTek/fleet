@@ -261,6 +261,7 @@ var envKnobs = []envKnob{
 	{key: "FLEET_PII_REDACTION_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_CONTEXT_HANDLES_ENABLED", fleet: true, kind: kindBool},
 	{key: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", fleet: true, kind: kindBool},
+	{key: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT", fleet: true, kind: kindBool},
 	// Waives the boot requirement for the open-egress NetworkPolicy, so it is
 	// a security posture rather than a preference: registered like any other
 	// bool so a typo ("ture") is refused at the seam instead of silently

@@ -430,8 +430,9 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	model := strings.TrimSpace(req.Model)
+	ownerEmail := user
 	if model != "" {
-		conv, err := s.store.Get(r.Context(), user, id)
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -444,8 +445,15 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return
 		}
+		ownerEmail = convOwnerEmail(conv, user)
 	}
-	if err := s.store.SetModel(r.Context(), user, id, model); err != nil {
+	err := s.store.SetModel(r.Context(), ownerEmail, id, model)
+	if errors.Is(err, store.ErrConversationNotFound) && model == "" {
+		if mpConv, mpErr := s.store.GetMultiplayerConversation(r.Context(), user, id); mpErr == nil && mpConv != nil {
+			err = s.store.SetModel(r.Context(), mpConv.UserEmail, id, model)
+		}
+	}
+	if err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

@@ -2344,9 +2344,14 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
         steered?: boolean;
         injected_context?: string;
         kind?: string;
+        sender_email?: string;
       };
       const text = (p.text ?? "").trim();
       if (!text) return;
+      const senderEmail =
+        typeof p.sender_email === "string" && p.sender_email.trim()
+          ? p.sender_email.trim()
+          : undefined;
       // A turn fleet started itself after an approval card was settled
       // (docs/RESUME-AFTER-APPROVAL.md) or when an in-chat patrol/timer fired:
       // its input is fleet's notice, and the row renders as one — the same
@@ -2384,6 +2389,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             id: allocMessageIds(),
             role: "user" as const,
             content: text,
+            ...(senderEmail ? { senderEmail } : {}),
             injectedContext,
             state: "done" as const,
           };
@@ -2407,16 +2413,26 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
           // library notes, and an attachment turn showed only the composer's
           // own receipt. Nothing else about the row is touched (its text may
           // legitimately differ — an edited resend).
-          if (injectedContext === undefined) return current;
-          if (prev.injectedContext === injectedContext) return current;
+          if (injectedContext === undefined && senderEmail === undefined)
+            return current;
+          if (
+            prev.injectedContext === injectedContext &&
+            prev.senderEmail === senderEmail
+          )
+            return current;
           const next = current.slice();
-          next[assistantIdx - 1] = { ...prev, injectedContext };
+          next[assistantIdx - 1] = {
+            ...prev,
+            ...(injectedContext !== undefined ? { injectedContext } : {}),
+            ...(senderEmail !== undefined ? { senderEmail } : {}),
+          };
           return next;
         }
         const userMsg: Message = {
           id: ctx.assistantId - 1,
           role: "user",
           content: text,
+          ...(senderEmail ? { senderEmail } : {}),
           injectedContext,
           ...(resumeKind ? { kind: resumeKind } : {}),
           state: "done",

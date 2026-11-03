@@ -204,7 +204,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
+	allowUnfiled := s.cfg != nil && s.cfg.LiveTeamChatsSharedByDefault()
+	stored, err := s.store.SetConversationTeamVisibleWithOptions(r.Context(), user, convID, body.Visible, allowUnfiled)
 	if err != nil {
 		// A chat with no team, no team-shared project to appear in, or that
 		// is archived cannot be shared — 409 with the store's sentence, which
@@ -251,6 +252,177 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		"team_visible": stored,
 		"shared_files": sharedFiles,
 		"total_files":  len(outs),
+	})
+}
+
+// autoShareNewConversationIfConfigured marks a newly created or branched
+// non-lockdown conversation as Multiplayer (and team-visible when on a team)
+// when the instance has FLEET_TEAM_CHATS_SHARED_BY_DEFAULT /
+// team_chats_shared_by_default enabled. It is best-effort: a conversation
+// created inside a personal project stays private without failing creation.
+func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user string, conv *store.Conversation) {
+	if conv == nil || conv.Lockdown || s.cfg == nil || !s.cfg.LiveTeamChatsSharedByDefault() {
+		return
+	}
+	if conv.ProjectID != "" {
+		stored, err := s.store.SetConversationTeamVisibleWithOptions(ctx, user, conv.ID, true, true)
+		if err != nil {
+			if !errors.Is(err, store.ErrNoTeamToShareWith) && !errors.Is(err, store.ErrNoTeamShareHome) && !errors.Is(err, store.ErrArchivedNotShareable) {
+				log.Printf("auto-share: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			}
+			return
+		}
+		if stored {
+			conv.TeamVisible = true
+			if err := s.store.MarkProjectSharedChat(ctx, conv.ID, user); err != nil {
+				log.Printf("auto-share: record has_shared_chat for %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			}
+		}
+	}
+	updated, err := s.store.SetConversationMultiplayer(ctx, user, conv.ID, true, nil, nil)
+	if err != nil {
+		if !errors.Is(err, store.ErrArchivedNotShareable) && !errors.Is(err, store.ErrConversationNotFound) {
+			log.Printf("auto-multiplayer: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		}
+		return
+	}
+	if updated != nil {
+		conv.Multiplayer = updated.Multiplayer
+		conv.TeamVisible = updated.TeamVisible
+	}
+}
+
+// getOwnedOrMultiplayerConversation resolves a conversation the caller either
+// owns or is permitted to participate in via Multiplayer mode (migration 092).
+func (s *Server) getOwnedOrMultiplayerConversation(ctx context.Context, user, convID string) (*store.Conversation, error) {
+	conv, err := s.store.Get(ctx, user, convID)
+	if err != nil || conv != nil {
+		return conv, err
+	}
+	return s.store.GetMultiplayerConversation(ctx, user, convID)
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+// handleConversationMultiplayerGet serves GET /conversations/{id}/multiplayer:
+// returns the conversation's multiplayer state, explicit participant/exclusion
+// lists, and resolved active roster. Accessible to the owner and to active
+// multiplayer participants.
+func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http.Request, convID, user string) {
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	if err != nil && !errors.Is(err, store.ErrConversationNotFound) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"multiplayer":  conv.Multiplayer,
+		"team_visible": conv.TeamVisible,
+		"owner_email":  conv.UserEmail,
+		"is_owner":     strings.EqualFold(conv.UserEmail, user),
+		"participants": nonNilStrings(conv.MultiplayerParticipants),
+		"excluded":     nonNilStrings(conv.MultiplayerExcluded),
+		"roster":       nonNilStrings(roster),
+	})
+}
+
+// handleConversationMultiplayerSet serves POST /conversations/{id}/multiplayer:
+// toggles Multiplayer mode (owner-only) and/or adds/removes specific people
+// from the multiplayer chat.
+func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http.Request, convID, user string) {
+	var body struct {
+		Multiplayer  *bool     `json:"multiplayer"`
+		Participants *[]string `json:"participants"`
+		Excluded     *[]string `json:"excluded"`
+		Add          []string  `json:"add"`
+		Remove       []string  `json:"remove"`
+	}
+	if !decodeOptionalJSONBody(w, r, &body) {
+		return
+	}
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	isOwner := strings.EqualFold(conv.UserEmail, user)
+	if body.Multiplayer != nil && !isOwner {
+		http.Error(w, "only the conversation owner can toggle multiplayer mode", http.StatusForbidden)
+		return
+	}
+	var partArg, exclArg []string
+	if body.Participants != nil {
+		partArg = *body.Participants
+	}
+	if body.Excluded != nil {
+		exclArg = *body.Excluded
+	}
+	updated := conv
+	if body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil {
+		targetMultiplayer := conv.Multiplayer
+		if body.Multiplayer != nil {
+			targetMultiplayer = *body.Multiplayer
+		}
+		updated, err = s.store.SetConversationMultiplayer(r.Context(), conv.UserEmail, convID, targetMultiplayer, partArg, exclArg)
+		if err != nil {
+			if errors.Is(err, store.ErrArchivedNotShareable) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			if errors.Is(err, store.ErrConversationNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(body.Add) > 0 || len(body.Remove) > 0 {
+		updated, err = s.store.UpdateConversationMultiplayerAccess(r.Context(), conv.UserEmail, convID, body.Add, body.Remove)
+		if err != nil {
+			if errors.Is(err, store.ErrConversationNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if updated != nil && updated.TeamVisible && updated.ProjectID != "" {
+		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
+			log.Printf("multiplayer: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		}
+	}
+	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	if err != nil && !errors.Is(err, store.ErrConversationNotFound) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"multiplayer":  updated.Multiplayer,
+		"team_visible": updated.TeamVisible,
+		"owner_email":  updated.UserEmail,
+		"is_owner":     isOwner,
+		"participants": nonNilStrings(updated.MultiplayerParticipants),
+		"excluded":     nonNilStrings(updated.MultiplayerExcluded),
+		"roster":       nonNilStrings(roster),
 	})
 }
 

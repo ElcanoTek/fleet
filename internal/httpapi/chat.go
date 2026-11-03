@@ -218,7 +218,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	if reqModel != conv.Model {
-		if err := s.store.SetModel(r.Context(), user, conv.ID, reqModel); err != nil {
+		if err := s.store.SetModel(r.Context(), convOwnerEmail(conv, user), conv.ID, reqModel); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
@@ -227,18 +227,26 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+func convOwnerEmail(conv *store.Conversation, fallback string) string {
+	if conv != nil && conv.UserEmail != "" {
+		return conv.UserEmail
+	}
+	return fallback
+}
+
 func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool) bool {
+	ownerEmail := convOwnerEmail(conv, user)
 	// Sending a message to an archived conversation un-archives it (#282) —
 	// mirrors how replying to an archived email brings it back to the inbox.
 	if conv.ArchivedAt != nil {
-		if err := s.store.SetArchived(r.Context(), user, conv.ID, false); err != nil {
+		if err := s.store.SetArchived(r.Context(), ownerEmail, conv.ID, false); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
 		conv.ArchivedAt = nil
 	}
 	if autoApprove != nil && *autoApprove != conv.AutoApprove {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *autoApprove); err != nil {
+		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
@@ -325,7 +333,7 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 	if next == "" {
 		return nil
 	}
-	if err := s.store.SetModel(ctx, user, conv.ID, next); err != nil {
+	if err := s.store.SetModel(ctx, convOwnerEmail(conv, user), conv.ID, next); err != nil {
 		return err
 	}
 	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
@@ -374,7 +382,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	defer func() { unlockFirst() }()
 	reqModel := strings.TrimSpace(req.Model)
 	if req.ConversationID != "" {
-		conv, err = s.store.Get(r.Context(), user, req.ConversationID)
+		conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, req.ConversationID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -457,6 +465,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
 			return
 		}
+		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	}
 
 	// Busy path (#785): a running turn means this submission QUEUES — never an
@@ -1148,6 +1157,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// the set the turn runs with — not only the creation-time request seed,
 		// which later turns never carry.
 		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+		if conv.Multiplayer && user != "" {
+			injected += "\n\n[Multiplayer chat: message sent by " + user + "]"
+		}
 	}
 
 	// Lockdown model migration, at the last moment before the client can be
@@ -1199,6 +1211,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	userEvent := withInputKind(map[string]any{"text": req.Message}, "kind", req.inputKind)
 	if injected != "" {
 		userEvent["injected_context"] = injected
+	}
+	if conv.Multiplayer && userWords && user != "" {
+		userEvent["sender_email"] = user
 	}
 	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
@@ -1446,6 +1461,10 @@ func (s *Server) runTurnAsync(
 	turnStager.inputKind = inputKind
 	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
+	senderEmail := ""
+	if conv.Multiplayer && inputKind == "" {
+		senderEmail = user
+	}
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
 		InjectedContext:             injectedContext,
@@ -1480,6 +1499,7 @@ func (s *Server) runTurnAsync(
 		CommitTerminal: commits.commitTerminal,
 		SteerSource:    steerSourceOrNil(steer),
 		InputKind:      inputKind,
+		SenderEmail:    senderEmail,
 		MCPUser:        mcpUser,
 	}, buf)
 	if err != nil {
@@ -1585,7 +1605,7 @@ func (s *Server) runTurnAsync(
 			// UpdateTitle is locked-guarded (#302): if the user manually renamed
 			// the conversation mid-turn it returns ErrTitleLocked — a benign skip,
 			// not an error, and we must NOT emit the overwrite to the sidebar.
-			switch err := s.store.UpdateTitle(persistCtx, user, conv.ID, title); {
+			switch err := s.store.UpdateTitle(persistCtx, convOwnerEmail(conv, user), conv.ID, title); {
 			case err == nil:
 				buf.Emit("conversation.title_updated", map[string]any{
 					"id":    conv.ID,
@@ -1695,7 +1715,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
 		convAutoApprove:      conv.AutoApprove,
 		liveAutoApprove: func(c context.Context) bool {
-			latest, err := s.store.Get(c, user, conv.ID)
+			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
 			if err != nil || latest == nil {
 				return false
 			}

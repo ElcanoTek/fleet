@@ -143,7 +143,7 @@ func newTurnOutcomeResponse(rec *store.TurnOutcomeRecord, liveRunning bool) turn
 // not own even if this handler's check were later dropped (#1112).
 func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convID, turnID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -187,6 +187,12 @@ type Conversation struct {
 	// are different and a single unlabeled icon conflated them. Set via
 	// POST /conversations/{id}/share-with-team.
 	TeamVisible bool `json:"team_visible,omitempty"`
+	// Multiplayer is true when teammates / workspace members can jump into this
+	// conversation directly and send messages with their own account and MCP
+	// connectors (migration 092).
+	Multiplayer             bool     `json:"multiplayer,omitempty"`
+	MultiplayerParticipants []string `json:"multiplayer_participants,omitempty"`
+	MultiplayerExcluded     []string `json:"multiplayer_excluded,omitempty"`
 	// BranchOrigin is set, by the handlers that serve it, on a TEAMMATE'S
 	// branch only (ADR-0079): whose chat it came from and which shared files
 	// were copied in. Never scanned from the conversations row — it lives in
@@ -1506,7 +1512,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
-			team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
+			team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
@@ -1953,7 +1959,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve, multiplayer, COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]')`
 
 // teamConversationColumns is conversationColumns with everything a teammate
 // has no business reading blanked out. Column count and scan order stay
@@ -1974,7 +1980,7 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 //   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
 //   - parent_conversation_id — reveals that a shared chat was branched from a
 //     private one, and hands over that private chat's id.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, multiplayer, '[]' AS multiplayer_participants, '[]' AS multiplayer_excluded`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -2024,13 +2030,16 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
 	var accountsRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove); err != nil {
+	var mpParticipantsRaw, mpExcludedRaw string
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
 	c.MCPAccounts = scanMCPAccounts(accountsRaw)
 	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
+	c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
+	c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
 	return c, nil
 }
 
@@ -2145,11 +2154,21 @@ var (
 // Opting OUT is never refused. Revocation must work from whatever state a row
 // is in, including one a pre-054 client created.
 func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error) {
+	return s.SetConversationTeamVisibleWithOptions(ctx, ownerEmail, convID, visible, false)
+}
+
+// SetConversationTeamVisibleWithOptions is SetConversationTeamVisible with an
+// explicit allowUnfiled flag: when allowUnfiled is true (used when the instance
+// enables FLEET_TEAM_CHATS_SHARED_BY_DEFAULT), an unfiled conversation
+// (project_id IS NULL / '') may be shared directly with the owner's team
+// without requiring a team-shared project. Conversations filed inside a
+// personal project still require the project to be team-shared.
+func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, ownerEmail, convID string, visible, allowUnfiled bool) (bool, error) {
 	ownerEmail = normalizeEmail(ownerEmail)
 	now := time.Now().Unix()
 	if !visible {
 		res, err := s.db.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
 			 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
 			now, convID, ownerEmail)
 		if err != nil {
@@ -2164,14 +2183,14 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	// Ownership first, so the three refusals keep their precedence: a caller
 	// who owns no such chat learns nothing about teams or projects (404), and
 	// only an owner sees which of the two share preconditions they are missing.
-	var homeTeam sql.NullString
+	var projectID, homeTeam sql.NullString
 	var archived bool
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT p.team_id, c.archived_at IS NOT NULL
+		SELECT c.project_id, p.team_id, c.archived_at IS NOT NULL
 		FROM conversations c
 		LEFT JOIN projects p ON p.id = c.project_id
 		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
-		convID, ownerEmail).Scan(&homeTeam, &archived); err != nil {
+		convID, ownerEmail).Scan(&projectID, &homeTeam, &archived); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, ErrConversationNotFound
 		}
@@ -2189,7 +2208,8 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	if team == "" {
 		return false, ErrNoTeamToShareWith
 	}
-	if strings.TrimSpace(homeTeam.String) != team {
+	unfiled := strings.TrimSpace(projectID.String) == ""
+	if strings.TrimSpace(homeTeam.String) != team && !(allowUnfiled && unfiled) {
 		return false, ErrNoTeamShareHome
 	}
 	// The share names its audience by the team's ID as well as its label
@@ -2226,8 +2246,9 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 			team_shared_with_id = (SELECT id FROM t), updated_at = $2
 		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
 		   AND c.archived_at IS NULL
-		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
-		team, now, convID, ownerEmail)
+		   AND (EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)
+		        OR ($5 AND COALESCE(c.project_id, '') = ''))`,
+		team, now, convID, ownerEmail, allowUnfiled)
 	if err != nil {
 		return false, err
 	}

@@ -721,4 +721,75 @@ describe("ChatShareControls — the chat header entry point", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  it("shows Multiplayer when multiplayer mode is active", () => {
+    render(
+      <ChatShareControls
+        conversation={{ multiplayer: true, team_visible: true }}
+        team="Reklaim"
+        onOpen={() => {}}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Multiplayer — open sharing" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("ShareDialog — Multiplayer mode", () => {
+  it("renders the Multiplayer mode section and allows adding/removing participants", async () => {
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      if (!init || !init.method || init.method === "GET") {
+        return {
+          ok: true,
+          json: async () => ({
+            multiplayer: true,
+            team_visible: true,
+            participants: [],
+            excluded: [],
+            roster: ["alice@reklaim.com", "bob@reklaim.com"],
+            owner_email: "alice@reklaim.com",
+            is_owner: true,
+          }),
+        };
+      }
+      const body = JSON.parse(String(init.body ?? "{}"));
+      return {
+        ok: true,
+        json: async () => ({
+          multiplayer: body.multiplayer ?? true,
+          team_visible: true,
+          participants: body.add ?? [],
+          excluded: body.remove ?? [],
+          roster: ["alice@reklaim.com", "bob@reklaim.com", ...(body.add ?? [])],
+          owner_email: "alice@reklaim.com",
+          is_owner: true,
+        }),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const onMultiplayerChange = vi.fn();
+      renderDialog({
+        conversation: conversation({ multiplayer: true, team_visible: true }),
+        onMultiplayerChange,
+      });
+      const mpBlock = screen.getByTestId("share-multiplayer-block");
+      expect(mpBlock).toBeInTheDocument();
+      expect(await within(mpBlock).findByText("bob@reklaim.com")).toBeInTheDocument();
+
+      // Remove bob@reklaim.com
+      await act(async () => {
+        fireEvent.click(within(mpBlock).getByRole("button", { name: "Remove" }));
+      });
+      expect(onMultiplayerChange).toHaveBeenCalledWith(
+        "c1",
+        expect.objectContaining({
+          excluded: ["bob@reklaim.com"],
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

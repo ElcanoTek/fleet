@@ -36,13 +36,14 @@ import (
 // can assert history replay) and streams a fixed event vocabulary, returning the
 // turn's new history. It needs no model, sandbox, or network.
 type fakeEngine struct {
-	mu             sync.Mutex
-	lastHistory    []agent.HistoryEntry
-	lastModel      string
-	lastUserEmail  string
-	lastMCPUser    agentcore.MCPUserIdentity
-	turns          int
-	providerHealth []agentcore.ModelHealth
+	mu              sync.Mutex
+	lastHistory     []agent.HistoryEntry
+	lastModel       string
+	lastUserEmail   string
+	lastSenderEmail string
+	lastMCPUser     agentcore.MCPUserIdentity
+	turns           int
+	providerHealth  []agentcore.ModelHealth
 }
 
 func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -50,12 +51,17 @@ func (f *fakeEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.Event
 	f.lastHistory = in.History
 	f.lastModel = in.Model
 	f.lastUserEmail = in.UserEmail
+	f.lastSenderEmail = in.SenderEmail
 	f.lastMCPUser = in.MCPUser
 	f.turns++
 	f.mu.Unlock()
 
+	userContent, _ := json.Marshal(agent.TextContent{
+		Text:        in.UserMessage,
+		SenderEmail: in.SenderEmail,
+	})
 	newHistory := []agent.HistoryEntry{
-		{Role: "user", Type: "text", Content: json.RawMessage(`{"text":"` + in.UserMessage + `"}`)},
+		{Role: "user", Type: "text", Content: userContent},
 		// A tool_call + tool_result pair so the audit-ledger derivation
 		// (deriveToolCallEntries) in runTurnAsync has something to record —
 		// this is what proves the in-process write path fires end to end.
@@ -229,6 +235,21 @@ func (s *fakeChatStore) PendingBranchFilesAnnouncement(_ context.Context, _ stri
 func (s *fakeChatStore) GetBranchOrigin(_ context.Context, _, _ string) (*store.BranchOrigin, error) {
 	return nil, nil
 }
+func (s *fakeChatStore) ListPendingApprovals(context.Context, string, string) ([]store.Approval, error) {
+	return nil, nil
+}
+func (s *fakeChatStore) ListResolvedApprovals(context.Context, string, string) ([]store.Approval, error) {
+	return nil, nil
+}
+func (s *fakeChatStore) ListExecutingApprovals(context.Context, string, string, string) ([]store.Approval, error) {
+	return nil, nil
+}
+func (s *fakeChatStore) ListPendingMemoryProposalsForConversation(context.Context, string, string) ([]store.Memory, error) {
+	return nil, nil
+}
+func (s *fakeChatStore) ListChatSchedules(context.Context, string, string, bool) ([]store.ChatSchedule, error) {
+	return nil, nil
+}
 
 func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	if s.onCreate != nil {
@@ -246,10 +267,14 @@ func (s *fakeChatStore) CreateConversation(_ context.Context, userEmail, title, 
 	return conv, nil
 }
 
-func (s *fakeChatStore) Get(_ context.Context, _, convID string) (*store.Conversation, error) {
+func (s *fakeChatStore) Get(_ context.Context, userEmail, convID string) (*store.Conversation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.convs[convID], nil
+	c := s.convs[convID]
+	if c != nil && c.UserEmail != "" && userEmail != "" && !strings.EqualFold(c.UserEmail, userEmail) {
+		return nil, nil
+	}
+	return c, nil
 }
 
 func (s *fakeChatStore) LoadHistory(_ context.Context, convID string) ([]agent.HistoryEntry, error) {
@@ -459,6 +484,125 @@ func (s *fakeChatStore) StageEnableMCPConnectorsApproval(_ context.Context, user
 	}, 0, nil
 }
 func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
+
+func (s *fakeChatStore) SetConversationTeamVisibleWithOptions(_ context.Context, _, convID string, visible, _ bool) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.TeamVisible = visible
+		if !visible {
+			c.Multiplayer = false
+		}
+		return visible, nil
+	}
+	return false, store.ErrConversationNotFound
+}
+func (s *fakeChatStore) SetConversationMultiplayer(_ context.Context, ownerEmail, convID string, multiplayer bool, participants, excluded []string) (*store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[convID]
+	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !strings.EqualFold(c.UserEmail, ownerEmail)) {
+		return nil, store.ErrConversationNotFound
+	}
+	c.Multiplayer = multiplayer
+	if multiplayer {
+		c.TeamVisible = true
+	}
+	if participants != nil {
+		c.MultiplayerParticipants = append([]string(nil), participants...)
+	}
+	if excluded != nil {
+		c.MultiplayerExcluded = append([]string(nil), excluded...)
+	}
+	cp := *c
+	return &cp, nil
+}
+func (s *fakeChatStore) UpdateConversationMultiplayerAccess(_ context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[convID]
+	if c == nil || (c.UserEmail != "" && ownerEmail != "" && !strings.EqualFold(c.UserEmail, ownerEmail)) {
+		return nil, store.ErrConversationNotFound
+	}
+	for _, a := range addEmails {
+		a = strings.ToLower(strings.TrimSpace(a))
+		if a == "" {
+			continue
+		}
+		c.MultiplayerExcluded = slices.DeleteFunc(c.MultiplayerExcluded, func(x string) bool { return strings.EqualFold(x, a) })
+		if !slices.Contains(c.MultiplayerParticipants, a) {
+			c.MultiplayerParticipants = append(c.MultiplayerParticipants, a)
+		}
+	}
+	for _, r := range removeEmails {
+		r = strings.ToLower(strings.TrimSpace(r))
+		if r == "" {
+			continue
+		}
+		c.MultiplayerParticipants = slices.DeleteFunc(c.MultiplayerParticipants, func(x string) bool { return strings.EqualFold(x, r) })
+		if !slices.Contains(c.MultiplayerExcluded, r) {
+			c.MultiplayerExcluded = append(c.MultiplayerExcluded, r)
+		}
+	}
+	cp := *c
+	return &cp, nil
+}
+func (s *fakeChatStore) GetMultiplayerConversation(_ context.Context, callerEmail, convID string) (*store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[convID]
+	if c == nil || !c.Multiplayer || c.ArchivedAt != nil {
+		return nil, nil
+	}
+	for _, ex := range c.MultiplayerExcluded {
+		if strings.EqualFold(ex, callerEmail) {
+			return nil, nil
+		}
+	}
+	cp := *c
+	return &cp, nil
+}
+func (s *fakeChatStore) ListMultiplayerRoster(_ context.Context, _, convID string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[convID]
+	if c == nil {
+		return nil, store.ErrConversationNotFound
+	}
+	roster := []string{}
+	if c.UserEmail != "" {
+		roster = append(roster, strings.ToLower(c.UserEmail))
+	}
+	for _, p := range c.MultiplayerParticipants {
+		if !slices.Contains(roster, strings.ToLower(p)) {
+			roster = append(roster, strings.ToLower(p))
+		}
+	}
+	return roster, nil
+}
+func (s *fakeChatStore) ListSharedAndMultiplayerConversations(_ context.Context, callerEmail string) ([]store.Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []store.Conversation
+	for _, c := range s.convs {
+		if strings.EqualFold(c.UserEmail, callerEmail) || (!c.Multiplayer && !c.TeamVisible) {
+			continue
+		}
+		excluded := false
+		for _, ex := range c.MultiplayerExcluded {
+			if strings.EqualFold(ex, callerEmail) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		out = append(out, *c)
+	}
+	return out, nil
+}
+func (s *fakeChatStore) MarkProjectSharedChat(context.Context, string, string) error { return nil }
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path
 // never touches these, so a nil-safe stub keeps the always-on fake compiling.

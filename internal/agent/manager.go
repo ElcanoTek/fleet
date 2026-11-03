@@ -169,6 +169,11 @@ type TurnInput struct {
 	// notice; the model sees the labelled text either way.
 	InputKind string
 
+	// SenderEmail, when non-empty (multiplayer conversations), is persisted
+	// on the user entry (TextContent.SenderEmail) so every participant in the
+	// shared thread can see who sent which message.
+	SenderEmail string
+
 	// MCPUser is the signed-in user who SENT this turn, for the bundle's
 	// ${FLEET_USER_EMAIL} env token (ADR-0087). The HTTP
 	// layer fills it from the authenticated request only for a turn a person
@@ -1711,7 +1716,7 @@ func assembleTurnMessages(in TurnInput, now time.Time) ([]fantasy.Message, Histo
 	today := agentcore.RuntimeToday(now)
 	note, _ := agentcore.RuntimeDateMessage(today) // RuntimeToday always yields a valid day
 	messages = append(messages, note)
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today})
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: in.SenderEmail})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }
