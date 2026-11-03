@@ -42,6 +42,23 @@ describe("formatScheduleCadence", () => {
         updated_at: 1000,
       }),
     ).toBe("One-shot (30m)");
+
+    expect(
+      formatScheduleCadence({
+        id: "3",
+        conversation_id: "c1",
+        kind: "patrol",
+        title: "Weekday Digest",
+        prompt: "check inbox",
+        cron: "0 9 * * 1-5",
+        timezone: "America/New_York",
+        status: "active",
+        run_count: 4,
+        next_run_at: 2000,
+        created_at: 1000,
+        updated_at: 1000,
+      }),
+    ).toBe("Weekdays at 09:00");
   });
 });
 
@@ -123,5 +140,66 @@ describe("PatrolPopover", () => {
       autoApprove: true,
     });
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets users customize a recurring schedule or one-time timer without typing raw cron", async () => {
+    const onStartPatrol = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+
+    render(
+      <PatrolPopover
+        initialPrompt="Summarize unread emails."
+        onStartPatrol={onStartPatrol}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    expect(screen.getByTestId("patrol-custom-builder")).toBeInTheDocument();
+
+    fireEvent.change(
+      screen.getByTestId("patrol-popover-schedule-frequency"),
+      { target: { value: "weekdays" } },
+    );
+    fireEvent.change(
+      screen.getByTestId("patrol-popover-schedule-time"),
+      { target: { value: "08:30" } },
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Start patrol" }));
+    await waitFor(() => expect(onStartPatrol).toHaveBeenCalledTimes(1));
+    expect(onStartPatrol.mock.calls[0][0]).toMatchObject({
+      prompt: "Summarize unread emails.",
+      cron: "30 8 * * 1-5",
+    });
+  });
+
+  it("clamps custom timer duration when switching from minutes to hours", async () => {
+    const onStartPatrol = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+
+    render(
+      <PatrolPopover
+        initialPrompt="Follow up once."
+        onStartPatrol={onStartPatrol}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("button", { name: "One-time timer" }));
+
+    fireEvent.change(screen.getByLabelText("Timer duration"), {
+      target: { value: "1440" },
+    });
+    fireEvent.change(screen.getByLabelText("Timer unit"), {
+      target: { value: "hours" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start timer" }));
+    await waitFor(() => expect(onStartPatrol).toHaveBeenCalledTimes(1));
+    expect(onStartPatrol.mock.calls[0][0]).toMatchObject({
+      durationSeconds: 168 * 3600,
+    });
   });
 });

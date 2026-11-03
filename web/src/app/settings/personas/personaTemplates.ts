@@ -1,3 +1,8 @@
+import {
+  describeCronExpression,
+  describeCronExpressionShort,
+} from "@/app/shared/lib/cron";
+
 // Starting points and small helpers for Settings → Personas
 // (docs/USER-PERSONAS.md). Kept apart from the page so they are unit-testable
 // and the page stays about layout.
@@ -50,9 +55,16 @@ export const CADENCE_PRESETS: { cron: string; label: string }[] = [
   { cron: "0 9 * * 1", label: "Mondays at 9:00" },
 ];
 
-/** cadenceLabel names a cron in words when it is a preset, else shows it. */
+/** cadenceLabel names a cron in words when it is a preset or describable schedule, else shows it. */
 export function cadenceLabel(cron: string): string {
-  return CADENCE_PRESETS.find((p) => p.cron === cron.trim())?.label ?? cron.trim();
+  const trimmed = cron.trim();
+  const preset = CADENCE_PRESETS.find((p) => p.cron === trimmed);
+  if (preset) return preset.label;
+  return (
+    describeCronExpressionShort(trimmed) ||
+    describeCronExpression(trimmed) ||
+    trimmed
+  );
 }
 
 /**

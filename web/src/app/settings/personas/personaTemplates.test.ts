@@ -10,9 +10,10 @@ describe("personaTemplates", () => {
     expect(slugify("Brad's Twin")).toBe("brad-s-twin");
   });
 
-  it("names preset cadences in words and shows anything else as cron", () => {
+  it("names preset and custom cadences in words and falls back to raw text when unparseable", () => {
     expect(cadenceLabel("0 */4 * * *")).toBe("Every 4 hours");
-    expect(cadenceLabel("15 7 * * *")).toBe("15 7 * * *");
+    expect(cadenceLabel("15 7 * * *")).toMatch(/7:15.*Daily/);
+    expect(cadenceLabel("@hourly")).toBe("@hourly");
   });
 
   it("templates fill every field the editor needs", () => {

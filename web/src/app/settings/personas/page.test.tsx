@@ -124,4 +124,36 @@ describe("PersonasPage", () => {
     expect(draft).toContain("I manage retail deals.");
     expect(draft).toContain('action "history"');
   });
+
+  it("lets users customize a persona patrol schedule with the visual builder without typing raw cron", async () => {
+    const calls = mockApi([twin]);
+    render(<PersonasPage />);
+    const row = await screen.findByTestId("persona-row-my-twin");
+    fireEvent.click(within(row).getByRole("button", { name: "Edit" }));
+    const editor = await screen.findByTestId("persona-editor");
+    expect(within(editor).getByTestId("persona-patrol-schedule-0")).toBeInTheDocument();
+
+    fireEvent.change(
+      within(editor).getByTestId("persona-patrol-schedule-0-frequency"),
+      { target: { value: "daily" } },
+    );
+    fireEvent.change(
+      within(editor).getByTestId("persona-patrol-schedule-0-time"),
+      { target: { value: "07:30" } },
+    );
+    fireEvent.click(within(editor).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(calls.some((c) => c.url === "/api/user-personas/p1" && c.method === "PUT")).toBe(true),
+    );
+    const put = calls.find((c) => c.url === "/api/user-personas/p1" && c.method === "PUT");
+    expect(put?.body).toMatchObject({
+      patrols: [
+        expect.objectContaining({
+          title: "Morning sweep",
+          cron: "30 7 * * *",
+        }),
+      ],
+    });
+  });
 });
