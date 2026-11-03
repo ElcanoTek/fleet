@@ -235,17 +235,26 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			}
 			patch.TeamID = &team
 		}
+		var affectedConvIDs []string
+		if patch.TeamID != nil {
+			affectedConvIDs = s.projectConvIDsBestEffort(r.Context(), id)
+		}
 		updated, err := s.store.UpdateProject(r.Context(), user, id, patch)
 		if err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}
+		if patch.TeamID != nil {
+			s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
+		}
 		writeJSON(w, updated)
 	case http.MethodDelete:
+		affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), id)
 		if err := s.store.DeleteProject(r.Context(), user, id); err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}
+		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -409,6 +418,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 	if admin {
 		actingOwner = ""
 	}
+	affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), projectID)
 	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail, actingOwner)
 	if err != nil {
 		if errors.Is(err, store.ErrNotProjectOwner) {
@@ -431,6 +441,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
 	}
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
 	log.Printf("projects: %q transferred project %q to %q", user, projectID, updated.OwnerEmail)
 	writeJSON(w, updated)

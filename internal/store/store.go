@@ -3009,23 +3009,11 @@ func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, a
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().Unix()
 	var convID string
-	if narrowedJSON != "" {
-		err = tx.QueryRowContext(ctx,
-			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
-			 WHERE id = $4 AND user_email = $5 AND status = 'pending'
-			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)
-			 RETURNING conversation_id`,
-			resultText, now, narrowedJSON, approvalID, userEmail, now,
-		).Scan(&convID)
-	} else {
-		err = tx.QueryRowContext(ctx,
-			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
-			 WHERE id = $3 AND user_email = $4 AND status = 'pending'
-			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)
-			 RETURNING conversation_id`,
-			resultText, now, approvalID, userEmail, now,
-		).Scan(&convID)
-	}
+	err = tx.QueryRowContext(ctx,
+		`SELECT conversation_id FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
+		approvalID, userEmail, now,
+	).Scan(&convID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -3037,6 +3025,28 @@ func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, a
 			return false, nil
 		}
 		return false, err
+	}
+	var res sql.Result
+	if narrowedJSON != "" {
+		res, err = tx.ExecContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
+			 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
+			resultText, now, narrowedJSON, approvalID, userEmail, now,
+		)
+	} else {
+		res, err = tx.ExecContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+			 WHERE id = $3 AND user_email = $4 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
+			resultText, now, approvalID, userEmail, now,
+		)
+	}
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return false, err
@@ -3116,6 +3126,21 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().Unix()
+	var pending int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
+		approvalID, userEmail, now,
+	).Scan(&pending); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return false, err
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, is_err = FALSE
 		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
@@ -3127,10 +3152,6 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil
-	}
-	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
-	if err != nil {
-		return false, err
 	}
 	res, err = tx.ExecContext(ctx,
 		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,

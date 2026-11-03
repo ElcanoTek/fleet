@@ -133,7 +133,7 @@ func (s *Server) newChatPatrolHandler(conv *store.Conversation, user string, buf
 		// Refresh conv.AutoApprove from the store so the returned view reflects
 		// any user toggle without allowing the model-callable tool to elevate
 		// AutoApprove on its own.
-		if fresh, err := s.store.Get(ctx, user, conv.ID); err == nil && fresh != nil {
+		if fresh, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID); err == nil && fresh != nil {
 			conv.AutoApprove = fresh.AutoApprove
 		}
 
@@ -393,7 +393,7 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 //   - DELETE /conversations/{id}/schedules/{scheduleID}
 //   - POST /conversations/{id}/schedules/{scheduleID}/run-now
 func (s *Server) handleScheduleRoutes(w http.ResponseWriter, r *http.Request, user, convID, subArg string) {
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -461,15 +461,18 @@ func (s *Server) handleScheduleCreate(w http.ResponseWriter, r *http.Request, us
 		writeScheduleError(w, err)
 		return
 	}
-	if req.AutoApprove != nil {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
-			writeScheduleError(w, err)
-			return
-		}
-		conv.AutoApprove = *req.AutoApprove
-	} else if !conv.AutoApprove {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err == nil {
-			conv.AutoApprove = true
+	isOwner := conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	if isOwner {
+		if req.AutoApprove != nil {
+			if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
+				writeScheduleError(w, err)
+				return
+			}
+			conv.AutoApprove = *req.AutoApprove
+		} else if !conv.AutoApprove {
+			if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, true); err == nil {
+				conv.AutoApprove = true
+			}
 		}
 	}
 	s.armShortScheduleTimer(sched.NextRunAt)
@@ -522,7 +525,7 @@ func (s *Server) handleSchedulePatch(w http.ResponseWriter, r *http.Request, use
 		writeScheduleError(w, err)
 		return
 	}
-	if req.AutoApprove != nil {
+	if req.AutoApprove != nil && (conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)) {
 		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *req.AutoApprove); err != nil {
 			writeScheduleError(w, err)
 			return

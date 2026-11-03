@@ -608,8 +608,10 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
 	exportConv := conv
+	exportHistory := history
 	historyPayload := historyForClient(history)
 	if !isOwner || conv.Multiplayer {
+		exportHistory = redactHistoryForSender(history, user, conv.UserEmail)
 		historyPayload = historyForParticipant(history, user, conv.UserEmail)
 	}
 	if !isOwner {
@@ -643,14 +645,14 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "html", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationHTML(exportConv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationHTML(exportConv, exportHistory, exportedAt, scope))
 	case "markdown", "md":
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
 			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "md", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationMarkdown(exportConv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationMarkdown(exportConv, exportHistory, exportedAt, scope))
 	default:
 		body := map[string]any{
 			"conversation": exportConv,
@@ -754,14 +756,28 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 	}
 	if inputID != "" {
 		if !isOwner {
-			existing, err := s.store.LookupInput(r.Context(), id, inputID)
+			mpInputID := effectiveMultiplayerInputID(user, inputID)
+			existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
 			if err != nil {
 				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
 				return
 			}
-			if existing == nil || !strings.EqualFold(existing.UserEmail, user) {
-				http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
-				return
+			if existing != nil {
+				inputID = mpInputID
+			} else {
+				rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
+				if err != nil {
+					http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+					return
+				}
+				if rawExisting != nil {
+					if !strings.EqualFold(rawExisting.UserEmail, user) {
+						http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
+						return
+					}
+				} else {
+					inputID = mpInputID
+				}
 			}
 		}
 		res, ok := s.stopInput(r.Context(), user, id, inputID)

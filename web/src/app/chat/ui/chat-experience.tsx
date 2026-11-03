@@ -959,6 +959,14 @@ export function ChatExperience({
       activeConversationId,
     ],
   );
+  const isActiveConversationOwner =
+    !activeConversationId ||
+    isPendingKey(activeConversationId) ||
+    conversations.some((c) => c.id === activeConversationId) ||
+    archivedConversations.some((c) => c.id === activeConversationId) ||
+    (Boolean(activeConversation?.user_email) &&
+      activeConversation?.user_email?.toLowerCase() ===
+        userEmail.trim().toLowerCase());
   // Lockdown state for the current view:
   //   - Active conversation flagged lockdown → use that
   //   - Pending new chat that the user clicked "+ Lockdown" for → true
@@ -2590,8 +2598,8 @@ export function ChatExperience({
       setActiveConversationId(conversationId);
       const conv =
         conversations.find((c) => c.id === conversationId) ??
-        teamSharedConversations.find((c) => c.id === conversationId) ??
-        projectSharedConversations.find((c) => c.id === conversationId);
+        archivedConversations.find((c) => c.id === conversationId) ??
+        teamSharedConversations.find((c) => c.id === conversationId);
       if (conv) {
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || currentDefaultModel());
@@ -6915,7 +6923,7 @@ export function ChatExperience({
                   }}
                   className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent py-1 pl-0 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] outline-none sm:text-[1.25rem]"
                 />
-              ) : (
+              ) : isActiveConversationOwner ? (
                 <h2 className="min-w-0">
                   <button
                     type="button"
@@ -6925,6 +6933,10 @@ export function ChatExperience({
                   >
                     {title}
                   </button>
+                </h2>
+              ) : (
+                <h2 className="min-w-0 truncate py-1 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] sm:text-[1.25rem]">
+                  {title}
                 </h2>
               )}
               {isLockdown ? (

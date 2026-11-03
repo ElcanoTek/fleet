@@ -383,40 +383,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	defer func() { unlockFirst() }()
 	reqModel := strings.TrimSpace(req.Model)
 	if req.ConversationID != "" {
-		conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, req.ConversationID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.Error(w, "conversation not found", http.StatusNotFound)
-			return
-		}
-		// A user-unique key is claimable in any conversation, and the
-		// database's uniqueness is per conversation: its lock is held from
-		// the lookup below until the key is claimed (or queued), so a
-		// concurrent send of the same key into another conversation finds
-		// this one's row instead of claiming the key a second time.
-		unlockFirst = s.lockUserScopedKey(user, req)
-		// A resend of an accepted input is answered before anything below
-		// touches the conversation: a replay must not re-apply the original
-		// request's model or un-archive the conversation.
-		if s.replayAcceptedInput(w, r, user, conv.ID, req) {
-			return
-		}
-		// The web echoes the conversation's stored model on every turn. An echo
-		// is "no opinion" — it can never be an override — so it must not trip
-		// the lockdown guard when that stored model has since been delisted.
-		// The migration itself happens where the turn LAUNCHES (startTurn, the
-		// path shared by direct and queue-drained turns), whose `conversation`
-		// event then tells the client the new model. Doing it here would also
-		// run for a busy-path steer, which launches no turn and so would leave
-		// the browser holding a slug the server had already replaced. A
-		// genuinely different disallowed slug still 400s below.
-		if reqModel == conv.Model {
-			reqModel = ""
-		}
-		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
+		var ok bool
+		conv, unlockFirst, ok = s.resolveExistingChatConversation(w, r, user, &req, reqModel)
+		if !ok {
 			return
 		}
 	} else {
@@ -529,6 +498,36 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.Request, user string, req *chatRequest, reqModel string) (conv *store.Conversation, unlockFirst func(), ok bool) {
+	unlockFirst = func() {}
+	var err error
+	conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, req.ConversationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, unlockFirst, false
+	}
+	if conv == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return nil, unlockFirst, false
+	}
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) &&
+		strings.TrimSpace(req.InputID) != "" &&
+		!strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+		req.InputID = effectiveMultiplayerInputID(user, req.InputID)
+	}
+	unlockFirst = s.lockUserScopedKey(user, *req)
+	if s.replayAcceptedInput(w, r, user, conv.ID, *req) {
+		return nil, unlockFirst, false
+	}
+	if reqModel == conv.Model {
+		reqModel = ""
+	}
+	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
+		return nil, unlockFirst, false
+	}
+	return conv, unlockFirst, true
+}
+
 // replayAcceptedInput answers a resend of an input_id that was already
 // ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
 // so it never runs a duplicate turn — even when the retry lands after the
@@ -558,6 +557,10 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	}
 	if existing == nil {
 		return false
+	}
+	if existing.UserEmail != "" && !strings.EqualFold(existing.UserEmail, user) {
+		http.Error(w, "input_id belongs to another user in this conversation", http.StatusConflict)
+		return true
 	}
 	s.writeQueueAck(r.Context(), w, http.StatusOK, existing.ConversationID, *existing)
 	return true

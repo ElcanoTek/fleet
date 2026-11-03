@@ -99,6 +99,28 @@ func (m *steerMailbox) emitQueueSnapshot() {
 	m.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items), "user_email": m.user})
 }
 
+const multiplayerInputKeyPrefix = "mp-user:"
+
+func effectiveMultiplayerInputID(user, rawID string) string {
+	rawID = strings.TrimSpace(rawID)
+	user = strings.ToLower(strings.TrimSpace(user))
+	if rawID == "" || user == "" || strings.HasPrefix(rawID, multiplayerInputKeyPrefix) {
+		return rawID
+	}
+	return multiplayerInputKeyPrefix + user + ":" + rawID
+}
+
+func externalClientInputID(storedID string) string {
+	if !strings.HasPrefix(storedID, multiplayerInputKeyPrefix) {
+		return storedID
+	}
+	rest := strings.TrimPrefix(storedID, multiplayerInputKeyPrefix)
+	if idx := strings.IndexByte(rest, ':'); idx >= 0 {
+		return rest[idx+1:]
+	}
+	return storedID
+}
+
 // queueItemsPayload is the wire shape of one queue snapshot (full snapshot on
 // every mutation — reattach needs no event sourcing).
 func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
@@ -107,7 +129,7 @@ func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 		preview := truncate.Clamp(it.Message, 160, "…")
 		out = append(out, map[string]any{
 			"id":              it.ID,
-			"client_input_id": it.ClientInputID,
+			"client_input_id": externalClientInputID(it.ClientInputID),
 			// The submitting client's own identity for the row (#1592), so a
 			// browser whose POST response was lost can confirm its input was
 			// queued before reporting it sent.
@@ -166,7 +188,7 @@ const maxPendingInputs = 20
 // rather than a wrong one.
 func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
 	input := map[string]any{
-		"id": row.ID, "client_input_id": row.ClientInputID,
+		"id": row.ID, "client_input_id": externalClientInputID(row.ClientInputID),
 		"mode": row.Mode, "state": row.State, "position": row.Position,
 	}
 	// A row the ack already reports as not queued is not in line; only a

@@ -271,15 +271,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		in.ConversationID, in.UserEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, in.UserEmail, in.ConversationID); err != nil {
 		return nil, err
 	}
 
@@ -566,15 +558,7 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		convID, userEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
 		return nil, err
 	}
 
@@ -657,7 +641,7 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),
 		ConversationID: convID,
-		UserEmail:      owner,
+		UserEmail:      sched.UserEmail,
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",
@@ -768,6 +752,16 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 	if err != nil {
 		return nil, err
 	}
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, sched.UserEmail, convID); err != nil {
+		if errors.Is(err, ErrConversationNotFound) {
+			_, _ = tx.ExecContext(ctx,
+				`UPDATE chat_schedules SET status = 'cancelled', updated_at = $1 WHERE id = $2`,
+				nowUnix, scheduleID,
+			)
+			return nil, tx.Commit()
+		}
+		return nil, err
+	}
 
 	// Check whether an earlier patrol turn is still queued/running, an approval
 	// card is awaiting human action, or the queue is full.
@@ -863,7 +857,7 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),
 		ConversationID: convID,
-		UserEmail:      owner,
+		UserEmail:      sched.UserEmail,
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",

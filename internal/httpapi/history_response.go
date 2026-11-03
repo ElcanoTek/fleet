@@ -75,18 +75,27 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	out := make([]agent.HistoryEntry, len(entries))
 	copy(out, entries)
 	for i := range out {
-		if out[i].InjectedContext == "" {
-			continue
-		}
 		sender := strings.TrimSpace(convOwnerEmail)
+		var (
+			tc    agent.TextContent
+			hasTC bool
+		)
 		if out[i].Role == "user" && out[i].Type == "text" {
-			var tc agent.TextContent
-			if json.Unmarshal(out[i].Content, &tc) == nil && strings.TrimSpace(tc.SenderEmail) != "" {
-				sender = strings.TrimSpace(tc.SenderEmail)
+			if json.Unmarshal(out[i].Content, &tc) == nil {
+				hasTC = true
+				if strings.TrimSpace(tc.SenderEmail) != "" {
+					sender = strings.TrimSpace(tc.SenderEmail)
+				}
 			}
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
 			out[i].InjectedContext = ""
+			if hasTC && len(tc.Images) > 0 {
+				tc.Images = nil
+				if b, err := json.Marshal(tc); err == nil {
+					out[i].Content = b
+				}
+			}
 		}
 	}
 	return out
@@ -96,23 +105,36 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 	out := make([]historyEntryResponse, 0, len(entries))
 	for _, e := range entries {
 		injected := e.InjectedContext
-		if injected != "" && viewerEmail != "" {
+		content := e.Content
+		if viewerEmail != "" {
 			sender := strings.TrimSpace(convOwnerEmail)
+			var (
+				tc    agent.TextContent
+				hasTC bool
+			)
 			if e.Role == "user" && e.Type == "text" {
-				var tc agent.TextContent
-				if json.Unmarshal(e.Content, &tc) == nil && strings.TrimSpace(tc.SenderEmail) != "" {
-					sender = strings.TrimSpace(tc.SenderEmail)
+				if json.Unmarshal(e.Content, &tc) == nil {
+					hasTC = true
+					if strings.TrimSpace(tc.SenderEmail) != "" {
+						sender = strings.TrimSpace(tc.SenderEmail)
+					}
 				}
 			}
 			if sender != "" && !strings.EqualFold(viewerEmail, sender) {
 				injected = ""
+				if hasTC && len(tc.Images) > 0 {
+					tc.Images = nil
+					if b, err := json.Marshal(tc); err == nil {
+						content = b
+					}
+				}
 			}
 		}
 		out = append(out, historyEntryResponse{
 			ID:              e.ID,
 			Role:            e.Role,
 			Type:            e.Type,
-			Content:         e.Content,
+			Content:         content,
 			InjectedContext: injected,
 		})
 	}

@@ -226,6 +226,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		return
 	}
 	if !body.Visible {
+		s.enforceMultiplayerRevocation(r.Context(), convID, &store.Conversation{UserEmail: user}, nil)
 		countCtx, cancel := context.WithTimeout(r.Context(), unshareCountTimeout)
 		var cerr error
 		outs, _, cerr = s.ownerOutputs(countCtx, convID)
@@ -444,31 +445,9 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 // convID belonging to a user who is no longer authorized to participate, and
 // detaches live SSE subscribers whose multiplayer access was revoked.
 func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string, conv *store.Conversation, roster []string) {
-	ownerEmail := ""
-	multiplayer := false
-	if conv != nil {
-		ownerEmail = conv.UserEmail
-		multiplayer = conv.Multiplayer
-	}
-	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
-	allowed := map[string]bool{}
-	if ownerKey != "" {
-		allowed[ownerKey] = true
-	}
-	if multiplayer {
-		for _, r := range roster {
-			if e := strings.ToLower(strings.TrimSpace(r)); e != "" {
-				allowed[e] = true
-			}
-		}
-		if conv != nil {
-			for _, ex := range conv.MultiplayerExcluded {
-				if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
-					delete(allowed, e)
-				}
-			}
-		}
-	}
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	ownerEmail, ownerKey, allowed, revokedCandidates := s.buildMultiplayerAllowedSet(qctx, convID, conv, roster)
 	s.inflightMu.Lock()
 	if s.multiplayerEpochs == nil {
 		s.multiplayerEpochs = make(map[string]uint64)
@@ -483,6 +462,7 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 		if entry.IsRunning() && entry.steer != nil {
 			sender := strings.ToLower(strings.TrimSpace(entry.steer.user))
 			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
 				_ = s.cancelInflightTurn(convID, entry.turnID)
 			}
 		}
@@ -490,16 +470,63 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 	if s.store == nil {
 		return
 	}
-	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	items, err := s.store.ListQueuedInputs(qctx, "", convID)
-	if err == nil {
+	s.revokeMultiplayerStoreItems(qctx, convID, ownerKey, allowed, revokedCandidates)
+}
+
+func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string, conv *store.Conversation, roster []string) (ownerEmail, ownerKey string, allowed, revokedCandidates map[string]bool) {
+	multiplayer := false
+	if conv != nil {
+		ownerEmail = conv.UserEmail
+		multiplayer = conv.Multiplayer
+	}
+	ownerKey = strings.ToLower(strings.TrimSpace(ownerEmail))
+	allowed = map[string]bool{}
+	revokedCandidates = map[string]bool{}
+	if ownerKey != "" {
+		allowed[ownerKey] = true
+	}
+	if !multiplayer {
+		return ownerEmail, ownerKey, allowed, revokedCandidates
+	}
+	for _, r := range roster {
+		e := strings.ToLower(strings.TrimSpace(r))
+		if e == "" {
+			continue
+		}
+		if e == ownerKey {
+			allowed[e] = true
+			continue
+		}
+		if s.store == nil {
+			allowed[e] = true
+			continue
+		}
+		if mc, merr := s.store.GetMultiplayerConversation(qctx, e, convID); merr == nil && mc != nil {
+			allowed[e] = true
+		} else {
+			revokedCandidates[e] = true
+		}
+	}
+	if conv != nil {
+		for _, ex := range conv.MultiplayerExcluded {
+			if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+				delete(allowed, e)
+				revokedCandidates[e] = true
+			}
+		}
+	}
+	return ownerEmail, ownerKey, allowed, revokedCandidates
+}
+
+func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, ownerKey string, allowed, revokedCandidates map[string]bool) {
+	if items, err := s.store.ListQueuedInputs(qctx, "", convID); err == nil {
 		for _, item := range items {
 			if item.State != store.InputStateQueued {
 				continue
 			}
 			sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
 			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
 				_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
 			}
 		}
@@ -508,9 +535,81 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 		for _, a := range approvals {
 			sender := strings.ToLower(strings.TrimSpace(a.UserEmail))
 			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
 				_, _ = s.store.ClaimApproval(qctx, a.UserEmail, a.ID, "rejected", "Multiplayer access to this conversation was revoked.")
 			}
 		}
+	}
+	for sender := range revokedCandidates {
+		if sender == "" || sender == ownerKey || allowed[sender] {
+			continue
+		}
+		if scheds, serr := s.store.ListChatSchedules(qctx, sender, convID, false); serr == nil {
+			for _, sc := range scheds {
+				_, _ = s.store.CancelChatSchedule(qctx, sender, convID, sc.ID)
+			}
+		}
+	}
+}
+
+func (s *Server) activeMultiplayerAndPendingConvIDsBestEffort(ctx context.Context) []string {
+	if s.store == nil {
+		return nil
+	}
+	if lister, ok := s.store.(interface {
+		ListActiveMultiplayerAndPendingConversationIDs(context.Context) ([]string, error)
+	}); ok {
+		ids, _ := lister.ListActiveMultiplayerAndPendingConversationIDs(ctx)
+		return ids
+	}
+	return nil
+}
+
+func (s *Server) projectConvIDsBestEffort(ctx context.Context, projectID string) []string {
+	if s.store == nil || projectID == "" {
+		return nil
+	}
+	ids, _ := s.store.ListProjectConversationIDs(ctx, projectID)
+	return ids
+}
+
+func (s *Server) reconcileAllMultiplayerAccess(ctx context.Context, extraConvIDs ...string) {
+	seen := make(map[string]bool)
+	var convIDs []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			convIDs = append(convIDs, id)
+		}
+	}
+	for _, id := range extraConvIDs {
+		add(id)
+	}
+	s.inflightMu.Lock()
+	for id := range s.inflight {
+		add(id)
+	}
+	s.inflightMu.Unlock()
+	for _, id := range s.activeMultiplayerAndPendingConvIDsBestEffort(ctx) {
+		add(id)
+	}
+	if len(convIDs) == 0 || s.store == nil {
+		return
+	}
+	getter, _ := s.store.(interface {
+		GetConversationOwnerAndMultiplayer(context.Context, string) (*store.Conversation, error)
+	})
+	for _, convID := range convIDs {
+		var conv *store.Conversation
+		if getter != nil {
+			conv, _ = getter.GetConversationOwnerAndMultiplayer(ctx, convID)
+		}
+		var roster []string
+		if conv != nil && conv.Multiplayer {
+			roster, _ = s.store.ListMultiplayerRoster(ctx, conv.UserEmail, convID)
+		}
+		s.enforceMultiplayerRevocation(ctx, convID, conv, roster)
 	}
 }
 

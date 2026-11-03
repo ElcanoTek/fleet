@@ -298,6 +298,10 @@ func (s *Store) mutateConversationMultiplayer(
 // lockAndVerifyOwnedOrMultiplayerTx locks the conversation row for convID and
 // verifies that callerEmail is its owner or an authorized multiplayer
 // participant, returning the conversation owner's email.
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func (s *Store) lockAndVerifyOwnedOrMultiplayerTx(ctx context.Context, tx *sql.Tx, callerEmail, convID string) (string, error) {
 	callerEmail = normalizeEmail(callerEmail)
 	var (
@@ -340,7 +344,7 @@ func (s *Store) lockAndVerifyOwnedOrMultiplayerTx(ctx context.Context, tx *sql.T
 		ArchivedAt:              archPtr,
 		Lockdown:                lockdown,
 	}
-	if !s.canParticipateInMultiplayer(ctx, callerEmail, c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
+	if !s.canParticipateInMultiplayer(ctx, tx, callerEmail, c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
 		return "", ErrConversationNotFound
 	}
 	return ownerEmail, nil
@@ -385,7 +389,7 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 	}
 	c.MultiplayerParticipants = scanEmailJSONArray(partRaw)
 	c.MultiplayerExcluded = scanEmailJSONArray(exclRaw)
-	if !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
+	if !s.canParticipateInMultiplayer(ctx, s.db, callerEmail, &c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
 		return nil, nil
 	}
 	if normalizeEmail(c.UserEmail) != callerEmail {
@@ -404,7 +408,7 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 	return &c, nil
 }
 
-func (s *Store) canParticipateInMultiplayer(ctx context.Context, callerEmail string, c *Conversation, sharedTeam string, sharedTeamID sql.NullInt64) bool {
+func (s *Store) canParticipateInMultiplayer(ctx context.Context, q rowQueryer, callerEmail string, c *Conversation, sharedTeam string, sharedTeamID sql.NullInt64) bool {
 	callerEmail = normalizeEmail(callerEmail)
 	if callerEmail == "" || c == nil || !c.Multiplayer || c.ArchivedAt != nil || c.Lockdown {
 		return false
@@ -422,7 +426,7 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, callerEmail str
 		return true
 	}
 	var callerTeam sql.NullString
-	_ = s.db.QueryRowContext(ctx,
+	_ = q.QueryRowContext(ctx,
 		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
 	).Scan(&callerTeam)
 	cTeam := strings.TrimSpace(callerTeam.String)
@@ -438,7 +442,7 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, callerEmail str
 		}
 		if sharedTeamID.Valid {
 			var currentTeamID int64
-			if err := s.db.QueryRowContext(ctx, `SELECT id FROM teams WHERE name = $1`, sharedTeam).Scan(&currentTeamID); err != nil || currentTeamID != sharedTeamID.Int64 {
+			if err := q.QueryRowContext(ctx, `SELECT id FROM teams WHERE name = $1`, sharedTeam).Scan(&currentTeamID); err != nil || currentTeamID != sharedTeamID.Int64 {
 				return false
 			}
 		}
@@ -563,7 +567,7 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
 		c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
 		if c.Multiplayer {
-			if containsEmail(c.MultiplayerExcluded, callerEmail) || !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam), sharedTeamID) {
+			if containsEmail(c.MultiplayerExcluded, callerEmail) || !s.canParticipateInMultiplayer(ctx, s.db, callerEmail, &c, strings.TrimSpace(sharedTeam), sharedTeamID) {
 				if c.TeamVisible && callerTeam != "" && strings.TrimSpace(sharedTeam) == callerTeam {
 					c.Multiplayer = false
 				} else {
@@ -579,6 +583,61 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.MCPAccounts = nil
 		c.AutoApprove = false
 		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// GetConversationOwnerAndMultiplayer returns the owner, multiplayer state, and
+// participant/exclusion lists for convID regardless of caller so the HTTP
+// server can reconcile live turns, SSE streams, queued inputs, and pending
+// approvals after indirect audience changes (project/team/user updates).
+func (s *Store) GetConversationOwnerAndMultiplayer(ctx context.Context, convID string) (*Conversation, error) {
+	if s == nil || s.db == nil || convID == "" {
+		return nil, nil
+	}
+	c, err := scanConversation(s.db.QueryRowContext(ctx,
+		`SELECT `+conversationColumns+` FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+		convID,
+	))
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+// ListActiveMultiplayerAndPendingConversationIDs returns conversation IDs that
+// are currently multiplayer-enabled or have queued inputs / pending approvals /
+// active schedules, used to reconcile access after indirect team/project/user
+// changes.
+func (s *Store) ListActiveMultiplayerAndPendingConversationIDs(ctx context.Context) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id FROM conversations WHERE deleted_at IS NULL AND archived_at IS NULL AND multiplayer = TRUE
+		UNION
+		SELECT DISTINCT conversation_id FROM chat_input_queue WHERE state = 'queued'
+		UNION
+		SELECT DISTINCT conversation_id FROM approvals WHERE status = 'pending'
+		UNION
+		SELECT DISTINCT conversation_id FROM chat_schedules WHERE status IN ('active', 'paused')
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		if id != "" {
+			out = append(out, id)
+		}
 	}
 	return out, rows.Err()
 }
