@@ -41,6 +41,8 @@
 #
 # Exit codes: 0 = healthy (or everything fixed), 1 = problems remain.
 
+# Tracing off before anything is read: `bash -x` would print the env file's DSNs and other secrets.
+{ set +x; } 2>/dev/null
 set -euo pipefail
 
 # ── locate this script + its repo root (default SRC_DIR) ──
