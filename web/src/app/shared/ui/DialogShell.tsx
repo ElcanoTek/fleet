@@ -64,7 +64,11 @@ export type DialogShellProps = {
   onDismiss: () => void;
   // "stacked" paints above ordinary modal peers — for a dialog summoned from
   // inside another one, where equal z-index leaves DOM order to decide.
-  layer?: "modal" | "stacked";
+  // "rail" paints above the navigation rail, for a dialog summoned from it:
+  // at 640–900px the expanded rail is a fixed overlay (scrim z-[380], panel
+  // z-[390], NavRail.tsx) and its menus portal at z-[400]/z-[410] (Menu.tsx),
+  // all of which would otherwise cover a z-50 dialog and take its clicks.
+  layer?: "modal" | "stacked" | "rail";
   // "top" hangs the panel below the viewport top (the shortcuts overlay)
   // instead of centring it.
   align?: "center" | "top";
@@ -163,7 +167,7 @@ export function DialogShell({
     <div
       className={[
         "fixed inset-0 flex justify-center px-4",
-        layer === "stacked" ? "z-[60]" : "z-50",
+        layer === "rail" ? "z-[420]" : layer === "stacked" ? "z-[60]" : "z-50",
         align === "top" ? "items-start pt-[10vh]" : "items-center",
       ].join(" ")}
     >

@@ -247,7 +247,9 @@ folds it. Hovering a project shows its menu: **Open project**, **New chat**, and
 for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
-and **System** appearance and opens **Settings**.
+and **System** appearance and opens **Settings**. Its **Sign out** asks you to
+confirm first, because it also signs you out of every app that shares your
+sign-in.
 
 **Settings → General → Browser notifications** turns on alerts in the browser
 you are using, even while the tab is in the background. By default you get one

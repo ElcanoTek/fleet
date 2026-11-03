@@ -75,6 +75,92 @@ test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", 
   await expect(page.getByRole("menuitem", { name: "Admin", exact: true })).toHaveCount(0);
 });
 
+test("Sign out asks first in a centred dialog, then signs out", async ({ page }) => {
+  await mockChatBoot(page);
+  await mockConversations(page);
+  await page.goto("/chat");
+  await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+
+  const openConfirm = async () => {
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    const dialog = page.getByRole("dialog", { name: "Sign out?" });
+    await expect(dialog).toBeVisible();
+    return dialog;
+  };
+
+  // Centred in the viewport, not pinned to the rail it was opened from.
+  const dialog = await openConfirm();
+  // Measured after the enter animation, which slides the panel in.
+  await dialog.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+  const box = await dialog.boundingBox();
+  const viewport = page.viewportSize();
+  expect(box && viewport).toBeTruthy();
+  if (box && viewport) {
+    expect(Math.abs(box.x + box.width / 2 - viewport.width / 2)).toBeLessThan(2);
+    expect(Math.abs(box.y + box.height / 2 - viewport.height / 2)).toBeLessThan(2);
+  }
+
+  // Cancel keeps the session.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("dialog", { name: "Sign out?" })).toHaveCount(0);
+  await expect(page).toHaveURL(/\/chat/);
+
+  // Confirming posts the logout form; with no central Auth configured the
+  // gateway lands on the manual sign-in page.
+  const confirm = await openConfirm();
+  await Promise.all([
+    page.waitForURL(/\/login\?manual=1/),
+    confirm.getByRole("button", { name: "Sign out" }).click(),
+  ]);
+});
+
+// The confirm must sit above the rail wherever the rail floats over the page:
+// the 640-900px overlay (scrim z-[380], rail z-[390]) and the <640px drawer.
+// The hit test proves a click on Sign out reaches the button, not the scrim.
+for (const layout of [
+  { name: "the expanded overlay rail at 800px", width: 800, height: 900, open: "Expand sidebar", openState: "Collapse sidebar" },
+  { name: "the phone drawer", width: 390, height: 844, open: "Open sidebar", openState: "Close sidebar" },
+]) {
+  test(`the Sign out confirm sits above ${layout.name}`, async ({ page }) => {
+    await page.setViewportSize({ width: layout.width, height: layout.height });
+    await mockChatBoot(page);
+    await mockConversations(page);
+    await page.goto("/chat");
+    await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+    await page.getByRole("button", { name: layout.open, exact: true }).click();
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    const dialog = page.getByRole("dialog", { name: "Sign out?" });
+    await expect(dialog).toBeVisible();
+    await dialog.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+
+    const confirm = dialog.getByRole("button", { name: "Sign out" });
+    const hit = await confirm.evaluate((button) => {
+      const r = button.getBoundingClientRect();
+      return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === button;
+    });
+    expect(hit).toBe(true);
+
+    // Escape closes only the confirm; the rail it came from stays open.
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("account-menu-button")).toBeFocused();
+    await expect(page.getByTestId("account-menu-button")).toBeInViewport();
+    await expect(page.getByRole("button", { name: layout.openState, exact: true })).toBeVisible();
+    if (layout.openState === "Collapse sidebar") {
+      await expect(page.getByRole("button", { name: layout.openState, exact: true })).toHaveAttribute("aria-expanded", "true");
+    }
+
+    await page.getByTestId("account-menu-button").click();
+    await page.getByRole("menuitem", { name: "Sign out" }).click();
+    await Promise.all([
+      page.waitForURL(/\/login\?manual=1/),
+      page.getByRole("dialog", { name: "Sign out?" }).getByRole("button", { name: "Sign out" }).click(),
+    ]);
+  });
+}
+
 test("the rail derives the Labels section and filters by label", async ({ page }) => {
   await mockChatBoot(page);
   await mockConversations(page);
