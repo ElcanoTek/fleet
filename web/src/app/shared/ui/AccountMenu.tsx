@@ -56,11 +56,15 @@ const THEME_OPTIONS = [
 
 export function AccountMenu({
   email,
+  appName,
   onSignOut,
   railCollapsed = false,
   current = false,
 }: {
   email: string;
+  // The deployment's name (branding.app_name), as the rail's brand row shows
+  // it, for the Sign out confirm.
+  appName: string;
   onSignOut: () => void;
   // Collapsed-rail mode (≥sm): the button shrinks to an avatar-only 2.5rem
   // square and the menu opens at a fixed 15rem instead of stretching to the
@@ -188,7 +192,7 @@ export function AccountMenu({
                 onSignOut();
               }}
             >
-              <p>This signs you out of Fleet and of every app that shares your sign-in.</p>
+              <p>This signs you out of {appName} and of every app that shares your sign-in.</p>
             </ConfirmDialog>,
             document.body,
           )

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { NavRail, type RailCollapse } from "./NavRail";
 
 afterEach(() => cleanup());
@@ -57,5 +57,18 @@ describe("NavRail brand mark", () => {
   it("does not emit a srcset — an unoptimized mark has no generated variants", () => {
     renderRail("/api/brand/logo");
     expect(screen.getByAltText("Acme").getAttribute("srcset")).toBeNull();
+  });
+});
+
+describe("NavRail account menu", () => {
+  // The Sign out confirm names the deployment as the brand row does
+  // (branding.app_name), not as "Fleet".
+  it("names the brand in the Sign out confirm", () => {
+    renderRail();
+    fireEvent.click(screen.getByRole("button", { name: /account menu/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sign out" }));
+    expect(screen.getByRole("dialog", { name: "Sign out?" })).toHaveTextContent(
+      "This signs you out of Acme and of every app that shares your sign-in.",
+    );
   });
 });
