@@ -126,7 +126,13 @@ export function PatrolSchedulePicker({
             {frequency === "custom_cron" ? (
               <button
                 type="button"
-                onClick={() => handleFrequencyChange("weekdays")}
+                onClick={() =>
+                  handleFrequencyChange(
+                    parsed.frequency !== "custom_cron"
+                      ? parsed.frequency
+                      : "weekdays",
+                  )
+                }
                 className="text-[0.68rem] font-normal text-[var(--color-accent)] hover:underline"
               >
                 Use simple schedule
@@ -284,7 +290,12 @@ export function PatrolSchedulePicker({
             <span>Time zone</span>
             <button
               type="button"
-              onClick={() => setCustomTzMode((v) => !v)}
+              onClick={() => {
+                if (customTzMode && !timezone.trim()) {
+                  onChangeTimezone(browserTimeZone());
+                }
+                setCustomTzMode((v) => !v);
+              }}
               className="text-[0.68rem] font-normal text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:underline"
             >
               {customTzMode ? "Pick from list" : "Custom zone"}
@@ -297,6 +308,11 @@ export function PatrolSchedulePicker({
               data-testid={`${testIdPrefix}-timezone-custom`}
               value={timezone}
               onChange={(e) => onChangeTimezone(e.target.value)}
+              onBlur={() => {
+                if (!timezone.trim()) {
+                  onChangeTimezone(browserTimeZone());
+                }
+              }}
               placeholder="America/New_York or UTC"
               className={`${inputClass} font-mono`}
             />

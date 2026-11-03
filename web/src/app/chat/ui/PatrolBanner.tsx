@@ -288,7 +288,10 @@ export function PatrolPopover({
         ? customDurationSeconds
         : selectedPreset.durationSeconds
       : undefined;
-  const tz = isCustom ? customTz || browserTimeZone() : browserTimeZone();
+  const tz =
+    effectiveKind === "patrol" && isCustom
+      ? customTz.trim() || browserTimeZone()
+      : browserTimeZone();
 
   return (
     <div

@@ -187,7 +187,10 @@ export default function PersonasPage() {
           base_persona: draft.base_persona,
           kind: draft.kind,
           autonomy: draft.autonomy,
-          patrols: draft.patrols,
+          patrols: draft.patrols.map((pt) => ({
+            ...pt,
+            timezone: (pt.timezone ?? "").trim() || browserTimeZone(),
+          })),
         }),
       });
       if (!res.ok) throw new Error(await failText(res, "Save failed"));
