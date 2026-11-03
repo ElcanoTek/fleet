@@ -119,8 +119,11 @@ Start a patrol or timer in either of two ways:
 - **Use Patrol in the composer:** open **More options** (`•••`) in the composer
   toolbar and click **Patrol & schedule** (or click the active **Patrol** status
   pill on the toolbar), choose a preset (**Every 1h**, **Every 2h**, **Every
-  4h**, **Every 6h**, **In 30m (1x)**, or **Custom**), enter the patrol
-  instructions, and press **Start patrol**.
+  4h**, **Every 6h**, **Weekdays 9am**, **Daily 9am**, **In 30m (once)**, **In
+  2h (once)**, or **Custom** to build a recurring schedule by hours, minutes,
+  daily/weekday/specific days of the week and time zone — with an **Advanced
+  cron** option — or a custom one-time timer in minutes or hours), enter the
+  patrol instructions, and press **Start patrol** (or **Start timer**).
 
 When a conversation has an active or paused patrol or timer, the **Patrol bar**
 appears at the top of the thread showing the schedule's status (**Patrol
@@ -543,8 +546,10 @@ the composer's persona menu (inside **More options** `•••`).
   assistant**, **Suggest actions** or **Act on my behalf**, the workspace
   persona it **Builds on** (its expertise and tool access carry over — your
   persona adds instructions, it cannot unlock tools the workspace persona does
-  not have), the instructions, and up to 8 suggested patrols (a title, how
-  often, a time zone, and what to do each time; at least 5 minutes apart).
+  not have), the instructions, and up to 8 suggested patrols (a title, quick
+  cadence presets or the schedule builder for hours, minutes, daily, weekdays,
+  or specific days of the week, a time-zone selector, and what to do each time;
+  at least 5 minutes apart, with an **Advanced cron** option when needed).
   You can keep up to 50 personas.
 - **Start chat** opens a new chat on the persona. **Start patrol** on a
   suggested patrol opens a new chat on the persona, attaches the patrol to it,

@@ -2317,12 +2317,16 @@ function EmailPreview({
     try {
       const doc = frame.contentDocument;
       if (!doc) return;
-      const measured = Math.max(
-        doc.documentElement?.scrollHeight ?? 0,
-        doc.body?.scrollHeight ?? 0,
-      );
+      const bodyHeight = doc.body?.scrollHeight ?? 0;
+      const docHeight = doc.documentElement?.scrollHeight ?? 0;
+      const measured =
+        docHeight > frame.clientHeight + 4
+          ? docHeight
+          : bodyHeight > 0
+            ? bodyHeight
+            : docHeight;
       if (measured > 0) {
-        setContentHeight(measured + 16);
+        setContentHeight(measured);
       }
       // Always start from original before applying a swap so
       // toggling back and forth is clean.
