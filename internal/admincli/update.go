@@ -83,7 +83,7 @@ func cmdUpdate(argv []string) int {
 	// FOREGROUND group: a background group that reads the tty is stopped by
 	// SIGTTIN, so update.sh's "Apply N commits? (y/N)" froze and the operator's
 	// answer went to this wrapper instead (fleetdev, 2026-11-03).
-	attr, ttyFD := updateSysProcAttr(int(os.Stdin.Fd()), term.IsTerminal)
+	attr, ttyFD := updateSysProcAttr(int(os.Stdin.Fd()), ownsTerminal)
 	cmd := newCmd(attr)
 	err := cmd.Start()
 	if err != nil && attr.Foreground {
@@ -360,17 +360,29 @@ func stagedBundleSource(dir string) (string, markerState) {
 }
 
 // updateSysProcAttr is the update script's process attributes: always its own
-// process group, and — when stdin is a terminal — that group in the terminal's
-// foreground, so the script's prompts can read the operator's answers. It
-// returns the terminal fd to hand back afterwards (-1 when none).
-func updateSysProcAttr(stdinFD int, isTerminal func(int) bool) (*syscall.SysProcAttr, int) {
+// process group, and — when this process's group is the terminal's foreground
+// group — that group in the foreground instead, so the script's prompts can
+// read the operator's answers. It returns the terminal fd to hand back
+// afterwards (-1 when none).
+func updateSysProcAttr(stdinFD int, ownsTerminal func(int) bool) (*syscall.SysProcAttr, int) {
 	attr := &syscall.SysProcAttr{Setpgid: true}
-	if isTerminal(stdinFD) {
+	if ownsTerminal(stdinFD) {
 		attr.Foreground = true
 		attr.Ctty = stdinFD
 		return attr, stdinFD
 	}
 	return attr, -1
+}
+
+// ownsTerminal reports whether fd is a terminal whose foreground group is this
+// process's group. A wrapper launched in the background (`fleet update --yes &`)
+// still has the terminal on stdin but must never take it from the shell.
+func ownsTerminal(fd int) bool {
+	if !term.IsTerminal(fd) {
+		return false
+	}
+	fg, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	return err == nil && fg == unix.Getpgrp()
 }
 
 // reclaimForeground makes this process's group the terminal's foreground
