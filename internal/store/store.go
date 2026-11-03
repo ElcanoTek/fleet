@@ -1719,6 +1719,7 @@ func stripPublicShareContentFields(raw json.RawMessage) json.RawMessage {
 		return raw
 	}
 	delete(obj, "sender_email")
+	delete(obj, "images")
 	out, err := json.Marshal(obj)
 	if err != nil {
 		return raw
@@ -1741,7 +1742,7 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	cutoff := time.Now().Add(-d).Unix()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, updated_at = $2
-		 WHERE pinned = FALSE AND archived_at IS NULL AND project_id IS NULL AND updated_at < $3`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND project_id IS NULL AND COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE AND updated_at < $3`,
 		now, now, cutoff,
 	)
 	if err != nil {
@@ -3702,13 +3703,14 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	//    are exempt just like pinned/project conversations so a scheduled patrol
 	//    is never reaped between runs.
 	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM chat_schedules cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
+	const notSharedOrMultiplayerClause = `COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE`
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day
 		// restore window. Only touches live rows (deleted_at IS NULL) so a
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -3718,7 +3720,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -3745,7 +3747,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
 		        ) AS rn
 		        FROM conversations
-		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+`
+		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+`
 		    ) ranked
 		    WHERE rn > $1
 		 )`,

@@ -367,7 +367,7 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 	}
 	query := `SELECT ` + chatScheduleSelectCols + `
 		FROM chat_schedules
-		WHERE conversation_id = $1 AND user_email = $2`
+		WHERE conversation_id = $1 AND ($2 = '' OR user_email = $2)`
 	if !includeTerminal {
 		query += ` AND status IN ('active', 'paused')`
 	}

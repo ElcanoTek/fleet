@@ -380,6 +380,10 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	if body.Excluded != nil {
 		exclArg = *body.Excluded
 	}
+	var priorRoster []string
+	if conv.Multiplayer {
+		priorRoster, _ = s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	}
 	updated := conv
 	if body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil {
 		targetMultiplayer := conv.Multiplayer
@@ -421,7 +425,8 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
-	reconcileSeeds := append([]string{}, roster...)
+	reconcileSeeds := append([]string{}, priorRoster...)
+	reconcileSeeds = append(reconcileSeeds, roster...)
 	reconcileSeeds = append(reconcileSeeds, conv.MultiplayerParticipants...)
 	reconcileSeeds = append(reconcileSeeds, body.Remove...)
 	s.enforceMultiplayerRevocation(r.Context(), convID, updated, reconcileSeeds)
@@ -493,6 +498,23 @@ func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string,
 		allowed[ownerKey] = true
 	}
 	if !multiplayer {
+		for _, r := range roster {
+			if e := strings.ToLower(strings.TrimSpace(r)); e != "" && e != ownerKey {
+				revokedCandidates[e] = true
+			}
+		}
+		if conv != nil {
+			for _, p := range conv.MultiplayerParticipants {
+				if e := strings.ToLower(strings.TrimSpace(p)); e != "" && e != ownerKey {
+					revokedCandidates[e] = true
+				}
+			}
+			for _, ex := range conv.MultiplayerExcluded {
+				if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+					revokedCandidates[e] = true
+				}
+			}
+		}
 		return ownerEmail, ownerKey, allowed, revokedCandidates
 	}
 	for _, r := range roster {
@@ -544,6 +566,15 @@ func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, owner
 			if sender != "" && !allowed[sender] {
 				revokedCandidates[sender] = true
 				_, _ = s.store.ClaimApproval(qctx, a.UserEmail, a.ID, "rejected", "Multiplayer access to this conversation was revoked.")
+			}
+		}
+	}
+	if scheds, serr := s.store.ListChatSchedules(qctx, "", convID, false); serr == nil {
+		for _, sc := range scheds {
+			sender := strings.ToLower(strings.TrimSpace(sc.UserEmail))
+			if sender != "" && sender != ownerKey && !allowed[sender] {
+				revokedCandidates[sender] = true
+				_, _ = s.store.CancelChatSchedule(qctx, sc.UserEmail, convID, sc.ID)
 			}
 		}
 	}

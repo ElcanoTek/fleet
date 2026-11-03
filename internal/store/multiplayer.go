@@ -521,9 +521,14 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 			return nil, ErrConversationNotFound
 		}
 	}
-	var ownerTeam sql.NullString
-	_ = s.db.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, normalizeEmail(conv.UserEmail)).Scan(&ownerTeam)
-	team := strings.TrimSpace(ownerTeam.String)
+	var sharedTeam sql.NullString
+	_ = s.db.QueryRowContext(ctx, `SELECT team_shared_with FROM conversations WHERE id = $1 AND deleted_at IS NULL`, convID).Scan(&sharedTeam)
+	team := strings.TrimSpace(sharedTeam.String)
+	if !conv.Multiplayer && team == "" {
+		var ownerTeam sql.NullString
+		_ = s.db.QueryRowContext(ctx, `SELECT team_id FROM users WHERE email = $1`, normalizeEmail(conv.UserEmail)).Scan(&ownerTeam)
+		team = strings.TrimSpace(ownerTeam.String)
+	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT email FROM users
