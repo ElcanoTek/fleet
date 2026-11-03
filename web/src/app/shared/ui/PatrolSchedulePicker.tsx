@@ -54,7 +54,7 @@ export function PatrolSchedulePicker({
     [parsed, frequency],
   );
 
-  const effectiveTz = timezone.trim() || browserTimeZone();
+  const effectiveTz = timezone.trim() || "UTC";
   const zones = useMemo(
     () => timeZoneOptions(effectiveTz, browserTimeZone()),
     [effectiveTz],
@@ -292,7 +292,7 @@ export function PatrolSchedulePicker({
               type="button"
               onClick={() => {
                 if (customTzMode && !timezone.trim()) {
-                  onChangeTimezone(browserTimeZone());
+                  onChangeTimezone("UTC");
                 }
                 setCustomTzMode((v) => !v);
               }}
@@ -310,7 +310,7 @@ export function PatrolSchedulePicker({
               onChange={(e) => onChangeTimezone(e.target.value)}
               onBlur={() => {
                 if (!timezone.trim()) {
-                  onChangeTimezone(browserTimeZone());
+                  onChangeTimezone("UTC");
                 }
               }}
               placeholder="America/New_York or UTC"

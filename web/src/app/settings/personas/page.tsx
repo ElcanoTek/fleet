@@ -189,7 +189,7 @@ export default function PersonasPage() {
           autonomy: draft.autonomy,
           patrols: draft.patrols.map((pt) => ({
             ...pt,
-            timezone: (pt.timezone ?? "").trim() || browserTimeZone(),
+            timezone: (pt.timezone ?? "").trim() || "UTC",
           })),
         }),
       });
@@ -538,7 +538,7 @@ export default function PersonasPage() {
                     </div>
                     <PatrolSchedulePicker
                       cron={pt.cron}
-                      timezone={pt.timezone ?? browserTimeZone()}
+                      timezone={pt.timezone || "UTC"}
                       onChangeCron={(nextCron) => setPatrol(i, { cron: nextCron })}
                       onChangeTimezone={(nextTz) => setPatrol(i, { timezone: nextTz })}
                       testIdPrefix={`persona-patrol-schedule-${i}`}

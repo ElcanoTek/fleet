@@ -290,7 +290,7 @@ export function PatrolPopover({
       : undefined;
   const tz =
     effectiveKind === "patrol" && isCustom
-      ? customTz.trim() || browserTimeZone()
+      ? customTz.trim() || "UTC"
       : browserTimeZone();
 
   return (
