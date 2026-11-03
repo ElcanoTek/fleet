@@ -10,6 +10,9 @@
 # the failing statement, "LINE 1: ALTER ROLE ... PASSWORD '...'") are shown
 # with each password replaced by the same placeholder.
 
+# Never traced, whoever sources this: `set -x` would print the passwords these functions take.
+{ set +x; } 2>/dev/null
+
 # What the plan and a redacted psql error show in place of each password.
 FLEET_CHAT_PW_PLACEHOLDER='<chat db password>'
 # Kept apart from the line above: gitleaks reads a bare next line as its value.

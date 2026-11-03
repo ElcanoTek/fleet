@@ -153,6 +153,68 @@ func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 	}
 }
 
+// TestBootstrapUnderXtraceHidesDBPasswords — an operator debugging a run with
+// `bash -x scripts/bootstrap.sh ...` gets every expanded command on stderr,
+// and the provisioning SQL and the passwords read back out of the env file are
+// expanded long before any redaction. bootstrap turns tracing off first thing.
+func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
+	bash, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skip("bash not available")
+	}
+	const chatPassword, schedPassword = "chatXtracePw4N8q", "schedXtracePw6M2v"
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + chatPassword + "@127.0.0.1:5432/chat?sslmode=disable\n" +
+		"FLEET_SCHED_DATABASE_URL=postgres://sched:" + schedPassword + "@127.0.0.1:5432/sched?sslmode=disable\n"
+	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root := repoRootFromTest(t)
+	cmd := exec.Command(bash, "-x", filepath.Join(root, "scripts", "bootstrap.sh"), "--dry-run", "--postgres=local")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(),
+		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
+		"TERM=dumb",
+		"FLEET_ENV_FILE="+envFile,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("bash -x bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	for _, secret := range []string{chatPassword, schedPassword} {
+		if strings.Contains(string(out), secret) {
+			t.Errorf("bash -x bootstrap --dry-run printed a live DB password from the env file")
+		}
+	}
+	if !strings.Contains(string(out), "<chat db password>") {
+		t.Errorf("bash -x bootstrap --dry-run did not reach the plan\n--- output ---\n%s", out)
+	}
+}
+
+// TestSecretHandlingScriptsStartUntraced pins the xtrace guard as the first
+// command of every script that reads the DB passwords: bootstrap.sh, the
+// pgprovision lib it sources, and doctor.sh (which reads the env file's DSNs).
+// Anything that ran before it would still be traced.
+func TestSecretHandlingScriptsStartUntraced(t *testing.T) {
+	root := repoRootFromTest(t)
+	for _, rel := range []string{"scripts/bootstrap.sh", "scripts/lib/pgprovision.sh", "scripts/doctor.sh"} {
+		body, err := os.ReadFile(filepath.Join(root, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		first := ""
+		for _, line := range strings.Split(string(body), "\n") {
+			if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+				first = trimmed
+				break
+			}
+		}
+		if first != "{ set +x; } 2>/dev/null" {
+			t.Errorf("%s: first command is %q, want the xtrace guard `{ set +x; } 2>/dev/null`", rel, first)
+		}
+	}
+}
+
 // TestBootstrapRefusesQuotedDBPassword — a single quote would end the
 // password's SQL literal early, and psql's error would then quote the rest of
 // the password as a token the redaction cannot recognise. The plan warns that

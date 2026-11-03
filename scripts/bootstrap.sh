@@ -168,6 +168,8 @@
 #   FLEET_BACKUP_RETENTION_DAYS  the timer's --prune cutoff: dumps older than this
 #                           many days are deleted after a successful run (default 30)
 #   FLEET_ACME_EMAIL        Let's Encrypt account email for Caddy (--domain; optional)
+# Tracing off before anything is read: `bash -x` would print the DB passwords and other secrets.
+{ set +x; } 2>/dev/null
 set -euo pipefail
 
 # Resolve this script's repo root so --enable-service can build + install the
