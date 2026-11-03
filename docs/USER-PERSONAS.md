@@ -116,7 +116,10 @@ keyboard. Actions:
   choice; **Build with the assistant** opens `/chat?draft=…` with the request in
   the composer — nothing is sent until the user presses Send — and **Write it
   myself** opens the editor on the twin template), **Your personas** (editor
-  with templates, drafts with **Approve**/**Discard**, **Start chat**, **Edit**,
+  with templates, quick cadence preset pills plus the shared `PatrolSchedulePicker`
+  for recurring hours/minutes/daily/weekdays/specific days, time-zone dropdown
+  with a `Custom zone` option, live schedule description, and `Advanced cron`
+  backup, drafts with **Approve**/**Discard**, **Start chat**, **Edit**,
   **View**, **Delete**, and **Start patrol** per suggested patrol), and
   **Workspace personas** (**Start chat**, **Customize**).
 - **Start patrol** creates a conversation on the persona, `POST`s the patrol to

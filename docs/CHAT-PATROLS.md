@@ -23,10 +23,10 @@ Previously, recurring work required promoting a conversation to a standalone hea
    - When a patrol turn stages a critical tool approval card while `conv.AutoApprove` is off, the card receives at least a 24-hour (`86400s`) expiry floor and automatically arms `resume_after_approval`, so approving the card later immediately resumes the patrol turn.
    - `python_bridge.py` automatically checkpoints and restores serializable user variables (`.fleet_python_state.pkl` in the conversation workspace) across turns and patrol runs, and persistent sandboxes scope their writable bind-mount to `<WorkspaceHostDir>/<convID>` and reap any detached non-kernel processes on turn release.
 
-3. **Web UI (`PatrolBanner.tsx`, `Composer.tsx`, `chat-experience.tsx`)**
+3. **Web UI (`PatrolBanner.tsx`, `PatrolSchedulePicker.tsx`, `patrolSchedule.ts`, `Composer.tsx`, `chat-experience.tsx`)**
    - `GET /api/conversations/{id}` and `/api/conversations/{id}/schedules` hydrate the conversation's active/paused schedules.
-   - The composer includes a **Patrol** popover with 1-click presets (`Every 1h`, `Every 2h`, `Every 4h`, `Every 6h`, `In 30m (1x)`, `Custom`), instructions input, and an optional `Auto-approve tools while patrolling` toggle.
-   - The `PatrolBanner` header bar displays live countdowns, run counts, and 1-click **Run now**, **Pause/Resume**, **Stop**, and **⚡ Enable Auto-approve** controls, and polls while a patrol is active so background patrol turns stream into open tabs automatically.
+   - The composer includes a **Patrol** popover with 1-click presets (`Every 1h`, `Every 2h`, `Every 4h`, `Every 6h`, `Weekdays 9am`, `Daily 9am`, `In 30m (once)`, `In 2h (once)`, `Custom`), instructions input, and an optional `Auto-approve tools while patrolling` toggle. Selecting `Custom` opens a visual schedule/timer builder supporting recurring schedules (`Every N hours`, `Every N minutes`, `Every day`, `Weekdays (Mon–Fri)`, `Specific days of the week` with Mon–Sun toggles, time picker, IANA time-zone dropdown with `Custom zone` entry, live `describeCronExpression` preview, and an `Advanced cron` backup input) as well as custom one-shot timers (`Minutes` / `Hours` up to 1440m / 168h).
+   - The `PatrolBanner` header bar displays human-readable cadences (`formatScheduleCadence`), live countdowns, run counts, and 1-click **Run now**, **Pause/Resume**, **Stop**, and **⚡ Enable Auto-approve** controls, and polls while a patrol is active so background patrol turns stream into open tabs automatically.
 
 ## Deferred Scope
 

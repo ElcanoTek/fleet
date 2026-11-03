@@ -40,6 +40,7 @@ export function PatrolSchedulePicker({
     cron: string;
     mode: PatrolFrequency;
   } | null>(null);
+  const [customTzMode, setCustomTzMode] = useState(false);
   const frequency: PatrolFrequency =
     overrideForCron && overrideForCron.cron === cron
       ? overrideForCron.mode
@@ -279,20 +280,41 @@ export function PatrolSchedulePicker({
 
       {onChangeTimezone ? (
         <label className={labelClass}>
-          <span>Time zone</span>
-          <select
-            aria-label="Time zone"
-            data-testid={`${testIdPrefix}-timezone`}
-            value={effectiveTz}
-            onChange={(e) => onChangeTimezone(e.target.value)}
-            className={inputClass}
-          >
-            {zones.map((z) => (
-              <option key={z} value={z}>
-                {formatTimeZoneLabel(z)}
-              </option>
-            ))}
-          </select>
+          <span className="flex items-center justify-between gap-2">
+            <span>Time zone</span>
+            <button
+              type="button"
+              onClick={() => setCustomTzMode((v) => !v)}
+              className="text-[0.68rem] font-normal text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:underline"
+            >
+              {customTzMode ? "Pick from list" : "Custom zone"}
+            </button>
+          </span>
+          {customTzMode ? (
+            <input
+              type="text"
+              aria-label="Time zone"
+              data-testid={`${testIdPrefix}-timezone-custom`}
+              value={timezone}
+              onChange={(e) => onChangeTimezone(e.target.value)}
+              placeholder="America/New_York or UTC"
+              className={`${inputClass} font-mono`}
+            />
+          ) : (
+            <select
+              aria-label="Time zone"
+              data-testid={`${testIdPrefix}-timezone`}
+              value={effectiveTz}
+              onChange={(e) => onChangeTimezone(e.target.value)}
+              className={inputClass}
+            >
+              {zones.map((z) => (
+                <option key={z} value={z}>
+                  {formatTimeZoneLabel(z)}
+                </option>
+              ))}
+            </select>
+          )}
         </label>
       ) : null}
 

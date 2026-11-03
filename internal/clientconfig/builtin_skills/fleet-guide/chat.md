@@ -717,8 +717,8 @@ about the first kind.
 
 | Card | When it appears | Your choices |
 | --- | --- | --- |
-| Send this email? | The assistant has drafted a message and wants to send it. The card shows the sender, the subject, and the To, Cc, and Bcc recipients each on their own line, lists every file that goes out with it by name, inline images included (visible even with the body collapsed), and shows the body. | **Send** · **Cancel** |
-| Email preview | The assistant wants to show you a draft without sending it. | **Dismiss** — display-only by design |
+| Send this email? | The assistant has drafted a message and wants to send it. The card shows the sender, the subject, and the To, Cc, and Bcc recipients each on their own line, lists every file that goes out with it by name, inline images included (visible even with the body collapsed), and shows the body (for HTML emails that exceed the preview height — or on a phone, where the collapsed preview lets vertical scrolling pass through — press **Expand full email** / **Collapse email preview** to view or interact with the full message). | **Send** · **Cancel** |
+| Email preview | The assistant wants to show you a draft without sending it (with the same **Light** / **Dark** inbox toggle, **Mobile** / **Desktop** size toggle on wide screens, **Show source**, and **Expand full email** / **Collapse email preview** controls). | **Dismiss** — display-only by design |
 | Run this shell command? | A command the platform treats as risky. | **Approve & run** · **Cancel** |
 | Schedule a task | The assistant proposes a scheduled task, usually because you chose **Make recurring task…**. See [From chat to a task](#10-from-chat-to-a-task). | **Approve & schedule** · **Edit** · **Cancel** |
 | Change a task | The assistant wants to stop or update an existing scheduled task. | **Approve & stop** or **Approve & update** · **Cancel** |
