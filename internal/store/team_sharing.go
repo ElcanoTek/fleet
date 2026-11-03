@@ -392,8 +392,8 @@ func (s *Store) UnshareTeamVisibleChatsInTeam(ctx context.Context, ownerEmail, t
 		return 0, nil
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
-		WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
+		UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+		WHERE user_email = $2 AND (team_visible = TRUE OR multiplayer = TRUE) AND team_shared_with = $3`,
 		time.Now().Unix(), normalizeEmail(ownerEmail), teamID,
 	)
 	if err != nil {

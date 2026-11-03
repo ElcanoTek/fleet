@@ -288,7 +288,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	}
 
 	if created && row.Mode == store.InputModeSteer && row.State != store.InputStateCancelled {
-		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil {
+		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
 			entry.steer.offer(row.ID, req.Message)
 		}
 	}

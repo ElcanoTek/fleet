@@ -982,24 +982,8 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
-	// "[project] ") alongside personal memory. For a non-owner multiplayer
-	// participant, only inject project context when the project is accessible
-	// to the participant.
-	var projectInstructions string
-	var projectMemoryBullets []string
-	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
-		projectInstructions, projectMemoryBullets = s.projectTurnContext(reqCtx, conv)
-	} else if conv.ProjectID != "" {
-		if p, perr := s.store.GetProject(reqCtx, conv.ProjectID); perr == nil && p != nil {
-			callerTeam := ""
-			if u, uerr := s.store.GetUser(reqCtx, user); uerr == nil && u != nil {
-				callerTeam = u.TeamID
-			}
-			if p.MemberOf(user, callerTeam) {
-				projectInstructions, projectMemoryBullets = s.projectTurnContext(reqCtx, conv)
-			}
-		}
-	}
+	// "[project] ") alongside personal memory.
+	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, user, conv)
 	memories, err := s.store.ListMemories(reqCtx, user)
 	if err != nil {
 		fail(http.StatusInternalServerError, err)
@@ -1174,9 +1158,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// the set the turn runs with — not only the creation-time request seed,
 		// which later turns never carry.
 		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
-		if conv.Multiplayer && user != "" {
-			injected += "\n\n[Multiplayer chat: message sent by " + user + "]"
-		}
+		injected = appendMultiplayerSenderBlock(injected, conv, user)
 	}
 
 	// Lockdown model migration, at the last moment before the client can be
@@ -1225,13 +1207,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Not the user's words when fleet started the turn: the same marker the
 	// persisted entry carries (TextContent.Kind), so a reattach renders the
 	// notice row the reload path renders.
-	userEvent := withInputKind(map[string]any{"text": req.Message}, "kind", req.inputKind)
-	if injected != "" {
-		userEvent["injected_context"] = injected
-	}
-	if conv.Multiplayer && userWords && user != "" {
-		userEvent["sender_email"] = user
-	}
+	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user)
 	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
 		// Same reason as the metadata events above: seed the queue snapshot so
@@ -1326,6 +1302,24 @@ func withInputKind(frame map[string]any, key, kind string) map[string]any {
 		frame[key] = kind
 	}
 	return frame
+}
+
+func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, user string) string {
+	if conv != nil && conv.Multiplayer && user != "" {
+		return injected + "\n\n[Multiplayer chat: message sent by " + user + "]"
+	}
+	return injected
+}
+
+func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {
+	userEvent := withInputKind(map[string]any{"text": message}, "kind", inputKind)
+	if injected != "" {
+		userEvent["injected_context"] = injected
+	}
+	if conv != nil && conv.Multiplayer && userWords && user != "" {
+		userEvent["sender_email"] = user
+	}
+	return userEvent
 }
 
 // seedConversationMCP persists a brand-new conversation's pre-chat Tools
@@ -1741,7 +1735,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		// construction so an edit governs the next staged card, no restart.
 		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		convAutoApprove: strings.EqualFold(convOwnerEmail(conv, user), user) && conv.AutoApprove,
+		convAutoApprove:      strings.EqualFold(convOwnerEmail(conv, user), user) && conv.AutoApprove,
 		liveAutoApprove: func(c context.Context) bool {
 			if !strings.EqualFold(convOwnerEmail(conv, user), user) {
 				return false

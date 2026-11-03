@@ -342,7 +342,7 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT email FROM users
-		WHERE ($1 = '' OR team_id = $1 OR COALESCE(team_id, '') = '')
+		WHERE ($1 = '' OR team_id = $1)
 		ORDER BY email ASC`, team)
 	if err != nil {
 		return nil, err
@@ -437,10 +437,10 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		}
 		c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
 		c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
-		if containsEmail(c.MultiplayerExcluded, callerEmail) {
-			continue
-		}
 		if c.Multiplayer {
+			if containsEmail(c.MultiplayerExcluded, callerEmail) {
+				continue
+			}
 			if !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam), sharedTeamID) {
 				continue
 			}

@@ -217,6 +217,7 @@ func unfileChatsWithoutProjectAccessTx(ctx context.Context, tx *sql.Tx, projectI
 		UPDATE conversations c SET
 			project_id = NULL,
 			team_visible = FALSE,
+			multiplayer = FALSE,
 			team_shared_with = NULL,
 			team_shared_with_id = NULL,
 			updated_at = $2
@@ -244,6 +245,7 @@ func unfileChatsInInaccessibleProjectsTx(ctx context.Context, tx *sql.Tx, email,
 		UPDATE conversations c SET
 			project_id = NULL,
 			team_visible = FALSE,
+			multiplayer = FALSE,
 			team_shared_with = NULL,
 			team_shared_with_id = NULL,
 			updated_at = $2
@@ -327,8 +329,8 @@ func (s *Store) UpdateProject(ctx context.Context, ownerEmail, id string, patch 
 		// team, where the old audience would otherwise keep reading a chat
 		// that no longer appears in anyone's Team section.
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
-			 WHERE project_id = $2 AND team_visible = TRUE
+			`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			 WHERE project_id = $2 AND (team_visible = TRUE OR multiplayer = TRUE)
 			   AND team_shared_with IS DISTINCT FROM NULLIF($3::text, '')`,
 			time.Now().Unix(), id, p.TeamID); err != nil {
 			return nil, err
@@ -382,7 +384,7 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 	// TransferProjectOwnership run. It is the behavior the other revocation
 	// paths were brought into line with, not an exception to them.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE project_id = $1`, id, time.Now().Unix()); err != nil {
 		return err
 	}
@@ -531,6 +533,13 @@ func (s *Store) setConversationProject(ctx context.Context, userEmail, convID, p
 				                AND p.team_id <> ''
 				                AND p.team_id = conversations.team_shared_with)
 				THEN team_visible ELSE FALSE END),
+			multiplayer = (CASE
+				WHEN $1::text IS NOT NULL
+				 AND EXISTS (SELECT 1 FROM projects p
+				              WHERE p.id = $1::text
+				                AND p.team_id <> ''
+				                AND p.team_id = conversations.team_shared_with)
+				THEN multiplayer ELSE FALSE END),
 			team_shared_with = (CASE
 				WHEN $1::text IS NOT NULL
 				 AND EXISTS (SELECT 1 FROM projects p

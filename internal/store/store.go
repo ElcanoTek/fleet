@@ -2160,7 +2160,7 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 // SetConversationTeamVisibleWithOptions is SetConversationTeamVisible with an
 // explicit allowUnfiled flag: when allowUnfiled is true (used when the instance
 // enables FLEET_TEAM_CHATS_SHARED_BY_DEFAULT), an unfiled conversation
-// (project_id IS NULL / '') may be shared directly with the owner's team
+// (project_id IS NULL / ”) may be shared directly with the owner's team
 // without requiring a team-shared project. Conversations filed inside a
 // personal project still require the project to be team-shared.
 func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, ownerEmail, convID string, visible, allowUnfiled bool) (bool, error) {

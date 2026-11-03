@@ -57,53 +57,57 @@ func clampSeed(seed string) string {
 	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
 }
 
-func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
-	user := userFromCtx(r.Context())
-	switch r.Method {
-	case http.MethodGet:
-		// ?archived=true returns the archived conversations (the collapsed
-		// "Archived" sidebar section, #282); default returns active ones.
-		// ?label= (repeatable, AND semantics) restricts to conversations
-		// carrying every listed label (#258).
-		q := r.URL.Query()
-		// ?scope=team returns the conversations same-team members have shared
-		// (team_visible), read-only (#237) — the manager/teammate view. It is a
-		// distinct, opt-in read path: it never mixes the caller's private
-		// conversations in, and a caller with no team gets 400.
-		if q.Get("scope") == "team" {
-			list, err := s.store.ListTeamConversations(r.Context(), user)
-			if errors.Is(err, store.ErrNoTeam) {
-				http.Error(w, "no team", http.StatusBadRequest)
-				return
-			}
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, map[string]any{"conversations": list})
+func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request, user string) {
+	// ?archived=true returns the archived conversations (the collapsed
+	// "Archived" sidebar section, #282); default returns active ones.
+	// ?label= (repeatable, AND semantics) restricts to conversations
+	// carrying every listed label (#258).
+	q := r.URL.Query()
+	// ?scope=team returns the conversations same-team members have shared
+	// (team_visible), read-only (#237) — the manager/teammate view. It is a
+	// distinct, opt-in read path: it never mixes the caller's private
+	// conversations in, and a caller with no team gets 400.
+	if q.Get("scope") == "team" {
+		list, err := s.store.ListTeamConversations(r.Context(), user)
+		if errors.Is(err, store.ErrNoTeam) {
+			http.Error(w, "no team", http.StatusBadRequest)
 			return
 		}
-		// ?scope=shared returns all conversations shared with the caller via
-		// Multiplayer mode or team visibility (migration 092), even when the
-		// caller has not joined a named team.
-		if q.Get("scope") == "shared" {
-			list, err := s.store.ListSharedAndMultiplayerConversations(r.Context(), user)
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, map[string]any{"conversations": list})
-			return
-		}
-		list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
-			ArchivedOnly: q.Get("archived") == "true",
-			Labels:       q["label"],
-		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]any{"conversations": list})
+		return
+	}
+	// ?scope=shared returns all conversations shared with the caller via
+	// Multiplayer mode or team visibility (migration 092), even when the
+	// caller has not joined a named team.
+	if q.Get("scope") == "shared" {
+		list, err := s.store.ListSharedAndMultiplayerConversations(r.Context(), user)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"conversations": list})
+		return
+	}
+	list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
+		ArchivedOnly: q.Get("archived") == "true",
+		Labels:       q["label"],
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"conversations": list})
+}
+
+func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r.Context())
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListConversations(w, r, user)
 	case http.MethodDelete:
 		// Bulk delete (#279). Two modes, mutually exclusive:
 		//

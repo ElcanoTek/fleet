@@ -1310,14 +1310,25 @@ func projectMemoryContents(memories []store.Memory) []string {
 // projectTurnContext resolves the turn-time project injection (#509): the
 // standing instructions plus the shared memories as tagged bullets. Empty for
 // non-project conversations; best-effort (a load failure degrades to no
-// project context rather than failing the turn).
-func (s *Server) projectTurnContext(ctx context.Context, conv *store.Conversation) (string, []string) {
+// project context rather than failing the turn). For a non-owner multiplayer
+// participant, only injects project context when the project is accessible to
+// the participant.
+func (s *Server) projectTurnContext(ctx context.Context, user string, conv *store.Conversation) (string, []string) {
 	if conv.ProjectID == "" {
 		return "", nil
 	}
 	proj, err := s.store.GetProject(ctx, conv.ProjectID)
 	if err != nil || proj == nil {
 		return "", nil
+	}
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+		callerTeam := ""
+		if u, uerr := s.store.GetUser(ctx, user); uerr == nil && u != nil {
+			callerTeam = u.TeamID
+		}
+		if !proj.MemberOf(user, callerTeam) {
+			return "", nil
+		}
 	}
 	var bullets []string
 	if pm, merr := s.store.ListProjectMemories(ctx, conv.ProjectID); merr == nil {

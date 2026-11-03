@@ -496,8 +496,8 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 	}
 	if old != "" {
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
-			WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
+			UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			WHERE user_email = $2 AND (team_visible = TRUE OR multiplayer = TRUE) AND team_shared_with = $3`,
 			time.Now().Unix(), email, old); err != nil {
 			return err
 		}
@@ -615,7 +615,7 @@ func renameTeamSharesTx(ctx context.Context, tx *sql.Tx, from, to string, now in
 	// live share (every share since migration 084 carries the id); clear it
 	// rather than leave a label that a future team named `from` could match.
 	_, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE team_shared_with = $1`, from, now)
 	return err
 }
@@ -650,7 +650,7 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE team_shared_with_id = $1`, id, now); err != nil {
 		return err
 	}
@@ -937,7 +937,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// deleted account's OWN chats went with it in the statement above, so no
 	// row is left pointing at a project whose owner is gone.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email, time.Now().Unix()); err != nil {
 		return fmt.Errorf("detach project conversations: %w", err)
 	}
