@@ -3003,12 +3003,17 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 	}
 	var isolatedConv *store.Conversation
 	if s.store != nil && approval != nil && approval.ConversationID != "" {
-		if conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID); cerr == nil && conv != nil {
-			if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
-				return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
-			}
-			isolatedConv = conv
+		conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
+		if cerr != nil {
+			return nil, func() {}, fmt.Errorf("resolve conversation for approval workspace: %w", cerr)
 		}
+		if conv == nil {
+			return nil, func() {}, fmt.Errorf("resolve conversation for approval workspace: conversation %s not found", approval.ConversationID)
+		}
+		if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
+			return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
+		}
+		isolatedConv = conv
 	}
 	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
 	if err != nil {

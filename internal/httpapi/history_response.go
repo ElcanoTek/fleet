@@ -63,64 +63,85 @@ func historyForClient(entries []agent.HistoryEntry) []historyEntryResponse {
 // entry's InjectedContext only when viewerEmail is the sender of that entry
 // (or the conversation owner for unattributed entries) so another user's
 // private attachment paths or library listings are never exposed.
+func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
+	return e.Type != "text" && e.Type != "summary" && e.Type != agent.EntryTypeSummaryBoundary
+}
+
 // redactHistoryForSender returns a shallow copy of entries with
-// InjectedContext cleared on any entry whose sender is not callerEmail, so
-// replaying conversation history into a multiplayer participant's turn never
-// feeds another user's private attachment paths, workspace inventory, or
-// expanded context handles to the model.
+// InjectedContext cleared and working-trace entries (tool_call, tool_result,
+// reasoning) omitted on any turn whose sender is not callerEmail, so replaying
+// conversation history into a multiplayer participant's turn never feeds
+// another user's private attachment paths, workspace inventory, or connector
+// API responses to the model.
 func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwnerEmail string) []agent.HistoryEntry {
 	if callerEmail == "" || len(entries) == 0 {
 		return entries
 	}
-	out := make([]agent.HistoryEntry, len(entries))
-	copy(out, entries)
-	for i := range out {
-		sender := strings.TrimSpace(convOwnerEmail)
+	out := make([]agent.HistoryEntry, 0, len(entries))
+	currentTurnSender := strings.TrimSpace(convOwnerEmail)
+	for _, e := range entries {
+		sender := currentTurnSender
 		var (
 			tc    agent.TextContent
 			hasTC bool
 		)
-		if out[i].Role == "user" && out[i].Type == "text" {
-			if json.Unmarshal(out[i].Content, &tc) == nil {
+		if e.Role == "user" && e.Type == "text" {
+			sender = strings.TrimSpace(convOwnerEmail)
+			if json.Unmarshal(e.Content, &tc) == nil {
 				hasTC = true
 				if strings.TrimSpace(tc.SenderEmail) != "" {
 					sender = strings.TrimSpace(tc.SenderEmail)
 				}
 			}
+			if !tc.Steered {
+				currentTurnSender = sender
+			}
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
-			out[i].InjectedContext = ""
+			if isPrivateTurnTraceEntry(e) {
+				continue
+			}
+			e.InjectedContext = ""
 			if hasTC && len(tc.Images) > 0 {
 				tc.Images = nil
 				if b, err := json.Marshal(tc); err == nil {
-					out[i].Content = b
+					e.Content = b
 				}
 			}
 		}
+		out = append(out, e)
 	}
 	return out
 }
 
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
+	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	for _, e := range entries {
 		injected := e.InjectedContext
 		content := e.Content
 		if viewerEmail != "" {
-			sender := strings.TrimSpace(convOwnerEmail)
+			sender := currentTurnSender
 			var (
 				tc    agent.TextContent
 				hasTC bool
 			)
 			if e.Role == "user" && e.Type == "text" {
+				sender = strings.TrimSpace(convOwnerEmail)
 				if json.Unmarshal(e.Content, &tc) == nil {
 					hasTC = true
 					if strings.TrimSpace(tc.SenderEmail) != "" {
 						sender = strings.TrimSpace(tc.SenderEmail)
 					}
 				}
+				if !tc.Steered {
+					currentTurnSender = sender
+				}
 			}
 			if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+				if isPrivateTurnTraceEntry(e) {
+					continue
+				}
 				injected = ""
 				if hasTC && len(tc.Images) > 0 {
 					tc.Images = nil

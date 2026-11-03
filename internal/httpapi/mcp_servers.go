@@ -586,7 +586,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 // the failure this feature exists to prevent. "accounts" omitted = clear
 // every override (a client that never sends it keeps pre-#988 behaviour:
 // the user's defaults).
-func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string) {
+func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	var req struct {
 		EnabledOptional []string          `json:"enabled_optional"`
 		Accounts        map[string]string `json:"accounts"`
@@ -594,7 +594,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	unlock := s.connectorLocks.lock(user + "\x00" + id)
+	unlock := s.connectorLocks.lock(id)
 	defer unlock()
 
 	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)
@@ -617,13 +617,40 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		clean = append(clean, n)
 	}
 	sort.Strings(clean)
-	if err := s.store.SetOptionalMCPServers(r.Context(), user, id, clean); err != nil {
+	ownerEmail := convOwnerEmail(conv, user)
+	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	persisted := clean
+	if !isOwner {
+		// Preserve owner-only remote connectors that were hidden from this
+		// participant's picker so toggling a shared connector never wipes
+		// another user's private remote server opt-ins.
+		merged := append([]string(nil), clean...)
+		mergedSeen := make(map[string]bool, len(merged))
+		for _, n := range merged {
+			mergedSeen[n] = true
+		}
+		if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr == nil && fresh != nil {
+			conv = fresh
+		}
+		for _, raw := range rawConversationOptionalMCPServers(conv) {
+			norm := strings.ToLower(strings.TrimSpace(raw))
+			if norm != "" && !valid[norm] && !mergedSeen[norm] {
+				mergedSeen[norm] = true
+				merged = append(merged, norm)
+			}
+		}
+		sort.Strings(merged)
+		persisted = merged
+	}
+	if err := s.store.SetOptionalMCPServers(r.Context(), ownerEmail, id, persisted); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
-	if err := s.store.SetConversationMCPAccounts(r.Context(), user, id, accounts); err != nil {
-		writeConversationMutationError(w, err)
-		return
+	if isOwner {
+		if err := s.store.SetConversationMCPAccounts(r.Context(), ownerEmail, id, accounts); err != nil {
+			writeConversationMutationError(w, err)
+			return
+		}
 	}
 	writeJSON(w, map[string]any{"enabled_optional": clean, "accounts": accounts})
 }

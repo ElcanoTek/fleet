@@ -183,7 +183,7 @@ func autoFenceRawHTMLDocument(content string) string {
 		return content
 	}
 	lines := strings.Split(content, "\n")
-	out := make([]string, 0, len(lines)+2)
+	var out []string
 	inFence, inHTML := false, false
 	for _, line := range lines {
 		if fenceLine.MatchString(line) {

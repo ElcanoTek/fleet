@@ -318,7 +318,6 @@ func ExclusionSetHash(excluded map[string]bool) string {
 func teamTranscriptEntry(m agent.HistoryEntry) (agent.HistoryEntry, bool) {
 	switch {
 	case m.Type == "text" && (m.Role == "user" || m.Role == "assistant"):
-		m.Content = stripPublicShareContentFields(m.Content)
 		return m, true
 	case m.Type == "summary" || m.Type == agent.EntryTypeSummaryBoundary:
 		return agent.HistoryEntry{ID: m.ID, Role: m.Role, Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)}, true

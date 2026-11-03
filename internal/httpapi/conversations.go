@@ -555,7 +555,7 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 		s.handleTeamLink(w, r, user, id)
 	},
 	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationMCPServersGet),
-	{sub: "mcp-servers", method: http.MethodPost}: (*Server).handleConversationMCPServersSet,
+	{sub: "mcp-servers", method: http.MethodPost}: withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationMCPServersSet),
 	{sub: "export", method: http.MethodGet}:       withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationExport),
 	{sub: "cancel", method: http.MethodPost}:      withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationCancel),
 	{sub: "summarize", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {

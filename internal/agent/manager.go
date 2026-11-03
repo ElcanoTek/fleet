@@ -1643,9 +1643,16 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 	if eventType == "enforcement" {
 		return
 	}
-	if eventType == "user.message" && o.senderEmail != "" && payload != nil {
-		if _, ok := payload["sender_email"]; !ok {
-			payload["sender_email"] = o.senderEmail
+	if o.senderEmail != "" && payload != nil {
+		switch eventType {
+		case "user.message":
+			if _, ok := payload["sender_email"]; !ok {
+				payload["sender_email"] = o.senderEmail
+			}
+		case "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end":
+			if _, ok := payload["user_email"]; !ok {
+				payload["user_email"] = o.senderEmail
+			}
 		}
 	}
 	o.sink.Emit(eventType, payload)

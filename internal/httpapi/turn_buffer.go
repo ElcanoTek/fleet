@@ -607,7 +607,7 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 			return b, true
 		}
 		return data, true
-	case "queue.updated", "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "memory.proposed", "patrol.updated":
+	case "queue.updated", "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
 		}
