@@ -157,7 +157,7 @@ is the shared list that both test suites assert against.
 | Input | `text_input`, `number`, `slider`, `select`, `choice` (segmented/radio), `multi_select` (options and/or free entry), `toggle`, `date`, `list_input` (paste one per line), `include_exclude` (allow/block lanes), `repeater` (add/duplicate/remove items) |
 
 Plus card-level `actions` (`submit` sends the values; `message` sends a
-templated or fixed reply, which serves as quick-reply buttons; `copy` copies a
+fixed reply, which serves as quick-reply buttons; `copy` copies a
 templated string to the clipboard without locking the card; `reset` resets inputs
 to their initial defaults), `field_errors` (inline errors on `id` or
 `repeater[i].field`, with `i` the 0-based item position, unlike the 1-based

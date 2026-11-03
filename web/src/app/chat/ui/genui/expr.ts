@@ -574,11 +574,28 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     if (!Number.isFinite(n)) return null;
     const digits = d === undefined ? 1 : Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
     const abs = Math.abs(n);
-    if (abs >= 1e12) return `${toText(roundTo(n / 1e12, digits))}T`;
-    if (abs >= 1e9) return `${toText(roundTo(n / 1e9, digits))}B`;
-    if (abs >= 1e6) return `${toText(roundTo(n / 1e6, digits))}M`;
-    if (abs >= 1e3) return `${toText(roundTo(n / 1e3, digits))}K`;
-    return toText(roundTo(n, digits));
+    const units: Array<[number, string]> = [
+      [1e12, "T"],
+      [1e9, "B"],
+      [1e6, "M"],
+      [1e3, "K"],
+    ];
+    for (let i = 0; i < units.length; i++) {
+      const [scale, suffix] = units[i];
+      if (abs >= scale) {
+        const r = roundTo(n / scale, digits);
+        if (Math.abs(r) >= 1000 && i > 0) {
+          const [nextScale, nextSuffix] = units[i - 1];
+          return `${toText(roundTo(n / nextScale, digits))}${nextSuffix}`;
+        }
+        return `${toText(r)}${suffix}`;
+      }
+    }
+    const r = roundTo(n, digits);
+    if (Math.abs(r) >= 1000) {
+      return `${toText(roundTo(n / 1e3, digits))}K`;
+    }
+    return toText(r);
   },
   number: ([v]) => numOrNull(num(v)),
   string: ([v]) => toText(v),

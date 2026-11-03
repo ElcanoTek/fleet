@@ -955,14 +955,17 @@ function CardBody({
   );
 
   const resetCard = useCallback(() => {
-    replaceValues(initialValues(spec));
-    if (!readOnly) saveDraft(storeId, null);
+    const next = initialValues(spec);
+    replaceValues(next);
     clearedRef.current = new Set();
     setClearedServerErrors(clearedRef.current);
+    if (!readOnly) {
+      saveDraft(storeId, editing ? next : null, answerKeyRef.current, clearedRef.current);
+    }
     setShowErrors(false);
     setNotice(null);
     setConfirming(null);
-  }, [spec, readOnly, storeId]);
+  }, [spec, readOnly, storeId, editing]);
 
   const send = async (action: Action) => {
     if (!onSubmit) return;
