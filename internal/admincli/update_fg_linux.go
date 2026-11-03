@@ -60,15 +60,18 @@ func waitForeground(cmd *exec.Cmd, ttyFD int) error {
 // cldStopped is siginfo's si_code for a stopped child (CLD_STOPPED).
 const cldStopped = 5
 
-// suspendSelf stops this process and returns only once it has been continued.
-// kill(self, SIGSTOP) can return before the stop takes effect, so it waits
-// for the SIGCONT the shell's fg / bg sends; going on early would hand the
-// terminal back while the shell still thinks the job is running.
+// suspendSelf stops this process's whole job (its process group: the wrapper
+// and, in a pipeline such as `fleet update | tee log`, the rest of the
+// pipeline — the shell only reports a job stopped once every member is) and
+// returns only once it has been continued. kill(SIGSTOP) can return before
+// the stop takes effect, so it waits for the SIGCONT the shell's fg / bg
+// sends; going on early would hand the terminal back while the shell still
+// thinks the job is running.
 func suspendSelf() {
 	cont := make(chan os.Signal, 1)
 	signal.Notify(cont, syscall.SIGCONT)
 	defer signal.Stop(cont)
-	_ = syscall.Kill(syscall.Getpid(), syscall.SIGSTOP)
+	_ = syscall.Kill(-syscall.Getpgrp(), syscall.SIGSTOP)
 	<-cont
 }
 
