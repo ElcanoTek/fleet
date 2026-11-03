@@ -281,6 +281,8 @@ test("moving between dashboard view and the normal chat keeps drafts, cards and 
   for (let round = 0; round < 3; round++) {
     await page.getByTestId("dashboard-enter").click();
     await expect(page.getByTestId("dashboard-panel")).toHaveCount(round === 0 ? 3 : 4);
+    // Entering puts the focus on the HUD's Exit.
+    await expect(page.getByTestId("dashboard-exit")).toBeFocused();
     if (round === 0) {
       // Pin the form and start answering it on the board.
       await page.getByTestId("dashboard-pin-card").click();
@@ -288,7 +290,9 @@ test("moving between dashboard view and the normal chat keeps drafts, cards and 
     }
     await expect(page.locator('[data-panel-key="c:call-follow-1"]').getByLabel(/Note to Acme/)).toHaveValue("Renewal looks good");
     await expect(prompt).toHaveValue("half-written question");
+    // Leaving puts it back on the header's Dashboard button.
     await page.getByTestId("dashboard-exit").click();
+    await expect(page.getByTestId("dashboard-enter")).toBeFocused();
 
     // Back in the normal chat: full cards again, no board pointers, the same
     // draft in the composer and in the form.

@@ -3710,7 +3710,24 @@ export function ChatExperience({
     setDashboardPane("board");
     // A drawer left open on a phone would reappear on the way out.
     setSidebarOpen(false);
+    dashboardToggledRef.current = true;
   }, []);
+  // The control that was pressed unmounts with the layout it lived in: once
+  // the new layout has rendered, put the keyboard focus on its toggle (HUD
+  // Exit on the way in, the header Dashboard button on the way out). Only
+  // after a toggle — never when a conversation simply opens in the view.
+  const dashboardToggledRef = useRef(false);
+  useEffect(() => {
+    if (!dashboardToggledRef.current) return;
+    dashboardToggledRef.current = false;
+    // Not if the toggle came from inside a dialog that keeps the focus.
+    if (document.activeElement?.closest('[role="dialog"]')) return;
+    document
+      .querySelector<HTMLElement>(
+        dashboardActive ? '[data-testid="dashboard-exit"]' : '[data-testid="dashboard-enter"]',
+      )
+      ?.focus();
+  }, [dashboardActive]);
   const focusDashboardPanel = useCallback((key: string) => {
     setDashboardFocus("");
     setDashboardPane("board");

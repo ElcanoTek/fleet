@@ -244,6 +244,17 @@ describe("cardRef", () => {
 });
 
 describe("reused ids and lineage", () => {
+  it("a reused id that names itself in replaces does not inherit the old card's panel", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "r", input: display("Old", { panel: "x" }) }]),
+      assistant(2, [{ id: "r", input: form("Reused", { replaces: "r" }) }]),
+      assistant(3, [{ id: "n", input: display("New X", { panel: "x" }) }]),
+    ]);
+    expect(b.panels.map((p) => [p.key, p.cardId])).toEqual([["p:x", "n"]]);
+    // The reused form is not on the board, so the rail draws it in full.
+    expect(b.cardSlots.has("r")).toBe(false);
+  });
+
   it("a card that inherited a panel keeps it when the original's id is reused later", () => {
     const b = boardOf([
       assistant(1, [{ id: "a", input: display("Rev", { panel: "rev" }) }]),

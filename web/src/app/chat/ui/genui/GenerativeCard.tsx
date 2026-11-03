@@ -246,8 +246,26 @@ export function keyDigest(key: string): string {
   return d;
 }
 
+// Drafts are also kept in memory for this page's life (bounded like the
+// stored ones), so a card that remounts — dashboard view draws it on the
+// board, normal view in the transcript — keeps what was typed even when
+// localStorage is blocked. The memory copy is read only when storage
+// throws; while storage works it is the one source.
+const memoryDrafts = new Map<string, string>();
+function rememberDraft(key: string, json: string) {
+  memoryDrafts.delete(key);
+  memoryDrafts.set(key, json);
+  while (memoryDrafts.size > MAX_DRAFTS) memoryDrafts.delete(memoryDrafts.keys().next().value as string);
+}
+
 function readDraft(key: string): StoredDraft | null {
-  const raw = window.localStorage.getItem(key);
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(key);
+  } catch {
+    // Storage unusable: the in-memory copy is the only one.
+    raw = memoryDrafts.get(key) ?? null;
+  }
   if (!raw) return null;
   const v = JSON.parse(raw) as Partial<StoredDraft> | null;
   if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
@@ -264,6 +282,7 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
     const d = readDraft(key);
     const k = keyDigest(answerKey);
     if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === k && draftSent(cardId, d) !== k) return d;
+    memoryDrafts.delete(key);
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -307,16 +326,21 @@ function pruneDrafts(keep: string) {
 
 function saveDraft(cardId: string, values: Values | null, after = "", cleared: Iterable<string> = []) {
   const key = DRAFT_PREFIX + cardId;
+  if (!values) {
+    sentMemory.delete(cardId);
+    memoryDrafts.delete(key);
+  } else {
+    sentMemory.delete(cardId);
+    rememberDraft(key, JSON.stringify({ values, at: Date.now(), after: keyDigest(after), cleared: [...cleared] }));
+  }
   try {
     if (!values) {
-      sentMemory.delete(cardId);
       window.localStorage.removeItem(key);
       return;
     }
     // Pruning scans every draft: only when this card starts one, not per edit.
     if (window.localStorage.getItem(key) === null) pruneDrafts(key);
-    sentMemory.delete(cardId);
-    putDraft(key, JSON.stringify({ values, at: Date.now(), after: keyDigest(after), cleared: [...cleared] }));
+    putDraft(key, memoryDrafts.get(key) as string);
   } catch {
     // Private mode: a draft is a convenience, never state we rely on.
   }

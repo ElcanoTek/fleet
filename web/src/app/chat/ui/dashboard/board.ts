@@ -165,7 +165,9 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       // The slot of the card this one refines — only while that card is the
       // one the slot shows. Refining a stale version takes nothing over,
       // matching deriveGenUiState's panel ownership.
-      const replacedRef = spec.replaces ? liveRef.get(spec.replaces) : undefined;
+      // A card never refines itself: `replaces` naming its own (reused) id
+      // is a self-reference, which deriveGenUiState ignores too.
+      const replacedRef = spec.replaces && spec.replaces !== tc.id ? liveRef.get(spec.replaces) : undefined;
       const replacedSlot = replacedRef !== undefined ? slotOf.get(replacedRef) : undefined;
       const lineage =
         replacedSlot !== undefined && slotRef.get(replacedSlot) === replacedRef ? replacedSlot : undefined;
