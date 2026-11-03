@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
@@ -206,9 +207,66 @@ func jsonPointerToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
 
-// unescapeJSONPointerToken decodes one RFC 6901 JSON Pointer reference token.
-func unescapeJSONPointerToken(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
+// decodeFragmentPointerToken decodes one RFC 6901 URI fragment reference token
+// (percent-decoding followed by `~1`/`~0` JSON Pointer unescaping).
+func decodeFragmentPointerToken(raw string) (string, bool) {
+	if strings.Contains(raw, "/") {
+		return "", false
+	}
+	unescaped, err := url.PathUnescape(raw)
+	if err != nil || strings.Contains(unescaped, "/") {
+		return "", false
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(unescaped, "~1", "/"), "~0", "~"), true
+}
+
+const (
+	maxRefExpansions             = 256
+	maxInlinedSchemaNodes        = 4096
+	maxInlineRefDepth            = 32
+	maxNormalizedToolSchemaBytes = 256 * 1024
+)
+
+type inlineBudget struct {
+	expansions int
+	nodes      int
+	exceeded   bool
+}
+
+func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
+	if budget != nil {
+		budget.nodes++
+		if budget.nodes > maxInlinedSchemaNodes {
+			budget.exceeded = true
+			return nil, false
+		}
+	}
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, vv := range t {
+			copied, ok := copyJSONValueBounded(vv, budget)
+			if !ok {
+				return nil, false
+			}
+			out[k] = copied
+		}
+		return out, true
+	case []any:
+		out := make([]any, len(t))
+		for i, vv := range t {
+			copied, ok := copyJSONValueBounded(vv, budget)
+			if !ok {
+				return nil, false
+			}
+			out[i] = copied
+		}
+		return out, true
+	case []string:
+		return append([]string(nil), t...), true
+	default:
+		return v, true
+	}
 }
 
 var schemaAnnotationKeywords = map[string]bool{
@@ -217,8 +275,8 @@ var schemaAnnotationKeywords = map[string]bool{
 }
 
 var interactingKeywordFamilies = [][]string{
-	{"properties", "patternProperties", "additionalProperties", "unevaluatedProperties"},
-	{"items", "prefixItems", "additionalItems", "unevaluatedItems", "contains", "minContains", "maxContains"},
+	{"properties", "patternProperties", "additionalProperties"},
+	{"items", "prefixItems", "additionalItems", "contains", "minContains", "maxContains"},
 	{"if", "then", "else"},
 	{"dependencies", "dependentRequired", "dependentSchemas"},
 }
@@ -254,15 +312,9 @@ type defScope struct {
 }
 
 func newDefScope(resource map[string]any) defScope {
-	var defs, definitions map[string]any
-	if d, ok := resource["$defs"].(map[string]any); ok && len(d) > 0 {
-		defs, _ = copyJSONValue(d).(map[string]any)
-	}
-	if d, ok := resource["definitions"].(map[string]any); ok && len(d) > 0 {
-		definitions, _ = copyJSONValue(d).(map[string]any)
-	}
-	rootCopy, _ := copyJSONValue(resource).(map[string]any)
-	return defScope{root: rootCopy, defs: defs, definitions: definitions}
+	defs, _ := resource["$defs"].(map[string]any)
+	definitions, _ := resource["definitions"].(map[string]any)
+	return defScope{root: resource, defs: defs, definitions: definitions}
 }
 
 func hasNonFragmentID(obj map[string]any) bool {
@@ -272,14 +324,17 @@ func hasNonFragmentID(obj map[string]any) bool {
 
 // inlineLocalRefs resolves `#/$defs/<Name>` and `#/definitions/<Name>`
 // references inside root against the active resource's `$defs` / `definitions`
-// maps. Recursive back-references are converted to shallow provider-safe stubs
-// without `$ref` so mcpTool.Info() never forwards a dangling reference.
+// maps. Recursive back-references and expansions exceeding the node/depth
+// budget are converted to shallow provider-safe stubs without `$ref` so
+// mcpTool.Info() never forwards a dangling reference or materializes a
+// combinatorial definition DAG.
 func inlineLocalRefs(root map[string]any) map[string]any {
 	if len(root) == 0 {
 		return root
 	}
 	scope := newDefScope(root)
-	resolved := inlineSchemaNodeRefs(root, scope, map[string]bool{"#": true}, true)
+	budget := &inlineBudget{}
+	resolved := inlineSchemaNodeRefs(root, scope, map[string]bool{"#": true}, true, false, budget)
 	switch r := resolved.(type) {
 	case map[string]any:
 		return r
@@ -293,7 +348,7 @@ func inlineLocalRefs(root map[string]any) map[string]any {
 	}
 }
 
-func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isResourceRoot bool) any {
+func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isResourceRoot, inlinedCopy bool, budget *inlineBudget) any {
 	obj, ok := node.(map[string]any)
 	if !ok {
 		return node
@@ -305,41 +360,71 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 	if ref, hasRef := obj["$ref"].(string); hasRef {
 		if target, canonKey, found := lookupLocalDef(ref, scope); found {
 			var resolved any
-			if active[canonKey] {
+			if active[canonKey] || len(active) > maxInlineRefDepth {
+				resolved = recursiveRefStub(target, scope)
+			} else if budget.exceeded || budget.expansions >= maxRefExpansions {
+				budget.exceeded = true
 				resolved = recursiveRefStub(target, scope)
 			} else {
-				nextActive := cloneActiveRefs(active, canonKey)
-				resolved = inlineSchemaNodeRefs(copyJSONValue(target), scope, nextActive, false)
+				budget.expansions++
+				if targetCopy, ok := copyJSONValueBounded(target, budget); ok {
+					nextActive := cloneActiveRefs(active, canonKey)
+					resolved = inlineSchemaNodeRefs(targetCopy, scope, nextActive, false, true, budget)
+				} else {
+					resolved = recursiveRefStub(target, scope)
+				}
 			}
 			if len(obj) > 1 {
-				return mergeResolvedWithSiblings(resolved, obj, scope, active)
+				merged := mergeResolvedWithSiblings(resolved, obj, scope, active, inlinedCopy, budget)
+				if inlinedCopy {
+					if m, ok := merged.(map[string]any); ok {
+						stripInlinedResourceMetadata(m)
+					}
+				}
+				return merged
+			}
+			if !isResourceRoot {
+				if m, ok := resolved.(map[string]any); ok {
+					stripInlinedResourceMetadata(m)
+				}
 			}
 			return resolved
 		}
 	}
-	inlineSchemaMapFields(obj, scope, active)
+	inlineSchemaMapFields(obj, scope, active, inlinedCopy, budget)
+	if inlinedCopy {
+		stripInlinedResourceMetadata(obj)
+	}
 	return obj
 }
 
-func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string]bool) {
+func stripInlinedResourceMetadata(obj map[string]any) {
+	delete(obj, "$id")
+	if _, isStr := obj["id"].(string); isStr {
+		delete(obj, "id")
+	}
+	delete(obj, "$defs")
+	delete(obj, "definitions")
+}
+
+func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string]bool, inlinedCopy bool, budget *inlineBudget) {
 	for key, value := range obj {
 		switch {
 		case schemaValuedKeywords[key]:
-			obj[key] = inlineSchemaNodeRefs(value, scope, active, false)
+			obj[key] = inlineSchemaNodeRefs(value, scope, active, false, inlinedCopy, budget)
 		case schemaArrayKeywords[key]:
 			if items, isArray := value.([]any); isArray {
 				for i, item := range items {
-					items[i] = inlineSchemaNodeRefs(item, scope, active, false)
+					items[i] = inlineSchemaNodeRefs(item, scope, active, false, inlinedCopy, budget)
 				}
 			}
 		case schemaMapKeywords[key]:
+			if key == "$defs" || key == "definitions" {
+				continue
+			}
 			if members, isMap := value.(map[string]any); isMap {
 				for name, member := range members {
-					memberActive := active
-					if key == "$defs" || key == "definitions" {
-						memberActive = cloneActiveRefs(active, key+":"+name)
-					}
-					members[name] = inlineSchemaNodeRefs(member, scope, memberActive, false)
+					members[name] = inlineSchemaNodeRefs(member, scope, active, false, inlinedCopy, budget)
 				}
 			}
 		}
@@ -387,14 +472,50 @@ func recursiveRefStub(target any, scope defScope) any {
 	}
 }
 
-func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope, active map[string]bool) any {
+var unevaluatedPropertyAffectingKeywords = map[string]bool{
+	"properties": true, "patternProperties": true, "additionalProperties": true,
+	"unevaluatedProperties": true, "dependentSchemas": true, "dependencies": true,
+	"allOf": true, "anyOf": true, "oneOf": true, "not": true,
+	"if": true, "then": true, "else": true,
+}
+
+var unevaluatedItemAffectingKeywords = map[string]bool{
+	"items": true, "prefixItems": true, "additionalItems": true, "contains": true,
+	"unevaluatedItems": true,
+	"allOf": true, "anyOf": true, "oneOf": true, "not": true,
+	"if": true, "then": true, "else": true,
+}
+
+func targetNeedsUnevaluatedIsolation(target, siblings map[string]any) bool {
+	if _, hasProps := target["unevaluatedProperties"]; hasProps {
+		for k := range siblings {
+			if unevaluatedPropertyAffectingKeywords[k] {
+				return true
+			}
+		}
+	}
+	if _, hasItems := target["unevaluatedItems"]; hasItems {
+		for k := range siblings {
+			if unevaluatedItemAffectingKeywords[k] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope, active map[string]bool, inlinedCopy bool, budget *inlineBudget) any {
 	siblings := make(map[string]any, len(obj)-1)
 	for k, v := range obj {
 		if k != "$ref" {
-			siblings[k] = copyJSONValue(v)
+			if copied, ok := copyJSONValueBounded(v, budget); ok {
+				siblings[k] = copied
+			} else {
+				siblings[k] = copyJSONValue(v)
+			}
 		}
 	}
-	inlineSchemaMapFields(siblings, scope, active)
+	inlineSchemaMapFields(siblings, scope, active, inlinedCopy, budget)
 
 	if b, isBool := resolved.(bool); isBool {
 		if !b {
@@ -406,6 +527,35 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 	if !ok {
 		return siblings
 	}
+	stripInlinedResourceMetadata(resMap)
+
+	// If the referenced target carries unevaluatedProperties or unevaluatedItems
+	// alongside validation/applicator siblings, keep the target in its own allOf
+	// subschema so its unevaluated* keyword only sees evaluations inside the
+	// target (matching JSON Schema 2020-12 $ref scope).
+	if targetNeedsUnevaluatedIsolation(resMap, siblings) {
+		out := make(map[string]any, len(siblings)+2)
+		for k, v := range resMap {
+			if schemaAnnotationKeywords[k] {
+				out[k] = copyJSONValue(v)
+			}
+		}
+		if t, hasType := resMap["type"]; hasType {
+			if _, sibHasType := siblings["type"]; !sibHasType {
+				out["type"] = copyJSONValue(t)
+			}
+		}
+		for k, v := range siblings {
+			out[k] = v
+		}
+		allOf := []any{resMap}
+		if sibAllOf, ok := siblings["allOf"].([]any); ok {
+			allOf = append(allOf, sibAllOf...)
+		}
+		out["allOf"] = allOf
+		return out
+	}
+
 	out, _ := copyJSONValue(resMap).(map[string]any)
 	var conflicts map[string]any
 	for k, v := range siblings {
@@ -472,16 +622,18 @@ func lookupLocalDef(ref string, scope defScope) (any, string, bool) {
 	if ref == "#" && scope.root != nil {
 		return scope.root, "#", true
 	}
-	if name, ok := strings.CutPrefix(ref, "#/$defs/"); ok && !strings.Contains(name, "/") {
-		decoded := unescapeJSONPointerToken(name)
-		if d, exists := scope.defs[decoded]; exists && isSchemaValue(d) {
-			return d, "$defs:" + decoded, true
+	if name, ok := strings.CutPrefix(ref, "#/$defs/"); ok {
+		if decoded, valid := decodeFragmentPointerToken(name); valid {
+			if d, exists := scope.defs[decoded]; exists && isSchemaValue(d) {
+				return d, "$defs:" + decoded, true
+			}
 		}
 	}
-	if name, ok := strings.CutPrefix(ref, "#/definitions/"); ok && !strings.Contains(name, "/") {
-		decoded := unescapeJSONPointerToken(name)
-		if d, exists := scope.definitions[decoded]; exists && isSchemaValue(d) {
-			return d, "definitions:" + decoded, true
+	if name, ok := strings.CutPrefix(ref, "#/definitions/"); ok {
+		if decoded, valid := decodeFragmentPointerToken(name); valid {
+			if d, exists := scope.definitions[decoded]; exists && isSchemaValue(d) {
+				return d, "definitions:" + decoded, true
+			}
 		}
 	}
 	return nil, "", false
@@ -585,6 +737,9 @@ func toolInputSchemaProblem(info fantasy.ToolInfo) error {
 	raw, err := json.Marshal(doc)
 	if err != nil {
 		return fmt.Errorf("encode input schema: %w", err)
+	}
+	if len(raw) > maxNormalizedToolSchemaBytes {
+		return fmt.Errorf("at /: normalized input schema is %d bytes (max %d)", len(raw), maxNormalizedToolSchemaBytes)
 	}
 	var decoded any
 	if err := json.Unmarshal(raw, &decoded); err != nil {

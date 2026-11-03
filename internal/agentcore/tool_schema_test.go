@@ -510,6 +510,25 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	      "properties": {"v": {"type": "number", "minimum": 0, "exclusiveMinimum": true}},
 	      "required": ["v"]
 	    },
+	    "Postal code": {
+	      "type": "string",
+	      "pattern": "^[0-9]{5}$"
+	    },
+	    "EmbeddedRes": {
+	      "$id": "https://example.com/embedded.json",
+	      "$defs": {"Code": {"type": "integer"}},
+	      "type": "object",
+	      "properties": {"code": {"$ref": "#/$defs/Code"}}
+	    },
+	    "OpenTarget": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}}
+	    },
+	    "ClosedUnevalTarget": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}},
+	      "unevaluatedProperties": false
+	    },
 	    "Wrapper": {
 	      "type": "object",
 	      "description": "generic wrapper",
@@ -534,6 +553,11 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	  "type": "object",
 	  "properties": {
 	    "wrapped": {"$ref": "#/$defs/Wrapper", "description": "custom override"},
+	    "postal": {"$ref": "#/$defs/Postal%20code"},
+	    "emb1": {"$ref": "#/$defs/EmbeddedRes"},
+	    "emb2": {"$ref": "#/$defs/EmbeddedRes"},
+	    "sib_uneval": {"$ref": "#/$defs/OpenTarget", "unevaluatedProperties": false},
+	    "target_uneval": {"$ref": "#/$defs/ClosedUnevalTarget", "properties": {"b": {"type": "string"}}},
 	    "tag": {"$ref": "#/definitions/LegacyTag", "maxLength": 20},
 	    "conflicting": {"$ref": "#/$defs/LongString", "minLength": 1},
 	    "always_ok": {"$ref": "#/$defs/Always"},
@@ -565,6 +589,39 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	leafV := leaf["properties"].(map[string]any)["v"].(map[string]any)
 	if leafV["exclusiveMinimum"] != float64(0) {
 		t.Fatalf("older-draft rewrite inside nested $defs not preserved: %v", leafV)
+	}
+
+	postal := props["postal"].(map[string]any)
+	if postal["type"] != "string" || postal["pattern"] != "^[0-9]{5}$" {
+		t.Fatalf("percent-encoded fragment token not resolved: %v", postal)
+	}
+
+	for _, name := range []string{"emb1", "emb2"} {
+		emb := props[name].(map[string]any)
+		if _, hasID := emb["$id"]; hasID {
+			t.Fatalf("inlined copy %s retained duplicate $id: %v", name, emb)
+		}
+		codeProp := emb["properties"].(map[string]any)["code"].(map[string]any)
+		if codeProp["type"] != "integer" {
+			t.Fatalf("inlined embedded resource %s did not resolve local $defs: %v", name, codeProp)
+		}
+	}
+
+	sibUneval := props["sib_uneval"].(map[string]any)
+	if sibUneval["unevaluatedProperties"] != false || sibUneval["properties"] == nil {
+		t.Fatalf("sibling unevaluatedProperties should stay at top level alongside target properties: %v", sibUneval)
+	}
+	if _, hasAllOf := sibUneval["allOf"]; hasAllOf {
+		t.Fatalf("sibling unevaluatedProperties should not be isolated in allOf: %v", sibUneval)
+	}
+
+	targetUneval := props["target_uneval"].(map[string]any)
+	if _, hasTopUneval := targetUneval["unevaluatedProperties"]; hasTopUneval {
+		t.Fatalf("target unevaluatedProperties must stay inside allOf subschema, not on outer sibling scope: %v", targetUneval)
+	}
+	targetAllOf, ok := targetUneval["allOf"].([]any)
+	if !ok || len(targetAllOf) != 1 || targetAllOf[0].(map[string]any)["unevaluatedProperties"] != false {
+		t.Fatalf("target unevaluatedProperties not preserved in allOf subschema: %v", targetUneval)
 	}
 
 	tag := props["tag"].(map[string]any)
@@ -634,5 +691,54 @@ func TestInfoInlinesRootRefSchema(t *testing.T) {
 	q, ok := info.Parameters["query"].(map[string]any)
 	if !ok || q["type"] != "string" {
 		t.Fatalf("root $ref Parameters = %v, want query:string", info.Parameters)
+	}
+}
+
+func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
+	defs := map[string]any{
+		"D0": map[string]any{
+			"type":       "object",
+			"title":      "Leaf",
+			"properties": map[string]any{"v": map[string]any{"type": "string"}},
+		},
+	}
+	for i := 1; i <= 25; i++ {
+		prev := "#/$defs/D" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		if i-1 < 10 {
+			prev = "#/$defs/D" + string(rune('0'+(i-1)))
+		} else {
+			prev = "#/$defs/D" + string(rune('0'+(i-1)/10)) + string(rune('0'+(i-1)%10))
+		}
+		name := "D" + string(rune('0'+i))
+		if i >= 10 {
+			name = "D" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		}
+		defs[name] = map[string]any{
+			"type":  "object",
+			"title": name,
+			"properties": map[string]any{
+				"left":  map[string]any{"$ref": prev},
+				"right": map[string]any{"$ref": prev},
+			},
+		}
+	}
+	schema := map[string]any{
+		"$defs": defs,
+		"type":  "object",
+		"properties": map[string]any{
+			"root": map[string]any{"$ref": "#/$defs/D25"},
+		},
+	}
+	mt := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "dag", Description: "dag", InputSchema: schema}}
+	info := mt.Info()
+	encoded, err := json.Marshal(info.Parameters)
+	if err != nil {
+		t.Fatalf("marshal bounded DAG Parameters: %v", err)
+	}
+	if strings.Contains(string(encoded), `"$ref"`) {
+		t.Fatalf("bounded DAG still contains dangling $ref: %s", encoded)
+	}
+	if len(encoded) > maxNormalizedToolSchemaBytes {
+		t.Fatalf("bounded DAG exceeded maxNormalizedToolSchemaBytes: %d > %d", len(encoded), maxNormalizedToolSchemaBytes)
 	}
 }
