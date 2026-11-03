@@ -104,7 +104,11 @@ func cmdUpdate(argv []string) int {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 	}()
-	if err := cmd.Wait(); err != nil {
+	wait := cmd.Wait
+	if ttyFD >= 0 {
+		wait = func() error { return waitForeground(cmd, ttyFD) }
+	}
+	if err := wait(); err != nil {
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
 			return exitErr.ExitCode()
@@ -374,7 +378,12 @@ func updateSysProcAttr(stdinFD int, isTerminal func(int) bool) (*syscall.SysProc
 // background group that later reads or configures the tty is stopped).
 // SIGTTOU is ignored for the call: tcsetpgrp from a background group raises it.
 func reclaimForeground(ttyFD int) {
+	ignoreTTOU(func() { _ = unix.IoctlSetPointerInt(ttyFD, unix.TIOCSPGRP, unix.Getpgrp()) })
+}
+
+// ignoreTTOU runs fn with SIGTTOU ignored.
+func ignoreTTOU(fn func()) {
 	signal.Ignore(syscall.SIGTTOU)
 	defer signal.Reset(syscall.SIGTTOU)
-	_ = unix.IoctlSetPointerInt(ttyFD, unix.TIOCSPGRP, unix.Getpgrp())
+	fn()
 }
