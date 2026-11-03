@@ -152,7 +152,7 @@ import {
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 import { deriveGenUiState } from "./genui/transcript";
-import { boardStatus, deriveBoard } from "./dashboard/board";
+import { boardManifest, boardStatus, deriveBoard } from "./dashboard/board";
 import { DashboardTranscriptContext, panelDomId, type DashboardTranscriptValue } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
 import { readDashboardView, useBoardPrefs, writeDashboardView } from "./dashboard/prefs";
@@ -3680,6 +3680,8 @@ export function ChatExperience({
     setDashboardView((on) => !on);
     setDashboardFocus("");
     setDashboardPane("board");
+    // A drawer left open on a phone would reappear on the way out.
+    setSidebarOpen(false);
   }, []);
   const focusDashboardPanel = useCallback((key: string) => {
     setDashboardFocus("");
@@ -5434,6 +5436,7 @@ export function ChatExperience({
   // site, not just inside a moved body.
   const turnStreamDeps = {
     dashboardView: dashboardActive,
+    dashboardBoard: board ? boardManifest(board.panels) : undefined,
     setConvMessages,
     getConvMessages,
     renameConvKey,

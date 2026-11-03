@@ -216,6 +216,57 @@ test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async 
   expect(await keys()).toEqual(["p:pipeline", "p:revenue", "c:call-health-1"]);
 });
 
+test("moving between dashboard view and the normal chat keeps drafts, cards and layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDashboardChat(page);
+  const prompt = page.locator("#promptInput");
+  await prompt.fill("half-written question");
+  const inline = (id: string) => page.locator(`[data-testid="genui-card"][data-card-id="${id}"]`);
+
+  for (let round = 0; round < 3; round++) {
+    await page.getByTestId("dashboard-enter").click();
+    await expect(page.getByTestId("dashboard-panel")).toHaveCount(round === 0 ? 3 : 4);
+    if (round === 0) {
+      // Pin the form and start answering it on the board.
+      await page.getByTestId("dashboard-pin-card").click();
+      await page.locator('[data-panel-key="c:call-follow-1"]').getByLabel(/Note to Acme/).fill("Renewal looks good");
+    }
+    await expect(page.locator('[data-panel-key="c:call-follow-1"]').getByLabel(/Note to Acme/)).toHaveValue("Renewal looks good");
+    await expect(prompt).toHaveValue("half-written question");
+    await page.getByTestId("dashboard-exit").click();
+
+    // Back in the normal chat: full cards again, no board pointers, the same
+    // draft in the composer and in the form.
+    await expect(page.getByTestId("dashboard-hud")).toHaveCount(0);
+    await expect(page.getByTestId("dashboard-card-pointer")).toHaveCount(0);
+    await expect(page.locator('[data-conversation-id="conv-dash"]')).toBeVisible();
+    await expect(inline("call-rev-2")).toContainText("$1.24M");
+    await expect(inline("call-follow-1").getByLabel(/Note to Acme/)).toHaveValue("Renewal looks good");
+    await expect(prompt).toHaveValue("half-written question");
+  }
+});
+
+test("the board tells the agent which card each panel is, pinned ones included", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDashboardChat(page);
+  await page.getByTestId("dashboard-enter").click();
+  await page.getByTestId("dashboard-pin-card").click();
+  await expect(page.getByTestId("dashboard-panel")).toHaveCount(4);
+  const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
+  // Pinning moves the focus to the new panel; type into the composer itself.
+  await expect(page.locator('[data-panel-key="c:call-follow-1"]')).toBeFocused();
+  await page.locator("#promptInput").fill("update the follow-up panel");
+  await page.locator("#promptInput").press("Enter");
+  const body = JSON.parse((await chat).postData() ?? "{}") as { view?: string; board?: unknown[] };
+  expect(body.view).toBe("dashboard");
+  expect(body.board).toEqual([
+    { title: "Revenue", card_id: "call-rev-2", panel: "revenue" },
+    { title: "Open deals", card_id: "call-pipe-1", panel: "pipeline" },
+    { title: "Systems", card_id: "call-health-1" },
+    { title: "Send a follow-up", card_id: "call-follow-1", pinned: true },
+  ]);
+});
+
 test("dashboard view on a phone switches between the board and the chat", async ({ page }) => {
   // Open the chat from the desktop rail, then go phone-sized.
   await page.setViewportSize({ width: 1280, height: 844 });

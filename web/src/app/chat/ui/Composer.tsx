@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
+import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
   ContextRing,
   ModelValidationBadge,
@@ -1855,7 +1856,21 @@ export function Composer({
                       compacting / when the token-limit toast fires), and also
                       reachable inside More options. */}
                   {canCompact && (contextUsage !== null || isSummarizing || compactToastVisible) ? (
-                    <div className="relative inline-flex">
+                    // On a phone the ring shows only when it needs attention
+                    // (filling up, compacting, or the token-limit toast);
+                    // otherwise Compact conversation in More options carries
+                    // the same percentage, and the bar stays calm.
+                    <div
+                      data-testid="composer-context-ring"
+                      className={`relative ${
+                        isSummarizing ||
+                        compactToastVisible ||
+                        contextUsage?.severity === "warn" ||
+                        contextUsage?.severity === "danger"
+                          ? "inline-flex"
+                          : "hidden sm:inline-flex"
+                      }`}
+                    >
                       {compactToastVisible && !isSummarizing ? (
                         <div
                           role="status"
@@ -1949,29 +1964,27 @@ export function Composer({
                       setPatrolPopoverOpen(false);
                       onOpenShare();
                     }}
-                    className={`inline-flex h-[1.95rem] shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[0.75rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50 ${
-                      isSharedAny
-                        ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-text-primary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]"
-                        : "border-[var(--color-border)] bg-[var(--color-overlay-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                    }`}
+                    // Icon-only, like the toolbar's other controls: the glyph
+                    // says who can see the chat (people = team / multiplayer,
+                    // chain = public link, arrow = private), the accent tint
+                    // says it is shared, and a dot marks multiplayer. The
+                    // label and tooltip carry the words.
+                    className={`${TOOL_BTN} ${isSharedAny ? TOOL_BTN_ACTIVE : ""}`}
                   >
-                    <Icon
-                      name={isMultiplayer || isTeamShared ? "persona" : "external-link"}
-                      className={`size-3.5 shrink-0 ${isSharedAny ? "text-[var(--color-accent)]" : ""}`}
-                    />
-                    {isMultiplayer ? (
-                      <>
-                        <span>Multiplayer</span>
-                        <span
-                          aria-hidden="true"
-                          className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                        />
-                      </>
-                    ) : isTeamShared || isLinkShared ? (
-                      <span>Shared</span>
+                    {isMultiplayer || isTeamShared ? (
+                      <TeamGlyph className="size-4 shrink-0" />
+                    ) : isLinkShared ? (
+                      <ShareGlyph className="size-4 shrink-0" />
                     ) : (
-                      <span>Share</span>
+                      <Icon name="external-link" className="size-[0.95rem] shrink-0" />
                     )}
+                    {isMultiplayer ? (
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-share-multiplayer-dot"
+                        className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
+                      />
+                    ) : null}
                   </button>
                 );
               })()

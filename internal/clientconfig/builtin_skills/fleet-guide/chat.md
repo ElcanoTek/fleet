@@ -350,8 +350,8 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
 | More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), **Send on Enter**, and **Dashboard view**. When a non-default persona, a patrol schedule, or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
-| Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**) to compact. See [Long conversations](#long-conversations). |
-| Share | On the right from the very start of the chat (even before your first message is sent). Opens sharing to turn on **Multiplayer**, share read-only with your team, or copy a public link, and reflects the current state (**Share**, **Shared**, or **Multiplayer**). |
+| Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**, which shows the same percentage) to compact. On a phone the ring appears only once the conversation is filling up (70% or more), or while it is compacting, so the toolbar stays uncluttered. See [Long conversations](#long-conversations). |
+| Share | An icon on the right from the very start of the chat (even before your first message is sent). Opens sharing to turn on **Multiplayer**, share read-only with your team, or copy a public link. The icon shows the current state: an arrow while the chat is only yours, two people (tinted) when it is shared with your team, a chain link (tinted) for a public link, and two people with a dot for **Multiplayer**. Hover it, or use a screen reader, for the words. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -370,8 +370,10 @@ not typing in the message box.
   and updates a panel in place when you ask it to refresh, so the panel keeps
   its spot and shows a small version number (**v2**, **v3**) and a brief glow.
   Messages you send from dashboard view tell the assistant you are looking at
-  the board, and ask it to update panels rather than repeat their numbers in
-  the chat.
+  the board and which panels are on it, in order, so "update this chart",
+  "refresh the second panel" or "add last week to the revenue panel" reach the
+  right one, including a card you pinned yourself. They also ask it to update
+  panels rather than repeat their numbers in the chat.
   An empty board offers a few starter requests; picking one puts it in the
   message box for you to edit and send.
 - **What goes on the board.** Cards that only show something (charts, figures,
@@ -394,6 +396,9 @@ not typing in the message box.
   how many approvals are waiting; click it to jump to the first one.
 - **On a phone**, the top bar has **Board** and **Chat** buttons to switch
   between the two.
+- **Switch back any time.** Leaving dashboard view returns the normal chat with
+  every card in place and whatever you had typed, in the message box or in a
+  card, still there. Coming back restores the board as you left it.
 
 Panels are cards, so the limits under [Interactive cards](#interactive-cards)
 apply: a panel from before a compaction is marked **archived** and can't be

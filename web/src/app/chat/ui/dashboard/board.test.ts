@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { deriveGenUiState } from "../genui/transcript";
-import { boardStatus, deriveBoard, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
+import { boardManifest, boardStatus, deriveBoard, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
 
 const display = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "stat", label: "x", value: "1" }], ...extra });
@@ -68,6 +68,25 @@ describe("deriveBoard", () => {
     expect(b.panels.map((p) => p.key)).toEqual(["p:revenue", "c:ask"]);
     expect(b.panels[1]).toMatchObject({ interactive: true, pinned: true });
     expect(b.cardSlots.has("sys")).toBe(false);
+  });
+
+  it("a pinned card refreshed with replaces + a panel key keeps its place, version and layout", () => {
+    const pinnedFlow = [
+      assistant(1, [
+        { id: "a", input: display("A", { panel: "a" }) },
+        { id: "f", input: form("Follow up") },
+        { id: "z", input: display("Z") },
+      ]),
+      assistant(2, [{ id: "f2", input: display("Follow up (sent)", { replaces: "f", panel: "follow" }) }]),
+    ];
+    const prefs = { ...EMPTY_BOARD_PREFS, pinned: ["f"], order: ["c:f", "p:a", "c:z"], wide: { "c:f": true } };
+    const b = boardOf(pinnedFlow, prefs);
+    expect(b.panels.map((p) => p.key)).toEqual(["p:follow", "p:a", "c:z"]);
+    expect(b.panels[0]).toMatchObject({ cardId: "f2", version: 2, pinned: true, wide: true, panelKey: "follow" });
+    expect(b.cardSlots.get("f")).toBe("p:follow");
+    // Taking it off the board under its old key still takes it off.
+    expect(boardOf(pinnedFlow, { ...prefs, removed: ["c:f"] }).panels.map((p) => p.key)).toEqual(["p:a", "c:z"]);
+    expect(boardManifest(b.panels)[0]).toEqual({ title: "Follow up (sent)", card_id: "f2", panel: "follow", pinned: true });
   });
 
   it("follows the user's order, then age, and their width choice over the heuristic", () => {

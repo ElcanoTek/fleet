@@ -113,6 +113,8 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
   const slotOf = new Map<string, string>();
   const slots = new Map<string, BoardPanel>();
   const firstSeen = new Map<string, number>();
+  // slot key → the keys it had before it moved (see below).
+  const aliases = new Map<string, string[]>();
   let seq = 0;
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
@@ -124,13 +126,26 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       if (genUi.owners.get(tc.id) !== tc) continue;
       const spec = genUi.cards.get(tc.id);
       if (!spec) continue;
+      // The slot of the card this one refines, if that card is on the board.
+      const lineage = spec.replaces ? slotOf.get(spec.replaces) : undefined;
       let key: string | undefined;
       if (spec.panel) key = `p:${spec.panel}`;
-      else if (spec.replaces && slotOf.has(spec.replaces)) key = slotOf.get(spec.replaces);
-      else if (pinned.has(tc.id) || isDisplayOnly(spec)) key = `c:${tc.id}`;
+      else if (pinned.has(tc.id)) key = `c:${tc.id}`;
+      else if (lineage) key = lineage;
+      else if (isDisplayOnly(spec)) key = `c:${tc.id}`;
       if (!key) continue;
+      let prev = slots.get(key);
+      if (lineage && lineage !== key && !prev && slots.has(lineage)) {
+        // A refinement that also names a panel key (typically a pinned card
+        // the agent refreshed and gave a key): the slot moves to the new key
+        // and keeps its place, version count and the user's layout choices.
+        prev = slots.get(lineage);
+        slots.delete(lineage);
+        firstSeen.set(key, firstSeen.get(lineage) ?? seq++);
+        aliases.set(key, [...(aliases.get(lineage) ?? []), lineage]);
+        for (const [cid, k] of slotOf) if (k === lineage) slotOf.set(cid, key);
+      }
       slotOf.set(tc.id, key);
-      const prev = slots.get(key);
       if (!firstSeen.has(key)) firstSeen.set(key, seq++);
       slots.set(key, {
         key,
@@ -146,13 +161,17 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       });
     }
   }
+  // A slot's earlier keys (after a move) still carry the user's choices.
+  const keysOf = (key: string) => [key, ...(aliases.get(key) ?? [])];
   const order = new Map(prefs.order.map((k, i) => [k, i]));
+  const orderOf = (key: string) => keysOf(key).map((k) => order.get(k)).find((o) => o !== undefined);
+  const wideOf = (key: string) => keysOf(key).map((k) => prefs.wide[k]).find((w) => w !== undefined);
   const panels = [...slots.values()]
-    .filter((p) => !removed.has(p.key))
-    .map((p) => ({ ...p, wide: prefs.wide[p.key] ?? prefersWide(p.spec) }))
+    .filter((p) => !keysOf(p.key).some((k) => removed.has(k)))
+    .map((p) => ({ ...p, wide: wideOf(p.key) ?? prefersWide(p.spec) }))
     .sort((a, b) => {
-      const oa = order.get(a.key);
-      const ob = order.get(b.key);
+      const oa = orderOf(a.key);
+      const ob = orderOf(b.key);
       if (oa !== undefined && ob !== undefined) return oa - ob;
       if (oa !== undefined) return -1;
       if (ob !== undefined) return 1;
@@ -203,4 +222,17 @@ export function boardStatus(messages: Message[], isStreaming: boolean): BoardSta
   const last = messages[messages.length - 1];
   const running = last?.role === "assistant" ? (last.toolCalls ?? []).filter((t) => t.state === "pending").pop() : undefined;
   return { kind: "working", label: running ? running.name : null };
+}
+
+/** What the server is told about the board on a dashboard-view turn. */
+export type BoardManifestEntry = { title: string; card_id: string; panel?: string; pinned?: boolean };
+
+/** The board, in order, as POST /api/chat's `board` (docs/DASHBOARD-VIEW.md). */
+export function boardManifest(panels: BoardPanel[]): BoardManifestEntry[] {
+  return panels.map((p) => ({
+    title: p.spec.title,
+    card_id: p.cardId,
+    ...(p.panelKey ? { panel: p.panelKey } : {}),
+    ...(p.pinned ? { pinned: true } : {}),
+  }));
 }

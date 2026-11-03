@@ -47,9 +47,30 @@ sends `view: "dashboard"` on `POST /api/chat`. The handler then appends one
 note to the turn's injected context (`appendDashboardViewBlock`,
 `internal/httpapi/chat.go`). The note tells the agent that the user is reading
 a board, to put watched figures in panel cards, to refresh a panel instead of
-restating it, and to keep prose short. Like every injected block it is
-persisted with the user message, so the transcript shows exactly what the model
-was told. Any value other than `"dashboard"` adds nothing.
+restating it, and to keep prose short. The request also carries `board`: the panels on the
+sender's board, in order, as `{title, card_id, panel?, pinned?}`. The note
+lists them one per line with how to update each one: `panel "<key>"` for a
+keyed panel, `replaces="<card_id>"` for a card without a key (typically one the
+user pinned). So "update this chart" or "refresh the second panel" resolves to
+a card. The list is bounded (24 panels, titles cut to 80 characters) and
+sanitized: control characters become spaces, square brackets are dropped so a
+title cannot close the note, and an entry with an unusable card id or panel key
+is skipped. Like every injected block it is persisted with the user message, so
+the transcript shows exactly what the model was told. Any `view` other than
+`"dashboard"` adds nothing, and `board` is ignored without it.
+
+**Pin, then update.** A pinned card keeps its slot when the agent refreshes it
+with `replaces`. If the refresh also gives it a `panel` key, the slot moves to
+that key and keeps its place, version count and the user's width, order and
+removal choices (`deriveBoard` carries the old key as an alias), so later
+updates can simply reuse the key.
+
+**Moving between the views.** Toggling never remounts the transcript or
+composer: the layout wrapper is always rendered (`display: contents` in normal
+view) and the conversation rail is hidden, not unmounted. Composer drafts, card
+drafts (stored under the same key whether the card is drawn on the board or in
+the transcript) and queued inputs survive any number of round
+trips, and leaving closes any focused panel and the phone sidebar drawer.
 
 **The screen.**
 
@@ -85,12 +106,15 @@ its id. A new chat started from dashboard view stays in it.
 
 **Tests.** Go: the `cards.json` fixture cases (a valid panel card, a non-slug
 key, a non-string key), `TestShowUIPanelCard`, `TestShowUIRef_Panel`, and
-`TestAppendDashboardViewBlock` / `TestChatRequestDecodesView`. Web: `board.test.ts`
-(slotting, lineage, pins, removal, order, width, reordering, status),
+`TestAppendDashboardViewBlock`, `TestDashboardBoardIsListed` (keys, pinned cards,
+sanitizing, the bound) and `TestChatRequestDecodesView`. Web: `board.test.ts`
+(slotting, lineage, pins, the slot moving to a new key, removal, order, width,
+reordering, status, the manifest),
 `prefs.test.ts` (round-trip, bounds, throwing storage), and `transcript.test.ts`
 (same-panel supersede, refused keys). Mocked Playwright
 (`e2e/mocked/dashboard-view.spec.ts`) covers the desktop board and rail, pin and
-remove, the `view` field on the POST, keyboard reorder, focus and `Esc`,
+remove, the `view` and `board` fields on the POST, three round trips between the
+views (composer draft, card draft, full cards back in the transcript), keyboard reorder, focus and `Esc`,
 remembered layout, the phone panes, and axe over the HUD and board in both
 themes.
 
@@ -114,9 +138,13 @@ themes.
   [in-chat patrol](CHAT-PATROLS.md) turn. Nothing in the browser polls a data
   source. A patrol that re-shows a panel is how a board "ticks".
 - **The hint rides direct sends only.** A message queued behind a running turn
-  (`mode: "queue"`) is stored without `view`, so that turn carries no new note.
-  The earlier dashboard notes are still in the replayed history. Patrol and
-  approval-resume turns carry none either.
+  (`mode: "queue"`) is stored without `view` or `board`, so that turn carries
+  no new note or board list. The earlier dashboard notes (and the board as it
+  was then) are still in the replayed history. Patrol and approval-resume turns
+  carry none either.
+- **The board list is the sender's.** In a multiplayer chat each participant's
+  board is their own arrangement, so "the second panel" means the second panel
+  on the board of whoever sent the message.
 - **The agent may ignore the hint.** It is an instruction, not a constraint. A
   model that never uses `panel` still gets a working board, because display-only
   cards are placed automatically. Its refreshes then arrive as new panels

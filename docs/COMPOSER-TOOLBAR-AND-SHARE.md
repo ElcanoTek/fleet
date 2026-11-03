@@ -15,14 +15,15 @@
      - Non-default **Persona** pill (on a new draft before the conversation is created; hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Auto-approve** (`⚡`) toggle badge (`hidden sm:inline-flex`)
-     - **Context ring** (and the `"Token limit hit — you should compact"` status toast) once context usage exists
+     - **Context ring** (and the `"Token limit hit — you should compact"` status toast) once context usage exists. Below `sm` the ring shows only when it needs attention (severity `warn`/`danger`, compacting, or the toast); otherwise **Compact conversation** in **More options** carries the percentage (dashboard-view follow-up, docs/DASHBOARD-VIEW.md).
 
 2. **Share in the composer from the very start of a chat**
    - **Right cluster:** **Share** (`composer-share-button`) sits right beside **Send / Stop** from the moment a new chat opens — before or after the first message is sent.
-   - **Live state indicator:** The button reflects the conversation's sharing state at a glance:
-     - `Share` when private (`Only you`)
-     - `Shared` when shared read-only with the team or via a public link
-     - `Multiplayer` (with a live accent dot) when Multiplayer mode is active — including on new chats when `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT=true` and the user belongs to a team
+   - **Live state indicator:** An icon-only toolbar button (the same size as Attach / Tools / More options; its `aria-label` and tooltip carry the words). It reflects the conversation's sharing state at a glance:
+     - arrow glyph when private (`Only you`)
+     - accent-tinted people glyph when shared read-only with the team; accent-tinted chain link for a public link (ADR-0057's two audience glyphs)
+     - people glyph with an accent dot when Multiplayer mode is active — including on new chats when `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT=true` and the user belongs to a team
+   - It was a text pill (`Share` / `Shared` / `Multiplayer`) when it shipped; the label crowded the phone toolbar, so it became an icon in the dashboard-view follow-up.
    - **Share-first draft materialization (`openShareFromComposer`):** Clicking **Share** on an empty new chat before sending a message materializes the conversation via `POST /api/conversations` while preserving all pre-chat composer state:
      - Draft text and pending attachments (`promoteComposerKey`)
      - Selected persona and model
