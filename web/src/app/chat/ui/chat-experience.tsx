@@ -4212,7 +4212,6 @@ export function ChatExperience({
         pinned: Boolean(created.pinned),
         updated_at: created.updated_at || Math.floor(Date.now() / 1000),
         user_email: created.user_email || userEmail || undefined,
-        team_id: created.team_id,
         project_id: created.project_id,
         team_visible: created.team_visible,
         multiplayer: created.multiplayer,

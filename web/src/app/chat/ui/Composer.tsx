@@ -1273,13 +1273,8 @@ export function Composer({
                 messages.length >= 2 &&
                 isConversationOwner !== false;
               const usagePct =
-                contextUsage && contextUsage.contextLength > 0
-                  ? Math.min(
-                      999,
-                      Math.round(
-                        (contextUsage.promptTokens / contextUsage.contextLength) * 100,
-                      ),
-                    )
+                contextUsage?.fraction != null
+                  ? Math.min(999, Math.round(contextUsage.fraction * 100))
                   : null;
               const hasActiveSecondary =
                 isAutoApprove ||
