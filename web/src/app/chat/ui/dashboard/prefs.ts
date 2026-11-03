@@ -130,8 +130,13 @@ export function useBoardPrefs(
   }));
   let current = state;
   if (state.slotKey !== slotKey) {
+    // A draft's own choices follow it (blank chat → its pending key → its
+    // id). Leaving a conversation for a new draft starts the draft empty:
+    // another chat's removals, order and widths are not this one's.
     const promoted = state.convId === null && convId !== null && state.slotKey.startsWith(`${pendingKey}:`);
-    current = { slotKey, convId, prefs: promoted || convId === null ? state.prefs : readBoardPrefs(convId) };
+    const draftToDraft = state.convId === null && convId === null;
+    const prefs = promoted || draftToDraft ? state.prefs : convId === null ? EMPTY_BOARD_PREFS : readBoardPrefs(convId);
+    current = { slotKey, convId, prefs };
     setState(current);
   }
   useEffect(() => {

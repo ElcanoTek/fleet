@@ -88,11 +88,25 @@ describe("useBoardPrefs", () => {
     expect(result.current[0]).toEqual(saved);
   });
 
+  it("starts a new draft empty when leaving a conversation", () => {
+    writeBoardPrefs("existing", saved);
+    const { result, rerender } = renderHook(({ key, id }) => useBoardPrefs(key, id, "pending"), {
+      initialProps: { key: "existing", id: "existing" as string | null },
+    });
+    expect(result.current[0]).toEqual(saved);
+    rerender({ key: "pending", id: null });
+    expect(result.current[0]).toEqual({ pinned: [], removed: [], order: [], wide: {} });
+    // …and the conversation's own layout is untouched.
+    expect(readBoardPrefs("existing")).toEqual(saved);
+  });
+
   it("carries a draft's choices onto the id it gets", () => {
     const { result, rerender } = renderHook(({ key, id }) => useBoardPrefs(key, id, "pending"), {
-      initialProps: { key: "pending:1", id: null as string | null },
+      initialProps: { key: "pending", id: null as string | null },
     });
     act(() => result.current[1]((p) => ({ ...p, order: ["c:z"] })));
+    // blank chat → its per-submission pending key → its id
+    rerender({ key: "pending:1", id: null });
     rerender({ key: "new-conv", id: "new-conv" });
     expect(result.current[0].order).toEqual(["c:z"]);
     expect(readBoardPrefs("new-conv").order).toEqual(["c:z"]);
