@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from "react";
 import { EMPTY_BOARD_PREFS, type BoardPrefs } from "./board";
 
 const VIEW_KEY = "fleet.dashboard.view.v1";
-const BOARD_KEY = "fleet.dashboard.board.v1";
+const BOARD_KEY = "fleet.dashboard.board.v2";
 /** Chats remembered as dashboards / boards remembered, newest first. */
 export const MAX_REMEMBERED = 60;
 
@@ -50,33 +50,45 @@ export function writeDashboardView(convId: string, on: boolean): void {
   write(VIEW_KEY, ids.slice(0, MAX_REMEMBERED));
 }
 
-type StoredBoards = Record<string, { prefs: BoardPrefs; at: number }>;
+// Stored as a list of entries, never as an object keyed by conversation id:
+// an id is data, and indexing a plain object with it ("__proto__") would
+// reach the prototype.
+type StoredBoard = { id: string; prefs: unknown; at: number };
+
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function storedBoards(): StoredBoard[] {
+  const v = read<unknown>(BOARD_KEY, []);
+  if (!Array.isArray(v)) return [];
+  return v.filter(
+    (e): e is StoredBoard =>
+      !!e && typeof e === "object" && typeof (e as StoredBoard).id === "string" && typeof (e as StoredBoard).at === "number",
+  );
+}
 
 function sanitize(v: unknown): BoardPrefs {
   if (!v || typeof v !== "object") return EMPTY_BOARD_PREFS;
   const o = v as Record<string, unknown>;
-  const wide: Record<string, boolean> = {};
-  if (o.wide && typeof o.wide === "object") {
-    for (const [k, b] of Object.entries(o.wide as Record<string, unknown>)) if (typeof b === "boolean") wide[k] = b;
+  const wide = new Map<string, boolean>();
+  if (o.wide && typeof o.wide === "object" && !Array.isArray(o.wide)) {
+    for (const [k, b] of Object.entries(o.wide as Record<string, unknown>)) {
+      if (typeof b === "boolean" && !UNSAFE_KEYS.has(k)) wide.set(k, b);
+    }
   }
-  return { pinned: strList(o.pinned), removed: strList(o.removed), order: strList(o.order), wide };
+  return { pinned: strList(o.pinned), removed: strList(o.removed), order: strList(o.order), wide: Object.fromEntries(wide) };
 }
 
 export function readBoardPrefs(convId: string | null): BoardPrefs {
   if (!convId) return EMPTY_BOARD_PREFS;
-  const all = read<StoredBoards>(BOARD_KEY, {});
-  return sanitize(all && typeof all === "object" ? all[convId]?.prefs : null);
+  return sanitize(storedBoards().find((e) => e.id === convId)?.prefs);
 }
 
 export function writeBoardPrefs(convId: string, prefs: BoardPrefs): void {
-  const all = read<StoredBoards>(BOARD_KEY, {});
-  const next: StoredBoards = all && typeof all === "object" && !Array.isArray(all) ? { ...all } : {};
-  next[convId] = { prefs, at: Date.now() };
-  // Keep the most recently edited boards only.
-  const kept = Object.entries(next)
-    .sort((a, b) => (b[1]?.at ?? 0) - (a[1]?.at ?? 0))
+  // Newest first; keep the most recently edited boards only.
+  const next = [{ id: convId, prefs, at: Date.now() }, ...storedBoards().filter((e) => e.id !== convId)]
+    .sort((a, b) => b.at - a.at)
     .slice(0, MAX_REMEMBERED);
-  write(BOARD_KEY, Object.fromEntries(kept));
+  write(BOARD_KEY, next);
 }
 
 /**

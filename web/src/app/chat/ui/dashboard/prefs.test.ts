@@ -26,10 +26,23 @@ describe("board prefs", () => {
     writeBoardPrefs("c1", { pinned: ["a"], removed: ["c:b"], order: ["p:x"], wide: { "p:x": true } });
     expect(readBoardPrefs("c1")).toEqual({ pinned: ["a"], removed: ["c:b"], order: ["p:x"], wide: { "p:x": true } });
     window.localStorage.setItem(
-      "fleet.dashboard.board.v1",
-      JSON.stringify({ c2: { prefs: { pinned: [1, "ok"], wide: { k: "yes" } }, at: 1 } }),
+      "fleet.dashboard.board.v2",
+      JSON.stringify([{ id: "c2", prefs: { pinned: [1, "ok"], wide: { k: "yes", ok: true } }, at: 1 }, { bogus: 1 }]),
     );
-    expect(readBoardPrefs("c2")).toEqual({ pinned: ["ok"], removed: [], order: [], wide: {} });
+    expect(readBoardPrefs("c2")).toEqual({ pinned: ["ok"], removed: [], order: [], wide: { ok: true } });
+  });
+
+  it("treats a conversation id as data, never as an object key", () => {
+    writeBoardPrefs("__proto__", { ...EMPTY_BOARD_PREFS, pinned: ["x"] });
+    expect(({} as Record<string, unknown>).pinned).toBeUndefined();
+    expect(readBoardPrefs("__proto__").pinned).toEqual(["x"]);
+    window.localStorage.setItem(
+      "fleet.dashboard.board.v2",
+      '[{"id":"c3","at":1,"prefs":{"wide":{"__proto__":true,"p:a":false}}}]',
+    );
+    const prefs = readBoardPrefs("c3");
+    expect(prefs.wide).toEqual({ "p:a": false });
+    expect(Object.getPrototypeOf(prefs.wide)).toBe(Object.prototype);
   });
 
   it("degrades to defaults when storage throws", () => {

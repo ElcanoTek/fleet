@@ -104,7 +104,7 @@ async function openDashboardChat(page: Page) {
   await page.addInitScript(() => {
     try {
       window.localStorage.removeItem("fleet.dashboard.view.v1");
-      window.localStorage.removeItem("fleet.dashboard.board.v1");
+      window.localStorage.removeItem("fleet.dashboard.board.v2");
     } catch {
       // storage unavailable: nothing to clear
     }

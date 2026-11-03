@@ -99,7 +99,7 @@ trips, and leaving closes any focused panel and the phone sidebar drawer.
 
 **Per-browser layout.** Whether a conversation opens in dashboard view, and its
 board layout (pins, removals, order, widths), are kept in `localStorage`
-(`fleet.dashboard.view.v1`, `fleet.dashboard.board.v1`). Each list is capped at
+(`fleet.dashboard.view.v1`, `fleet.dashboard.board.v2`). Each list is capped at
 the 60 most recent conversations, and every access is wrapped so blocked
 storage degrades to "forgets on reload". A draft keeps its view when it gets
 its id. A new chat started from dashboard view stays in it.

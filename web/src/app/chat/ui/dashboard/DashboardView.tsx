@@ -513,7 +513,13 @@ export function DashboardBoard({
     if (dragging) setOrder(dropKey(keys, dragging, target));
     setDragging(null);
   };
-  const onToggleWide = (key: string, wide: boolean) => updatePrefs((p) => ({ ...p, wide: { ...p.wide, [key]: wide } }));
+  // Rebuilt from entries rather than written by computed key: a slot key is
+  // derived from transcript data.
+  const onToggleWide = (key: string, wide: boolean) =>
+    updatePrefs((p) => ({
+      ...p,
+      wide: Object.fromEntries([...Object.entries(p.wide).filter(([k]) => k !== key), [key, wide]]),
+    }));
   const onRemove = (key: string) => {
     if (maximized === key) setMaximized("");
     updatePrefs((p) => ({
