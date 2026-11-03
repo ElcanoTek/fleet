@@ -1925,19 +1925,23 @@ export function Composer({
                     !shareConversation?.multiplayer,
                 );
                 const isSharedAny = isMultiplayer || isTeamShared || isLinkShared;
+                // A public link can sit beside team or multiplayer sharing; it
+                // is never hidden behind them (anyone with the URL can read).
+                const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
+                const linkSuffix = alsoLink ? " and by public link" : "";
                 const ariaLabel = isMultiplayer
-                  ? "Multiplayer — open sharing"
+                  ? `Multiplayer${linkSuffix} — open sharing`
                   : isTeamShared
                     ? shareTeam
-                      ? `Shared with ${shareTeam} — open sharing`
-                      : "Shared with team — open sharing"
+                      ? `Shared with ${shareTeam}${linkSuffix} — open sharing`
+                      : `Shared with team${linkSuffix} — open sharing`
                     : isLinkShared
                       ? "Public link — open sharing"
                       : "Share this chat";
                 const tipText = isMultiplayer
-                  ? "Multiplayer chat is on — click to manage participants or sharing"
+                  ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
                   : isTeamShared
-                    ? "Shared with your team — click to manage sharing"
+                    ? `Shared with your team${linkSuffix} — click to manage sharing`
                     : isLinkShared
                       ? "Public link active — click to manage sharing"
                       : "Share this chat or start multiplayer";
@@ -1978,6 +1982,15 @@ export function Composer({
                     ) : (
                       <Icon name="external-link" className="size-[0.95rem] shrink-0" />
                     )}
+                    {alsoLink ? (
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-share-link-badge"
+                        className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
+                      >
+                        <ShareGlyph className="size-[0.55rem]" />
+                      </span>
+                    ) : null}
                     {isMultiplayer ? (
                       <span
                         aria-hidden="true"

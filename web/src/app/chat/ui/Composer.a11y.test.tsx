@@ -577,6 +577,21 @@ describe("Composer — share button and overflow options menu", () => {
     expect(screen.getByTestId("composer-share-button")).toHaveAccessibleName(
       "Multiplayer — open sharing",
     );
+
+    // A public link beside team sharing is shown and named, never hidden.
+    rerender(
+      <Host
+        overrides={{
+          onOpenShare,
+          shareConversation: { team_visible: true, share_token: "tok" },
+          shareTeam: "Growth",
+        }}
+      />,
+    );
+    expect(screen.getByTestId("composer-share-button")).toHaveAccessibleName(
+      "Shared with Growth and by public link — open sharing",
+    );
+    expect(screen.getByTestId("composer-share-link-badge")).toBeInTheDocument();
   });
 
   it("groups secondary controls in More options and closes on Escape", () => {

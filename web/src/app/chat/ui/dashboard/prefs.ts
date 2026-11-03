@@ -61,7 +61,10 @@ export function dashboardViewAfterSwitch(
   justCreated = false,
 ): boolean {
   if (nextConvId === null) return current;
-  if (current && (justCreated || prevKey.startsWith(`${pendingKey}:`))) return true;
+  // justCreated counts only for the switch out of the blank slot itself: the
+  // marker outlives that switch, and a later visit is ordinary navigation.
+  const fromBlank = prevKey === pendingKey;
+  if (current && ((justCreated && fromBlank) || prevKey.startsWith(`${pendingKey}:`))) return true;
   return readDashboardView(nextConvId);
 }
 
@@ -138,7 +141,9 @@ export function useBoardPrefs(
     // id). Leaving a conversation for a new draft starts the draft empty:
     // another chat's removals, order and widths are not this one's.
     const promoted =
-      state.convId === null && convId !== null && (justCreated || state.slotKey.startsWith(`${pendingKey}:`));
+      state.convId === null &&
+      convId !== null &&
+      ((justCreated && state.slotKey === pendingKey) || state.slotKey.startsWith(`${pendingKey}:`));
     const draftToDraft = state.convId === null && convId === null;
     const prefs = promoted || draftToDraft ? state.prefs : convId === null ? EMPTY_BOARD_PREFS : readBoardPrefs(convId);
     current = { slotKey, convId, prefs };

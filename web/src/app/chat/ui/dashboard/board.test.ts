@@ -268,6 +268,20 @@ describe("reused ids and lineage", () => {
 });
 
 describe("slot aliases on panels", () => {
+  it("a slot that moves onto a key another slot left stops sharing it", () => {
+    const b = boardOf(
+      [
+        assistant(1, [{ id: "a", input: display("A", { panel: "a" }) }]),
+        assistant(2, [{ id: "b", input: display("B", { panel: "b", replaces: "a" }) }]),
+        assistant(3, [{ id: "c", input: display("C", { panel: "c" }) }]),
+        assistant(4, [{ id: "d", input: display("D", { panel: "a", replaces: "c" }) }]),
+      ],
+      { ...EMPTY_BOARD_PREFS, removed: ["p:a"] },
+    );
+    // Removing p:a (now the C→D panel) must not hide p:b.
+    expect(b.panels.map((p) => [p.key, p.aliases])).toEqual([["p:b", []]]);
+  });
+
   it("a key that becomes live again stops being another slot's alias", () => {
     const b = boardOf([
       assistant(1, [{ id: "a", input: display("A", { panel: "a" }) }]),

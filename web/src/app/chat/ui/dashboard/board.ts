@@ -179,6 +179,7 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       else if (isDisplayOnly(spec)) key = `c:${ref}`;
       if (!key) continue;
       let prev = slots.get(key);
+      const wasLive = prev !== undefined;
       if (lineage && lineage !== key) {
         // A refinement that also names a panel key (typically a pinned card
         // the agent refreshed and gave a key). The card it replaces is
@@ -205,7 +206,7 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       // A key that is live again (an unrelated card opened a new panel under
       // a key some slot moved away from) is that new panel's alone: it stops
       // being an alias, so the two never share removal, order or width.
-      if (!prev) for (const set of aliases.values()) set.delete(key);
+      if (!wasLive) for (const [k, set] of aliases) if (k !== key) set.delete(key);
       slotOf.set(ref, key);
       slotRef.set(key, ref);
       if (!firstSeen.has(key)) firstSeen.set(key, seq++);

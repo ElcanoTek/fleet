@@ -76,6 +76,9 @@ describe("dashboardViewAfterSwitch", () => {
     // Share before the first send creates the conversation straight from the
     // blank slot: still this draft, so the view stays on.
     expect(dashboardViewAfterSwitch("pending", "shared-new", true, "pending", true)).toBe(true);
+    // …but only for that switch: coming back later from another chat is
+    // ordinary navigation, even while the marker is still set.
+    expect(dashboardViewAfterSwitch("plain-conv", "shared-new", true, "pending", true)).toBe(false);
   });
 });
 

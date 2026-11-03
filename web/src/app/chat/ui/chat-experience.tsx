@@ -5430,6 +5430,12 @@ export function ChatExperience({
         // d turns dashboard view on or off (docs/DASHBOARD-VIEW.md).
         key: "d",
         enabled: listNavActive && !fullPageOverlay,
+        // Not while a dialog or menu owns the keyboard (share, compaction,
+        // memories, help…): the view must not change behind it.
+        when: () =>
+          !document.querySelector(
+            '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], [aria-modal="true"]',
+          ),
         handler: () => toggleDashboardView(),
       },
       {
