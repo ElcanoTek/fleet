@@ -1724,9 +1724,6 @@ func assembleTurnMessages(in TurnInput, now time.Time) ([]fantasy.Message, Histo
 	note, _ := agentcore.RuntimeDateMessage(today) // RuntimeToday always yields a valid day
 	messages = append(messages, note)
 	initialSender := in.SenderEmail
-	if in.InputKind != "" {
-		initialSender = ""
-	}
 	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: initialSender})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil

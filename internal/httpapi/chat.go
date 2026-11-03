@@ -1328,11 +1328,12 @@ func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, use
 }
 
 func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {
+	_ = userWords
 	userEvent := withInputKind(map[string]any{"text": message}, "kind", inputKind)
 	if injected != "" {
 		userEvent["injected_context"] = injected
 	}
-	if conv != nil && conv.Multiplayer && userWords && user != "" {
+	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))) && user != "" {
 		userEvent["sender_email"] = user
 	}
 	return userEvent
@@ -1501,7 +1502,7 @@ func (s *Server) runTurnAsync(
 	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
 	senderEmail := ""
-	if conv.Multiplayer {
+	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
 		senderEmail = user
 	}
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{

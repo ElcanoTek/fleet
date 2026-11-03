@@ -65,6 +65,7 @@ type turnBuffer struct {
 	// "evicted" frame — without it a congested client saw the same clean EOF
 	// a finished turn produces and rendered a still-generating turn as done.
 	evictedSubs map[uint64]bool
+	revokedSubs map[uint64]bool
 	subViewers  map[uint64]string
 	nextSubID   uint64
 	closed      bool
@@ -123,6 +124,7 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 		turnID:      turnID,
 		subscribers: make(map[uint64]chan bufferedEvent),
 		evictedSubs: make(map[uint64]bool),
+		revokedSubs: make(map[uint64]bool),
 		subViewers:  make(map[uint64]string),
 		maxBytes:    sseMaxBytesPerTurn,
 	}
@@ -649,22 +651,18 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 // (`user.message.injected_context`) and user-scoped `queue.updated` frames in
 // multiplayer conversations.
 func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string) error {
+	return b.AttachForViewerChecked(ctx, lastEventID, w, caps, viewerEmail, convOwnerEmail, nil)
+}
+
+// AttachForViewerChecked is AttachForViewer with an optional allowCheck hook
+// evaluated after subscriber registration and during replay so a concurrent
+// multiplayer access revocation cannot slip between the route's initial lookup
+// and subscriber registration.
+func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string, allowCheck func() bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	setSupportedCapabilitiesHeader(w)
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	// Advertise supported capabilities as the very first frame so a client that
-	// can't read response headers (browser EventSource) still discovers them.
-	// Best-effort: a write error here is surfaced by the replay/live writes below.
-	_ = writeCapabilitiesFrame(w, flusher)
 
 	// Atomically grab the replay slice and register a live subscription.
 	// Registering under the same lock the publisher uses guarantees no
@@ -688,6 +686,25 @@ func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w 
 	}
 	b.mu.Unlock()
 
+	if (allowCheck != nil && !allowCheck()) || b.isSubRevoked(subID) {
+		b.unsubscribe(subID)
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return nil
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	setSupportedCapabilitiesHeader(w)
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Advertise supported capabilities as the very first frame so a client that
+	// can't read response headers (browser EventSource) still discovers them.
+	// Best-effort: a write error here is surfaced by the replay/live writes below.
+	_ = writeCapabilitiesFrame(w, flusher)
+
 	// If the sliding window evicted events the client hadn't seen yet (the oldest
 	// surviving event is newer than its next-expected id), tell it up front so the
 	// UI can surface a non-intrusive "some events may be missing" notice. Omitted
@@ -702,6 +719,10 @@ func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w 
 
 	// Pump replay (filtered by the client's declared capabilities and viewer scope).
 	for _, e := range replay {
+		if b.isSubRevoked(subID) || (allowCheck != nil && !allowCheck()) {
+			b.unsubscribe(subID)
+			return nil
+		}
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
@@ -809,10 +830,23 @@ func (b *turnBuffer) detachUnauthorizedViewers(ownerEmail string, allowedViewers
 		if v == "" || strings.EqualFold(v, ownerEmail) || allowedViewers[v] {
 			continue
 		}
+		if b.revokedSubs == nil {
+			b.revokedSubs = make(map[uint64]bool)
+		}
+		b.revokedSubs[subID] = true
 		close(ch)
 		delete(b.subscribers, subID)
 		delete(b.subViewers, subID)
 	}
+}
+
+func (b *turnBuffer) isSubRevoked(subID uint64) bool {
+	if subID == 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.revokedSubs[subID]
 }
 
 // writeSSEFrame formats one event as an SSE frame and flushes. Any

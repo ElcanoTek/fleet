@@ -796,7 +796,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		return "", "", err
 	}
 
-	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
+	a.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
 
 	msg := fmt.Sprintf(
 		"SUGGESTION_DISPLAYED: the user is now seeing your model-switch suggestion (suggestion_id=%s). The card has three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. Do NOT call suggest_advanced_model again. Briefly summarize what you've done so far and stop iterating; the user's choice will arrive on the next turn.",

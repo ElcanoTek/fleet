@@ -733,8 +733,9 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 			})
 		} else if buf != nil {
 			buf.Emit("tool.approval_superseded", map[string]any{
-				"tool":  tools.EnableMCPConnectorsToolName,
-				"count": superseded,
+				"tool":       tools.EnableMCPConnectorsToolName,
+				"count":      superseded,
+				"user_email": user,
 			})
 		}
 	}
@@ -742,7 +743,11 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	if turnStager != nil {
 		turnStager.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
 	} else if buf != nil {
-		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
+		ev := approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID)
+		if user != "" {
+			ev["user_email"] = user
+		}
+		buf.Emit("tool.approval_required", ev)
 	}
 	if turnStager != nil {
 		turnStager.firePushNotification(tools.EnableMCPConnectorsToolName)

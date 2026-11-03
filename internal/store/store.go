@@ -1676,10 +1676,30 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 			// contract deliberately omits internal identifiers — a global BIGSERIAL id
 			// would leak cross-conversation row ordering/volume to an anonymous viewer.
 			m.ID = 0
+			m.Content = stripPublicShareContentFields(m.Content)
 			out.Messages = append(out.Messages, m)
 		}
 	}
 	return &out, nil
+}
+
+func stripPublicShareContentFields(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+	if _, has := obj["sender_email"]; !has {
+		return raw
+	}
+	delete(obj, "sender_email")
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // AutoArchiveOlderThan archives unpinned, not-already-archived conversations

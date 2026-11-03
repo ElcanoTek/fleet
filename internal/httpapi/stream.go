@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -31,6 +32,7 @@ import (
 //  2. Otherwise 204 — client should reload the DB-backed history.
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
+	epoch := s.currentMultiplayerEpoch(convID)
 	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -39,6 +41,16 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	if conv == nil {
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
+	}
+	var allowCheck func() bool
+	if conv.UserEmail != "" && !strings.EqualFold(user, conv.UserEmail) {
+		allowCheck = func() bool {
+			if s.currentMultiplayerEpoch(convID) == epoch {
+				return true
+			}
+			c, cerr := s.store.GetMultiplayerConversation(r.Context(), user, convID)
+			return cerr == nil && c != nil
+		}
 	}
 
 	lastEventID := parseLastEventID(r)
@@ -52,7 +64,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// we currently have buffered, fall through to the DB lookup below.
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
 		s.sseReconnects.inc("within_buffer")
-		if err := entry.buf.AttachForViewer(r.Context(), lastEventID, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
+		if err := entry.buf.AttachForViewerChecked(r.Context(), lastEventID, w, caps, user, conv.UserEmail, allowCheck); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
 		}
 		return
@@ -63,6 +75,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	if requestedTurnID == "" {
 		s.sseReconnects.inc("no_content")
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if allowCheck != nil && !allowCheck() {
+		http.Error(w, "conversation not found", http.StatusNotFound)
 		return
 	}
 	// Conversation scope is in the query (#1112). The equality check
