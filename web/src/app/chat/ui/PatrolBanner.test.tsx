@@ -173,4 +173,33 @@ describe("PatrolPopover", () => {
       cron: "30 8 * * 1-5",
     });
   });
+
+  it("clamps custom timer duration when switching from minutes to hours", async () => {
+    const onStartPatrol = vi.fn().mockResolvedValue(undefined);
+    const onClose = vi.fn();
+
+    render(
+      <PatrolPopover
+        initialPrompt="Follow up once."
+        onStartPatrol={onStartPatrol}
+        onClose={onClose}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Custom" }));
+    fireEvent.click(screen.getByRole("button", { name: "One-time timer" }));
+
+    fireEvent.change(screen.getByLabelText("Timer duration"), {
+      target: { value: "1440" },
+    });
+    fireEvent.change(screen.getByLabelText("Timer unit"), {
+      target: { value: "hours" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Start timer" }));
+    await waitFor(() => expect(onStartPatrol).toHaveBeenCalledTimes(1));
+    expect(onStartPatrol.mock.calls[0][0]).toMatchObject({
+      durationSeconds: 168 * 3600,
+    });
+  });
 });

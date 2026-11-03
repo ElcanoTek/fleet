@@ -273,10 +273,15 @@ export function PatrolPopover({
         ? customCron.trim()
         : selectedPreset.cron
       : undefined;
+  const maxTimerAmount = customTimerUnit === "hours" ? 168 : 1440;
+  const clampedTimerAmount = Math.min(
+    maxTimerAmount,
+    Math.max(1, Math.round(customTimerAmount || 1)),
+  );
   const customDurationSeconds =
     customTimerUnit === "hours"
-      ? Math.max(1, Math.round(customTimerAmount || 1)) * 3600
-      : Math.max(1, Math.round(customTimerAmount || 1)) * 60;
+      ? clampedTimerAmount * 3600
+      : clampedTimerAmount * 60;
   const effectiveDurationSeconds =
     effectiveKind === "timer"
       ? isCustom
@@ -406,12 +411,15 @@ export function PatrolPopover({
                   <input
                     type="number"
                     min={1}
-                    max={customTimerUnit === "hours" ? 168 : 1440}
+                    max={maxTimerAmount}
                     aria-label="Timer duration"
                     value={customTimerAmount}
                     onChange={(e) =>
                       setCustomTimerAmount(
-                        Math.max(1, Number(e.target.value) || 1),
+                        Math.min(
+                          maxTimerAmount,
+                          Math.max(1, Math.round(Number(e.target.value) || 1)),
+                        ),
                       )
                     }
                     className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
@@ -422,11 +430,14 @@ export function PatrolPopover({
                   <select
                     aria-label="Timer unit"
                     value={customTimerUnit}
-                    onChange={(e) =>
-                      setCustomTimerUnit(
-                        e.target.value as "minutes" | "hours",
-                      )
-                    }
+                    onChange={(e) => {
+                      const nextUnit = e.target.value as "minutes" | "hours";
+                      const nextMax = nextUnit === "hours" ? 168 : 1440;
+                      setCustomTimerUnit(nextUnit);
+                      setCustomTimerAmount((prev) =>
+                        Math.min(nextMax, Math.max(1, Math.round(prev || 1))),
+                      );
+                    }}
                     className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
                   >
                     <option value="minutes">Minutes</option>

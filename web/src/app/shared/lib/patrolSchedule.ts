@@ -23,7 +23,7 @@ export type PatrolScheduleState = {
   rawCron: string;
 };
 
-export const MINUTE_INTERVAL_OPTIONS = [5, 10, 15, 20, 30, 45] as const;
+export const MINUTE_INTERVAL_OPTIONS = [5, 10, 15, 20, 30] as const;
 export const HOUR_INTERVAL_OPTIONS = [1, 2, 3, 4, 6, 8, 12] as const;
 
 export const PATROL_WEEKDAYS: ReadonlyArray<{
@@ -80,15 +80,6 @@ export function buildPatrolCron(state: PatrolScheduleState): string {
       const { hour, minute } = parseTimeParts(state.time);
       const sorted = sortPatrolDays(state.days);
       const picked = sorted.length > 0 ? sorted : [1];
-      if (
-        picked.length === 5 &&
-        picked.every((d, idx) => d === idx + 1)
-      ) {
-        return `${minute} ${hour} * * 1-5`;
-      }
-      if (picked.length === 7) {
-        return `${minute} ${hour} * * *`;
-      }
       return `${minute} ${hour} * * ${picked.join(",")}`;
     }
     case "custom_cron":
@@ -174,6 +165,7 @@ export function parsePatrolCron(cron: string): PatrolScheduleState {
           ...base,
           frequency: "daily",
           time,
+          days: [1, 2, 3, 4, 5, 6, 0],
           rawCron: trimmed,
         };
       }
@@ -190,18 +182,6 @@ export function parsePatrolCron(cron: string): PatrolScheduleState {
         const parsedDays = sortPatrolDays(
           dowField.split(",").map((d) => Number(d) % 7),
         );
-        if (
-          parsedDays.length === 5 &&
-          parsedDays.every((d, i) => d === i + 1)
-        ) {
-          return {
-            ...base,
-            frequency: "weekdays",
-            time,
-            days: [1, 2, 3, 4, 5],
-            rawCron: trimmed,
-          };
-        }
         if (parsedDays.length > 0) {
           return {
             ...base,

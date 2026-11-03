@@ -2455,7 +2455,7 @@ function EmailPreview({
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="text-[0.72rem] font-medium text-[var(--color-accent)] hover:underline"
+            className="text-[0.72rem] font-medium text-[var(--color-card-link)] hover:underline"
           >
             {expanded ? "Collapse email preview" : "Expand full email"}
           </button>

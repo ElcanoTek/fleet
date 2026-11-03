@@ -2,10 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   buildPatrolCron,
   formatCompactCronCadence,
+  MINUTE_INTERVAL_OPTIONS,
   parsePatrolCron,
 } from "./patrolSchedule";
 
 describe("patrolSchedule", () => {
+  it("only offers minute intervals that divide 60 evenly", () => {
+    for (const m of MINUTE_INTERVAL_OPTIONS) {
+      expect(60 % m).toBe(0);
+    }
+  });
+
   it("round-trips simple hourly, minute, daily, weekday, and weekly schedules", () => {
     expect(
       buildPatrolCron({
@@ -61,6 +68,16 @@ describe("patrolSchedule", () => {
         rawCron: "",
       }),
     ).toBe("15 14 * * 1,3,5");
+
+    const allSevenCron = buildPatrolCron({
+      frequency: "weekly",
+      intervalMinutes: 30,
+      intervalHours: 2,
+      time: "09:00",
+      days: [1, 2, 3, 4, 5, 6, 0],
+      rawCron: "",
+    });
+    expect(parsePatrolCron(allSevenCron).days).toEqual([1, 2, 3, 4, 5, 6, 0]);
   });
 
   it("parses standard cron expressions into simple builder states and falls back to custom_cron for complex ones", () => {
