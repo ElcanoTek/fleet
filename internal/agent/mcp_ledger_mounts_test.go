@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // TestEnsureMCPRunsDirMountedReadOnly pins Codex P1 on #1709: a scheduled
@@ -53,5 +54,33 @@ func TestEnsureMCPRunsDirRefusesSymlink(t *testing.T) {
 	}
 	if dir, err := ensureMCPRunsDir(root); err == nil {
 		t.Fatalf("expected a symlinked mcp-runs to be refused, got %q", dir)
+	}
+}
+
+// The per-job scheduled workspaces tree (#1897): created before any sandbox
+// exists, at exactly the parent of every job directory, and a symlink
+// squatting on the name fails boot rather than being mounted.
+func TestEnsureTaskWorkspacesDir(t *testing.T) {
+	root := t.TempDir()
+	dir, err := ensureTaskWorkspacesDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("tasks/ must exist before any sandbox starts: %v, %v", fi, err)
+	}
+	if job := tools.TaskWorkspaceDir(root, "11111111-1111-1111-1111-111111111111"); filepath.Dir(job) != dir {
+		t.Fatalf("read-only mount %q does not cover job dir %q", dir, job)
+	}
+	if again, err := ensureTaskWorkspacesDir(root); err != nil || again != dir {
+		t.Fatalf("second boot: %q, %v; want %q, nil", again, err, dir)
+	}
+
+	squatted := t.TempDir()
+	if err := os.Symlink(t.TempDir(), filepath.Join(squatted, "tasks")); err != nil {
+		t.Fatal(err)
+	}
+	if dir, err := ensureTaskWorkspacesDir(squatted); err == nil {
+		t.Fatalf("expected a symlinked tasks/ to be refused, got %q", dir)
 	}
 }

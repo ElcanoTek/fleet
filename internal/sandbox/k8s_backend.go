@@ -615,8 +615,22 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 	// emptyDir scratch mounts mirror the podman --tmpfs set (sizes included)
 	// so a --read-only-rootfs image behaves identically in both backends,
 	// plus the bridge dir the scripts are uploaded into.
+	// The workspace claim holds the whole workspace root. A scoped sandbox
+	// (#1897) mounts only its own directory of it, as a subPath at that
+	// directory's same path, so no other conversation's or job's directory
+	// exists inside the pod — the counterpart of the podman backend mounting
+	// WorkspaceScope.Dir instead of the root.
+	workspaceRW, workspaceRO := cfg.workspaceMounts()
+	workspaceMount := k8sVolumeMount{Name: "workspace", MountPath: cfg.WorkspaceHostDir}
+	if workspaceRW != cfg.WorkspaceHostDir {
+		rel, err := filepath.Rel(cfg.WorkspaceHostDir, filepath.Clean(workspaceRW))
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			return nil, fmt.Errorf("sandbox pod: scoped workspace %q is not inside the workspace claim root %q", workspaceRW, cfg.WorkspaceHostDir)
+		}
+		workspaceMount = k8sVolumeMount{Name: "workspace", MountPath: filepath.Join(cfg.WorkspaceHostDir, rel), SubPath: filepath.ToSlash(rel)}
+	}
 	mounts := []k8sVolumeMount{
-		{Name: "workspace", MountPath: cfg.WorkspaceHostDir},
+		workspaceMount,
 		{Name: "bridge", MountPath: k8sBridgeDir},
 		{Name: "tmp", MountPath: "/tmp"},
 		{Name: "ipython", MountPath: "/home/sandbox/.ipython"},
@@ -639,7 +653,7 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 	// the skills but no turn can rewrite what every other chat reads. Roots
 	// NOT nested in the claim carry fileop anchors only (bundle docs the
 	// image itself provides) and get no mount, exactly as before.
-	for _, dir := range cfg.ReadOnlyMounts {
+	for _, dir := range workspaceRO {
 		if dir == "" {
 			continue
 		}
@@ -684,7 +698,7 @@ func buildSandboxPod(cfg ContainerConfig, kcfg KubernetesConfig, name string) (*
 			// PID 1: a do-nothing process to keep the pod alive; every real
 			// operation execs into it — same shape as the podman backend.
 			Command:    []string{"sleep", "infinity"},
-			WorkingDir: cfg.WorkspaceHostDir,
+			WorkingDir: workspaceRW,
 			SecurityContext: &k8sContainerSecCtx{
 				AllowPrivilegeEscalation: boolPtr(false),
 				ReadOnlyRootFilesystem:   boolPtr(true),
@@ -1101,7 +1115,8 @@ func (k *k8sImpl) runBash(ctx context.Context, req BashRequest) (BashResult, err
 }
 
 func (k *k8sImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
-	anchor, readOnly, err := fileOpAnchorFor(k.cfg.WorkspaceHostDir, k.cfg.ReadOnlyMounts, req.Root)
+	rw, ro := k.cfg.workspaceMounts()
+	anchor, readOnly, err := fileOpAnchorFor(rw, ro, req.Root)
 	if err != nil {
 		return FileOpResult{}, err
 	}
@@ -1115,7 +1130,8 @@ func (k *k8sImpl) runFileOp(ctx context.Context, req FileOpRequest) (FileOpResul
 }
 
 func (k *k8sImpl) bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error) {
-	anchor, readOnly, err := fileOpAnchorFor(k.cfg.WorkspaceHostDir, k.cfg.ReadOnlyMounts, root)
+	rw, ro := k.cfg.workspaceMounts()
+	anchor, readOnly, err := fileOpAnchorFor(rw, ro, root)
 	if err != nil {
 		return FileOpRootIdentity{}, err
 	}
