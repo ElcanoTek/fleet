@@ -179,7 +179,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			// DeleteAllUnpinned) return only a count, not IDs, so those rely on
 			// the pool's idle reaper to reclaim instead.
 			for _, cid := range req.ConversationIDs {
-				s.enforceMultiplayerRevocation(r.Context(), cid, user, false, nil)
+				s.enforceMultiplayerRevocation(r.Context(), cid, &store.Conversation{UserEmail: user}, nil)
 				s.removeConversationPrivateStash(cid)
 				s.releasePersistentSandbox(cid)
 				s.sessionApprovals.Forget(cid)

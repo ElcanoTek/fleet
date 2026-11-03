@@ -115,8 +115,9 @@ type Server struct {
 	// Each entry carries a monotonic token so a turn whose handler is
 	// cleaning up doesn't accidentally clobber a fresher entry that
 	// another submit installed in the meantime.
-	inflightMu sync.Mutex
-	inflight   map[string]inflightEntry
+	inflightMu                  sync.Mutex
+	inflight                    map[string]inflightEntry
+	activeParticipantWorkspaces map[string]string
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
 	// delete handlers) against the maintenance reconciler, so a Sync pass can
 	// never observe — and "repair" — a mutation's intermediate on-disk state.

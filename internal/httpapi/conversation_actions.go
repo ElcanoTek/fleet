@@ -280,7 +280,7 @@ func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request
 		writeConversationMutationError(w, err)
 		return
 	}
-	s.enforceMultiplayerRevocation(r.Context(), id, user, false, nil)
+	s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
 	s.removeConversationPrivateStash(id)
 	// Reclaim the conversation's persistent run_python sandbox (#213), if any,
 	// and its in-memory session pre-approvals (#300).
@@ -349,7 +349,7 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	if req.Archived {
-		s.enforceMultiplayerRevocation(r.Context(), id, user, false, nil)
+		s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

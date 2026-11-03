@@ -118,7 +118,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 		// team_visible and the team audience stamp ONLY when the conversation
 		// currently lives in a project that is actually shared with that same
 		// team; unfiled chats and personal-project chats become private again.
-		_, err := s.db.ExecContext(ctx, `
+		res, err := s.db.ExecContext(ctx, `
 			UPDATE conversations SET
 				multiplayer = FALSE,
 				multiplayer_participants = $1,
@@ -160,7 +160,19 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 		if err != nil {
 			return nil, err
 		}
-		return s.Get(ctx, ownerEmail, convID)
+		if n, err := res.RowsAffected(); err != nil {
+			return nil, err
+		} else if n == 0 {
+			return nil, ErrConversationNotFound
+		}
+		updated, err := s.Get(ctx, ownerEmail, convID)
+		if err != nil {
+			return nil, err
+		}
+		if updated == nil {
+			return nil, ErrConversationNotFound
+		}
+		return updated, nil
 	}
 
 	var ownerTeam sql.NullString
@@ -177,11 +189,12 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	var res sql.Result
 	if team != "" {
 		if err := lockTeamNamesTx(ctx, tx, team); err != nil {
 			return nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `
+		res, err = tx.ExecContext(ctx, `
 			WITH t AS (
 				INSERT INTO teams (name, created_at) VALUES ($1, $2)
 				ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
@@ -197,11 +210,12 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 				updated_at = $2
 			WHERE id = $5 AND user_email = $6 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			team, now, partJSON, exclJSON, convID, ownerEmail,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `
+		res, err = tx.ExecContext(ctx, `
 			UPDATE conversations SET
 				multiplayer = TRUE,
 				multiplayer_participants = $1,
@@ -209,14 +223,27 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 				updated_at = $3
 			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			partJSON, exclJSON, now, convID, ownerEmail,
-		); err != nil {
+		)
+		if err != nil {
 			return nil, err
 		}
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return nil, err
+	} else if n == 0 {
+		return nil, ErrConversationNotFound
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return s.Get(ctx, ownerEmail, convID)
+	updated, err := s.Get(ctx, ownerEmail, convID)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		return nil, ErrConversationNotFound
+	}
+	return updated, nil
 }
 
 // UpdateConversationMultiplayerAccess adds and/or removes specific user emails

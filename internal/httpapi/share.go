@@ -410,17 +410,25 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 			return
 		}
 	}
-	if updated != nil && updated.TeamVisible && updated.ProjectID != "" {
+	if updated == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if updated.TeamVisible && updated.ProjectID != "" {
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
 			log.Printf("multiplayer: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
-	if err != nil && !errors.Is(err, store.ErrConversationNotFound) {
+	if err != nil {
+		if errors.Is(err, store.ErrConversationNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.enforceMultiplayerRevocation(r.Context(), convID, updated.UserEmail, updated.Multiplayer, roster)
+	s.enforceMultiplayerRevocation(r.Context(), convID, updated, roster)
 	writeJSON(w, map[string]any{
 		"multiplayer":  updated.Multiplayer,
 		"team_visible": updated.TeamVisible,
@@ -435,15 +443,29 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 // enforceMultiplayerRevocation cancels any active turn or queued inputs in
 // convID belonging to a user who is no longer authorized to participate, and
 // detaches live SSE subscribers whose multiplayer access was revoked.
-func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID, ownerEmail string, multiplayer bool, roster []string) {
+func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string, conv *store.Conversation, roster []string) {
+	ownerEmail := ""
+	multiplayer := false
+	if conv != nil {
+		ownerEmail = conv.UserEmail
+		multiplayer = conv.Multiplayer
+	}
+	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
 	allowed := map[string]bool{}
-	if owner := strings.ToLower(strings.TrimSpace(ownerEmail)); owner != "" {
-		allowed[owner] = true
+	if ownerKey != "" {
+		allowed[ownerKey] = true
 	}
 	if multiplayer {
 		for _, r := range roster {
 			if e := strings.ToLower(strings.TrimSpace(r)); e != "" {
 				allowed[e] = true
+			}
+		}
+		if conv != nil {
+			for _, ex := range conv.MultiplayerExcluded {
+				if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+					delete(allowed, e)
+				}
 			}
 		}
 	}

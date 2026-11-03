@@ -195,6 +195,13 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 	// Idle → the drain launches it now; a running turn → it waits in the
 	// queue and that turn's completion tail drains it.
 	s.maybeDrainQueue(convID)
+	// If another multiplayer participant also had settled armed cards in this
+	// conversation, ClaimApprovalResume claimed only the earliest participant's
+	// batch; re-arm the debounce so the remaining participant gets their own
+	// resume turn.
+	if armed, err := s.store.HasArmedApprovals(ctx, convID); err == nil && armed {
+		s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
+	}
 }
 
 func approvalResumeIDs(items []store.ApprovalResumeItem) []string {

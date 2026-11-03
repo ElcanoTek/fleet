@@ -341,7 +341,13 @@ func TestMultiplayerPrivateWorkspaceIsolation(t *testing.T) {
 	if got, err := os.ReadFile(bobAtt); err != nil || string(got) != "bob_private_attachment" {
 		t.Fatalf("expected Bob's attachment to be restored on Bob's next turn, got %q err=%v", string(got), err)
 	}
-	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
+	// Simulate an interrupted process restart during Bob's turn (in-memory state cleared, disk marker left behind):
+	// Alice's workspace file fetch must automatically recover her stashed attachments and return 200.
+	srv.clearParticipantWorkspaceActive(conv.ID)
+	wAliceAfterRestart := doAuthedJSONRequest(t, srv, http.MethodGet, "/conversations/"+conv.ID+"/workspace/attachments/slug1/alice-secret.csv", "alice@reklaim.com", nil)
+	if wAliceAfterRestart.Code != http.StatusOK || wAliceAfterRestart.Body.String() != "alice_private_attachment" {
+		t.Fatalf("expected 200 with owner attachment after interrupted turn recovery, got %d body=%q", wAliceAfterRestart.Code, wAliceAfterRestart.Body.String())
+	}
 
 	// Deleting the conversation removes the participant stash directory too.
 	stashDir, err := srv.privateWorkspaceStashDir(conv.ID)

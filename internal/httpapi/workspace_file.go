@@ -66,6 +66,13 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	// `ln -s /etc/passwd workspace/<conv>/p` written by the agent (or a
 	// malicious upload) would let any user with the conversation read host
 	// secrets via this endpoint.
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	if isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath))) {
+		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+	}
 	wsDir, err := tools.SafeWorkspaceJoin(tools.WorkspaceDirForConversation(convID), ".")
 	if err != nil {
 		http.Error(w, "workspace unavailable", http.StatusNotFound)
@@ -102,8 +109,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
-	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
-	if isPrivateWorkspacePath(filepath.ToSlash(rel)) || isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath))) {
+	if isPrivateWorkspacePath(filepath.ToSlash(rel)) {
 		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
 			http.Error(w, "file not found", http.StatusNotFound)
 			return
@@ -187,30 +193,83 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
-func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
-	if s.store == nil {
-		return
+func (s *Server) setParticipantWorkspaceActive(convID, user string) {
+	s.inflightMu.Lock()
+	if s.activeParticipantWorkspaces == nil {
+		s.activeParticipantWorkspaces = make(map[string]string)
 	}
+	s.activeParticipantWorkspaces[convID] = user
+	s.inflightMu.Unlock()
+}
+
+func (s *Server) clearParticipantWorkspaceActive(convID string) {
+	s.inflightMu.Lock()
+	delete(s.activeParticipantWorkspaces, convID)
+	s.inflightMu.Unlock()
+}
+
+func (s *Server) isParticipantWorkspaceActiveInMemory(convID, ownerEmail string) bool {
+	s.inflightMu.Lock()
+	user := s.activeParticipantWorkspaces[convID]
+	s.inflightMu.Unlock()
+	if user != "" && (ownerEmail == "" || !strings.EqualFold(user, ownerEmail)) {
+		return true
+	}
+	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() && entry.steer != nil && entry.steer.user != "" && !strings.EqualFold(entry.steer.user, ownerEmail) {
+		return true
+	}
+	return false
+}
+
+func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil || root == "" {
 		return
 	}
-	_, _ = s.store.SweepOrphanWorkspaces(ctx, root)
+	if s.store != nil {
+		_, _ = s.store.SweepOrphanWorkspaces(ctx, root)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	for _, d := range entries {
+		if !d.IsDir() {
+			continue
+		}
+		convID := d.Name()
+		if !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+			continue
+		}
+		if s.isParticipantWorkspaceActiveInMemory(convID, "") {
+			continue
+		}
+		_ = recoverInterruptedParticipantWorkspace(tools.WorkspaceDirForConversation(convID), filepath.Join(root, convID))
+	}
 }
 
 func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
 	if ownerEmail == "" {
 		return false
 	}
-	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() && entry.steer != nil && entry.steer.user != "" && !strings.EqualFold(entry.steer.user, ownerEmail) {
+	if s.isParticipantWorkspaceActiveInMemory(convID, ownerEmail) {
 		return true
 	}
 	stashRoot, err := s.privateWorkspaceStashDir(convID)
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(stashRoot, "active-participant"))
-	return err == nil
+	if _, err := os.Stat(filepath.Join(stashRoot, "active-participant")); err != nil {
+		return false
+	}
+	// No participant turn is active in memory, so any active-participant
+	// marker left on disk came from an interrupted earlier process. Recover
+	// the owner's private workspace directories immediately before serving the
+	// request; fail closed if recovery cannot complete.
+	if err := recoverInterruptedParticipantWorkspace(tools.WorkspaceDirForConversation(convID), stashRoot); err != nil {
+		return true
+	}
+	return false
 }
 
 // activateTurnPrivateWorkspace isolates privateWorkspaceDirs (attachments/ and
@@ -263,6 +322,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
 		return fmt.Errorf("restore participant attachments: %w", err)
 	}
+	s.setParticipantWorkspaceActive(conv.ID, user)
 	return nil
 }
 
@@ -274,6 +334,7 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
 		return
 	}
+	s.clearParticipantWorkspaceActive(conv.ID)
 	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
 		return
 	}

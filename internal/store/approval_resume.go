@@ -223,12 +223,37 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	// An approved card whose sentinel still stands (its outcome write failed)
 	// is not settled: it stays armed, and boot recovery drops it with a note
 	// once RecoverStrandedApprovals has recorded it as unknown.
+	//
+	// In multiplayer conversations, a participant's turn stages approvals under
+	// that participant's user_email. Claim one participant's settled armed
+	// cards at a time and enqueue the resume row under their user_email so the
+	// resumed turn runs under the originating participant's identity rather
+	// than the conversation owner's, and never combines two different
+	// participants' approvals into one turn.
+	var resumeUser string
+	err = tx.QueryRowContext(ctx,
+		`SELECT COALESCE(NULLIF(TRIM(user_email), ''), $3)
+		   FROM approvals
+		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
+		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
+		  ORDER BY COALESCE(resolved_at, 0), created_at, id
+		  LIMIT 1`,
+		req.ConversationID, ApprovalExecutingSentinel, owner).Scan(&resumeUser)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, nil // nothing armed was settled: no-op
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Owner = resumeUser
+
 	rows, err = tx.QueryContext(ctx,
 		`UPDATE approvals SET resume_state = 'claimed'
 		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
 		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
+		    AND LOWER(COALESCE(NULLIF(TRIM(user_email), ''), $3)) = LOWER($4)
 		  RETURNING id, tool_name, status, COALESCE(result_text, ''), is_err, COALESCE(resolved_at, 0), created_at`,
-		req.ConversationID, ApprovalExecutingSentinel)
+		req.ConversationID, ApprovalExecutingSentinel, owner, resumeUser)
 	if err != nil {
 		return out, err
 	}
@@ -305,7 +330,7 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
-		ID: uuid.NewString(), ConversationID: req.ConversationID, UserEmail: owner,
+		ID: uuid.NewString(), ConversationID: req.ConversationID, UserEmail: resumeUser,
 		ClientInputID: "approval-resume:" + ids[0],
 		Message:       ApprovalResumeInputText(out.Claimed),
 		Attachments:   "[]", Mode: InputModeResume, State: InputStateQueued,
