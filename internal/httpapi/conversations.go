@@ -250,14 +250,14 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+			_ = s.store.Delete(r.Context(), user, conv.ID)
 			return
 		}
 		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
 		// without running a turn, so the next real turn sees it as history.
 		// Best-effort ordering is NOT acceptable here — a discussion opened
 		// on a missing seed is an empty chat with a misleading title — so a
-		// failed append fails the request (the empty conversation row is
-		// harmless and reachable from the sidebar).
+		// failed append fails the request and rolls back the created row.
 		if seed := strings.TrimSpace(req.Seed); seed != "" {
 			content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
 			if err == nil {
@@ -265,10 +265,12 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
 			}
 			if err != nil {
+				_ = s.store.Delete(r.Context(), user, conv.ID)
 				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
+		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 		writeJSON(w, conv)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -392,8 +392,10 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 		return clean, nil
 	}
 	bundled := map[string]agent.OptionalServerInfo{}
-	for _, info := range s.agent.MCPServerCatalog() {
-		bundled[strings.ToLower(info.Name)] = info
+	if s.agent != nil {
+		for _, info := range s.agent.MCPServerCatalog() {
+			bundled[strings.ToLower(info.Name)] = info
+		}
 	}
 	var remote map[string]map[string]bool
 	for rawName, rawAcct := range accounts {
