@@ -244,6 +244,16 @@ describe("cardRef", () => {
 });
 
 describe("slot aliases on panels", () => {
+  it("a key that becomes live again stops being another slot's alias", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "a", input: display("A", { panel: "a" }) }]),
+      assistant(2, [{ id: "b", input: display("B", { panel: "b", replaces: "a" }) }]),
+      assistant(3, [{ id: "n", input: display("New A", { panel: "a" }) }]),
+    ], { ...EMPTY_BOARD_PREFS, removed: ["p:a"] });
+    // Removing the NEW p:a hides only it; the moved panel (p:b) stays.
+    expect(b.panels.map((p) => [p.key, p.aliases])).toEqual([["p:b", []]]);
+  });
+
   it("a moved slot lists the key it had", () => {
     const b = boardOf(
       [

@@ -3658,6 +3658,10 @@ export function ChatExperience({
   // the server names it): only that path keeps the current view. Opening any
   // other conversation, from a blank chat included, restores that
   // conversation's own saved view.
+  // Share before the first message creates the conversation straight from
+  // the blank slot (openShareFromComposer); that is still this draft.
+  const dashboardJustCreated =
+    dashboardConvId !== null && shareCreatedSummariesRef.current.has(dashboardConvId);
   const [dashboardKeySeen, setDashboardKeySeen] = useState(currentConvKey);
   if (dashboardKeySeen !== currentConvKey) {
     setDashboardKeySeen(currentConvKey);
@@ -3666,6 +3670,7 @@ export function ChatExperience({
       dashboardConvId,
       dashboardView,
       PENDING_CONV_KEY,
+      dashboardJustCreated,
     );
     if (next !== dashboardView) setDashboardView(next);
   }
@@ -3684,6 +3689,7 @@ export function ChatExperience({
     currentConvKey,
     dashboardConvId,
     PENDING_CONV_KEY,
+    dashboardJustCreated,
   );
   const dashboardGenUi = useMemo(
     () => (dashboardActive ? deriveGenUiState(messages) : null),
@@ -5433,10 +5439,27 @@ export function ChatExperience({
         key: "Escape",
         shift: false,
         enabled: dashboardActive && listNavActive,
-        when: () =>
-          !document.querySelector(
-            '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
-          ),
+        // Typing in a focused panel's input does not trap Esc: it closes the
+        // panel. Typing in the message box keeps Esc for the composer (the
+        // guide says so); there it never leaves the view.
+        allowInInput: true,
+        when: (e) => {
+          if (
+            document.querySelector(
+              '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+            )
+          )
+            return false;
+          const t = e.target;
+          const typing =
+            t instanceof HTMLElement &&
+            (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
+          if (!typing) return true;
+          return (
+            dashboardFocus !== "" &&
+            !!(t as HTMLElement).closest('[data-testid="dashboard-focus-layer"]')
+          );
+        },
         handler: () => {
           if (dashboardFocus) setDashboardFocus("");
           else toggleDashboardView();

@@ -73,6 +73,9 @@ describe("dashboardViewAfterSwitch", () => {
     // Conversation to conversation: each keeps its own.
     expect(dashboardViewAfterSwitch("saved-on", "plain-conv", true, "pending")).toBe(false);
     expect(dashboardViewAfterSwitch("plain-conv", "saved-on", false, "pending")).toBe(true);
+    // Share before the first send creates the conversation straight from the
+    // blank slot: still this draft, so the view stays on.
+    expect(dashboardViewAfterSwitch("pending", "shared-new", true, "pending", true)).toBe(true);
   });
 });
 
@@ -98,6 +101,15 @@ describe("useBoardPrefs", () => {
     expect(result.current[0]).toEqual({ pinned: [], removed: [], order: [], wide: {} });
     // …and the conversation's own layout is untouched.
     expect(readBoardPrefs("existing")).toEqual(saved);
+  });
+
+  it("carries a draft's choices onto a conversation Share created from it", () => {
+    const { result, rerender } = renderHook(({ key, id, created }) => useBoardPrefs(key, id, "pending", created), {
+      initialProps: { key: "pending", id: null as string | null, created: false },
+    });
+    act(() => result.current[1]((p) => ({ ...p, order: ["c:q"] })));
+    rerender({ key: "shared-new", id: "shared-new", created: true });
+    expect(result.current[0].order).toEqual(["c:q"]);
   });
 
   it("carries a draft's choices onto the id it gets", () => {

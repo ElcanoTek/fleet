@@ -1,4 +1,4 @@
-import { render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DashboardBoard } from "./DashboardView";
 import type { BoardPanel } from "./board";
@@ -43,5 +43,17 @@ describe("DashboardBoard focus layer", () => {
     const { getByTestId } = render(<DashboardBoard {...props} panels={[]} maximized="c:gone" setMaximized={setMaximized} />);
     expect(setMaximized).toHaveBeenCalledWith("");
     expect(document.activeElement).toBe(getByTestId("dashboard-board"));
+  });
+});
+
+describe("DashboardBoard width", () => {
+  it("a width choice replaces any made under the panel's earlier keys", () => {
+    const updatePrefs = vi.fn();
+    const { getByRole } = render(
+      <DashboardBoard {...props} updatePrefs={updatePrefs} panels={[panel("p:b", ["p:a"])]} maximized="" setMaximized={vi.fn()} />,
+    );
+    fireEvent.click(getByRole("button", { name: "Make Revenue wide" }));
+    const next = updatePrefs.mock.calls[0][0]({ pinned: [], removed: [], order: [], wide: { "p:a": false, "p:x": true } });
+    expect(next.wide).toEqual({ "p:x": true, "p:b": true });
   });
 });

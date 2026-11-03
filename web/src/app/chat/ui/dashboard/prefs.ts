@@ -56,9 +56,12 @@ export function dashboardViewAfterSwitch(
   nextConvId: string | null,
   current: boolean,
   pendingKey: string,
+  // The draft was just created as this conversation without a send (Share
+  // before the first message materializes it straight from the blank slot).
+  justCreated = false,
 ): boolean {
   if (nextConvId === null) return current;
-  if (current && prevKey.startsWith(`${pendingKey}:`)) return true;
+  if (current && (justCreated || prevKey.startsWith(`${pendingKey}:`))) return true;
   return readDashboardView(nextConvId);
 }
 
@@ -122,6 +125,7 @@ export function useBoardPrefs(
   slotKey: string,
   convId: string | null,
   pendingKey: string,
+  justCreated = false,
 ): [BoardPrefs, (update: (prev: BoardPrefs) => BoardPrefs) => void] {
   const [state, setState] = useState<{ slotKey: string; convId: string | null; prefs: BoardPrefs }>(() => ({
     slotKey,
@@ -133,7 +137,8 @@ export function useBoardPrefs(
     // A draft's own choices follow it (blank chat → its pending key → its
     // id). Leaving a conversation for a new draft starts the draft empty:
     // another chat's removals, order and widths are not this one's.
-    const promoted = state.convId === null && convId !== null && state.slotKey.startsWith(`${pendingKey}:`);
+    const promoted =
+      state.convId === null && convId !== null && (justCreated || state.slotKey.startsWith(`${pendingKey}:`));
     const draftToDraft = state.convId === null && convId === null;
     const prefs = promoted || draftToDraft ? state.prefs : convId === null ? EMPTY_BOARD_PREFS : readBoardPrefs(convId);
     current = { slotKey, convId, prefs };

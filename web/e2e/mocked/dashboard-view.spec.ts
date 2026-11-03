@@ -171,6 +171,22 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await expect(panels).toHaveCount(4);
   await expect(page.locator('[data-panel-key="c:call-follow-1"]')).toContainText("Send a follow-up");
 
+  // Typing in a focused panel's input, Esc closes the panel (not the view).
+  await page.locator('[data-panel-key="c:call-follow-1"]').getByTestId("dashboard-panel-focus").click();
+  const layer = page.getByTestId("dashboard-focus-layer");
+  await layer.getByLabel(/Note to Acme/).fill("hi");
+  await page.keyboard.press("Escape");
+  await expect(layer).toHaveCount(0);
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
+
+  // Esc out of a panel's menu hands the focus back to its button.
+  const menuButton = page.locator('[data-panel-key="c:call-health-1"]').getByRole("button", { name: "More for Systems" });
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Move earlier" }).focus();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect(menuButton).toBeFocused();
+
   // Remove the systems panel: its card returns to the chat rail.
   const systems = page.locator('[data-panel-key="c:call-health-1"]');
   await systems.getByRole("button", { name: "More for Systems" }).click();

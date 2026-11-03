@@ -286,6 +286,7 @@ function PanelMenu({
   const [open, setOpen] = useState(false);
   const menuId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -295,6 +296,8 @@ function PanelMenu({
       if (e.key === "Escape") {
         e.stopPropagation();
         setOpen(false);
+        // Back to the menu's own button, not to <body>.
+        triggerRef.current?.focus();
       }
     };
     window.addEventListener("mousedown", onDown);
@@ -321,6 +324,7 @@ function PanelMenu({
   return (
     <div ref={wrapRef} className="relative">
       <button
+        ref={triggerRef}
         type="button"
         className="dash-icon-btn"
         aria-label={`More for ${panel.spec.title}`}
@@ -367,6 +371,30 @@ function Panel(props: PanelProps) {
     props.setDragging(panel.key);
   };
   const dropTarget = props.dragging !== null && props.dragging !== panel.key;
+  // A long conversation can hold dozens of display cards, each up to
+  // thousands of rows: a panel mounts its card only once it nears the
+  // viewport (and keeps it), so opening the board never builds them all at
+  // once. Without IntersectionObserver (old browsers, jsdom) it mounts now.
+  const sectionRef = useRef<HTMLElement>(null);
+  const [nearView, setNearView] = useState(
+    () => maximized === true || typeof IntersectionObserver === "undefined",
+  );
+  useEffect(() => {
+    if (nearView) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setNearView(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: "800px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [nearView]);
   return (
     // The slot is the grid cell and the drop target; the panel is the frame.
     <div
@@ -389,6 +417,7 @@ function Panel(props: PanelProps) {
       }
     >
     <section
+      ref={sectionRef}
       id={maximized ? undefined : panelDomId(panel.key)}
       data-testid="dashboard-panel"
       data-panel-key={panel.key}
@@ -471,6 +500,9 @@ function Panel(props: PanelProps) {
         </div>
       </header>
       <div className="dash-panel-body">
+        {!nearView ? (
+          <div className="min-h-[9rem]" data-testid="dashboard-panel-deferred" aria-hidden="true" />
+        ) : (
         <Suspense fallback={<div className="px-3.5 py-3 text-[0.75rem] text-[var(--color-text-muted)]">Loading…</div>}>
           <GenerativeCard
             key={`${panel.cardId}#${panel.occurrence}`}
@@ -486,6 +518,7 @@ function Panel(props: PanelProps) {
             onResumeHeld={props.onResumeHeld}
           />
         </Suspense>
+        )}
       </div>
     </section>
       {dropTarget ? <div className="dash-drop-hint" aria-hidden="true" /> : null}
@@ -548,11 +581,15 @@ export function DashboardBoard({
   };
   // Rebuilt from entries rather than written by computed key: a slot key is
   // derived from transcript data.
-  const onToggleWide = (key: string, wide: boolean) =>
+  // The new choice replaces any made under the panel's earlier keys, which
+  // would otherwise win back after a refresh moves the slot to one of them.
+  const onToggleWide = (key: string, wide: boolean) => {
+    const stale = new Set([key, ...(panels.find((p) => p.key === key)?.aliases ?? [])]);
     updatePrefs((p) => ({
       ...p,
-      wide: Object.fromEntries([...Object.entries(p.wide).filter(([k]) => k !== key), [key, wide]]),
+      wide: Object.fromEntries([...Object.entries(p.wide).filter(([k]) => !stale.has(k)), [key, wide]]),
     }));
+  };
   const onRemove = (key: string) => {
     if (maximized === key) setMaximized("");
     updatePrefs((p) => ({

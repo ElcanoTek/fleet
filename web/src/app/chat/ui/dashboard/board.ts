@@ -188,6 +188,10 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
         aliases.delete(lineage);
         for (const [cid, k] of slotOf) if (k === lineage) slotOf.set(cid, key);
       }
+      // A key that is live again (an unrelated card opened a new panel under
+      // a key some slot moved away from) is that new panel's alone: it stops
+      // being an alias, so the two never share removal, order or width.
+      if (!prev) for (const set of aliases.values()) set.delete(key);
       slotOf.set(tc.id, key);
       if (!firstSeen.has(key)) firstSeen.set(key, seq++);
       slots.set(key, {
