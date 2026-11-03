@@ -55,7 +55,8 @@ test("a Git-backed library prompt can be selected into the chat composer", async
 
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Open prompt library" }).click();
+  await page.getByRole("button", { name: "More options" }).click();
+  await page.getByRole("menuitem", { name: "Open prompt library" }).click();
   await expect(page.getByRole("dialog", { name: "Prompt library" })).toBeVisible();
   await page.getByRole("button", { name: "Use prompt" }).click();
   await expect(page.getByRole("textbox").first()).toHaveValue(content);
@@ -93,7 +94,8 @@ test("a form prompt from the library is filled in and inserted rendered into the
 
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
-  await page.getByRole("button", { name: "Open prompt library" }).click();
+  await page.getByRole("button", { name: "More options" }).click();
+  await page.getByRole("menuitem", { name: "Open prompt library" }).click();
   await expect(page.getByRole("region", { name: "Meeting follow-up form" })).toBeVisible();
 
   const use = page.getByRole("button", { name: "Use prompt" });

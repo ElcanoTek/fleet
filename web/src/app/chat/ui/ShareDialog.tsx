@@ -1302,6 +1302,7 @@ export function ChatShareControls({
   conversation,
   team,
   onOpen,
+  hideShareButton = false,
 }: {
   conversation: Pick<
     ConversationSummary,
@@ -1309,6 +1310,7 @@ export function ChatShareControls({
   >;
   team?: string;
   onOpen: () => void;
+  hideShareButton?: boolean;
 }) {
   const label = visibilityLabel(conversation, team || "your team");
   const shared = Boolean(conversation.team_visible || conversation.multiplayer);
@@ -1335,14 +1337,16 @@ export function ChatShareControls({
         )}
         <span className="hidden sm:inline">{label}</span>
       </button>
-      <button
-        type="button"
-        data-testid="chat-header-share"
-        onClick={onOpen}
-        className={`inline-flex h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
-      >
-        Share
-      </button>
+      {!hideShareButton ? (
+        <button
+          type="button"
+          data-testid="chat-header-share"
+          onClick={onOpen}
+          className={`inline-flex h-[1.875rem] items-center rounded-[var(--radius-md)] border border-[var(--color-border-strong)] bg-transparent px-3.5 text-[0.8125rem] font-medium text-[var(--color-text-primary)] transition hover:bg-[var(--color-overlay-soft)] ${FOCUS}`}
+        >
+          Share
+        </button>
+      ) : null}
     </span>
   );
 }

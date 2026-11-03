@@ -726,7 +726,12 @@ export function ChatExperience({
   // Runtime client config: branding strings + the empty-state quick-start
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
-  const { branding, pills, models: workspaceModelTiers } = useClientConfig();
+  const {
+    branding,
+    pills,
+    models: workspaceModelTiers,
+    teamChatsSharedByDefault = false,
+  } = useClientConfig();
   // Visibility only (the Tools library's admin-only links); the server
   // authorizes every admin action on its own.
   const adminState = useIsAdmin();
@@ -4168,6 +4173,79 @@ export function ChatExperience({
     setShareDialog({ id: conversation.id });
   };
 
+  // openShareFromComposer lets the user open sharing from the composer toolbar
+  // at any point — including at the very start of a brand-new chat before the
+  // first message is sent. When no conversation row exists yet, it materializes
+  // a draft conversation on the spot, promotes the composer draft onto it, and
+  // opens the Share dialog immediately.
+  const [creatingShareChat, setCreatingShareChat] = useState(false);
+  const openShareFromComposer = async () => {
+    if (activeConversation) {
+      openShareDialog(activeConversation);
+      return;
+    }
+    if (creatingShareChat || isStreaming) return;
+    setCreatingShareChat(true);
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "New conversation",
+          persona: selectedPersona || undefined,
+          model: selectedModel || undefined,
+          lockdown: isLockdown || undefined,
+        }),
+      });
+      if (!response.ok) return;
+      const created = (await response.json()) as Partial<ConversationSummary>;
+      if (!created?.id) return;
+      const pendingKey = activePendingKey ?? draftKeyRef.current;
+      const hadPendingAutoApprove = Boolean(
+        pendingKey && pendingAutoApproveByKey[pendingKey],
+      );
+      const summary: ConversationSummary = {
+        id: created.id,
+        title: created.title || "New conversation",
+        persona: created.persona || selectedPersona || "default",
+        model: created.model || selectedModel || "",
+        pinned: Boolean(created.pinned),
+        updated_at: created.updated_at || Math.floor(Date.now() / 1000),
+        user_email: created.user_email || userEmail || undefined,
+        team_id: created.team_id,
+        project_id: created.project_id,
+        team_visible: created.team_visible,
+        multiplayer: created.multiplayer,
+        share_token: created.share_token,
+        lockdown: created.lockdown ?? (isLockdown || undefined),
+        auto_approve: hadPendingAutoApprove || created.auto_approve,
+      };
+      promoteComposerKey(currentConvKey, summary.id);
+      if (pendingKey && hadPendingAutoApprove) {
+        setPendingAutoApproveForKey(pendingKey, false);
+        const autoUrl = conversationApiUrl(summary.id, "/auto-approve");
+        if (autoUrl) {
+          void fetch(autoUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ auto_approve: true }),
+          }).catch(() => {});
+        }
+      }
+      setConversations((curr) => [
+        summary,
+        ...curr.filter((c) => c.id !== summary.id),
+      ]);
+      activeConversationIdRef.current = summary.id;
+      setActiveConversationId(summary.id);
+      openShareDialog(summary);
+    } catch {
+      // Ignore transient network failure; next click retries cleanly.
+    } finally {
+      setCreatingShareChat(false);
+    }
+  };
+
   // buildShareUrl turns a share token into the absolute, copy-paste link a
   // recipient opens. window.origin is the deployment origin the user is on (#226).
   const buildShareUrl = (token: string) =>
@@ -6985,6 +7063,7 @@ export function ChatExperience({
                   conversation={activeConversation}
                   team={activeChatTeamAudience}
                   onOpen={() => openShareDialog(activeConversation)}
+                  hideShareButton
                 />
               ) : null}
             </div>
@@ -7336,6 +7415,15 @@ export function ChatExperience({
                 activeConversationIdRef={activeConversationIdRef}
                 abortControllersRef={abortControllersRef}
                 isPendingKey={isPendingKey}
+                onOpenShare={() => void openShareFromComposer()}
+                shareConversation={
+                  activeConversation ??
+                  (teamChatsSharedByDefault && myTeam
+                    ? { multiplayer: true, team_visible: true }
+                    : null)
+                }
+                shareTeam={activeChatTeamAudience}
+                shareBusy={creatingShareChat}
               />
             </section>
           </div>
