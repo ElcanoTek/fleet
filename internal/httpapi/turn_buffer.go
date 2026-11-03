@@ -565,7 +565,47 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 			}
 		}
 		return data, true
-	case "queue.updated", "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "memory.proposed", "patrol.updated":
+	case "mcp.servers_updated":
+		if len(data) == 0 {
+			return data, true
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return data, true
+		}
+		partRaw, hasPart := m["participant_enabled_optional"]
+		if !hasPart {
+			return data, true
+		}
+		delete(m, "participant_enabled_optional")
+		if viewerEmail != "" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
+			m["enabled_optional"] = partRaw
+			allowed := map[string]bool{}
+			if arr, ok := partRaw.([]any); ok {
+				for _, v := range arr {
+					if s, ok := v.(string); ok {
+						allowed[strings.ToLower(strings.TrimSpace(s))] = true
+					}
+				}
+			}
+			if addedArr, ok := m["added"].([]any); ok && len(addedArr) > 0 {
+				var filteredAdded []string
+				for _, v := range addedArr {
+					if s, ok := v.(string); ok && allowed[strings.ToLower(strings.TrimSpace(s))] {
+						filteredAdded = append(filteredAdded, s)
+					}
+				}
+				if len(filteredAdded) == 0 {
+					return nil, false
+				}
+				m["added"] = filteredAdded
+			}
+		}
+		if b, err := json.Marshal(m); err == nil {
+			return b, true
+		}
+		return data, true
+	case "queue.updated", "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
 		}

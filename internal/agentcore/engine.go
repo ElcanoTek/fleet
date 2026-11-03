@@ -498,16 +498,19 @@ func ApplyCompactionRecords(messages []fantasy.Message, compactions []Compaction
 }
 
 func applyCompactionRecord(messages []fantasy.Message, c CompactionRecord) []fantasy.Message {
-	if c.Head < 0 || c.Removed <= 0 || strings.TrimSpace(c.Summary) == "" {
+	if c.Head < 0 || c.Head >= len(messages)-1 || c.Removed <= 0 || strings.TrimSpace(c.Summary) == "" {
 		return messages
 	}
-	if len(messages) <= c.Head+1 {
+	prefix := messages[:c.Head]
+	active := messages[c.Head:]
+	if c.Removed >= len(active) && c.FirstKeptToolCallID == "" {
 		return messages
 	}
-	cutIdx := c.Head + c.Removed
+	relRemoved := min(c.Removed, len(active))
+	cutIdx := len(prefix) + relRemoved
 	if c.FirstKeptToolCallID != "" {
 		if cutIdx >= len(messages) || firstToolCallID(messages[cutIdx]) != c.FirstKeptToolCallID {
-			for i := c.Head + 1; i < len(messages); i++ {
+			for i := len(prefix) + 1; i < len(messages); i++ {
 				if firstToolCallID(messages[i]) == c.FirstKeptToolCallID {
 					cutIdx = i
 					break
@@ -521,18 +524,17 @@ func applyCompactionRecord(messages []fantasy.Message, c CompactionRecord) []fan
 	// Never split a tool exchange: mirror snapCutBackward / snapCutForward on
 	// messages[c.Head:] so the kept tail never starts with an orphaned tool
 	// result (#1106).
-	active := messages[c.Head:]
-	relCut := snapCutBackward(active, cutIdx-c.Head)
+	relCut := snapCutBackward(active, cutIdx-len(prefix))
 	if relCut < 1 {
-		relCut = snapCutForward(active, cutIdx-c.Head)
+		relCut = snapCutForward(active, cutIdx-len(prefix))
 	}
 	if relCut < 1 || len(active)-relCut < 1 {
 		return messages
 	}
-	cutIdx = c.Head + relCut
+	cutIdx = len(prefix) + relCut
 	keep := dropPlanReannounceMessages(messages[cutIdx:])
-	out := make([]fantasy.Message, 0, c.Head+1+len(keep))
-	out = append(out, messages[:c.Head]...)
+	out := make([]fantasy.Message, 0, len(prefix)+1+len(keep))
+	out = append(out, prefix...)
 	out = append(out, fantasy.NewUserMessage(c.Summary))
 	out = append(out, keep...)
 	return out

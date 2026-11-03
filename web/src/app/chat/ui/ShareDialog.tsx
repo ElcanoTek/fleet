@@ -191,6 +191,8 @@ export type ShareDialogProps = {
   myTeam?: string;
   /** Fleet admin? Only phrases the no-team guidance (A3a). */
   isAdmin?: boolean;
+  /** Whether the viewer owns the conversation; false hides owner-only team/public link actions. */
+  isOwner?: boolean;
   /**
    * Team-shared projects the caller can see. The dialog narrows them to the
    * caller's OWN team (the server pairs a chat's project against the caller's
@@ -252,6 +254,7 @@ export function ShareDialog({
   project,
   myTeam,
   isAdmin,
+  isOwner,
   teamSharedProjects,
   busy,
   copied,
@@ -294,6 +297,49 @@ export function ShareDialog({
         ? "your team"
         : team;
 
+  const conversationId = conversation?.id ?? "";
+  // Multiplayer state & participant management.
+  const [mpState, setMpState] = useState<{
+    id: string;
+    data: MultiplayerState;
+  } | null>(null);
+  const [mpError, setMpError] = useState<string | null>(null);
+  const [addEmailInput, setAddEmailInput] = useState("");
+  useEffect(() => {
+    if (!conversationId) return;
+    let cancelled = false;
+    fetchMultiplayerState(conversationId).then((data) => {
+      if (!cancelled && data) {
+        setMpState({ id: conversationId, data });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId]);
+  const liveMp =
+    mpState?.id === conversationId ? mpState.data : null;
+  const isMultiplayer =
+    liveMp !== null ? liveMp.multiplayer : Boolean(conversation?.multiplayer);
+  const isOwnerForMp =
+    isOwner !== undefined
+      ? isOwner && (liveMp !== null ? liveMp.is_owner : true)
+      : liveMp !== null
+        ? liveMp.is_owner
+        : true;
+  const mpExcluded =
+    liveMp?.excluded ?? conversation?.multiplayer_excluded ?? [];
+  const mpParticipants =
+    liveMp?.participants ?? conversation?.multiplayer_participants ?? [];
+  const mpRoster = (() => {
+    const base = liveMp?.roster ?? [];
+    const excludedSet = new Set(mpExcluded.map((e) => e.toLowerCase()));
+    const combined = Array.from(
+      new Set([...base, ...mpParticipants].map((e) => e.trim().toLowerCase()).filter(Boolean)),
+    );
+    return combined.filter((e) => !excludedSet.has(e));
+  })();
+
   // Outputs: read whenever the file line can show (A4/A5/A6). Keyed by chat
   // id AND read generation, so a stale read for another chat (or an earlier
   // read of this one) never paints this one, and a re-read after a share is
@@ -301,8 +347,7 @@ export function ShareDialog({
   // loading (nothing that promises a count is enabled yet), ready, and
   // failed (said plainly — never rendered as zero files).
   const wantsOutputs =
-    state === "A4" || state === "A5" || state === "A6";
-  const conversationId = conversation?.id ?? "";
+    isOwnerForMp && (state === "A4" || state === "A5" || state === "A6");
   const [outputsTick, setOutputsTick] = useState(0);
   const outputsKey = `${conversationId}:${outputsTick}`;
   const [outputs, setOutputs] = useState<
@@ -351,43 +396,6 @@ export function ShareDialog({
   const [confirmStopLink, setConfirmStopLink] = useState(false);
   const [pending, setPending] = useState(false);
   const working = busy || pending;
-
-  // Multiplayer state & participant management.
-  const [mpState, setMpState] = useState<{
-    id: string;
-    data: MultiplayerState;
-  } | null>(null);
-  const [mpError, setMpError] = useState<string | null>(null);
-  const [addEmailInput, setAddEmailInput] = useState("");
-  useEffect(() => {
-    if (!conversationId) return;
-    let cancelled = false;
-    fetchMultiplayerState(conversationId).then((data) => {
-      if (!cancelled && data) {
-        setMpState({ id: conversationId, data });
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [conversationId]);
-  const liveMp =
-    mpState?.id === conversationId ? mpState.data : null;
-  const isMultiplayer =
-    liveMp !== null ? liveMp.multiplayer : Boolean(conversation?.multiplayer);
-  const isOwnerForMp = liveMp !== null ? liveMp.is_owner : true;
-  const mpExcluded =
-    liveMp?.excluded ?? conversation?.multiplayer_excluded ?? [];
-  const mpParticipants =
-    liveMp?.participants ?? conversation?.multiplayer_participants ?? [];
-  const mpRoster = (() => {
-    const base = liveMp?.roster ?? [];
-    const excludedSet = new Set(mpExcluded.map((e) => e.toLowerCase()));
-    const combined = Array.from(
-      new Set([...base, ...mpParticipants].map((e) => e.trim().toLowerCase()).filter(Boolean)),
-    );
-    return combined.filter((e) => !excludedSet.has(e));
-  })();
 
   const applyMpUpdate = (c: ConversationSummary, payload: {
     multiplayer?: boolean;
@@ -648,7 +656,8 @@ export function ShareDialog({
             </p>
           ) : null}
 
-          {/* ── The team block: always first, always full contrast ── */}
+          {/* ── The team block: always first, always full contrast (owner only) ── */}
+          {isOwnerForMp ? (
           <section
             aria-label="Share with your team"
             data-testid="share-team-block"
@@ -957,6 +966,7 @@ export function ShareDialog({
               </>
             ) : null}
           </section>
+          ) : null}
 
           {/* ── Multiplayer mode: live collaborative chat with add/remove people ── */}
           {!conversation.lockdown ? (
@@ -1119,7 +1129,8 @@ export function ShareDialog({
             </section>
           ) : null}
 
-          {/* ── Public link: one collapsed row, behavior unchanged ── */}
+          {/* ── Public link: one collapsed row, behavior unchanged (owner only) ── */}
+          {isOwnerForMp ? (
           <section
             aria-label="Share outside your team"
             className="flex flex-col rounded-[var(--radius-lg)] border border-[var(--color-border)]"
@@ -1231,6 +1242,7 @@ export function ShareDialog({
               </div>
             ) : null}
           </section>
+          ) : null}
 
           <div className="flex justify-end">
             <button

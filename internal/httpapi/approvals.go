@@ -341,7 +341,7 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 		a.recordIDs[toolCallID] = approval.ID
 		a.recordMu.Unlock()
 	}
-	a.sink.Emit("tool.action_recorded", map[string]any{
+	a.emitUserScoped("tool.action_recorded", map[string]any{
 		"approval_id": approval.ID,
 		"tool":        toolName,
 		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
@@ -383,7 +383,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// the decision. Runs before staging so no approval row or card is created.
 	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
 	if a.autoApproveInTest && !handlerOnlyApproval(toolName) {
-		a.sink.Emit("tool.auto_resolved", map[string]any{
+		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "auto_approve_in_test",
@@ -402,7 +402,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// path that skipped the POST refusal: every call stages its own card.
 	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
 		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
-			a.sink.Emit("tool.auto_resolved", map[string]any{
+			a.emitUserScoped("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
 				"mode":    p.Mode,
 				"pattern": p.Pattern,
@@ -420,7 +420,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.
 	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		a.sink.Emit("tool.auto_resolved", map[string]any{
+		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "conversation_auto_approve",

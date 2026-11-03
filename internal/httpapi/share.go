@@ -369,7 +369,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		return
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user)
-	if !isOwner && (body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil || len(body.Add) > 0 || len(body.Remove) > 0) {
+	if !isOwner {
 		http.Error(w, "only the conversation owner can change multiplayer settings", http.StatusForbidden)
 		return
 	}

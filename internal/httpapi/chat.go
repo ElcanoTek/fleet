@@ -510,9 +510,9 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 		http.Error(w, "conversation not found", http.StatusNotFound)
 		return nil, unlockFirst, false
 	}
-	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) &&
-		strings.TrimSpace(req.InputID) != "" &&
-		!strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
+	if strings.TrimSpace(req.InputID) != "" &&
+		!strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") &&
+		((conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) || strings.HasPrefix(strings.TrimSpace(req.InputID), multiplayerInputKeyPrefix)) {
 		req.InputID = effectiveMultiplayerInputID(user, req.InputID)
 	}
 	unlockFirst = s.lockUserScopedKey(user, *req)

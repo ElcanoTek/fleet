@@ -104,7 +104,7 @@ const multiplayerInputKeyPrefix = "mp-user:"
 func effectiveMultiplayerInputID(user, rawID string) string {
 	rawID = strings.TrimSpace(rawID)
 	user = strings.ToLower(strings.TrimSpace(user))
-	if rawID == "" || user == "" || strings.HasPrefix(rawID, multiplayerInputKeyPrefix) {
+	if rawID == "" || user == "" {
 		return rawID
 	}
 	return multiplayerInputKeyPrefix + user + ":" + rawID

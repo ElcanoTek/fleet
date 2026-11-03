@@ -576,18 +576,41 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		}
 		return nil, fmt.Errorf("auto-approve enable connectors: %w", err)
 	}
-	if autoRes.Superseded > 0 && buf != nil {
-		buf.Emit("tool.approval_superseded", map[string]any{
-			"tool":  tools.EnableMCPConnectorsToolName,
-			"count": autoRes.Superseded,
+	if autoRes.Superseded > 0 {
+		if turnStager != nil {
+			turnStager.emitUserScoped("tool.approval_superseded", map[string]any{
+				"tool":  tools.EnableMCPConnectorsToolName,
+				"count": autoRes.Superseded,
+			})
+		} else if buf != nil {
+			buf.Emit("tool.approval_superseded", map[string]any{
+				"tool":       tools.EnableMCPConnectorsToolName,
+				"count":      autoRes.Superseded,
+				"user_email": user,
+			})
+		}
+	}
+	if len(conv.ParticipantOptionalMCPServers) > 0 {
+		conv.ParticipantOptionalMCPServers = merged
+	}
+	callerMerged := s.effectiveOptionalMCPServersForCaller(ctx, user, &store.Conversation{
+		UserEmail:                 conv.UserEmail,
+		OptionalMCPServersEnabled: merged,
+	})
+	participantMerged := callerMerged
+	if conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user) {
+		participantMerged = s.effectiveOptionalMCPServersForCaller(ctx, "__participant__", &store.Conversation{
+			UserEmail:                 conv.UserEmail,
+			OptionalMCPServersEnabled: merged,
 		})
 	}
-	conv.OptionalMCPServersEnabled = merged
+	conv.OptionalMCPServersEnabled = callerMerged
 
 	if buf != nil {
 		buf.Emit("mcp.servers_updated", map[string]any{
-			"enabled_optional": merged,
-			"added":            newlyAdded,
+			"enabled_optional":             callerMerged,
+			"added":                        newlyAdded,
+			"participant_enabled_optional": participantMerged,
 		})
 		buf.Emit("tool.action_recorded", map[string]any{
 			"approval_id":      approval.ID,
@@ -595,7 +618,8 @@ func (s *Server) autoApproveEnableMCPConnectors(
 			"summary":          summarizeEnableMCPConnectorsInput(tools.EnableMCPConnectorsToolName, rawInput),
 			"undo_hint":        "You can toggle connectors off anytime in the Tools picker.",
 			"result_text":      recordText,
-			"enabled_optional": merged,
+			"enabled_optional": callerMerged,
+			"user_email":       user,
 		})
 	}
 
@@ -622,7 +646,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	return &tools.EnableMCPConnectorsResult{
 		Status:          "enabled",
 		Connectors:      safeAdded,
-		EnabledOptional: promptSafeSlice(merged),
+		EnabledOptional: promptSafeSlice(callerMerged),
 		AutoApproved:    true,
 		ApprovalID:      approval.ID,
 		Message:         msg,

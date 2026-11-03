@@ -6646,6 +6646,12 @@ export function ChatExperience({
             }
             myTeam={myTeam}
             isAdmin={myTeamAdmin}
+            isOwner={
+              shareDialog.id === activeConversationId
+                ? isActiveConversationOwner
+                : conversations.some((c) => c.id === shareDialog.id) ||
+                  archivedConversations.some((c) => c.id === shareDialog.id)
+            }
             teamSharedProjects={teamSharedProjects}
             error={shareError}
             busy={shareBusy}
