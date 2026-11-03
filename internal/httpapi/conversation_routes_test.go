@@ -65,6 +65,8 @@ func conversationRoutePairs() []routePairProbe {
 		// shared from (ADR-0057) — so the handler answers its own 409, not the
 		// dispatcher's 405. The 200 path is covered in team_sharing_http_test.
 		{sub: "share-with-team", method: http.MethodPost, body: map[string]bool{"visible": true}, want: http.StatusConflict},
+		{sub: "multiplayer", method: http.MethodGet, body: nil, want: http.StatusOK},
+		{sub: "multiplayer", method: http.MethodPost, body: map[string]bool{"multiplayer": true}, want: http.StatusOK},
 		// The one conversation route a non-owner may reach (ADR-0057). Probed
 		// on a fresh, unshared chat, so the handler answers its own 404 —
 		// distinct from the dispatcher's 405 for an unmatched pair. The 200

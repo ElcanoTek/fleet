@@ -57,3 +57,19 @@ func historyForClient(entries []agent.HistoryEntry) []historyEntryResponse {
 	}
 	return out
 }
+
+// historyForParticipant projects loaded history for a non-owner multiplayer
+// participant, omitting server-injected context (`InjectedContext`) so private
+// owner attachment paths or library listings are never exposed.
+func historyForParticipant(entries []agent.HistoryEntry) []historyEntryResponse {
+	out := make([]historyEntryResponse, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, historyEntryResponse{
+			ID:      e.ID,
+			Role:    e.Role,
+			Type:    e.Type,
+			Content: e.Content,
+		})
+	}
+	return out
+}

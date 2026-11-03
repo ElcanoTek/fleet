@@ -236,6 +236,7 @@ func convOwnerEmail(conv *store.Conversation, fallback string) string {
 
 func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool) bool {
 	ownerEmail := convOwnerEmail(conv, user)
+	isOwner := strings.EqualFold(ownerEmail, user)
 	// Sending a message to an archived conversation un-archives it (#282) —
 	// mirrors how replying to an archived email brings it back to the inbox.
 	if conv.ArchivedAt != nil {
@@ -245,7 +246,7 @@ func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Reque
 		}
 		conv.ArchivedAt = nil
 	}
-	if autoApprove != nil && *autoApprove != conv.AutoApprove {
+	if autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
 		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
@@ -981,8 +982,24 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
-	// "[project] ") alongside personal memory.
-	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, conv)
+	// "[project] ") alongside personal memory. For a non-owner multiplayer
+	// participant, only inject project context when the project is accessible
+	// to the participant.
+	var projectInstructions string
+	var projectMemoryBullets []string
+	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
+		projectInstructions, projectMemoryBullets = s.projectTurnContext(reqCtx, conv)
+	} else if conv.ProjectID != "" {
+		if p, perr := s.store.GetProject(reqCtx, conv.ProjectID); perr == nil && p != nil {
+			callerTeam := ""
+			if u, uerr := s.store.GetUser(reqCtx, user); uerr == nil && u != nil {
+				callerTeam = u.TeamID
+			}
+			if p.MemberOf(user, callerTeam) {
+				projectInstructions, projectMemoryBullets = s.projectTurnContext(reqCtx, conv)
+			}
+		}
+	}
 	memories, err := s.store.ListMemories(reqCtx, user)
 	if err != nil {
 		fail(http.StatusInternalServerError, err)
@@ -1454,8 +1471,19 @@ func (s *Server) runTurnAsync(
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
-	// A "user:<name>" persona runs as its bundle base plus the owner's layer.
-	turnPersona, personaLayer := s.resolveTurnPersona(turnCtx, conv)
+	// A "user:<name>" persona runs as its bundle base plus the owner's layer
+	// (only when the turn sender is the owner; non-owner participants run on
+	// the caller's own persona layer or the bundle base without exposing the
+	// owner's private user persona instructions).
+	var turnPersona string
+	var personaLayer *agent.UserPersonaLayer
+	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, conv)
+	} else {
+		callerConv := *conv
+		callerConv.UserEmail = user
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, &callerConv)
+	}
 
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
@@ -1713,8 +1741,11 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		// construction so an edit governs the next staged card, no restart.
 		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		convAutoApprove:      conv.AutoApprove,
+		convAutoApprove: strings.EqualFold(convOwnerEmail(conv, user), user) && conv.AutoApprove,
 		liveAutoApprove: func(c context.Context) bool {
+			if !strings.EqualFold(convOwnerEmail(conv, user), user) {
+				return false
+			}
 			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
 			if err != nil || latest == nil {
 				return false

@@ -140,6 +140,7 @@ type fakeChatStore struct {
 	mu         sync.Mutex
 	convs      map[string]*store.Conversation
 	history    map[string][]agent.HistoryEntry
+	users      map[string]*store.User
 	turnRows   int
 	appends    int
 	recorded   int
@@ -193,7 +194,19 @@ func newFakeChatStore() *fakeChatStore {
 	return &fakeChatStore{
 		convs:   map[string]*store.Conversation{},
 		history: map[string][]agent.HistoryEntry{},
+		users:   map[string]*store.User{},
 	}
+}
+
+func (s *fakeChatStore) GetUser(_ context.Context, email string) (*store.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.users != nil {
+		if u, ok := s.users[strings.ToLower(strings.TrimSpace(email))]; ok {
+			return u, nil
+		}
+	}
+	return nil, nil
 }
 
 // Connector prefs (unified connector UX): the fake has no prefs, meaning

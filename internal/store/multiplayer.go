@@ -86,7 +86,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 	if cur == nil {
 		return nil, ErrConversationNotFound
 	}
-	if multiplayer && cur.ArchivedAt != nil {
+	if multiplayer && (cur.ArchivedAt != nil || cur.Lockdown) {
 		return nil, ErrArchivedNotShareable
 	}
 
@@ -167,7 +167,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 				team_shared_with = $1,
 				team_shared_with_id = (SELECT id FROM t),
 				updated_at = $2
-			WHERE id = $5 AND user_email = $6 AND deleted_at IS NULL AND archived_at IS NULL`,
+			WHERE id = $5 AND user_email = $6 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			team, now, partJSON, exclJSON, convID, ownerEmail,
 		); err != nil {
 			return nil, err
@@ -179,7 +179,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 				multiplayer_participants = $1,
 				multiplayer_excluded = $2,
 				updated_at = $3
-			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL AND archived_at IS NULL`,
+			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			partJSON, exclJSON, now, convID, ownerEmail,
 		); err != nil {
 			return nil, err
@@ -268,10 +268,13 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 		return nil, nil
 	}
 	if normalizeEmail(c.UserEmail) != callerEmail {
-		// Never leak the owner's public share capability token or private labels
-		// to a non-owner participant.
-		c.ShareToken = ""
+		// Never leak owner-private fields to a non-owner participant.
+		c.OptionalMCPServersEnabled = nil
 		c.Labels = nil
+		c.ShareToken = ""
+		c.ParentConversationID = ""
+		c.MCPAccounts = nil
+		c.AutoApprove = false
 	}
 	return &c, nil
 }
@@ -289,26 +292,26 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, callerEmail str
 	if containsEmail(c.MultiplayerExcluded, callerEmail) {
 		return false
 	}
-	var callerTeam sql.NullString
-	_ = s.db.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
-	).Scan(&callerTeam)
 	// Explicitly added by the owner.
 	if containsEmail(c.MultiplayerParticipants, callerEmail) {
 		return true
 	}
-	// Default whole-team / whole-fleet inclusion:
-	// - If the conversation is stamped to a specific team AND the caller has a
-	//   different non-empty team, they belong to another team and are not
-	//   included by default (unless explicitly added in MultiplayerParticipants).
-	// - Otherwise (same team, or teamless caller/owner on this Fleet instance),
-	//   they can participate!
+	var callerTeam sql.NullString
+	_ = s.db.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
+	).Scan(&callerTeam)
 	cTeam := strings.TrimSpace(callerTeam.String)
+	// Default whole-team / whole-fleet inclusion:
+	// - When the conversation is stamped to a specific team (sharedTeam != ""),
+	//   only members of that same team are included by default (plus anyone
+	//   explicitly added in MultiplayerParticipants above).
+	// - When the conversation has no team stamp (sharedTeam == ""), anyone on
+	//   this Fleet instance can participate unless excluded.
 	if sharedTeam != "" {
-		if cTeam != "" && cTeam != sharedTeam {
+		if cTeam != sharedTeam {
 			return false
 		}
-		if cTeam == sharedTeam && sharedTeamID.Valid {
+		if sharedTeamID.Valid {
 			var currentTeamID int64
 			if err := s.db.QueryRowContext(ctx, `SELECT id FROM teams WHERE name = $1`, sharedTeam).Scan(&currentTeamID); err != nil || currentTeamID != sharedTeamID.Int64 {
 				return false
@@ -391,8 +394,19 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
+		  AND c.lockdown = FALSE
 		  AND c.user_email <> $1
-		  AND (c.multiplayer = TRUE OR (c.team_visible = TRUE AND $2 <> '' AND c.team_shared_with = $2 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2)))
+		  AND (
+		    (c.multiplayer = TRUE
+		      AND NOT (c.multiplayer_excluded::jsonb ? $1)
+		      AND (
+		        (c.multiplayer_participants::jsonb ? $1)
+		        OR COALESCE(c.team_shared_with, '') = ''
+		        OR ($2 <> '' AND c.team_shared_with = $2 AND (c.team_shared_with_id IS NULL OR c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2)))
+		      )
+		    )
+		    OR (c.team_visible = TRUE AND $2 <> '' AND c.team_shared_with = $2 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $2))
+		  )
 		ORDER BY c.pinned DESC, c.updated_at DESC, c.id DESC`,
 		callerEmail, callerTeam,
 	)

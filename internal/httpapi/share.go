@@ -258,10 +258,15 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 // autoShareNewConversationIfConfigured marks a newly created or branched
 // non-lockdown conversation as Multiplayer (and team-visible when on a team)
 // when the instance has FLEET_TEAM_CHATS_SHARED_BY_DEFAULT /
-// team_chats_shared_by_default enabled. It is best-effort: a conversation
-// created inside a personal project stays private without failing creation.
+// team_chats_shared_by_default enabled and the user belongs to a team. It is
+// best-effort: a conversation created inside a personal project or by a
+// teamless user stays private without failing creation.
 func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user string, conv *store.Conversation) {
 	if conv == nil || conv.Lockdown || s.cfg == nil || !s.cfg.LiveTeamChatsSharedByDefault() {
+		return
+	}
+	u, err := s.store.GetUser(ctx, user)
+	if err != nil || u == nil || strings.TrimSpace(u.TeamID) == "" {
 		return
 	}
 	if conv.ProjectID != "" {
@@ -363,8 +368,8 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		return
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user)
-	if body.Multiplayer != nil && !isOwner {
-		http.Error(w, "only the conversation owner can toggle multiplayer mode", http.StatusForbidden)
+	if !isOwner && (body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil || len(body.Add) > 0 || len(body.Remove) > 0) {
+		http.Error(w, "only the conversation owner can change multiplayer settings", http.StatusForbidden)
 		return
 	}
 	var partArg, exclArg []string
@@ -380,7 +385,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		if body.Multiplayer != nil {
 			targetMultiplayer = *body.Multiplayer
 		}
-		updated, err = s.store.SetConversationMultiplayer(r.Context(), conv.UserEmail, convID, targetMultiplayer, partArg, exclArg)
+		updated, err = s.store.SetConversationMultiplayer(r.Context(), user, convID, targetMultiplayer, partArg, exclArg)
 		if err != nil {
 			if errors.Is(err, store.ErrArchivedNotShareable) {
 				http.Error(w, err.Error(), http.StatusConflict)
@@ -395,7 +400,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		}
 	}
 	if len(body.Add) > 0 || len(body.Remove) > 0 {
-		updated, err = s.store.UpdateConversationMultiplayerAccess(r.Context(), conv.UserEmail, convID, body.Add, body.Remove)
+		updated, err = s.store.UpdateConversationMultiplayerAccess(r.Context(), user, convID, body.Add, body.Remove)
 		if err != nil {
 			if errors.Is(err, store.ErrConversationNotFound) {
 				http.Error(w, "not found", http.StatusNotFound)

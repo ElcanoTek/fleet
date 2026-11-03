@@ -187,24 +187,40 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// A teammate's branch carries where it came from and which shared files
 	// were copied in (ADR-0079) — the branch banner and its "Your copy"
 	// labels. Display data: a failed read degrades to no banner.
-	origin, oerr := s.store.GetBranchOrigin(r.Context(), user, id)
-	if oerr != nil {
-		log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
-		origin = nil
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	var origin *store.BranchOrigin
+	if isOwner {
+		var oerr error
+		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
+		if oerr != nil {
+			log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			origin = nil
+		}
 	}
 	conv.BranchOrigin = origin
 	schedules, serr := s.store.ListChatSchedules(r.Context(), user, id, false)
 	if serr != nil || schedules == nil {
 		schedules = []store.ChatSchedule{}
 	}
+	historyPayload := historyForClient(history)
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.MCPAccounts = nil
+		sanitized.AutoApprove = false
+		conv = &sanitized
+		historyPayload = historyForParticipant(history)
+	}
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
-		// historyForClient, not the raw entries: the owner's own read is the
-		// one surface that carries each turn's `injected_context` as its own
-		// field, so the transcript can render server-injected context outside
-		// the user's bubble (history_response.go, ADR-0058).
-		"history":                  historyForClient(history),
+		// historyForClient for the owner (carries `injected_context`), or
+		// historyForParticipant for a non-owner multiplayer participant (omits
+		// `injected_context` so owner attachment paths are not exposed).
+		"history":                  historyPayload,
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
@@ -664,12 +680,12 @@ func writeStopResult(w http.ResponseWriter, res inputStop, finishedMsg string) {
 
 // handleConversationCancel serves POST /conversations/{id}/cancel.
 //
-// Explicit Stop button. Owner-scoped: the withOwnedConversation gate confirms
-// the conversation belongs to the caller before issuing the cancel so a token
-// leak can't cancel arbitrary chats. The scope decode below is deliberately
-// lenient (a malformed body means the default scope, not a 400), so it does
-// not use decodeJSONBody.
-func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, _ *store.Conversation) {
+// Explicit Stop button. Owner-scoped by default (scope=all / scope=turn), while
+// a non-owner multiplayer participant may stop their own input by `input_id`
+// (or cancel the active turn via `turn_id` / `scope=turn` without sweeping
+// other participants' queued inputs).
+func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
 	// Stop semantics (#785): default scope "all" covers the active turn
 	// AND every still-queued follow-up — Stop means "stop working", not
 	// "stop this one and surprise me with the next". scope=turn cancels
@@ -718,6 +734,10 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 			return
 		}
 		writeStopResult(w, res, "the input had already finished")
+		return
+	}
+	if !isOwner && inputID == "" {
+		http.Error(w, "only the conversation owner can stop all turns in this conversation", http.StatusForbidden)
 		return
 	}
 	if turnID != "" {

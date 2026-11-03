@@ -35,15 +35,16 @@ func doAuthedJSONRequest(t *testing.T, srv *Server, method, path, userEmail stri
 }
 
 func TestMultiplayer_DefaultOnAndPerChatToggle(t *testing.T) {
-	t.Run("default-on instance creates multiplayer chats by default (except lockdown)", func(t *testing.T) {
+	t.Run("default-on instance creates multiplayer chats by default (except lockdown and teamless users)", func(t *testing.T) {
 		engine := &fakeEngine{}
 		st := newFakeChatStore()
+		st.users["alice@reklaim.com"] = &store.User{Email: "alice@reklaim.com", TeamID: "reklaim"}
 		srv := newDefaultChatServer(t, engine, st)
 		srv.cfg.SetTeamChatsSharedByDefault(true)
 		srv.cfg.SandboxImage = "localhost/fleet-sandbox:latest"
 		srv.cfg.LockdownAllowedModels = []string{"anthropic/claude-opus-4.8"}
 
-		// 1. POST /chat creates a multiplayer conversation by default.
+		// 1. POST /chat by a team member creates a multiplayer conversation by default.
 		w := doAuthedJSONRequest(t, srv, http.MethodPost, "/chat", "alice@reklaim.com", map[string]any{
 			"message": "hello team",
 			"model":   "anthropic/claude-opus-4.8",
@@ -56,6 +57,22 @@ func TestMultiplayer_DefaultOnAndPerChatToggle(t *testing.T) {
 		st.mu.Unlock()
 		if conv1 == nil || !conv1.Multiplayer || !conv1.TeamVisible {
 			t.Fatalf("expected conv-1 to have Multiplayer=true and TeamVisible=true, got %+v", conv1)
+		}
+
+		// 2. Teamless user's new chat stays private.
+		wSolo := doAuthedJSONRequest(t, srv, http.MethodPost, "/conversations", "solo@reklaim.com", map[string]any{
+			"title": "solo chat",
+			"model": "anthropic/claude-opus-4.8",
+		})
+		if wSolo.Code != http.StatusOK {
+			t.Fatalf("POST /conversations solo status = %d: %s", wSolo.Code, wSolo.Body.String())
+		}
+		var soloConv store.Conversation
+		if err := json.Unmarshal(wSolo.Body.Bytes(), &soloConv); err != nil {
+			t.Fatalf("decode solo conv: %v", err)
+		}
+		if soloConv.Multiplayer || soloConv.TeamVisible {
+			t.Fatalf("expected teamless user conversation to stay private, got Multiplayer=%v TeamVisible=%v", soloConv.Multiplayer, soloConv.TeamVisible)
 		}
 
 		// 2. Lockdown chat stays private even when default-on is enabled.
