@@ -517,11 +517,16 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	    },
 	    "Node": {
 	      "type": "object",
+	      "title": "Node",
 	      "properties": {
 	        "name": {"type": "string"},
 	        "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}
 	      }
-	    }
+	    },
+	    "Always": true,
+	    "Never": false,
+	    "LongString": {"type": "string", "minLength": 10},
+	    "RootOnly": {"type": "string"}
 	  },
 	  "definitions": {
 	    "LegacyTag": {"type": "string", "minLength": 1}
@@ -529,8 +534,22 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	  "type": "object",
 	  "properties": {
 	    "wrapped": {"$ref": "#/$defs/Wrapper", "description": "custom override"},
-	    "tag": {"$ref": "#/definitions/LegacyTag"},
+	    "tag": {"$ref": "#/definitions/LegacyTag", "maxLength": 20},
+	    "conflicting": {"$ref": "#/$defs/LongString", "minLength": 1},
+	    "always_ok": {"$ref": "#/$defs/Always"},
+	    "never_ok": {"$ref": "#/$defs/Never", "description": "ignored on false"},
 	    "tree": {"$ref": "#/$defs/Node"},
+	    "nested_resource": {
+	      "$id": "https://example.com/sub.json",
+	      "$defs": {
+	        "LongString": {"type": "integer"}
+	      },
+	      "type": "object",
+	      "properties": {
+	        "local_def": {"$ref": "#/$defs/LongString"},
+	        "outer_def": {"$ref": "#/$defs/RootOnly"}
+	      }
+	    },
 	    "dangling": {"$ref": "#/$defs/DoesNotExist"}
 	  }
 	}`
@@ -549,8 +568,24 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 	}
 
 	tag := props["tag"].(map[string]any)
-	if tag["type"] != "string" || tag["minLength"] != float64(1) {
-		t.Fatalf("definitions $ref not inlined: %v", tag)
+	if tag["type"] != "string" || tag["minLength"] != float64(1) || tag["maxLength"] != float64(20) {
+		t.Fatalf("definitions $ref or non-conflicting sibling not inlined: %v", tag)
+	}
+
+	conflicting := props["conflicting"].(map[string]any)
+	if conflicting["minLength"] != float64(10) {
+		t.Fatalf("conflicting sibling overwrote referenced minLength=10: %v", conflicting)
+	}
+	allOf, ok := conflicting["allOf"].([]any)
+	if !ok || len(allOf) != 1 || allOf[0].(map[string]any)["minLength"] != float64(1) {
+		t.Fatalf("conflicting sibling constraint not preserved in allOf: %v", conflicting)
+	}
+
+	if props["always_ok"] != true {
+		t.Fatalf("boolean true $defs target not inlined: %v", props["always_ok"])
+	}
+	if props["never_ok"] != false {
+		t.Fatalf("boolean false $defs target not inlined: %v", props["never_ok"])
 	}
 
 	tree := props["tree"].(map[string]any)
@@ -558,12 +593,46 @@ func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
 		t.Fatalf("cyclic Node not inlined at top level: %v", tree)
 	}
 	childrenItems := tree["properties"].(map[string]any)["children"].(map[string]any)["items"].(map[string]any)
-	if childrenItems["$ref"] != "#/$defs/Node" {
-		t.Fatalf("cyclic back-reference should stop at cycle boundary, got: %v", childrenItems)
+	if _, hasRef := childrenItems["$ref"]; hasRef || childrenItems["type"] != "object" || childrenItems["title"] != "Node" {
+		t.Fatalf("cyclic back-reference should be converted to provider-safe object stub without $ref, got: %v", childrenItems)
+	}
+
+	nestedProps := props["nested_resource"].(map[string]any)["properties"].(map[string]any)
+	localDef := nestedProps["local_def"].(map[string]any)
+	if localDef["type"] != "integer" {
+		t.Fatalf("nested $id resource should resolve against its own $defs, got: %v", localDef)
+	}
+	outerDef := nestedProps["outer_def"].(map[string]any)
+	if outerDef["$ref"] != "#/$defs/RootOnly" {
+		t.Fatalf("nested $id resource should not resolve missing fragment against root $defs, got: %v", outerDef)
 	}
 
 	dangling := props["dangling"].(map[string]any)
 	if dangling["$ref"] != "#/$defs/DoesNotExist" {
 		t.Fatalf("unresolvable $ref should be left intact, got: %v", dangling)
+	}
+}
+
+func TestInfoInlinesRootRefSchema(t *testing.T) {
+	const rootRefSchema = `{
+	  "$ref": "#/$defs/Input",
+	  "$defs": {
+	    "Input": {
+	      "type": "object",
+	      "properties": {
+	        "query": {"type": "string"}
+	      },
+	      "required": ["query"]
+	    }
+	  }
+	}`
+	mt := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "search", Description: "Search", InputSchema: jsonMap(t, rootRefSchema)}}
+	info := mt.Info()
+	if !reflect.DeepEqual(info.Required, []string{"query"}) {
+		t.Fatalf("root $ref Required = %v, want [query]", info.Required)
+	}
+	q, ok := info.Parameters["query"].(map[string]any)
+	if !ok || q["type"] != "string" {
+		t.Fatalf("root $ref Parameters = %v, want query:string", info.Parameters)
 	}
 }

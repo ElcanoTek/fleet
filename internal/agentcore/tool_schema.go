@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -97,8 +98,7 @@ func normalizeToolSchemaWithNotes(schema map[string]any) (map[string]any, []stri
 	if out == nil {
 		out = map[string]any{}
 	}
-	inlineLocalRefs(out)
-	return out, notes
+	return inlineLocalRefs(out), notes
 }
 
 func normalizeSchemaNode(node any, path string, notes *[]string) any {
@@ -211,85 +211,280 @@ func unescapeJSONPointerToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
 }
 
-// inlineLocalRefs resolves `#/$defs/<Name>` and `#/definitions/<Name>`
-// references inside root against root's top-level `$defs` / `definitions` maps.
-// Unresolvable references and recursive cycles are left untouched.
-func inlineLocalRefs(root map[string]any) {
-	defs, _ := root["$defs"].(map[string]any)
-	definitions, _ := root["definitions"].(map[string]any)
-	if len(defs) == 0 && len(definitions) == 0 {
-		return
-	}
-	inlineSchemaMapFields(root, defs, definitions, nil)
+var schemaAnnotationKeywords = map[string]bool{
+	"title": true, "description": true, "default": true, "examples": true,
+	"$comment": true, "deprecated": true, "readOnly": true, "writeOnly": true,
 }
 
-func inlineSchemaNodeRefs(node any, defs, definitions map[string]any, active map[string]bool) any {
+var interactingKeywordFamilies = [][]string{
+	{"properties", "patternProperties", "additionalProperties", "unevaluatedProperties"},
+	{"items", "prefixItems", "additionalItems", "unevaluatedItems", "contains", "minContains", "maxContains"},
+	{"if", "then", "else"},
+	{"dependencies", "dependentRequired", "dependentSchemas"},
+}
+
+func siblingInteractsWithTarget(key string, target map[string]any) bool {
+	if _, exists := target[key]; exists {
+		return true
+	}
+	for _, family := range interactingKeywordFamilies {
+		inFamily := false
+		for _, member := range family {
+			if member == key {
+				inFamily = true
+				break
+			}
+		}
+		if !inFamily {
+			continue
+		}
+		for _, member := range family {
+			if _, exists := target[member]; exists {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type defScope struct {
+	root        map[string]any
+	defs        map[string]any
+	definitions map[string]any
+}
+
+func newDefScope(resource map[string]any) defScope {
+	var defs, definitions map[string]any
+	if d, ok := resource["$defs"].(map[string]any); ok && len(d) > 0 {
+		defs, _ = copyJSONValue(d).(map[string]any)
+	}
+	if d, ok := resource["definitions"].(map[string]any); ok && len(d) > 0 {
+		definitions, _ = copyJSONValue(d).(map[string]any)
+	}
+	rootCopy, _ := copyJSONValue(resource).(map[string]any)
+	return defScope{root: rootCopy, defs: defs, definitions: definitions}
+}
+
+func hasNonFragmentID(obj map[string]any) bool {
+	id, ok := obj["$id"].(string)
+	return ok && id != "" && !strings.HasPrefix(id, "#")
+}
+
+// inlineLocalRefs resolves `#/$defs/<Name>` and `#/definitions/<Name>`
+// references inside root against the active resource's `$defs` / `definitions`
+// maps. Recursive back-references are converted to shallow provider-safe stubs
+// without `$ref` so mcpTool.Info() never forwards a dangling reference.
+func inlineLocalRefs(root map[string]any) map[string]any {
+	if len(root) == 0 {
+		return root
+	}
+	scope := newDefScope(root)
+	resolved := inlineSchemaNodeRefs(root, scope, map[string]bool{"#": true}, true)
+	switch r := resolved.(type) {
+	case map[string]any:
+		return r
+	case bool:
+		if !r {
+			return map[string]any{"not": map[string]any{}}
+		}
+		return map[string]any{}
+	default:
+		return root
+	}
+}
+
+func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isResourceRoot bool) any {
 	obj, ok := node.(map[string]any)
 	if !ok {
 		return node
 	}
-	if ref, hasRef := obj["$ref"].(string); hasRef && !active[ref] {
-		if target, found := lookupLocalDef(ref, defs, definitions); found {
-			nextActive := make(map[string]bool, len(active)+1)
-			for k, v := range active {
-				nextActive[k] = v
+	if !isResourceRoot && hasNonFragmentID(obj) {
+		scope = newDefScope(obj)
+		active = map[string]bool{"#": true}
+	}
+	if ref, hasRef := obj["$ref"].(string); hasRef {
+		if target, canonKey, found := lookupLocalDef(ref, scope); found {
+			var resolved any
+			if active[canonKey] {
+				resolved = recursiveRefStub(target, scope)
+			} else {
+				nextActive := cloneActiveRefs(active, canonKey)
+				resolved = inlineSchemaNodeRefs(copyJSONValue(target), scope, nextActive, false)
 			}
-			nextActive[ref] = true
-			resolved, _ := inlineSchemaNodeRefs(copyJSONValue(target), defs, definitions, nextActive).(map[string]any)
-			if resolved != nil {
-				if len(obj) > 1 {
-					siblings := make(map[string]any, len(obj)-1)
-					for k, v := range obj {
-						if k != "$ref" {
-							siblings[k] = copyJSONValue(v)
-						}
-					}
-					inlineSchemaMapFields(siblings, defs, definitions, active)
-					for k, v := range siblings {
-						resolved[k] = v
-					}
-				}
-				return resolved
+			if len(obj) > 1 {
+				return mergeResolvedWithSiblings(resolved, obj, scope, active)
 			}
+			return resolved
 		}
 	}
-	inlineSchemaMapFields(obj, defs, definitions, active)
+	inlineSchemaMapFields(obj, scope, active)
 	return obj
 }
 
-func inlineSchemaMapFields(obj map[string]any, defs, definitions map[string]any, active map[string]bool) {
+func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string]bool) {
 	for key, value := range obj {
 		switch {
 		case schemaValuedKeywords[key]:
-			obj[key] = inlineSchemaNodeRefs(value, defs, definitions, active)
+			obj[key] = inlineSchemaNodeRefs(value, scope, active, false)
 		case schemaArrayKeywords[key]:
 			if items, isArray := value.([]any); isArray {
 				for i, item := range items {
-					items[i] = inlineSchemaNodeRefs(item, defs, definitions, active)
+					items[i] = inlineSchemaNodeRefs(item, scope, active, false)
 				}
 			}
 		case schemaMapKeywords[key]:
 			if members, isMap := value.(map[string]any); isMap {
 				for name, member := range members {
-					members[name] = inlineSchemaNodeRefs(member, defs, definitions, active)
+					memberActive := active
+					if key == "$defs" || key == "definitions" {
+						memberActive = cloneActiveRefs(active, key+":"+name)
+					}
+					members[name] = inlineSchemaNodeRefs(member, scope, memberActive, false)
 				}
 			}
 		}
 	}
 }
 
-func lookupLocalDef(ref string, defs, definitions map[string]any) (map[string]any, bool) {
+func cloneActiveRefs(active map[string]bool, addKey string) map[string]bool {
+	next := make(map[string]bool, len(active)+1)
+	for k, v := range active {
+		next[k] = v
+	}
+	next[addKey] = true
+	return next
+}
+
+func recursiveRefStub(target any, scope defScope) any {
+	seen := map[string]bool{}
+	cur := target
+	for {
+		if b, ok := cur.(bool); ok {
+			return b
+		}
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return map[string]any{}
+		}
+		if ref, hasRef := obj["$ref"].(string); hasRef {
+			if next, key, found := lookupLocalDef(ref, scope); found && !seen[key] {
+				seen[key] = true
+				cur = next
+				continue
+			}
+		}
+		stub := map[string]any{}
+		if t, ok := obj["type"].(string); ok && t != "array" {
+			stub["type"] = t
+		}
+		if title, ok := obj["title"].(string); ok {
+			stub["title"] = title
+		}
+		if desc, ok := obj["description"].(string); ok {
+			stub["description"] = desc
+		}
+		return stub
+	}
+}
+
+func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope, active map[string]bool) any {
+	siblings := make(map[string]any, len(obj)-1)
+	for k, v := range obj {
+		if k != "$ref" {
+			siblings[k] = copyJSONValue(v)
+		}
+	}
+	inlineSchemaMapFields(siblings, scope, active)
+
+	if b, isBool := resolved.(bool); isBool {
+		if !b {
+			return false
+		}
+		return siblings
+	}
+	resMap, ok := resolved.(map[string]any)
+	if !ok {
+		return siblings
+	}
+	out, _ := copyJSONValue(resMap).(map[string]any)
+	var conflicts map[string]any
+	for k, v := range siblings {
+		switch {
+		case schemaAnnotationKeywords[k] || k == "$defs" || k == "definitions":
+			out[k] = v
+		case k == "required":
+			if existing, has := out["required"]; has {
+				out["required"] = mergeRequiredAny(existing, v)
+			} else {
+				out["required"] = v
+			}
+		case k == "allOf":
+			if existing, ok := out["allOf"].([]any); ok {
+				if extra, ok := v.([]any); ok {
+					out["allOf"] = append(existing, extra...)
+					continue
+				}
+			}
+			out["allOf"] = v
+		default:
+			if !siblingInteractsWithTarget(k, resMap) {
+				out[k] = v
+			} else if existing, exists := resMap[k]; !exists || !reflect.DeepEqual(existing, v) {
+				if conflicts == nil {
+					conflicts = map[string]any{}
+				}
+				conflicts[k] = v
+			}
+		}
+	}
+	if len(conflicts) > 0 {
+		allOf, _ := out["allOf"].([]any)
+		out["allOf"] = append(allOf, conflicts)
+	}
+	return out
+}
+
+func mergeRequiredAny(a, b any) []any {
+	var extra []string
+	switch names := b.(type) {
+	case []any:
+		for _, v := range names {
+			if s, ok := v.(string); ok {
+				extra = append(extra, s)
+			}
+		}
+	case []string:
+		extra = append(extra, names...)
+	}
+	return mergeRequired(a, extra)
+}
+
+func isSchemaValue(v any) bool {
+	switch v.(type) {
+	case map[string]any, bool:
+		return true
+	default:
+		return false
+	}
+}
+
+func lookupLocalDef(ref string, scope defScope) (any, string, bool) {
+	if ref == "#" && scope.root != nil {
+		return scope.root, "#", true
+	}
 	if name, ok := strings.CutPrefix(ref, "#/$defs/"); ok && !strings.Contains(name, "/") {
-		if d, ok := defs[unescapeJSONPointerToken(name)].(map[string]any); ok {
-			return d, true
+		decoded := unescapeJSONPointerToken(name)
+		if d, exists := scope.defs[decoded]; exists && isSchemaValue(d) {
+			return d, "$defs:" + decoded, true
 		}
 	}
 	if name, ok := strings.CutPrefix(ref, "#/definitions/"); ok && !strings.Contains(name, "/") {
-		if d, ok := definitions[unescapeJSONPointerToken(name)].(map[string]any); ok {
-			return d, true
+		decoded := unescapeJSONPointerToken(name)
+		if d, exists := scope.definitions[decoded]; exists && isSchemaValue(d) {
+			return d, "definitions:" + decoded, true
 		}
 	}
-	return nil, false
+	return nil, "", false
 }
 
 // foldExclusiveBound rewrites the draft-04 boolean exclusive bound and reports
