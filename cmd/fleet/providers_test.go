@@ -33,10 +33,14 @@ func TestToAgentcoreProviders(t *testing.T) {
 		bundle := &clientconfig.Bundle{Providers: []clientconfig.ProviderDef{
 			{Name: "  anthropic-direct  ", Type: " anthropic ", APIKeyEnv: "TEST_ANTHROPIC_KEY", Models: []string{"claude-opus-4-8"}},
 			{Name: "local", Type: "ollama", BaseURL: " http://localhost:11434/v1 ", ContextWindowTokens: 32_768}, // no key env
+			{Name: "aws", Type: "bedrock", APIKeyEnv: "TEST_ANTHROPIC_KEY", Region: " eu-west-1 ", ContextWindowTokens: 200_000},
 		}}
 		got := toAgentcoreProviders(bundle)
-		if len(got) != 2 {
-			t.Fatalf("got %d providers, want 2", len(got))
+		if len(got) != 3 {
+			t.Fatalf("got %d providers, want 3", len(got))
+		}
+		if got[2].Region != "eu-west-1" {
+			t.Errorf("provider[2] Region = %q, want eu-west-1, trimmed", got[2].Region)
 		}
 		// Fields are trimmed; the key is resolved from the env var, not the name.
 		if got[0].Name != "anthropic-direct" || got[0].Type != agentcore.ProviderTypeAnthropic {
@@ -141,6 +145,40 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 	if !strings.Contains(out, `admin provider "`+name+`-legacy" (type ollama) declares no context window`) ||
 		strings.Contains(out, `"`+name+`" (type`) {
 		t.Fatalf("log = %q, want one warning, for the legacy row only", out)
+	}
+}
+
+// TestLoadDBLLMProvidersCarriesTheRegion: a bedrock row's Region (migration
+// 092) reaches the routing table, where it picks the endpoint the row calls.
+func TestLoadDBLLMProvidersCarriesTheRegion(t *testing.T) {
+	chatDsn := os.Getenv("FLEET_TEST_DATABASE_URL")
+	if chatDsn == "" {
+		t.Skip("FLEET_TEST_DATABASE_URL is required; skipping Postgres-backed test")
+	}
+	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = chat.Close() })
+	ctx := context.Background()
+	// No cipher here either, so no keyed row may be left over (see above).
+	if err := chat.TruncateAllForTest(ctx); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	row, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
+		Name: "aws-region", Type: "bedrock", Models: []string{"anthropic.claude-haiku-4-5-20251001-v1:0"},
+		Enabled: true, ContextWindowTokens: 200000, Region: "ap-southeast-2",
+	})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = chat.DeleteLLMProvider(context.Background(), row.ID) })
+	got, err := loadDBLLMProviders(ctx, chat)
+	if err != nil {
+		t.Fatalf("loadDBLLMProviders: %v", err)
+	}
+	if len(got) != 1 || got[0].Region != "ap-southeast-2" || got[0].Type != agentcore.ProviderTypeBedrock {
+		t.Fatalf("routing table = %+v, want the bedrock row with region ap-southeast-2", got)
 	}
 }
 

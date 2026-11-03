@@ -318,3 +318,45 @@ func TestProbeProviderMissingRequiredFieldMakesNoCall(t *testing.T) {
 		t.Fatalf("the probe made %d network call(s) for rows it should have refused", hits)
 	}
 }
+
+// bedrock's probe is ListAsyncInvokes at the Runtime endpoint turns use, with
+// the key as a Bearer token. Bedrock refuses a key from another Region, or
+// one without that permission, with 403, so the detail names those too. A
+// region that is not a Region name never picks the host the key is sent to.
+func TestProbeProviderBedrock(t *testing.T) {
+	var gotPath, gotQuery, gotAuth string
+	status, reply := http.StatusOK, `{"asyncInvokeSummaries":[]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery, gotAuth = r.URL.Path, r.URL.RawQuery, r.Header.Get("Authorization")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(reply))
+	}))
+	defer srv.Close()
+	cfg := ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-key", BaseURL: srv.URL}
+	res := ProbeProvider(context.Background(), cfg)
+	if !res.OK || res.Detail != "connected — key accepted" {
+		t.Fatalf("res = %+v, want connected", res)
+	}
+	if gotPath != "/async-invoke" || gotQuery != "maxResults=1" || gotAuth != "Bearer bedrock-key" {
+		t.Fatalf("probe sent %s?%s with Authorization %q", gotPath, gotQuery, gotAuth)
+	}
+	status = http.StatusForbidden
+	if res = ProbeProvider(context.Background(), cfg); res.OK || res.Status != http.StatusForbidden ||
+		!strings.Contains(res.Detail, "region is the one it was made in") || strings.Contains(res.Detail, "bedrock-key") {
+		t.Fatalf("403 res = %+v, want the Bedrock refusal detail without the key", res)
+	}
+	// AWS documents the message for a key from another Region, not its
+	// status: it is matched in whatever 4xx carries it.
+	status, reply = http.StatusBadRequest, `{"message":"Credential should be scoped to a valid region."}`
+	if res = ProbeProvider(context.Background(), cfg); res.OK || !strings.Contains(res.Detail, "region is the one it was made in") {
+		t.Fatalf("wrong-Region res = %+v, want the Bedrock refusal detail", res)
+	}
+	gotPath = ""
+	bad := ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-key", Region: "evil.example/x"}
+	if res = ProbeProvider(context.Background(), bad); res.OK || !strings.Contains(res.Detail, "not an AWS Region name") {
+		t.Fatalf("bad region res = %+v, want it refused", res)
+	}
+	if gotPath != "" {
+		t.Fatal("the probe made a call for a region it should have refused")
+	}
+}

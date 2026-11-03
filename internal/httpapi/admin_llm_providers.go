@@ -28,7 +28,8 @@ import (
 // (or absent on create); "" = clear the stored key. ContextWindowTokens works
 // the same way: nil keeps the stored value (0 on create), so a client that
 // predates the field, such as a browser tab still running the pre-082 page,
-// cannot reset a declared window by omitting it.
+// cannot reset a declared window by omitting it. Region (a bedrock row's AWS
+// Region) is kept the same way when omitted.
 type llmProviderBody struct {
 	Name                string   `json:"name"`
 	Type                string   `json:"type"`
@@ -37,6 +38,7 @@ type llmProviderBody struct {
 	Enabled             bool     `json:"enabled"`
 	APIKey              *string  `json:"api_key"`
 	ContextWindowTokens *int     `json:"context_window_tokens"`
+	Region              *string  `json:"region"`
 }
 
 // handleAdminLLMProviders serves /admin/llm-providers: GET lists every row
@@ -62,6 +64,9 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 		}
 		if body.ContextWindowTokens != nil {
 			in.ContextWindowTokens = *body.ContextWindowTokens
+		}
+		if body.Region != nil {
+			in.Region = *body.Region
 		}
 		key := ""
 		if body.APIKey != nil {
@@ -108,14 +113,17 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 		if body.ContextWindowTokens != nil {
 			in.ContextWindowTokens = *body.ContextWindowTokens
 		}
+		if body.Region != nil {
+			in.Region = *body.Region
+		}
 		// Effective-key check: an update that leaves the key untouched (nil)
 		// counts the stored key; one that sets/clears it counts the new value.
-		// An omitted context window likewise keeps the stored one.
+		// An omitted context window or region likewise keeps the stored one.
 		effectiveKey := ""
 		if body.APIKey != nil {
 			effectiveKey = *body.APIKey
 		}
-		if body.APIKey == nil || body.ContextWindowTokens == nil {
+		if body.APIKey == nil || body.ContextWindowTokens == nil || body.Region == nil {
 			existing, err := s.store.ListLLMProviders(r.Context())
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -132,6 +140,12 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 				}
 				if body.ContextWindowTokens == nil {
 					in.ContextWindowTokens = p.ContextWindowTokens
+				}
+				// A kept region goes only to a type that takes one, so a
+				// client that changes a bedrock row's type without sending
+				// region is not refused for the region it never set.
+				if spec, ok := agentcore.LookupProviderType(strings.ToLower(strings.TrimSpace(in.Type))); body.Region == nil && ok && spec.Region {
+					in.Region = p.Region
 				}
 				break
 			}
@@ -183,6 +197,7 @@ func (s *Server) handleAdminLLMProviderTest(w http.ResponseWriter, r *http.Reque
 		APIKey:  cfg.APIKey,
 		BaseURL: cfg.BaseURL,
 		Models:  cfg.Models,
+		Region:  cfg.Region,
 	})
 	writeJSON(w, result)
 }
@@ -227,6 +242,7 @@ func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) erro
 		APIKey:  effectiveKey,
 		BaseURL: in.BaseURL,
 		Models:  in.Models,
+		Region:  in.Region,
 	}, agentcore.DefaultProviderHeaders); err != nil {
 		return err
 	}

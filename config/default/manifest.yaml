@@ -311,9 +311,10 @@ remote_mcp_catalog: []
 # OpenRouter (set OPENROUTER_API_KEY and you're done — no providers: block needed).
 # Declare providers: to route specific model slugs natively to Anthropic, OpenAI,
 # a self-hosted Ollama, any OpenAI-compatible server, the Vercel AI Gateway,
-# Azure OpenAI or the Gemini API instead — for failover, data residency, or to
-# avoid the OpenRouter markup. Types: openrouter | anthropic | openai | ollama |
-# openaicompat | vercel | azure | google. See docs/PROVIDERS.md and
+# Azure OpenAI, the Gemini API or Claude on Amazon Bedrock instead — for
+# failover, data residency, or to avoid the OpenRouter markup. Types: openrouter
+# | anthropic | openai | ollama | openaicompat | vercel | azure | google |
+# bedrock. See docs/PROVIDERS.md and
 # docs/adr/0017-multi-provider-llm.md.
 #
 # SECURITY — api_key_env names an env var; its VALUE is read HOST-SIDE at boot
@@ -367,6 +368,12 @@ remote_mcp_catalog: []
 #     api_key_env: GEMINI_API_KEY
 #     models: ["gemini-3.8-flash"]
 #     context_window_tokens: 1048576
+#   - name: bedrock             # Claude models on Amazon Bedrock
+#     type: bedrock
+#     api_key_env: BEDROCK_API_KEY   # a Bedrock API key
+#     region: us-west-2         # the Region the key was made in (default us-east-1)
+#     models: ["us.anthropic.claude-sonnet-4-5-20250929-v1:0"] # Bedrock model ids
+#     context_window_tokens: 200000
 #
 # Declare context_window_tokens on every entry except OpenRouter: an undeclared
 # native limit falls back to 32,000 tokens (4,096 for Ollama), less than a turn

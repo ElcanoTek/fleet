@@ -55,9 +55,12 @@ type LLMProvider struct {
 	// ContextWindowTokens is the endpoint's declared context limit (migration
 	// 082), the admin-row twin of a bundle entry's context_window_tokens. 0 =
 	// not declared, which leaves the resolver's conservative fallback.
-	ContextWindowTokens int   `json:"context_window_tokens"`
-	CreatedAt           int64 `json:"created_at"`
-	UpdatedAt           int64 `json:"updated_at"`
+	ContextWindowTokens int `json:"context_window_tokens"`
+	// Region is a bedrock row's AWS Region (migration 092). "" = not set, so
+	// us-east-1; every other type has none.
+	Region    string `json:"region"`
+	CreatedAt int64  `json:"created_at"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 // LLMProviderConfig is the resolver-building read: LLMProvider plus the
@@ -78,12 +81,14 @@ type LLMProviderInput struct {
 	Enabled             bool
 	APIKey              *string
 	ContextWindowTokens int
+	Region              string
 }
 
 func (in *LLMProviderInput) normalize() error {
 	in.Name = strings.ToLower(strings.TrimSpace(in.Name))
 	in.Type = strings.ToLower(strings.TrimSpace(in.Type))
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
+	in.Region = strings.TrimSpace(in.Region)
 	if !llmProviderNameRE.MatchString(in.Name) {
 		return fmt.Errorf("invalid provider name %q (lowercase slug, no slashes)", in.Name)
 	}
@@ -97,6 +102,9 @@ func (in *LLMProviderInput) normalize() error {
 	}
 	if spec.BaseURLRequired && in.BaseURL == "" {
 		return fmt.Errorf("invalid provider %q: type %s requires a base_url", in.Name, in.Type)
+	}
+	if err := agentcore.CheckProviderFields(spec, in.BaseURL, in.Region); err != nil {
+		return fmt.Errorf("invalid provider %q: %w", in.Name, err)
 	}
 	// The column is a Postgres INTEGER; out-of-range values are refused here
 	// as a bad request rather than reaching SQL as a server error.
@@ -138,13 +146,13 @@ func (in *LLMProviderInput) normalize() error {
 }
 
 const llmProviderColumns = `id, name, provider_type, base_url,
-	(api_key_sealed IS NOT NULL) AS has_key, models, enabled, context_window_tokens, created_at, updated_at`
+	(api_key_sealed IS NOT NULL) AS has_key, models, enabled, context_window_tokens, region, created_at, updated_at`
 
 func scanLLMProvider(row interface{ Scan(...any) error }) (*LLMProvider, error) {
 	var p LLMProvider
 	var modelsJSON []byte
 	if err := row.Scan(&p.ID, &p.Name, &p.Type, &p.BaseURL, &p.HasAPIKey,
-		&modelsJSON, &p.Enabled, &p.ContextWindowTokens, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		&modelsJSON, &p.Enabled, &p.ContextWindowTokens, &p.Region, &p.CreatedAt, &p.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(modelsJSON, &p.Models); err != nil {
@@ -181,7 +189,7 @@ func (s *Store) ListLLMProviders(ctx context.Context) ([]LLMProvider, error) {
 // resolver host-side. Never expose its result over HTTP.
 func (s *Store) LLMProviderConfigs(ctx context.Context) ([]LLMProviderConfig, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, region, created_at, updated_at
 		FROM llm_providers WHERE enabled ORDER BY created_at, name`)
 	if err != nil {
 		return nil, err
@@ -193,7 +201,7 @@ func (s *Store) LLMProviderConfigs(ctx context.Context) ([]LLMProviderConfig, er
 		var sealed []byte
 		var modelsJSON []byte
 		if err := rows.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &sealed,
-			&modelsJSON, &c.Enabled, &c.ContextWindowTokens, &c.CreatedAt, &c.UpdatedAt); err != nil {
+			&modelsJSON, &c.Enabled, &c.ContextWindowTokens, &c.Region, &c.CreatedAt, &c.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(modelsJSON, &c.Models); err != nil {
@@ -221,13 +229,13 @@ func (s *Store) LLMProviderConfigs(ctx context.Context) ([]LLMProviderConfig, er
 // host-side use only, never expose the result over HTTP.
 func (s *Store) GetLLMProviderConfig(ctx context.Context, id string) (*LLMProviderConfig, error) {
 	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, created_at, updated_at
+		SELECT id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, region, created_at, updated_at
 		FROM llm_providers WHERE id=$1`, id)
 	var c LLMProviderConfig
 	var sealed []byte
 	var modelsJSON []byte
 	err := row.Scan(&c.ID, &c.Name, &c.Type, &c.BaseURL, &sealed,
-		&modelsJSON, &c.Enabled, &c.ContextWindowTokens, &c.CreatedAt, &c.UpdatedAt)
+		&modelsJSON, &c.Enabled, &c.ContextWindowTokens, &c.Region, &c.CreatedAt, &c.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrLLMProviderNotFound
 	}
@@ -269,9 +277,9 @@ func (s *Store) CreateLLMProvider(ctx context.Context, in LLMProviderInput) (*LL
 	}
 	now := time.Now().Unix()
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO llm_providers (id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9)`,
-		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, now)
+		INSERT INTO llm_providers (id, name, provider_type, base_url, api_key_sealed, models, enabled, context_window_tokens, region, created_at, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)`,
+		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("a provider named %q already exists", in.Name)
@@ -304,9 +312,9 @@ func (s *Store) UpdateLLMProvider(ctx context.Context, id string, in LLMProvider
 	now := time.Now().Unix()
 	if in.APIKey == nil {
 		res, err := s.db.ExecContext(ctx, `
-			UPDATE llm_providers SET name=$2, provider_type=$3, base_url=$4, models=$5, enabled=$6, context_window_tokens=$7, updated_at=$8
+			UPDATE llm_providers SET name=$2, provider_type=$3, base_url=$4, models=$5, enabled=$6, context_window_tokens=$7, region=$8, updated_at=$9
 			WHERE id=$1`,
-			id, in.Name, in.Type, in.BaseURL, modelsJSON, in.Enabled, in.ContextWindowTokens, now)
+			id, in.Name, in.Type, in.BaseURL, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 		if err != nil {
 			if pgUniqueViolation(err) {
 				return nil, fmt.Errorf("a provider named %q already exists", in.Name)
@@ -323,9 +331,9 @@ func (s *Store) UpdateLLMProvider(ctx context.Context, id string, in LLMProvider
 		return nil, err
 	}
 	res, err := s.db.ExecContext(ctx, `
-		UPDATE llm_providers SET name=$2, provider_type=$3, base_url=$4, api_key_sealed=$5, models=$6, enabled=$7, context_window_tokens=$8, updated_at=$9
+		UPDATE llm_providers SET name=$2, provider_type=$3, base_url=$4, api_key_sealed=$5, models=$6, enabled=$7, context_window_tokens=$8, region=$9, updated_at=$10
 		WHERE id=$1`,
-		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, now)
+		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			return nil, fmt.Errorf("a provider named %q already exists", in.Name)
