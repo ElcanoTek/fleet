@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -50,7 +51,7 @@ func TestResolveWorkspaceScope(t *testing.T) {
 	f := newScopeFixture(t)
 
 	t.Run("valid scope is cleaned and keeps existing read-only dirs", func(t *testing.T) {
-		got, err := resolveWorkspaceScope(f.root, WorkspaceScope{
+		got, ino, err := resolveWorkspaceScope(f.root, WorkspaceScope{
 			Dir:      f.job + "/",
 			ReadOnly: []string{f.ownRun, filepath.Join(f.runsBase, "task-missing")},
 			Withhold: []string{f.runsBase},
@@ -60,6 +61,9 @@ func TestResolveWorkspaceScope(t *testing.T) {
 		}
 		if got.Dir != f.job {
 			t.Errorf("Dir = %q, want %q", got.Dir, f.job)
+		}
+		if want := inodeOf(t, f.job); ino != want {
+			t.Errorf("inode = %d, want %d", ino, want)
 		}
 		// A missing read-only dir is dropped, as a missing ReadOnlyMounts entry is.
 		if len(got.ReadOnly) != 1 || got.ReadOnly[0] != f.ownRun {
@@ -83,7 +87,7 @@ func TestResolveWorkspaceScope(t *testing.T) {
 		"read-only contains dir":     {Dir: f.job, ReadOnly: []string{filepath.Join(f.root, "tasks")}},
 	} {
 		t.Run("refuses "+name, func(t *testing.T) {
-			if got, err := resolveWorkspaceScope(f.root, scope); err == nil {
+			if got, _, err := resolveWorkspaceScope(f.root, scope); err == nil {
 				t.Fatalf("resolveWorkspaceScope(%+v) = %+v, nil; want an error", scope, got)
 			}
 		})
@@ -94,10 +98,87 @@ func TestResolveWorkspaceScope(t *testing.T) {
 		if err := os.WriteFile(file, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := resolveWorkspaceScope(f.root, WorkspaceScope{Dir: file}); err == nil {
+		if _, _, err := resolveWorkspaceScope(f.root, WorkspaceScope{Dir: file}); err == nil {
 			t.Fatal("a regular file was accepted as the scoped workspace")
 		}
 	})
+
+	// Everything below the root is writable by a whole-root sandbox (a chat,
+	// a worktree run), and podman follows a symlinked volume source. A
+	// symlink anywhere below the root — the job dir, tasks/, or a read-only
+	// extra — must be refused, never followed, whether it points at another
+	// job or outside the root.
+	t.Run("refuses symlinks below the root", func(t *testing.T) {
+		outside := t.TempDir()
+		linkedJob := filepath.Join(f.root, "tasks", "job-link")
+		if err := os.Symlink(f.otherJob, linkedJob); err != nil {
+			t.Fatal(err)
+		}
+		escapeJob := filepath.Join(f.root, "tasks", "job-escape")
+		if err := os.Symlink(outside, escapeJob); err != nil {
+			t.Fatal(err)
+		}
+		linkedTasks := filepath.Join(f.root, "tasks2")
+		if err := os.Symlink(filepath.Join(f.root, "tasks"), linkedTasks); err != nil {
+			t.Fatal(err)
+		}
+		linkedRun := filepath.Join(f.runsBase, "task-link")
+		if err := os.Symlink(f.otherRun, linkedRun); err != nil {
+			t.Fatal(err)
+		}
+		for name, scope := range map[string]WorkspaceScope{
+			"job dir is a symlink to another job":  {Dir: linkedJob},
+			"job dir is a symlink out of the root": {Dir: escapeJob},
+			"a parent component is a symlink":      {Dir: filepath.Join(linkedTasks, "job-a")},
+			"a read-only extra is a symlink":       {Dir: f.job, ReadOnly: []string{linkedRun}},
+		} {
+			if got, _, err := resolveWorkspaceScope(f.root, scope); err == nil {
+				t.Errorf("%s: resolveWorkspaceScope = %+v, nil; want a refusal", name, got)
+			}
+		}
+	})
+
+	// The root itself is operator configuration and may be a symlink.
+	t.Run("a symlinked root is fine", func(t *testing.T) {
+		link := filepath.Join(t.TempDir(), "ws")
+		if err := os.Symlink(f.root, link); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := resolveWorkspaceScope(link, WorkspaceScope{Dir: filepath.Join(link, "tasks", "job-a")}); err != nil {
+			t.Fatalf("symlinked workspace root refused: %v", err)
+		}
+	})
+}
+
+func inodeOf(t *testing.T, path string) uint64 {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Sys().(*syscall.Stat_t).Ino
+}
+
+// scopedFakePodman is fakePodman whose `exec` answers verifyScopedMount's
+// in-container stat with statOutput, so a test can play both an intact mount
+// and a directory swapped while the sandbox started. Only `run` argv is
+// logged.
+func scopedFakePodman(t *testing.T, statOutput string) (string, string) {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-podman")
+	logPath := filepath.Join(dir, "argv.log")
+	// The verb follows global flags (--cgroup-manager on linux), so find it
+	// among the arguments rather than at $1.
+	script := "#!/bin/sh\n" +
+		"verb=\nfor a in \"$@\"; do case \"$a\" in exec|run) verb=$a; break;; esac; done\n" +
+		"if [ \"$verb\" = exec ]; then printf '%s\\n' '" + statOutput + "'; exit 0; fi\n" +
+		"if [ \"$verb\" = run ]; then for a in \"$@\"; do printf '%s\\n' \"$a\" >> \"" + logPath + "\"; done; fi\n" +
+		"printf 'deadbeefcafe\\n'\nexit 0\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake podman: %v", err)
+	}
+	return bin, logPath
 }
 
 func TestWorkspaceMountsPlan(t *testing.T) {
@@ -155,7 +236,7 @@ func TestScopedContainerRunArgs(t *testing.T) {
 	}
 	t.Setenv(seccompProfileEnv, "")
 	f := newScopeFixture(t)
-	bin, logPath := fakePodman(t)
+	bin, logPath := scopedFakePodman(t, fmt.Sprint(inodeOf(t, f.job)))
 	pool := NewPool(PoolConfig{
 		Mode:         ModeContainer,
 		BridgeScript: []byte("# unused\n"),
@@ -200,6 +281,45 @@ func TestScopedContainerRunArgs(t *testing.T) {
 			if strings.Contains(a, "--volume="+banned) {
 				t.Errorf("scoped sandbox mounts %q (arg %q): another job's or conversation's files would be visible", banned, a)
 			}
+		}
+	}
+}
+
+// TestTakeScopedRefusesSwappedMount: if the directory podman mounted is not
+// the inode the no-symlink walk checked — it was swapped while the sandbox
+// started — the take tears the sandbox down and fails closed.
+func TestTakeScopedRefusesSwappedMount(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("podman arg assembly is linux-only")
+	}
+	t.Setenv(seccompProfileEnv, "")
+	f := newScopeFixture(t)
+	bin, _ := scopedFakePodman(t, fmt.Sprint(inodeOf(t, f.otherJob)))
+	pool := NewPool(PoolConfig{
+		Mode:         ModeContainer,
+		BridgeScript: []byte("# unused\n"),
+		Container:    ContainerConfig{Image: "img", WorkspaceHostDir: f.root, PodmanBinary: bin, StatsInterval: -1},
+	})
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sb, _, err := pool.TakeScoped(ctx, ScopedTake{Scope: WorkspaceScope{Dir: f.job}, NoNetwork: true})
+	if err == nil || sb != nil {
+		t.Fatalf("TakeScoped = %v, %v; want a fail-closed refusal for a swapped mount", sb, err)
+	}
+	if !strings.Contains(err.Error(), "not the one checked") {
+		t.Errorf("err = %v; want the swapped-mount refusal", err)
+	}
+}
+
+func TestShellSingleQuote(t *testing.T) {
+	for in, want := range map[string]string{
+		"/ws/tasks/a":  "'/ws/tasks/a'",
+		"/ws/it's":     `'/ws/it'\''s'`,
+		"/ws/a b;rm x": "'/ws/a b;rm x'",
+	} {
+		if got := shellSingleQuote(in); got != want {
+			t.Errorf("shellSingleQuote(%q) = %s, want %s", in, got, want)
 		}
 	}
 }

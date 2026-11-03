@@ -34,6 +34,22 @@ trust exactly what the shells can reach.
   directory must exist and lie strictly inside the workspace root; a read-only
   extra must lie inside the root and must not contain the job directory. Any
   violation fails the take — it never falls back to mounting the whole root.
+- **No symlinks below the root.** Everything under the workspace root is
+  writable by a whole-root sandbox (a chat, a worktree run), and podman
+  follows a symlinked volume source, so a `tasks/<lineage>` swapped for a
+  symlink would otherwise mount — and relabel — whatever it points at. Every
+  path component below the root of the job directory and of each read-only
+  extra is checked with `Lstat`; a symlink or non-directory fails the take.
+  The root itself is operator configuration and may be a symlink.
+- **The mounted directory is the one checked (podman).** To close the window
+  between that check and podman's mount, the take `stat`s the job directory
+  inside the started container and compares its inode with the one the check
+  saw; a mismatch tears the container down and fails the take. The kubernetes
+  backend does not run this check — a pod's view of the claim is another
+  host's mount, where inode numbers are not guaranteed to match — and relies
+  on the `Lstat` walk plus the kubelet's own `subPath` handling, which refuses
+  a symlink that leaves the volume (a swap to another directory inside the
+  claim during pod start is the residual there).
 - Allowlisted egress without a proxy, and allowlisted egress on kubernetes,
   fail closed exactly as the unscoped takes do.
 - A pool with no container backend (host/mock test pools) answers

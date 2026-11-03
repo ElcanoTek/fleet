@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -524,28 +528,110 @@ func (p *Pool) TakeScoped(ctx context.Context, req ScopedTake) (*Sandbox, func()
 	if p.cfg.Container.Image == "" || (p.cfg.Mode != ModeContainer && p.cfg.Mode != ModeKubernetes) {
 		return nil, func() {}, ErrContainerUnavailable
 	}
-	scope, err := resolveWorkspaceScope(p.cfg.Container.WorkspaceHostDir, req.Scope)
+	scope, dirIno, err := resolveWorkspaceScope(p.cfg.Container.WorkspaceHostDir, req.Scope)
 	if err != nil {
 		return nil, func() {}, err
 	}
+	var (
+		sb      *Sandbox
+		cleanup func()
+	)
 	if req.Allowlisted {
 		if p.cfg.Mode == ModeKubernetes {
 			// Same refusal as TakeContainerWithEgress: the proxy is
 			// unreachable from a pod on another node.
 			return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
 		}
-		return p.egressContainer(ctx, req.Override, req.Allowlist, scope)
+		sb, cleanup, err = p.egressContainer(ctx, req.Override, req.Allowlist, scope)
+	} else {
+		sb, cleanup, err = p.coldContainer(ctx, req.Override, req.NoNetwork, scope)
 	}
-	return p.coldContainer(ctx, req.Override, req.NoNetwork, scope)
+	if err != nil {
+		return sb, cleanup, err
+	}
+	if p.cfg.Mode == ModeContainer {
+		if verr := verifyScopedMount(ctx, sb, scope.Dir, dirIno); verr != nil {
+			cleanup()
+			return nil, func() {}, verr
+		}
+	}
+	return sb, cleanup, nil
+}
+
+// verifyScopedMount closes the window between resolveWorkspaceScope's
+// no-symlink walk and podman's bind mount: everything under the workspace
+// root is writable by a whole-root sandbox (a chat, a worktree run), which
+// could swap the checked directory for a symlink after the check and have
+// podman mount the symlink's target instead. Inside the started container the
+// mounted directory must be the very inode the walk checked — a bind mount on
+// the same kernel shows the source's inode — or the sandbox is torn down and
+// the take fails closed. Podman only: a pod's view of the workspace claim is
+// another host's mount, where inode numbers are not guaranteed to match, and
+// the kubelet resolves subPath symlinks itself, refusing any that leave the
+// volume.
+func verifyScopedMount(ctx context.Context, sb *Sandbox, dir string, wantIno uint64) error {
+	res, err := sb.RunBash(ctx, BashRequest{
+		Command: "stat -c %i -- " + shellSingleQuote(dir),
+		Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return fmt.Errorf("scoped sandbox: verify the mounted workspace %q: %w", dir, err)
+	}
+	got := strings.TrimSpace(string(res.Stdout))
+	if res.ExitCode != 0 || got != strconv.FormatUint(wantIno, 10) {
+		return fmt.Errorf("scoped sandbox: the directory mounted at %q is not the one checked (inode %q, want %d; exit %d) — it was replaced while the sandbox started (fail-closed)", dir, got, wantIno, res.ExitCode)
+	}
+	return nil
+}
+
+// shellSingleQuote quotes s as one POSIX shell word.
+func shellSingleQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// lstatNoSymlinks walks every path component of path below root with Lstat
+// and refuses a symlink or a non-directory at any of them, returning the
+// final directory's inode. root itself is operator configuration and may be a
+// symlink (e.g. /opt/fleet/workspace); everything beneath it is writable by a
+// whole-root sandbox, so nothing beneath it is followed.
+func lstatNoSymlinks(root, path string) (uint64, error) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return 0, fmt.Errorf("%q is not strictly inside %q", path, root)
+	}
+	cur := root
+	var info os.FileInfo
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		cur = filepath.Join(cur, part)
+		info, err = os.Lstat(cur)
+		if err != nil {
+			return 0, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return 0, fmt.Errorf("%q is a symlink", cur)
+		}
+		if !info.IsDir() {
+			return 0, fmt.Errorf("%q is not a directory", cur)
+		}
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, fmt.Errorf("%q: no inode available", path)
+	}
+	return st.Ino, nil
 }
 
 // resolveWorkspaceScope validates a requested scope against the workspace root
-// and returns it with every path absolute and clean. Pure apart from os.Stat,
-// so the refusal cases are unit-testable without a container.
-func resolveWorkspaceScope(root string, scope WorkspaceScope) (*WorkspaceScope, error) {
+// and returns it with every path absolute and clean, plus the inode of Dir for
+// verifyScopedMount. No path component below the root may be a symlink: a
+// whole-root sandbox can plant one, and podman follows a symlinked volume
+// source — so a symlinked tasks/<lineage> would mount (and relabel) whatever
+// it points at. Pure apart from Lstat, so the refusal cases are unit-testable
+// without a container.
+func resolveWorkspaceScope(root string, scope WorkspaceScope) (*WorkspaceScope, uint64, error) {
 	absRoot, err := filepath.Abs(root)
 	if err != nil || root == "" {
-		return nil, fmt.Errorf("scoped sandbox: workspace root %q cannot be resolved", root)
+		return nil, 0, fmt.Errorf("scoped sandbox: workspace root %q cannot be resolved", root)
 	}
 	inside := func(path string) (string, bool) {
 		abs, err := filepath.Abs(path)
@@ -560,24 +646,28 @@ func resolveWorkspaceScope(root string, scope WorkspaceScope) (*WorkspaceScope, 
 	}
 	dir, ok := inside(scope.Dir)
 	if !ok {
-		return nil, fmt.Errorf("scoped sandbox: workspace scope %q is not a directory strictly inside the workspace root %q (fail-closed)", scope.Dir, absRoot)
+		return nil, 0, fmt.Errorf("scoped sandbox: workspace scope %q is not a directory strictly inside the workspace root %q (fail-closed)", scope.Dir, absRoot)
 	}
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("scoped sandbox: workspace scope %q is not an existing directory (fail-closed)", dir)
+	dirIno, err := lstatNoSymlinks(absRoot, dir)
+	if err != nil {
+		return nil, 0, fmt.Errorf("scoped sandbox: workspace scope %q is not a real directory beneath the root (fail-closed): %w", dir, err)
 	}
 	out := &WorkspaceScope{Dir: dir}
 	for _, ro := range scope.ReadOnly {
 		abs, ok := inside(ro)
 		if !ok {
-			return nil, fmt.Errorf("scoped sandbox: read-only path %q is not inside the workspace root %q", ro, absRoot)
+			return nil, 0, fmt.Errorf("scoped sandbox: read-only path %q is not inside the workspace root %q", ro, absRoot)
 		}
 		if rel, err := filepath.Rel(abs, dir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
 			// A read-only mount over (or above) Dir would shadow the
 			// writable workspace or re-expose its siblings.
-			return nil, fmt.Errorf("scoped sandbox: read-only path %q contains the scoped workspace %q", abs, dir)
+			return nil, 0, fmt.Errorf("scoped sandbox: read-only path %q contains the scoped workspace %q", abs, dir)
 		}
-		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-			continue
+		if _, err := lstatNoSymlinks(absRoot, abs); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // not created (yet): nothing to mount
+			}
+			return nil, 0, fmt.Errorf("scoped sandbox: read-only path %q is not a real directory beneath the root (fail-closed): %w", abs, err)
 		}
 		out.ReadOnly = append(out.ReadOnly, abs)
 	}
@@ -589,7 +679,7 @@ func resolveWorkspaceScope(root string, scope WorkspaceScope) (*WorkspaceScope, 
 			out.Withhold = append(out.Withhold, abs)
 		}
 	}
-	return out, nil
+	return out, dirIno, nil
 }
 
 // Take pulls a warm sandbox or constructs a fresh one if none are

@@ -41,6 +41,11 @@ mounts the job directory at its same path instead of the root; kubernetes
 mounts it as a `subPath` of the workspace claim at its same path. The fileop
 anchor reads the same plan, so the file tools trust exactly what is mounted.
 
+No path component below the root may be a symlink (a whole-root sandbox
+can plant one, and podman follows a symlinked volume source); on podman the
+take also checks, inside the started container, that the mounted directory
+is the inode it validated, and fails closed on a swap.
+
 Every network posture and per-task limit is carried unchanged; the take always
 cold-starts, because the warm inventory is spawned with the whole-root mount.
 A bad scope fails the take closed; it never degrades to the whole root. Only
