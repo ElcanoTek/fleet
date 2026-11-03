@@ -120,6 +120,39 @@ func TestBootstrapFreshDBNameFlags(t *testing.T) {
 
 // TestBootstrapRejectsUnsafeDBIdentifier — the names are interpolated into the
 // provisioning SQL, so anything beyond a plain identifier must die up front.
+// TestBootstrapDryRunHidesDBPasswords — the plan prints the role/database SQL,
+// and on an installed box its passwords are the live ones, read back out of the
+// env file's DSNs (env_dsn_password). A plan is something an operator pastes
+// into a ticket or a chat, so it must show a placeholder, never a password.
+func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
+	const chatPassword, schedPassword = "chatLivePw7Q2xR9", "schedLivePw9K4mT3"
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + chatPassword + "@127.0.0.1:5432/chat?sslmode=disable\n" +
+		"FLEET_SCHED_DATABASE_URL=postgres://sched:" + schedPassword + "@127.0.0.1:5432/sched?sslmode=disable\n"
+	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local")
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	for _, secret := range []string{chatPassword, schedPassword} {
+		if strings.Contains(out, secret) {
+			t.Errorf("bootstrap --dry-run printed a live DB password from the env file\n--- output ---\n%s", out)
+		}
+	}
+	for _, want := range []string{
+		"ALTER ROLE chat WITH LOGIN PASSWORD '<chat db password>'",
+		"ALTER ROLE sched WITH LOGIN PASSWORD '<sched db password>'",
+		"CREATE DATABASE chat OWNER chat",
+		"CREATE DATABASE sched OWNER sched",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
+		}
+	}
+}
+
 func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
 	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--chat-db-name", "bad-name;drop")

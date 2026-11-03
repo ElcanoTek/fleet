@@ -1250,6 +1250,18 @@ guard_preexisting() {
   die "$msg"
 }
 
+# role_db_sql USER PASSWORD DB — the SQL that provisions one role + database:
+# CREATE ROLE if missing, ALTER it to PASSWORD, CREATE DATABASE if missing.
+role_db_sql() {
+  cat <<SQL
+SELECT 'CREATE ROLE ${1} LOGIN PASSWORD ''${2}'''
+ WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${1}')\gexec
+ALTER ROLE ${1} WITH LOGIN PASSWORD '${2}';
+SELECT 'CREATE DATABASE ${3} OWNER ${1}'
+ WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${3}')\gexec
+SQL
+}
+
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(env_dsn_password FLEET_CHAT_DATABASE_URL)}"
@@ -1311,38 +1323,28 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
   # is recorded in the env file, whose password we reuse). The ALTER therefore
   # only ever applies to roles this script itself provisioned — it can never
   # rotate a pre-existing (e.g. legacy) role's password.
+  # PSQL_PLAN is the same SQL with a placeholder for each password: the
+  # --dry-run prints it, and on an installed box the passwords are the live
+  # ones read back out of the env file's DSNs (env_dsn_password above).
   PSQL_SQL=""
+  PSQL_PLAN=""
   if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
     info "chat: --adopt-existing-chat-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
   else
-    PSQL_SQL+=$(cat <<SQL
-SELECT 'CREATE ROLE ${CHAT_DB_USER} LOGIN PASSWORD ''${CHAT_DB_PASSWORD}'''
- WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${CHAT_DB_USER}')\gexec
-ALTER ROLE ${CHAT_DB_USER} WITH LOGIN PASSWORD '${CHAT_DB_PASSWORD}';
-SELECT 'CREATE DATABASE ${CHAT_DB_NAME} OWNER ${CHAT_DB_USER}'
- WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${CHAT_DB_NAME}')\gexec
-SQL
-)
-    PSQL_SQL+=$'\n'
+    PSQL_SQL+="$(role_db_sql "$CHAT_DB_USER" "$CHAT_DB_PASSWORD" "$CHAT_DB_NAME")"$'\n'
+    PSQL_PLAN+="$(role_db_sql "$CHAT_DB_USER" '<chat db password>' "$CHAT_DB_NAME")"$'\n'
   fi
   if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
     info "sched: --adopt-existing-sched-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
   else
-    PSQL_SQL+=$(cat <<SQL
-SELECT 'CREATE ROLE ${SCHED_DB_USER} LOGIN PASSWORD ''${SCHED_DB_PASSWORD}'''
- WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${SCHED_DB_USER}')\gexec
-ALTER ROLE ${SCHED_DB_USER} WITH LOGIN PASSWORD '${SCHED_DB_PASSWORD}';
-SELECT 'CREATE DATABASE ${SCHED_DB_NAME} OWNER ${SCHED_DB_USER}'
- WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${SCHED_DB_NAME}')\gexec
-SQL
-)
-    PSQL_SQL+=$'\n'
+    PSQL_SQL+="$(role_db_sql "$SCHED_DB_USER" "$SCHED_DB_PASSWORD" "$SCHED_DB_NAME")"$'\n'
+    PSQL_PLAN+="$(role_db_sql "$SCHED_DB_USER" '<sched db password>' "$SCHED_DB_NAME")"$'\n'
   fi
   if [[ -z "$PSQL_SQL" ]]; then
     info "both databases adopted — nothing to provision."
   elif [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run as postgres:"
-    printf '%s\n' "$PSQL_SQL" | sed 's/^/    /'
+    printf '%s\n' "$PSQL_PLAN" | sed 's/^/    /'
   else
     printf '%s\n' "$PSQL_SQL" | runuser -u postgres -- psql -v ON_ERROR_STOP=1 >/dev/null \
       || die "role/database provisioning failed"
