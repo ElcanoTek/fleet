@@ -695,6 +695,31 @@ func TestInfoInlinesRootRefSchema(t *testing.T) {
 }
 
 func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
+	// A large linear enum (5,000 scalar values in 1 schema object) must be
+	// preserved intact without triggering the schema-node budget.
+	largeEnum := make([]any, 5000)
+	for i := range largeEnum {
+		largeEnum[i] = "val"
+	}
+	enumSchema := map[string]any{
+		"$defs": map[string]any{
+			"BigEnum": map[string]any{"type": "string", "enum": largeEnum},
+		},
+		"type":       "object",
+		"properties": map[string]any{"choice": map[string]any{"$ref": "#/$defs/BigEnum"}},
+	}
+	enumTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "enum_ok", Description: "enum", InputSchema: enumSchema}}
+	if issue, ok := CheckMCPToolSchema("srv", enumTool.tool); ok {
+		t.Fatalf("large linear enum definition wrongly flagged as schema issue: %+v", issue)
+	}
+	choice := enumTool.Info().Parameters["choice"].(map[string]any)
+	if gotEnum, _ := choice["enum"].([]any); len(gotEnum) != 5000 {
+		t.Fatalf("large enum values lost during $ref inlining: len=%d, want 5000", len(gotEnum))
+	}
+
+	// A 25-level 2-way DAG (2^25 = 33M nodes if expanded naively) must be
+	// bounded during Info() and withheld by CheckMCPToolSchema (Gate 5)
+	// rather than advertising a lossy half-expanded schema.
 	defs := map[string]any{
 		"D0": map[string]any{
 			"type":       "object",
@@ -703,7 +728,7 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 		},
 	}
 	for i := 1; i <= 25; i++ {
-		prev := "#/$defs/D" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		var prev string
 		if i-1 < 10 {
 			prev = "#/$defs/D" + string(rune('0'+(i-1)))
 		} else {
@@ -740,5 +765,29 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 	}
 	if len(encoded) > maxNormalizedToolSchemaBytes {
 		t.Fatalf("bounded DAG exceeded maxNormalizedToolSchemaBytes: %d > %d", len(encoded), maxNormalizedToolSchemaBytes)
+	}
+	issue, ok := CheckMCPToolSchema("srv", mt.tool)
+	if !ok || issue.Status != ToolSchemaInvalid || !strings.Contains(issue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on DAG bomb = (%+v, %v), want ToolSchemaInvalid budget exceeded", issue, ok)
+	}
+
+	// A 1 MiB description referenced 32 times must abort on the byte budget
+	// before copying or marshaling 32 MiB of strings.
+	hugeDesc := strings.Repeat("x", 1024*1024)
+	hugeProps := make(map[string]any, 32)
+	for i := 0; i < 32; i++ {
+		hugeProps["p"+string(rune('a'+i%26))+string(rune('0'+i/26))] = map[string]any{"$ref": "#/$defs/HugeDesc"}
+	}
+	hugeSchema := map[string]any{
+		"$defs": map[string]any{
+			"HugeDesc": map[string]any{"type": "string", "description": hugeDesc},
+		},
+		"type":       "object",
+		"properties": hugeProps,
+	}
+	hugeTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "huge_desc", Description: "huge", InputSchema: hugeSchema}}
+	hugeIssue, hugeOK := CheckMCPToolSchema("srv", hugeTool.tool)
+	if !hugeOK || hugeIssue.Status != ToolSchemaInvalid || !strings.Contains(hugeIssue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on 32x 1MiB description = (%+v, %v), want ToolSchemaInvalid budget exceeded", hugeIssue, hugeOK)
 	}
 }

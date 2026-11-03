@@ -225,27 +225,46 @@ const (
 	maxInlinedSchemaNodes        = 4096
 	maxInlineRefDepth            = 32
 	maxNormalizedToolSchemaBytes = 256 * 1024
+	maxStubAnnotationBytes       = 1024
+	schemaBudgetExceededKey      = "$x_fleet_ref_budget_exceeded"
 )
 
 type inlineBudget struct {
 	expansions int
 	nodes      int
+	bytes      int
 	exceeded   bool
 }
 
-func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
-	if budget != nil {
-		budget.nodes++
-		if budget.nodes > maxInlinedSchemaNodes {
-			budget.exceeded = true
-			return nil, false
-		}
+func (b *inlineBudget) addBytes(n int) bool {
+	if b == nil {
+		return true
 	}
+	if n < 0 || b.bytes > maxNormalizedToolSchemaBytes-n {
+		b.bytes = maxNormalizedToolSchemaBytes + 1
+		b.exceeded = true
+		return false
+	}
+	b.bytes += n
+	return true
+}
+
+func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
+		if budget != nil {
+			budget.nodes++
+			if budget.nodes > maxInlinedSchemaNodes || !budget.addBytes(2) {
+				budget.exceeded = true
+				return nil, false
+			}
+		}
 		out := make(map[string]any, len(t))
-		for k, vv := range t {
-			copied, ok := copyJSONValueBounded(vv, budget)
+		for _, k := range sortedMapKeys(t) {
+			if !budget.addBytes(len(k) + 4) {
+				return nil, false
+			}
+			copied, ok := copyJSONValueBounded(t[k], budget)
 			if !ok {
 				return nil, false
 			}
@@ -253,6 +272,9 @@ func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
 		}
 		return out, true
 	case []any:
+		if !budget.addBytes(2 + len(t)) {
+			return nil, false
+		}
 		out := make([]any, len(t))
 		for i, vv := range t {
 			copied, ok := copyJSONValueBounded(vv, budget)
@@ -263,8 +285,24 @@ func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
 		}
 		return out, true
 	case []string:
+		if !budget.addBytes(2 + len(t)) {
+			return nil, false
+		}
+		for _, s := range t {
+			if !budget.addBytes(len(s) + 2) {
+				return nil, false
+			}
+		}
 		return append([]string(nil), t...), true
+	case string:
+		if !budget.addBytes(len(t) + 2) {
+			return nil, false
+		}
+		return t, true
 	default:
+		if !budget.addBytes(8) {
+			return nil, false
+		}
 		return v, true
 	}
 }
@@ -360,18 +398,19 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 	if ref, hasRef := obj["$ref"].(string); hasRef {
 		if target, canonKey, found := lookupLocalDef(ref, scope); found {
 			var resolved any
-			if active[canonKey] || len(active) > maxInlineRefDepth {
+			switch {
+			case active[canonKey]:
 				resolved = recursiveRefStub(target, scope)
-			} else if budget.exceeded || budget.expansions >= maxRefExpansions {
+			case len(active) > maxInlineRefDepth || budget.exceeded || budget.expansions >= maxRefExpansions:
 				budget.exceeded = true
-				resolved = recursiveRefStub(target, scope)
-			} else {
+				resolved = budgetExceededStub()
+			default:
 				budget.expansions++
 				if targetCopy, ok := copyJSONValueBounded(target, budget); ok {
 					nextActive := cloneActiveRefs(active, canonKey)
 					resolved = inlineSchemaNodeRefs(targetCopy, scope, nextActive, false, true, budget)
 				} else {
-					resolved = recursiveRefStub(target, scope)
+					resolved = budgetExceededStub()
 				}
 			}
 			if len(obj) > 1 {
@@ -403,12 +442,24 @@ func stripInlinedResourceMetadata(obj map[string]any) {
 	if _, isStr := obj["id"].(string); isStr {
 		delete(obj, "id")
 	}
+	delete(obj, "$anchor")
+	delete(obj, "$dynamicAnchor")
 	delete(obj, "$defs")
 	delete(obj, "definitions")
 }
 
+func sortedMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string]bool, inlinedCopy bool, budget *inlineBudget) {
-	for key, value := range obj {
+	for _, key := range sortedMapKeys(obj) {
+		value := obj[key]
 		switch {
 		case schemaValuedKeywords[key]:
 			obj[key] = inlineSchemaNodeRefs(value, scope, active, false, inlinedCopy, budget)
@@ -423,8 +474,8 @@ func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string
 				continue
 			}
 			if members, isMap := value.(map[string]any); isMap {
-				for name, member := range members {
-					members[name] = inlineSchemaNodeRefs(member, scope, active, false, inlinedCopy, budget)
+				for _, name := range sortedMapKeys(members) {
+					members[name] = inlineSchemaNodeRefs(members[name], scope, active, false, inlinedCopy, budget)
 				}
 			}
 		}
@@ -432,12 +483,37 @@ func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string
 }
 
 func cloneActiveRefs(active map[string]bool, addKey string) map[string]bool {
-	next := make(map[string]bool, len(active)+1)
+	next := make(map[string]bool, len(active))
 	for k, v := range active {
 		next[k] = v
 	}
 	next[addKey] = true
 	return next
+}
+
+func budgetExceededStub() map[string]any {
+	return map[string]any{schemaBudgetExceededKey: true}
+}
+
+func hasSchemaBudgetExceeded(v any) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		if t[schemaBudgetExceededKey] == true {
+			return true
+		}
+		for _, vv := range t {
+			if hasSchemaBudgetExceeded(vv) {
+				return true
+			}
+		}
+	case []any:
+		for _, vv := range t {
+			if hasSchemaBudgetExceeded(vv) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func recursiveRefStub(target any, scope defScope) any {
@@ -462,10 +538,10 @@ func recursiveRefStub(target any, scope defScope) any {
 		if t, ok := obj["type"].(string); ok && t != "array" {
 			stub["type"] = t
 		}
-		if title, ok := obj["title"].(string); ok {
+		if title, ok := obj["title"].(string); ok && len(title) <= maxStubAnnotationBytes {
 			stub["title"] = title
 		}
-		if desc, ok := obj["description"].(string); ok {
+		if desc, ok := obj["description"].(string); ok && len(desc) <= maxStubAnnotationBytes {
 			stub["description"] = desc
 		}
 		return stub
@@ -482,7 +558,7 @@ var unevaluatedPropertyAffectingKeywords = map[string]bool{
 var unevaluatedItemAffectingKeywords = map[string]bool{
 	"items": true, "prefixItems": true, "additionalItems": true, "contains": true,
 	"unevaluatedItems": true,
-	"allOf": true, "anyOf": true, "oneOf": true, "not": true,
+	"allOf":            true, "anyOf": true, "oneOf": true, "not": true,
 	"if": true, "then": true, "else": true,
 }
 
@@ -505,13 +581,14 @@ func targetNeedsUnevaluatedIsolation(target, siblings map[string]any) bool {
 }
 
 func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope, active map[string]bool, inlinedCopy bool, budget *inlineBudget) any {
-	siblings := make(map[string]any, len(obj)-1)
-	for k, v := range obj {
+	siblings := make(map[string]any, len(obj))
+	for _, k := range sortedMapKeys(obj) {
 		if k != "$ref" {
+			v := obj[k]
 			if copied, ok := copyJSONValueBounded(v, budget); ok {
 				siblings[k] = copied
 			} else {
-				siblings[k] = copyJSONValue(v)
+				siblings[k] = budgetExceededStub()
 			}
 		}
 	}
@@ -534,7 +611,7 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 	// subschema so its unevaluated* keyword only sees evaluations inside the
 	// target (matching JSON Schema 2020-12 $ref scope).
 	if targetNeedsUnevaluatedIsolation(resMap, siblings) {
-		out := make(map[string]any, len(siblings)+2)
+		out := make(map[string]any, len(siblings))
 		for k, v := range resMap {
 			if schemaAnnotationKeywords[k] {
 				out[k] = copyJSONValue(v)
@@ -718,6 +795,9 @@ var draft2020Metaschema = sync.OnceValues(func() (*jsonschema.Schema, error) {
 // $ref or assert formats, so it never refuses a schema the providers accept
 // today on those grounds.
 func toolInputSchemaProblem(info fantasy.ToolInfo) error {
+	if hasSchemaBudgetExceeded(info.Parameters) {
+		return errors.New("at /: $ref expansion budget exceeded")
+	}
 	meta, err := draft2020Metaschema()
 	if err != nil {
 		// Fail open: an unavailable validator must never remove tools.
@@ -728,9 +808,13 @@ func toolInputSchemaProblem(info fantasy.ToolInfo) error {
 	if required == nil {
 		required = []string{}
 	}
+	propsCopy, ok := copyJSONValueBounded(info.Parameters, &inlineBudget{})
+	if !ok {
+		return fmt.Errorf("at /: normalized input schema exceeds %d bytes", maxNormalizedToolSchemaBytes)
+	}
 	doc := map[string]any{
 		"type":       "object",
-		"properties": copyJSONValue(info.Parameters),
+		"properties": propsCopy,
 		"required":   required,
 	}
 	fantasyschema.Normalize(doc)
