@@ -593,21 +593,48 @@ func (s *Server) autoApproveEnableMCPConnectors(
 	if len(conv.ParticipantOptionalMCPServers) > 0 {
 		conv.ParticipantOptionalMCPServers = merged
 	}
-	callerMerged := s.effectiveOptionalMCPServersForCaller(ctx, user, &store.Conversation{
-		UserEmail:                 conv.UserEmail,
-		OptionalMCPServersEnabled: merged,
-	})
+	synthConv := &store.Conversation{
+		UserEmail:                     conv.UserEmail,
+		OptionalMCPServersEnabled:     merged,
+		ParticipantOptionalMCPServers: merged,
+	}
+	callerMerged := s.effectiveOptionalMCPServersForCaller(ctx, user, synthConv)
 	ownerMerged := callerMerged
 	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
-		ownerMerged = s.effectiveOptionalMCPServersForCaller(ctx, conv.UserEmail, &store.Conversation{
-			UserEmail:                 conv.UserEmail,
-			OptionalMCPServersEnabled: merged,
-		})
+		ownerMerged = s.effectiveOptionalMCPServersForCaller(ctx, conv.UserEmail, synthConv)
 	}
-	participantMerged := s.effectiveOptionalMCPServersForCaller(ctx, "__participant__", &store.Conversation{
-		UserEmail:                 conv.UserEmail,
-		OptionalMCPServersEnabled: merged,
+	participantMerged := s.effectiveOptionalMCPServersForCaller(ctx, "", &store.Conversation{
+		UserEmail:                     "__owner__",
+		ParticipantOptionalMCPServers: merged,
 	})
+	viewerEnabled := map[string][]string{}
+	addViewer := func(email string) {
+		key := strings.ToLower(strings.TrimSpace(email))
+		if key == "" {
+			return
+		}
+		if _, exists := viewerEnabled[key]; exists {
+			return
+		}
+		viewerEnabled[key] = s.effectiveOptionalMCPServersForCaller(ctx, key, synthConv)
+	}
+	addViewer(conv.UserEmail)
+	addViewer(user)
+	for _, p := range conv.MultiplayerParticipants {
+		addViewer(p)
+	}
+	if buf != nil {
+		for _, subEmail := range buf.subscriberEmails() {
+			addViewer(subEmail)
+		}
+	}
+	if s.store != nil {
+		if roster, rerr := s.store.ListMultiplayerRoster(ctx, user, conv.ID); rerr == nil {
+			for _, rEmail := range roster {
+				addViewer(rEmail)
+			}
+		}
+	}
 	conv.OptionalMCPServersEnabled = callerMerged
 
 	if buf != nil {
@@ -616,6 +643,7 @@ func (s *Server) autoApproveEnableMCPConnectors(
 			"added":                        newlyAdded,
 			"owner_enabled_optional":       ownerMerged,
 			"participant_enabled_optional": participantMerged,
+			"viewer_enabled_optional":      viewerEnabled,
 			"user_email":                   user,
 		})
 		buf.Emit("tool.action_recorded", map[string]any{

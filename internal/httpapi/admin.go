@@ -298,7 +298,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		}
 	}
 	var affectedConvIDs []string
-	if body.TeamID != nil {
+	if body.TeamID != nil || body.Role != nil {
 		affectedConvIDs = s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	}
 	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
@@ -313,7 +313,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 		}
 		return
 	}
-	if body.TeamID != nil {
+	if body.TeamID != nil || body.Role != nil {
 		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	}
 	if body.Role != nil {

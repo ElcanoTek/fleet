@@ -1649,7 +1649,7 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 			if _, ok := payload["sender_email"]; !ok {
 				payload["sender_email"] = o.senderEmail
 			}
-		case "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end":
+		case "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
 			if _, ok := payload["user_email"]; !ok {
 				payload["user_email"] = o.senderEmail
 			}

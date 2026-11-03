@@ -479,15 +479,20 @@ func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user 
 	if conv == nil {
 		return nil
 	}
-	if len(conv.OptionalMCPServersEnabled) > 0 {
-		return conv.OptionalMCPServersEnabled
+	raw := conv.OptionalMCPServersEnabled
+	if len(raw) == 0 {
+		raw = conv.ParticipantOptionalMCPServers
 	}
-	if len(conv.ParticipantOptionalMCPServers) == 0 {
+	if len(raw) == 0 {
 		return nil
 	}
+	if (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
+		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user)) {
+		return raw
+	}
 	valid := s.optionalServerWhitelist(ctx, user)
-	out := make([]string, 0, len(conv.ParticipantOptionalMCPServers))
-	for _, n := range conv.ParticipantOptionalMCPServers {
+	out := make([]string, 0, len(raw))
+	for _, n := range raw {
 		key := strings.ToLower(strings.TrimSpace(n))
 		if valid[key] {
 			out = append(out, n)

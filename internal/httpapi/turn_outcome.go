@@ -172,5 +172,13 @@ func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convI
 		http.Error(w, "turn not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, newTurnOutcomeResponse(rec, liveRunning))
+	out := newTurnOutcomeResponse(rec, liveRunning)
+	if len(out.Detail) > 0 && rec.TerminalEvent != "" {
+		if sanitized, keep := sanitizeTurnEventForViewer(rec.TerminalEvent, out.Detail, user, conv.UserEmail); keep && json.Valid(sanitized) {
+			out.Detail = json.RawMessage(sanitized)
+		} else if !keep {
+			out.Detail = nil
+		}
+	}
+	writeJSON(w, out)
 }

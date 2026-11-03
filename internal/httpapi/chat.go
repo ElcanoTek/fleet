@@ -1558,12 +1558,12 @@ func (s *Server) runTurnAsync(
 			// turn.error here would read as a failure of the turn's own —
 			// and so would an "error" log line, which is what operators grep.
 			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
-			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled"})
+			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}
 		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
 		if !errors.Is(err, ErrModelSelectionRequired) {
-			buf.Emit("turn.error", map[string]any{"message": err.Error()})
+			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})
 		}
 		return
 	}

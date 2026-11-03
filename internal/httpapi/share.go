@@ -459,6 +459,9 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
 	s.sessionApprovals.ForgetUnauthorizedUsers(convID, ownerEmail, allowed)
+	for _, sender := range s.executingApprovals.cancelUnauthorized(convID, ownerEmail, allowed, &s.approvalStops) {
+		revokedCandidates[sender] = true
+	}
 	if ok {
 		if entry.buf != nil {
 			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
@@ -595,6 +598,9 @@ func (s *Server) reconcileAllMultiplayerAccess(ctx context.Context, extraConvIDs
 		add(id)
 	}
 	s.inflightMu.Unlock()
+	for _, id := range s.executingApprovals.convIDs() {
+		add(id)
+	}
 	for _, id := range s.activeMultiplayerAndPendingConvIDsBestEffort(ctx) {
 		add(id)
 	}

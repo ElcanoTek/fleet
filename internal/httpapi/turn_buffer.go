@@ -571,6 +571,8 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 		return sanitizeMCPServersUpdatedEvent(data, viewerEmail, convOwnerEmail)
 	case "queue.updated":
 		return sanitizeQueueUpdatedEvent(data, viewerEmail)
+	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+		return sanitizeTerminalTurnEvent(name, data, viewerEmail, convOwnerEmail)
 	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
@@ -597,6 +599,46 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 	}
 }
 
+func sanitizeTerminalTurnEvent(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	delete(m, "user_email")
+	sender := uEmail
+	if sender == "" {
+		sender = strings.TrimSpace(convOwnerEmail)
+	}
+	if viewerEmail != "" && sender != "" && !strings.EqualFold(viewerEmail, sender) {
+		switch name {
+		case "turn.completed":
+			return []byte("{}"), true
+		case "turn.cancelled":
+			return []byte(`{"reason":"cancelled"}`), true
+		case "turn.error":
+			return []byte(`{"message":"Turn failed."}`), true
+		case "turn.model_required":
+			out := map[string]any{"message": "Turn failed."}
+			if reason, ok := m["reason"].(string); ok && reason != "" {
+				out["reason"] = reason
+			}
+			if b, err := json.Marshal(out); err == nil {
+				return b, true
+			}
+			return []byte(`{"message":"Turn failed."}`), true
+		}
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
 func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
 	if len(data) == 0 {
 		return data, true
@@ -607,10 +649,12 @@ func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail str
 	}
 	partRaw, hasPart := m["participant_enabled_optional"]
 	ownerRaw, hasOwner := m["owner_enabled_optional"]
+	viewerMap, _ := m["viewer_enabled_optional"].(map[string]any)
 	uEmail, _ := m["user_email"].(string)
 	uEmail = strings.TrimSpace(uEmail)
 	delete(m, "participant_enabled_optional")
 	delete(m, "owner_enabled_optional")
+	delete(m, "viewer_enabled_optional")
 	delete(m, "user_email")
 	if !hasPart {
 		return data, true
@@ -618,7 +662,10 @@ func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail str
 	isSender := viewerEmail != "" && uEmail != "" && strings.EqualFold(viewerEmail, uEmail)
 	if viewerEmail != "" && !isSender {
 		targetRaw := partRaw
-		if convOwnerEmail != "" && strings.EqualFold(viewerEmail, convOwnerEmail) {
+		viewerKey := strings.ToLower(strings.TrimSpace(viewerEmail))
+		if vSpecific, ok := viewerMap[viewerKey]; ok {
+			targetRaw = vSpecific
+		} else if convOwnerEmail != "" && strings.EqualFold(viewerEmail, convOwnerEmail) {
 			if hasOwner {
 				targetRaw = ownerRaw
 			} else if uEmail == "" {
@@ -879,6 +926,23 @@ func (b *turnBuffer) unsubscribe(id uint64) {
 		delete(b.subscribers, id)
 	}
 	delete(b.subViewers, id)
+}
+
+// subscriberEmails returns the deduplicated viewer emails of all currently
+// attached live SSE subscribers on this buffer.
+func (b *turnBuffer) subscriberEmails() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	seen := make(map[string]bool, len(b.subViewers))
+	var out []string
+	for subID := range b.subscribers {
+		v := strings.ToLower(strings.TrimSpace(b.subViewers[subID]))
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // detachUnauthorizedViewers closes and removes any live subscriber whose

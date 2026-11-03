@@ -1965,8 +1965,10 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if stoppable {
 		s.armApprovalStop(approvalID)
 	}
+	s.executingApprovals.register(execCtx, convID, user, approvalID)
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil || !claimed {
+		s.executingApprovals.unregister(approvalID)
 		if stoppable {
 			s.disarmApprovalStop(approvalID)
 		}
@@ -1997,6 +1999,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	go func() {
 		defer s.approvalRuns.leave()
 		defer s.disarmApprovalStop(approvalID)
+		defer s.executingApprovals.unregister(approvalID)
 		defer safe.Recover("httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
@@ -2145,7 +2148,9 @@ func (s *Server) attachApprovedOptionalMCPServers(execCtx context.Context, reply
 }
 
 func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, approvalID string, approval *store.Approval, req approvalRequest) map[string]any {
-	text, toolErr := s.runClaimedApprovalAction(execCtx, user, convID, approval, req)
+	actionCtx := s.executingApprovals.register(execCtx, convID, user, approvalID)
+	text, toolErr := s.runClaimedApprovalAction(actionCtx, user, convID, approval, req)
+	s.executingApprovals.unregister(approvalID)
 	// The call has returned, so nothing listens to its stop signal any more:
 	// close the stop window now (approval_stop.go). A Stop accepted before
 	// this point is recorded AND in the stop line below; one after it is
@@ -2243,6 +2248,95 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 // RecoverStrandedApprovals records it as outcome unknown.
 func (s *Server) DrainApprovalRuns(ctx context.Context) bool {
 	return s.approvalRuns.drain(ctx)
+}
+
+type executingApprovalEntry struct {
+	convID     string
+	userEmail  string
+	approvalID string
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+type executingApprovalRegistry struct {
+	mu sync.Mutex
+	m  map[string]executingApprovalEntry
+}
+
+func (r *executingApprovalRegistry) register(parent context.Context, convID, userEmail, approvalID string) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = make(map[string]executingApprovalEntry)
+	}
+	if existing, ok := r.m[approvalID]; ok && existing.ctx != nil {
+		return existing.ctx
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.m[approvalID] = executingApprovalEntry{
+		convID:     strings.TrimSpace(convID),
+		userEmail:  strings.ToLower(strings.TrimSpace(userEmail)),
+		approvalID: approvalID,
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+	return ctx
+}
+
+func (r *executingApprovalRegistry) unregister(approvalID string) {
+	r.mu.Lock()
+	entry, ok := r.m[approvalID]
+	if ok {
+		delete(r.m, approvalID)
+	}
+	r.mu.Unlock()
+	if ok && entry.cancel != nil {
+		entry.cancel()
+	}
+}
+
+func (r *executingApprovalRegistry) convIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, e := range r.m {
+		if e.convID != "" {
+			out = append(out, e.convID)
+		}
+	}
+	return out
+}
+
+func (r *executingApprovalRegistry) cancelUnauthorized(convID, ownerEmail string, allowed map[string]bool, stops *approvalStopRegistry) []string {
+	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
+	r.mu.Lock()
+	var toCancel []executingApprovalEntry
+	for _, e := range r.m {
+		if convID != "" && e.convID != convID {
+			continue
+		}
+		if e.userEmail == "" || e.userEmail == ownerKey || allowed[e.userEmail] {
+			continue
+		}
+		toCancel = append(toCancel, e)
+	}
+	r.mu.Unlock()
+	senders := make([]string, 0, len(toCancel))
+	for _, e := range toCancel {
+		senders = append(senders, e.userEmail)
+		if stops != nil {
+			stops.mu.Lock()
+			h := stops.m[e.approvalID]
+			stops.mu.Unlock()
+			if h != nil {
+				h.stop()
+			}
+		}
+		if e.cancel != nil {
+			e.cancel()
+		}
+	}
+	return senders
 }
 
 // approvalRunGate admits and counts approved executions for the shutdown
