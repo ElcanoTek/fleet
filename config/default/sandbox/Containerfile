@@ -104,24 +104,25 @@ RUN microdnf upgrade -y \
     && python3 -c "import pip, pypdf, tornado, idna, pygments, soupsieve"
 
 # Exception to the RPM-first rule: Fedora's builds of a few Python packages
-# lag upstream security releases (Tornado 6.5.7 vs patched 6.5.8, pypdf 4.x
-# vs upstream 6.x, soupsieve, pygments, and pip itself), and every Grype scan
-# flags that gap as open CVEs (GHSA-2wc2-fm75-p42x, GHSA-g867-7843-wf8q,
-# GHSA-wf93-45jw-7689, …). Overlay the current PyPI releases into /usr/local
-# and remove the vulnerable RPM copies so neither the runtime nor the CVE
-# scan sees them. These packages work without native extensions (Tornado
-# includes an optional accelerator), unlike the native data stack kept on RPMs.
-# None of these pull in further dependencies. Unpinned on purpose,
-# same policy as the base image: every rebuild picks up the latest upstream
-# fixes. `rpm -e --nodeps` leaves dangling RPM-db requires (beautifulsoup4 →
-# soupsieve, ipython → pygments) — harmless, the /usr/local copies satisfy
-# the actual imports, and nothing runs dnf inside the built image.
+# lag upstream security releases (Pillow 12.3.0 vs patched 13.0.0, Tornado 6.5.7
+# vs patched 6.5.8, pypdf 4.x vs upstream 6.x, soupsieve, pygments, and pip
+# itself), and every Grype scan flags that gap as open CVEs (GHSA-2wc2-fm75-p42x,
+# GHSA-g867-7843-wf8q, GHSA-wf93-45jw-7689, …). Overlay the current PyPI
+# releases into /usr/local and remove the vulnerable RPM copies so neither the
+# runtime nor the CVE scan sees them. These packages ship prebuilt wheels (or
+# pure-Python wheels) for Fedora's Python, unlike the rest of the native data
+# stack kept on RPMs, and none of these pull in further dependencies. Unpinned
+# on purpose, same policy as the base image: every rebuild picks up the latest
+# upstream fixes. `rpm -e --nodeps` leaves dangling RPM-db requires
+# (beautifulsoup4 → soupsieve, ipython → pygments, matplotlib → pillow) —
+# harmless, the /usr/local copies satisfy the actual imports, and nothing runs
+# dnf inside the built image.
 RUN python3 -m pip install --no-cache-dir --break-system-packages --upgrade \
-        pip pypdf python-docx python-pptx soupsieve pygments "tornado>=6.5.8" \
-    && rpm -e --nodeps python3-pip python3-pypdf python3-soupsieve python3-pygments python3-tornado \
+        pip "pillow>=13.0.0" pypdf python-docx python-pptx soupsieve pygments "tornado>=6.5.8" \
+    && rpm -e --nodeps python3-pip python3-pillow python3-pypdf python3-soupsieve python3-pygments python3-tornado \
     && rm -rf /root/.cache/pip \
-    && python3 -c "import sys, pip, pypdf, docx, pptx, soupsieve, pygments, tornado; \
-stale = [m.__name__ for m in (pip, pypdf, docx, pptx, soupsieve, pygments, tornado) \
+    && python3 -c "import sys, PIL, pip, pypdf, docx, pptx, soupsieve, pygments, tornado; \
+stale = [m.__name__ for m in (PIL, pip, pypdf, docx, pptx, soupsieve, pygments, tornado) \
          if not m.__file__.startswith('/usr/local/')]; \
 sys.exit('RPM copy still shadows the pip overlay: %r' % stale if stale else 0)"
 
