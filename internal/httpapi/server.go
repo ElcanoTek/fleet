@@ -118,6 +118,9 @@ type Server struct {
 	inflightMu                  sync.Mutex
 	inflight                    map[string]inflightEntry
 	activeParticipantWorkspaces map[string]string
+	activeWorkspaceUnlocks      map[string]func()
+	multiplayerEpochs           map[string]uint64
+	workspaceLocks              keyedLocks
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
 	// delete handlers) against the maintenance reconciler, so a Sync pass can
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
@@ -792,8 +795,18 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBu
 // against does not hold the row back: that sweep's set never contained it.
 // swept reports a refusal so the caller cancels the row instead of
 // un-claiming it.
+func (s *Server) currentMultiplayerEpoch(convID string) uint64 {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return s.multiplayerEpochs[convID]
+}
+
 func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
+	if steer != nil && steer.nonOwner && s.multiplayerEpochs[convID] != steer.mpEpoch {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
 	if queued != nil && s.stopSweepGens[convID] != queued.sweepGen {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true

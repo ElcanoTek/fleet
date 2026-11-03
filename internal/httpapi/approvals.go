@@ -3000,7 +3000,7 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 	}
 	var isolatedConv *store.Conversation
 	if s.store != nil && approval != nil && approval.ConversationID != "" {
-		if conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID); cerr == nil && conv != nil && conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, approval.UserEmail) {
+		if conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID); cerr == nil && conv != nil {
 			if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
 				return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
 			}

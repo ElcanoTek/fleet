@@ -979,6 +979,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusInternalServerError, err)
 		return true
 	}
+	history = redactHistoryForSender(history, user, conv.UserEmail)
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
@@ -1006,8 +1007,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
 		return true
 	}
-	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
+	if !s.revalidateMultiplayerTurnAccess(reqCtx, user, conv, steer, queued, releaseSlot, fail) {
+		return true
+	}
+	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
 	if swept && queued == nil {
 		// A Stop scope=all began while this direct claim's turn was being
@@ -1494,7 +1498,7 @@ func (s *Server) runTurnAsync(
 	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
 	senderEmail := ""
-	if conv.Multiplayer && inputKind == "" {
+	if conv.Multiplayer {
 		senderEmail = user
 	}
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
@@ -1765,4 +1769,37 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		modelAllowed:      s.cfg.LockdownAllows,
 		lockdownOnly:      s.cfg.LockdownOnly,
 	}
+}
+
+func (s *Server) revalidateMultiplayerTurnAccess(
+	ctx context.Context,
+	user string,
+	conv *store.Conversation,
+	steer *steerMailbox,
+	queued *queuedLaunch,
+	releaseSlot func(),
+	fail func(int, error),
+) bool {
+	if conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+		return true
+	}
+	steer.nonOwner = true
+	steer.mpEpoch = s.currentMultiplayerEpoch(conv.ID)
+	rechecked, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID)
+	if err != nil {
+		fail(http.StatusInternalServerError, err)
+		return false
+	}
+	if rechecked == nil {
+		if queued != nil {
+			if releaseSlot != nil {
+				releaseSlot()
+			}
+			s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+			return false
+		}
+		fail(http.StatusNotFound, errors.New("conversation not found"))
+		return false
+	}
+	return true
 }

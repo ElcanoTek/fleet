@@ -138,20 +138,22 @@ func (s *Store) mutateConversationMultiplayer(
 	ownerEmail = normalizeEmail(ownerEmail)
 	now := time.Now().Unix()
 
-	var ownerTeam sql.NullString
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, ownerEmail,
-	).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	team := strings.TrimSpace(ownerTeam.String)
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := lockUserTeamChangeTx(ctx, tx, ownerEmail, ""); err != nil {
+		return nil, err
+	}
+	var ownerTeam sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1 FOR UPDATE`, ownerEmail,
+	).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	team := strings.TrimSpace(ownerTeam.String)
 	if team != "" {
 		if err := lockTeamNamesTx(ctx, tx, team); err != nil {
 			return nil, err
@@ -510,11 +512,12 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
 		c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
 		if c.Multiplayer {
-			if containsEmail(c.MultiplayerExcluded, callerEmail) {
-				continue
-			}
-			if !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam), sharedTeamID) {
-				continue
+			if containsEmail(c.MultiplayerExcluded, callerEmail) || !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam), sharedTeamID) {
+				if c.TeamVisible && callerTeam != "" && strings.TrimSpace(sharedTeam) == callerTeam {
+					c.Multiplayer = false
+				} else {
+					continue
+				}
 			}
 		}
 		// Blank out owner-private fields before returning to a teammate.

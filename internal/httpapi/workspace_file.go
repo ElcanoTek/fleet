@@ -193,19 +193,32 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
-func (s *Server) setParticipantWorkspaceActive(convID, user string) {
+func (s *Server) setParticipantWorkspaceActive(convID, user string, unlock func()) {
 	s.inflightMu.Lock()
-	if s.activeParticipantWorkspaces == nil {
-		s.activeParticipantWorkspaces = make(map[string]string)
+	if user != "" {
+		if s.activeParticipantWorkspaces == nil {
+			s.activeParticipantWorkspaces = make(map[string]string)
+		}
+		s.activeParticipantWorkspaces[convID] = user
 	}
-	s.activeParticipantWorkspaces[convID] = user
+	if unlock != nil {
+		if s.activeWorkspaceUnlocks == nil {
+			s.activeWorkspaceUnlocks = make(map[string]func())
+		}
+		s.activeWorkspaceUnlocks[convID] = unlock
+	}
 	s.inflightMu.Unlock()
 }
 
 func (s *Server) clearParticipantWorkspaceActive(convID string) {
 	s.inflightMu.Lock()
 	delete(s.activeParticipantWorkspaces, convID)
+	unlock := s.activeWorkspaceUnlocks[convID]
+	delete(s.activeWorkspaceUnlocks, convID)
 	s.inflightMu.Unlock()
+	if unlock != nil {
+		unlock()
+	}
 }
 
 func (s *Server) isParticipantWorkspaceActiveInMemory(convID, ownerEmail string) bool {
@@ -284,45 +297,55 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
 		return errors.New("invalid conversation id")
 	}
+	unlock := s.workspaceLocks.lock(conv.ID)
 	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
 	if err != nil {
+		unlock()
 		return err
 	}
 	wsDir := tools.WorkspaceDirForConversation(conv.ID)
 	if err := recoverInterruptedParticipantWorkspace(wsDir, stashRoot); err != nil {
+		unlock()
 		return err
 	}
 	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+		s.setParticipantWorkspaceActive(conv.ID, "", unlock)
 		return nil
 	}
 	if _, err := tools.EnsureWorkspaceDir(conv.ID); err != nil {
+		unlock()
 		return err
 	}
 	ownerStash := filepath.Join(stashRoot, "owner")
 	if err := os.MkdirAll(ownerStash, 0o750); err != nil {
+		unlock()
 		return err
 	}
 	marker := filepath.Join(stashRoot, "active-participant")
 	if err := os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600); err != nil { //nolint:gosec // host-side control-plane marker
+		unlock()
 		return err
 	}
 	for _, dirName := range privateWorkspaceDirs {
 		wsSub := filepath.Join(wsDir, dirName)
 		if err := movePrivateDirIfPresent(wsSub, filepath.Join(ownerStash, dirName)); err != nil {
 			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			unlock()
 			return fmt.Errorf("stash owner %s: %w", dirName, err)
 		}
 		if _, statErr := os.Lstat(wsSub); !os.IsNotExist(statErr) { //nolint:gosec // server-derived workspace path
 			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			unlock()
 			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
 		}
 	}
 	partAtt := filepath.Join(stashRoot, "participants", participantDigest(user), uploadsDir)
 	if err := movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir)); err != nil {
 		_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+		unlock()
 		return fmt.Errorf("restore participant attachments: %w", err)
 	}
-	s.setParticipantWorkspaceActive(conv.ID, user)
+	s.setParticipantWorkspaceActive(conv.ID, user, unlock)
 	return nil
 }
 
@@ -334,16 +357,13 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
 		return
 	}
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
+			wsDir := tools.WorkspaceDirForConversation(conv.ID)
+			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+		}
+	}
 	s.clearParticipantWorkspaceActive(conv.ID)
-	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
-		return
-	}
-	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
-	if err != nil {
-		return
-	}
-	wsDir := tools.WorkspaceDirForConversation(conv.ID)
-	_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
 }
 
 func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) error {

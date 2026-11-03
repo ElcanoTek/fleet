@@ -63,6 +63,35 @@ func historyForClient(entries []agent.HistoryEntry) []historyEntryResponse {
 // entry's InjectedContext only when viewerEmail is the sender of that entry
 // (or the conversation owner for unattributed entries) so another user's
 // private attachment paths or library listings are never exposed.
+// redactHistoryForSender returns a shallow copy of entries with
+// InjectedContext cleared on any entry whose sender is not callerEmail, so
+// replaying conversation history into a multiplayer participant's turn never
+// feeds another user's private attachment paths, workspace inventory, or
+// expanded context handles to the model.
+func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwnerEmail string) []agent.HistoryEntry {
+	if callerEmail == "" || len(entries) == 0 {
+		return entries
+	}
+	out := make([]agent.HistoryEntry, len(entries))
+	copy(out, entries)
+	for i := range out {
+		if out[i].InjectedContext == "" {
+			continue
+		}
+		sender := strings.TrimSpace(convOwnerEmail)
+		if out[i].Role == "user" && out[i].Type == "text" {
+			var tc agent.TextContent
+			if json.Unmarshal(out[i].Content, &tc) == nil && strings.TrimSpace(tc.SenderEmail) != "" {
+				sender = strings.TrimSpace(tc.SenderEmail)
+			}
+		}
+		if sender != "" && !strings.EqualFold(callerEmail, sender) {
+			out[i].InjectedContext = ""
+		}
+	}
+	return out
+}
+
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
 	for _, e := range entries {

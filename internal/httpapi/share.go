@@ -469,7 +469,14 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 			}
 		}
 	}
-	if entry, ok := s.getInflight(convID); ok {
+	s.inflightMu.Lock()
+	if s.multiplayerEpochs == nil {
+		s.multiplayerEpochs = make(map[string]uint64)
+	}
+	s.multiplayerEpochs[convID]++
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	if ok {
 		if entry.buf != nil {
 			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
 		}

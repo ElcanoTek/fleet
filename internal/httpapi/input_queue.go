@@ -33,12 +33,14 @@ import (
 // queued->injected flip), so a missed or unconsumed offer automatically
 // degrades to the durable fallback — the row drains as the next turn.
 type steerMailbox struct {
-	store  chatStore
-	turnID string
-	buf    *turnBuffer
-	user   string
-	convID string
-	slot   chan agentcore.SteerMessage
+	store    chatStore
+	turnID   string
+	buf      *turnBuffer
+	user     string
+	convID   string
+	nonOwner bool
+	mpEpoch  uint64
+	slot     chan agentcore.SteerMessage
 }
 
 func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer) *steerMailbox {

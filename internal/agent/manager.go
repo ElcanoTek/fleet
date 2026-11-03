@@ -1723,7 +1723,11 @@ func assembleTurnMessages(in TurnInput, now time.Time) ([]fantasy.Message, Histo
 	today := agentcore.RuntimeToday(now)
 	note, _ := agentcore.RuntimeDateMessage(today) // RuntimeToday always yields a valid day
 	messages = append(messages, note)
-	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: in.SenderEmail})
+	initialSender := in.SenderEmail
+	if in.InputKind != "" {
+		initialSender = ""
+	}
+	userEntry := mustEntry("user", "text", TextContent{Text: in.UserMessage, Images: imageRefs, Kind: in.InputKind, RuntimeToday: today, SenderEmail: initialSender})
 	userEntry.InjectedContext = in.InjectedContext
 	return messages, userEntry, nil
 }
@@ -2000,12 +2004,12 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	effectiveModelSlug := defaultIfEmpty(strings.TrimSpace(res.ModelSlug), modelSlug)
 
 	if runErr != nil {
-		return m.failedTurnResult(ctx, runErr, res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
+		return m.failedTurnResult(ctx, runErr, res, userEntry, in.SenderEmail, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 	}
 	if res.Cancelled {
-		return m.cancelledTurnResult(res, userEntry, effectiveModelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
+		return m.cancelledTurnResult(res, userEntry, in.SenderEmail, effectiveModelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
-	return m.completedTurnResult(res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
+	return m.completedTurnResult(res, userEntry, in.SenderEmail, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
 }
 
 func userEntrySender(userEntry HistoryEntry) string {
@@ -2017,6 +2021,13 @@ func userEntrySender(userEntry HistoryEntry) string {
 		return ""
 	}
 	return strings.TrimSpace(tc.SenderEmail)
+}
+
+func resolveTurnSender(userEntry HistoryEntry, fallback string) string {
+	if s := userEntrySender(userEntry); s != "" {
+		return s
+	}
+	return strings.TrimSpace(fallback)
 }
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
@@ -2054,10 +2065,10 @@ func commitPartialSideEffects(runErr error, res agentcore.Result, senderEmail st
 	}
 }
 
-func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
+func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, senderEmail, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
-	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, userEntrySender(userEntry))...)
+	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, resolveTurnSender(userEntry, senderEmail))...)
 	usage := res.Usage
 	summary := TurnSummaryContent{
 		CostUSD:              usage.CostUSD,
@@ -2121,9 +2132,9 @@ func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEnt
 // the user can fix by choosing another model: committed side effects persist
 // first (ADR-0035), then ErrModelSelectionRequired wraps the cause so the HTTP
 // layer suppresses its generic turn.error in favor of turn.model_required.
-func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
+func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentcore.Result, userEntry HistoryEntry, senderEmail, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return m.cancelledTurnResult(res, userEntry, modelSlug, startedAt, ctxErr, sink, commitTerminal)
+		return m.cancelledTurnResult(res, userEntry, senderEmail, modelSlug, startedAt, ctxErr, sink, commitTerminal)
 	}
 	if errors.Is(runErr, agentcore.ErrGuardrailBlocked) {
 		sink.Emit("turn.policy_blocked", map[string]any{"policy": "prompt-injection"})
@@ -2132,7 +2143,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 	failure := turnFailureFor(reason, modelSlug, status, runErr)
 	usage := res.Usage
-	commitPartialSideEffects(runErr, res, userEntrySender(userEntry), TurnSummaryContent{
+	commitPartialSideEffects(runErr, res, resolveTurnSender(userEntry, senderEmail), TurnSummaryContent{
 		CostUSD:              usage.CostUSD,
 		PromptTokens:         usage.PromptTokens,
 		PromptTokensLastStep: usage.LastStepInputTokens,
@@ -2161,10 +2172,10 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 // accumulated transcript to history entries, appends the turn_summary, commits
 // canonical history behind the terminal gate, emits turn.completed, and builds
 // the TurnResult. Mirrors cancelledTurnResult for the completed path.
-func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
+func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEntry, senderEmail, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
-	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, userEntrySender(userEntry))...)
+	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, resolveTurnSender(userEntry, senderEmail))...)
 
 	finalText := res.FinalText
 	usage := res.Usage
