@@ -2503,25 +2503,29 @@ export function ChatExperience({
     );
   };
 
+  const deletedConvIdsRef = useRef<Set<string>>(new Set());
+
   const refreshConversations = async () => {
     const seqAtStart = new Map(autoApproveSeqRef.current);
     const reconcileAutoApprove = (list: ConversationSummary[]) =>
-      list.map((c) => {
-        const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
-        const startSeq = seqAtStart.get(c.id) ?? 0;
-        const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
-        if (
-          (inFlight || curSeq !== startSeq) &&
-          autoApproveDisplayedRef.current.has(c.id)
-        ) {
-          return {
-            ...c,
-            auto_approve: autoApproveDisplayedRef.current.get(c.id),
-          };
-        }
-        autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
-        return c;
-      });
+      list
+        .filter((c) => !deletedConvIdsRef.current.has(c.id))
+        .map((c) => {
+          const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
+          const startSeq = seqAtStart.get(c.id) ?? 0;
+          const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
+          if (
+            (inFlight || curSeq !== startSeq) &&
+            autoApproveDisplayedRef.current.has(c.id)
+          ) {
+            return {
+              ...c,
+              auto_approve: autoApproveDisplayedRef.current.get(c.id),
+            };
+          }
+          autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
+          return c;
+        });
     try {
       // Active and archived lists in parallel (#282). The archived fetch is
       // best-effort — a failure leaves the previous archived list in place
@@ -2549,8 +2553,6 @@ export function ChatExperience({
       // non-fatal
     }
   };
-
-  const deletedConvIdsRef = useRef<Set<string>>(new Set());
 
   const loadConversation = async (
     conversationId: string,
@@ -4317,21 +4319,26 @@ export function ChatExperience({
       const isStillOnOriginDraft = (): boolean =>
         activeConversationIdRef.current === originActiveId &&
         draftKeyRef.current === originDraftKey;
-      const tryDeleteStaleDraft = async (): Promise<boolean> => {
+      const deleteStaleDraftWithRetry = async (attempt = 0): Promise<void> => {
+        deletedConvIdsRef.current.add(createdId);
         const delUrl = conversationApiUrl(createdId);
-        if (!delUrl) return false;
+        if (!delUrl) return;
         try {
           const delRes = await fetch(delUrl, { method: "DELETE" });
           if (delRes.ok || delRes.status === 404) {
-            deletedConvIdsRef.current.add(createdId);
-            return true;
+            return;
           }
         } catch {
-          // falls through to reconciliation below
+          // retry below
         }
-        return false;
+        if (attempt < 2) {
+          setTimeout(() => {
+            void deleteStaleDraftWithRetry(attempt + 1);
+          }, 1000 * (attempt + 1));
+        }
       };
-      if (!isStillOnOriginDraft() && (await tryDeleteStaleDraft())) {
+      if (!isStillOnOriginDraft()) {
+        await deleteStaleDraftWithRetry();
         return;
       }
       let autoApprovePersisted = Boolean(created.auto_approve);
@@ -4350,8 +4357,8 @@ export function ChatExperience({
           }
         }
       }
-      const stillOnOriginDraft = isStillOnOriginDraft();
-      if (!stillOnOriginDraft && (await tryDeleteStaleDraft())) {
+      if (!isStillOnOriginDraft()) {
+        await deleteStaleDraftWithRetry();
         return;
       }
       const summary: ConversationSummary = {
@@ -4377,9 +4384,6 @@ export function ChatExperience({
         ...curr.filter((c) => c.id !== summary.id),
       ]);
       promoteComposerKey(originConvKey, summary.id);
-      if (!stillOnOriginDraft) {
-        return;
-      }
       setPendingLockdown(false);
       activeConversationIdRef.current = summary.id;
       setActiveConversationId(summary.id);

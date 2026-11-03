@@ -2315,7 +2315,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       setConversations((curr) => {
         if (curr.some((c) => c.id === p.id)) {
           return curr.map((c) =>
-            c.id === p.id && p.title ? { ...c, title: p.title } : c,
+            c.id === p.id &&
+            p.title &&
+            (!c.title || c.title === "New conversation")
+              ? { ...c, title: p.title }
+              : c,
           );
         }
         const optimistic: ConversationSummary = {
