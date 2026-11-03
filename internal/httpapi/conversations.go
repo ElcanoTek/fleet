@@ -157,6 +157,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		case len(req.ConversationIDs) > 0:
 			// Targeted bulk delete by explicit ID list.
@@ -178,6 +179,8 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			// DeleteAllUnpinned) return only a count, not IDs, so those rely on
 			// the pool's idle reaper to reclaim instead.
 			for _, cid := range req.ConversationIDs {
+				s.enforceMultiplayerRevocation(r.Context(), cid, user, false, nil)
+				s.removeConversationPrivateStash(cid)
 				s.releasePersistentSandbox(cid)
 				s.sessionApprovals.Forget(cid)
 			}
@@ -189,6 +192,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		}
 	case http.MethodPost:

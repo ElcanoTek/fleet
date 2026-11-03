@@ -1082,10 +1082,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 
+	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		s.maybeDrainQueue(conv.ID)
+		fail(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+		return true
+	}
+
 	// Track the goroutine on activeTurns BEFORE attaching the persister or
 	// emitting metadata events so graceful shutdown (DrainTurns) and external
 	// update drains never seal a half-initialized turn as completed.
 	if !s.admitActiveTurnOrAbort(conv.ID, buf, turnToken, turnCancel, fail) {
+		s.restoreTurnPrivateWorkspace(conv, user)
 		return true
 	}
 
@@ -1093,7 +1102,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
 	s.attachTurnPersister(buf, user, conv.ID)
-	s.activateTurnPrivateWorkspace(conv, user)
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
@@ -1705,6 +1713,7 @@ func (s *Server) sweepRetention(ctx context.Context) {
 		log.Printf("post-turn sweep error: %v", err)
 	} else if expired > 0 || evicted > 0 {
 		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
+		s.sweepOrphanPrivateWorkspaceStashes(ctx)
 	}
 	if purged, err := s.store.PurgeTerminalInputs(ctx,
 		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {

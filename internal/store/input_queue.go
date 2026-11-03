@@ -290,11 +290,23 @@ func scanInputRow(row rowScanner) (InputQueueRow, error) {
 
 // ListQueuedInputs returns the conversation's non-terminal rows in drain
 // order — the authoritative snapshot the queue UI and reconnects read.
+// When userEmail is "", returns rows across all users in convID.
 func (s *Store) ListQueuedInputs(ctx context.Context, userEmail, convID string) ([]InputQueueRow, error) {
-	rows, err := s.db.QueryContext(ctx,
-		inputQueueSelect+` WHERE conversation_id = $1 AND user_email = $2
-		    AND state IN ('queued','running','injected') AND mode <> 'direct'
-		  ORDER BY position, created_at, id`, convID, userEmail)
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if userEmail == "" {
+		rows, err = s.db.QueryContext(ctx,
+			inputQueueSelect+` WHERE conversation_id = $1
+			    AND state IN ('queued','running','injected') AND mode <> 'direct'
+			  ORDER BY position, created_at, id`, convID)
+	} else {
+		rows, err = s.db.QueryContext(ctx,
+			inputQueueSelect+` WHERE conversation_id = $1 AND user_email = $2
+			    AND state IN ('queued','running','injected') AND mode <> 'direct'
+			  ORDER BY position, created_at, id`, convID, userEmail)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -511,11 +523,23 @@ func (s *Store) CompleteInjectedInputs(ctx context.Context, turnID string) error
 // claim-limbo gate in httpapi refuses by the same comparison, so the two
 // agree on exactly one swept set.
 func (s *Store) CancelQueuedInputs(ctx context.Context, userEmail, convID string, upTo int64) (int, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $3
-		  WHERE conversation_id = $1 AND user_email = $2 AND state = 'queued'
-		    AND COALESCE(accepted_seq, 0) <= $4`,
-		convID, userEmail, time.Now().Unix(), upTo)
+	var (
+		res sql.Result
+		err error
+	)
+	if userEmail == "" {
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $2
+			  WHERE conversation_id = $1 AND state = 'queued'
+			    AND COALESCE(accepted_seq, 0) <= $3`,
+			convID, time.Now().Unix(), upTo)
+	} else {
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE chat_input_queue SET state = 'cancelled', updated_at = $3
+			  WHERE conversation_id = $1 AND user_email = $2 AND state = 'queued'
+			    AND COALESCE(accepted_seq, 0) <= $4`,
+			convID, userEmail, time.Now().Unix(), upTo)
+	}
 	if err != nil {
 		return 0, err
 	}

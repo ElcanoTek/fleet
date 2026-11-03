@@ -4,9 +4,11 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"mime"
@@ -145,6 +147,24 @@ func participantDigest(userEmail string) string {
 	return hex.EncodeToString(sum[:])[:32]
 }
 
+func (s *Server) privateWorkspaceStashRoot() (string, error) {
+	if s.cfg != nil {
+		if base := strings.TrimSpace(s.cfg.EmailAttachmentDir); base != "" {
+			abs, err := filepath.Abs(base)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(filepath.Clean(abs), "multiplayer-private"), nil
+		}
+	}
+	wsRoot, err := filepath.Abs(tools.WorkspaceDirForConversation(""))
+	if err != nil {
+		return "", err
+	}
+	wsRoot = filepath.Clean(wsRoot)
+	return filepath.Join(filepath.Dir(wsRoot), ".fleet-private-"+filepath.Base(wsRoot)), nil
+}
+
 // privateWorkspaceStashDir returns the host-only control-plane directory used
 // to isolate per-sender private workspace trees (attachments/ and user-skills/)
 // outside the conversation workspace mounted into sandboxes.
@@ -152,19 +172,30 @@ func (s *Server) privateWorkspaceStashDir(convID string) (string, error) {
 	if convID == "" || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
 		return "", errors.New("invalid conversation id")
 	}
-	if base := strings.TrimSpace(s.cfg.EmailAttachmentDir); base != "" {
-		abs, err := filepath.Abs(base)
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(filepath.Clean(abs), "multiplayer-private", convID), nil
-	}
-	wsRoot, err := filepath.Abs(tools.WorkspaceDirForConversation(""))
+	root, err := s.privateWorkspaceStashRoot()
 	if err != nil {
 		return "", err
 	}
-	wsRoot = filepath.Clean(wsRoot)
-	return filepath.Join(filepath.Dir(wsRoot), ".fleet-private-"+filepath.Base(wsRoot), convID), nil
+	return filepath.Join(root, convID), nil
+}
+
+func (s *Server) removeConversationPrivateStash(convID string) {
+	stashDir, err := s.privateWorkspaceStashDir(convID)
+	if err != nil {
+		return
+	}
+	_ = os.RemoveAll(stashDir)
+}
+
+func (s *Server) sweepOrphanPrivateWorkspaceStashes(ctx context.Context) {
+	if s.store == nil {
+		return
+	}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return
+	}
+	_, _ = s.store.SweepOrphanWorkspaces(ctx, root)
 }
 
 func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
@@ -188,33 +219,51 @@ func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
 // runs a turn, the owner's attachments/ and user-skills/ are moved out of the
 // mounted workspace into the host-only control-plane stash and replaced with
 // the participant's own staged attachments (if any from an earlier turn).
-func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user string) {
+// Returns a non-nil error if isolation cannot be confirmed so the turn aborts
+// rather than launching with another user's private workspace files present.
+func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user string) error {
 	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
-		return
+		return errors.New("invalid conversation id")
 	}
 	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
 	if err != nil {
-		return
+		return err
 	}
 	wsDir := tools.WorkspaceDirForConversation(conv.ID)
-	recoverInterruptedParticipantWorkspace(wsDir, stashRoot)
+	if err := recoverInterruptedParticipantWorkspace(wsDir, stashRoot); err != nil {
+		return err
+	}
 	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
-		return
+		return nil
 	}
 	if _, err := tools.EnsureWorkspaceDir(conv.ID); err != nil {
-		return
+		return err
 	}
 	ownerStash := filepath.Join(stashRoot, "owner")
 	if err := os.MkdirAll(ownerStash, 0o750); err != nil {
-		return
+		return err
 	}
 	marker := filepath.Join(stashRoot, "active-participant")
-	_ = os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600) //nolint:gosec // host-side control-plane marker
+	if err := os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600); err != nil { //nolint:gosec // host-side control-plane marker
+		return err
+	}
 	for _, dirName := range privateWorkspaceDirs {
-		movePrivateDirIfPresent(filepath.Join(wsDir, dirName), filepath.Join(ownerStash, dirName))
+		wsSub := filepath.Join(wsDir, dirName)
+		if err := movePrivateDirIfPresent(wsSub, filepath.Join(ownerStash, dirName)); err != nil {
+			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			return fmt.Errorf("stash owner %s: %w", dirName, err)
+		}
+		if _, statErr := os.Lstat(wsSub); !os.IsNotExist(statErr) { //nolint:gosec // server-derived workspace path
+			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
+		}
 	}
 	partAtt := filepath.Join(stashRoot, "participants", participantDigest(user), uploadsDir)
-	movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir))
+	if err := movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir)); err != nil {
+		_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+		return fmt.Errorf("restore participant attachments: %w", err)
+	}
+	return nil
 }
 
 // restoreTurnPrivateWorkspace removes a non-owner participant's materialized
@@ -233,48 +282,69 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 		return
 	}
 	wsDir := tools.WorkspaceDirForConversation(conv.ID)
-	restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+	_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
 }
 
-func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) {
+func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) error {
 	marker := filepath.Join(stashRoot, "active-participant")
 	raw, err := os.ReadFile(marker) //nolint:gosec // server-derived stashRoot
 	if err != nil {
-		return
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
-	restoreParticipantWorkspaceToOwner(wsDir, stashRoot, strings.TrimSpace(string(raw)))
+	return restoreParticipantWorkspaceToOwner(wsDir, stashRoot, strings.TrimSpace(string(raw)))
 }
 
-func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail string) {
-	_ = os.RemoveAll(filepath.Join(wsDir, userSkillsRoot)) //nolint:gosec // server-derived conversation workspace
+func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail string) error {
+	if err := os.RemoveAll(filepath.Join(wsDir, userSkillsRoot)); err != nil { //nolint:gosec // server-derived conversation workspace
+		return err
+	}
 	if participantEmail != "" {
 		partAtt := filepath.Join(stashRoot, "participants", participantDigest(participantEmail), uploadsDir)
-		movePrivateDirIfPresent(filepath.Join(wsDir, uploadsDir), partAtt)
-	} else {
-		_ = os.RemoveAll(filepath.Join(wsDir, uploadsDir)) //nolint:gosec // server-derived conversation workspace
+		if err := movePrivateDirIfPresent(filepath.Join(wsDir, uploadsDir), partAtt); err != nil {
+			return err
+		}
+	} else if err := os.RemoveAll(filepath.Join(wsDir, uploadsDir)); err != nil { //nolint:gosec // server-derived conversation workspace
+		return err
 	}
 	ownerStash := filepath.Join(stashRoot, "owner")
 	for _, dirName := range privateWorkspaceDirs {
-		movePrivateDirIfPresent(filepath.Join(ownerStash, dirName), filepath.Join(wsDir, dirName))
+		if err := movePrivateDirIfPresent(filepath.Join(ownerStash, dirName), filepath.Join(wsDir, dirName)); err != nil {
+			return err
+		}
 	}
-	_ = os.Remove(filepath.Join(stashRoot, "active-participant"))
+	if err := os.Remove(filepath.Join(stashRoot, "active-participant")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
-func movePrivateDirIfPresent(src, dst string) {
+func movePrivateDirIfPresent(src, dst string) error {
 	info, err := os.Lstat(src) //nolint:gosec // server-derived workspace/stash paths
-	if err != nil || !info.IsDir() {
-		return
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
 	}
-	_ = os.RemoveAll(dst)                                         //nolint:gosec // server-derived destination
+	if !info.IsDir() {
+		return os.RemoveAll(src) //nolint:gosec // server-derived source
+	}
+	if err := os.RemoveAll(dst); err != nil { //nolint:gosec // server-derived destination
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { //nolint:gosec // workspace/stash parent dir
-		return
+		return err
 	}
 	if err := os.Rename(src, dst); err == nil { //nolint:gosec // server-derived workspace/stash paths
-		return
+		return nil
 	}
-	if copyDirRecursive(src, dst) == nil {
-		_ = os.RemoveAll(src) //nolint:gosec // server-derived source
+	if err := copyDirRecursive(src, dst); err != nil {
+		return err
 	}
+	return os.RemoveAll(src) //nolint:gosec // server-derived source
 }
 
 func copyDirRecursive(src, dst string) error {

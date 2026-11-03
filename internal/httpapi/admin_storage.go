@@ -181,6 +181,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		if err != nil {
 			log.Printf("admin storage cleanup: workspace sweep: %v", err)
 		}
+		s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 		resp.RemovedWorkspaces = removed
 	}
 

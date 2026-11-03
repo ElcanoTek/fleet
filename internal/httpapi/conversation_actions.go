@@ -280,6 +280,8 @@ func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request
 		writeConversationMutationError(w, err)
 		return
 	}
+	s.enforceMultiplayerRevocation(r.Context(), id, user, false, nil)
+	s.removeConversationPrivateStash(id)
 	// Reclaim the conversation's persistent run_python sandbox (#213), if any,
 	// and its in-memory session pre-approvals (#300).
 	s.releasePersistentSandbox(id)
@@ -345,6 +347,9 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 	if err := s.store.SetArchived(r.Context(), user, id, req.Archived); err != nil {
 		writeConversationMutationError(w, err)
 		return
+	}
+	if req.Archived {
+		s.enforceMultiplayerRevocation(r.Context(), id, user, false, nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -822,10 +827,10 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// follow-up submitted after Stop, while the cancelled turn was still
 		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
 			log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		} else if n > 0 {
-			s.emitQueueUpdate(qctx, user, id)
+			s.emitQueueUpdate(qctx, "", id)
 		}
 		qcancel()
 	} else {

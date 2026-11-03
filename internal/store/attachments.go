@@ -118,6 +118,22 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 		}
 		removed++
 	}
+	// Also sweep the sibling .fleet-private-<base> stash root if present.
+	if absRoot, absErr := filepath.Abs(root); absErr == nil {
+		absRoot = filepath.Clean(absRoot)
+		siblingStash := filepath.Join(filepath.Dir(absRoot), ".fleet-private-"+filepath.Base(absRoot))
+		if stEntries, rerr := os.ReadDir(siblingStash); rerr == nil {
+			for _, e := range stEntries {
+				if !e.IsDir() || !looksLikeConversationID(e.Name()) {
+					continue
+				}
+				if _, alive := live[e.Name()]; alive {
+					continue
+				}
+				_ = removeWorkspaceTree(siblingStash, e.Name())
+			}
+		}
+	}
 	return removed, errors.Join(errs...)
 }
 

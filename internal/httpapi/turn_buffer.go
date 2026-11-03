@@ -65,6 +65,7 @@ type turnBuffer struct {
 	// "evicted" frame — without it a congested client saw the same clean EOF
 	// a finished turn produces and rendered a still-generating turn as done.
 	evictedSubs map[uint64]bool
+	subViewers  map[uint64]string
 	nextSubID   uint64
 	closed      bool
 	finishedAt  time.Time
@@ -122,6 +123,7 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 		turnID:      turnID,
 		subscribers: make(map[uint64]chan bufferedEvent),
 		evictedSubs: make(map[uint64]bool),
+		subViewers:  make(map[uint64]string),
 		maxBytes:    sseMaxBytesPerTurn,
 	}
 }
@@ -642,6 +644,7 @@ func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w 
 		subID = b.nextSubID
 		ch = make(chan bufferedEvent, 256)
 		b.subscribers[subID] = ch
+		b.subViewers[subID] = strings.ToLower(strings.TrimSpace(viewerEmail))
 	}
 	b.mu.Unlock()
 
@@ -752,6 +755,23 @@ func (b *turnBuffer) unsubscribe(id uint64) {
 	if ch, ok := b.subscribers[id]; ok {
 		close(ch)
 		delete(b.subscribers, id)
+	}
+	delete(b.subViewers, id)
+}
+
+// detachUnauthorizedViewers closes and removes any live subscriber whose
+// viewerEmail is neither the conversation owner nor in allowedViewers.
+func (b *turnBuffer) detachUnauthorizedViewers(ownerEmail string, allowedViewers map[string]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for subID, ch := range b.subscribers {
+		v := b.subViewers[subID]
+		if v == "" || strings.EqualFold(v, ownerEmail) || allowedViewers[v] {
+			continue
+		}
+		close(ch)
+		delete(b.subscribers, subID)
+		delete(b.subViewers, subID)
 	}
 }
 

@@ -619,6 +619,16 @@ func (s *fakeChatStore) MarkProjectSharedChat(context.Context, string, string) e
 
 // Bulk conversation operations (#279) — default no-ops; the /chat turn path
 // never touches these, so a nil-safe stub keeps the always-on fake compiling.
+func (s *fakeChatStore) Delete(_ context.Context, user, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c := s.convs[id]
+	if c == nil || (c.UserEmail != "" && !strings.EqualFold(c.UserEmail, user)) {
+		return store.ErrConversationNotFound
+	}
+	delete(s.convs, id)
+	return nil
+}
 func (s *fakeChatStore) DeleteByIDs(_ context.Context, _ string, ids []string) (int, error) {
 	return len(ids), nil
 }
@@ -1159,12 +1169,12 @@ func (s *fakeChatStore) InputsAhead(_ context.Context, id string) (int, bool, er
 	return n, true, nil
 }
 
-func (s *fakeChatStore) ListQueuedInputs(_ context.Context, _, convID string) ([]store.InputQueueRow, error) {
+func (s *fakeChatStore) ListQueuedInputs(_ context.Context, userEmail, convID string) ([]store.InputQueueRow, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []store.InputQueueRow
 	for _, it := range s.queue {
-		if it.ConversationID == convID && it.Mode != store.InputModeDirect && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
+		if it.ConversationID == convID && (userEmail == "" || strings.EqualFold(it.UserEmail, userEmail)) && it.Mode != store.InputModeDirect && it.State != store.InputStateCompleted && it.State != store.InputStateCancelled {
 			out = append(out, it)
 		}
 	}
@@ -1231,12 +1241,12 @@ func (s *fakeChatStore) CompleteInjectedInputs(_ context.Context, turnID string)
 	return nil
 }
 
-func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, _, convID string, upTo int64) (int, error) {
+func (s *fakeChatStore) CancelQueuedInputs(_ context.Context, userEmail, convID string, upTo int64) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	n := 0
 	for i := range s.queue {
-		if s.queue[i].ConversationID == convID && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedSeq <= upTo {
+		if s.queue[i].ConversationID == convID && (userEmail == "" || strings.EqualFold(s.queue[i].UserEmail, userEmail)) && s.queue[i].State == store.InputStateQueued && s.queue[i].AcceptedSeq <= upTo {
 			s.queue[i].State = store.InputStateCancelled
 			n++
 		}

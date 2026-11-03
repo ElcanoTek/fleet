@@ -283,7 +283,9 @@ func TestMultiplayerPrivateWorkspaceIsolation(t *testing.T) {
 	}
 
 	// Activate Bob's non-owner participant turn workspace.
-	srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com")
+	if err := srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com"); err != nil {
+		t.Fatalf("activateTurnPrivateWorkspace: %v", err)
+	}
 
 	// Alice's attachments/ and user-skills/ must not be present in wsDir during Bob's turn.
 	if _, err := os.Stat(ownerAtt); !os.IsNotExist(err) {
@@ -333,9 +335,24 @@ func TestMultiplayerPrivateWorkspaceIsolation(t *testing.T) {
 	}
 
 	// On Bob's next turn, Bob's previously staged attachment is swapped back in for Bob.
-	srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com")
+	if err := srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com"); err != nil {
+		t.Fatalf("activateTurnPrivateWorkspace (2): %v", err)
+	}
 	if got, err := os.ReadFile(bobAtt); err != nil || string(got) != "bob_private_attachment" {
 		t.Fatalf("expected Bob's attachment to be restored on Bob's next turn, got %q err=%v", string(got), err)
 	}
 	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
+
+	// Deleting the conversation removes the participant stash directory too.
+	stashDir, err := srv.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		t.Fatalf("privateWorkspaceStashDir: %v", err)
+	}
+	wDel := doAuthedJSONRequest(t, srv, http.MethodDelete, "/conversations/"+conv.ID, "alice@reklaim.com", nil)
+	if wDel.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /conversations/%s status = %d", conv.ID, wDel.Code)
+	}
+	if _, err := os.Stat(stashDir); !os.IsNotExist(err) {
+		t.Fatalf("expected stashDir %s to be removed on conversation delete, got err=%v", stashDir, err)
+	}
 }

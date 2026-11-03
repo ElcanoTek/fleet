@@ -420,6 +420,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.enforceMultiplayerRevocation(r.Context(), convID, updated.UserEmail, updated.Multiplayer, roster)
 	writeJSON(w, map[string]any{
 		"multiplayer":  updated.Multiplayer,
 		"team_visible": updated.TeamVisible,
@@ -429,6 +430,52 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		"excluded":     nonNilStrings(updated.MultiplayerExcluded),
 		"roster":       nonNilStrings(roster),
 	})
+}
+
+// enforceMultiplayerRevocation cancels any active turn or queued inputs in
+// convID belonging to a user who is no longer authorized to participate, and
+// detaches live SSE subscribers whose multiplayer access was revoked.
+func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID, ownerEmail string, multiplayer bool, roster []string) {
+	allowed := map[string]bool{}
+	if owner := strings.ToLower(strings.TrimSpace(ownerEmail)); owner != "" {
+		allowed[owner] = true
+	}
+	if multiplayer {
+		for _, r := range roster {
+			if e := strings.ToLower(strings.TrimSpace(r)); e != "" {
+				allowed[e] = true
+			}
+		}
+	}
+	if entry, ok := s.getInflight(convID); ok {
+		if entry.buf != nil {
+			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
+		}
+		if entry.IsRunning() && entry.steer != nil {
+			sender := strings.ToLower(strings.TrimSpace(entry.steer.user))
+			if sender != "" && !allowed[sender] {
+				_ = s.cancelInflightTurn(convID, entry.turnID)
+			}
+		}
+	}
+	if s.store == nil {
+		return
+	}
+	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	items, err := s.store.ListQueuedInputs(qctx, "", convID)
+	if err != nil {
+		return
+	}
+	for _, item := range items {
+		if item.State != store.InputStateQueued {
+			continue
+		}
+		sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
+		if sender != "" && !allowed[sender] {
+			_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
+		}
+	}
 }
 
 // unshareCountTimeout bounds the best-effort count an unshare reports after

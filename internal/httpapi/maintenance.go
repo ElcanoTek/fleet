@@ -113,6 +113,7 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	if removed > 0 {
 		log.Printf("maintenance: workspace sweep removed %d orphan dir(s)", removed)
 	}
+	s.sweepOrphanPrivateWorkspaceStashes(ctx)
 
 	// download_url partial files a cancelled turn left behind (the sandbox
 	// was retired before the download could abort its own partial). Without
