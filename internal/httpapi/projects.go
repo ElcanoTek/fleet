@@ -1390,7 +1390,7 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 	if projectID == "" {
 		if defaults := s.defaultEnabledOptionalMCPServers(r.Context(), user); len(defaults) > 0 {
 			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, defaults); err != nil {
-				_ = s.store.Delete(r.Context(), user, conv.ID)
+				s.rollbackCreatedConversation(user, conv.ID)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return nil, false
 			}

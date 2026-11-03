@@ -433,7 +433,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// from the chat request so pre-chat Tools picker selections take
 		// effect on this first turn.
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
-			_ = s.store.Delete(r.Context(), user, conv.ID)
+			s.rollbackCreatedConversation(user, conv.ID)
 			return
 		}
 		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)

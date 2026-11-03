@@ -7,11 +7,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -62,6 +65,17 @@ func clampSeed(seed string) string {
 		return seed
 	}
 	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
+}
+
+func (s *Server) rollbackCreatedConversation(user, convID string) {
+	if convID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.Delete(ctx, user, convID); err != nil {
+		log.Printf("rollback created conversation %s: %v", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+	}
 }
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request, user string) {
@@ -250,7 +264,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
-			_ = s.store.Delete(r.Context(), user, conv.ID)
+			s.rollbackCreatedConversation(user, conv.ID)
 			return
 		}
 		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
@@ -265,7 +279,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
 			}
 			if err != nil {
-				_ = s.store.Delete(r.Context(), user, conv.ID)
+				s.rollbackCreatedConversation(user, conv.ID)
 				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
