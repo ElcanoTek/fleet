@@ -330,3 +330,15 @@ describe("panel ownership and reused ids", () => {
     expect(s.cards.get("a")?.title).toBe("Unrelated");
   });
 });
+
+describe("panel moves retire the old owner", () => {
+  it("a stale card's later refinement does not inherit the panel its lineage left", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("A", { panel: "x" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "c", input: card("C", { panel: "y", replaces: "a" }), resultText: "UI_DISPLAYED card_id=c" }]),
+      assistant(3, [{ id: "b", input: card("B", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(4, [{ id: "n", input: card("New X", { panel: "x" }), resultText: "UI_DISPLAYED card_id=n" }]),
+    ]);
+    expect(s.superseded.has("b")).toBe(false);
+  });
+});

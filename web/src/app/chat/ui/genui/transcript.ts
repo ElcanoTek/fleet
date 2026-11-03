@@ -198,6 +198,13 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       // later same-key card supersedes the refinement, not the original.
       const inherited = !spec.panel && spec.replaces ? panelOf.get(spec.replaces) : undefined;
       const panel = spec.panel ?? (inherited !== undefined && panelOwner.get(inherited) === spec.replaces ? inherited : undefined);
+      // A card that replaces a panel's owner but names a different key moves
+      // that lineage: the old panel no longer has an owner, so a later
+      // refinement of the replaced card does not inherit it.
+      if (spec.replaces && spec.replaces !== tc.id) {
+        const from = panelOf.get(spec.replaces);
+        if (from !== undefined && from !== panel && panelOwner.get(from) === spec.replaces) panelOwner.delete(from);
+      }
       if (panel) {
         const prev = panelOwner.get(panel);
         if (prev !== undefined && prev !== tc.id) superseded.add(prev);

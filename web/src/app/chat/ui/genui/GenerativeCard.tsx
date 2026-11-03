@@ -394,7 +394,13 @@ function markDraftSent(storeId: string, sentKey: string) {
   try {
     const d = readDraft(key);
     if (!d) return;
-    if (putDraft(key, JSON.stringify({ ...d, sent: sent || undefined }))) sentMemory.delete(storeId);
+    const json = JSON.stringify({ ...d, sent: sent || undefined });
+    // The page copy carries the marker too, whichever copy is read later.
+    rememberDraft(key, json);
+    if (putDraft(key, json)) {
+      sentMemory.delete(storeId);
+      memoryOnlyDrafts.delete(key);
+    } else memoryOnlyDrafts.add(key);
   } catch {
     // A draft is a convenience; the in-memory marker still holds.
   }

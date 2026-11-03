@@ -159,8 +159,9 @@ themes.
   rather than updates, unless it uses `replaces`.
 - **No timestamps on panels.** Messages carry no client-visible time, so a
   panel shows its version count, not "updated 2 min ago".
-- **Masonry is approximate.** The grid uses `grid-auto-flow: dense`, so mixed
-  heights can leave gaps.
+- **No masonry.** Panels fill the grid in board order (not `dense`), so what
+  the user sees second is the panel the agent is told is second, and keyboard
+  order matches. Mixed widths and heights can leave gaps.
 - **Web chat only.** The terminal client and ACP editors see `show_ui` calls as
   before. The shared read-only transcript does not offer the view.
 - **Panels from before a compaction are archived.** They render read-only with

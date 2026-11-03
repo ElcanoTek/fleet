@@ -6886,7 +6886,9 @@ select.mcp-server-picker__account-select {
   .dash-grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 19rem), 1fr));
-    grid-auto-flow: row dense;
+    /* Not dense: the visual order must be the board order the agent is told
+       ("the second panel") and the keyboard follows. */
+    grid-auto-flow: row;
     align-items: start;
     gap: 1rem;
   }

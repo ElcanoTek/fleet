@@ -3729,7 +3729,18 @@ export function ChatExperience({
   // after a toggle — never when a conversation simply opens in the view.
   const dashboardToggledRef = useRef(false);
   useEffect(() => {
-    if (!dashboardToggledRef.current) return;
+    if (!dashboardToggledRef.current) {
+      // Opening a conversation that restores dashboard view hides the rail
+      // the user just activated a row in: bring the focus into the HUD
+      // rather than leave it inside a hidden subtree.
+      if (
+        dashboardActive &&
+        document.activeElement?.closest('[data-dashboard-rail-wrapper]')
+      ) {
+        document.querySelector<HTMLElement>('[data-testid="dashboard-exit"]')?.focus();
+      }
+      return;
+    }
     dashboardToggledRef.current = false;
     // Not if the toggle came from inside a dialog that keeps the focus.
     if (document.activeElement?.closest('[role="dialog"]')) return;
@@ -6528,7 +6539,7 @@ export function ChatExperience({
       >
         {/* Dashboard view takes the whole screen: the rail stays mounted
             (its search, scroll and drafts survive) but is not drawn. */}
-        <div className={dashboardActive ? "hidden" : "contents"}>
+        <div data-dashboard-rail-wrapper="" className={dashboardActive ? "hidden" : "contents"}>
         <ConversationSidebar
           collapse={railCollapse}
           sidebarOpen={sidebarOpen}
