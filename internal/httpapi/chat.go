@@ -1403,8 +1403,8 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return false
 			}
-			conv.OptionalMCPServersEnabled = clean
 		}
+		conv.OptionalMCPServersEnabled = clean
 	}
 	if len(mcpAccounts) > 0 {
 		accounts, verr := s.cleanMCPAccounts(r.Context(), user, mcpAccounts)

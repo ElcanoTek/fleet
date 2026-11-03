@@ -2509,6 +2509,14 @@ export function ChatExperience({
 
   const deletedConvIdsRef = useRef<Set<string>>(new Set());
   const deleteAllUnpinnedSeqRef = useRef(0);
+  const conversationsRefreshSeqRef = useRef(0);
+  const conversationsRefreshAppliedSeqRef = useRef(0);
+  const shareCreatedSummariesRef = useRef<
+    Map<
+      string,
+      { summary: ConversationSummary; seq: number; deleteAllSeq: number }
+    >
+  >(new Map());
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -2518,6 +2526,8 @@ export function ChatExperience({
   }, []);
 
   const refreshConversations = async () => {
+    conversationsRefreshSeqRef.current += 1;
+    const refreshSeq = conversationsRefreshSeqRef.current;
     const seqAtStart = new Map(autoApproveSeqRef.current);
     const reconcileAutoApprove = (list: ConversationSummary[]) =>
       list
@@ -2546,19 +2556,43 @@ export function ChatExperience({
         fetch("/api/conversations", { cache: "no-store" }),
         fetch("/api/conversations?archived=true", { cache: "no-store" }),
       ]);
-      if (activeRes.ok) {
-        const data = (await activeRes.json()) as {
-          conversations: ConversationSummary[] | null;
-        };
-        setConversations(reconcileAutoApprove(data.conversations ?? []));
-      }
+      if (refreshSeq <= conversationsRefreshAppliedSeqRef.current) return;
+      conversationsRefreshAppliedSeqRef.current = refreshSeq;
+      let nextArchived: ConversationSummary[] | null = null;
       if (archivedRes.ok) {
         const data = (await archivedRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setArchivedConversations(
-          reconcileAutoApprove(data.conversations ?? []),
-        );
+        nextArchived = reconcileAutoApprove(data.conversations ?? []);
+        setArchivedConversations(nextArchived);
+      }
+      if (activeRes.ok) {
+        const data = (await activeRes.json()) as {
+          conversations: ConversationSummary[] | null;
+        };
+        const reconciledActive = reconcileAutoApprove(data.conversations ?? []);
+        const activeIds = new Set(reconciledActive.map((c) => c.id));
+        const archivedIds = new Set((nextArchived ?? []).map((c) => c.id));
+        setConversations((curr) => {
+          const preserved: ConversationSummary[] = [];
+          for (const [id, entry] of shareCreatedSummariesRef.current) {
+            if (
+              deletedConvIdsRef.current.has(id) ||
+              deleteAllUnpinnedSeqRef.current !== entry.deleteAllSeq ||
+              refreshSeq > entry.seq ||
+              activeIds.has(id) ||
+              archivedIds.has(id)
+            ) {
+              shareCreatedSummariesRef.current.delete(id);
+              continue;
+            }
+            const existing = curr.find((c) => c.id === id) ?? entry.summary;
+            preserved.push(existing);
+          }
+          return preserved.length > 0
+            ? [...preserved, ...reconciledActive]
+            : reconciledActive;
+        });
       }
       void loadTeamSharedChatCounts();
     } catch {
@@ -4321,7 +4355,9 @@ export function ChatExperience({
         );
         return;
       }
-      const created = (await response.json()) as Partial<ConversationSummary>;
+      const created = (await response.json()) as Partial<ConversationSummary> & {
+        optional_mcp_servers_enabled?: unknown;
+      };
       if (!created?.id) {
         if (mountedRef.current) {
           showRailError("Couldn't open sharing for this chat.");
@@ -4393,6 +4429,17 @@ export function ChatExperience({
       if (pendingKey && hadPendingAutoApprove) {
         setPendingAutoApproveForKey(pendingKey, false);
       }
+      if (Array.isArray(created.optional_mcp_servers_enabled)) {
+        const persisted = created.optional_mcp_servers_enabled.filter(
+          (n): n is string => typeof n === "string",
+        );
+        setMcpServers((curr) => reconcileMcpSelection(curr, persisted));
+      }
+      shareCreatedSummariesRef.current.set(summary.id, {
+        summary,
+        seq: conversationsRefreshSeqRef.current,
+        deleteAllSeq: deleteAllUnpinnedSeqRef.current,
+      });
       setConversations((curr) => [
         summary,
         ...curr.filter((c) => c.id !== summary.id),
@@ -7371,10 +7418,19 @@ export function ChatExperience({
               messages={messages}
               pills={pills}
               activePillId={activePillId}
-              setActivePillId={setActivePillId}
-              submitPrompt={submitPrompt}
+              setActivePillId={(id) => {
+                if (creatingShareForCurrentView) return;
+                setActivePillId(id);
+              }}
+              submitPrompt={(text, opts) => {
+                if (creatingShareForCurrentView) return Promise.resolve(false);
+                return submitPrompt(text, opts);
+              }}
               resumeHeldCardSend={resumeHeldCardSend}
-              setPrompt={setPrompt}
+              setPrompt={(next) => {
+                if (creatingShareForCurrentView) return;
+                setPrompt(next);
+              }}
               isSummarizing={isSummarizing}
               summarizeStartedAt={summarizeStartedAt}
               summarizeStream={summarizeStream}
@@ -7524,10 +7580,16 @@ export function ChatExperience({
                 onStartPatrol={handleStartPatrol}
                 activePatrolCount={activePatrolCount}
                 prompt={prompt}
-                setPrompt={setPrompt}
+                setPrompt={(next) => {
+                  if (creatingShareForCurrentView) return;
+                  setPrompt(next);
+                }}
                 promptPlaceholder={promptPlaceholder}
                 promptRef={promptRef}
-                submitPrompt={submitPrompt}
+                submitPrompt={(text) => {
+                  if (creatingShareForCurrentView) return Promise.resolve(false);
+                  return submitPrompt(text);
+                }}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
                 toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}

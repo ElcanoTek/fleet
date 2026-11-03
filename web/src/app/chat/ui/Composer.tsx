@@ -393,7 +393,10 @@ export function Composer({
     Math.max(skillMatches.length - 1, 0),
   );
   const skillPopoverOpen =
-    skillMatches.length > 0 && !skillPopoverDismissed && !isStreaming;
+    skillMatches.length > 0 &&
+    !skillPopoverDismissed &&
+    !isStreaming &&
+    !shareBusy;
   const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -573,6 +576,7 @@ export function Composer({
           event.preventDefault();
           dragCounterRef.current = 0;
           setIsDraggingOver(false);
+          if (shareBusy) return;
           addAttachmentFiles(event.dataTransfer.files);
         }}
       >
@@ -780,8 +784,10 @@ export function Composer({
             </span>
             <button
               type="button"
-              className="font-medium text-[var(--color-accent)] hover:underline"
+              disabled={shareBusy}
+              className="font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
               onClick={() => {
+                if (shareBusy) return;
                 setPrompt((p) => `\`\`\`\n${p}\n\`\`\``);
                 setShowCodeNudge(false);
               }}
@@ -806,7 +812,7 @@ export function Composer({
                 key={a.clientId}
                 attachment={a}
                 onRemove={() => removePendingAttachment(a.clientId)}
-                removalDisabled={isStreaming || isUploadingAttachments}
+                removalDisabled={isStreaming || isUploadingAttachments || shareBusy}
               />
             ))}
             {attachmentError ? (
@@ -844,9 +850,10 @@ export function Composer({
             <span className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-[var(--radius-md)] border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                disabled={isStreaming}
+                className="rounded-[var(--radius-md)] border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40"
+                disabled={isStreaming || shareBusy}
                 onClick={() => {
+                  if (shareBusy) return;
                   setSelectedModel(spreadsheetNudge.recommendedModel);
                   setSpreadsheetNudgeDismissed(true);
                 }}
@@ -869,8 +876,13 @@ export function Composer({
           ref={fileInputRef}
           type="file"
           multiple
+          disabled={isStreaming || isUploadingAttachments || shareBusy}
           className="hidden"
           onChange={(event) => {
+            if (shareBusy) {
+              event.target.value = "";
+              return;
+            }
             addAttachmentFiles(event.target.files);
             // Reset so picking the same file twice in a row still fires onChange.
             event.target.value = "";
@@ -1251,7 +1263,7 @@ export function Composer({
                     }}
                   />
                 ) : null}
-                {toolsLibrary ? (
+                {toolsLibrary && !shareBusy ? (
                   <ToolsLibrary
                     servers={mcpServers}
                     categories={pickerCategories}
@@ -1275,16 +1287,20 @@ export function Composer({
             ) : null}
             {/* Keep PromptLibrary mounted at the toolbar root so its portalled
                 dialog stays open after the overflow menu closes. */}
-            <PromptLibrary
-              currentText={prompt}
-              onInsert={setPrompt}
-              compact
-              returnFocusRef={moreButtonRef}
-              renderTrigger={(openLibrary) => {
-                openPromptLibraryRef.current = openLibrary;
-                return null;
-              }}
-            />
+            {!shareBusy ? (
+              <PromptLibrary
+                currentText={prompt}
+                onInsert={(next) => {
+                  if (!shareBusy) setPrompt(next);
+                }}
+                compact
+                returnFocusRef={moreButtonRef}
+                renderTrigger={(openLibrary) => {
+                  openPromptLibraryRef.current = openLibrary;
+                  return null;
+                }}
+              />
+            ) : null}
             {(() => {
               const personaLocked =
                 isStreaming ||
@@ -1746,6 +1762,7 @@ export function Composer({
                         aria-label="Patrol & recurring schedule"
                         aria-haspopup="true"
                         aria-expanded={patrolPopoverOpen}
+                        disabled={shareBusy}
                         data-testid="chat-patrol-button"
                         data-tip-top={
                           patrolPopoverOpen
@@ -1769,7 +1786,7 @@ export function Composer({
                           </span>
                         ) : null}
                       </button>
-                      {patrolPopoverOpen ? (
+                      {patrolPopoverOpen && !shareBusy ? (
                         <PatrolPopover
                           initialPrompt={prompt}
                           onStartPatrol={async (input) => {
@@ -1883,6 +1900,7 @@ export function Composer({
                     onClick={() => {
                       setMoreMenuOpen(false);
                       setMcpPickerOpen(false);
+                      setToolsLibrary(null);
                       setPersonaPickerOpen(false);
                       setModelPickerOpen(false);
                       setPatrolPopoverOpen(false);
