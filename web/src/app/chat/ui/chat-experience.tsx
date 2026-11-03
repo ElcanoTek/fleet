@@ -716,7 +716,9 @@ export function ChatExperience({
   const [personas, setPersonas] = useState<string[]>(
     () => restoredSession?.personas ?? [],
   );
-  const [defaultPersona, setDefaultPersona] = useState<string>("");
+  const [defaultPersona, setDefaultPersona] = useState<string>(
+    () => restoredSession?.defaultPersona ?? "",
+  );
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
@@ -1276,6 +1278,7 @@ export function ChatExperience({
       archivedConversations,
       activeConversationId,
       personas,
+      defaultPersona,
       selectedPersona,
       selectedModel,
       skills,
@@ -1289,6 +1292,7 @@ export function ChatExperience({
     archivedConversations,
     activeConversationId,
     personas,
+    defaultPersona,
     selectedPersona,
     selectedModel,
     skills,

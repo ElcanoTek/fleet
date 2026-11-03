@@ -1900,8 +1900,7 @@ export function Composer({
                     />
                     {isMultiplayer ? (
                       <>
-                        <span className="hidden sm:inline">Multiplayer</span>
-                        <span className="sm:hidden">Share</span>
+                        <span>Multiplayer</span>
                         <span
                           aria-hidden="true"
                           className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"

@@ -41,6 +41,7 @@ export type ChatSessionSnapshot = {
   // Nice-to-haves that are cheap to keep so the composer/header don't flicker
   // back to defaults on return while the background revalidation is in flight.
   personas: string[];
+  defaultPersona?: string;
   selectedPersona: string;
   selectedModel: string;
   skills: SkillInfo[];
