@@ -107,6 +107,14 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 			}
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
+			if e.Type == "turn_summary" {
+				if redacted, ok := redactTurnSummaryForOtherParticipant(e.Content); ok {
+					e.Content = redacted
+					e.InjectedContext = ""
+					out = append(out, e)
+				}
+				continue
+			}
 			if isPrivateTurnTraceEntry(e) {
 				continue
 			}
@@ -121,6 +129,34 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 		out = append(out, e)
 	}
 	return out
+}
+
+func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage, bool) {
+	if len(raw) == 0 {
+		return nil, false
+	}
+	var ts agent.TurnSummaryContent
+	if err := json.Unmarshal(raw, &ts); err != nil {
+		return nil, false
+	}
+	if !ts.Cancelled && ts.Failure == nil {
+		return nil, false
+	}
+	redacted := agent.TurnSummaryContent{
+		Cancelled: ts.Cancelled,
+		Model:     ts.Model,
+	}
+	if ts.Failure != nil {
+		redacted.Failure = &agent.TurnFailure{
+			Reason:  ts.Failure.Reason,
+			Message: "Turn failed.",
+		}
+	}
+	b, err := json.Marshal(redacted)
+	if err != nil {
+		return nil, false
+	}
+	return b, true
 }
 
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
@@ -157,14 +193,23 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 				}
 			}
 			if sender != "" && !strings.EqualFold(viewerEmail, sender) {
-				if isPrivateTurnTraceEntry(e) {
+				switch {
+				case e.Type == "turn_summary":
+					redacted, ok := redactTurnSummaryForOtherParticipant(e.Content)
+					if !ok {
+						continue
+					}
+					content = redacted
+					injected = ""
+				case isPrivateTurnTraceEntry(e):
 					continue
-				}
-				injected = ""
-				if hasTC && len(tc.Images) > 0 {
-					tc.Images = nil
-					if b, err := json.Marshal(tc); err == nil {
-						content = b
+				default:
+					injected = ""
+					if hasTC && len(tc.Images) > 0 {
+						tc.Images = nil
+						if b, err := json.Marshal(tc); err == nil {
+							content = b
+						}
 					}
 				}
 			}

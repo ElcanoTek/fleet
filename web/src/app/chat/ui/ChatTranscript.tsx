@@ -1249,7 +1249,7 @@ export function ChatTranscript({
                                       kebab needs the chat found and hovered first. It saves the
                                       WHOLE chat as a workflow template, not this one exchange:
                                       the reply is where the user is standing, not the scope. */}
-                                  {!isStreaming ? (
+                                  {!isStreaming && isConversationOwner ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"

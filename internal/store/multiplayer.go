@@ -471,12 +471,13 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, q rowQueryer, c
 	if containsEmail(c.MultiplayerExcluded, callerEmail) {
 		return false
 	}
-	// Require a live, enabled user row so a deleted or disabled user cannot
-	// retain multiplayer access through a pre-revocation session cookie,
-	// explicit participant list, or teamless conversation.
+	// Require a live, enabled non-viewer user row so a deleted, disabled, or
+	// read-only viewer user cannot gain interactive multiplayer access through
+	// a pre-revocation session cookie, explicit participant list, or teamless
+	// conversation.
 	var callerTeam sql.NullString
 	if err := q.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE`, callerEmail,
+		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE AND role <> 'viewer'`, callerEmail,
 	).Scan(&callerTeam); err != nil {
 		return false
 	}
@@ -527,6 +528,7 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT email FROM users
 		WHERE enabled = TRUE
+		  AND role <> 'viewer'
 		  AND ($1 = '' OR team_id = $1)
 		ORDER BY email ASC`, team)
 	if err != nil {
@@ -547,13 +549,13 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 		if e == "" || seen[e] {
 			return
 		}
-		var isEnabled bool
-		if err := s.db.QueryRowContext(ctx, `SELECT enabled FROM users WHERE email = $1`, e).Scan(&isEnabled); err == nil && isEnabled {
+		var isEligible bool
+		if err := s.db.QueryRowContext(ctx, `SELECT (enabled = TRUE AND role <> 'viewer') FROM users WHERE email = $1`, e).Scan(&isEligible); err == nil && isEligible {
 			add(e)
 		}
 	}
 	add(conv.UserEmail)
-	add(callerEmail)
+	addIfEnabled(callerEmail)
 	for rows.Next() {
 		var e string
 		if err := rows.Scan(&e); err == nil {

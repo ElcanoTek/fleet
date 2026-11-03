@@ -454,14 +454,8 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 			s.clearParticipantWorkspaceActive(conv.ID)
 			return fmt.Errorf("stash owner %s: %w", dirName, err)
 		}
-		if _, statErr := os.Lstat(wsSub); !os.IsNotExist(statErr) { //nolint:gosec // server-derived workspace path
-			_ = rollbackOwnerStash(wsDir, stashRoot)
-			s.clearParticipantWorkspaceActive(conv.ID)
-			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
-		}
 	}
-	marker := filepath.Join(stashRoot, "active-participant")
-	if err := os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600); err != nil { //nolint:gosec // host-side control-plane marker
+	if err := writeStashMarker(stashRoot, "active-participant", strings.ToLower(strings.TrimSpace(user))); err != nil {
 		_ = rollbackOwnerStash(wsDir, stashRoot)
 		s.clearParticipantWorkspaceActive(conv.ID)
 		return err
@@ -496,6 +490,15 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 		}
 	}
 	s.clearParticipantWorkspaceActive(conv.ID)
+}
+
+func writeStashMarker(stashRoot, name, val string) error {
+	root, err := os.OpenRoot(stashRoot)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	return root.WriteFile(name, []byte(val), 0o600)
 }
 
 func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) error {

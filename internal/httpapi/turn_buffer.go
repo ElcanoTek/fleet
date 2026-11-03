@@ -571,7 +571,7 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 		return sanitizeMCPServersUpdatedEvent(data, viewerEmail, convOwnerEmail)
 	case "queue.updated":
 		return sanitizeQueueUpdatedEvent(data, viewerEmail)
-	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
+	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
 		}

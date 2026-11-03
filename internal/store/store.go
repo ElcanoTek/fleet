@@ -1028,9 +1028,14 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		return out, err
 	}
 
+	resumeUser := strings.TrimSpace(req.UserEmail)
+	if resumeUser == "" {
+		resumeUser = owner
+	}
+
 	canEnqueue := req.AllowResume
 	if canEnqueue {
-		hasOutstanding, qerr := hasOutstandingApprovalsTx(ctx, tx, req.ConversationID, req.IgnoreOutstanding)
+		hasOutstanding, qerr := hasOutstandingApprovalsTx(ctx, tx, req.ConversationID, resumeUser, req.IgnoreOutstanding)
 		if qerr != nil {
 			return out, qerr
 		}
@@ -1042,8 +1047,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if canEnqueue {
 		if err := tx.QueryRowContext(ctx,
 			`SELECT count(*) FROM chat_input_queue
-			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2`,
-			req.ConversationID, now-3600,
+			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2
+			    AND ($3 = '' OR LOWER(user_email) = LOWER($3))`,
+			req.ConversationID, now-3600, resumeUser,
 		).Scan(&out.RecentResumes); err != nil {
 			return out, err
 		}
@@ -1088,7 +1094,7 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	var priorIDs []string
 	if canEnqueue || out.ResumeSkipped != "" {
 		var cerr error
-		priorClaimed, priorIDs, cerr = claimSettledArmedApprovalsTx(ctx, tx, req.ConversationID)
+		priorClaimed, priorIDs, cerr = claimSettledArmedApprovalsTx(ctx, tx, req.ConversationID, resumeUser)
 		if cerr != nil {
 			return out, cerr
 		}
@@ -1104,10 +1110,6 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		firstID := id
 		if len(priorIDs) > 0 {
 			firstID = priorIDs[0]
-		}
-		resumeUser := strings.TrimSpace(req.UserEmail)
-		if resumeUser == "" {
-			resumeUser = owner
 		}
 		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 			ID:             uuid.NewString(),
@@ -1148,14 +1150,15 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	return out, nil
 }
 
-func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID string, ignore func(string) bool) (bool, error) {
+func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userEmail string, ignore func(string) bool) (bool, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id FROM approvals
 		  WHERE conversation_id = $1
+		    AND ($3 = '' OR LOWER(user_email) = LOWER($3))
 		    AND ((status = 'pending' AND tool_name <> 'preview_email')
 		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
 		  ORDER BY created_at, id`,
-		convID, ApprovalExecutingSentinel,
+		convID, ApprovalExecutingSentinel, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return false, err
@@ -1180,13 +1183,14 @@ func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID string, i
 	return hasOutstanding, nil
 }
 
-func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID string) ([]ApprovalResumeItem, []string, error) {
+func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userEmail string) ([]ApprovalResumeItem, []string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`UPDATE approvals SET resume_state = 'claimed'
 		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
+		    AND ($3 = '' OR LOWER(user_email) = LOWER($3))
 		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
 		  RETURNING id, tool_name, status, COALESCE(result_text, ''), is_err, COALESCE(resolved_at, 0), created_at`,
-		convID, ApprovalExecutingSentinel,
+		convID, ApprovalExecutingSentinel, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, nil, err

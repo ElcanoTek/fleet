@@ -3013,6 +3013,7 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 		if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
 			return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
 		}
+		s.materializeUserSkills(ctx, approval.UserEmail, approval.ConversationID)
 		isolatedConv = conv
 	}
 	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
