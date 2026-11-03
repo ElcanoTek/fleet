@@ -80,6 +80,15 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	out := make([]agent.HistoryEntry, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	for _, e := range entries {
+		if e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(callerEmail, convOwnerEmail) {
+			out = append(out, agent.HistoryEntry{
+				ID:      e.ID,
+				Role:    e.Role,
+				Type:    agent.EntryTypeSummaryBoundary,
+				Content: json.RawMessage(`{}`),
+			})
+			continue
+		}
 		sender := currentTurnSender
 		var (
 			tc    agent.TextContent
@@ -118,6 +127,15 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 	out := make([]historyEntryResponse, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
 	for _, e := range entries {
+		if viewerEmail != "" && e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
+			out = append(out, historyEntryResponse{
+				ID:      e.ID,
+				Role:    e.Role,
+				Type:    agent.EntryTypeSummaryBoundary,
+				Content: json.RawMessage(`{}`),
+			})
+			continue
+		}
 		injected := e.InjectedContext
 		content := e.Content
 		if viewerEmail != "" {

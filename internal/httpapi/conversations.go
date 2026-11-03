@@ -152,11 +152,13 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, "conversation_ids is mutually exclusive with all_matching", http.StatusBadRequest)
 				return
 			}
+			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllMatching(r.Context(), user, r.URL.Query().Get("label"))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
 			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		case len(req.ConversationIDs) > 0:
@@ -187,11 +189,13 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"deleted": n})
 		default:
 			// Legacy bare DELETE /conversations → DeleteAllUnpinned.
+			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllUnpinned(r.Context(), user)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
 			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		}

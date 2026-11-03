@@ -7122,6 +7122,7 @@ export function ChatExperience({
               lockdownAllowedModels={serverConfig.lockdownAllowedModels}
               lockdownOnly={serverConfig.lockdownOnly}
               selectedModel={selectedModel}
+              isConversationOwner={isActiveConversationOwner}
               patchAssistantMessage={patchAssistantMessage}
               resendUserMessage={resendUserMessage}
               retryLastUserMessage={retryLastUserMessage}

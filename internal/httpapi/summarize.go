@@ -137,6 +137,7 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	history = redactHistoryForSender(history, user, conv.UserEmail)
 	if len(history) == 0 {
 		http.Error(w, "conversation has no history to summarize", http.StatusBadRequest)
 		return
