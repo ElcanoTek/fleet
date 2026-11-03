@@ -146,6 +146,20 @@ func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 	return out
 }
 
+// queueItemsPayloadForBuffer is queueItemsPayload with each row's user_email
+// attached so sanitizeTurnEventForViewer can filter a conversation-wide
+// queue.updated snapshot (emitted after Stop scope=all) down to the viewing
+// user's own rows before stripping user_email on delivery.
+func queueItemsPayloadForBuffer(items []store.InputQueueRow) []map[string]any {
+	out := queueItemsPayload(items)
+	for i, it := range items {
+		if i < len(out) {
+			out[i]["user_email"] = it.UserEmail
+		}
+	}
+	return out
+}
+
 // emitQueueUpdate publishes the queue snapshot into the conversation's live
 // buffer, when one is running (nil-safe otherwise — the GET endpoint is the
 // authoritative snapshot for idle conversations).
@@ -158,7 +172,7 @@ func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
 	if err != nil {
 		return
 	}
-	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items), "user_email": user})
+	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayloadForBuffer(items), "user_email": user})
 }
 
 // maxPendingInputs caps how many still-queued rows one conversation may hold.

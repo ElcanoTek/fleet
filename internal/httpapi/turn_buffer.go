@@ -568,46 +568,10 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 		}
 		return data, true
 	case "mcp.servers_updated":
-		if len(data) == 0 {
-			return data, true
-		}
-		var m map[string]any
-		if err := json.Unmarshal(data, &m); err != nil {
-			return data, true
-		}
-		partRaw, hasPart := m["participant_enabled_optional"]
-		if !hasPart {
-			return data, true
-		}
-		delete(m, "participant_enabled_optional")
-		if viewerEmail != "" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
-			m["enabled_optional"] = partRaw
-			allowed := map[string]bool{}
-			if arr, ok := partRaw.([]any); ok {
-				for _, v := range arr {
-					if s, ok := v.(string); ok {
-						allowed[strings.ToLower(strings.TrimSpace(s))] = true
-					}
-				}
-			}
-			if addedArr, ok := m["added"].([]any); ok && len(addedArr) > 0 {
-				var filteredAdded []string
-				for _, v := range addedArr {
-					if s, ok := v.(string); ok && allowed[strings.ToLower(strings.TrimSpace(s))] {
-						filteredAdded = append(filteredAdded, s)
-					}
-				}
-				if len(filteredAdded) == 0 {
-					return nil, false
-				}
-				m["added"] = filteredAdded
-			}
-		}
-		if b, err := json.Marshal(m); err == nil {
-			return b, true
-		}
-		return data, true
-	case "queue.updated", "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
+		return sanitizeMCPServersUpdatedEvent(data, viewerEmail, convOwnerEmail)
+	case "queue.updated":
+		return sanitizeQueueUpdatedEvent(data, viewerEmail)
+	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
 		if len(data) == 0 {
 			return data, true
 		}
@@ -631,6 +595,86 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 	default:
 		return data, true
 	}
+}
+
+func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	partRaw, hasPart := m["participant_enabled_optional"]
+	if !hasPart {
+		return data, true
+	}
+	delete(m, "participant_enabled_optional")
+	if viewerEmail != "" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
+		m["enabled_optional"] = partRaw
+		allowed := map[string]bool{}
+		if arr, ok := partRaw.([]any); ok {
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					allowed[strings.ToLower(strings.TrimSpace(s))] = true
+				}
+			}
+		}
+		if addedArr, ok := m["added"].([]any); ok && len(addedArr) > 0 {
+			var filteredAdded []string
+			for _, v := range addedArr {
+				if s, ok := v.(string); ok && allowed[strings.ToLower(strings.TrimSpace(s))] {
+					filteredAdded = append(filteredAdded, s)
+				}
+			}
+			if len(filteredAdded) == 0 {
+				return nil, false
+			}
+			m["added"] = filteredAdded
+		}
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
+func sanitizeQueueUpdatedEvent(data []byte, viewerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	if uEmail != "" && viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+		return nil, false
+	}
+	delete(m, "user_email")
+	if rawItems, ok := m["items"].([]any); ok {
+		filtered := make([]any, 0, len(rawItems))
+		for _, rawItem := range rawItems {
+			itemMap, ok := rawItem.(map[string]any)
+			if !ok {
+				filtered = append(filtered, rawItem)
+				continue
+			}
+			itemUser, _ := itemMap["user_email"].(string)
+			itemUser = strings.TrimSpace(itemUser)
+			delete(itemMap, "user_email")
+			if uEmail == "" && viewerEmail != "" && itemUser != "" && !strings.EqualFold(viewerEmail, itemUser) {
+				continue
+			}
+			filtered = append(filtered, itemMap)
+		}
+		m["items"] = filtered
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
 }
 
 // Attach writes every event with ID > lastEventID to w in SSE framing,

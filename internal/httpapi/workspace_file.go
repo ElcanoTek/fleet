@@ -67,6 +67,15 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	// malicious upload) would let any user with the conversation read host
 	// secrets via this endpoint.
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	swapUnlock := s.workspaceSwapLocks.lock(convID)
+	swapUnlocked := false
+	releaseSwap := func() {
+		if !swapUnlocked {
+			swapUnlocked = true
+			swapUnlock()
+		}
+	}
+	defer releaseSwap()
 	if isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath))) {
 		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
 			http.Error(w, "file not found", http.StatusNotFound)
@@ -116,6 +125,7 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		}
 	}
 	f, err := root.Open(rel)
+	releaseSwap()
 	if err != nil {
 		http.Error(w, "file unavailable", http.StatusNotFound)
 		return
@@ -298,6 +308,8 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		return errors.New("invalid conversation id")
 	}
 	unlock := s.workspaceLocks.lock(conv.ID)
+	swapUnlock := s.workspaceSwapLocks.lock(conv.ID)
+	defer swapUnlock()
 	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
 	if err != nil {
 		unlock()
@@ -326,26 +338,26 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		unlock()
 		return err
 	}
+	s.setParticipantWorkspaceActive(conv.ID, user, unlock)
 	for _, dirName := range privateWorkspaceDirs {
 		wsSub := filepath.Join(wsDir, dirName)
 		if err := movePrivateDirIfPresent(wsSub, filepath.Join(ownerStash, dirName)); err != nil {
 			_ = rollbackOwnerStash(wsDir, stashRoot)
-			unlock()
+			s.clearParticipantWorkspaceActive(conv.ID)
 			return fmt.Errorf("stash owner %s: %w", dirName, err)
 		}
 		if _, statErr := os.Lstat(wsSub); !os.IsNotExist(statErr) { //nolint:gosec // server-derived workspace path
 			_ = rollbackOwnerStash(wsDir, stashRoot)
-			unlock()
+			s.clearParticipantWorkspaceActive(conv.ID)
 			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
 		}
 	}
 	partAtt := filepath.Join(stashRoot, "participants", participantDigest(user), uploadsDir)
 	if err := movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir)); err != nil {
 		_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
-		unlock()
+		s.clearParticipantWorkspaceActive(conv.ID)
 		return fmt.Errorf("restore participant attachments: %w", err)
 	}
-	s.setParticipantWorkspaceActive(conv.ID, user, unlock)
 	return nil
 }
 
@@ -357,6 +369,8 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
 		return
 	}
+	swapUnlock := s.workspaceSwapLocks.lock(conv.ID)
+	defer swapUnlock()
 	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
 		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
 			wsDir := tools.WorkspaceDirForConversation(conv.ID)

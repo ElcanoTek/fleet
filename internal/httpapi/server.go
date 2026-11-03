@@ -121,6 +121,7 @@ type Server struct {
 	activeWorkspaceUnlocks      map[string]func()
 	multiplayerEpochs           map[string]uint64
 	workspaceLocks              keyedLocks
+	workspaceSwapLocks          keyedLocks
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
 	// delete handlers) against the maintenance reconciler, so a Sync pass can
 	// never observe — and "repair" — a mutation's intermediate on-disk state.

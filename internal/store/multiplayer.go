@@ -471,14 +471,19 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, q rowQueryer, c
 	if containsEmail(c.MultiplayerExcluded, callerEmail) {
 		return false
 	}
+	// Require a live user row so a deleted user cannot retain multiplayer
+	// access through a pre-deletion session cookie, explicit participant list,
+	// or teamless conversation.
+	var callerTeam sql.NullString
+	if err := q.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
+	).Scan(&callerTeam); err != nil {
+		return false
+	}
 	// Explicitly added by the owner.
 	if containsEmail(c.MultiplayerParticipants, callerEmail) {
 		return true
 	}
-	var callerTeam sql.NullString
-	_ = q.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
-	).Scan(&callerTeam)
 	cTeam := strings.TrimSpace(callerTeam.String)
 	// Default whole-team / whole-fleet inclusion:
 	// - When the conversation is stamped to a specific team (sharedTeam != ""),
@@ -564,10 +569,14 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 	if callerEmail == "" {
 		return []Conversation{}, nil
 	}
-	var callerTeam string
-	if u, err := s.GetUser(ctx, callerEmail); err == nil && u != nil {
-		callerTeam = strings.TrimSpace(u.TeamID)
+	u, err := s.GetUser(ctx, callerEmail)
+	if err != nil {
+		return nil, err
 	}
+	if u == nil {
+		return []Conversation{}, nil
+	}
+	callerTeam := strings.TrimSpace(u.TeamID)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT `+conversationColumns+`, COALESCE(c.team_shared_with, ''), c.team_shared_with_id
 		FROM conversations c
@@ -632,6 +641,8 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		c.ParentConversationID = ""
 		c.MCPAccounts = nil
 		c.AutoApprove = false
+		c.MultiplayerParticipants = nil
+		c.MultiplayerExcluded = nil
 		out = append(out, c)
 	}
 	return out, rows.Err()

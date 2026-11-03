@@ -964,9 +964,10 @@ export function ChatExperience({
     isPendingKey(activeConversationId) ||
     conversations.some((c) => c.id === activeConversationId) ||
     archivedConversations.some((c) => c.id === activeConversationId) ||
-    (Boolean(activeConversation?.user_email) &&
-      activeConversation?.user_email?.toLowerCase() ===
-        userEmail.trim().toLowerCase());
+    !activeConversation?.user_email ||
+    !userEmail.trim() ||
+    activeConversation.user_email.toLowerCase() ===
+      userEmail.trim().toLowerCase();
   // Lockdown state for the current view:
   //   - Active conversation flagged lockdown → use that
   //   - Pending new chat that the user clicked "+ Lockdown" for → true
@@ -2703,6 +2704,22 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
+      if (
+        data.conversation.user_email &&
+        userEmail.trim() &&
+        data.conversation.user_email.toLowerCase() !==
+          userEmail.trim().toLowerCase()
+      ) {
+        setTeamSharedConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          return [data.conversation, ...prev];
+        });
+      }
       if (movesTheUser) {
         setActiveConversationId(data.conversation.id);
         // Opening a conversation clears the keyboard focus cursor (#306): the

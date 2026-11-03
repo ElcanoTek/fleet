@@ -3025,10 +3025,13 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 	if isolatedConv != nil {
 		origCleanup := cleanup
 		cleanup = func() {
-			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
+			if sb != nil {
+				sb.Close()
+			}
 			if origCleanup != nil {
 				origCleanup()
 			}
+			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
 		}
 	}
 	return sb, cleanup, nil
