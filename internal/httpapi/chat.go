@@ -524,17 +524,6 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
 		return nil, unlockFirst, false
 	}
-	// If this conversation was materialized before its first message (for
-	// example via Share in the composer on an empty draft) and still carries the
-	// placeholder "New conversation" title without a manual rename, give it a
-	// heuristic title from the opening message so the sidebar updates on turn 1.
-	if conv.Title == "New conversation" && !conv.TitleLocked {
-		if nextTitle := agent.HeuristicTitle(req.Message); nextTitle != "" && nextTitle != conv.Title {
-			if err := s.store.UpdateTitle(r.Context(), convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
-				conv.Title = nextTitle
-			}
-		}
-	}
 	return conv, unlockFirst, true
 }
 
@@ -1216,6 +1205,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// with the stored model; the manager's own guard then decides.
 	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
 		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+	}
+
+	// If this conversation was materialized before its first message (for
+	// example via Share in the composer on an empty draft) and still carries the
+	// placeholder "New conversation" title without a manual rename, give it a
+	// heuristic title from the admitted opening message right before emitting
+	// the `conversation` event so a rejected turn never mutates the title.
+	if len(history) == 0 && conv.Title == "New conversation" && !conv.TitleLocked && userWords {
+		if nextTitle := agent.HeuristicTitle(req.Message); nextTitle != "" && nextTitle != conv.Title {
+			if err := s.store.UpdateTitle(turnCtx, convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
+				conv.Title = nextTitle
+			}
+		}
 	}
 
 	// Prime the buffer with the metadata events so a late reattach

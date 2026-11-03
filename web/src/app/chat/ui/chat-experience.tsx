@@ -2716,7 +2716,7 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
-      const canInsertMissingRow = !options.background && !options.restore;
+      const canInsertMissingRow = !options.background;
       if (
         data.conversation.user_email &&
         userEmail.trim() &&
@@ -4219,7 +4219,14 @@ export function ChatExperience({
   // first message is sent. When no conversation row exists yet, it materializes
   // a draft conversation on the spot, promotes the composer draft onto it, and
   // opens the Share dialog immediately.
-  const [creatingShareChat, setCreatingShareChat] = useState(false);
+  const [creatingShareOrigin, setCreatingShareOrigin] = useState<{
+    activeId: string | null;
+    draftKey: string;
+  } | null>(null);
+  const creatingShareForCurrentView =
+    creatingShareOrigin !== null &&
+    activeConversationId === creatingShareOrigin.activeId &&
+    draftKey === creatingShareOrigin.draftKey;
   const openShareFromComposer = async () => {
     if (activeConversation) {
       openShareDialog(activeConversation);
@@ -4236,7 +4243,8 @@ export function ChatExperience({
       });
       return;
     }
-    if (creatingShareChat || isStreaming || isUploadingAttachments) return;
+    if (creatingShareForCurrentView || isStreaming || isUploadingAttachments)
+      return;
     if (
       (activeConversationId === null || isPendingKey(activeConversationId)) &&
       getConvMessages(currentConvKey).length > 0
@@ -4264,7 +4272,10 @@ export function ChatExperience({
         ? enabledOptionalMcpServerNames(mcpServers)
         : undefined;
     const mcpAccounts = mcpAccountOverrides(mcpServers);
-    setCreatingShareChat(true);
+    setCreatingShareOrigin({
+      activeId: originActiveId,
+      draftKey: originDraftKey,
+    });
     try {
       const response = await fetch("/api/conversations", {
         method: "POST",
@@ -4359,7 +4370,13 @@ export function ChatExperience({
     } catch {
       showRailError("Couldn't reach the server to open sharing for this chat.");
     } finally {
-      setCreatingShareChat(false);
+      setCreatingShareOrigin((curr) =>
+        curr &&
+        curr.activeId === originActiveId &&
+        curr.draftKey === originDraftKey
+          ? null
+          : curr,
+      );
     }
   };
 
@@ -7545,7 +7562,7 @@ export function ChatExperience({
                     : null)
                 }
                 shareTeam={activeChatTeamAudience}
-                shareBusy={creatingShareChat || isUploadingAttachments}
+                shareBusy={creatingShareForCurrentView}
               />
             </section>
           </div>
