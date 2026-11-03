@@ -214,6 +214,10 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.ParentConversationID = ""
 		sanitized.AutoApprove = false
 		conv = &sanitized
+	} else if len(conv.OptionalMCPServersEnabled) > 0 {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
+		conv = &sanitized
 	}
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
@@ -621,6 +625,10 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		sanitized.ParentConversationID = ""
 		sanitized.MCPAccounts = nil
 		sanitized.AutoApprove = false
+		exportConv = &sanitized
+	} else if len(conv.OptionalMCPServersEnabled) > 0 {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
 		exportConv = &sanitized
 	}
 	exportedAt := time.Now().UTC()

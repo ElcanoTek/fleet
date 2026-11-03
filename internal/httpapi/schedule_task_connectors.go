@@ -83,7 +83,7 @@ func (s *Server) chatTaskConnectorsFor(user, convID string) func(context.Context
 		if conv == nil {
 			return out, nil
 		}
-		enabled, accounts := s.applyConnectorPrefs(ctx, user, conv.OptionalMCPServersEnabled, conv.MCPAccounts)
+		enabled, accounts := s.applyConnectorPrefs(ctx, user, s.effectiveOptionalMCPServersForCaller(ctx, user, conv), conv.MCPAccounts)
 		for _, name := range enabled {
 			name = strings.TrimSpace(name)
 			if name == "" {

@@ -486,8 +486,12 @@ func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user 
 	if len(raw) == 0 {
 		return nil
 	}
-	if (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
-		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user)) {
+	isOwner := (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
+		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user))
+	if isOwner && !conv.Multiplayer && (s.remoteMCP == nil || !s.remoteMCP.Enabled()) {
+		return raw
+	}
+	if s.agent == nil {
 		return raw
 	}
 	valid := s.optionalServerWhitelist(ctx, user)
@@ -625,9 +629,9 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	ownerEmail := convOwnerEmail(conv, user)
 	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
 	persisted := clean
-	if !isOwner {
-		// Preserve owner-only remote connectors that were hidden from this
-		// participant's picker so toggling a shared connector never wipes
+	if !isOwner || (conv != nil && conv.Multiplayer) {
+		// Preserve another user's private remote connectors that were hidden
+		// from this caller's picker so toggling a shared connector never wipes
 		// another user's private remote server opt-ins.
 		merged := append([]string(nil), clean...)
 		mergedSeen := make(map[string]bool, len(merged))

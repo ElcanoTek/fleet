@@ -79,6 +79,7 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 	}
 	out := make([]agent.HistoryEntry, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
+	toolCallSenders := make(map[string]string)
 	for _, e := range entries {
 		if e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(callerEmail, convOwnerEmail) {
 			out = append(out, agent.HistoryEntry{
@@ -94,7 +95,8 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 			tc    agent.TextContent
 			hasTC bool
 		)
-		if e.Role == "user" && e.Type == "text" {
+		switch {
+		case e.Role == "user" && e.Type == "text":
 			sender = strings.TrimSpace(convOwnerEmail)
 			if json.Unmarshal(e.Content, &tc) == nil {
 				hasTC = true
@@ -104,6 +106,26 @@ func redactHistoryForSender(entries []agent.HistoryEntry, callerEmail, convOwner
 			}
 			if !tc.Steered {
 				currentTurnSender = sender
+			}
+		case e.Type == "tool_call":
+			var tcc agent.ToolCallContent
+			if json.Unmarshal(e.Content, &tcc) == nil && strings.TrimSpace(tcc.ID) != "" {
+				toolCallSenders[strings.TrimSpace(tcc.ID)] = currentTurnSender
+			}
+		case e.Type == "tool_result":
+			var trc agent.ToolResultContent
+			if json.Unmarshal(e.Content, &trc) == nil {
+				if strings.TrimSpace(trc.SenderEmail) != "" {
+					sender = strings.TrimSpace(trc.SenderEmail)
+				} else if tcSender := toolCallSenders[strings.TrimSpace(trc.ID)]; tcSender != "" {
+					sender = tcSender
+				}
+				if trc.SenderEmail != "" {
+					trc.SenderEmail = ""
+					if b, err := json.Marshal(trc); err == nil {
+						e.Content = b
+					}
+				}
 			}
 		}
 		if sender != "" && !strings.EqualFold(callerEmail, sender) {
@@ -162,6 +184,7 @@ func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage,
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)
+	toolCallSenders := make(map[string]string)
 	for _, e := range entries {
 		if viewerEmail != "" && e.Type == "summary" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
 			out = append(out, historyEntryResponse{
@@ -180,7 +203,8 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 				tc    agent.TextContent
 				hasTC bool
 			)
-			if e.Role == "user" && e.Type == "text" {
+			switch {
+			case e.Role == "user" && e.Type == "text":
 				sender = strings.TrimSpace(convOwnerEmail)
 				if json.Unmarshal(e.Content, &tc) == nil {
 					hasTC = true
@@ -190,6 +214,26 @@ func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerE
 				}
 				if !tc.Steered {
 					currentTurnSender = sender
+				}
+			case e.Type == "tool_call":
+				var tcc agent.ToolCallContent
+				if json.Unmarshal(e.Content, &tcc) == nil && strings.TrimSpace(tcc.ID) != "" {
+					toolCallSenders[strings.TrimSpace(tcc.ID)] = currentTurnSender
+				}
+			case e.Type == "tool_result":
+				var trc agent.ToolResultContent
+				if json.Unmarshal(e.Content, &trc) == nil {
+					if strings.TrimSpace(trc.SenderEmail) != "" {
+						sender = strings.TrimSpace(trc.SenderEmail)
+					} else if tcSender := toolCallSenders[strings.TrimSpace(trc.ID)]; tcSender != "" {
+						sender = tcSender
+					}
+					if trc.SenderEmail != "" {
+						trc.SenderEmail = ""
+						if b, err := json.Marshal(trc); err == nil {
+							content = b
+						}
+					}
 				}
 			}
 			if sender != "" && !strings.EqualFold(viewerEmail, sender) {

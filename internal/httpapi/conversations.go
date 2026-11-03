@@ -100,6 +100,11 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request,
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	for i := range list {
+		if len(list[i].OptionalMCPServersEnabled) > 0 {
+			list[i].OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, &list[i])
+		}
+	}
 	writeJSON(w, map[string]any{"conversations": list})
 }
 

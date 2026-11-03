@@ -3262,7 +3262,11 @@ func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, re
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr})
+	payloadMap := map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr}
+	if sender := strings.TrimSpace(userEmail); sender != "" {
+		payloadMap["sender_email"] = sender
+	}
+	payload, err := json.Marshal(payloadMap)
 	if err != nil {
 		return err
 	}

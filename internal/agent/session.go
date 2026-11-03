@@ -175,7 +175,8 @@ type ToolResultContent struct {
 	// web draws the card from it on reload. Display data only — replay never
 	// sends it to the model. Omitted for every other result, so their rows
 	// are unchanged.
-	Card string `json:"card,omitempty"`
+	Card        string `json:"card,omitempty"`
+	SenderEmail string `json:"sender_email,omitempty"`
 }
 
 // SummaryContent for Type=summary. Inserted by the user-initiated

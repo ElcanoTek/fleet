@@ -1904,7 +1904,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-				resolutionCallID(approval), resultText)
+				resolutionCallID(approval), resultText, approval.UserEmail)
 			s.noteApprovalSettled(convID, approval)
 			return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
 		}
@@ -1931,7 +1931,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-			resolutionCallID(approval), historyMsg)
+			resolutionCallID(approval), historyMsg, approval.UserEmail)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		s.noteApprovalSettled(convID, approval)
 		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
@@ -2142,8 +2142,8 @@ func (s *Server) attachApprovedOptionalMCPServers(execCtx context.Context, reply
 	if approval.ToolName != tools.EnableMCPConnectorsToolName || toolErr != nil || isErr {
 		return
 	}
-	if conv, gerr := s.store.Get(execCtx, user, convID); gerr == nil && conv != nil {
-		reply["enabled_optional"] = conv.OptionalMCPServersEnabled
+	if conv, gerr := s.getOwnedOrMultiplayerConversation(execCtx, user, convID); gerr == nil && conv != nil {
+		reply["enabled_optional"] = s.effectiveOptionalMCPServersForCaller(execCtx, user, conv)
 	}
 }
 
@@ -2519,8 +2519,8 @@ func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID 
 		state["model"] = conv.Model
 	}
 	if latest.ToolName == tools.EnableMCPConnectorsToolName && latest.Status == "approved" {
-		if conv, err := s.store.Get(ctx, user, latest.ConversationID); err == nil && conv != nil {
-			state["enabled_optional"] = conv.OptionalMCPServersEnabled
+		if conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, latest.ConversationID); err == nil && conv != nil {
+			state["enabled_optional"] = s.effectiveOptionalMCPServersForCaller(ctx, user, conv)
 		}
 	}
 	return approvalBody(state)
@@ -2563,7 +2563,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		}
 		metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "dismissed")
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-			"User dismissed the model-switch suggestion. Continue working with the current model.")
+			"User dismissed the model-switch suggestion. Continue working with the current model.", approval.UserEmail)
 		// Not a resume tool, but a deferred resume may be waiting on it.
 		s.noteApprovalSettled(approval.ConversationID, approval)
 		writeJSON(w, map[string]any{
@@ -2604,7 +2604,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	}
 	metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "accepted_"+action)
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-		resultText)
+		resultText, approval.UserEmail)
 	s.noteApprovalSettled(approval.ConversationID, approval)
 
 	writeJSON(w, map[string]any{
@@ -2704,7 +2704,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			continue
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
-			resolutionCallID(&a), resultText)
+			resolutionCallID(&a), resultText, a.UserEmail)
 		// A timed-out card is settled too: an opted-in one resumes (the model
 		// learns the action was not taken), and any other may release a
 		// resume that was waiting on it.
@@ -3403,17 +3403,21 @@ func (s *Server) orchestratorTaskLink() string {
 
 // appendToolResultToHistory writes a synthetic tool_result row so the
 // conversation transcript reflects the outcome of the (async) approval.
-func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string) {
+func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string, senderEmail ...string) {
 	entry := agent.HistoryEntry{
 		Role: "tool",
 		Type: "tool_result",
 	}
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"id":     callID,
 		"name":   toolName,
 		"text":   text,
 		"is_err": false,
-	})
+	}
+	if len(senderEmail) > 0 && strings.TrimSpace(senderEmail[0]) != "" {
+		payloadMap["sender_email"] = strings.TrimSpace(senderEmail[0])
+	}
+	payload, _ := json.Marshal(payloadMap)
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)
