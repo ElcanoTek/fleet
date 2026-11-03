@@ -3583,6 +3583,17 @@ export function ChatExperience({
   const [teamSharedChatCounts, setTeamSharedChatCounts] = useState<
     Record<string, number> | undefined
   >(undefined);
+  // The rail's "Team chats" never lists the user's own chats. The fetch
+  // below filters them, but it can resolve before the session email has (a
+  // reload), when it cannot tell whose a chat is: so the rail filters again
+  // at render against the email as it is now, and shows none until known.
+  const railTeamSharedConversations = useMemo(() => {
+    const mine = userEmail.trim().toLowerCase();
+    if (!mine) return [];
+    return teamSharedConversations.filter(
+      (c) => (c.user_email ?? "").trim().toLowerCase() !== mine,
+    );
+  }, [teamSharedConversations, userEmail]);
   const loadTeamSharedChatCounts = useCallback(async () => {
     try {
       const [teamRes, sharedRes] = await Promise.all([
@@ -6590,7 +6601,7 @@ export function ChatExperience({
           onDeleteProject={(projectID) => setPendingProjectDelete(projectID)}
           projects={projects}
           teamSharedChatCounts={teamSharedChatCounts}
-          teamSharedConversations={teamSharedConversations}
+          teamSharedConversations={railTeamSharedConversations}
           onSelectTeamSharedConversation={(c) => {
             setProjectHome(null);
             if (c.multiplayer) {
