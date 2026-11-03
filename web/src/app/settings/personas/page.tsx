@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { navigate } from "@/app/lib/navigation";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
+import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
 import { btnClass, ConnBadge, InlineConfirmButton, RevealButton, SETTINGS_INPUT } from "../ui/atoms";
 import {
   ConnEmpty,
@@ -493,55 +494,52 @@ export default function PersonasPage() {
                 the persona&apos;s card.
               </p>
               {draft.patrols.map((pt, i) => {
-                const preset = CADENCE_PRESETS.some((c) => c.cron === pt.cron) ? pt.cron : "custom";
                 return (
                   <div
                     key={i}
                     data-testid={`patrol-row-${i}`}
-                    className="grid gap-[0.5rem] border-t border-[var(--color-border-subtle)] pt-[0.6rem] first-of-type:border-t-0"
+                    className="grid gap-[0.55rem] border-t border-[var(--color-border-subtle)] pt-[0.65rem] first-of-type:border-t-0"
                   >
-                    <div className="flex flex-wrap gap-[0.6rem]">
-                      <ConnField label="Title" grow>
-                        <input
-                          className={SETTINGS_INPUT}
-                          value={pt.title}
-                          placeholder="Morning pacing sweep"
-                          onChange={(e) => setPatrol(i, { title: e.target.value })}
-                        />
-                      </ConnField>
-                      <ConnField label="How often">
-                        <select
-                          className={SETTINGS_INPUT}
-                          value={preset}
-                          onChange={(e) => setPatrol(i, { cron: e.target.value === "custom" ? "" : e.target.value })}
-                        >
-                          {CADENCE_PRESETS.map((c) => (
-                            <option key={c.cron} value={c.cron}>
+                    <ConnField label="Title" grow>
+                      <input
+                        className={SETTINGS_INPUT}
+                        value={pt.title}
+                        placeholder="Morning pacing sweep"
+                        onChange={(e) => setPatrol(i, { title: e.target.value })}
+                      />
+                    </ConnField>
+                    <div className="grid gap-1.5">
+                      <span className="text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
+                        Quick presets
+                      </span>
+                      <div className="flex flex-wrap gap-1">
+                        {CADENCE_PRESETS.map((c) => {
+                          const active = pt.cron.trim() === c.cron;
+                          return (
+                            <button
+                              key={c.cron}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() => setPatrol(i, { cron: c.cron })}
+                              className={`rounded-full border px-2.5 py-0.5 text-[0.72rem] font-medium transition ${
+                                active
+                                  ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-text-primary)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]"
+                              }`}
+                            >
                               {c.label}
-                            </option>
-                          ))}
-                          <option value="custom">Custom (cron)</option>
-                        </select>
-                      </ConnField>
-                      {preset === "custom" ? (
-                        <ConnField label="Cron (5 fields)">
-                          <input
-                            className={SETTINGS_INPUT}
-                            value={pt.cron}
-                            placeholder="30 7 * * 1-5"
-                            onChange={(e) => setPatrol(i, { cron: e.target.value })}
-                          />
-                        </ConnField>
-                      ) : null}
-                      <ConnField label="Time zone">
-                        <input
-                          className={SETTINGS_INPUT}
-                          value={pt.timezone ?? ""}
-                          placeholder="UTC"
-                          onChange={(e) => setPatrol(i, { timezone: e.target.value })}
-                        />
-                      </ConnField>
+                            </button>
+                          );
+                        })}
+                      </div>
                     </div>
+                    <PatrolSchedulePicker
+                      cron={pt.cron}
+                      timezone={pt.timezone ?? browserTimeZone()}
+                      onChangeCron={(nextCron) => setPatrol(i, { cron: nextCron })}
+                      onChangeTimezone={(nextTz) => setPatrol(i, { timezone: nextTz })}
+                      testIdPrefix={`persona-patrol-schedule-${i}`}
+                    />
                     <ConnField label="What to do each time">
                       <textarea
                         className={`${SETTINGS_INPUT} min-h-[4rem]! resize-y pt-[0.55rem]! text-[0.82rem]!`}

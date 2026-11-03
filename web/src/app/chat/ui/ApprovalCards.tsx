@@ -2276,6 +2276,8 @@ function EmailPreview({
   const [windowWidth, setWindowWidth] = useState(
     typeof window === "undefined" ? 1024 : window.innerWidth,
   );
+  const [expanded, setExpanded] = useState(false);
+  const [contentHeight, setContentHeight] = useState<number | null>(null);
   useEffect(() => {
     const handler = () => setWindowWidth(window.innerWidth);
     window.addEventListener("resize", handler);
@@ -2315,6 +2317,13 @@ function EmailPreview({
     try {
       const doc = frame.contentDocument;
       if (!doc) return;
+      const measured = Math.max(
+        doc.documentElement?.scrollHeight ?? 0,
+        doc.body?.scrollHeight ?? 0,
+      );
+      if (measured > 0) {
+        setContentHeight(measured + 16);
+      }
       // Always start from original before applying a swap so
       // toggling back and forth is clean.
       const els = doc.querySelectorAll<HTMLElement>("[data-ep-orig]");
@@ -2408,7 +2417,7 @@ function EmailPreview({
       ) : null}
 
       <div
-        className="flex justify-center px-2 py-3 transition-colors"
+        className="flex justify-center px-1.5 py-2 transition-colors sm:px-2 sm:py-3"
         style={{ background: stageBg }}
       >
         <iframe
@@ -2418,13 +2427,40 @@ function EmailPreview({
           title="Email preview"
           /* allow-same-origin lets the parent touch the iframe DOM to
              apply dark-mode color swaps. No allow-scripts → arbitrary
-             LLM HTML still can't execute JS. */
+             LLM HTML still can't execute JS.
+             On phones (<640px), pointer-events-none while collapsed prevents
+             the iframe from trapping vertical thumb scrolling in long email
+             chats; expanding renders the full height inline. */
           sandbox="allow-same-origin"
           srcDoc={html}
-          className="rounded-[0.4rem] border border-black/10 bg-white transition-[width] duration-base"
-          style={{ width: `${viewportPx}px`, maxWidth: "100%", height: "28rem" }}
+          className={`rounded-[0.4rem] border border-black/10 bg-white transition-[width,height] duration-base ${
+            expanded ? "pointer-events-auto" : "pointer-events-none sm:pointer-events-auto"
+          }`}
+          style={{
+            width: `${viewportPx}px`,
+            maxWidth: "100%",
+            height: expanded
+              ? `${Math.min(Math.max(contentHeight ?? 680, 448), 2400)}px`
+              : contentHeight
+                ? `${Math.min(Math.max(contentHeight, 160), windowWidth < 640 ? 320 : 448)}px`
+                : windowWidth < 640
+                  ? "20rem"
+                  : "28rem",
+          }}
         />
       </div>
+
+      {windowWidth < 640 || (contentHeight ?? 0) > 448 ? (
+        <div className="flex items-center justify-center border-t border-[var(--color-border)] bg-[var(--color-surface-inset)] px-2 py-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="text-[0.72rem] font-medium text-[var(--color-accent)] hover:underline"
+          >
+            {expanded ? "Collapse email preview" : "Expand full email"}
+          </button>
+        </div>
+      ) : null}
 
       {showRaw ? (
         <pre

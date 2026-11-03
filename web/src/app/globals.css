@@ -1399,6 +1399,7 @@ button {
 .assistant-markdown-p {
   margin: 0.22rem 0;
   white-space: pre-wrap;
+  overflow-wrap: break-word;
   line-height: 1.55;
   color: var(--color-text-secondary);
 }
@@ -1409,7 +1410,13 @@ button {
   gap: 0.16rem;
   margin: 0.2rem 0 0.3rem;
   padding-left: 1.15rem;
+  min-width: 0;
   color: var(--color-text-secondary);
+}
+
+.assistant-markdown-li {
+  min-width: 0;
+  overflow-wrap: break-word;
 }
 
 .assistant-markdown-li::marker {
@@ -1429,12 +1436,15 @@ button {
 
 .assistant-markdown-table-shell {
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  max-width: 100%;
   margin: 0.55rem 0;
 }
 
 .assistant-markdown-table {
   width: 100%;
-  min-width: 34rem;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: 0.8rem;
   line-height: 1.45;
@@ -1446,11 +1456,17 @@ button {
 
 .assistant-markdown-th,
 .assistant-markdown-td {
-  padding: 0.5rem 0.2rem 0.5rem 0;
+  padding: 0.5rem 0.75rem 0.5rem 0;
   text-align: left;
   vertical-align: top;
+  overflow-wrap: break-word;
   border-bottom: 1px solid
     color-mix(in srgb, var(--color-text-muted) 14%, transparent);
+}
+
+.assistant-markdown-th:last-child,
+.assistant-markdown-td:last-child {
+  padding-right: 0;
 }
 
 .assistant-markdown-th {
@@ -1722,7 +1738,14 @@ button {
 
 @media (max-width: 640px) {
   .assistant-markdown-table {
-    min-width: 28rem;
+    min-width: 100%;
+    font-size: 0.75rem;
+    line-height: 1.4;
+  }
+
+  .assistant-markdown-th,
+  .assistant-markdown-td {
+    padding: 0.42rem 0.55rem 0.42rem 0;
   }
 }
 

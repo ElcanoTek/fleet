@@ -404,8 +404,23 @@ export function ChatTranscript({
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
     count: rows.length,
     getScrollElement: () => conversationRef.current,
-    estimateSize: () => 180,
-    overscan: 6,
+    estimateSize: (index) => {
+      const row = rows[index];
+      if (!row || row.kind !== "message") return 110;
+      const text = row.message.content ?? "";
+      if (row.message.role === "user") {
+        return Math.min(540, 72 + Math.ceil(text.length / 70) * 22);
+      }
+      const newlines = (text.match(/\n/g) || []).length;
+      const wrappedLines = Math.ceil(text.length / 65);
+      const lineCount = Math.max(newlines, wrappedLines);
+      const approvalEstimate = (row.message.approvals?.length ?? 0) * 240;
+      return Math.min(
+        2600,
+        Math.max(140, 96 + lineCount * 22 + approvalEstimate),
+      );
+    },
+    overscan: 10,
     gap: rowGap,
     getItemKey: (index) => {
       const row = rows[index];
@@ -466,6 +481,7 @@ export function ChatTranscript({
     let raf = 0;
     const update = () => {
       raf = 0;
+      if (typeof window !== "undefined" && window.innerWidth < 640) return;
       const probe = el.scrollTop + el.clientHeight * 0.33;
       let current: number | null = minimapEntries[0]?.id ?? null;
       for (const entry of minimapEntries) {
@@ -542,7 +558,11 @@ export function ChatTranscript({
             // creating a horizontal scroll inside the chat column on mobile.
             // The min-w-0 chain below should already prevent it, but if a
             // future renderer regresses, this caps the visible bleed.
-            className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto pr-0 sm:pr-1"
+            // [overflow-anchor:none] prevents native browser CSS scroll anchoring
+            // from fighting TanStack Virtual's scrollTop compensation when
+            // VirtualTranscriptRow translateY offsets update as tall turns
+            // (such as email patrol digests) are measured above the fold.
+            className="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto pr-0 sm:pr-1 [overflow-anchor:none]"
           >
             {/* Jump rail: sticky (height 0, so the column below is unshifted)
                 pinned to the scroller's visible top; the rail hangs in the

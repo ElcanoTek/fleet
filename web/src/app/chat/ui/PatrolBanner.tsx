@@ -4,6 +4,12 @@ import { useEffect, useState } from "react";
 import { Icon } from "./Icon";
 import type { ChatSchedule } from "./history";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import {
+  describeCronExpression,
+  describeCronExpressionShort,
+} from "@/app/shared/lib/cron";
+import { browserTimeZone } from "@/app/shared/lib/timezones";
+import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
 
 export function formatScheduleCadence(sc: ChatSchedule): string {
   if (sc.kind === "timer") {
@@ -14,7 +20,8 @@ export function formatScheduleCadence(sc: ChatSchedule): string {
     return "One-shot timer";
   }
   const cron = (sc.cron ?? sc.cron_expr ?? "").trim();
-  if (cron === "0 * * * *") return "Every hour";
+  if (!cron) return "Recurring patrol";
+  if (cron === "0 * * * *" || cron === "0 */1 * * *") return "Every hour";
   const stepHours = cron.match(/^0 \*\/(\d+) \* \* \*$/);
   if (stepHours) return `Every ${stepHours[1]}h`;
   const stepMins = cron.match(/^\*\/(\d+) \* \* \* \*$/);
@@ -25,7 +32,17 @@ export function formatScheduleCadence(sc: ChatSchedule): string {
     const mm = daily[1].padStart(2, "0");
     return `Daily at ${hh}:${mm}`;
   }
-  return cron || "Recurring patrol";
+  const weekdays = cron.match(/^(\d+) (\d+) \* \* (?:1-5|MON-FRI)$/i);
+  if (weekdays) {
+    const hh = weekdays[2].padStart(2, "0");
+    const mm = weekdays[1].padStart(2, "0");
+    return `Weekdays at ${hh}:${mm}`;
+  }
+  return (
+    describeCronExpressionShort(cron) ||
+    describeCronExpression(cron) ||
+    cron
+  );
 }
 
 export function formatCountdown(nextRunAt: number, nowSec: number): string {
@@ -92,32 +109,34 @@ export function PatrolBanner({
         return (
           <div
             key={sc.id}
-            className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-lg)] border border-[color-mix(in_srgb,var(--color-accent)_34%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-accent)_6%,var(--color-surface-2))] px-3 py-1.5 text-xs text-[var(--color-text-secondary)] shadow-xs"
+            className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 rounded-[var(--radius-lg)] border border-[color-mix(in_srgb,var(--color-accent)_34%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-accent)_6%,var(--color-surface-2))] px-2.5 py-1.5 text-xs text-[var(--color-text-secondary)] shadow-xs sm:px-3"
           >
-            <div className="flex min-w-0 flex-1 items-center gap-2">
-              <span
-                className={`inline-block size-2 shrink-0 rounded-full ${
-                  isPaused
-                    ? "bg-[var(--color-warning,#f59e0b)]"
-                    : "animate-pulse bg-[var(--color-status-success-fg,#10b981)]"
-                }`}
-              />
-              <StatusChip tone={isPaused ? "neutral" : "accent"} caps className="shrink-0">
-                {sc.kind === "timer" ? "timer" : "patrol"}
-              </StatusChip>
-              <span
-                className="min-w-0 truncate font-medium text-[var(--color-text-primary)]"
-                title={sc.prompt}
-              >
-                {sc.title}
-              </span>
-              <span className="shrink-0 text-[0.72rem] text-[var(--color-text-muted)]">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span
+                  className={`inline-block size-2 shrink-0 rounded-full ${
+                    isPaused
+                      ? "bg-[var(--color-warning,#f59e0b)]"
+                      : "animate-pulse bg-[var(--color-status-success-fg,#10b981)]"
+                  }`}
+                />
+                <StatusChip tone={isPaused ? "neutral" : "accent"} caps className="shrink-0">
+                  {sc.kind === "timer" ? "timer" : "patrol"}
+                </StatusChip>
+                <span
+                  className="min-w-0 truncate font-medium text-[var(--color-text-primary)]"
+                  title={sc.prompt}
+                >
+                  {sc.title}
+                </span>
+              </div>
+              <span className="text-[0.72rem] text-[var(--color-text-muted)]">
                 · {cadence}
                 {countdown ? ` (${countdown})` : ""} · {runsLabel}
               </span>
             </div>
 
-            <div className="flex shrink-0 items-center gap-1.5">
+            <div className="flex shrink-0 flex-wrap items-center gap-1.5">
               {onToggleAutoApprove ? (
                 <button
                   type="button"
@@ -197,10 +216,20 @@ const PATROL_PRESETS = [
   { id: "2h", label: "Every 2h", kind: "patrol" as const, cron: "0 */2 * * *", durationSeconds: 0 },
   { id: "4h", label: "Every 4h", kind: "patrol" as const, cron: "0 */4 * * *", durationSeconds: 0 },
   { id: "6h", label: "Every 6h", kind: "patrol" as const, cron: "0 */6 * * *", durationSeconds: 0 },
+  { id: "weekdays", label: "Weekdays 9am", kind: "patrol" as const, cron: "0 9 * * 1-5", durationSeconds: 0 },
   { id: "daily", label: "Daily 9am", kind: "patrol" as const, cron: "0 9 * * *", durationSeconds: 0 },
   { id: "timer30m", label: "In 30m (once)", kind: "timer" as const, cron: "", durationSeconds: 1800 },
   { id: "timer2h", label: "In 2h (once)", kind: "timer" as const, cron: "", durationSeconds: 7200 },
-  { id: "custom", label: "Custom", kind: "patrol" as const, cron: "0 */2 * * *", durationSeconds: 0 },
+  { id: "custom", label: "Custom", kind: "patrol" as const, cron: "0 9 * * 1-5", durationSeconds: 0 },
+];
+
+const CUSTOM_TIMER_PRESETS = [
+  { label: "15m", value: 15, unit: "minutes" as const },
+  { label: "45m", value: 45, unit: "minutes" as const },
+  { label: "1h", value: 1, unit: "hours" as const },
+  { label: "3h", value: 3, unit: "hours" as const },
+  { label: "4h", value: 4, unit: "hours" as const },
+  { label: "8h", value: 8, unit: "hours" as const },
 ];
 
 export type CreatePatrolInput = {
@@ -222,7 +251,11 @@ export function PatrolPopover({
   onClose: () => void;
 }) {
   const [presetId, setPresetId] = useState<string>("2h");
-  const [customCron, setCustomCron] = useState<string>("0 */2 * * *");
+  const [customKind, setCustomKind] = useState<"patrol" | "timer">("patrol");
+  const [customCron, setCustomCron] = useState<string>("0 9 * * 1-5");
+  const [customTz, setCustomTz] = useState<string>(() => browserTimeZone());
+  const [customTimerAmount, setCustomTimerAmount] = useState<number>(45);
+  const [customTimerUnit, setCustomTimerUnit] = useState<"minutes" | "hours">("minutes");
   const [title, setTitle] = useState<string>("Recurring Patrol");
   const [patrolPrompt, setPatrolPrompt] = useState<string>(() =>
     (initialPrompt ?? "").trim() ||
@@ -232,23 +265,32 @@ export function PatrolPopover({
   const [submitting, setSubmitting] = useState<boolean>(false);
 
   const selectedPreset = PATROL_PRESETS.find((p) => p.id === presetId) ?? PATROL_PRESETS[1];
+  const isCustom = selectedPreset.id === "custom";
+  const effectiveKind: "patrol" | "timer" = isCustom ? customKind : selectedPreset.kind;
   const effectiveCron =
-    selectedPreset.id === "custom"
-      ? customCron.trim()
-      : selectedPreset.kind === "patrol"
-        ? selectedPreset.cron
-        : undefined;
-  const tz =
-    typeof Intl !== "undefined"
-      ? Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-      : "UTC";
+    effectiveKind === "patrol"
+      ? isCustom
+        ? customCron.trim()
+        : selectedPreset.cron
+      : undefined;
+  const customDurationSeconds =
+    customTimerUnit === "hours"
+      ? Math.max(1, Math.round(customTimerAmount || 1)) * 3600
+      : Math.max(1, Math.round(customTimerAmount || 1)) * 60;
+  const effectiveDurationSeconds =
+    effectiveKind === "timer"
+      ? isCustom
+        ? customDurationSeconds
+        : selectedPreset.durationSeconds
+      : undefined;
+  const tz = isCustom ? customTz || browserTimeZone() : browserTimeZone();
 
   return (
     <div
       role="dialog"
       aria-label="Configure in-chat patrol"
       data-testid="patrol-popover"
-      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex flex-col gap-2.5 rounded-[0.85rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-3.5 shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[22rem]"
+      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex max-h-[calc(100dvh-6rem)] flex-col gap-2.5 overflow-y-auto rounded-[0.85rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-3.5 shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[24rem]"
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
@@ -291,19 +333,110 @@ export function PatrolPopover({
         })}
       </div>
 
-      {selectedPreset.id === "custom" ? (
-        <label className="grid gap-1">
-          <span className="text-[0.68rem] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
-            Custom cron expression ({tz})
-          </span>
-          <input
-            type="text"
-            value={customCron}
-            onChange={(e) => setCustomCron(e.target.value)}
-            placeholder="0 */2 * * *"
-            className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 font-mono text-[0.76rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-          />
-        </label>
+      {isCustom ? (
+        <div className="grid gap-2" data-testid="patrol-custom-builder">
+          <div className="grid grid-cols-2 gap-1 rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5">
+            <button
+              type="button"
+              aria-pressed={customKind === "patrol"}
+              onClick={() => setCustomKind("patrol")}
+              className={`rounded-[0.38rem] px-2 py-1 text-[0.72rem] font-medium transition ${
+                customKind === "patrol"
+                  ? "bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              }`}
+            >
+              Recurring schedule
+            </button>
+            <button
+              type="button"
+              aria-pressed={customKind === "timer"}
+              onClick={() => setCustomKind("timer")}
+              className={`rounded-[0.38rem] px-2 py-1 text-[0.72rem] font-medium transition ${
+                customKind === "timer"
+                  ? "bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
+              }`}
+            >
+              One-time timer
+            </button>
+          </div>
+
+          {customKind === "patrol" ? (
+            <PatrolSchedulePicker
+              compact
+              cron={customCron}
+              timezone={customTz}
+              onChangeCron={setCustomCron}
+              onChangeTimezone={setCustomTz}
+              testIdPrefix="patrol-popover-schedule"
+            />
+          ) : (
+            <div
+              data-testid="patrol-custom-timer"
+              className="grid gap-2 rounded-[0.55rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] p-2.5"
+            >
+              <div className="flex flex-wrap gap-1">
+                {CUSTOM_TIMER_PRESETS.map((tp) => {
+                  const active =
+                    customTimerAmount === tp.value &&
+                    customTimerUnit === tp.unit;
+                  return (
+                    <button
+                      key={tp.label}
+                      type="button"
+                      onClick={() => {
+                        setCustomTimerAmount(tp.value);
+                        setCustomTimerUnit(tp.unit);
+                      }}
+                      className={`rounded-[var(--radius-pill)] border px-2 py-0.5 text-[0.7rem] font-medium transition ${
+                        active
+                          ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                          : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]"
+                      }`}
+                    >
+                      In {tp.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-[0.68rem] font-medium text-[var(--color-text-muted)]">
+                  <span>Run once in</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={customTimerUnit === "hours" ? 168 : 1440}
+                    aria-label="Timer duration"
+                    value={customTimerAmount}
+                    onChange={(e) =>
+                      setCustomTimerAmount(
+                        Math.max(1, Number(e.target.value) || 1),
+                      )
+                    }
+                    className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                  />
+                </label>
+                <label className="grid gap-1 text-[0.68rem] font-medium text-[var(--color-text-muted)]">
+                  <span>Unit</span>
+                  <select
+                    aria-label="Timer unit"
+                    value={customTimerUnit}
+                    onChange={(e) =>
+                      setCustomTimerUnit(
+                        e.target.value as "minutes" | "hours",
+                      )
+                    }
+                    className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                  >
+                    <option value="minutes">Minutes</option>
+                    <option value="hours">Hours</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
       ) : null}
 
       <label className="grid gap-1">
@@ -354,7 +487,11 @@ export function PatrolPopover({
         </button>
         <button
           type="button"
-          disabled={!patrolPrompt.trim() || (selectedPreset.id === "custom" && !customCron.trim()) || submitting}
+          disabled={
+            !patrolPrompt.trim() ||
+            (effectiveKind === "patrol" && !effectiveCron) ||
+            submitting
+          }
           onClick={async () => {
             setSubmitting(true);
             try {
@@ -363,8 +500,7 @@ export function PatrolPopover({
                 prompt: patrolPrompt.trim(),
                 cron: effectiveCron,
                 timezone: tz,
-                durationSeconds:
-                  selectedPreset.kind === "timer" ? selectedPreset.durationSeconds : undefined,
+                durationSeconds: effectiveDurationSeconds,
                 autoApprove,
               });
               if (ok !== false) {
@@ -378,7 +514,7 @@ export function PatrolPopover({
         >
           {submitting
             ? "Starting…"
-            : selectedPreset.kind === "timer"
+            : effectiveKind === "timer"
               ? "Start timer"
               : "Start patrol"}
         </button>
