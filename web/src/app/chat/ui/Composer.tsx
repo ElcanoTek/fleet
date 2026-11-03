@@ -183,6 +183,7 @@ export type ComposerProps = {
   // Persona picker: the workspace (bundle) roster plus the user's own
   // personas (Settings → Personas), selected by their "user:<name>" ref.
   personas: string[];
+  defaultPersona?: string;
   userPersonas?: UserPersonaOption[];
   selectedPersona: string;
   setSelectedPersona: Dispatch<SetStateAction<string>>;
@@ -307,6 +308,7 @@ export function Composer({
   spreadsheetNudge,
   setSpreadsheetNudgeDismissed,
   personas,
+  defaultPersona,
   userPersonas = [],
   selectedPersona,
   setSelectedPersona,
@@ -478,6 +480,14 @@ export function Composer({
   useEffect(() => {
     if (modelPickerOpen && !isStreaming) modelInputRef.current?.focus();
   }, [modelPickerOpen, isStreaming, modelInputRef]);
+
+  useEffect(() => {
+    if (!personaPickerOpen) return;
+    const selectedOption = personaPickerRef.current?.querySelector<HTMLElement>(
+      '[role="option"][aria-selected="true"], [role="option"]',
+    );
+    (selectedOption ?? personaButtonRef.current)?.focus();
+  }, [personaPickerOpen, personaPickerRef]);
 
   useEffect(() => {
     if (!patrolPopoverOpen) return;
@@ -1258,7 +1268,7 @@ export function Composer({
             {(() => {
               const personaLocked =
                 isStreaming ||
-                (activeConversationId !== null && messages.length > 0);
+                (activeConversationId !== null && !isPendingKey(activeConversationId));
               const workspaceOptions =
                 personas.length > 0
                   ? personas
@@ -1266,9 +1276,11 @@ export function Composer({
                     ? []
                     : [selectedPersona];
               const currentPersonaLabel = personaLabel(selectedPersona, userPersonas);
+              const effectiveDefaultPersona = defaultPersona || personas[0] || "";
               const isNonDefaultPersona =
                 isUserPersonaRef(selectedPersona) ||
-                (personas.length > 0 && selectedPersona !== personas[0]);
+                (effectiveDefaultPersona !== "" &&
+                  selectedPersona !== effectiveDefaultPersona);
               const canCompact =
                 Boolean(activeConversationId) &&
                 messages.length >= 2 &&
@@ -1536,17 +1548,24 @@ export function Composer({
                   </div>
 
                   {/* Contextual Persona chip + picker: rendered on the bar when
-                      a non-default persona is active or while the picker is open. */}
+                      a non-default persona is active or while the picker is open.
+                      Passive status chip is hidden on phone viewports (< sm) so
+                      active secondary indicators never crowd Share/Send. */}
                   {!personaLocked && (isNonDefaultPersona || personaPickerOpen) ? (
                     <div
                       ref={personaPickerRef}
                       role="presentation"
-                      className="relative inline-flex"
+                      className={`relative ${
+                        personaPickerOpen ? "inline-flex" : "hidden sm:inline-flex"
+                      }`}
                       onKeyDown={(event) => {
                         if (event.key === "Escape" && personaPickerOpen) {
                           event.stopPropagation();
                           setPersonaPickerOpen(false);
-                          personaButtonRef.current?.focus();
+                          (isNonDefaultPersona
+                            ? personaButtonRef.current
+                            : moreButtonRef.current
+                          )?.focus();
                         }
                       }}
                     >
@@ -1567,9 +1586,16 @@ export function Composer({
                           <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
                             {(() => {
                               const pick = (p: string) => {
+                                const nextIsNonDefault =
+                                  isUserPersonaRef(p) ||
+                                  (effectiveDefaultPersona !== "" &&
+                                    p !== effectiveDefaultPersona);
                                 setSelectedPersona(p);
                                 setPersonaPickerOpen(false);
-                                personaButtonRef.current?.focus();
+                                (nextIsNonDefault
+                                  ? personaButtonRef.current
+                                  : moreButtonRef.current
+                                )?.focus();
                               };
                               const option = (value: string, title: string, sub?: string) => {
                                 const selected = value === selectedPersona;
@@ -1650,7 +1676,9 @@ export function Composer({
                     <div
                       ref={patrolPopoverRef}
                       role="presentation"
-                      className="relative inline-flex"
+                      className={`relative ${
+                        patrolPopoverOpen ? "inline-flex" : "hidden sm:inline-flex"
+                      }`}
                     >
                       <button
                         ref={patrolButtonRef}
@@ -1693,7 +1721,10 @@ export function Composer({
                           }}
                           onClose={() => {
                             setPatrolPopoverOpen(false);
-                            patrolButtonRef.current?.focus();
+                            (activePatrolCount > 0
+                              ? patrolButtonRef.current
+                              : moreButtonRef.current
+                            )?.focus();
                           }}
                         />
                       ) : null}
@@ -1723,16 +1754,17 @@ export function Composer({
                     </div>
                   ) : null}
 
-                  {/* Active Auto-approve indicator: shown directly on the toolbar when
+                  {/* Active Auto-approve indicator: shown directly on the desktop toolbar when
                       Auto-approve is ON so the user always sees it at a glance and can
-                      turn it off in a single tap. */}
+                      turn it off in a single tap (on phone viewports More options carries
+                      the active dot and toggle to avoid crowding Share/Send). */}
                   {toggleAutoApprove && isAutoApprove ? (
                     <button
                       type="button"
                       aria-label="Auto-approve tools in this chat is on (click to turn off)"
                       data-tip-top="Auto-approve on for this chat"
                       aria-pressed={true}
-                      className={`${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
+                      className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
                       onClick={toggleAutoApprove}
                     >
                       <Icon name="zap" className="size-3.5" />

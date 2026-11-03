@@ -444,10 +444,11 @@ func (s *Server) cleanMCPAccounts(ctx context.Context, user string, accounts map
 // Best-effort on the remote legs — a lookup failure degrades to whatever did
 // resolve rather than failing the caller's request.
 func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[string]bool {
-	catalog := s.agent.MCPServerCatalog()
-	valid := make(map[string]bool, len(catalog))
-	for _, info := range catalog {
-		valid[strings.ToLower(info.Name)] = true
+	valid := make(map[string]bool)
+	if s.agent != nil {
+		for _, info := range s.agent.MCPServerCatalog() {
+			valid[strings.ToLower(info.Name)] = true
+		}
 	}
 	if s.remoteMCP != nil && s.remoteMCP.Enabled() && user != "" {
 		if servers, err := s.remoteMCP.ListServers(ctx, user); err == nil {

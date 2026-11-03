@@ -225,6 +225,7 @@ export type ServerConfig = {
   // it so oversize files are refused immediately with an explanation
   // instead of failing after a full upload round-trip.
   uploadMaxBytes: number;
+  teamChatsSharedByDefault?: boolean;
 };
 
 // parseServerConfigPayload maps GET /api/server-config onto ServerConfig.
@@ -235,6 +236,7 @@ export function parseServerConfigPayload(cfg: {
   lockdown_only?: boolean;
   lockdown_allowed_models?: string[] | null;
   upload_max_bytes?: number;
+  team_chats_shared_by_default?: boolean;
 }): ServerConfig {
   return {
     lockdownAvailable: cfg.lockdown_available === true,
@@ -246,6 +248,7 @@ export function parseServerConfigPayload(cfg: {
       typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
         ? cfg.upload_max_bytes
         : DEFAULT_UPLOAD_MAX_BYTES,
+    teamChatsSharedByDefault: cfg.team_chats_shared_by_default === true,
   };
 }
 
@@ -713,6 +716,7 @@ export function ChatExperience({
   const [personas, setPersonas] = useState<string[]>(
     () => restoredSession?.personas ?? [],
   );
+  const [defaultPersona, setDefaultPersona] = useState<string>("");
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
@@ -4185,7 +4189,10 @@ export function ChatExperience({
       return;
     }
     if (creatingShareChat || isStreaming || isUploadingAttachments) return;
-    const pendingKey = activePendingKey ?? draftKeyRef.current;
+    const originActiveId = activeConversationIdRef.current;
+    const originDraftKey = draftKeyRef.current;
+    const originConvKey = currentConvKey;
+    const pendingKey = activePendingKey ?? originDraftKey;
     const hadPendingAutoApprove = Boolean(
       pendingKey && pendingAutoApproveByKey[pendingKey],
     );
@@ -4260,8 +4267,6 @@ export function ChatExperience({
         lockdown: created.lockdown ?? (isLockdown || undefined),
         auto_approve: autoApprovePersisted,
       };
-      promoteComposerKey(currentConvKey, summary.id);
-      setPendingLockdown(false);
       if (pendingKey && hadPendingAutoApprove) {
         setPendingAutoApproveForKey(pendingKey, false);
       }
@@ -4269,9 +4274,16 @@ export function ChatExperience({
         summary,
         ...curr.filter((c) => c.id !== summary.id),
       ]);
-      activeConversationIdRef.current = summary.id;
-      setActiveConversationId(summary.id);
-      openShareDialog(summary);
+      const stillOnOriginDraft =
+        activeConversationIdRef.current === originActiveId &&
+        draftKeyRef.current === originDraftKey;
+      if (stillOnOriginDraft) {
+        promoteComposerKey(originConvKey, summary.id);
+        setPendingLockdown(false);
+        activeConversationIdRef.current = summary.id;
+        setActiveConversationId(summary.id);
+        openShareDialog(summary);
+      }
     } catch {
       showRailError("Couldn't reach the server to open sharing for this chat.");
     } finally {
@@ -5769,6 +5781,7 @@ export function ChatExperience({
           const pd = (await pr.json()) as PersonasResponse;
           if (!cancelled) {
             setPersonas(pd.personas);
+            if (pd.default) setDefaultPersona(pd.default);
             setUserPersonas(pd.user_personas ?? []);
             if (!willLoadConversation) {
               setSelectedPersona(newChatLink?.persona ?? pd.default);
@@ -7403,6 +7416,7 @@ export function ChatExperience({
                 spreadsheetNudge={spreadsheetNudge}
                 setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}
                 personas={personas}
+                defaultPersona={defaultPersona}
                 userPersonas={userPersonas}
                 selectedPersona={selectedPersona}
                 setSelectedPersona={setSelectedPersona}
@@ -7451,7 +7465,10 @@ export function ChatExperience({
                 onOpenShare={() => void openShareFromComposer()}
                 shareConversation={
                   activeConversation ??
-                  (teamChatsSharedByDefault && myTeam
+                  ((serverConfig.teamChatsSharedByDefault ||
+                    teamChatsSharedByDefault) &&
+                  myTeam &&
+                  !isLockdown
                     ? { multiplayer: true, team_visible: true }
                     : null)
                 }

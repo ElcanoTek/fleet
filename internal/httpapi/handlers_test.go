@@ -336,12 +336,14 @@ func TestConversationRename_LocksTitle(t *testing.T) {
 // Share-first chat created with "New conversation" gets upgraded to a heuristic
 // title on its first POST /chat turn.
 func TestConversationCreate_PreChatSeedsAndHeuristicTitle(t *testing.T) {
-	s := serverFixture(t)
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	s := newDefaultChatServer(t, engine, st)
 	h := s.Routes()
 
 	w := do(t, h, http.MethodPost, "/conversations", map[string]any{
 		"title":            "New conversation",
-		"persona":          "victoria",
+		"persona":          "default",
 		"auto_approve":     true,
 		"enabled_optional": []string{},
 	}, "u@x.com")
