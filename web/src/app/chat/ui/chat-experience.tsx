@@ -4267,6 +4267,23 @@ export function ChatExperience({
         showRailError("Couldn't open sharing for this chat.");
         return;
       }
+      const createdId = created.id;
+      const discardIfLeftOriginDraft = (): boolean => {
+        const stillOnOriginDraft =
+          activeConversationIdRef.current === originActiveId &&
+          draftKeyRef.current === originDraftKey;
+        if (!stillOnOriginDraft) {
+          const delUrl = conversationApiUrl(createdId);
+          if (delUrl) {
+            void fetch(delUrl, { method: "DELETE" }).catch(() => {});
+          }
+          return true;
+        }
+        return false;
+      };
+      if (discardIfLeftOriginDraft()) {
+        return;
+      }
       let autoApprovePersisted = Boolean(created.auto_approve);
       if (hadPendingAutoApprove && !autoApprovePersisted) {
         const autoUrl = conversationApiUrl(created.id, "/auto-approve");
@@ -4282,6 +4299,9 @@ export function ChatExperience({
             autoApprovePersisted = false;
           }
         }
+      }
+      if (discardIfLeftOriginDraft()) {
+        return;
       }
       const summary: ConversationSummary = {
         id: created.id,
@@ -4305,16 +4325,11 @@ export function ChatExperience({
         summary,
         ...curr.filter((c) => c.id !== summary.id),
       ]);
-      const stillOnOriginDraft =
-        activeConversationIdRef.current === originActiveId &&
-        draftKeyRef.current === originDraftKey;
-      if (stillOnOriginDraft) {
-        promoteComposerKey(originConvKey, summary.id);
-        setPendingLockdown(false);
-        activeConversationIdRef.current = summary.id;
-        setActiveConversationId(summary.id);
-        openShareDialog(summary);
-      }
+      promoteComposerKey(originConvKey, summary.id);
+      setPendingLockdown(false);
+      activeConversationIdRef.current = summary.id;
+      setActiveConversationId(summary.id);
+      openShareDialog(summary);
     } catch {
       showRailError("Couldn't reach the server to open sharing for this chat.");
     } finally {

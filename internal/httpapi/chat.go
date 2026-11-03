@@ -529,11 +529,7 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	// placeholder "New conversation" title without a manual rename, give it a
 	// heuristic title from the opening message so the sidebar updates on turn 1.
 	if conv.Title == "New conversation" && !conv.TitleLocked {
-		nextTitle := strings.TrimSpace(req.Title)
-		if nextTitle == "" {
-			nextTitle = agent.HeuristicTitle(req.Message)
-		}
-		if nextTitle != "" && nextTitle != conv.Title {
+		if nextTitle := agent.HeuristicTitle(req.Message); nextTitle != "" && nextTitle != conv.Title {
 			if err := s.store.UpdateTitle(r.Context(), convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
 				conv.Title = nextTitle
 			}

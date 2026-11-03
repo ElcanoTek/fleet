@@ -660,11 +660,13 @@ export function Composer({
               : promptPlaceholder
           }
           rows={1}
+          readOnly={shareBusy}
           suppressHydrationWarning
           value={prompt}
           onFocus={() => setIsComposerFocused(true)}
           onBlur={() => setIsComposerFocused(false)}
           onChange={(event) => {
+            if (shareBusy) return;
             const value = event.target.value;
             setPrompt(value);
             // Every edit resets the skill-popover highlight to the top
@@ -730,6 +732,10 @@ export function Composer({
             }
           }}
           onPaste={(event) => {
+            if (shareBusy) {
+              event.preventDefault();
+              return;
+            }
             // Pasting files / screenshots from clipboard runs
             // through the same addAttachmentFiles path as the
             // file-picker and drag-and-drop. Only intercept when
