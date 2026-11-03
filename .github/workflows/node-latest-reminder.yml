@@ -53,8 +53,20 @@ jobs:
           # shellcheck source=/dev/null
           . scripts/lib/node-version.sh
           current="$(fleet_node_major_want .)"
-          # index.json is newest-first; the first entry is the latest release.
-          latest="$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json | jq -r '.[0].version')"
+          # index.json is newest-first, but it also lists PRERELEASES: from
+          # v27 on, each major has a public alpha phase months before it
+          # ships (v27.0.0-alpha.0.0.0 topped the list on 2026-10-29 while
+          # v26 was still the newest release, and filed #1903 by mistake).
+          # ADR-0078 tracks the latest RELEASED major, so take the newest
+          # entry shaped exactly vMAJOR.MINOR.PATCH — the same shape
+          # fleet_node_tarball_install accepts — and skip anything with a
+          # prerelease suffix.
+          latest="$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json \
+            | jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].version // empty')"
+          if [ -z "${latest}" ]; then
+            echo "no release-shaped version in nodejs.org/dist/index.json; refusing to guess." >&2
+            exit 1
+          fi
           latest_major="$(printf '%s' "${latest#v}" | cut -d. -f1)"
           echo "web/.nvmrc major: ${current}; newest node release: ${latest}"
           if [ "${current}" -ge "${latest_major}" ]; then
