@@ -491,6 +491,14 @@ export function Composer({
 
   useEffect(() => {
     if (!patrolPopoverOpen) return;
+    const firstDialogControl = patrolPopoverRef.current?.querySelector<HTMLElement>(
+      '[role="dialog"] button:not([disabled]), [role="dialog"] input:not([disabled]), [role="dialog"] textarea:not([disabled])',
+    );
+    (firstDialogControl ?? patrolButtonRef.current ?? moreButtonRef.current)?.focus();
+  }, [patrolPopoverOpen]);
+
+  useEffect(() => {
+    if (!patrolPopoverOpen) return;
     const handleMouseDown = (event: MouseEvent) => {
       if (
         patrolPopoverRef.current &&
@@ -716,7 +724,9 @@ export function Composer({
             const shouldSend = sendOnEnter ? !event.shiftKey : modifierSend;
             if (shouldSend) {
               event.preventDefault();
-              void submitPrompt(prompt);
+              if (!shareBusy) {
+                void submitPrompt(prompt);
+              }
             }
           }}
           onPaste={(event) => {
@@ -890,7 +900,7 @@ export function Composer({
                 type="button"
                 aria-haspopup="listbox"
                 aria-expanded={modelPickerOpen}
-                disabled={isStreaming}
+                disabled={isStreaming || shareBusy}
                 title={
                   modelError
                     ? modelError.message
@@ -953,7 +963,7 @@ export function Composer({
                   className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]"
                 />
               </button>
-              {modelPickerOpen && !isStreaming ? (
+              {modelPickerOpen && !isStreaming && !shareBusy ? (
                 <div className={COMPOSER_POP_WIDE}>
                   <input
                     ref={modelInputRef}
@@ -1148,7 +1158,7 @@ export function Composer({
               aria-label="Attach files"
               data-tip-top="Attach files"
               className={TOOL_BTN}
-              disabled={isStreaming || isUploadingAttachments}
+              disabled={isStreaming || isUploadingAttachments || shareBusy}
               onClick={() => fileInputRef.current?.click()}
             >
               <Icon name="paperclip" className="size-3.5" />
@@ -1177,7 +1187,7 @@ export function Composer({
                   aria-label="Tools"
                   aria-haspopup="true"
                   aria-expanded={mcpPickerOpen}
-                  disabled={isStreaming}
+                  disabled={isStreaming || shareBusy}
                   // No tooltip while the menu is open: it would sit over the
                   // menu's footer, and a tap leaves it showing on a phone.
                   data-tip-top={mcpPickerOpen ? undefined : `Tools, ${toolsBadge} on`}
@@ -1207,7 +1217,7 @@ export function Composer({
                     </span>
                   ) : null}
                 </button>
-                {mcpPickerOpen && !isStreaming ? (
+                {mcpPickerOpen && !isStreaming && !shareBusy ? (
                   <ToolsPopover
                     servers={mcpServers}
                     categories={pickerCategories}
@@ -1318,6 +1328,7 @@ export function Composer({
                       aria-label="More options"
                       aria-haspopup="true"
                       aria-expanded={moreMenuOpen}
+                      disabled={shareBusy}
                       data-tip-top={moreMenuOpen ? undefined : "Prompts, persona, schedule & more"}
                       className={`${TOOL_BTN} ${
                         moreMenuOpen
@@ -1336,7 +1347,7 @@ export function Composer({
                         />
                       ) : null}
                     </button>
-                    {moreMenuOpen ? (
+                    {moreMenuOpen && !shareBusy ? (
                       <div
                         data-testid="composer-more-popover"
                         role="menu"
@@ -1406,6 +1417,7 @@ export function Composer({
                             className={POP_ROW}
                             onClick={() => {
                               setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
                               setPatrolPopoverOpen(true);
                             }}
                           >
@@ -1486,6 +1498,7 @@ export function Composer({
                             className={`${POP_ROW} disabled:opacity-40`}
                             onClick={() => {
                               setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
                               setConfirmSummarize(true);
                             }}
                           >
@@ -1574,6 +1587,7 @@ export function Composer({
                         type="button"
                         aria-haspopup="listbox"
                         aria-expanded={personaPickerOpen}
+                        disabled={isStreaming || shareBusy}
                         aria-label={`Persona — ${currentPersonaLabel}`}
                         data-tip-top={`Persona — ${currentPersonaLabel}`}
                         className={`${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
@@ -1581,7 +1595,7 @@ export function Composer({
                       >
                         <Icon name="persona" className="size-3.5" />
                       </button>
-                      {personaPickerOpen ? (
+                      {personaPickerOpen && !shareBusy ? (
                         <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
                           <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
                             {(() => {
@@ -1761,6 +1775,7 @@ export function Composer({
                   {toggleAutoApprove && isAutoApprove ? (
                     <button
                       type="button"
+                      disabled={shareBusy}
                       aria-label="Auto-approve tools in this chat is on (click to turn off)"
                       data-tip-top="Auto-approve on for this chat"
                       aria-pressed={true}
@@ -1812,7 +1827,14 @@ export function Composer({
                     disabled={shareBusy}
                     aria-label={ariaLabel}
                     data-tip-top={tipText}
-                    onClick={onOpenShare}
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setMcpPickerOpen(false);
+                      setPersonaPickerOpen(false);
+                      setModelPickerOpen(false);
+                      setPatrolPopoverOpen(false);
+                      onOpenShare();
+                    }}
                     className={`inline-flex h-[1.95rem] shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[0.75rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50 ${
                       isSharedAny
                         ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-text-primary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]"
@@ -1876,13 +1898,17 @@ export function Composer({
                 prompt.trim() &&
                 !isStreaming &&
                 !isUploadingAttachments &&
+                !shareBusy &&
                 !modelError
                   ? "bg-[image:var(--gradient-action-fill)] text-[var(--color-on-primary-fill)] hover:-translate-y-px enabled:hover:bg-[image:var(--gradient-action-fill-hover)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
               }`}
               type="submit"
               disabled={
-                !prompt.trim() || isUploadingAttachments || modelError !== null
+                !prompt.trim() ||
+                isUploadingAttachments ||
+                shareBusy ||
+                modelError !== null
               }
               title={
                 modelError

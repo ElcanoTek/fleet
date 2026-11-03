@@ -2728,6 +2728,26 @@ export function ChatExperience({
           }
           return [data.conversation, ...prev];
         });
+      } else if (data.conversation.archived_at != null) {
+        setArchivedConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          return [data.conversation, ...prev];
+        });
+      } else {
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          return [data.conversation, ...prev];
+        });
       }
       if (movesTheUser) {
         setActiveConversationId(data.conversation.id);
@@ -4186,6 +4206,17 @@ export function ChatExperience({
   const openShareFromComposer = async () => {
     if (activeConversation) {
       openShareDialog(activeConversation);
+      return;
+    }
+    if (activeConversationId !== null && !isPendingKey(activeConversationId)) {
+      openShareDialog({
+        id: activeConversationId,
+        title: "Conversation",
+        persona: selectedPersona || "default",
+        model: selectedModel || "",
+        pinned: false,
+        updated_at: Math.floor(Date.now() / 1000),
+      });
       return;
     }
     if (creatingShareChat || isStreaming || isUploadingAttachments) return;
