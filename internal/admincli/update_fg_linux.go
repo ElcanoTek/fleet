@@ -39,7 +39,13 @@ func waitForeground(cmd *exec.Cmd, ttyFD int) error {
 				break
 			}
 		}
-		reclaimForeground(ttyFD)
+		// Take the terminal back only from the script's own group. After `bg`
+		// the shell holds it, and a script that reads it stops with SIGTTIN:
+		// leave the shell's terminal alone and just stop, so the shell
+		// reports the job stopped until the operator brings it back with fg.
+		if fg, err := unix.IoctlGetInt(ttyFD, unix.TIOCGPGRP); err == nil && fg == pid {
+			reclaimForeground(ttyFD)
+		}
 		suspendSelf()
 		// Resumed by `fg` (we hold the terminal again): hand it to the script.
 		// Resumed by `bg`: leave the terminal to the shell — a script that then
