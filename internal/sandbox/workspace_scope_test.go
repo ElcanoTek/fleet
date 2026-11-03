@@ -51,7 +51,7 @@ func TestResolveWorkspaceScope(t *testing.T) {
 	f := newScopeFixture(t)
 
 	t.Run("valid scope is cleaned and keeps existing read-only dirs", func(t *testing.T) {
-		got, ino, err := resolveWorkspaceScope(f.root, WorkspaceScope{
+		got, id, err := resolveWorkspaceScope(f.root, WorkspaceScope{
 			Dir:      f.job + "/",
 			ReadOnly: []string{f.ownRun, filepath.Join(f.runsBase, "task-missing")},
 			Withhold: []string{f.runsBase},
@@ -62,8 +62,8 @@ func TestResolveWorkspaceScope(t *testing.T) {
 		if got.Dir != f.job {
 			t.Errorf("Dir = %q, want %q", got.Dir, f.job)
 		}
-		if want := inodeOf(t, f.job); ino != want {
-			t.Errorf("inode = %d, want %d", ino, want)
+		if want := identityOf(t, f.job); id.String() != want {
+			t.Errorf("identity = %s, want %s", id, want)
 		}
 		// A missing read-only dir is dropped, as a missing ReadOnlyMounts entry is.
 		if len(got.ReadOnly) != 1 || got.ReadOnly[0] != f.ownRun {
@@ -150,13 +150,15 @@ func TestResolveWorkspaceScope(t *testing.T) {
 	})
 }
 
-func inodeOf(t *testing.T, path string) uint64 {
+// identityOf is path's "dev:inode", as `stat -c %d:%i` prints it.
+func identityOf(t *testing.T, path string) string {
 	t.Helper()
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return info.Sys().(*syscall.Stat_t).Ino
+	st := info.Sys().(*syscall.Stat_t)
+	return fmt.Sprintf("%d:%d", st.Dev, st.Ino)
 }
 
 // scopedFakePodman is fakePodman whose `exec` answers verifyScopedMount's
@@ -236,7 +238,7 @@ func TestScopedContainerRunArgs(t *testing.T) {
 	}
 	t.Setenv(seccompProfileEnv, "")
 	f := newScopeFixture(t)
-	bin, logPath := scopedFakePodman(t, fmt.Sprint(inodeOf(t, f.job)))
+	bin, logPath := scopedFakePodman(t, identityOf(t, f.job))
 	pool := NewPool(PoolConfig{
 		Mode:         ModeContainer,
 		BridgeScript: []byte("# unused\n"),
@@ -294,7 +296,7 @@ func TestTakeScopedRefusesSwappedMount(t *testing.T) {
 	}
 	t.Setenv(seccompProfileEnv, "")
 	f := newScopeFixture(t)
-	bin, _ := scopedFakePodman(t, fmt.Sprint(inodeOf(t, f.otherJob)))
+	bin, _ := scopedFakePodman(t, identityOf(t, f.otherJob))
 	pool := NewPool(PoolConfig{
 		Mode:         ModeContainer,
 		BridgeScript: []byte("# unused\n"),

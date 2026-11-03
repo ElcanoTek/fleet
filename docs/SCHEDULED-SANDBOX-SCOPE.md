@@ -37,19 +37,25 @@ trust exactly what the shells can reach.
 - **No symlinks below the root.** Everything under the workspace root is
   writable by a whole-root sandbox (a chat, a worktree run), and podman
   follows a symlinked volume source, so a `tasks/<lineage>` swapped for a
-  symlink would otherwise mount — and relabel — whatever it points at. Every
-  path component below the root of the job directory and of each read-only
-  extra is checked with `Lstat`; a symlink or non-directory fails the take.
-  The root itself is operator configuration and may be a symlink.
+  symlink would otherwise mount — and relabel — whatever it points at. The job
+  directory and each read-only extra are walked from the root one component
+  at a time through pinned descriptors (`openat(…, O_NOFOLLOW|O_DIRECTORY)`),
+  so a symlink or non-directory at any component fails the take, and a parent
+  renamed to a symlink mid-walk cannot redirect it. The root itself is
+  operator configuration and may be a symlink.
 - **The mounted directory is the one checked (podman).** To close the window
   between that check and podman's mount, the take `stat`s the job directory
-  inside the started container and compares its inode with the one the check
-  saw; a mismatch tears the container down and fails the take. The kubernetes
-  backend does not run this check — a pod's view of the claim is another
-  host's mount, where inode numbers are not guaranteed to match — and relies
-  on the `Lstat` walk plus the kubelet's own `subPath` handling, which refuses
-  a symlink that leaves the volume (a swap to another directory inside the
-  claim during pod start is the residual there).
+  inside the started container and compares its device and inode with those
+  the pinned walk read (`fstat` on the final descriptor); a mismatch tears the
+  container down and fails the take. One residual: podman's `:z` relabel runs
+  at mount time, so a directory swapped in during that window is relabelled
+  before the check refuses the sandbox — it is never handed to a run. The
+  kubernetes backend does not run the in-container check — a pod's view of
+  the claim is another host's mount, where device and inode numbers are not
+  guaranteed to match — and relies on the pinned walk plus the kubelet's own
+  `subPath` handling, which refuses a symlink that leaves the volume (a swap
+  to another directory inside the claim during pod start is the residual
+  there).
 - Allowlisted egress without a proxy, and allowlisted egress on kubernetes,
   fail closed exactly as the unscoped takes do.
 - A pool with no container backend (host/mock test pools) answers

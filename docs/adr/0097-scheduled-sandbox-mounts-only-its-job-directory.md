@@ -42,9 +42,11 @@ mounts it as a `subPath` of the workspace claim at its same path. The fileop
 anchor reads the same plan, so the file tools trust exactly what is mounted.
 
 No path component below the root may be a symlink (a whole-root sandbox
-can plant one, and podman follows a symlinked volume source); on podman the
-take also checks, inside the started container, that the mounted directory
-is the inode it validated, and fails closed on a swap.
+can plant one, and podman follows a symlinked volume source): the walk goes
+through pinned `openat(O_NOFOLLOW)` descriptors, so it cannot be raced through
+a parent. On podman the take also checks, inside the started container, that
+the mounted directory has the device and inode the walk pinned, and fails
+closed on a swap.
 
 Every network posture and per-task limit is carried unchanged; the take always
 cold-starts, because the warm inventory is spawned with the whole-root mount.
