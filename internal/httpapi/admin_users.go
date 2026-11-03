@@ -188,7 +188,9 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.sessionApprovals.ForgetUser(email)
 	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
+	s.purgeParticipantPrivateStashes(email)
 	s.removeOpsAdmin(r, email)
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
 	log.Printf("admin users: deleted %q by %q", email, actor)

@@ -203,6 +203,36 @@ func (s *Server) removeConversationPrivateStash(convID string) {
 	_ = os.RemoveAll(stashDir)
 }
 
+func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
+	userEmail = strings.ToLower(strings.TrimSpace(userEmail))
+	if userEmail == "" {
+		return
+	}
+	root, err := s.privateWorkspaceStashRoot()
+	if err != nil || root == "" {
+		return
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return
+	}
+	digest := participantDigest(userEmail)
+	for _, d := range entries {
+		if !d.IsDir() {
+			continue
+		}
+		convID := d.Name()
+		if !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+			continue
+		}
+		unlock := s.workspaceSwapLocks.lock(convID)
+		if !s.isParticipantWorkspaceActiveInMemory(convID, "") {
+			_ = os.RemoveAll(filepath.Join(root, convID, "participants", digest)) //nolint:gosec // server-derived stash path
+		}
+		unlock()
+	}
+}
+
 func (s *Server) setParticipantWorkspaceActive(convID, user string, unlock func()) {
 	s.inflightMu.Lock()
 	if user != "" {
@@ -282,13 +312,15 @@ func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
 	if err != nil {
 		return false
 	}
-	if _, err := os.Stat(filepath.Join(stashRoot, "active-participant")); err != nil {
+	_, activeErr := os.Stat(filepath.Join(stashRoot, "active-participant"))
+	_, phaseErr := os.Stat(filepath.Join(stashRoot, "swap-phase"))
+	if activeErr != nil && phaseErr != nil {
 		return false
 	}
-	// No participant turn is active in memory, so any active-participant
-	// marker left on disk came from an interrupted earlier process. Recover
-	// the owner's private workspace directories immediately before serving the
-	// request; fail closed if recovery cannot complete.
+	// No participant turn is active in memory, so any active-participant or
+	// swap-phase marker left on disk came from an interrupted earlier process.
+	// Recover the owner's private workspace directories immediately before
+	// serving the request; fail closed if recovery cannot complete.
 	if err := recoverInterruptedParticipantWorkspace(tools.WorkspaceDirForConversation(convID), stashRoot); err != nil {
 		return true
 	}
@@ -333,8 +365,8 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		unlock()
 		return err
 	}
-	marker := filepath.Join(stashRoot, "active-participant")
-	if err := os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600); err != nil { //nolint:gosec // host-side control-plane marker
+	phaseFile := filepath.Join(stashRoot, "swap-phase")
+	if err := os.WriteFile(phaseFile, []byte("stashing-owner"), 0o600); err != nil {
 		unlock()
 		return err
 	}
@@ -352,6 +384,13 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
 		}
 	}
+	marker := filepath.Join(stashRoot, "active-participant")
+	if err := os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600); err != nil { //nolint:gosec // host-side control-plane marker
+		_ = rollbackOwnerStash(wsDir, stashRoot)
+		s.clearParticipantWorkspaceActive(conv.ID)
+		return err
+	}
+	_ = os.Remove(phaseFile)
 	partAtt := filepath.Join(stashRoot, "participants", participantDigest(user), uploadsDir)
 	if err := movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir)); err != nil {
 		_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
@@ -383,13 +422,23 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) error {
 	marker := filepath.Join(stashRoot, "active-participant")
 	raw, err := os.ReadFile(marker) //nolint:gosec // server-derived stashRoot
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
+	if err == nil {
+		return restoreParticipantWorkspaceToOwner(wsDir, stashRoot, strings.TrimSpace(string(raw)))
+	}
+	if !os.IsNotExist(err) {
 		return err
 	}
-	return restoreParticipantWorkspaceToOwner(wsDir, stashRoot, strings.TrimSpace(string(raw)))
+	// If active-participant is absent, any swap interrupted during
+	// "stashing-owner" (before participant files entered wsDir) or during
+	// "restoring-owner" (after participant files were already cleared/stashed)
+	// only has owner files in wsDir and/or ownerStash.
+	if _, statErr := os.Stat(filepath.Join(stashRoot, "swap-phase")); statErr == nil {
+		return rollbackOwnerStash(wsDir, stashRoot)
+	}
+	if _, statErr := os.Stat(filepath.Join(stashRoot, "owner")); statErr == nil {
+		return rollbackOwnerStash(wsDir, stashRoot)
+	}
+	return nil
 }
 
 func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail string) error {
@@ -404,16 +453,12 @@ func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail strin
 	} else if err := os.RemoveAll(filepath.Join(wsDir, uploadsDir)); err != nil { //nolint:gosec // server-derived conversation workspace
 		return err
 	}
-	ownerStash := filepath.Join(stashRoot, "owner")
-	for _, dirName := range privateWorkspaceDirs {
-		if err := movePrivateDirIfPresent(filepath.Join(ownerStash, dirName), filepath.Join(wsDir, dirName)); err != nil {
-			return err
-		}
-	}
+	phaseFile := filepath.Join(stashRoot, "swap-phase")
+	_ = os.WriteFile(phaseFile, []byte("restoring-owner"), 0o600)
 	if err := os.Remove(filepath.Join(stashRoot, "active-participant")); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return nil
+	return rollbackOwnerStash(wsDir, stashRoot)
 }
 
 func rollbackOwnerStash(wsDir, stashRoot string) error {
@@ -432,6 +477,9 @@ func rollbackOwnerStash(wsDir, stashRoot string) error {
 		}
 	}
 	if err := os.Remove(filepath.Join(stashRoot, "active-participant")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(filepath.Join(stashRoot, "swap-phase")); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil

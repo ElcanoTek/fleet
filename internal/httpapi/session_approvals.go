@@ -71,6 +71,53 @@ func (r *SessionApprovalRegistry) Forget(convID string) {
 	}
 }
 
+// ForgetUnauthorizedUsers drops every pre-decision recorded for convID whose
+// userEmail is neither the conversation owner nor in allowed. Nil-safe.
+func (r *SessionApprovalRegistry) ForgetUnauthorizedUsers(convID, ownerEmail string, allowed map[string]bool) {
+	if r == nil || convID == "" {
+		return
+	}
+	prefix := convID + "\x00"
+	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.entries {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(k, prefix)
+		idx := strings.IndexByte(rest, '\x00')
+		if idx < 0 {
+			continue
+		}
+		userKey := rest[:idx]
+		if userKey == "" || userKey == ownerKey || allowed[userKey] {
+			continue
+		}
+		delete(r.entries, k)
+	}
+}
+
+// ForgetUser drops every pre-decision recorded for userEmail across all
+// conversations. Nil-safe.
+func (r *SessionApprovalRegistry) ForgetUser(userEmail string) {
+	if r == nil {
+		return
+	}
+	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	if userKey == "" {
+		return
+	}
+	needle := "\x00" + userKey + "\x00"
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for k := range r.entries {
+		if strings.Contains(k, needle) {
+			delete(r.entries, k)
+		}
+	}
+}
+
 // Match returns the first policy covering (convID, toolName, rawInput), or
 // ok=false when none applies. A "" pattern matches every call; "argName=glob"
 // matches when the call's args[argName] matches glob (filepath.Match). DENY

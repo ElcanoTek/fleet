@@ -496,11 +496,16 @@ func (s *Server) handleExternalAccess(w http.ResponseWriter, r *http.Request) {
 		ChatRole: chatRole, OpsRole: opsRole, Team: team, IssuedAt: body.IssuedAt,
 		TeamRename: teamRename,
 	}
+	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	applied, _, err := accessStore.ApplyExternalAccess(r.Context(), desired)
 	if err != nil {
 		http.Error(w, "external access update failed", http.StatusInternalServerError)
 		return
 	}
+	if !applied.Allowed {
+		s.sessionApprovals.ForgetUser(applied.Email)
+	}
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	for attempt := 0; attempt < 4; attempt++ {
 		if s.opsAdmins == nil {
 			if applied.Allowed && applied.OpsRole != "none" {

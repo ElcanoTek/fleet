@@ -455,6 +455,7 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 	s.multiplayerEpochs[convID]++
 	entry, ok := s.inflight[convID]
 	s.inflightMu.Unlock()
+	s.sessionApprovals.ForgetUnauthorizedUsers(convID, ownerEmail, allowed)
 	if ok {
 		if entry.buf != nil {
 			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
