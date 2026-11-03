@@ -2716,7 +2716,7 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
-      const canInsertMissingRow = !options.background;
+      const canInsertMissingRow = movesTheUser;
       if (
         data.conversation.user_email &&
         userEmail.trim() &&
@@ -2730,10 +2730,14 @@ export function ChatExperience({
             next[idx] = { ...prev[idx], ...data.conversation };
             return next;
           }
-          if (!canInsertMissingRow) return prev;
           return [data.conversation, ...prev];
         });
       } else if (data.conversation.archived_at != null) {
+        setConversations((prev) =>
+          prev.some((c) => c.id === data.conversation.id)
+            ? prev.filter((c) => c.id !== data.conversation.id)
+            : prev,
+        );
         setArchivedConversations((prev) => {
           const idx = prev.findIndex((c) => c.id === data.conversation.id);
           if (idx >= 0) {
@@ -2745,6 +2749,11 @@ export function ChatExperience({
           return [data.conversation, ...prev];
         });
       } else {
+        setArchivedConversations((prev) =>
+          prev.some((c) => c.id === data.conversation.id)
+            ? prev.filter((c) => c.id !== data.conversation.id)
+            : prev,
+        );
         setConversations((prev) => {
           const idx = prev.findIndex((c) => c.id === data.conversation.id);
           if (idx >= 0) {
@@ -4305,20 +4314,24 @@ export function ChatExperience({
         return;
       }
       const createdId = created.id;
-      const discardIfLeftOriginDraft = (): boolean => {
-        const stillOnOriginDraft =
-          activeConversationIdRef.current === originActiveId &&
-          draftKeyRef.current === originDraftKey;
-        if (!stillOnOriginDraft) {
-          const delUrl = conversationApiUrl(createdId);
-          if (delUrl) {
-            void fetch(delUrl, { method: "DELETE" }).catch(() => {});
+      const isStillOnOriginDraft = (): boolean =>
+        activeConversationIdRef.current === originActiveId &&
+        draftKeyRef.current === originDraftKey;
+      const tryDeleteStaleDraft = async (): Promise<boolean> => {
+        const delUrl = conversationApiUrl(createdId);
+        if (!delUrl) return false;
+        try {
+          const delRes = await fetch(delUrl, { method: "DELETE" });
+          if (delRes.ok || delRes.status === 404) {
+            deletedConvIdsRef.current.add(createdId);
+            return true;
           }
-          return true;
+        } catch {
+          // falls through to reconciliation below
         }
         return false;
       };
-      if (discardIfLeftOriginDraft()) {
+      if (!isStillOnOriginDraft() && (await tryDeleteStaleDraft())) {
         return;
       }
       let autoApprovePersisted = Boolean(created.auto_approve);
@@ -4337,7 +4350,8 @@ export function ChatExperience({
           }
         }
       }
-      if (discardIfLeftOriginDraft()) {
+      const stillOnOriginDraft = isStillOnOriginDraft();
+      if (!stillOnOriginDraft && (await tryDeleteStaleDraft())) {
         return;
       }
       const summary: ConversationSummary = {
@@ -4363,6 +4377,9 @@ export function ChatExperience({
         ...curr.filter((c) => c.id !== summary.id),
       ]);
       promoteComposerKey(originConvKey, summary.id);
+      if (!stillOnOriginDraft) {
+        return;
+      }
       setPendingLockdown(false);
       activeConversationIdRef.current = summary.id;
       setActiveConversationId(summary.id);
