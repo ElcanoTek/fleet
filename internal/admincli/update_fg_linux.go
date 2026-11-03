@@ -43,6 +43,13 @@ func waitForeground(cmd *exec.Cmd, ttyFD int) error {
 		// the shell holds it, and a script that reads it stops with SIGTTIN:
 		// leave the shell's terminal alone and just stop, so the shell
 		// reports the job stopped until the operator brings it back with fg.
+		if syscall.Getpgrp() != syscall.Getpid() {
+			// Not our own job (e.g. the shell runs without job control, `set +m`,
+			// and we share its group): no shell would ever continue a stopped
+			// job, so don't stop anything — let the script carry on.
+			_ = syscall.Kill(-pid, syscall.SIGCONT)
+			continue
+		}
 		if fg, err := unix.IoctlGetInt(ttyFD, unix.TIOCGPGRP); err == nil && fg == pid {
 			reclaimForeground(ttyFD)
 		}
@@ -60,9 +67,10 @@ func waitForeground(cmd *exec.Cmd, ttyFD int) error {
 // cldStopped is siginfo's si_code for a stopped child (CLD_STOPPED).
 const cldStopped = 5
 
-// suspendSelf stops this process's whole job (its process group: the wrapper
-// and, in a pipeline such as `fleet update | tee log`, the rest of the
-// pipeline — the shell only reports a job stopped once every member is) and
+// suspendSelf stops this process's whole job — its process group, which the
+// caller has checked this process leads (the wrapper and, in a pipeline such
+// as `fleet update | tee log`, the rest of the pipeline; the shell only
+// reports a job stopped once every member is) — and
 // returns only once it has been continued. kill(SIGSTOP) can return before
 // the stop takes effect, so it waits for the SIGCONT the shell's fg / bg
 // sends; going on early would hand the terminal back while the shell still
