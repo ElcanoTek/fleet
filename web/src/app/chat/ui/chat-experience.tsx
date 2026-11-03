@@ -2508,6 +2508,14 @@ export function ChatExperience({
   };
 
   const deletedConvIdsRef = useRef<Set<string>>(new Set());
+  const deleteAllUnpinnedSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const refreshConversations = async () => {
     const seqAtStart = new Map(autoApproveSeqRef.current);
@@ -2634,6 +2642,7 @@ export function ChatExperience({
     // that chain replaces its slot, after which the chain finds its slot
     // missing and lets go (#1584).
     const recoveryTokenAtStart = recoveryTokenRef.current(conversationId);
+    const deleteAllSeqAtStart = deleteAllUnpinnedSeqRef.current;
     // background: a warm-return revalidation already has the cached transcript
     // on screen, so it must NOT flash the blocking spinner — it swaps in the
     // fresh server copy underneath the rendered messages.
@@ -2722,7 +2731,9 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
-      const canInsertMissingRow = movesTheUser;
+      const canInsertMissingRow =
+        movesTheUser &&
+        deleteAllUnpinnedSeqRef.current === deleteAllSeqAtStart;
       if (
         data.conversation.user_email &&
         userEmail.trim() &&
@@ -2996,13 +3007,8 @@ export function ChatExperience({
     // deletion looked like it had taken the projects with it, which is exactly
     // the moment a user would panic. The predicate lives in one module shared
     // with the confirm dialog's count, so the two cannot disagree.
+    deleteAllUnpinnedSeqRef.current += 1;
     const remaining = afterDeleteAllUnpinned(conversations);
-    const remainingIds = new Set(remaining.map((c) => c.id));
-    for (const c of conversations) {
-      if (!remainingIds.has(c.id)) {
-        deletedConvIdsRef.current.add(c.id);
-      }
-    }
     setConversations(remaining);
     const active = activeConversationId
       ? remaining.find((c) => c.id === activeConversationId)
@@ -4307,6 +4313,7 @@ export function ChatExperience({
         }),
       });
       if (!response.ok) {
+        if (!mountedRef.current) return;
         const errText = (await response.text().catch(() => "")).trim();
         showRailError(
           errText ||
@@ -4316,11 +4323,14 @@ export function ChatExperience({
       }
       const created = (await response.json()) as Partial<ConversationSummary>;
       if (!created?.id) {
-        showRailError("Couldn't open sharing for this chat.");
+        if (mountedRef.current) {
+          showRailError("Couldn't open sharing for this chat.");
+        }
         return;
       }
       const createdId = created.id;
       const isStillOnOriginDraft = (): boolean =>
+        mountedRef.current &&
         activeConversationIdRef.current === originActiveId &&
         draftKeyRef.current === originDraftKey;
       const deleteStaleDraftWithRetry = async (attempt = 0): Promise<void> => {
@@ -4393,15 +4403,21 @@ export function ChatExperience({
       setActiveConversationId(summary.id);
       openShareDialog(summary);
     } catch {
-      showRailError("Couldn't reach the server to open sharing for this chat.");
+      if (mountedRef.current) {
+        showRailError(
+          "Couldn't reach the server to open sharing for this chat.",
+        );
+      }
     } finally {
-      setCreatingShareOrigin((curr) =>
-        curr &&
-        curr.activeId === originActiveId &&
-        curr.draftKey === originDraftKey
-          ? null
-          : curr,
-      );
+      if (mountedRef.current) {
+        setCreatingShareOrigin((curr) =>
+          curr &&
+          curr.activeId === originActiveId &&
+          curr.draftKey === originDraftKey
+            ? null
+            : curr,
+        );
+      }
     }
   };
 
