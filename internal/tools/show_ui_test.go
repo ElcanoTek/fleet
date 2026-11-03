@@ -161,7 +161,7 @@ func TestShowUISelfContainedCalculatorCard(t *testing.T) {
 			{"id": "reset", "label": "Reset", "kind": "reset"}
 		]
 	}`)
-	if resp.IsError || !strings.Contains(resp.Content, "display-only") {
+	if resp.IsError || !strings.Contains(resp.Content, "self-contained interactive card") || !strings.Contains(resp.Content, "end your turn now") || strings.Contains(resp.Content, "display-only") {
 		t.Fatalf("self-contained calculator card failed: %+v", resp)
 	}
 }

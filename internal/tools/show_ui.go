@@ -198,6 +198,8 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 		fmt.Fprintf(&b, " Do not restate its contents. End your turn now with at most one short sentence. When the user submits, their next message will start with %q followed by the values as JSON; act on those values with your normal tools.", fmt.Sprintf("%s card=%s action=<action_id>", UISubmissionPrefix, callID))
 	case hasMessageAction(card.Actions):
 		fmt.Fprintf(&b, " Its buttons send their fixed message as the user's next reply (after a %q line); end your turn now with at most one short sentence.", fmt.Sprintf("%s card=%s action=<action_id>", UIReplyPrefix, callID))
+	case card.HasInputs || len(card.Actions) > 0:
+		b.WriteString(" It is a self-contained interactive card; do not restate its contents, and end your turn now with at most one short sentence.")
 	default:
 		b.WriteString(" It is display-only; continue your answer without repeating what the card shows.")
 	}

@@ -298,5 +298,19 @@ describe("turnSendersByMessageId and hasHiddenOtherUserTurnDetails", () => {
     expect(senders.get(3)).toBe("alice@elcanotek.com");
     expect(hasHiddenOtherUserTurnDetails(msgs[2], senders.get(3), "brad@elcanotek.com", true)).toBe(true);
   });
+
+  it("resets turn sender attribution on unattributed automatic turns (approval_resume / chat_patrol)", () => {
+    const msgs: Message[] = [
+      { id: 1, role: "user", content: "teammate question", senderEmail: "alice@elcanotek.com", state: "done" },
+      { id: 2, role: "assistant", content: "teammate answer", state: "done" },
+      { id: 3, role: "user", kind: "approval_resume", content: "resume notice", state: "done" },
+      { id: 4, role: "assistant", content: "owner resumed answer", state: "done" },
+    ];
+    const senders = turnSendersByMessageId(msgs);
+    expect(senders.get(2)).toBe("alice@elcanotek.com");
+    expect(senders.get(4)).toBeUndefined();
+    expect(hasHiddenOtherUserTurnDetails(msgs[3], senders.get(4), "brad@elcanotek.com", true)).toBe(false);
+    expect(hasHiddenOtherUserTurnDetails(msgs[3], senders.get(4), "alice@elcanotek.com", false)).toBe(true);
+  });
 });
 

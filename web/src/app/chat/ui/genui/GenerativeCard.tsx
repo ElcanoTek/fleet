@@ -1172,7 +1172,6 @@ function CardBody({
   const confirmingVisible = confirming && !awaiting && isVisible(confirming, scope) ? confirming : null;
   const hasUsableFooterReset =
     !locked &&
-    !confirmingVisible &&
     !awaiting &&
     sending === null &&
     actions.some(
@@ -1180,7 +1179,7 @@ function CardBody({
         a.kind === "reset" &&
         !(typeof a.disabled_if === "string" && truthy(evaluateSafe(a.disabled_if, scope, false))),
     );
-  const showHeaderReset = !fieldsLocked && isModified && !hasUsableFooterReset;
+  const showHeaderReset = !fieldsLocked && !confirmingVisible && isModified && !hasUsableFooterReset;
   // Discard it outright, so it does not silently return if the action shows again.
   if (confirming && !confirmingVisible) setConfirming(null);
   // Keyboard focus follows the confirmation: the action row it replaces

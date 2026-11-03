@@ -2271,4 +2271,21 @@ describe("a confirmation and Escape", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
+
+  it("keeps header Reset suppressed while a confirmed reset is asking for confirmation", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Confirmed Reset",
+      components: [{ type: "number", id: "n", label: "Amount", value: 10 }],
+      actions: [{ id: "reset", label: "Reset all", kind: "reset", confirm: "Reset everything?" }],
+    });
+    render(<GenerativeCard cardId="confirm-reset" spec={s} />);
+    const input = screen.getByLabelText(/Amount/) as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "25");
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Reset all" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+  });
 });

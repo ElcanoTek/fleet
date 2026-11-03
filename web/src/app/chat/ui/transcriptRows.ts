@@ -6,7 +6,7 @@
 // testable without jsdom (which does no layout, so a virtualized transcript
 // renders nothing there).
 
-import { APPROVAL_RESUME_KIND, CHAT_PATROL_KIND, type Message } from "./history";
+import type { Message } from "./history";
 import { isRenderableCardCall } from "./genui/transcript";
 
 export type TranscriptRow =
@@ -110,10 +110,7 @@ export function turnSendersByMessageId(messages: readonly Message[]): Map<number
   let currentSender: string | undefined;
   for (const m of messages) {
     if (m.role === "user") {
-      if (
-        !m.steered &&
-        (m.senderEmail !== undefined || (m.kind !== APPROVAL_RESUME_KIND && m.kind !== CHAT_PATROL_KIND))
-      ) {
+      if (!m.steered) {
         currentSender = m.senderEmail;
       }
       continue;

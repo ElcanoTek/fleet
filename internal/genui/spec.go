@@ -116,6 +116,9 @@ type Card struct {
 	// than a new message each time. Display metadata only: it never changes
 	// what the card can do or send.
 	Panel string `json:"panel,omitempty"`
+	// HasInputs reports whether the validated card declares any input
+	// components (or selectable tables), including inside repeaters.
+	HasInputs bool `json:"-"`
 }
 
 type kind int
@@ -493,6 +496,7 @@ func Validate(raw []byte) (Card, []Issue) {
 	if len(v.issues) == 0 {
 		// Decode into the typed shape only once the payload is known-good.
 		_ = json.Unmarshal(raw, &c)
+		c.HasInputs = len(v.fields) > 0
 	}
 	if len(v.issues) > maxIssuesReported {
 		extra := len(v.issues) - maxIssuesReported
