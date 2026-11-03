@@ -2411,6 +2411,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             role: "user" as const,
             content: text,
             ...(senderEmail ? { senderEmail } : {}),
+            steered: true,
             injectedContext,
             state: "done" as const,
           };

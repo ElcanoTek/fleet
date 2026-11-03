@@ -2022,7 +2022,7 @@ describe("structural accessibility of every valid fixture card", () => {
       const card = screen.getByTestId("genui-card");
       audit(card, `${c.name} (fresh)`);
       // Pressing the first submit action shows any validation errors.
-      const submit = (s.actions ?? []).find((a) => a.kind !== "message" && !a.confirm && !a.visible_if && !a.disabled_if);
+      const submit = (s.actions ?? []).find((a) => (!a.kind || a.kind === "submit") && !a.confirm && !a.visible_if && !a.disabled_if);
       if (submit) {
         const btn = within(card).queryByRole("button", { name: submit.label });
         if (btn && !(btn as HTMLButtonElement).disabled) {
@@ -2037,6 +2037,204 @@ describe("structural accessibility of every valid fixture card", () => {
       }
     });
   }
+});
+
+describe("self-contained interactive calculators, reactive tables/charts, and copy/reset actions", () => {
+  it("updates reactive table cells, chart series, progress caption, and copies formatted summary", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const s = spec({
+      title: "Budget Simulator",
+      components: [
+        { type: "number", id: "budget", label: "Budget", value: 50000 },
+        {
+          type: "progress",
+          label: "Share of Cap",
+          value: "budget",
+          max: 100000,
+          tone: "info",
+          caption: "${{ commas(budget) }} of $100,000",
+        },
+        {
+          type: "table",
+          label: "Breakdown",
+          templates: true,
+          columns: [
+            { key: "channel", label: "Channel" },
+            { key: "spend", label: "Spend" },
+          ],
+          rows: [
+            { channel: "CTV", spend: "${{ commas(round(budget * 0.6)) }}" },
+            { channel: "Display", spend: "${{ compact(budget * 0.4) }}" },
+          ],
+        },
+        {
+          type: "chart",
+          kind: "bar",
+          title: "Projected Spend",
+          labels: ["CTV", "Display"],
+          unit: "$",
+          series: [{ name: "Spend", values: ["round(budget * 0.6)", "{{ round(budget * 0.4) }}"] }],
+        },
+      ],
+      actions: [
+        { id: "copy", label: "Copy summary", kind: "copy", message: "Total: ${{ commas(budget) }} ({{ compact(budget) }})" },
+        { id: "ask", label: "Analyze scenario", kind: "message", message: "Explain {{ .Budget }} scenario" },
+      ],
+    });
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="calc" spec={s} onSubmit={onSubmit} />);
+
+    // Initial render reflects $50,000 defaults in progress caption, table cells, and chart sr-only table.
+    expect(screen.getByText("$50,000 of $100,000")).toBeTruthy();
+    expect(screen.getByText("$30,000")).toBeTruthy();
+    expect(screen.getByText("$20K")).toBeTruthy();
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+
+    // Change budget to 100000 -> live table cells, chart, progress caption, and header Reset appear.
+    const input = screen.getByLabelText("Budget");
+    await user.clear(input);
+    await user.type(input, "100000");
+    expect(screen.getByText("$100,000 of $100,000")).toBeTruthy();
+    expect(screen.getByText("$60,000")).toBeTruthy();
+    expect(screen.getByText("$40K")).toBeTruthy();
+    const chartTable = screen.getByRole("table", { name: "Projected Spend" });
+    expect(within(chartTable).getByRole("row", { name: /CTV/ }).textContent).toContain("$60000");
+
+    // Copy action writes rendered template to clipboard and shows "Copied" without locking the card.
+    await user.click(screen.getByRole("button", { name: "Copy summary" }));
+    expect(writeText).toHaveBeenCalledWith("Total: $100,000 (100K)");
+    expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    // Header Reset button restores initial default ($50,000) and disappears.
+    const resetBtn = screen.getByTestId("genui-reset");
+    await user.click(resetBtn);
+    expect((screen.getByLabelText("Budget") as HTMLInputElement).value).toBe("50000");
+    expect(screen.getByText("$50,000 of $100,000")).toBeTruthy();
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+
+    // Static message action preserves literal mustaches in fixed quick replies.
+    await user.click(screen.getByRole("button", { name: "Analyze scenario" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      buildReplyMessage("calc", "ask", "Explain {{ .Budget }} scenario"),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
+
+  it("enables a footer reset action only when inputs differ from defaults", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Checklist",
+      components: [
+        { type: "toggle", id: "done", label: "Task complete", value: false },
+        { type: "stat", label: "Status", value: "{{ done ? 'Done' : 'Pending' }}" },
+      ],
+      actions: [{ id: "rst", label: "Reset", kind: "reset" }],
+    });
+    render(<GenerativeCard cardId="rst" spec={s} />);
+    const resetBtn = screen.getByRole("button", { name: "Reset" }) as HTMLButtonElement;
+    expect(resetBtn.disabled).toBe(true);
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+
+    await user.click(screen.getByRole("switch", { name: "Task complete" }));
+    expect(screen.getByText("Done")).toBeTruthy();
+    expect(resetBtn.disabled).toBe(false);
+    // No duplicate header Reset button when a footer reset action exists.
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+
+    await user.click(resetBtn);
+    expect(screen.getByText("Pending")).toBeTruthy();
+    expect(resetBtn.disabled).toBe(true);
+  });
+
+  it("keeps the header Reset button when a footer reset action is hidden or disabled, preserves literal mustaches in legacy tables, and does not clip long action templates at 2,000 chars", async () => {
+    const user = userEvent.setup();
+    const longLine = "x".repeat(2500);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const s = spec({
+      title: "Reset & Template Fidelity",
+      components: [
+        { type: "toggle", id: "allow_footer_reset", label: "Allow footer reset", value: false },
+        { type: "text_input", id: "notes", label: "Notes", value: longLine },
+        {
+          type: "table",
+          label: "Legacy Table",
+          columns: [{ key: "syntax", label: "Syntax" }],
+          rows: [{ syntax: "{{ .Name }} and {{ notes }}" }],
+        },
+      ],
+      actions: [
+        { id: "rst", label: "Reset", kind: "reset", visible_if: "allow_footer_reset" },
+        { id: "copy", label: "Copy notes", kind: "copy", message: "{{ notes }}" },
+      ],
+    });
+    render(<GenerativeCard cardId="fidelity" spec={s} />);
+
+    // Legacy table without templates: true preserves literal mustaches verbatim.
+    expect(screen.getByText("{{ .Name }} and {{ notes }}")).toBeTruthy();
+
+    // Modify notes while footer reset is hidden -> header Reset button is shown!
+    const input = screen.getByLabelText("Notes");
+    await user.type(input, "!");
+    expect(screen.getByTestId("genui-reset")).toBeTruthy();
+
+    // Copy action preserves the full >2,000-character string without clipping with "…".
+    await user.click(screen.getByRole("button", { name: "Copy notes" }));
+    expect(writeText).toHaveBeenCalledWith(`${longLine}!`);
+  });
+
+  it("preserves null chart-expression results as gaps, excludes hidden inputs from copy templates, and reports clipboard failures", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("Clipboard denied")).mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const s = spec({
+      title: "Edge cases",
+      components: [
+        { type: "toggle", id: "show_secret", label: "Show secret", value: true },
+        { type: "text_input", id: "secret_code", label: "Secret code", visible_if: "show_secret", value: "ALPHA" },
+        { type: "number", id: "opt_num", label: "Optional number" },
+        {
+          type: "chart",
+          kind: "line",
+          title: "Gap Chart",
+          labels: ["A", "B"],
+          series: [{ name: "S", values: ["opt_num", 10] }],
+        },
+      ],
+      actions: [
+        { id: "copy", label: "Copy code", kind: "copy", message: "Code={{ secret_code }}" },
+      ],
+    });
+    render(<GenerativeCard cardId="edge" spec={s} />);
+
+    // Blank optional number evaluates to null in chart series -> rendered as "No value" gap, not 0.
+    const chartTable = screen.getByRole("table", { name: "Gap Chart" });
+    expect(within(chartTable).getByRole("row", { name: /A/ }).textContent).toContain("No value");
+
+    // Failed clipboard write does not flip button to "Copied" and surfaces notice.
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    expect(await screen.findByText("Could not copy. Try again.")).toBeTruthy();
+
+    // Hide secret_code via toggle -> copy template omits the hidden value.
+    await user.click(screen.getByRole("switch", { name: "Show secret" }));
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(writeText).toHaveBeenLastCalledWith("Code=");
+  });
 });
 
 describe("table cells", () => {
@@ -2072,5 +2270,22 @@ describe("a confirmation and Escape", () => {
     await user.click(screen.getByLabelText(/Name/));
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("keeps header Reset suppressed while a confirmed reset is asking for confirmation", async () => {
+    const user = userEvent.setup();
+    const s = spec({
+      title: "Confirmed Reset",
+      components: [{ type: "number", id: "n", label: "Amount", value: 10 }],
+      actions: [{ id: "reset", label: "Reset all", kind: "reset", confirm: "Reset everything?" }],
+    });
+    render(<GenerativeCard cardId="confirm-reset" spec={s} />);
+    const input = screen.getByLabelText(/Amount/) as HTMLInputElement;
+    await user.clear(input);
+    await user.type(input, "25");
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Reset all" }));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(screen.queryByTestId("genui-reset")).toBeNull();
   });
 });

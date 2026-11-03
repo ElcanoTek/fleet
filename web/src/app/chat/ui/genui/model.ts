@@ -46,7 +46,7 @@ export type Component = { type: string; id?: string; visible_if?: string } & Rec
 export type Action = {
   id: string;
   label: string;
-  kind?: "submit" | "message";
+  kind?: "submit" | "message" | "copy" | "reset";
   style?: "primary" | "secondary" | "danger";
   message?: string;
   validate?: boolean;

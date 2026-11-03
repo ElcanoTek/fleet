@@ -40,7 +40,7 @@ type ShowUIParams struct {
 	Title       string     `json:"title,omitempty" description:"Short card title (a few words). Required unless from_result is given."`
 	Description string     `json:"description,omitempty" description:"Optional one-line subtitle. May contain {{ expr }} templates."`
 	Components  []any      `json:"components,omitempty" description:"The card body: an array of component objects, each with a \"type\" from the catalog in the tool description. Required unless from_result is given."`
-	Actions     []any      `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card has inputs."`
+	Actions     []any      `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message|copy|reset, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card collects answers, optional on live calculators/checklists where every input drives an expression."`
 	Replaces    string     `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
 	Panel       string     `json:"panel,omitempty" description:"Optional dashboard panel key (1-40 chars of a-z, 0-9, '-', '_'; e.g. \"revenue\"). The card becomes that panel on the user's dashboard board, and a later card with the same panel key updates it in place. Use for numbers, charts and tables the user will keep watching."`
 	FieldErrors []any      `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
@@ -59,14 +59,14 @@ A CARD A TOOL BUILT — when a tool result already contains a ready-made card (f
 
 COMPONENTS — every component is {"type": ..., ...props}; any component may also take "visible_if": "<expr>" (a condition must read an editable input and be able to hold; a constant or self-contradictory one is refused).
 Layout: section {title?, description?, children, collapsible?, collapsed?} · columns {children (2-4, one per column)} · tabs {tabs:[{label, children}], variant?: tabs|steps} · divider {}
-Display: heading {text} · text {text, markdown?, tone?: default|muted} · callout {text, title?, tone?: neutral|info|success|warning|danger} · badges {items:[{text, tone?}]} · stat {label, value, caption?, tone?} · facts {items:[{label, value}]} · table {columns:[{key, label?, align?}], rows:[{<key>: string|number|bool|null}], select?: none|single|multi, row_key?, id?, value?, required?, disabled? (the last four only when select is single|multi)} · status_list {items:[{status: pass|fail|warn|info|pending, label, detail?, field? (an input path, same form as field_errors)}]} · progress {value (expr), max?, label?} · chart {kind: bar|line, labels:[...], series:[{name, values:[numbers]}], title?, unit?} · diff {rows:[{label, before?, after?}], title?} · code {text, language?} · link {text, url (https)}
-Inputs (all take id (required, unique), label?, help?, required?, disabled?, value? = default):
+Display: heading {text} · text {text, markdown?, tone?: default|muted} · callout {text, title?, tone?: neutral|info|success|warning|danger} · badges {items:[{text, tone?}]} · stat {label, value, caption?, tone?} · facts {items:[{label, value}]} · table {columns:[{key, label?, align?}], rows:[{<key>: string|number|bool|null}], templates?: bool (set true to evaluate {{ expr }} templates in string cells; row_key stays static), select?: none|single|multi, row_key?, id?, value?, required?, disabled? (the last four only when select is single|multi)} · status_list {items:[{status: pass|fail|warn|info|pending, label, detail?, field? (an input path, same form as field_errors)}]} · progress {value (expr), max?, label?, caption?, tone?} · chart {kind: bar|line, labels:[...], series:[{name, values:[numbers or expr strings]}], title?, unit?} · diff {rows:[{label, before?, after?}], title?} · code {text, language?} · link {text, url (https)}
+Inputs (all take id (required, unique; letters, digits and '_' only — never '-'), label?, help?, required?, disabled?, value? = default):
   text_input {placeholder?, multiline?, min_length?, max_length?, format?: text|email|url} · number {min?, max?, step?, prefix?, suffix?} · slider {min, max, step?, prefix?, suffix?} · select {options} · choice {options, variant?: segmented|radio} · multi_select {options?, allow_custom?, max_items?} · toggle {} · date {min?, max?} (YYYY-MM-DD) · list_input {placeholder?, max_items?, dedupe?} (paste one item per line → string array) · include_exclude {options?, allow_custom?, include_label?, exclude_label?} (value {include:[], exclude:[]}) · repeater {fields:[components], item_label?, min_items?, max_items?, add_label?} (a list of items the user can add/remove/duplicate; value is [{field_id: value}]; no nested repeaters)
 Options are strings or {value, label?, description?}. A selectable table submits the row_key value(s) of the chosen rows under its id.
 
-EXPRESSIONS — used in {{ }} templates (text, heading, callout, stat value/caption, facts value, status_list label/detail, badges text, description, help, item_label) and in visible_if / disabled_if / progress value. Read input ids by name; inside a repeater's fields also that item's fields and index (1-based); from outside, repeater_id.field is the array of that field across items ('.' only after an input name: unique(rows.cpm), not unique(rows).cpm). Operators: + - * / % == != < <= > >= && || ! ?: ( ) and literals ('text', 12.5, true, false, null). Functions: ` + "len count sum avg min max abs floor ceil round(x, digits?) fixed(x, digits) number string upper lower join(list, sep?) contains(list|text, x) empty unique" + `. Example: "{{ count(lines) * len(exchanges) }} deals", visible_if "channel == 'Video'".
+EXPRESSIONS — used in {{ }} templates (text, heading, callout, stat value/caption, facts value, table string cells when templates: true, status_list label/detail, progress caption, badges text, copy action message, description, help, item_label) and in visible_if / disabled_if / progress value / chart series values. Read input ids by name; inside a repeater's fields also that item's fields and index (1-based); from outside, repeater_id.field is the array of that field across items ('.' only after an input name: unique(rows.cpm), not unique(rows).cpm). Operators: + - * / % == != < <= > >= && || ! ?: ( ) and literals ('text', 12.5, true, false, null). Functions: ` + "len count sum avg min max abs floor ceil round(x, digits?) fixed(x, digits) commas(x, digits?) compact(x, digits?) number string upper lower join(list, sep?) contains(list|text, x) empty unique" + `. Example: "${{ commas(round(events * cpm)) }}", visible_if "channel == 'Video'".
 
-ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply, after a "` + UIReplyPrefix + ` card=<card_id> action=<action_id>" line — use for quick-reply buttons), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}; a button hidden or disabled in every state is refused. At most 6.
+ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply, after a "` + UIReplyPrefix + ` card=<card_id> action=<action_id>" line — use for quick-reply buttons) | "copy" (copies the rendered "message" {{ }} template to the clipboard without ending the card — great for calculators and checklists) | "reset" (resets inputs to their defaults), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}; a button hidden or disabled in every state is refused. A self-contained calculator or checklist where every input is read by an expression needs no submit button (actions may be omitted or use copy/reset). At most 6.
 
 DASHBOARD PANELS — add "panel": "<key>" (1-40 chars of a-z, 0-9, '-', '_') to make a card a living tile on the user's dashboard board instead of a one-off message. A later show_ui with the SAME panel key updates that tile in place (no replaces needed); a new key adds a tile. A tile with no key (a card the user pinned to the board) is updated with replaces=<its card_id>, which keeps its place; add a panel key then if you like. In dashboard view the user's message lists the panels on their board with each one's card_id and key, so "update this chart" can be matched to a panel. Use panels for what the user will keep watching — KPIs (stat), trends (chart), lists to triage (table, status_list) — one topic per panel, a few components each, and refresh a panel when its numbers change rather than restating them in prose. A panel may also hold inputs (a filter, a what-if slider); the usual submit flow applies. Without a panel key a display-only card still appears on the board while the user is in dashboard view.
 
@@ -196,8 +196,10 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	switch {
 	case interactive:
 		fmt.Fprintf(&b, " Do not restate its contents. End your turn now with at most one short sentence. When the user submits, their next message will start with %q followed by the values as JSON; act on those values with your normal tools.", fmt.Sprintf("%s card=%s action=<action_id>", UISubmissionPrefix, callID))
-	case len(card.Actions) > 0:
+	case hasMessageAction(card.Actions):
 		fmt.Fprintf(&b, " Its buttons send their fixed message as the user's next reply (after a %q line); end your turn now with at most one short sentence.", fmt.Sprintf("%s card=%s action=<action_id>", UIReplyPrefix, callID))
+	case card.HasInputs || len(card.Actions) > 0:
+		b.WriteString(" It is a self-contained interactive card; do not restate its contents, and end your turn now with at most one short sentence.")
 	default:
 		b.WriteString(" It is display-only; continue your answer without repeating what the card shows.")
 	}
@@ -211,6 +213,19 @@ func hasSubmitAction(actions []any) bool {
 			continue
 		}
 		if k, _ := m["kind"].(string); k == "" || k == "submit" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasMessageAction(actions []any) bool {
+	for _, a := range actions {
+		m, ok := a.(map[string]any)
+		if !ok {
+			continue
+		}
+		if k, _ := m["kind"].(string); k == "message" {
 			return true
 		}
 	}

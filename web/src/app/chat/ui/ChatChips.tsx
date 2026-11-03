@@ -290,6 +290,35 @@ export function TurnSummaryChip({
 }
 
 /**
+ * Pill rendered in the TurnSummaryChip slot when "Show details" is active on a
+ * turn sent by another user in a multiplayer or shared conversation (whose
+ * tool calls, reasoning, and token/cost telemetry are withheld by the server).
+ */
+export function OtherUserTurnDetailsPill({
+  cancelled,
+  model,
+}: {
+  cancelled?: boolean;
+  model?: string;
+}) {
+  const modelLabel = shortModelName(model);
+  return (
+    <p
+      data-testid="other-user-turn-details-pill"
+      title="Tool calls, reasoning, and token/cost details are only visible to the user who ran this turn."
+      className="inline-flex items-center gap-1.5 self-start rounded-[var(--radius-pill)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-muted)]"
+    >
+      <Icon name="lock" className="size-3 shrink-0 opacity-75" aria-hidden="true" />
+      <span>
+        {cancelled ? "stopped · " : ""}
+        Turn details hidden for other users&apos; turns
+        {modelLabel ? ` · ${modelLabel}` : ""}
+      </span>
+    </p>
+  );
+}
+
+/**
  * SummaryBanner renders a compaction marker — the message inserted by
  * the user-initiated "summarize and continue" flow. Reads as a
  * distinct phase boundary, not a regular assistant turn:
@@ -390,7 +419,14 @@ export function ConversationTotalsChip({
     () =>
       messages
         .map((m) => m.summary)
-        .filter((s): s is TurnSummary => !!s),
+        .filter(
+          (s): s is TurnSummary =>
+            !!s &&
+            (s.costUsd > 0 ||
+              s.promptTokens > 0 ||
+              s.completionTokens > 0 ||
+              s.durationMs > 0),
+        ),
     [messages],
   );
 

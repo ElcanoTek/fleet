@@ -156,10 +156,17 @@ is the shared list that both test suites assert against.
 | Display | `heading`, `text` (plain or markdown), `callout`, `badges`, `stat`, `facts`, `table`, `status_list`, `progress`, `chart` (bar/line), `diff`, `code`, `link` |
 | Input | `text_input`, `number`, `slider`, `select`, `choice` (segmented/radio), `multi_select` (options and/or free entry), `toggle`, `date`, `list_input` (paste one per line), `include_exclude` (allow/block lanes), `repeater` (add/duplicate/remove items) |
 
-Plus card-level `actions` (`submit` sends the values; `message` sends a fixed
-reply, which serves as quick-reply buttons), `field_errors` (inline errors on
-`id` or `repeater[i].field`, with `i` the 0-based item position, unlike the
-1-based `index` in expressions), and `replaces` (collapses an older card).
+Plus card-level `actions` (`submit` sends the values; `message` sends a
+fixed reply, which serves as quick-reply buttons; `copy` copies a
+templated string to the clipboard without locking the card; `reset` resets inputs
+to their initial defaults), `field_errors` (inline errors on `id` or
+`repeater[i].field`, with `i` the 0-based item position, unlike the 1-based
+`index` in expressions), and `replaces` (collapses an older card). When every
+input on a card is reachable and read by at least one expression driving display
+components or actions, `submit` is optional so the agent can render
+self-contained calculators, what-if simulators, and interactive checklists. Any
+unlocked interactive card also shows a subtle header **Reset** button once the
+user modifies an input away from its initial defaults.
 
 A quick reply is sent as `[UI reply] card=<id> action=<id>` followed by the
 button's text, so the card it answered is known from the marker rather than by
@@ -216,16 +223,18 @@ unique, both as first shown and after a submit shows its errors.
 
 The one logic surface is a small, side-effect-free expression language. It is
 used in `{{ }}` templates (text, headings, callout and badge text, stat
-values and captions, fact values, status-list labels and details,
-descriptions, help and repeater item labels; titles and input labels are
-plain text) and in
-`visible_if`, `disabled_if` and `progress.value`. It supports literals, input ids
+values and captions, fact values, table string cells when `templates: true` is
+set on the table, status-list labels and details, progress captions, `copy`
+action `message` strings, descriptions, help and repeater item labels; titles,
+input labels, `message` action replies, and selectable table `row_key` values
+are plain text) and in `visible_if`, `disabled_if`, `progress.value`, and
+string elements of `chart.series[i].values`. It supports literals, input ids
 (in a repeater, the item's own fields and `index`; from outside, `rep.field` as
 an array), `+ - * / % == != < <= > >= && || ! ?:`, member access on an input
 name (`rows.cpm`, never on a call's result: `unique(rows.cpm)`, not
 `unique(rows).cpm`, so every member is checked), and a fixed
-function whitelist: `len count sum avg min max abs floor ceil round fixed number
-string upper lower join contains empty unique`.
+function whitelist: `len count sum avg min max abs floor ceil round fixed commas
+compact number string upper lower join contains empty unique`.
 
 It is a pinned pair. `internal/genui/expr.go` parses and checks every name it
 reads against the card's inputs, so a typo becomes a tool error the model fixes

@@ -114,6 +114,8 @@ const ARITY: Record<string, [number, number]> = {
   ceil: [1, 1],
   round: [1, 2],
   fixed: [2, 2],
+  commas: [1, 2],
+  compact: [1, 2],
   number: [1, 1],
   string: [1, 1],
   upper: [1, 1],
@@ -510,6 +512,15 @@ function uniqueValues(items: Value[]): Value[] {
   return out;
 }
 
+function addCommas(s: string): string {
+  if (s.includes("e") || s.includes("E")) return s;
+  const [rawInt, dec] = s.split(".");
+  const sign = rawInt.startsWith("-") ? "-" : "";
+  const digits = sign ? rawInt.slice(1) : rawInt;
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dec !== undefined ? `${sign}${grouped}.${dec}` : `${sign}${grouped}`;
+}
+
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -550,6 +561,41 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     const n = num(v);
     const digits = Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
     return Number.isFinite(n) ? roundTo(n, digits).toFixed(digits) : null;
+  },
+  commas: ([v, d]) => {
+    const n = num(v);
+    if (!Number.isFinite(n)) return null;
+    if (d === undefined) return addCommas(toText(n));
+    const digits = Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
+    return addCommas(roundTo(n, digits).toFixed(digits));
+  },
+  compact: ([v, d]) => {
+    const n = num(v);
+    if (!Number.isFinite(n)) return null;
+    const digits = d === undefined ? 1 : Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
+    const abs = Math.abs(n);
+    const units: Array<[number, string]> = [
+      [1e12, "T"],
+      [1e9, "B"],
+      [1e6, "M"],
+      [1e3, "K"],
+    ];
+    for (let i = 0; i < units.length; i++) {
+      const [scale, suffix] = units[i];
+      if (abs >= scale) {
+        const r = roundTo(n / scale, digits);
+        if (Math.abs(r) >= 1000 && i > 0) {
+          const [nextScale, nextSuffix] = units[i - 1];
+          return `${toText(roundTo(n / nextScale, digits))}${nextSuffix}`;
+        }
+        return `${toText(r)}${suffix}`;
+      }
+    }
+    const r = roundTo(n, digits);
+    if (Math.abs(r) >= 1000) {
+      return `${toText(roundTo(n / 1e3, digits))}K`;
+    }
+    return toText(r);
   },
   number: ([v]) => numOrNull(num(v)),
   string: ([v]) => toText(v),
@@ -698,6 +744,29 @@ export function renderTemplate(s: string | undefined, scope: Scope): string {
       return "⚠";
     }
     if (t.length > left) t = `${t.slice(0, Math.max(0, left))}…`;
+    left -= t.length;
+    return t;
+  });
+}
+
+/**
+ * Render an action payload's {{ expr }} holes without the display-only
+ * MAX_TEMPLATE_CHARS (2,000-character) clip, while bounding total hole
+ * expansion to `maxChars` incrementally so repeated large expressions cannot
+ * allocate unbounded strings before the caller's byte-limit check.
+ */
+export function renderActionTemplate(s: string | undefined, scope: Scope, maxChars = MAX_EXPR_STRING): string {
+  if (!s || !s.includes("{{")) return s ?? "";
+  let left = Math.max(0, maxChars);
+  return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
+    if (left <= 0) return "";
+    let t: string;
+    try {
+      t = toText(evaluate(src, scope));
+    } catch {
+      return "⚠";
+    }
+    if (t.length > left) t = t.slice(0, left);
     left -= t.length;
     return t;
   });

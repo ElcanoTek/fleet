@@ -148,3 +148,20 @@ func TestShowUIPanelCard(t *testing.T) {
 		t.Fatal("the tool description no longer teaches panel keys")
 	}
 }
+
+func TestShowUISelfContainedCalculatorCard(t *testing.T) {
+	resp := runShowUI(t, `{
+		"title": "Budget Simulator",
+		"components": [
+			{"type": "slider", "id": "budget", "label": "Budget", "min": 1000, "max": 50000, "step": 1000, "value": 10000},
+			{"type": "stat", "label": "Projected", "value": "${{ commas(budget) }} ({{ compact(budget) }})"}
+		],
+		"actions": [
+			{"id": "copy", "label": "Copy", "kind": "copy", "message": "Budget: ${{ commas(budget) }}"},
+			{"id": "reset", "label": "Reset", "kind": "reset"}
+		]
+	}`)
+	if resp.IsError || !strings.Contains(resp.Content, "self-contained interactive card") || !strings.Contains(resp.Content, "end your turn now") || strings.Contains(resp.Content, "display-only") {
+		t.Fatalf("self-contained calculator card failed: %+v", resp)
+	}
+}

@@ -1093,6 +1093,12 @@ export type Message = {
    */
   senderEmail?: string;
   /**
+   * True when this user message was steered mid-turn into an already running
+   * turn (#785). Tool traces and summaries stay scoped to the user who started
+   * the turn (historyForParticipant).
+   */
+  steered?: boolean;
+  /**
    * Server-injected context for a user turn — everything fleet appended to the
    * message before the model saw it (see HistoryEntry.injected_context). Never
    * part of `content`, which is what the user typed. The transcript renders it
@@ -1478,6 +1484,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         text?: string;
         kind?: string;
         sender_email?: string;
+        steered?: boolean;
       };
       const senderEmail =
         typeof userContent.sender_email === "string" &&
@@ -1490,6 +1497,7 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
         role: "user",
         content: String(userContent.text ?? ""),
         ...(senderEmail ? { senderEmail } : {}),
+        ...(userContent.steered === true ? { steered: true } : {}),
         injectedContext: injected.trim() ? injected : undefined,
         // A turn fleet started itself after an approval card was settled or
         // when an in-chat patrol/timer fired: the row is fleet's notice, not
