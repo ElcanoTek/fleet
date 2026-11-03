@@ -29,9 +29,12 @@ function PillIcon({ name, className }: { name: string; className?: string }) {
 export function EmptyStatePrompts({
   pills,
   onPick,
+  singleColumn,
 }: {
   pills: ProtocolPill[];
   onPick: (id: string) => void;
+  /** One column at every width (dashboard view's narrow chat rail). */
+  singleColumn?: boolean;
 }) {
   if (pills.length === 0) return null;
 
@@ -40,7 +43,7 @@ export function EmptyStatePrompts({
   // .suggestions breakpoint) instead of two uneven groups where the lone
   // Optimization card dangled under its own header.
   return (
-    <div className="grid w-full max-w-[44rem] gap-2.5 min-[901px]:grid-cols-2">
+    <div className={`grid w-full max-w-[44rem] gap-2.5${singleColumn ? "" : " min-[901px]:grid-cols-2"}`}>
       {pills.map((pill) => (
         <PillCard key={pill.id} pill={pill} onPick={onPick} />
       ))}

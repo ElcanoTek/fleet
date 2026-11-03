@@ -89,6 +89,12 @@ type chatRequest struct {
 	// exposes a turn before its user message commits, so the transcript agrees
 	// with both readings. Empty = the caller wants no such echo.
 	SubmissionID string `json:"submission_id,omitempty"`
+	// View names the layout the sender is reading the chat in. "dashboard"
+	// (docs/DASHBOARD-VIEW.md) adds a short note to the turn's injected
+	// context so the agent keeps the board's panels current; any other value
+	// is ignored. It is a presentation hint only: it grants nothing and
+	// changes no tool, approval or limit.
+	View string `json:"view,omitempty"`
 
 	// inputKind is set only by the server, never decoded from a request (it
 	// is unexported, so encoding/json cannot fill it): agent.
@@ -1206,6 +1212,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// which later turns never carry.
 		injected = s.applyConnectorRecommendations(injected, req.Message, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), req.EnabledOptional)
 		injected = appendMultiplayerSenderBlock(injected, conv, user)
+		injected = appendDashboardViewBlock(injected, req.View)
 	}
 
 	// Lockdown model migration, at the last moment before the client can be
@@ -1363,6 +1370,29 @@ func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, use
 		return injected + "\n\n[Multiplayer chat: message sent by " + user + "]"
 	}
 	return injected
+}
+
+// chatViewDashboard is the chatRequest.View value the web client sends while
+// the sender has the chat open in dashboard view.
+const chatViewDashboard = "dashboard"
+
+// dashboardViewNote is what the agent reads on a turn sent from dashboard
+// view. It points at the show_ui panel key (the tool description holds the
+// details) and asks for terse prose, because the board, not the transcript,
+// is where the reader is looking.
+const dashboardViewNote = "[Dashboard view: the user is reading this chat as a live dashboard — a board of panels beside a narrow chat rail. " +
+	"Put numbers, trends and lists they will keep watching in show_ui cards with a \"panel\" key (one topic per panel); " +
+	"to update a panel, call show_ui again with the same panel key instead of restating the numbers in prose. " +
+	"Keep chat replies short: say what changed and point at the panel.]"
+
+// appendDashboardViewBlock notes a dashboard-view turn in the injected
+// context. Like every injected block it is persisted with the user message,
+// so a reload shows exactly what the model was told and later turns replay it.
+func appendDashboardViewBlock(injected, view string) string {
+	if view != chatViewDashboard {
+		return injected
+	}
+	return injected + "\n\n" + dashboardViewNote
 }
 
 func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {

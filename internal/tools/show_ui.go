@@ -42,6 +42,7 @@ type ShowUIParams struct {
 	Components  []any      `json:"components,omitempty" description:"The card body: an array of component objects, each with a \"type\" from the catalog in the tool description. Required unless from_result is given."`
 	Actions     []any      `json:"actions,omitempty" description:"Footer buttons: [{id, label, kind: submit|message, style: primary|secondary|danger, message, validate, confirm, visible_if, disabled_if}]. Required (with at least one kind=submit) when the card has inputs."`
 	Replaces    string     `json:"replaces,omitempty" description:"card_id of an earlier card this one updates. The old card collapses to a 'replaced' note so only the newest version is interactive."`
+	Panel       string     `json:"panel,omitempty" description:"Optional dashboard panel key (1-40 chars of a-z, 0-9, '-', '_'; e.g. \"revenue\"). The card becomes that panel on the user's dashboard board, and a later card with the same panel key updates it in place. Use for numbers, charts and tables the user will keep watching."`
 	FieldErrors []any      `json:"field_errors,omitempty" description:"Inline errors to show next to inputs: [{field: \"id\" or \"repeater_id[i].field_id\", message}], where i is the item's 0-based position in the repeater's array (the first item is [0], unlike the 1-based index in expressions). Use when re-showing a card after checking the user's answers; the field must be editable (not disabled)."`
 }
 
@@ -66,6 +67,8 @@ Options are strings or {value, label?, description?}. A selectable table submits
 EXPRESSIONS — used in {{ }} templates (text, heading, callout, stat value/caption, facts value, status_list label/detail, badges text, description, help, item_label) and in visible_if / disabled_if / progress value. Read input ids by name; inside a repeater's fields also that item's fields and index (1-based); from outside, repeater_id.field is the array of that field across items ('.' only after an input name: unique(rows.cpm), not unique(rows).cpm). Operators: + - * / % == != < <= > >= && || ! ?: ( ) and literals ('text', 12.5, true, false, null). Functions: ` + "len count sum avg min max abs floor ceil round(x, digits?) fixed(x, digits) number string upper lower join(list, sep?) contains(list|text, x) empty unique" + `. Example: "{{ count(lines) * len(exchanges) }} deals", visible_if "channel == 'Video'".
 
 ACTIONS — {id, label, kind: "submit" (default; sends the values) | "message" (sends the fixed "message" text as the user's reply, after a "` + UIReplyPrefix + ` card=<card_id> action=<action_id>" line — use for quick-reply buttons), style?, validate? (default true: required fields must be filled), confirm? (a confirmation question), visible_if?, disabled_if?}; a button hidden or disabled in every state is refused. At most 6.
+
+DASHBOARD PANELS — add "panel": "<key>" (1-40 chars of a-z, 0-9, '-', '_') to make a card a living tile on the user's dashboard board instead of a one-off message. A later show_ui with the SAME panel key updates that tile in place (no replaces needed); a new key adds a tile. Use panels for what the user will keep watching — KPIs (stat), trends (chart), lists to triage (table, status_list) — one topic per panel, a few components each, and refresh a panel when its numbers change rather than restating them in prose. A panel may also hold inputs (a filter, a what-if slider); the usual submit flow applies. Without a panel key a display-only card still appears on the board while the user is in dashboard view.
 
 The spec is validated: a mistake comes back as a tool error naming the path — fix it and call again. Keep cards focused (one task per card); limits: 128 KiB per card, 800 components, 500 table rows (and 500 entries per badges / facts / status_list / diff list; 2000 rows, entries and repeater item fields across the card, each repeater counted at its max_items (200 when unset); 3200 chart points × series), 2000 options per input.`
 
@@ -186,6 +189,9 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	fmt.Fprintf(&b, "UI_DISPLAYED card_id=%s: the user can now see the card %q.", callID, genui.TruncateRunes(card.Title, 120))
 	if card.Replaces != "" {
 		fmt.Fprintf(&b, " It replaces card %s, which is now collapsed.", card.Replaces)
+	}
+	if card.Panel != "" {
+		fmt.Fprintf(&b, " It is dashboard panel %q: show_ui again with panel %q to update it in place.", card.Panel, card.Panel)
 	}
 	switch {
 	case interactive:

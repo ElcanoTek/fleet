@@ -300,7 +300,8 @@ nothing shared.
 
 ### The header
 
-Above the transcript sit three small controls, left to right: **Keyboard
+Above the transcript sit four small controls, left to right: **Dashboard**
+switches the conversation to [dashboard view](#dashboard-view); **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
 the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
@@ -348,10 +349,55 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), and **Send on Enter**. When a non-default persona, a patrol schedule, or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), **Send on Enter**, and **Dashboard view**. When a non-default persona, a patrol schedule, or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**) to compact. See [Long conversations](#long-conversations). |
 | Share | On the right from the very start of the chat (even before your first message is sent). Opens sharing to turn on **Multiplayer**, share read-only with your team, or copy a public link, and reflects the current state (**Share**, **Shared**, or **Multiplayer**). |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
+
+### Dashboard view
+
+Dashboard view turns a conversation into a live board: the assistant's charts,
+numbers and tables stay on screen as panels, and the chat narrows to a rail
+beside them. Use it for anything you want to keep an eye on while you keep
+talking: a pipeline, a campaign, a launch checklist, a comparison you are
+refining. Turn it on with **Dashboard** at the top of the chat, **Dashboard
+view** in **More options**, or `D`; leave with **Exit**, or `Esc` when you are
+not typing in the message box.
+
+- **Ask for what you want to watch.** "Turn this into a dashboard", "add a
+  panel for open deals", "refresh the revenue panel". The assistant builds
+  panels from the same [interactive cards](#interactive-cards) it uses in chat,
+  and updates a panel in place when you ask it to refresh, so the panel keeps
+  its spot and shows a small version number (**v2**, **v3**) and a brief glow.
+  Messages you send from dashboard view tell the assistant you are looking at
+  the board, and ask it to update panels rather than repeat their numbers in
+  the chat.
+  An empty board offers a few starter requests; picking one puts it in the
+  message box for you to edit and send.
+- **What goes on the board.** Cards that only show something (charts, figures,
+  tables, checklists) go on the board, and so does any card the assistant
+  marked as a panel. Forms that ask you a question stay in the chat, where the
+  conversation is; **Pin to board** under a form adds it as a panel. A card on
+  the board shows in the chat as a one-line pointer; click it to jump to the
+  panel.
+- **Arrange it.** Drag a panel by the handle at the left of its title, or focus
+  the handle and use the arrow keys. The buttons on a panel widen or narrow it,
+  **Focus** it to fill the board (`Esc` or the close button returns), and
+  **•••** moves it or takes it off the board; its card then goes back to the
+  chat. The layout, and whether a conversation opens in dashboard view, are
+  remembered in this browser only, so a teammate opening the same chat sees the
+  panels in their own arrangement.
+- **Nothing changes about what the assistant can do.** You type, attach files,
+  and answer approval cards in the chat rail exactly as before, and emails and
+  other actions still wait for your approval. The status light at the top says
+  **Standby**, names the step in progress while the assistant works, or shows
+  how many approvals are waiting; click it to jump to the first one.
+- **On a phone**, the top bar has **Board** and **Chat** buttons to switch
+  between the two.
+
+Panels are cards, so the limits under [Interactive cards](#interactive-cards)
+apply: a panel from before a compaction is marked **archived** and can't be
+answered, and the board appears only in the web app.
 
 ## 3. Getting good answers
 
@@ -1351,6 +1397,7 @@ Linux.
 | `#` | Delete the focused conversation (opens the confirmation; never a silent delete) |
 | `Y` | Copy the last reply |
 | `E` | Edit your last message |
+| `D` | Turn [dashboard view](#dashboard-view) on or off (`Esc` leaves it) |
 | `?` | Show the shortcut help |
 | `Esc` | Close search, the help overlay, or the sidebar |
 

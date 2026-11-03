@@ -95,6 +95,7 @@ import { useStickToBottom } from "./stickToBottom";
 import { assistantDisplayContent } from "./turnNarration";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
+import { DashboardTranscriptContext } from "./dashboard/context";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
 // pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
 // pay for it.
@@ -488,6 +489,7 @@ export function ChatTranscript({
   // Card state (spec, submission, replaced) is derived from the transcript
   // itself — see genui/transcript.ts.
   const genUi = useMemo(() => deriveGenUiState(messages), [messages]);
+  const dashboard = useContext(DashboardTranscriptContext);
 
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);
@@ -539,7 +541,7 @@ export function ChatTranscript({
                 <div className="flex min-h-full flex-col items-center justify-start gap-6 pb-6 pt-10 sm:gap-8 sm:pb-8">
                   <div className="text-center">
                     <h2 className="font-heading text-[1.4rem] font-semibold text-[var(--color-text-primary)] sm:text-[1.75rem]">
-                      {isLockdown ? "Lockdown chat" : "What can I help with?"}
+                      {isLockdown ? "Lockdown chat" : dashboard ? "What should we watch?" : "What can I help with?"}
                     </h2>
                     {isLockdown ? (
                       <p className="mt-2 max-w-md text-[0.8125rem] text-[var(--color-text-muted)] sm:text-[0.875rem]">
@@ -571,6 +573,7 @@ export function ChatTranscript({
                     ) : (
                       <EmptyStatePrompts
                         pills={pills}
+                        singleColumn={!!dashboard}
                         onPick={(id) => {
                           const picked = getPill(id, pills);
                           if (!picked) return;
@@ -902,6 +905,31 @@ export function ChatTranscript({
                                     const owns = genUi.owners.get(tc.id) === tc;
                                     const spec = owns ? genUi.cards.get(tc.id) : cardSpecOf(tc);
                                     if (!spec) return null;
+                                    // Dashboard view: a card that lives on the board is drawn
+                                    // there; the rail keeps a pointer to it, never a second copy.
+                                    const slot = owns ? dashboard?.cardSlots.get(tc.id) : undefined;
+                                    if (dashboard && slot) {
+                                      const current = !genUi.superseded.has(tc.id);
+                                      return (
+                                        <button
+                                          key={tc.id}
+                                          type="button"
+                                          data-testid="dashboard-card-pointer"
+                                          data-card-id={tc.id}
+                                          className="dash-pointer"
+                                          onClick={() => dashboard.focusPanel(slot)}
+                                        >
+                                          <Icon name="grid" className="size-3.5 shrink-0 text-[var(--color-accent)]" />
+                                          <span className="min-w-0 flex-1 truncate">
+                                            <span className="font-medium text-[var(--color-text-primary)]">{spec.title}</span>
+                                            {current ? " · on the board" : " · earlier version, updated on the board"}
+                                          </span>
+                                          <Icon name="arrow-right" className="size-3.5 shrink-0" />
+                                        </button>
+                                      );
+                                    }
+                                    const pinnable =
+                                      dashboard && owns && !genUi.superseded.has(tc.id) && !isPreSummary;
                                     return (
                                       <Suspense
                                         key={tc.id}
@@ -926,6 +954,17 @@ export function ChatTranscript({
                                           }
                                           onResumeHeld={resumeHeldCardSend}
                                         />
+                                        {pinnable ? (
+                                          <button
+                                            type="button"
+                                            data-testid="dashboard-pin-card"
+                                            className="mt-1 inline-flex items-center gap-1.5 self-start rounded-full px-2 py-1 text-[0.75rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                                            onClick={() => dashboard.pinCard(tc.id, spec.panel)}
+                                          >
+                                            <Icon name="pin" className="size-3.5" />
+                                            Pin to board
+                                          </button>
+                                        ) : null}
                                       </Suspense>
                                     );
                                   })}

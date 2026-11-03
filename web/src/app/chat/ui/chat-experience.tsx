@@ -151,6 +151,11 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
+import { deriveGenUiState } from "./genui/transcript";
+import { boardStatus, deriveBoard } from "./dashboard/board";
+import { DashboardTranscriptContext, panelDomId, type DashboardTranscriptValue } from "./dashboard/context";
+import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
+import { readDashboardView, useBoardPrefs, writeDashboardView } from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
@@ -469,6 +474,7 @@ const shortcutHelpGroups: ShortcutHelpGroup[] = [
     entries: [
       { chips: [{ label: "Y" }], description: "Copy the last response" },
       { chips: [{ label: "E" }], description: "Edit your last message" },
+      { chips: [{ label: "D" }], description: "Turn dashboard view on or off" },
     ],
   },
 ];
@@ -3633,6 +3639,101 @@ export function ChatExperience({
     Boolean(teamChatView) ||
     Boolean(teamLinkNotice);
 
+  // ── Dashboard view (docs/DASHBOARD-VIEW.md) ──────────────────────────
+  // The chat as a live board: panels are the conversation's show_ui cards,
+  // the chat narrows to a rail beside them. Remembered per conversation in
+  // this browser. A draft keeps the view it had when it gets its id, and so
+  // does a new chat started from dashboard view.
+  const dashboardConvId = realConvId(currentConvKey);
+  const [dashboardView, setDashboardView] = useState(() =>
+    readDashboardView(dashboardConvId),
+  );
+  const [dashboardConvSeen, setDashboardConvSeen] = useState(dashboardConvId);
+  if (dashboardConvSeen !== dashboardConvId) {
+    setDashboardConvSeen(dashboardConvId);
+    if (dashboardConvId !== null && !(dashboardConvSeen === null && dashboardView)) {
+      const stored = readDashboardView(dashboardConvId);
+      if (stored !== dashboardView) setDashboardView(stored);
+    }
+  }
+  useEffect(() => {
+    if (dashboardConvId) writeDashboardView(dashboardConvId, dashboardView);
+  }, [dashboardConvId, dashboardView]);
+  const dashboardActive = dashboardView && !fullPageOverlay;
+  const [dashboardPane, setDashboardPane] = useState<"board" | "chat">("board");
+  const [dashboardFocus, setDashboardFocus] = useState("");
+  const [boardPrefs, updateBoardPrefs] = useBoardPrefs(dashboardConvId);
+  const dashboardGenUi = useMemo(
+    () => (dashboardActive ? deriveGenUiState(messages) : null),
+    [dashboardActive, messages],
+  );
+  const board = useMemo(
+    () =>
+      dashboardGenUi ? deriveBoard(messages, dashboardGenUi, boardPrefs) : null,
+    [dashboardGenUi, messages, boardPrefs],
+  );
+  const dashboardStatus = useMemo(
+    () => boardStatus(messages, isStreaming),
+    [messages, isStreaming],
+  );
+  const toggleDashboardView = useCallback(() => {
+    setDashboardView((on) => !on);
+    setDashboardFocus("");
+    setDashboardPane("board");
+  }, []);
+  const focusDashboardPanel = useCallback((key: string) => {
+    setDashboardFocus("");
+    setDashboardPane("board");
+    // After the pane switch paints: bring the panel into view and flash it.
+    window.setTimeout(() => {
+      const el = document.getElementById(panelDomId(key));
+      if (!el) return;
+      el.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+      el.focus({ preventScroll: true });
+      el.classList.remove("dash-panel-flash");
+      void el.offsetWidth; // restart the animation
+      el.classList.add("dash-panel-flash");
+      window.setTimeout(() => el.classList.remove("dash-panel-flash"), 1600);
+    }, 60);
+  }, []);
+  const dashboardTranscript = useMemo<DashboardTranscriptValue | null>(
+    () =>
+      board
+        ? {
+            cardSlots: board.cardSlots,
+            focusPanel: focusDashboardPanel,
+            pinCard: (cardId, panelKey) => {
+              updateBoardPrefs((p) => ({
+                ...p,
+                pinned: p.pinned.includes(cardId) ? p.pinned : [...p.pinned, cardId],
+                removed: p.removed.filter(
+                  (k) => k !== `c:${cardId}` && (!panelKey || k !== `p:${panelKey}`),
+                ),
+              }));
+              focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${cardId}`);
+            },
+          }
+        : null,
+    [board, focusDashboardPanel, updateBoardPrefs],
+  );
+  const showDashboardApprovals = useCallback(() => {
+    setDashboardPane("chat");
+    let id: string | null = null;
+    for (const m of messages) {
+      for (const a of m.approvals ?? []) {
+        if (a.status === "pending" && id === null) id = a.id;
+      }
+    }
+    if (id === null) return;
+    const target = id;
+    window.setTimeout(() => {
+      const el = document.querySelector(
+        `[data-approval-id="${CSS.escape(target)}"]`,
+      );
+      el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    }, 60);
+  }, [messages]);
+
   // A teammate's branch (B20): the banner, and the outputs its transcript
   // names that were NOT shared at branch time — those render as locked names,
   // because the branch's workspace does not have them.
@@ -5268,6 +5369,28 @@ export function ChatExperience({
         },
       },
       {
+        // d turns dashboard view on or off (docs/DASHBOARD-VIEW.md).
+        key: "d",
+        enabled: listNavActive && !fullPageOverlay,
+        handler: () => toggleDashboardView(),
+      },
+      {
+        // In dashboard view, Esc closes a focused panel, then leaves the
+        // view. Not while typing (the composer keeps its own Escape), and not
+        // while a dialog or menu owns the keyboard.
+        key: "Escape",
+        shift: false,
+        enabled: dashboardActive && listNavActive,
+        when: () =>
+          !document.querySelector(
+            '[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]',
+          ),
+        handler: () => {
+          if (dashboardFocus) setDashboardFocus("");
+          else toggleDashboardView();
+        },
+      },
+      {
         key: "Escape",
         shift: false,
         allowInInput: true,
@@ -5289,6 +5412,10 @@ export function ChatExperience({
       lastAssistantMessageId,
       lastUserMessageId,
       isStreaming,
+      fullPageOverlay,
+      dashboardActive,
+      dashboardFocus,
+      toggleDashboardView,
     ],
   );
   useKeyboardShortcuts(shortcuts);
@@ -5306,6 +5433,7 @@ export function ChatExperience({
   // annotation makes tsc flag any missing or mistyped dep at THIS assembly
   // site, not just inside a moved body.
   const turnStreamDeps = {
+    dashboardView: dashboardActive,
     setConvMessages,
     getConvMessages,
     renameConvKey,
@@ -6281,7 +6409,15 @@ export function ChatExperience({
           two-column rail+main layout; the rail column is `auto` so it tracks
           the aside's own width (300px expanded / 4.25rem collapsed strip)
           continuously through the collapse transition. */}
-      <div className="grid h-[100dvh] grid-cols-[minmax(0,1fr)] sm:grid-cols-[auto_minmax(0,1fr)]">
+      <div
+        className={[
+          "grid h-[100dvh] grid-cols-[minmax(0,1fr)]",
+          dashboardActive ? "" : "sm:grid-cols-[auto_minmax(0,1fr)]",
+        ].join(" ")}
+      >
+        {/* Dashboard view takes the whole screen: the rail stays mounted
+            (its search, scroll and drafts survive) but is not drawn. */}
+        <div className={dashboardActive ? "hidden" : "contents"}>
         <ConversationSidebar
           collapse={railCollapse}
           sidebarOpen={sidebarOpen}
@@ -6368,6 +6504,7 @@ export function ChatExperience({
             void moveConversationToProject(conversationId, projectID)
           }
         />
+        </div>
 
         {shortcutsOpen ? (
           <KeyboardShortcutsOverlay
@@ -7132,11 +7269,40 @@ export function ChatExperience({
           {/* Shared top header (#169): "Chat" on the left, the chat's header
               controls (search, shortcuts, memories, details) right-aligned —
               the same bordered bar the Operations Center renders. */}
+          {dashboardActive ? (
+            <DashboardHud
+              title={activeConversationId ? title : "New dashboard"}
+              status={dashboardStatus}
+              panelCount={board?.panels.length ?? 0}
+              mobilePane={dashboardPane}
+              setMobilePane={setDashboardPane}
+              onExit={toggleDashboardView}
+              onApprovals={showDashboardApprovals}
+            />
+          ) : (
           <PageTopBar
             title="Chat"
             onMenu={() => setSidebarOpen(true)}
             actions={
               <>
+                {!fullPageOverlay ? (
+                  <button
+                    aria-label="Open dashboard view"
+                    data-testid="dashboard-enter"
+                    data-tip-bottom="Dashboard view (D)"
+                    type="button"
+                    onClick={toggleDashboardView}
+                    className="group/tbtn dash-enter inline-flex h-11 items-center justify-center gap-1.5 rounded-md px-2.5 text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:h-8 sm:rounded-full sm:border sm:border-[var(--color-border-strong)] sm:px-3"
+                  >
+                    <Icon
+                      name="grid"
+                      className="size-4 transition motion-safe:group-hover/tbtn:rotate-90"
+                    />
+                    <span className="hidden text-[0.75rem] font-semibold sm:inline">
+                      Dashboard
+                    </span>
+                  </button>
+                ) : null}
                 <button
                   aria-label="Keyboard shortcuts"
                   className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
@@ -7201,6 +7367,7 @@ export function ChatExperience({
               </>
             }
           />
+          )}
 
           {/* Active conversation name (#169): a heading at the top of the chat
               content area, left-aligned to the "Chat" header label, carrying the
@@ -7208,7 +7375,7 @@ export function ChatExperience({
               chat (no active conversation) shows no name — the empty-state hero in
               the transcript stands in. Hidden while a project home is open (the
               home has its own header; the chat underneath stays mounted). */}
-          {activeConversationId && !fullPageOverlay ? (
+          {activeConversationId && !fullPageOverlay && !dashboardActive ? (
             <div className="flex min-w-0 items-center gap-2 px-4 pt-3 sm:px-6">
               {renamingTitleDraft !== null ? (
                 <input
@@ -7294,7 +7461,7 @@ export function ChatExperience({
 
           {/* B20: a teammate's branch says where it came from, and links back
               to the owner's live chat only while that is still shared. */}
-          {activeBranchOrigin && !fullPageOverlay ? (
+          {activeBranchOrigin && !fullPageOverlay && !dashboardActive ? (
             <div className="px-4 pt-2 sm:px-6">
               <BranchOriginBanner
                 origin={activeBranchOrigin}
@@ -7400,9 +7567,44 @@ export function ChatExperience({
               grid-cols-[minmax(0,1fr)] clamps the single column to the container
               width so rich content can't bleed past the right edge on mobile;
               min-w-0 descendants still scroll wide children internally. */}
+          {/* Dashboard view (docs/DASHBOARD-VIEW.md) puts the board beside
+              this column and narrows the column to a rail. The wrapper is
+              always rendered (display: contents outside dashboard view) so
+              toggling the view never remounts the transcript or composer. */}
+          <div className={dashboardActive ? "dash-shell" : "contents"}>
+          {board ? (
+            <DashboardBoard
+              className={dashboardPane === "chat" ? "max-lg:hidden" : ""}
+              panels={board.panels}
+              summaryIndex={summaryIndex}
+              liveMessageIndex={isStreaming ? messages.length - 1 : -1}
+              storageScope={dashboardConvId ?? currentConvKey}
+              submissions={dashboardGenUi?.submissions ?? new Map()}
+              replies={dashboardGenUi?.replies ?? new Map()}
+              onSubmit={(text, onUnsent, onHeld, stillHeld, model) => {
+                if (creatingShareForCurrentView) return Promise.resolve(false);
+                return submitPrompt(text, { fromCard: true, onUnsent, onHeld, stillHeld, model });
+              }}
+              onResumeHeld={resumeHeldCardSend}
+              updatePrefs={updateBoardPrefs}
+              onStarter={(text) => {
+                if (creatingShareForCurrentView) return;
+                setPrompt(text);
+                setDashboardPane("chat");
+                window.setTimeout(() => promptRef.current?.focus(), 60);
+              }}
+              maximized={dashboardFocus}
+              setMaximized={setDashboardFocus}
+            />
+          ) : null}
+          <DashboardTranscriptContext.Provider value={dashboardTranscript}>
           <div
             className={[
-              "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2 sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10",
+              "grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)_auto] gap-2 overflow-hidden px-3 pb-3 pt-2",
+              dashboardActive
+                ? "dash-rail sm:gap-3 sm:px-4 sm:pb-4"
+                : "sm:gap-3 sm:px-6 sm:pb-5 lg:px-8 xl:px-10",
+              dashboardActive && dashboardPane === "board" ? "max-lg:hidden" : "",
               fullPageOverlay ? "hidden" : "",
             ].join(" ")}
           >
@@ -7576,6 +7778,8 @@ export function ChatExperience({
                 />
               ) : null}
               <Composer
+                dashboardView={dashboardActive}
+                onToggleDashboardView={fullPageOverlay ? undefined : toggleDashboardView}
                 cancelRecovery={cancelRecovery}
                 onStartPatrol={handleStartPatrol}
                 activePatrolCount={activePatrolCount}
@@ -7668,6 +7872,8 @@ export function ChatExperience({
                 shareBusy={creatingShareForCurrentView}
               />
             </section>
+          </div>
+          </DashboardTranscriptContext.Provider>
           </div>
         </main>
       </div>

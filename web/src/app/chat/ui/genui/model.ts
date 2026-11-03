@@ -62,7 +62,18 @@ export type CardSpec = {
   actions?: Action[];
   replaces?: string;
   field_errors?: { field: string; message: string }[];
+  /**
+   * The dashboard panel this card lives in (docs/DASHBOARD-VIEW.md). A later
+   * card with the same key takes the panel over. Must match
+   * genui.ValidPanelKey (internal/genui/spec.go); anything else is dropped.
+   */
+  panel?: string;
 };
+
+/** Mirrors genui.ValidPanelKey: 1–40 of a-z, 0-9, '-', '_'. */
+export function isPanelKey(v: unknown): v is string {
+  return typeof v === "string" && /^[a-z0-9_-]{1,40}$/.test(v);
+}
 
 export const INPUT_TYPES = new Set([
   "text_input",
@@ -132,6 +143,7 @@ function parseCardSpecUncached(input: string): CardSpec | null {
     components: o.components.filter(isComponent),
     actions: Array.isArray(o.actions) ? (o.actions.filter((a) => a && typeof a === "object" && typeof (a as Action).id === "string") as Action[]) : [],
     replaces: typeof o.replaces === "string" ? o.replaces : undefined,
+    panel: isPanelKey(o.panel) ? o.panel : undefined,
     field_errors: Array.isArray(o.field_errors)
       ? (o.field_errors.filter(
           (e) => e && typeof e === "object" && typeof (e as { field?: unknown }).field === "string",

@@ -139,6 +139,12 @@ const POP_ROW_SELECTED =
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 
 export type ComposerProps = {
+  /**
+   * Dashboard view (docs/DASHBOARD-VIEW.md): whether it is on, and the
+   * toggle the More options menu offers. Omitted: no menu row.
+   */
+  dashboardView?: boolean;
+  onToggleDashboardView?: () => void;
   // Textarea value + draft handling
   prompt: string;
   setPrompt: Dispatch<SetStateAction<string>>;
@@ -285,6 +291,8 @@ export type ComposerProps = {
 };
 
 export function Composer({
+  dashboardView = false,
+  onToggleDashboardView,
   prompt,
   setPrompt,
   promptPlaceholder,
@@ -1618,6 +1626,41 @@ export function Composer({
                             {sendOnEnter ? "On" : "Off"}
                           </span>
                         </button>
+
+                        {onToggleDashboardView ? (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={dashboardView}
+                            data-testid="composer-dashboard-toggle"
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              onToggleDashboardView();
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="grid" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Dashboard view</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Live panels beside the chat · press D
+                                </span>
+                              </span>
+                            </span>
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                dashboardView
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {dashboardView ? "On" : "Off"}
+                            </span>
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>

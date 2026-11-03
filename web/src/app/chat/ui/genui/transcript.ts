@@ -3,7 +3,8 @@
 // or, for a card shown by reference to a tool's result, the validated spec
 // the show_ui result carries (`card`),
 // its submission IS a later user message (parseSubmissionMessage), and
-// "replaced" IS a later card's `replaces`. Deriving all three from the
+// "replaced" IS a later card's `replaces` (or a later card with the same
+// dashboard `panel` key). Deriving all three from the
 // messages means a reload and a second tab agree on every card's state with
 // nothing extra to store.
 
@@ -127,6 +128,10 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
   const replies = new Map<string, Reply>();
+  // panel key → the card id currently showing it. A card with a panel key
+  // takes that panel over (docs/DASHBOARD-VIEW.md), so the card it displaces
+  // reads as replaced exactly as if it had been named in `replaces`.
+  const panelOwner = new Map<string, string>();
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
     if (m.role === "user") {
@@ -181,6 +186,11 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       // A card never replaces itself (a refinement whose reused id equals
       // the one it names).
       if (spec.replaces && spec.replaces !== tc.id) superseded.add(spec.replaces);
+      if (spec.panel) {
+        const prev = panelOwner.get(spec.panel);
+        if (prev !== undefined && prev !== tc.id) superseded.add(prev);
+        panelOwner.set(spec.panel, tc.id);
+      }
     }
   }
   return { cards, owners, occurrences, answerSpecs, submissions, superseded, replies };

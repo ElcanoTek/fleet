@@ -77,8 +77,9 @@ type ShowUIRef struct {
 const DefaultShowUIRefPath = "show_ui"
 
 // showUIRefOverrides are the only keys a reference may carry beside
-// from_result: what a refinement needs on top of the tool's card.
-var showUIRefOverrides = map[string]bool{"replaces": true, "field_errors": true}
+// from_result: what a refinement needs on top of the tool's card, plus the
+// dashboard panel it belongs in.
+var showUIRefOverrides = map[string]bool{"replaces": true, "field_errors": true, "panel": true}
 
 // uiInvalid formats a refusal the model can act on. It starts with
 // UI_INVALID, like every refusal, so no client draws a card for it.
@@ -96,7 +97,7 @@ func resolveShowUIRef(ctx context.Context, callID string, input map[string]json.
 	}
 	for k := range input {
 		if k != "from_result" && !showUIRefOverrides[k] {
-			return fail("with from_result, the card comes from the tool's result; only replaces and field_errors may be given beside it, not %q. Drop %q and call %s again.", k, k, ShowUIToolName)
+			return fail("with from_result, the card comes from the tool's result; only replaces, field_errors and panel may be given beside it, not %q. Drop %q and call %s again.", k, k, ShowUIToolName)
 		}
 	}
 	var ref ShowUIRef

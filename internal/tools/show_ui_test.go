@@ -132,3 +132,19 @@ func TestShowUIRefusesRedactedCards(t *testing.T) {
 		t.Fatalf("escaped secret: %+v", escaped)
 	}
 }
+
+// A panel card is acknowledged as that dashboard panel, with the key to reuse
+// for an update, and a bad key is a tool error the model can fix.
+func TestShowUIPanelCard(t *testing.T) {
+	resp := runShowUI(t, `{"title":"Revenue","panel":"revenue","components":[{"type":"stat","label":"MTD","value":"$1.2M"}]}`)
+	if resp.IsError || !strings.Contains(resp.Content, `dashboard panel "revenue"`) || !strings.Contains(resp.Content, "display-only") {
+		t.Fatalf("got %+v", resp)
+	}
+	bad := runShowUI(t, `{"title":"Revenue","panel":"Revenue MTD","components":[{"type":"stat","label":"MTD","value":"$1"}]}`)
+	if !bad.IsError || !strings.Contains(bad.Content, "panel:") {
+		t.Fatalf("a non-slug panel key was accepted: %+v", bad)
+	}
+	if !strings.Contains(showUIDescription, "DASHBOARD PANELS") {
+		t.Fatal("the tool description no longer teaches panel keys")
+	}
+}

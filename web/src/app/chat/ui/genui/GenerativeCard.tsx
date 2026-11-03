@@ -152,6 +152,12 @@ export type GenerativeCardProps = {
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
   /**
+   * "panel": drawn inside a dashboard panel (docs/DASHBOARD-VIEW.md), which
+   * supplies the frame and the title, so the card drops its own border,
+   * background and title row. Behaviour is identical.
+   */
+  variant?: "inline" | "panel";
+  /**
    * Namespaces this card's browser-stored draft and pending hold, normally by
    * conversation id. A branched conversation copies the tool call — card id
    * included — so without it a draft typed in one would appear in the other.
@@ -591,6 +597,7 @@ export default function GenerativeCard(props: GenerativeCardProps) {
 function CardBody({
   cardId,
   spec,
+  variant,
   submission,
   reply,
   superseded,
@@ -1108,14 +1115,25 @@ function CardBody({
         data-testid="genui-card"
         data-card-id={cardId}
         data-state={superseded ? "superseded" : submittedAction && !editing ? "submitted" : "open"}
-        className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+        data-variant={variant ?? "inline"}
+        className={
+          variant === "panel"
+            ? "min-w-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+            : "min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+        }
       >
-        <div className="border-b border-[var(--color-border)] px-3.5 py-2.5">
-          <div className="font-medium">{spec.title}</div>
-          {spec.description ? (
-            <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
-          ) : null}
-        </div>
+        {variant === "panel" ? (
+          spec.description ? (
+            <div className="px-3.5 pt-2 text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+          ) : null
+        ) : (
+          <div className="border-b border-[var(--color-border)] px-3.5 py-2.5">
+            <div className="font-medium">{spec.title}</div>
+            {spec.description ? (
+              <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+            ) : null}
+          </div>
+        )}
         {/* Inputs disable themselves when locked (InputField); layout controls
             — tabs, collapsible sections, repeater items — stay usable so a
             submitted card can still be read in full. */}

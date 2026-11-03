@@ -277,3 +277,22 @@ describe("derivation cost", () => {
     expect(deriveGenUiState([shown, edited]).submissions.get("c1")?.values).toEqual({ n: "y" });
   });
 });
+
+describe("dashboard panel keys", () => {
+  it("a later card with the same panel key replaces the earlier one", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Revenue", { panel: "revenue" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "b", input: card("Deals", { panel: "deals" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(3, [{ id: "c", input: card("Revenue", { panel: "revenue" }), resultText: "UI_DISPLAYED card_id=c" }]),
+    ]);
+    expect([...s.superseded]).toEqual(["a"]);
+    expect(s.cards.get("c")?.panel).toBe("revenue");
+  });
+
+  it("drops a panel key the server would refuse", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("R", { panel: "Not A Key" }), resultText: "UI_DISPLAYED card_id=a" }]),
+    ]);
+    expect(s.cards.get("a")?.panel).toBeUndefined();
+  });
+});
