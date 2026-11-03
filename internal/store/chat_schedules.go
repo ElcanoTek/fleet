@@ -580,15 +580,17 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	}
 
 	// Coalesce repeated Run-now clicks when a patrol turn is already queued or
-	// running in this conversation, so clicking Run-now while busy does not stack
-	// duplicate patrol turns or burn run_count against MaxRuns.
+	// running for this schedule's owner in this conversation, so clicking
+	// Run-now while busy does not stack duplicate patrol turns or burn run_count
+	// against MaxRuns.
 	existingInput, err := scanInputRow(tx.QueryRowContext(ctx,
 		inputQueueSelect+`
 		  WHERE conversation_id = $1
+		    AND user_email = $2
 		    AND state IN ('queued', 'running')
-		    AND (mode = 'patrol' OR client_input_id LIKE $2)
+		    AND (mode = 'patrol' OR client_input_id LIKE $3)
 		  ORDER BY position ASC LIMIT 1`,
-		convID, ChatPatrolInputKeyPrefix+"%",
+		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
 	))
 	if err == nil {
 		if cerr := tx.Commit(); cerr != nil {
@@ -763,17 +765,19 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		return nil, err
 	}
 
-	// Check whether an earlier patrol turn is still queued/running, an approval
-	// card is awaiting human action, or the queue is full.
+	// Check whether an earlier patrol turn for this schedule's owner is still
+	// queued/running, an approval card for this owner is awaiting human action,
+	// or the conversation queue is full.
 	var hasInFlightPatrol bool
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM chat_input_queue
 			 WHERE conversation_id = $1
+			   AND user_email = $2
 			   AND state IN ('queued', 'running')
-			   AND (mode = 'patrol' OR client_input_id LIKE $2)
+			   AND (mode = 'patrol' OR client_input_id LIKE $3)
 		)`,
-		convID, ChatPatrolInputKeyPrefix+"%",
+		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
 	).Scan(&hasInFlightPatrol); err != nil {
 		return nil, err
 	}
@@ -783,10 +787,11 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		`SELECT EXISTS (
 			SELECT 1 FROM approvals
 			 WHERE conversation_id = $1
+			   AND user_email = $2
 			   AND status = 'pending'
 			   AND tool_name <> 'preview_email'
 		)`,
-		convID,
+		convID, sched.UserEmail,
 	).Scan(&hasPendingApproval); err != nil {
 		return nil, err
 	}

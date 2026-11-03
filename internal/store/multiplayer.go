@@ -471,12 +471,12 @@ func (s *Store) canParticipateInMultiplayer(ctx context.Context, q rowQueryer, c
 	if containsEmail(c.MultiplayerExcluded, callerEmail) {
 		return false
 	}
-	// Require a live user row so a deleted user cannot retain multiplayer
-	// access through a pre-deletion session cookie, explicit participant list,
-	// or teamless conversation.
+	// Require a live, enabled user row so a deleted or disabled user cannot
+	// retain multiplayer access through a pre-revocation session cookie,
+	// explicit participant list, or teamless conversation.
 	var callerTeam sql.NullString
 	if err := q.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, callerEmail,
+		`SELECT team_id FROM users WHERE email = $1 AND enabled = TRUE`, callerEmail,
 	).Scan(&callerTeam); err != nil {
 		return false
 	}
@@ -570,11 +570,11 @@ func (s *Store) ListSharedAndMultiplayerConversations(ctx context.Context, calle
 		return []Conversation{}, nil
 	}
 	u, err := s.GetUser(ctx, callerEmail)
+	if errors.Is(err, ErrUserNotFound) || u == nil {
+		return []Conversation{}, nil
+	}
 	if err != nil {
 		return nil, err
-	}
-	if u == nil {
-		return []Conversation{}, nil
 	}
 	callerTeam := strings.TrimSpace(u.TeamID)
 	rows, err := s.db.QueryContext(ctx, `
