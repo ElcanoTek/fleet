@@ -976,7 +976,7 @@ function CardBody({
     try {
       const message =
         action.kind === "message"
-          ? buildReplyMessage(cardId, action.id, renderTemplate(str(action.message), scope))
+          ? buildReplyMessage(cardId, action.id, renderTemplate(str(action.message), submitValues))
           : buildSubmissionMessage(cardId, action.id, submitValues);
       const bytes = submissionBytes(message);
       if (bytes > MAX_SUBMISSION_BYTES) {
@@ -1102,15 +1102,25 @@ function CardBody({
       return;
     }
     if (action.kind === "copy") {
-      const text = renderTemplate(str(action.message), scope);
-      try {
-        void navigator.clipboard?.writeText?.(text)?.catch(() => {});
-      } catch {
-        /* clipboard unavailable */
+      const text = renderTemplate(str(action.message), submitValues);
+      setNotice(null);
+      const write = navigator.clipboard?.writeText;
+      if (typeof write !== "function") {
+        setCopiedId(null);
+        setNotice("Could not copy. Try again.");
+        return;
       }
-      setCopiedId(action.id);
-      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = window.setTimeout(() => setCopiedId((cur) => (cur === action.id ? null : cur)), 2000);
+      void Promise.resolve()
+        .then(() => write.call(navigator.clipboard, text))
+        .then(() => {
+          setCopiedId(action.id);
+          if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+          copyTimerRef.current = window.setTimeout(() => setCopiedId((cur) => (cur === action.id ? null : cur)), 2000);
+        })
+        .catch(() => {
+          setCopiedId(null);
+          setNotice("Could not copy. Try again.");
+        });
       return;
     }
     void send(action);
@@ -1938,7 +1948,9 @@ function Chart({ c }: { c: Component }) {
           if (typeof v === "string") {
             const raw = v.trim();
             const src = raw.startsWith("{{") && raw.endsWith("}}") && !raw.slice(2, -2).includes("{{") ? raw.slice(2, -2).trim() : raw;
-            const n = Number(evaluateSafe(src, scope, null));
+            const res = evaluateSafe(src, scope, null);
+            if (res === null || res === undefined || res === "" || typeof res === "boolean") return null;
+            const n = typeof res === "number" ? res : Number(res);
             return Number.isFinite(n) ? n : null;
           }
           return null;

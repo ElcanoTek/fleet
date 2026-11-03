@@ -2154,6 +2154,55 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
     expect(screen.getByText("Pending")).toBeTruthy();
     expect(resetBtn.disabled).toBe(true);
   });
+
+  it("preserves null chart-expression results as gaps, excludes hidden inputs from message/copy templates, and reports clipboard failures", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockRejectedValue(new Error("Clipboard denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const s = spec({
+      title: "Edge cases",
+      components: [
+        { type: "toggle", id: "show_secret", label: "Show secret", value: true },
+        { type: "text_input", id: "secret_code", label: "Secret code", visible_if: "show_secret", value: "ALPHA" },
+        { type: "number", id: "opt_num", label: "Optional number" },
+        {
+          type: "chart",
+          kind: "line",
+          title: "Gap Chart",
+          labels: ["A", "B"],
+          series: [{ name: "S", values: ["opt_num", 10] }],
+        },
+      ],
+      actions: [
+        { id: "copy", label: "Copy code", kind: "copy", message: "Code={{ secret_code }}" },
+        { id: "msg", label: "Send code", kind: "message", message: "Code={{ secret_code }}" },
+      ],
+    });
+    const onSubmit = vi.fn().mockResolvedValue(true);
+    render(<GenerativeCard cardId="edge" spec={s} onSubmit={onSubmit} />);
+
+    // Blank optional number evaluates to null in chart series -> rendered as "No value" gap, not 0.
+    const chartTable = screen.getByRole("table", { name: "Gap Chart" });
+    expect(within(chartTable).getByRole("row", { name: /A/ }).textContent).toContain("No value");
+
+    // Failed clipboard write does not flip button to "Copied" and surfaces notice.
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
+    expect(await screen.findByText("Could not copy. Try again.")).toBeTruthy();
+
+    // Hide secret_code via toggle -> outgoing message template omits the hidden value.
+    await user.click(screen.getByRole("switch", { name: "Show secret" }));
+    await user.click(screen.getByRole("button", { name: "Send code" }));
+    expect(onSubmit).toHaveBeenCalledWith(
+      buildReplyMessage("edge", "msg", "Code="),
+      expect.any(Function),
+      expect.any(Function),
+      expect.any(Function),
+    );
+  });
 });
 
 describe("table cells", () => {
