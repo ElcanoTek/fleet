@@ -15,6 +15,9 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
@@ -53,31 +56,67 @@ func cmdUpdate(argv []string) int {
 	// down instead of orphaning a half-finished build.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path + operator-supplied flags passed as separate argv (no shell string interpolation).
-	cmd := exec.CommandContext(ctx, "bash", args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM); err == nil {
-			return nil
-		}
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
-	cmd.WaitDelay = 5 * time.Second
 	ownerID := strings.TrimSpace(strings.TrimPrefix(drainOwnerToken, "draining "))
-	cmd.Env = append(os.Environ(), "FLEET_DRAIN_OWNER_TOKEN="+ownerID)
+	newCmd := func(attr *syscall.SysProcAttr) *exec.Cmd {
+		//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path + operator-supplied flags passed as separate argv (no shell string interpolation).
+		c := exec.CommandContext(ctx, "bash", args...)
+		c.SysProcAttr = attr
+		c.Cancel = func() error {
+			if c.Process == nil {
+				return nil
+			}
+			if err := syscall.Kill(-c.Process.Pid, syscall.SIGTERM); err == nil {
+				return nil
+			}
+			return c.Process.Signal(syscall.SIGTERM)
+		}
+		c.WaitDelay = 5 * time.Second
+		c.Env = append(os.Environ(), "FLEET_DRAIN_OWNER_TOKEN="+ownerID)
+		c.Stdout = os.Stdout
+		c.Stderr = os.Stderr
+		c.Stdin = os.Stdin
+		return c
+	}
 	defer ClearUpdateDrain()
+	// The script runs in its own process group (so Cancel can signal the whole
+	// tree). On an interactive terminal that group must also be the terminal's
+	// FOREGROUND group: a background group that reads the tty is stopped by
+	// SIGTTIN, so update.sh's "Apply N commits? (y/N)" froze and the operator's
+	// answer went to this wrapper instead (fleetdev, 2026-11-03).
+	attr, ttyFD := updateSysProcAttr(int(os.Stdin.Fd()), ownsTerminal)
+	cmd := newCmd(attr)
+	err := cmd.Start()
+	if err != nil && attr.Foreground {
+		// stdin is a terminal but not this session's controlling one: fall back
+		// to a plain group (its prompts then need --yes, as over non-interactive ssh).
+		attr, ttyFD = &syscall.SysProcAttr{Setpgid: true}, -1
+		cmd = newCmd(attr)
+		err = cmd.Start()
+	}
+	if err != nil {
+		return errf(5, "update: %v", err)
+	}
+	if ttyFD >= 0 {
+		// Take the terminal back only if the script's group still holds it: a
+		// script resumed with `bg` exits while the shell owns the terminal, and
+		// reclaiming then would hand it to this (background) group as it exits.
+		childPgid := cmd.Process.Pid
+		defer func() {
+			if fg, err := unix.IoctlGetInt(ttyFD, unix.TIOCGPGRP); err == nil && fg == childPgid {
+				reclaimForeground(ttyFD)
+			}
+		}()
+	}
 	defer func() {
 		if cmd.Process != nil && cmd.Process.Pid > 0 {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 	}()
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
-	if err := cmd.Run(); err != nil {
+	wait := cmd.Wait
+	if ttyFD >= 0 {
+		wait = func() error { return waitForeground(cmd, ttyFD) }
+	}
+	if err := wait(); err != nil {
 		var exitErr *exec.ExitError
 		if asExit(err, &exitErr) {
 			return exitErr.ExitCode()
@@ -326,4 +365,45 @@ func stagedBundleSource(dir string) (string, markerState) {
 		return "", markerInvalid
 	}
 	return line, markerOK
+}
+
+// updateSysProcAttr is the update script's process attributes: always its own
+// process group, and — when this process's group is the terminal's foreground
+// group — that group in the foreground instead, so the script's prompts can
+// read the operator's answers. It returns the terminal fd to hand back
+// afterwards (-1 when none).
+func updateSysProcAttr(stdinFD int, ownsTerminal func(int) bool) (*syscall.SysProcAttr, int) {
+	attr := &syscall.SysProcAttr{Setpgid: true}
+	if ownsTerminal(stdinFD) {
+		attr.Foreground = true
+		attr.Ctty = stdinFD
+		return attr, stdinFD
+	}
+	return attr, -1
+}
+
+// ownsTerminal reports whether fd is a terminal whose foreground group is this
+// process's group. A wrapper launched in the background (`fleet update --yes &`)
+// still has the terminal on stdin but must never take it from the shell.
+func ownsTerminal(fd int) bool {
+	if !term.IsTerminal(fd) {
+		return false
+	}
+	fg, err := unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+	return err == nil && fg == unix.Getpgrp()
+}
+
+// reclaimForeground makes this process's group the terminal's foreground
+// group again once the script has exited (the kernel does not, and a
+// background group that later reads or configures the tty is stopped).
+// SIGTTOU is ignored for the call: tcsetpgrp from a background group raises it.
+func reclaimForeground(ttyFD int) {
+	ignoreTTOU(func() { _ = unix.IoctlSetPointerInt(ttyFD, unix.TIOCSPGRP, unix.Getpgrp()) })
+}
+
+// ignoreTTOU runs fn with SIGTTOU ignored.
+func ignoreTTOU(fn func()) {
+	signal.Ignore(syscall.SIGTTOU)
+	defer signal.Reset(syscall.SIGTTOU)
+	fn()
 }
