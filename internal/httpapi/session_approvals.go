@@ -31,16 +31,25 @@ func NewSessionApprovalRegistry() *SessionApprovalRegistry {
 	return &SessionApprovalRegistry{entries: map[string][]SessionApprovalPolicy{}}
 }
 
-func sessionKey(convID, toolName string) string { return convID + "\x00" + toolName }
+func sessionKey(convID, userEmail, toolName string) string {
+	return convID + "\x00" + strings.ToLower(strings.TrimSpace(userEmail)) + "\x00" + toolName
+}
 
 // Register records a pre-decision for (convID, toolName). Nil-safe.
 func (r *SessionApprovalRegistry) Register(convID, toolName string, p SessionApprovalPolicy) {
+	r.RegisterForUser(convID, "", toolName, p)
+}
+
+// RegisterForUser records a pre-decision scoped to (convID, userEmail, toolName)
+// so one multiplayer participant's session decision never governs another
+// participant's tool calls. Nil-safe.
+func (r *SessionApprovalRegistry) RegisterForUser(convID, userEmail, toolName string, p SessionApprovalPolicy) {
 	if r == nil {
 		return
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	k := sessionKey(convID, toolName)
+	k := sessionKey(convID, userEmail, toolName)
 	r.entries[k] = append(r.entries[k], p)
 }
 
@@ -67,11 +76,20 @@ func (r *SessionApprovalRegistry) Forget(convID string) {
 // matches when the call's args[argName] matches glob (filepath.Match). DENY
 // policies are evaluated before APPROVE so an explicit pre-denial always wins.
 func (r *SessionApprovalRegistry) Match(convID, toolName, rawInput string) (SessionApprovalPolicy, bool) {
+	return r.MatchForUser(convID, "", toolName, rawInput)
+}
+
+// MatchForUser returns the first policy covering (convID, userEmail, toolName, rawInput),
+// falling back to user-agnostic policies registered with userEmail="" in unit tests.
+func (r *SessionApprovalRegistry) MatchForUser(convID, userEmail, toolName, rawInput string) (SessionApprovalPolicy, bool) {
 	if r == nil {
 		return SessionApprovalPolicy{}, false
 	}
 	r.mu.Lock()
-	policies := append([]SessionApprovalPolicy(nil), r.entries[sessionKey(convID, toolName)]...)
+	policies := append([]SessionApprovalPolicy(nil), r.entries[sessionKey(convID, userEmail, toolName)]...)
+	if strings.TrimSpace(userEmail) != "" {
+		policies = append(policies, r.entries[sessionKey(convID, "", toolName)]...)
+	}
 	r.mu.Unlock()
 	if len(policies) == 0 {
 		return SessionApprovalPolicy{}, false

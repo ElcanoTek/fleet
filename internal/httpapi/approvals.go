@@ -362,6 +362,13 @@ func (a *approvalStager) isAutoApprove() bool {
 	return a.convAutoApprove
 }
 
+func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
+	if a.userEmail != "" {
+		payload["user_email"] = a.userEmail
+	}
+	a.sink.Emit(name, payload)
+}
+
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
 	// A task prompt the create/edit seam will refuse is refused BEFORE a card
 	// exists (#1601): the model learns the error now, and nobody is asked to
@@ -394,7 +401,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// a session policy, even one registered before that rule existed or by a
 	// path that skipped the POST refusal: every call stages its own card.
 	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
+		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
 			a.sink.Emit("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
 				"mode":    p.Mode,
@@ -499,7 +506,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
 			// open stream to refresh its approval state.
-			a.sink.Emit("tool.approval_superseded", map[string]any{
+			a.emitUserScoped("tool.approval_superseded", map[string]any{
 				"tool":  toolName,
 				"count": n,
 			})
@@ -538,14 +545,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	if cardFallback != "" {
 		// Observable without reading server logs: the card a declared
 		// describer should have produced fell back to the generic one.
-		a.sink.Emit("tool.approval_card_fallback", map[string]any{
+		a.emitUserScoped("tool.approval_card_fallback", map[string]any{
 			"approval_id": approval.ID,
 			"tool":        toolName,
 			"reason":      cardFallback,
 		})
 	}
 
-	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
+	a.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
 	a.firePushNotification(toolName)
 	return approval.ID, nil
 }
@@ -1757,7 +1764,7 @@ func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req a
 	case scope == "pattern":
 		pattern = strings.TrimSpace(req.Pattern)
 	}
-	s.sessionApprovals.Register(convID, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
+	s.sessionApprovals.RegisterForUser(convID, user, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
 	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF, so a request-supplied scope/pattern cannot forge a log line.
 	log.Printf("audit: %q pre-%s %q for conversation %q (scope=%q pattern=%q)", user, mode, toolName, convID, scope, pattern)
 }
@@ -2991,7 +2998,32 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 	if pool == nil {
 		return nil, func() {}, fmt.Errorf("approval handler: no sandbox pool wired (chat-server boot misconfigured?)")
 	}
-	return takeStagedBashSandbox(ctx, pool, lockdown)
+	var isolatedConv *store.Conversation
+	if s.store != nil && approval != nil && approval.ConversationID != "" {
+		if conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID); cerr == nil && conv != nil && conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, approval.UserEmail) {
+			if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
+				return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
+			}
+			isolatedConv = conv
+		}
+	}
+	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
+	if err != nil {
+		if isolatedConv != nil {
+			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
+		}
+		return nil, func() {}, err
+	}
+	if isolatedConv != nil {
+		origCleanup := cleanup
+		cleanup = func() {
+			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
+			if origCleanup != nil {
+				origCleanup()
+			}
+		}
+	}
+	return sb, cleanup, nil
 }
 
 // stagedBashLockdown resolves whether an approved bash command must run
@@ -3005,7 +3037,7 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 	if s.cfg.LockdownOnly {
 		return true, nil
 	}
-	conv, err := s.store.Get(ctx, approval.UserEmail, approval.ConversationID)
+	conv, err := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
 	if err != nil {
 		return false, fmt.Errorf("resolve conversation lockdown state: %w", err)
 	}

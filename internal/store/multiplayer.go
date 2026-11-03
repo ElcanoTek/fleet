@@ -76,27 +76,111 @@ func containsEmail(list []string, target string) bool {
 //     belongs to a team so the conversation appears in team listings, without
 //     requiring the conversation to live inside a project first.
 func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, convID string, multiplayer bool, participants, excluded []string) (*Conversation, error) {
+	return s.mutateConversationMultiplayer(ctx, ownerEmail, convID, func(_ bool, curParticipants, curExcluded []string) (bool, []string, []string) {
+		nextParticipants := curParticipants
+		if participants != nil {
+			nextParticipants = normalizeEmailSlice(participants, ownerEmail)
+		}
+		nextExcluded := curExcluded
+		if excluded != nil {
+			nextExcluded = normalizeEmailSlice(excluded, ownerEmail)
+		}
+		return multiplayer, nextParticipants, nextExcluded
+	})
+}
+
+// UpdateConversationMultiplayerAccess adds and/or removes specific user emails
+// on a conversation's multiplayer access list atomically under a row lock.
+func (s *Store) UpdateConversationMultiplayerAccess(ctx context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*Conversation, error) {
+	ownerEmail = normalizeEmail(ownerEmail)
+	return s.mutateConversationMultiplayer(ctx, ownerEmail, convID, func(curMultiplayer bool, curParticipants, curExcluded []string) (bool, []string, []string) {
+		partMap := make(map[string]bool)
+		for _, p := range curParticipants {
+			partMap[normalizeEmail(p)] = true
+		}
+		exclMap := make(map[string]bool)
+		for _, e := range curExcluded {
+			exclMap[normalizeEmail(e)] = true
+		}
+		for _, raw := range addEmails {
+			e := normalizeEmail(raw)
+			if e == "" || e == ownerEmail {
+				continue
+			}
+			delete(exclMap, e)
+			partMap[e] = true
+		}
+		for _, raw := range removeEmails {
+			e := normalizeEmail(raw)
+			if e == "" || e == ownerEmail {
+				continue
+			}
+			delete(partMap, e)
+			exclMap[e] = true
+		}
+		parts := make([]string, 0, len(partMap))
+		for e := range partMap {
+			parts = append(parts, e)
+		}
+		excls := make([]string, 0, len(exclMap))
+		for e := range exclMap {
+			excls = append(excls, e)
+		}
+		return curMultiplayer, normalizeEmailSlice(parts, ownerEmail), normalizeEmailSlice(excls, ownerEmail)
+	})
+}
+
+func (s *Store) mutateConversationMultiplayer(
+	ctx context.Context,
+	ownerEmail, convID string,
+	mutate func(curMultiplayer bool, curParticipants, curExcluded []string) (bool, []string, []string),
+) (*Conversation, error) {
 	ownerEmail = normalizeEmail(ownerEmail)
 	now := time.Now().Unix()
 
-	cur, err := s.Get(ctx, ownerEmail, convID)
+	var ownerTeam sql.NullString
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT team_id FROM users WHERE email = $1`, ownerEmail,
+	).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	team := strings.TrimSpace(ownerTeam.String)
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	if cur == nil {
-		return nil, ErrConversationNotFound
-	}
-	if multiplayer && (cur.ArchivedAt != nil || cur.Lockdown) {
-		return nil, ErrArchivedNotShareable
+	defer func() { _ = tx.Rollback() }()
+
+	if team != "" {
+		if err := lockTeamNamesTx(ctx, tx, team); err != nil {
+			return nil, err
+		}
 	}
 
-	nextParticipants := cur.MultiplayerParticipants
-	if participants != nil {
-		nextParticipants = normalizeEmailSlice(participants, ownerEmail)
+	var (
+		archivedAt     sql.NullInt64
+		lockdown       bool
+		curMultiplayer bool
+		partRaw        string
+		exclRaw        string
+	)
+	if err := tx.QueryRowContext(ctx,
+		`SELECT archived_at, lockdown, multiplayer, COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]')
+		   FROM conversations
+		  WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL
+		    FOR UPDATE`,
+		convID, ownerEmail,
+	).Scan(&archivedAt, &lockdown, &curMultiplayer, &partRaw, &exclRaw); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrConversationNotFound
+		}
+		return nil, err
 	}
-	nextExcluded := cur.MultiplayerExcluded
-	if excluded != nil {
-		nextExcluded = normalizeEmailSlice(excluded, ownerEmail)
+
+	multiplayer, nextParticipants, nextExcluded := mutate(curMultiplayer, scanEmailJSONArray(partRaw), scanEmailJSONArray(exclRaw))
+	if multiplayer && (archivedAt.Valid || lockdown) {
+		return nil, ErrArchivedNotShareable
 	}
 	// Anyone explicitly excluded is removed from explicit participants so the
 	// two lists never contradict each other.
@@ -113,12 +197,14 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 	partJSON := marshalEmailSlice(nextParticipants)
 	exclJSON := marshalEmailSlice(nextExcluded)
 
-	if !multiplayer {
+	var res sql.Result
+	switch {
+	case !multiplayer:
 		// Turning off multiplayer clears multiplayer = FALSE. Preserve
 		// team_visible and the team audience stamp ONLY when the conversation
 		// currently lives in a project that is actually shared with that same
 		// team; unfiled chats and personal-project chats become private again.
-		res, err := s.db.ExecContext(ctx, `
+		res, err = tx.ExecContext(ctx, `
 			UPDATE conversations SET
 				multiplayer = FALSE,
 				multiplayer_participants = $1,
@@ -157,43 +243,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 			partJSON, exclJSON, now, convID, ownerEmail,
 		)
-		if err != nil {
-			return nil, err
-		}
-		if n, err := res.RowsAffected(); err != nil {
-			return nil, err
-		} else if n == 0 {
-			return nil, ErrConversationNotFound
-		}
-		updated, err := s.Get(ctx, ownerEmail, convID)
-		if err != nil {
-			return nil, err
-		}
-		if updated == nil {
-			return nil, ErrConversationNotFound
-		}
-		return updated, nil
-	}
-
-	var ownerTeam sql.NullString
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT team_id FROM users WHERE email = $1`, ownerEmail,
-	).Scan(&ownerTeam); err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	team := strings.TrimSpace(ownerTeam.String)
-
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	var res sql.Result
-	if team != "" {
-		if err := lockTeamNamesTx(ctx, tx, team); err != nil {
-			return nil, err
-		}
+	case team != "":
 		res, err = tx.ExecContext(ctx, `
 			WITH t AS (
 				INSERT INTO teams (name, created_at) VALUES ($1, $2)
@@ -211,10 +261,7 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 			WHERE id = $5 AND user_email = $6 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			team, now, partJSON, exclJSON, convID, ownerEmail,
 		)
-		if err != nil {
-			return nil, err
-		}
-	} else {
+	default:
 		res, err = tx.ExecContext(ctx, `
 			UPDATE conversations SET
 				multiplayer = TRUE,
@@ -224,9 +271,9 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL AND archived_at IS NULL AND lockdown = FALSE`,
 			partJSON, exclJSON, now, convID, ownerEmail,
 		)
-		if err != nil {
-			return nil, err
-		}
+	}
+	if err != nil {
+		return nil, err
 	}
 	if n, err := res.RowsAffected(); err != nil {
 		return nil, err
@@ -246,52 +293,6 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 	return updated, nil
 }
 
-// UpdateConversationMultiplayerAccess adds and/or removes specific user emails
-// on a conversation's multiplayer access list.
-func (s *Store) UpdateConversationMultiplayerAccess(ctx context.Context, ownerEmail, convID string, addEmails, removeEmails []string) (*Conversation, error) {
-	ownerEmail = normalizeEmail(ownerEmail)
-	cur, err := s.Get(ctx, ownerEmail, convID)
-	if err != nil {
-		return nil, err
-	}
-	if cur == nil {
-		return nil, ErrConversationNotFound
-	}
-	partMap := make(map[string]bool)
-	for _, p := range cur.MultiplayerParticipants {
-		partMap[normalizeEmail(p)] = true
-	}
-	exclMap := make(map[string]bool)
-	for _, e := range cur.MultiplayerExcluded {
-		exclMap[normalizeEmail(e)] = true
-	}
-	for _, raw := range addEmails {
-		e := normalizeEmail(raw)
-		if e == "" || e == ownerEmail {
-			continue
-		}
-		delete(exclMap, e)
-		partMap[e] = true
-	}
-	for _, raw := range removeEmails {
-		e := normalizeEmail(raw)
-		if e == "" || e == ownerEmail {
-			continue
-		}
-		delete(partMap, e)
-		exclMap[e] = true
-	}
-	parts := make([]string, 0, len(partMap))
-	for e := range partMap {
-		parts = append(parts, e)
-	}
-	excls := make([]string, 0, len(exclMap))
-	for e := range exclMap {
-		excls = append(excls, e)
-	}
-	return s.SetConversationMultiplayer(ctx, ownerEmail, convID, cur.Multiplayer, parts, excls)
-}
-
 // GetMultiplayerConversation returns the conversation when convID has
 // multiplayer = TRUE (and is not deleted, archived, or lockdown) AND
 // callerEmail is allowed to participate in it. Returns (nil, nil) otherwise.
@@ -300,8 +301,6 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 	if callerEmail == "" || convID == "" {
 		return nil, nil
 	}
-	var sharedTeam sql.NullString
-	var sharedTeamID sql.NullInt64
 	c, err := scanConversation(s.db.QueryRowContext(ctx,
 		`SELECT `+conversationColumns+`
 		 FROM conversations
@@ -314,11 +313,25 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 		}
 		return nil, err
 	}
+	var (
+		partRaw      string
+		exclRaw      string
+		sharedTeam   sql.NullString
+		sharedTeamID sql.NullInt64
+	)
 	if err := s.db.QueryRowContext(ctx,
-		`SELECT team_shared_with, team_shared_with_id FROM conversations WHERE id = $1`, convID,
-	).Scan(&sharedTeam, &sharedTeamID); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		`SELECT COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]'), team_shared_with, team_shared_with_id
+		   FROM conversations
+		  WHERE id = $1 AND deleted_at IS NULL AND archived_at IS NULL AND multiplayer = TRUE AND lockdown = FALSE`,
+		convID,
+	).Scan(&partRaw, &exclRaw, &sharedTeam, &sharedTeamID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, err
 	}
+	c.MultiplayerParticipants = scanEmailJSONArray(partRaw)
+	c.MultiplayerExcluded = scanEmailJSONArray(exclRaw)
 	if !s.canParticipateInMultiplayer(ctx, callerEmail, &c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
 		return nil, nil
 	}
