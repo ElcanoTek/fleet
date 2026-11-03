@@ -593,8 +593,15 @@ describe("Composer — share button and overflow options menu", () => {
     const moreBtn = screen.getByTestId("composer-more-button");
     fireEvent.click(moreBtn);
     const menu = screen.getByTestId("composer-more-popover");
-    expect(within(menu).getByRole("menuitem", { name: "Open prompt library" })).toBeInTheDocument();
-    expect(within(menu).getByRole("menuitem", { name: "Patrol & recurring schedule" })).toBeInTheDocument();
+    const promptItem = within(menu).getByRole("menuitem", { name: "Open prompt library" });
+    const personaItem = within(menu).getByRole("menuitem", { name: /Persona/ });
+    const patrolItem = within(menu).getByRole("menuitem", { name: "Patrol & recurring schedule" });
+    expect(promptItem).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(personaItem).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(promptItem).toHaveFocus();
+    expect(patrolItem).toBeInTheDocument();
     const autoApproveItem = within(menu).getByRole("menuitemcheckbox", {
       name: /Auto-approve tools in this chat/,
     });

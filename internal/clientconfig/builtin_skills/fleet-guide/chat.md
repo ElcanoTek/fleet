@@ -310,7 +310,7 @@ that support button across Chat, the Operations Center, Settings, and Guides;
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
 Every conversation also shows who can see it — **Only
-you**, **Shared with** your team, **Multiplayer**, or **Public link** — and a **Share** button.
+you**, **Shared with** your team, **Multiplayer**, or **Public link** — and a **Share** button in the composer.
 Both open the share dialog.
 
 ### The transcript
@@ -1039,7 +1039,7 @@ Sharing a conversation with your team is how a good piece of work travels. A cha
 is shared with a team only when it sits in a project shared with that team **and**
 its owner shares it; sharing the project alone never shares its chats.
 
-**The share dialog** (the **Share** button in the header, or **Share…** in a
+**The share dialog** (the **Share** button in the composer, the visibility badge in the header, or **Share…** in a
 chat's menu) always leads with your team and offers one button that does the
 whole job for the situation you are in:
 

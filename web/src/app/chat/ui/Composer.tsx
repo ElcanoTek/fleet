@@ -513,6 +513,10 @@ export function Composer({
 
   useEffect(() => {
     if (!moreMenuOpen) return;
+    const firstItem = moreMenuRef.current?.querySelector<HTMLElement>(
+      '[role="menu"] [role^="menuitem"]:not([disabled])',
+    );
+    firstItem?.focus();
     const handleMouseDown = (event: MouseEvent) => {
       if (
         moreMenuRef.current &&
@@ -1320,10 +1324,46 @@ export function Composer({
                     role="presentation"
                     className="relative inline-flex"
                     onKeyDown={(event) => {
-                      if (event.key === "Escape" && moreMenuOpen) {
+                      if (!moreMenuOpen) return;
+                      if (event.key === "Escape") {
                         event.stopPropagation();
                         setMoreMenuOpen(false);
                         moreButtonRef.current?.focus();
+                        return;
+                      }
+                      if (
+                        event.key === "ArrowDown" ||
+                        event.key === "ArrowUp" ||
+                        event.key === "Home" ||
+                        event.key === "End"
+                      ) {
+                        const items = Array.from(
+                          moreMenuRef.current?.querySelectorAll<HTMLElement>(
+                            '[role="menu"] [role^="menuitem"]:not([disabled])',
+                          ) ?? [],
+                        );
+                        if (items.length === 0) return;
+                        event.preventDefault();
+                        const currentIndex = items.indexOf(
+                          document.activeElement as HTMLElement,
+                        );
+                        let nextIndex = 0;
+                        if (event.key === "Home") {
+                          nextIndex = 0;
+                        } else if (event.key === "End") {
+                          nextIndex = items.length - 1;
+                        } else if (event.key === "ArrowDown") {
+                          nextIndex =
+                            currentIndex >= 0
+                              ? (currentIndex + 1) % items.length
+                              : 0;
+                        } else {
+                          nextIndex =
+                            currentIndex > 0
+                              ? currentIndex - 1
+                              : items.length - 1;
+                        }
+                        items[nextIndex]?.focus();
                       }
                     }}
                   >
@@ -1830,7 +1870,14 @@ export function Composer({
                   <button
                     type="button"
                     data-testid="composer-share-button"
-                    disabled={shareBusy}
+                    disabled={
+                      shareBusy ||
+                      isStreaming ||
+                      isUploadingAttachments ||
+                      ((activeConversationId === null ||
+                        isPendingKey(activeConversationId)) &&
+                        messages.length > 0)
+                    }
                     aria-label={ariaLabel}
                     data-tip-top={tipText}
                     onClick={() => {

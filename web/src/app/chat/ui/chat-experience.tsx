@@ -2550,6 +2550,8 @@ export function ChatExperience({
     }
   };
 
+  const deletedConvIdsRef = useRef<Set<string>>(new Set());
+
   const loadConversation = async (
     conversationId: string,
     options: {
@@ -2703,6 +2705,7 @@ export function ChatExperience({
       if (attachedConvIdsRef.current.has(conversationId)) return;
       if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
         return;
+      if (deletedConvIdsRef.current.has(conversationId)) return;
       // A BACKGROUND reload must not move the user. Recovery reconciles
       // conversations that are not on screen, and one finishing after the
       // user has navigated elsewhere would otherwise switch the active
@@ -2713,6 +2716,7 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
+      const canInsertMissingRow = !options.background && !options.restore;
       if (
         data.conversation.user_email &&
         userEmail.trim() &&
@@ -2726,6 +2730,7 @@ export function ChatExperience({
             next[idx] = { ...prev[idx], ...data.conversation };
             return next;
           }
+          if (!canInsertMissingRow) return prev;
           return [data.conversation, ...prev];
         });
       } else if (data.conversation.archived_at != null) {
@@ -2736,6 +2741,7 @@ export function ChatExperience({
             next[idx] = { ...prev[idx], ...data.conversation };
             return next;
           }
+          if (!canInsertMissingRow) return prev;
           return [data.conversation, ...prev];
         });
       } else {
@@ -2746,6 +2752,7 @@ export function ChatExperience({
             next[idx] = { ...prev[idx], ...data.conversation };
             return next;
           }
+          if (!canInsertMissingRow) return prev;
           return [data.conversation, ...prev];
         });
       }
@@ -2975,6 +2982,12 @@ export function ChatExperience({
     // the moment a user would panic. The predicate lives in one module shared
     // with the confirm dialog's count, so the two cannot disagree.
     const remaining = afterDeleteAllUnpinned(conversations);
+    const remainingIds = new Set(remaining.map((c) => c.id));
+    for (const c of conversations) {
+      if (!remainingIds.has(c.id)) {
+        deletedConvIdsRef.current.add(c.id);
+      }
+    }
     setConversations(remaining);
     const active = activeConversationId
       ? remaining.find((c) => c.id === activeConversationId)
@@ -3058,6 +3071,9 @@ export function ChatExperience({
       return false;
     }
     const removed = new Set(ids);
+    for (const id of ids) {
+      deletedConvIdsRef.current.add(id);
+    }
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
     setArchivedConversations((current) =>
@@ -3143,6 +3159,7 @@ export function ChatExperience({
       showRailError(`Couldn't delete the chat (HTTP ${response.status}).`);
       return false;
     }
+    deletedConvIdsRef.current.add(conversationId);
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
     // Also drop it from the archived list (#282): delete is reachable from the
@@ -4220,6 +4237,15 @@ export function ChatExperience({
       return;
     }
     if (creatingShareChat || isStreaming || isUploadingAttachments) return;
+    if (
+      (activeConversationId === null || isPendingKey(activeConversationId)) &&
+      getConvMessages(currentConvKey).length > 0
+    ) {
+      showRailError(
+        "Send or retry your first message before sharing this chat.",
+      );
+      return;
+    }
     const originActiveId = activeConversationIdRef.current;
     const originDraftKey = draftKeyRef.current;
     const originConvKey = currentConvKey;
