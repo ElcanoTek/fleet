@@ -186,12 +186,17 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(menuButton).toBeFocused();
+  // After a menu action the focus lands on the panel's More button again.
+  await menuButton.click();
+  await page.getByRole("menuitem", { name: "Move earlier" }).click();
+  await expect(menuButton).toBeFocused();
 
   // Remove the systems panel: its card returns to the chat rail.
   const systems = page.locator('[data-panel-key="c:call-health-1"]');
   await systems.getByRole("button", { name: "More for Systems" }).click();
   await page.getByRole("menuitem", { name: "Remove from board" }).click();
   await expect(panels).toHaveCount(3);
+  await expect(page.getByTestId("dashboard-board")).toBeFocused();
   await expect(page.locator('[data-testid="genui-card"][data-card-id="call-health-1"]')).toBeVisible();
 
   // Remove the revenue panel, then pin its card back: the same slot returns

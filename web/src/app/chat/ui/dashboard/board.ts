@@ -19,7 +19,7 @@
 
 import type { Message, ToolCall } from "../history";
 import { isInput, walkInputs, type CardSpec, type Component } from "../genui/model";
-import { isRenderableCardCall, type GenUiState } from "../genui/transcript";
+import { cardSpecOf, isRenderableCardCall, type GenUiState } from "../genui/transcript";
 
 export type BoardPrefs = {
   /** Cards the user pinned to the board (forms included), as cardRef. */
@@ -133,8 +133,17 @@ export function isDisplayOnly(spec: CardSpec): boolean {
 export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: BoardPrefs): Board {
   const removed = new Set(prefs.removed);
   const pinned = new Set(prefs.pinned);
-  // card id → slot key, for every card placed so far (lineage lookups).
+  // card reference (cardRef: id + occurrence) → slot key, for every card
+  // placed so far. Lineage is followed by occurrence while walking the
+  // transcript, so a later card reusing an id never breaks the chain of a
+  // panel an earlier card with that id started.
   const slotOf = new Map<string, string>();
+  const idOfRef = new Map<string, string>();
+  // raw id → the reference of its latest occurrence so far: what a
+  // `replaces` naming that id means at this point in the conversation.
+  const liveRef = new Map<string, string>();
+  // slot key → the reference of the card it currently shows.
+  const slotRef = new Map<string, string>();
   const slots = new Map<string, BoardPanel>();
   const firstSeen = new Map<string, number>();
   // slot key → the keys it had before it moved (see below). A set, never
@@ -146,21 +155,22 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
     if (m.role !== "assistant") continue;
     for (const tc of m.toolCalls ?? []) {
       if (!isRenderableCardCall(tc)) continue;
-      // A reused id belongs to its newest call; an older call with it is a
-      // replaced card, never a panel.
-      if (genUi.owners.get(tc.id) !== tc) continue;
-      const spec = genUi.cards.get(tc.id);
+      const owns = genUi.owners.get(tc.id) === tc;
+      const spec = owns ? genUi.cards.get(tc.id) : cardSpecOf(tc);
       if (!spec) continue;
-      // The slot of the card this one refines — only while that card is the
-      // one the slot shows. Refining a stale version takes nothing over,
-      // matching deriveGenUiState's panel ownership.
-      const replacedSlot = spec.replaces ? slotOf.get(spec.replaces) : undefined;
-      const lineage =
-        replacedSlot !== undefined && slots.get(replacedSlot)?.cardId === spec.replaces ? replacedSlot : undefined;
       // A provider can reuse a tool-call id: the user's per-card choices
       // (pin, and the c: slot's removal, order and width) belong to one
       // occurrence of it, never to an unrelated later card.
       const ref = cardRef(tc.id, genUi.occurrences.get(tc) ?? 0);
+      // The slot of the card this one refines — only while that card is the
+      // one the slot shows. Refining a stale version takes nothing over,
+      // matching deriveGenUiState's panel ownership.
+      const replacedRef = spec.replaces ? liveRef.get(spec.replaces) : undefined;
+      const replacedSlot = replacedRef !== undefined ? slotOf.get(replacedRef) : undefined;
+      const lineage =
+        replacedSlot !== undefined && slotRef.get(replacedSlot) === replacedRef ? replacedSlot : undefined;
+      liveRef.set(tc.id, ref);
+      idOfRef.set(ref, tc.id);
       const isPinned = pinned.has(ref);
       let key: string | undefined;
       if (spec.panel) key = `p:${spec.panel}`;
@@ -182,6 +192,10 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
           prev = moved;
           firstSeen.set(key, firstSeen.get(lineage) ?? seq++);
         }
+        // The old key's age goes with the slot: a later panel that reuses
+        // the key is new, and is ordered as new.
+        firstSeen.delete(lineage);
+        slotRef.delete(lineage);
         const merged = new Set([...(aliases.get(key) ?? []), lineage, ...(aliases.get(lineage) ?? [])]);
         merged.delete(key);
         aliases.set(key, merged);
@@ -192,7 +206,8 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       // a key some slot moved away from) is that new panel's alone: it stops
       // being an alias, so the two never share removal, order or width.
       if (!prev) for (const set of aliases.values()) set.delete(key);
-      slotOf.set(tc.id, key);
+      slotOf.set(ref, key);
+      slotRef.set(key, ref);
       if (!firstSeen.has(key)) firstSeen.set(key, seq++);
       slots.set(key, {
         key,
@@ -210,6 +225,9 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       });
     }
   }
+  // A slot still showing an older occurrence of a reused id shows a card
+  // the transcript has replaced: it is not a panel.
+  for (const [key, panel] of slots) if (genUi.owners.get(panel.cardId) !== panel.call) slots.delete(key);
   // A slot's earlier keys (after a move) still carry the user's choices.
   const keysOf = (key: string) => [key, ...(aliases.get(key) ?? new Set<string>())];
   const order = new Map(prefs.order.map((k, i) => [k, i]));
@@ -229,7 +247,10 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
   const shown = new Set(panels.map((p) => p.key));
   const cardSlots = new Map<string, string>();
   const removedKeysOf = new Map<string, string[]>();
-  for (const [cardId, key] of slotOf) {
+  // Keyed by raw id, for the transcript's current card with each id only.
+  for (const [ref, key] of slotOf) {
+    const cardId = idOfRef.get(ref);
+    if (cardId === undefined || liveRef.get(cardId) !== ref) continue;
     if (shown.has(key)) cardSlots.set(cardId, key);
     else if (slots.has(key)) removedKeysOf.set(cardId, keysOf(key));
   }

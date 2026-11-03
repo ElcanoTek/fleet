@@ -243,6 +243,30 @@ describe("cardRef", () => {
   });
 });
 
+describe("reused ids and lineage", () => {
+  it("a card that inherited a panel keeps it when the original's id is reused later", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "a", input: display("Rev", { panel: "rev" }) }]),
+      assistant(2, [{ id: "b", input: display("Rev (fixed)", { replaces: "a" }) }]),
+      assistant(3, [{ id: "a", input: form("Unrelated form") }]),
+    ]);
+    expect(b.panels.map((p) => [p.key, p.cardId])).toEqual([["p:rev", "b"]]);
+    expect(b.cardSlots.get("b")).toBe("p:rev");
+    // The reused id's new card is a form: in the chat, not on the board.
+    expect(b.cardSlots.has("a")).toBe(false);
+  });
+
+  it("a key that becomes live again after its slot moved is ordered as new", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "a", input: display("A", { panel: "a" }) }]),
+      assistant(2, [{ id: "z", input: display("Z") }]),
+      assistant(3, [{ id: "b", input: display("B", { panel: "b", replaces: "a" }) }]),
+      assistant(4, [{ id: "n", input: display("New A", { panel: "a" }) }]),
+    ]);
+    expect(b.panels.map((p) => p.key)).toEqual(["p:b", "c:z", "p:a"]);
+  });
+});
+
 describe("slot aliases on panels", () => {
   it("a key that becomes live again stops being another slot's alias", () => {
     const b = boardOf([

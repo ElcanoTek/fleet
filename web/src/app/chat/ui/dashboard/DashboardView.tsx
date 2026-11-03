@@ -307,7 +307,10 @@ function PanelMenu({
       window.removeEventListener("keydown", onKey, true);
     };
   }, [open]);
-  const item = (label: string, action: () => void, disabled = false) => (
+  // After an action the focused item unmounts: hand the focus to the
+  // panel's More button (it moves with the panel), or to the board when the
+  // panel itself is gone.
+  const item = (label: string, action: () => void, disabled = false, removes = false) => (
     <button
       type="button"
       role="menuitem"
@@ -316,6 +319,10 @@ function PanelMenu({
       onClick={() => {
         setOpen(false);
         action();
+        window.setTimeout(() => {
+          if (removes) document.querySelector<HTMLElement>('[data-testid="dashboard-board"]')?.focus();
+          else triggerRef.current?.focus();
+        }, 0);
       }}
     >
       {label}
@@ -339,7 +346,7 @@ function PanelMenu({
         <div id={menuId} role="menu" className="dash-popover absolute right-0 top-[calc(100%+0.25rem)] z-30 grid min-w-[11rem] p-1">
           {item("Move earlier", () => onMove(panel.key, -1), index === 0)}
           {item("Move later", () => onMove(panel.key, 1), index === count - 1)}
-          {item("Remove from board", () => onRemove(panel.key))}
+          {item("Remove from board", () => onRemove(panel.key), false, true)}
         </div>
       ) : null}
     </div>

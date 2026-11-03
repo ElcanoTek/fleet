@@ -493,19 +493,30 @@ export function ChatTranscript({
 
   // Dashboard view's "approvals waiting" light asks for a message that may
   // not be mounted (virtualized): scroll its row in, then centre the card.
+  // A message folded into compacted history has no row of its own: expand
+  // the history first, then jump once its row exists.
   const dashboardJump = dashboard?.jumpRequest;
+  const handledJump = useRef(0);
   useEffect(() => {
-    if (!dashboardJump) return;
+    if (!dashboardJump || handledJump.current === dashboardJump.nonce) return;
     const rowIndex = rows.findIndex((r) => r.kind === "message" && r.message.id === dashboardJump.messageId);
+    if (rowIndex < 0 && summaryIndex >= 0 && !summaryExpanded) {
+      setSummaryExpanded(true);
+      return;
+    }
+    handledJump.current = dashboardJump.nonce;
     if (rowIndex >= 0) virtualizer.scrollToIndex(rowIndex, { align: "start" });
-    const t = window.setTimeout(() => {
-      const el = document.querySelector(`[data-approval-id="${CSS.escape(dashboardJump.approvalId)}"]`);
+    // Not cleared on re-run: rows change with every streamed token, which
+    // must not cancel the centring of a request already handled.
+    const approvalId = dashboardJump.approvalId;
+    window.setTimeout(() => {
+      const el = document.querySelector(`[data-approval-id="${CSS.escape(approvalId)}"]`);
       el?.scrollIntoView?.({ block: "center" });
     }, 120);
-    return () => window.clearTimeout(t);
-    // Fire once per request (the nonce changes); rows/virtualizer are read live.
+    // Re-run when rows change (the expanded history); the virtualizer is
+    // read live.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dashboardJump]);
+  }, [dashboardJump, rows]);
 
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);
