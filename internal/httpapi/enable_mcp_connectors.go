@@ -833,6 +833,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 		return "", fmt.Errorf("no connectors specified in approval payload")
 	}
 
+	callerEmail := strings.TrimSpace(user)
 	if s.cfg != nil && s.cfg.MockMode {
 		if conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID); err == nil && conv != nil {
 			merged := append([]string(nil), rawConversationOptionalMCPServers(conv)...)
@@ -849,7 +850,10 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 				}
 			}
 			sort.Strings(merged)
-			_ = s.store.SetOptionalMCPServers(ctx, convOwnerEmail(conv, user), convID, merged)
+			if callerEmail == "" {
+				callerEmail = convOwnerEmail(conv, user)
+			}
+			_ = s.store.SetOptionalMCPServers(ctx, callerEmail, convID, merged)
 		}
 		return fmt.Sprintf("Enabled optional MCP connector(s) for this conversation: %s. Their tools are now active and mounted in your roster — proceed with the user's request.", strings.Join(promptSafeSlice(args.Connectors), ", ")), nil
 	}
@@ -864,7 +868,11 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 
 	rawEnabled := rawConversationOptionalMCPServers(conv)
 	currentEnabled := append([]string(nil), s.effectiveOptionalMCPServersForCaller(ctx, user, conv)...)
-	effectivePersona, _ := s.resolveTurnPersona(ctx, conv)
+	personaConv := *conv
+	if callerEmail != "" {
+		personaConv.UserEmail = callerEmail
+	}
+	effectivePersona, _ := s.resolveTurnPersona(ctx, &personaConv)
 	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, currentEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts, advertisedSetFromNames(args.Connectors))
 	if err != nil {
 		return "", err
@@ -884,7 +892,10 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 	sort.Strings(merged)
 
-	if err := s.store.SetOptionalMCPServers(ctx, convOwnerEmail(conv, user), convID, merged); err != nil {
+	if callerEmail == "" {
+		callerEmail = convOwnerEmail(conv, user)
+	}
+	if err := s.store.SetOptionalMCPServers(ctx, callerEmail, convID, merged); err != nil {
 		return "", fmt.Errorf("persist enabled connectors: %w", err)
 	}
 	return fmt.Sprintf(

@@ -628,6 +628,10 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	sort.Strings(clean)
 	ownerEmail := convOwnerEmail(conv, user)
 	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	callerEmail := strings.TrimSpace(user)
+	if callerEmail == "" {
+		callerEmail = ownerEmail
+	}
 	// Preserve another user's private remote connectors that were hidden
 	// from this caller's picker so toggling a shared connector never wipes
 	// another user's private remote server opt-ins.
@@ -636,8 +640,14 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	for _, n := range merged {
 		mergedSeen[n] = true
 	}
-	if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr == nil && fresh != nil {
+	if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr != nil {
+		http.Error(w, ferr.Error(), http.StatusInternalServerError)
+		return
+	} else if fresh != nil {
 		conv = fresh
+	} else if !isOwner {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
 	}
 	for _, raw := range rawConversationOptionalMCPServers(conv) {
 		norm := strings.ToLower(strings.TrimSpace(raw))
@@ -648,7 +658,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	}
 	sort.Strings(merged)
 	persisted := merged
-	if err := s.store.SetOptionalMCPServers(r.Context(), ownerEmail, id, persisted); err != nil {
+	if err := s.store.SetOptionalMCPServers(r.Context(), callerEmail, id, persisted); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
@@ -681,7 +691,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 			mergedAccounts[prefix+k] = v
 		}
 	}
-	if err := s.store.SetConversationMCPAccounts(r.Context(), ownerEmail, id, mergedAccounts); err != nil {
+	if err := s.store.SetConversationMCPAccounts(r.Context(), callerEmail, id, mergedAccounts); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

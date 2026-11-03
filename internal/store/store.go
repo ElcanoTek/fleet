@@ -929,10 +929,19 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	if err != nil {
 		return fmt.Errorf("marshal optional mcp servers: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
 		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, time.Now().Unix(), convID, userEmail,
+		payload, time.Now().Unix(), convID, ownerEmail,
 	)
 	if err != nil {
 		return err
@@ -941,7 +950,7 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AutoApproveConnectorsRequest carries the inputs for AutoApproveEnableMCPConnectors.
@@ -1414,10 +1423,19 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 	if err != nil {
 		return fmt.Errorf("marshal mcp accounts: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET mcp_accounts = $1, updated_at = $2
 		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, time.Now().Unix(), convID, userEmail,
+		payload, time.Now().Unix(), convID, ownerEmail,
 	)
 	if err != nil {
 		return err
@@ -1426,7 +1444,7 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // SetModel updates the per-chat OpenRouter slug. Empty model clears the
