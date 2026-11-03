@@ -981,7 +981,7 @@ export function ChatExperience({
   //     the empty state all light up by default)
   const isLockdown =
     activeConversation?.lockdown === true ||
-    (isPendingKey(activeConversationId) &&
+    ((activeConversationId === null || isPendingKey(activeConversationId)) &&
       (pendingLockdown || serverConfig.lockdownOnly));
   const activePendingKey =
     activeConversationId === null
@@ -4184,29 +4184,70 @@ export function ChatExperience({
       openShareDialog(activeConversation);
       return;
     }
-    if (creatingShareChat || isStreaming) return;
+    if (creatingShareChat || isStreaming || isUploadingAttachments) return;
+    const pendingKey = activePendingKey ?? draftKeyRef.current;
+    const hadPendingAutoApprove = Boolean(
+      pendingKey && pendingAutoApproveByKey[pendingKey],
+    );
+    const draftText = prompt.trim();
+    const initialTitle = draftText
+      ? draftText.length > 80
+        ? `${draftText.slice(0, 80)}…`
+        : draftText
+      : "New conversation";
+    const enabledOptional =
+      mcpServers.length > 0
+        ? enabledOptionalMcpServerNames(mcpServers)
+        : undefined;
+    const mcpAccounts = mcpAccountOverrides(mcpServers);
     setCreatingShareChat(true);
     try {
       const response = await fetch("/api/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: "New conversation",
+          title: initialTitle,
           persona: selectedPersona || undefined,
           model: selectedModel || undefined,
           lockdown: isLockdown || undefined,
+          enabled_optional: enabledOptional,
+          mcp_accounts:
+            Object.keys(mcpAccounts).length > 0 ? mcpAccounts : undefined,
+          auto_approve: hadPendingAutoApprove || undefined,
         }),
       });
-      if (!response.ok) return;
+      if (!response.ok) {
+        const errText = (await response.text().catch(() => "")).trim();
+        showRailError(
+          errText ||
+            `Couldn't open sharing for this chat (HTTP ${response.status}).`,
+        );
+        return;
+      }
       const created = (await response.json()) as Partial<ConversationSummary>;
-      if (!created?.id) return;
-      const pendingKey = activePendingKey ?? draftKeyRef.current;
-      const hadPendingAutoApprove = Boolean(
-        pendingKey && pendingAutoApproveByKey[pendingKey],
-      );
+      if (!created?.id) {
+        showRailError("Couldn't open sharing for this chat.");
+        return;
+      }
+      let autoApprovePersisted = Boolean(created.auto_approve);
+      if (hadPendingAutoApprove && !autoApprovePersisted) {
+        const autoUrl = conversationApiUrl(created.id, "/auto-approve");
+        if (autoUrl) {
+          try {
+            const autoRes = await fetch(autoUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ auto_approve: true }),
+            });
+            autoApprovePersisted = autoRes.ok;
+          } catch {
+            autoApprovePersisted = false;
+          }
+        }
+      }
       const summary: ConversationSummary = {
         id: created.id,
-        title: created.title || "New conversation",
+        title: created.title || initialTitle,
         persona: created.persona || selectedPersona || "default",
         model: created.model || selectedModel || "",
         pinned: Boolean(created.pinned),
@@ -4217,19 +4258,12 @@ export function ChatExperience({
         multiplayer: created.multiplayer,
         share_token: created.share_token,
         lockdown: created.lockdown ?? (isLockdown || undefined),
-        auto_approve: hadPendingAutoApprove || created.auto_approve,
+        auto_approve: autoApprovePersisted,
       };
       promoteComposerKey(currentConvKey, summary.id);
+      setPendingLockdown(false);
       if (pendingKey && hadPendingAutoApprove) {
         setPendingAutoApproveForKey(pendingKey, false);
-        const autoUrl = conversationApiUrl(summary.id, "/auto-approve");
-        if (autoUrl) {
-          void fetch(autoUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ auto_approve: true }),
-          }).catch(() => {});
-        }
       }
       setConversations((curr) => [
         summary,
@@ -4239,7 +4273,7 @@ export function ChatExperience({
       setActiveConversationId(summary.id);
       openShareDialog(summary);
     } catch {
-      // Ignore transient network failure; next click retries cleanly.
+      showRailError("Couldn't reach the server to open sharing for this chat.");
     } finally {
       setCreatingShareChat(false);
     }
@@ -7422,7 +7456,7 @@ export function ChatExperience({
                     : null)
                 }
                 shareTeam={activeChatTeamAudience}
-                shareBusy={creatingShareChat}
+                shareBusy={creatingShareChat || isUploadingAttachments}
               />
             </section>
           </div>

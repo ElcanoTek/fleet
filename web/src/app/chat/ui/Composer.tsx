@@ -1249,6 +1249,7 @@ export function Composer({
               currentText={prompt}
               onInsert={setPrompt}
               compact
+              returnFocusRef={moreButtonRef}
               renderTrigger={(openLibrary) => {
                 openPromptLibraryRef.current = openLibrary;
                 return null;
@@ -1337,6 +1338,7 @@ export function Composer({
                           className={POP_ROW}
                           onClick={() => {
                             setMoreMenuOpen(false);
+                            moreButtonRef.current?.focus();
                             openPromptLibraryRef.current?.();
                           }}
                         >
@@ -1698,10 +1700,11 @@ export function Composer({
                     </div>
                   ) : null}
 
-                  {/* Context Ring: shown on desktop once context usage exists (or while
-                      compacting), and always accessible on mobile inside More options. */}
+                  {/* Context Ring: shown once context usage exists (or while
+                      compacting / when the token-limit toast fires), and also
+                      reachable inside More options. */}
                   {canCompact && (contextUsage !== null || isSummarizing || compactToastVisible) ? (
-                    <div className="relative hidden sm:inline-flex">
+                    <div className="relative inline-flex">
                       {compactToastVisible && !isSummarizing ? (
                         <div
                           role="status"
@@ -1784,39 +1787,10 @@ export function Composer({
                         : "border-[var(--color-border)] bg-[var(--color-overlay-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
                     }`}
                   >
-                    {isMultiplayer || isTeamShared ? (
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 16 16"
-                        className="size-3.5 shrink-0 text-[var(--color-accent)]"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <circle cx="6" cy="5.5" r="2.2" />
-                        <path d="M2 13c0-2 1.8-3.3 4-3.3s4 1.3 4 3.3" />
-                        <circle cx="11.3" cy="6" r="1.7" />
-                        <path d="M11.5 9.8c1.6.2 2.7 1.2 2.7 2.8" />
-                      </svg>
-                    ) : (
-                      <svg
-                        aria-hidden="true"
-                        viewBox="0 0 16 16"
-                        className={`size-3.5 shrink-0 ${isLinkShared ? "text-[var(--color-accent)]" : ""}`}
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="1.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <circle cx="12" cy="3.5" r="1.8" />
-                        <circle cx="4" cy="8" r="1.8" />
-                        <circle cx="12" cy="12.5" r="1.8" />
-                        <path d="M5.6 7.1l4.8-2.7M5.6 8.9l4.8 2.7" />
-                      </svg>
-                    )}
+                    <Icon
+                      name={isMultiplayer || isTeamShared ? "persona" : "external-link"}
+                      className={`size-3.5 shrink-0 ${isSharedAny ? "text-[var(--color-accent)]" : ""}`}
+                    />
                     {isMultiplayer ? (
                       <>
                         <span className="hidden sm:inline">Multiplayer</span>

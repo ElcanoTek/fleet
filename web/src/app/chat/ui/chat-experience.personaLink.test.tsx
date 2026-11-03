@@ -74,21 +74,24 @@ describe("persona new-chat link", () => {
     expect(fetchMock.mock.calls.some(([u]) => String(u) === "/api/conversations/conv-a")).toBe(false);
   });
 
-  it("lets the user click Share in the composer from the start of a new chat and preserves the draft", async () => {
+  it("lets the user click Share in the composer from the start of a new chat and preserves the draft, title, and pre-chat options", async () => {
     window.history.replaceState(null, "", "/chat?persona=user%3Amy-twin&draft=Draft%20before%20sharing");
     const fetchMock = mockBackend();
     const base = fetchMock.getMockImplementation()!;
+    let createdPayload: Record<string, unknown> | null = null;
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === "/api/conversations" && init?.method === "POST") {
+        createdPayload = JSON.parse(String(init.body ?? "{}")) as Record<string, unknown>;
         return new Response(
           JSON.stringify({
             id: "conv-new",
-            title: "New conversation",
+            title: createdPayload.title || "New conversation",
             persona: "user:my-twin",
             model: "vendor/one",
             pinned: false,
             updated_at: 1767225700,
+            auto_approve: Boolean(createdPayload.auto_approve),
           }),
           { status: 200 },
         );
@@ -100,11 +103,20 @@ describe("persona new-chat link", () => {
     const composer = await screen.findByDisplayValue("Draft before sharing");
     expect(composer.tagName).toBe("TEXTAREA");
 
+    // Enable auto-approve before clicking Share to verify pre-chat options are seeded.
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    fireEvent.click(screen.getByRole("menuitemcheckbox", { name: /Auto-approve tools in this chat/ }));
+
     const shareBtn = screen.getByTestId("composer-share-button");
     fireEvent.click(shareBtn);
 
     const dialog = await screen.findByRole("dialog", { name: "Share this chat" });
     expect(dialog).toBeInTheDocument();
+    expect(createdPayload).toMatchObject({
+      title: "Draft before sharing",
+      persona: "user:my-twin",
+      auto_approve: true,
+    });
     // Draft stays intact in the composer after promoting onto the materialized conversation.
     expect(screen.getByDisplayValue("Draft before sharing")).toBeInTheDocument();
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
@@ -35,6 +35,8 @@ type Props = {
   // Optional custom trigger renderer so callers like Composer can keep the
   // dialog mounted while placing the trigger button inside an overflow menu.
   renderTrigger?: (openLibrary: () => void) => React.ReactNode;
+  // Optional element to return focus to when the dialog closes.
+  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 const FIELD =
@@ -52,6 +54,7 @@ export function PromptLibrary({
   onInsert,
   compact = false,
   renderTrigger,
+  returnFocusRef,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<PromptLibraryItem[]>([]);
@@ -67,6 +70,7 @@ export function PromptLibrary({
 
   useDialogA11y(open, modalRef, () => setOpen(false), {
     initialFocusRef: searchRef,
+    returnFocusRef,
   });
 
   const load = async () => {

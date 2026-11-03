@@ -524,6 +524,21 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
 		return nil, unlockFirst, false
 	}
+	// If this conversation was materialized before its first message (for
+	// example via Share in the composer on an empty draft) and still carries the
+	// placeholder "New conversation" title without a manual rename, give it a
+	// heuristic title from the opening message so the sidebar updates on turn 1.
+	if conv.Title == "New conversation" && !conv.TitleLocked {
+		nextTitle := strings.TrimSpace(req.Title)
+		if nextTitle == "" {
+			nextTitle = agent.HeuristicTitle(req.Message)
+		}
+		if nextTitle != "" && nextTitle != conv.Title {
+			if err := s.store.UpdateTitle(r.Context(), convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
+				conv.Title = nextTitle
+			}
+		}
+	}
 	return conv, unlockFirst, true
 }
 
@@ -1364,7 +1379,7 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 // /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
 // rather than a silent drop. Returns false after writing an error response.
 func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool) bool {
-	if len(enabledOptional) > 0 {
+	if enabledOptional != nil {
 		valid := s.optionalServerWhitelist(r.Context(), user)
 		seen := make(map[string]bool, len(enabledOptional))
 		clean := make([]string, 0, len(enabledOptional))
@@ -1377,7 +1392,7 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 			clean = append(clean, n)
 		}
 		sort.Strings(clean)
-		if len(clean) > 0 {
+		if len(clean) > 0 || len(conv.OptionalMCPServersEnabled) > 0 {
 			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, clean); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return false

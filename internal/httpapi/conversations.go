@@ -41,6 +41,13 @@ type createConversationRequest struct {
 	// seedMaxChars; the tail is kept (the end of a transcript — the
 	// result — matters more than the beginning).
 	Seed string `json:"seed,omitempty"`
+	// EnabledOptional, MCPAccounts, and AutoApprove seed pre-chat composer
+	// selections when a draft conversation is materialized before its first
+	// message turn (for example, when the user clicks Share in the composer on
+	// a brand-new chat).
+	EnabledOptional []string          `json:"enabled_optional,omitempty"`
+	MCPAccounts     map[string]string `json:"mcp_accounts,omitempty"`
+	AutoApprove     *bool             `json:"auto_approve,omitempty"`
 }
 
 // seedMaxChars bounds a seeded first message so a pathological caller can't
@@ -232,8 +239,17 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return
 		}
+		if len(req.MCPAccounts) > 0 {
+			if _, err := s.cleanMCPAccounts(r.Context(), user, req.MCPAccounts); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
 		if !ok {
+			return
+		}
+		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
 			return
 		}
 		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message

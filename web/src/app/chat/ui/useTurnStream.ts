@@ -2313,7 +2313,11 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       // fast mock turn that often landed after turn.completed, so the
       // dot never painted.
       setConversations((curr) => {
-        if (curr.some((c) => c.id === p.id)) return curr;
+        if (curr.some((c) => c.id === p.id)) {
+          return curr.map((c) =>
+            c.id === p.id && p.title ? { ...c, title: p.title } : c,
+          );
+        }
         const optimistic: ConversationSummary = {
           id: p.id,
           title: p.title,

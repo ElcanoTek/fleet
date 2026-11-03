@@ -116,21 +116,22 @@ Start a patrol or timer in either of two ways:
   *"check back in 30 minutes and verify the backfill"*). The assistant uses the
   `chat_patrol` tool (`create`, `list`, `update`, `pause`, `resume`, `cancel`) to
   attach or adjust the schedule on the current conversation.
-- **Use the Patrol button in the composer:** click **Patrol** in the composer
-  toolbar, choose a preset (**Every 1h**, **Every 2h**, **Every 4h**, **Every
-  6h**, **In 30m (1x)**, or **Custom**), enter the patrol instructions, and
-  press **Start patrol**.
+- **Use Patrol in the composer:** open **More options** (`•••`) in the composer
+  toolbar and click **Patrol & schedule** (or click the active **Patrol** status
+  pill on the toolbar), choose a preset (**Every 1h**, **Every 2h**, **Every
+  4h**, **Every 6h**, **In 30m (1x)**, or **Custom**), enter the patrol
+  instructions, and press **Start patrol**.
 
 When a conversation has an active or paused patrol or timer, the **Patrol bar**
 appears at the top of the thread showing the schedule's status (**Patrol
 active**, **Timer armed**, or **Paused**), cadence, run count, and countdown to
 the next run, along with **Run now**, **Pause / Resume**, and **Stop** buttons.
-Enabling **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or composer)
-lets session-approvable tool calls run hands-free while you are away; if a
-patrol turn does stage an approval card, the card stays open for 24 hours and
-automatically resumes the patrol turn as soon as you approve it. Conversations
-with an active or paused patrol are exempt from retention sweeps until the
-patrol is stopped.
+Enabling **⚡ Auto-approve** (in the Patrol popover, Patrol bar, or **More
+options** in the composer) lets session-approvable tool calls run hands-free
+while you are away; if a patrol turn does stage an approval card, the card stays
+open for 24 hours and automatically resumes the patrol turn as soon as you
+approve it. Conversations with an active or paused patrol are exempt from
+retention sweeps until the patrol is stopped.
 
 A patrol runs as the chat's persona, so a persona of your own — a digital twin,
 say — can keep watch for you: press **Start patrol** on one of its suggested
@@ -340,18 +341,16 @@ and a minimap along the edge lets you jump between messages.
 
 ### The composer
 
-The toolbar beneath the message box is a row of icons. Left to right:
+The toolbar beneath the message box keeps everyday controls upfront and groups secondary options into **More options** (`•••`). Left to right:
 
 | Control | What it does |
 | --- | --- |
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
-| Persona | How the assistant thinks and writes in this chat: your deployment's personas under **Workspace**, and your own under **Yours** (see [Your own personas and digital twin](#your-own-personas-and-digital-twin)). It is chosen before the first message; once the chat is underway the control is hidden. **Manage your personas** (or **Create your own persona**) at the bottom of the menu opens **Settings → Personas**. |
-| Prompt library | Opens the shared library to insert or save a prompt. See [The prompt library](#9-the-prompt-library). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| Context ring | Appears once the conversation has content and fills as it grows. Click it to compact. See [Long conversations](#long-conversations). |
-| Auto-approve | The lightning bolt on the right. When on for this conversation, executable connector actions and shell commands run without stopping on an approval card (can be toggled mid-turn). Outbound email, scheduled-task changes, and actions the deployment requires a decision on every time still show their card. |
-| Send on Enter | The toggle on the right. On, `Enter` sends and `Shift Enter` adds a line. Off, `Enter` adds a line and `⌘Enter` or `Ctrl Enter` sends. The same setting lives in **Settings**. |
+| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (before the first message), **Patrol & schedule**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), and **Send on Enter**. When a non-default persona, a patrol schedule, or **Auto-approve** is active, a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**) to compact. See [Long conversations](#long-conversations). |
+| Share | On the right from the very start of the chat (even before your first message is sent). Opens sharing to turn on **Multiplayer**, share read-only with your team, or copy a public link, and reflects the current state (**Share**, **Shared**, or **Multiplayer**). |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ## 3. Getting good answers
@@ -467,7 +466,7 @@ chat to propose a skill or edit an existing one, then click **Approve** or
 
 Under **Settings → Personas** you can write personas of your own. They are
 private: only chats you start can use them, and they appear under **Yours** in
-the composer's persona menu.
+the composer's persona menu (inside **More options** `•••`).
 
 - **Build your digital twin.** Describe yourself (your role, what you watch, how
   you decide, how you like things written), choose whether the twin may read
@@ -794,8 +793,9 @@ same kind in this conversation, turning the button into **Approve + allow all**.
 Leave it unticked unless you know exactly what the rest of the conversation will
 do. A deployment can turn the checkbox off for actions that need your decision
 every time; their cards have no checkbox, and each call shows its own card. You
-can also turn on **Auto-approve** for the current conversation using the
-lightning-bolt button in the composer toolbar (even while a reply is streaming)
+can also turn on **Auto-approve** for the current conversation from **More
+options** (`•••`) in the composer toolbar (even while a reply is streaming; once
+on, a lightning-bolt badge stays visible on the toolbar for one-click turn-off)
 so executable connector actions and shell commands run without stopping on a
 card, while outbound email, scheduled-task cards, and actions that require a
 decision every time still ask. Cards are not for exploring what an action would change; ask the assistant to
@@ -1148,10 +1148,10 @@ than compacting an old one.
 The library is where a finished prompt lives. Chats are where prompts get built;
 tasks are where they run; the library is the one place both of them look.
 
-There is one library, visible from two places. The book icon in the composer and
-the prompt field in the Operations Center task form open the same list, so a
-prompt saved from a conversation is, word for word, the prompt a task can run. It
-holds two kinds of entry:
+There is one library, visible from two places. **Prompt library** inside **More
+options** (`•••`) in the composer and the prompt field in the Operations Center
+task form open the same list, so a prompt saved from a conversation is, word for
+word, the prompt a task can run. It holds two kinds of entry:
 
 | Kind | What it is |
 | --- | --- |
