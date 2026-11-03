@@ -225,12 +225,13 @@ var components = map[string]compSpec{
 		"columns": reqObjects(map[string]prop{
 			"key": req(kString), "label": p(kString), "align": enum("left", "right", "center"),
 		}),
-		"rows":     {kind: kRows, required: true},
-		"select":   enum("none", "single", "multi"),
-		"row_key":  p(kString),
-		"value":    p(kValue),
-		"required": p(kBool),
-		"disabled": p(kBool),
+		"rows":      {kind: kRows, required: true},
+		"templates": p(kBool),
+		"select":    enum("none", "single", "multi"),
+		"row_key":   p(kString),
+		"value":     p(kValue),
+		"required":  p(kBool),
+		"disabled":  p(kBool),
 	}},
 	"status_list": {props: map[string]prop{"items": entryList(map[string]prop{
 		"status": {kind: kEnum, required: true, enum: []string{"pass", "fail", "warn", "info", "pending"}},
@@ -548,7 +549,7 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 		v.addf(path+".id", "ids must match %s (letters, digits and '_' only; use '_' instead of '-')", idRe.String())
 	}
 
-	v.componentRules(path, typ, obj)
+	v.componentRules(path, typ, obj, repeater)
 	if val, ok := obj["value"]; ok && spec.props["value"].kind == kValue {
 		v.checkValue(path+".value", typ, obj, val)
 	}
@@ -876,7 +877,7 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 			for k, cell := range obj {
 				switch s := cell.(type) {
 				case string:
-					v.checkProp(fmt.Sprintf("%s[%d].%s", path, i, k), p(kTemplate), s, repeater)
+					v.checkString(fmt.Sprintf("%s[%d].%s", path, i, k), s)
 				case float64, bool, nil:
 				default:
 					v.addf(fmt.Sprintf("%s[%d].%s", path, i, k), "cells must be strings, numbers, booleans or null")
@@ -1320,7 +1321,7 @@ func (v *validator) lengthRules(path string, num func(string) (float64, bool)) {
 	}
 }
 
-func (v *validator) componentRules(path, typ string, obj map[string]any) {
+func (v *validator) componentRules(path, typ string, obj map[string]any, repeater string) {
 	v.constantConditions(path, obj)
 	num := func(k string) (float64, bool) { f, ok := obj[k].(float64); return f, ok }
 	// A zero cap leaves the input nothing to hold: never answerable if
@@ -1379,7 +1380,7 @@ func (v *validator) componentRules(path, typ string, obj map[string]any) {
 	case "repeater":
 		v.repeaterRules(path, obj, num)
 	case "table":
-		v.tableRules(path, obj)
+		v.tableRules(path, obj, repeater)
 	case "chart":
 		v.chartRules(path, obj)
 	}
@@ -1515,7 +1516,7 @@ func (v *validator) noNestedRepeater(path string, kids []any) {
 	}
 }
 
-func (v *validator) tableRules(path string, obj map[string]any) {
+func (v *validator) tableRules(path string, obj map[string]any, repeater string) {
 	if sel, _ := obj["select"].(string); sel == "" || sel == "none" {
 		for _, k := range []string{"disabled", "required"} {
 			if _, has := obj[k]; has {
@@ -1544,7 +1545,8 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 	}
 	// A cell under a key no column declares is never drawn: report it, so a
 	// mistyped key is fixed rather than shown as a blank.
-	if rows, ok := obj["rows"].([]any); ok && len(keys) > 0 {
+	tmpl, _ := obj["templates"].(bool)
+	if rows, ok := obj["rows"].([]any); ok && (len(keys) > 0 || tmpl) {
 		for i, r := range rows {
 			m, ok := r.(map[string]any)
 			if !ok {
@@ -1556,8 +1558,21 @@ func (v *validator) tableRules(path string, obj map[string]any) {
 			}
 			sort.Strings(cells)
 			for _, k := range cells {
-				if !keys[k] {
-					v.addf(fmt.Sprintf("%s.rows[%d].%s", path, i, k), "no column has key %q; add the column or fix the key", k)
+				cp := fmt.Sprintf("%s.rows[%d].%s", path, i, k)
+				if len(keys) > 0 && !keys[k] {
+					v.addf(cp, "no column has key %q; add the column or fix the key", k)
+				}
+				if tmpl {
+					if s, ok := m[k].(string); ok {
+						holes, err := TemplateExprs(s)
+						if err != nil {
+							v.addf(cp, "%v", err)
+						} else {
+							for _, h := range holes {
+								v.exprs = append(v.exprs, exprRef{path: cp, src: h, repeater: repeater})
+							}
+						}
+					}
 				}
 			}
 		}
@@ -1592,6 +1607,7 @@ func (v *validator) selectableRowKeys(path, rk string, obj map[string]any) {
 	if req, _ := obj["required"].(bool); req && len(rows) == 0 {
 		v.addf(path+".rows", "a required selectable table has no rows to pick from; add rows or drop required")
 	}
+	tmpl, _ := obj["templates"].(bool)
 	seen := map[string]bool{}
 	for i, r := range rows {
 		m, ok := r.(map[string]any)
@@ -1603,7 +1619,7 @@ func (v *validator) selectableRowKeys(path, rk string, obj map[string]any) {
 		switch {
 		case !ok || strings.TrimSpace(key) == "":
 			v.addf(rp, "every row of a selectable table needs a non-empty string %q (the value submitted for that row)", rk)
-		case strings.Contains(key, "{{"):
+		case tmpl && strings.Contains(key, "{{"):
 			v.addf(rp, "row_key %q must be a static string identifier, not a {{ }} template", rk)
 		case seen[key]:
 			v.addf(rp, "duplicate row_key value %q; each row needs its own", key)
@@ -2061,9 +2077,15 @@ func (v *validator) allInputsReadByExprs() bool {
 			return false
 		}
 	}
+	isOwnInputProp := func(f *field, path string) bool {
+		if f.typ == "repeater" || !strings.HasPrefix(path, f.path+".") {
+			return false
+		}
+		return f.typ != "table" || !strings.HasPrefix(path, f.path+".rows[")
+	}
 	isInputProp := func(path string) bool {
 		for _, f := range v.fields {
-			if f.typ != "repeater" && strings.HasPrefix(path, f.path+".") {
+			if isOwnInputProp(f, path) {
 				return true
 			}
 		}
@@ -2081,7 +2103,7 @@ func (v *validator) allInputsReadByExprs() bool {
 			hasOutputExpr = true
 		}
 		for _, r := range refs {
-			if f, ok := v.fields[r]; ok && f.typ != "repeater" && strings.HasPrefix(e.path, f.path+".") {
+			if f, ok := v.fields[r]; ok && isOwnInputProp(f, e.path) {
 				continue
 			}
 			read[r] = true

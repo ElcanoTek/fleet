@@ -223,11 +223,12 @@ unique, both as first shown and after a submit shows its errors.
 
 The one logic surface is a small, side-effect-free expression language. It is
 used in `{{ }}` templates (text, headings, callout and badge text, stat
-values and captions, fact values, table string cells, status-list labels and
-details, progress captions, action `message` strings, descriptions, help and
-repeater item labels; titles, input labels, and selectable table `row_key`
-values are plain text) and in `visible_if`, `disabled_if`, `progress.value`, and
-string elements of `chart.series[i].values`. It supports literals, input ids
+values and captions, fact values, table string cells when `templates: true` is
+set on the table, status-list labels and details, progress captions, action
+`message` strings, descriptions, help and repeater item labels; titles, input
+labels, and selectable table `row_key` values are plain text) and in
+`visible_if`, `disabled_if`, `progress.value`, and string elements of
+`chart.series[i].values`. It supports literals, input ids
 (in a repeater, the item's own fields and `index`; from outside, `rep.field` as
 an array), `+ - * / % == != < <= > >= && || ! ?:`, member access on an input
 name (`rows.cpm`, never on a call's result: `unique(rows.cpm)`, not

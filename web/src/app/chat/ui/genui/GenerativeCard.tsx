@@ -25,7 +25,7 @@ import {
 } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { evaluateSafe, renderTemplate, toText, truthy, type Scope } from "./expr";
+import { evaluateSafe, renderActionTemplate, renderTemplate, toText, truthy, type Scope } from "./expr";
 import {
   buildReplyMessage,
   parseListText,
@@ -976,7 +976,7 @@ function CardBody({
     try {
       const message =
         action.kind === "message"
-          ? buildReplyMessage(cardId, action.id, renderTemplate(str(action.message), submitValues))
+          ? buildReplyMessage(cardId, action.id, renderActionTemplate(str(action.message), submitValues))
           : buildSubmissionMessage(cardId, action.id, submitValues);
       const bytes = submissionBytes(message);
       if (bytes > MAX_SUBMISSION_BYTES) {
@@ -1102,7 +1102,15 @@ function CardBody({
       return;
     }
     if (action.kind === "copy") {
-      const text = renderTemplate(str(action.message), submitValues);
+      const text = renderActionTemplate(str(action.message), submitValues);
+      const bytes = submissionBytes(text);
+      if (bytes > MAX_SUBMISSION_BYTES) {
+        setCopiedId(null);
+        setNotice(
+          `Too large to copy (${Math.ceil(bytes / 1024).toLocaleString()} KB; max ${(MAX_SUBMISSION_BYTES / 1024).toLocaleString()} KB). Shorten the longest list.`,
+        );
+        return;
+      }
       setNotice(null);
       const write = navigator.clipboard?.writeText;
       if (typeof write !== "function") {
@@ -1159,6 +1167,17 @@ function CardBody({
   // longer holds) closes rather than offering a Yes for an unavailable action.
   // So does one opened before another tab's send put this card on hold.
   const confirmingVisible = confirming && !awaiting && isVisible(confirming, scope) ? confirming : null;
+  const hasUsableFooterReset =
+    !locked &&
+    !confirmingVisible &&
+    !awaiting &&
+    sending === null &&
+    actions.some(
+      (a) =>
+        a.kind === "reset" &&
+        !(typeof a.disabled_if === "string" && truthy(evaluateSafe(a.disabled_if, scope, false))),
+    );
+  const showHeaderReset = !fieldsLocked && isModified && !editing && !hasUsableFooterReset;
   // Discard it outright, so it does not silently return if the action shows again.
   if (confirming && !confirmingVisible) setConfirming(null);
   // Keyboard focus follows the confirmation: the action row it replaces
@@ -1218,12 +1237,12 @@ function CardBody({
         }
       >
         {variant === "panel" ? (
-          spec.description || (!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset")) ? (
+          spec.description || showHeaderReset ? (
             <div className="flex items-start justify-between gap-2 px-3.5 pt-2">
               <div className="min-w-0 text-[0.75rem] text-[var(--color-text-muted)]">
                 {spec.description ? renderTemplate(spec.description, scope) : null}
               </div>
-              {!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset") ? (
+              {showHeaderReset ? (
                 <button
                   type="button"
                   data-testid="genui-reset"
@@ -1243,7 +1262,7 @@ function CardBody({
                 <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
               ) : null}
             </div>
-            {!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset") ? (
+            {showHeaderReset ? (
               <button
                 type="button"
                 data-testid="genui-reset"
@@ -1825,7 +1844,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                       className="border-b border-[var(--color-border)] px-2 py-1.5 tabular-nums"
                       style={{ textAlign: col.align as "left" | "right" | "center" }}
                     >
-                      {cellText(Object.prototype.hasOwnProperty.call(r, col.key) ? r[col.key] : undefined, scope)}
+                      {cellText(Object.prototype.hasOwnProperty.call(r, col.key) ? r[col.key] : undefined, c.templates === true ? scope : undefined)}
                     </td>
                   ))}
                 </tr>

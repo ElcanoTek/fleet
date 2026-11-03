@@ -110,7 +110,10 @@ export function turnSendersByMessageId(messages: readonly Message[]): Map<number
   let currentSender: string | undefined;
   for (const m of messages) {
     if (m.role === "user") {
-      if (m.senderEmail !== undefined || (m.kind !== APPROVAL_RESUME_KIND && m.kind !== CHAT_PATROL_KIND)) {
+      if (
+        !m.steered &&
+        (m.senderEmail !== undefined || (m.kind !== APPROVAL_RESUME_KIND && m.kind !== CHAT_PATROL_KIND))
+      ) {
         currentSender = m.senderEmail;
       }
       continue;

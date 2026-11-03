@@ -733,6 +733,23 @@ export function renderTemplate(s: string | undefined, scope: Scope): string {
 }
 
 /**
+ * Render an action payload's {{ expr }} holes without the display-only
+ * MAX_TEMPLATE_CHARS (2,000-character) clip, so message and copy actions
+ * preserve full list_input or repeater expansions up to the submission /
+ * clipboard byte limit.
+ */
+export function renderActionTemplate(s: string | undefined, scope: Scope): string {
+  if (!s || !s.includes("{{")) return s ?? "";
+  return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
+    try {
+      return toText(evaluate(src, scope));
+    } catch {
+      return "⚠";
+    }
+  });
+}
+
+/**
  * The most text one template's holes add. A hole can expand an input far
  * past the spec's own size (join over a 20,000-line list), and a card can
  * repeat it in hundreds of components; displayed hole text is clipped, while

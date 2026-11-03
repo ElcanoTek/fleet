@@ -331,7 +331,7 @@ your eye lands on the answer and then on anything that needs you:
 
 | Part | What it is |
 | --- | --- |
-| Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. A chip in the danger colour is a call that failed; the chip of an action that went to an approval card is not: it is marked **sent for approval**, and the card says whether it ran. Shown only when **Show details** is on. |
+| Execution trail | A row of chips, one per tool the assistant used: a file it read, a connector it called, code it ran. Click a chip to see exactly what went in and what came back. This is how you check the work. A chip in the danger colour is a call that failed; the chip of an action that went to an approval card is not: it is marked **sent for approval**, and the card says whether it ran. Shown only when **Show details** is on (for turns run under another person's account in a multiplayer or shared chat, **Turn details hidden for other users' turns** appears instead of their private tool calls, reasoning, and per-turn cost figures). |
 | Reasoning | The assistant's narrated thinking. Also shown only when **Show details** is on. |
 | Working notes | While a reply is in progress, the short notes the assistant writes between steps ("Let me look up the deal first."). Shown only when **Show details** is on, and only until you reload the page: the saved conversation keeps the answer, not the notes. With details off, a status line takes their place: **Thinking**, or the step under way, such as **Running shell** or the plan item it is working on. |
 | The answer | Text, tables, charts, and images. Code and data come in copyable blocks. When the assistant produces an HTML report, it renders as an **HTML preview** with a **Show source** toggle. |
@@ -890,7 +890,7 @@ card helps; you can also simply ask for one ("give me a form for this").
 
 - **Fill it in, then press its button.** Fields marked with a red asterisk are
   required; the card says how many need fixing and takes you to the first. A
-  **Fix** link next to a checklist line jumps to the field it is about.
+  **Fix** link next to a checklist line jumps to the field it is about. Self-contained calculators, checklists, and what-if cards update their totals, charts, and progress bars live as you adjust inputs without needing to send a message, and may offer a copy button (**Copied**) to copy a formatted summary to your clipboard or a **Reset** button to restore default values. Once you change any input on an editable card, **Reset** also appears in the card's header (whenever no usable reset button is shown in the footer) to put the starting values back and clear any saved draft.
 - **Your answers become your next message.** Pressing a button sends what you
   entered as an ordinary message, shown as a compact summary of the card's name,
   the button you pressed and your answers (**Show what was sent** reveals the
@@ -1165,7 +1165,7 @@ dialog). When Multiplayer mode is on:
   send messages into the shared thread.
 - Every message shows the sender's email above their bubble, and each turn runs
   under **the sender's own account** — using the sender's email, personal
-  memories, skills, per-user connector accounts, and approval cards.
+  memories, skills, per-user connector accounts, and approval cards. Because a turn's tool calls, reasoning, and token/cost summary belong to the person whose credentials ran it, turning on **Show details** shows **Turn details hidden for other users' turns** on turns started by someone else.
 - By default, everyone on the owner's team (or workspace) can participate. In the
   share dialog under **People who can participate**, the owner can remove
   specific people with `×`, restore removed people with `+`, or invite someone

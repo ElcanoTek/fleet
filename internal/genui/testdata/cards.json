@@ -18265,6 +18265,7 @@
      {
       "type": "table",
       "label": "Channel Split",
+      "templates": true,
       "columns": [
        {
         "key": "channel",
@@ -18446,6 +18447,7 @@
       "type": "table",
       "id": "t",
       "label": "T",
+      "templates": true,
       "select": "single",
       "row_key": "id",
       "columns": [

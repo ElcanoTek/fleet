@@ -2062,6 +2062,7 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
         {
           type: "table",
           label: "Breakdown",
+          templates: true,
           columns: [
             { key: "channel", label: "Channel" },
             { key: "spend", label: "Spend" },
@@ -2153,6 +2154,46 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
     await user.click(resetBtn);
     expect(screen.getByText("Pending")).toBeTruthy();
     expect(resetBtn.disabled).toBe(true);
+  });
+
+  it("keeps the header Reset button when a footer reset action is hidden or disabled, preserves literal mustaches in legacy tables, and does not clip long action templates at 2,000 chars", async () => {
+    const user = userEvent.setup();
+    const longLine = "x".repeat(2500);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    const s = spec({
+      title: "Reset & Template Fidelity",
+      components: [
+        { type: "toggle", id: "allow_footer_reset", label: "Allow footer reset", value: false },
+        { type: "text_input", id: "notes", label: "Notes", value: longLine },
+        {
+          type: "table",
+          label: "Legacy Table",
+          columns: [{ key: "syntax", label: "Syntax" }],
+          rows: [{ syntax: "{{ .Name }} and {{ notes }}" }],
+        },
+      ],
+      actions: [
+        { id: "rst", label: "Reset", kind: "reset", visible_if: "allow_footer_reset" },
+        { id: "copy", label: "Copy notes", kind: "copy", message: "{{ notes }}" },
+      ],
+    });
+    render(<GenerativeCard cardId="fidelity" spec={s} />);
+
+    // Legacy table without templates: true preserves literal mustaches verbatim.
+    expect(screen.getByText("{{ .Name }} and {{ notes }}")).toBeTruthy();
+
+    // Modify notes while footer reset is hidden -> header Reset button is shown!
+    const input = screen.getByLabelText("Notes");
+    await user.type(input, "!");
+    expect(screen.getByTestId("genui-reset")).toBeTruthy();
+
+    // Copy action preserves the full >2,000-character string without clipping with "…".
+    await user.click(screen.getByRole("button", { name: "Copy notes" }));
+    expect(writeText).toHaveBeenCalledWith(`${longLine}!`);
   });
 
   it("preserves null chart-expression results as gaps, excludes hidden inputs from message/copy templates, and reports clipboard failures", async () => {

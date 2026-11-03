@@ -287,5 +287,16 @@ describe("turnSendersByMessageId and hasHiddenOtherUserTurnDetails", () => {
     };
     expect(hasHiddenOtherUserTurnDetails(msg, "alice@elcanotek.com", "brad@elcanotek.com", true)).toBe(true);
   });
+
+  it("preserves the initiating turn sender when another participant steers mid-turn", () => {
+    const msgs: Message[] = [
+      { id: 1, role: "user", content: "start turn", senderEmail: "alice@elcanotek.com", state: "done" },
+      { id: 2, role: "user", content: "also check Q4", senderEmail: "brad@elcanotek.com", steered: true, state: "done" },
+      { id: 3, role: "assistant", content: "working on it", state: "done" },
+    ];
+    const senders = turnSendersByMessageId(msgs);
+    expect(senders.get(3)).toBe("alice@elcanotek.com");
+    expect(hasHiddenOtherUserTurnDetails(msgs[2], senders.get(3), "brad@elcanotek.com", true)).toBe(true);
+  });
 });
 
