@@ -183,3 +183,10 @@ containers — the warm pool builds one container config at boot and hands warm
 containers to whichever conversation claims one next, so this is a real
 performance decision, not a patch. It is a **separate change**, deliberately
 not attempted here.
+
+Scheduled runs have since taken that change for themselves (#1897,
+[ADR-0097](adr/0097-scheduled-sandbox-mounts-only-its-job-directory.md)): a
+non-worktree scheduled run cold-starts a sandbox that mounts only its own job
+directory, so a scheduled job can no longer read a conversation's directory
+or another job's. Chat sandboxes still mount the whole root, so a chat can
+still read a scheduled job's directory, and another chat's.

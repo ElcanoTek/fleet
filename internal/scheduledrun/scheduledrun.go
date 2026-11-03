@@ -473,6 +473,10 @@ type sandboxTaker interface {
 	// TakeContainerWithEgress cold-starts a fresh sandbox in allowlisted egress
 	// mode (#211), restricting outbound HTTP(S) to allowlist via the host proxy.
 	TakeContainerWithEgress(ctx context.Context, ov sandbox.ResourceOverride, allowlist []string) (*sandbox.Sandbox, func(), error)
+	// TakeScoped cold-starts a sandbox that mounts only the job's own
+	// directory of the workspace root (#1897), with the posture and overrides
+	// the request carries.
+	TakeScoped(ctx context.Context, req sandbox.ScopedTake) (*sandbox.Sandbox, func(), error)
 	// EgressDefault reports the fleet-wide network mode (#211) and the allowlist
 	// for allowlisted mode. ("", nil) = open/current behavior.
 	EgressDefault() (mode string, allowlist []string)
@@ -493,13 +497,38 @@ type sandboxTaker interface {
 // network namespace to seal, so sealing is not applicable and we fall back to
 // the host take. This is not a production downgrade — buildSandboxPool requires
 // a container image outside mock mode, so a real deployment always seals here.
-func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task) (*sandbox.Sandbox, func(), error) {
+//
+// A non-nil scope (#1897) routes EVERY posture through TakeScoped instead, so
+// the sandbox mounts only the job's own directory of the workspace root: the
+// same network and limit decisions, always a cold start. A scoped take never
+// degrades to an unscoped one on a container error — only the no-container
+// (host/mock) case falls back to Take, as above.
+func takeTaskSandbox(ctx context.Context, pool sandboxTaker, task *models.Task, scope *sandbox.WorkspaceScope) (*sandbox.Sandbox, func(), error) {
 	// Fleet-wide egress mode (#211). lockdown is a kill-switch: it seals EVERY
 	// sandbox, overriding a task's AllowNetwork. allowlisted routes a networked
 	// task's egress through the host proxy (best-effort). open/"" = current.
 	mode, allowlist := pool.EgressDefault()
 	networked := task.AllowNetwork && mode != sandbox.NetworkModeLockdown
 	allowlisted := networked && mode == sandbox.NetworkModeAllowlisted
+
+	if scope != nil {
+		req := sandbox.ScopedTake{
+			Scope:       *scope,
+			NoNetwork:   !networked,
+			Allowlisted: allowlisted,
+		}
+		if allowlisted {
+			req.Allowlist = allowlist
+		}
+		if !task.SandboxLimits.IsZero() {
+			req.Override = sandboxOverride(task.SandboxLimits)
+		}
+		sb, cleanup, err := pool.TakeScoped(ctx, req)
+		if errors.Is(err, sandbox.ErrContainerUnavailable) {
+			return pool.Take(ctx)
+		}
+		return sb, cleanup, err
+	}
 
 	// Per-task sandbox limits (#205) require a cold start (a warm pooled container
 	// is already running with the pool's ceilings), so route through the override
@@ -687,6 +716,65 @@ func (r *Runner) taskWorkspaceDir(task *models.Task) string {
 	return dir
 }
 
+// runSandboxScope decides what of the workspace root a scheduled run's
+// sandbox mounts (#1897). #1543 gave each job its own working directory, but
+// the sandbox still bind-mounted the whole root read-write, so bash and
+// run_python could `ls ..` every other job's and conversation's directory and
+// read — or overwrite — their files; models did exactly that after an elided
+// tool result and answered from another job's numbers. A run whose effective
+// workspace is its own job directory now gets a sandbox that mounts only:
+//
+//   - that directory, read-write;
+//   - the pool's read-only mounts (supporting docs, the shared file library,
+//     the staged skills) EXCEPT the whole mcp-runs/ tree;
+//   - this occurrence's own mcp-runs/task-<id>, read-only, when one of its
+//     selected MCP servers uses ${FLEET_WORKSPACE} — created here, before the
+//     sandbox starts, because a mount source must exist when it is mounted.
+//
+// It returns nil — the whole-root mount, as before — for a worktree run (its
+// git metadata lives in the root repository's .git, which the worktree
+// needs), under FLEET_SCHEDULED_SHARED_WORKSPACE=1 (the operator asked for
+// the shared root), when the job directory fell back to the root, and for a
+// focused caller that set no working directory.
+func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath string) (*sandbox.WorkspaceScope, error) {
+	if task == nil || wtPath != "" {
+		return nil, nil
+	}
+	dir := tools.ForcedWorkingDirFromContext(ctx)
+	if dir == "" {
+		return nil, nil
+	}
+	root := r.workspaceRoot()
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	if rel, err := filepath.Rel(root, dir); err != nil || rel == "." || !filepath.IsLocal(rel) {
+		return nil, nil
+	}
+	runsBase := agentcore.PerRunMCPWorkspaceBase(root)
+	scope := &sandbox.WorkspaceScope{Dir: dir, Withhold: []string{runsBase}}
+	if !taskCredentialAllowlist(task).DeniesAll() && r.selectionUsesMCPRunDir(r.taskMCPSelection(task)) {
+		runDir, run, err := agentcore.OpenStableMCPWorkspace(taskMCPRunKey(task))
+		if err != nil {
+			return nil, fmt.Errorf("prepare MCP run dir for the scoped sandbox: %w", err)
+		}
+		_ = run.Close()
+		// The MCP run dir hangs off FLEET_WORKSPACE_ROOT, the runner's root
+		// off the config; they are one directory on every real deployment.
+		// If they ever differ the dir was never inside the sandbox's mounts,
+		// so leave it out rather than fail the scoped take.
+		if rel, rerr := filepath.Rel(root, runDir); rerr == nil && filepath.IsLocal(rel) {
+			scope.ReadOnly = append(scope.ReadOnly, runDir)
+		} else {
+			log.Printf("scheduled task %s: MCP run dir %s is outside the workspace root %s; not mounted in the scoped sandbox", task.ID, runDir, root)
+		}
+	}
+	return scope, nil
+}
+
 // configureRunWorkspace binds every sandbox and in-process file resolver to
 // the same effective root, then installs the governed output-artifact writer.
 // Keeping this as one seam prevents non-worktree scheduled runs from returning
@@ -824,7 +912,11 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// network-SEALED by default (--network=none, same as interactive lockdown)
 	// because unattended runs have no human on the loop; a task opts into
 	// outbound egress only via its AllowNetwork field. See takeTaskSandbox.
-	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task)
+	scope, err := r.runSandboxScope(ctx, task, wtPath)
+	if err != nil {
+		return nil, false, "", err
+	}
+	sb, cleanup, err := takeTaskSandbox(ctx, r.mgr.SandboxPool(), task, scope)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("take sandbox: %w", err)
 	}
@@ -1598,22 +1690,38 @@ func (r *Runner) taskMCPSelection(task *models.Task) agentcore.MCPSelection {
 }
 
 func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.MCPSelection) (string, error) {
+	if !r.selectionUsesMCPRunDir(selection) {
+		return "", nil
+	}
+	return r.stableTaskWorkdir(task)
+}
+
+// selectionUsesMCPRunDir reports whether any selected server references
+// ${FLEET_WORKSPACE}, i.e. whether the run gets a per-occurrence MCP run dir.
+// Shared by the MCP binding and the scoped sandbox (runSandboxScope), which
+// must mount that dir, so the two cannot disagree about whether it exists.
+func (r *Runner) selectionUsesMCPRunDir(selection agentcore.MCPSelection) bool {
 	if r.openTaskMCPScope != nil {
 		inventory := r.taskMCPServerInventory()
 		for _, choice := range selection {
 			if inventory[choice.Server].UsesWorkspace {
-				return r.stableTaskWorkdir(task)
+				return true
 			}
 		}
-		return "", nil
+		return false
 	}
 	bases := r.mcpBases()
 	for _, choice := range selection {
 		if base, ok := bases[choice.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
-			return r.stableTaskWorkdir(task)
+			return true
 		}
 	}
-	return "", nil
+	return false
+}
+
+// taskMCPRunKey is the per-occurrence MCP run dir key: mcp-runs/task-<id>.
+func taskMCPRunKey(task *models.Task) string {
+	return "task-" + task.ID.String()
 }
 
 // stableTaskWorkdir resolves the ${FLEET_WORKSPACE} directory for a task's
@@ -1634,7 +1742,7 @@ func (r *Runner) prepareTaskMCPWorkspace(task *models.Task, selection agentcore.
 // through the os.Root agentcore hands back (no write can leave the run dir)
 // and rebuilds inputs/ from scratch every attempt (see stageTaskInputs).
 func (r *Runner) stableTaskWorkdir(task *models.Task) (string, error) {
-	workdir, run, err := agentcore.OpenStableMCPWorkspace("task-" + task.ID.String())
+	workdir, run, err := agentcore.OpenStableMCPWorkspace(taskMCPRunKey(task))
 	if err != nil {
 		return "", err
 	}

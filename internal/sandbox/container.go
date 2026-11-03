@@ -220,6 +220,14 @@ type ContainerConfig struct {
 	// have to populate this list.
 	ReadOnlyMounts []string
 
+	// Scope, when non-nil, narrows what of WorkspaceHostDir this sandbox
+	// mounts (#1897): Scope.Dir replaces the whole root as the read-write
+	// workspace mount and the working directory, and the read-only set is
+	// adjusted per the scope. nil keeps the whole-root mount. Set only by
+	// Pool.TakeScoped, which validates every path against the root first;
+	// see WorkspaceScope.
+	Scope *WorkspaceScope
+
 	// StartTimeout caps how long we wait for `podman run` to return a
 	// container ID. Defaults to 30s.
 	StartTimeout time.Duration
@@ -230,6 +238,62 @@ type ContainerConfig struct {
 	// negative value disables collection. Sampling is read-only and never
 	// touches the container's isolation or limits.
 	StatsInterval time.Duration
+}
+
+// WorkspaceScope narrows a sandbox's view of the workspace root to one
+// directory inside it (#1897). Without a scope every sandbox bind-mounts the
+// whole root read-write, so bash and run_python can list and read every other
+// conversation's and every other scheduled job's directory — the file tools
+// are confined by the fileop anchor, the shells are not. A scoped sandbox
+// mounts:
+//
+//   - Dir, read-write, as the working directory: the only part of the
+//     workspace root the sandbox can write;
+//   - ReadOnlyMounts minus Withhold: the supporting docs and the read-only
+//     trees nested in the root (the shared file library, the staged skills);
+//   - ReadOnly: further directories inside the root this sandbox may read,
+//     narrower than a withheld tree (one scheduled occurrence's own
+//     mcp-runs/task-<id>, instead of every occurrence's).
+//
+// Nothing else under the root exists inside the container, so `ls ..` from
+// Dir shows only the mount points above.
+type WorkspaceScope struct {
+	// Dir is the scoped read-write workspace: an existing directory strictly
+	// inside the workspace root.
+	Dir string
+	// ReadOnly lists extra directories strictly inside the workspace root to
+	// mount read-only. A missing one is skipped.
+	ReadOnly []string
+	// Withhold lists entries of the pool's ReadOnlyMounts this sandbox must
+	// not get (the whole mcp-runs/ tree, which holds every occurrence's
+	// ledger and staged inputs).
+	Withhold []string
+}
+
+// workspaceMounts is the backend-shared mount plan for the workspace: the one
+// read-write directory (the root, or the scope's Dir) and the read-only set.
+// The podman argument list, the kubernetes pod spec and the fileop anchor all
+// read it, so what a sandbox can reach and what its file tools trust cannot
+// drift apart.
+func (cfg ContainerConfig) workspaceMounts() (rw string, ro []string) {
+	if cfg.Scope == nil {
+		return cfg.WorkspaceHostDir, cfg.ReadOnlyMounts
+	}
+	withheld := make(map[string]bool, len(cfg.Scope.Withhold))
+	for _, w := range cfg.Scope.Withhold {
+		if w != "" {
+			withheld[filepath.Clean(w)] = true
+		}
+	}
+	ro = make([]string, 0, len(cfg.ReadOnlyMounts)+len(cfg.Scope.ReadOnly))
+	for _, dir := range cfg.ReadOnlyMounts {
+		if dir == "" || withheld[filepath.Clean(dir)] {
+			continue
+		}
+		ro = append(ro, dir)
+	}
+	ro = append(ro, cfg.Scope.ReadOnly...)
+	return cfg.Scope.Dir, ro
 }
 
 // NewContainer starts a fresh sandbox container and returns a Sandbox
@@ -473,6 +537,9 @@ func (c *containerImpl) start(ctx context.Context) error {
 		return fmt.Errorf("chmod bridge: %w", err)
 	}
 	c.bridgeScriptPath = scriptF.Name()
+	// The workspace mount plan: the whole root, or a scoped sandbox's own
+	// directory (#1897). See WorkspaceScope.
+	workspaceRW, workspaceRO := c.cfg.workspaceMounts()
 
 	// Resolve the seccomp profile passed to `podman run` (#219). The bundled
 	// default is a curated default-deny allowlist that adds syscall filtering on
@@ -598,10 +665,14 @@ func (c *containerImpl) start(ctx context.Context) error {
 		// claim warm containers too, #1291 — safe precisely because `:z`
 		// gives every container the same shared label.) Same fix as the
 		// supporting-doc mounts below.
-		fmt.Sprintf("--volume=%s:%s:rw,z", c.cfg.WorkspaceHostDir, c.cfg.WorkspaceHostDir),
+		//
+		// A scoped sandbox (#1897) mounts only its own directory here, at its
+		// own same path, so no other conversation's or job's directory exists
+		// inside the container at all.
+		fmt.Sprintf("--volume=%s:%s:rw,z", workspaceRW, workspaceRW),
 		// Bridge script — read-only bind of the host temp file.
 		fmt.Sprintf("--volume=%s:/opt/bridge/bridge.py:ro,Z", c.bridgeScriptPath),
-		fmt.Sprintf("--workdir=%s", c.cfg.WorkspaceHostDir),
+		fmt.Sprintf("--workdir=%s", workspaceRW),
 	}
 	// Disk quota (#216): without it an agent can fill the host disk and crash
 	// the box. ulimit fsize (per-file, reaches the workspace bind mount) is
@@ -613,7 +684,7 @@ func (c *containerImpl) start(ctx context.Context) error {
 	// conversation workspace resolve inside the container too. Read-only:
 	// the agent should never write to these from a turn. See the field's
 	// doc on ReadOnlyMounts for the lockdown bug this closes.
-	for _, dir := range c.cfg.ReadOnlyMounts {
+	for _, dir := range workspaceRO {
 		if dir == "" {
 			continue
 		}
@@ -1106,7 +1177,8 @@ func stderrText(buf *cappedBuffer) string {
 // it using directory descriptors. A model-controlled Root can therefore never
 // turn the shared workspace mount into authority over a sibling conversation.
 func (c *containerImpl) fileOpAnchor(root string) (anchor string, readOnly bool, err error) {
-	return fileOpAnchorFor(c.cfg.WorkspaceHostDir, c.cfg.ReadOnlyMounts, root)
+	rw, ro := c.cfg.workspaceMounts()
+	return fileOpAnchorFor(rw, ro, root)
 }
 
 // fileOpAnchorFor is the backend-shared anchor resolution (see fileOpAnchor's

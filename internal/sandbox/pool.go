@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -334,7 +336,15 @@ func (p *Pool) TakeContainerWithOverrides(ctx context.Context, ov ResourceOverri
 		// warmContainerConfig, so the sealed posture holds warm or cold.
 		return p.Take(ctx)
 	}
+	return p.coldContainer(ctx, ov, noNetwork, nil)
+}
+
+// coldContainer cold-starts one container with the given overrides, network
+// posture and optional workspace scope. The shared tail of
+// TakeContainerWithOverrides and TakeScoped.
+func (p *Pool) coldContainer(ctx context.Context, ov ResourceOverride, noNetwork bool, scope *WorkspaceScope) (*Sandbox, func(), error) {
 	cfg := p.cfg.Container
+	cfg.Scope = scope
 	cfg.BridgeScript = p.cfg.BridgeScript
 	// Network sealing is enforced HERE rather than upstream so the lockdown
 	// contract is impossible to bypass via a bad caller.
@@ -433,6 +443,13 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 		// boot too; this is the can't-bypass-it backstop.
 		return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
 	}
+	return p.egressContainer(ctx, ov, allowlist, nil)
+}
+
+// egressContainer cold-starts one allowlisted-egress container with an
+// optional workspace scope. The shared tail of TakeContainerWithEgress and
+// TakeScoped; callers have already refused the kubernetes backend.
+func (p *Pool) egressContainer(ctx context.Context, ov ResourceOverride, allowlist []string, scope *WorkspaceScope) (*Sandbox, func(), error) {
 	if p.cfg.EgressProxy == nil {
 		return nil, func() {}, errors.New("allowlisted network mode requested but no egress proxy is configured (fail-closed)")
 	}
@@ -441,6 +458,7 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 		return nil, func() {}, fmt.Errorf("register egress allowlist: %w", err)
 	}
 	cfg := p.cfg.Container
+	cfg.Scope = scope
 	cfg.BridgeScript = p.cfg.BridgeScript
 	cfg.StorageOptSupported = p.storageOptSupported(ctx)
 	// Allowlisted needs slirp transport (NoNetwork=false) to reach the proxy;
@@ -462,6 +480,116 @@ func (p *Pool) TakeContainerWithEgress(ctx context.Context, ov ResourceOverride,
 	}
 	sb.SetPythonCellTimeout(p.cfg.PythonCellTimeout)
 	return sb, func() { sb.Close(); release() }, nil
+}
+
+// ScopedTake is one TakeScoped request: the workspace scope plus the network
+// posture and resource overrides the unscoped take paths express as separate
+// methods.
+type ScopedTake struct {
+	// Scope narrows the workspace mount (see WorkspaceScope).
+	Scope WorkspaceScope
+	// Override carries per-task resource limits (#205); zero = pool defaults.
+	Override ResourceOverride
+	// NoNetwork seals egress (--network=none). Ignored when Allowlisted.
+	NoNetwork bool
+	// Allowlisted routes egress through the host proxy, restricted to
+	// Allowlist (#211) — an explicit flag rather than a non-nil list, so an
+	// empty allowlist can never read as "open".
+	Allowlisted bool
+	Allowlist   []string
+}
+
+// TakeScoped cold-starts a sandbox whose workspace mount is narrowed to
+// req.Scope.Dir (#1897) instead of the whole workspace root, with the network
+// posture and overrides req asks for. It always cold-starts: the warm
+// inventory is spawned with the whole-root mount, and handing one of those to
+// a scoped take would be exactly the visibility the scope removes.
+//
+// Every scope path is checked against the workspace root before anything
+// starts, and the take FAILS CLOSED on a bad Dir (outside the root, the root
+// itself, missing, or not a directory) rather than falling back to the whole
+// root. A ReadOnly entry that does not exist yet is dropped (as a missing
+// ReadOnlyMounts entry always is); one outside the root, or one containing
+// Dir, is refused.
+//
+// Returns ErrContainerUnavailable when the pool has no container backend
+// (host/mock pools), like the other container takes.
+func (p *Pool) TakeScoped(ctx context.Context, req ScopedTake) (*Sandbox, func(), error) {
+	if p == nil {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	if p.isClosed() {
+		return nil, func() {}, ErrClosed
+	}
+	if p.cfg.Container.Image == "" || (p.cfg.Mode != ModeContainer && p.cfg.Mode != ModeKubernetes) {
+		return nil, func() {}, ErrContainerUnavailable
+	}
+	scope, err := resolveWorkspaceScope(p.cfg.Container.WorkspaceHostDir, req.Scope)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if req.Allowlisted {
+		if p.cfg.Mode == ModeKubernetes {
+			// Same refusal as TakeContainerWithEgress: the proxy is
+			// unreachable from a pod on another node.
+			return nil, func() {}, errors.New("allowlisted network mode is not supported by the kubernetes sandbox backend (fail-closed)")
+		}
+		return p.egressContainer(ctx, req.Override, req.Allowlist, scope)
+	}
+	return p.coldContainer(ctx, req.Override, req.NoNetwork, scope)
+}
+
+// resolveWorkspaceScope validates a requested scope against the workspace root
+// and returns it with every path absolute and clean. Pure apart from os.Stat,
+// so the refusal cases are unit-testable without a container.
+func resolveWorkspaceScope(root string, scope WorkspaceScope) (*WorkspaceScope, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil || root == "" {
+		return nil, fmt.Errorf("scoped sandbox: workspace root %q cannot be resolved", root)
+	}
+	inside := func(path string) (string, bool) {
+		abs, err := filepath.Abs(path)
+		if err != nil || path == "" {
+			return "", false
+		}
+		rel, err := filepath.Rel(absRoot, abs)
+		if err != nil || rel == "." || !filepath.IsLocal(rel) {
+			return "", false
+		}
+		return abs, true
+	}
+	dir, ok := inside(scope.Dir)
+	if !ok {
+		return nil, fmt.Errorf("scoped sandbox: workspace scope %q is not a directory strictly inside the workspace root %q (fail-closed)", scope.Dir, absRoot)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return nil, fmt.Errorf("scoped sandbox: workspace scope %q is not an existing directory (fail-closed)", dir)
+	}
+	out := &WorkspaceScope{Dir: dir}
+	for _, ro := range scope.ReadOnly {
+		abs, ok := inside(ro)
+		if !ok {
+			return nil, fmt.Errorf("scoped sandbox: read-only path %q is not inside the workspace root %q", ro, absRoot)
+		}
+		if rel, err := filepath.Rel(abs, dir); err == nil && (rel == "." || filepath.IsLocal(rel)) {
+			// A read-only mount over (or above) Dir would shadow the
+			// writable workspace or re-expose its siblings.
+			return nil, fmt.Errorf("scoped sandbox: read-only path %q contains the scoped workspace %q", abs, dir)
+		}
+		if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+			continue
+		}
+		out.ReadOnly = append(out.ReadOnly, abs)
+	}
+	for _, w := range scope.Withhold {
+		if w == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(w); err == nil {
+			out.Withhold = append(out.Withhold, abs)
+		}
+	}
+	return out, nil
 }
 
 // Take pulls a warm sandbox or constructs a fresh one if none are

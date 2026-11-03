@@ -1724,18 +1724,29 @@ A run now works in `<workspace-root>/tasks/<lineage_id>/`. `lineage_id` is the
 key every run of one **job** shares: a task created fresh is its own lineage,
 and the clone recipe carries it to recurrence occurrences, re-runs and clones —
 so a daily job still finds its own previous downloads and nobody else's. The
-directory is created on first use under the root the sandbox already
-bind-mounts (no mount changes), the supporting-doc symlinks (`protocols/`,
+directory is created on first use under the workspace root, the supporting-doc symlinks (`protocols/`,
 `skills/`, `shared/`, …) are seeded into it exactly as they were into the root,
 the file browser and `publish_artifact` see it as the run's workspace
 (`workspace_path`), and the per-run MCP directories (`mcp-runs/`) and the
 reserved `${FLEET_WORKSPACE_ROOT}` token are unaffected (the per-job directory
 is under the root, so a connector allowlisting the root still reads it).
 
-`FLEET_SCHEDULED_SHARED_WORKSPACE=1` restores the shared root for every job
-(the pre-#1543 behaviour). A job that must start from another job's output
-should say so in its prompt and read it by path; the shared root is not a
-working directory any more. See ADR-0069.
+**The sandbox mounts only the job's directory (#1897).** The run's sandbox
+bind-mounts `tasks/<lineage_id>/` read-write instead of the whole root, plus
+the read-only supporting docs, the shared file library and — when one of its
+MCP servers uses `${FLEET_WORKSPACE}` — its own `mcp-runs/task-<id>/`. Other
+jobs' directories, chat conversation directories and other occurrences' MCP
+run directories do not exist inside the container, so `bash` and `run_python`
+cannot list, read or write them (the file tools were already confined). The
+take always cold-starts, on both sandbox backends. Worktree runs and
+`FLEET_SCHEDULED_SHARED_WORKSPACE=1` keep the whole-root mount. See ADR-0097
+and [`SCHEDULED-SANDBOX-SCOPE.md`](SCHEDULED-SANDBOX-SCOPE.md).
+
+`FLEET_SCHEDULED_SHARED_WORKSPACE=1` restores the shared root — working
+directory and mount — for every job (the pre-#1543 behaviour). A job that must
+start from another job's output cannot read it by path from its sandbox: share
+it through the shared file library, or run both jobs with the shared root. See
+ADR-0069.
 
 ```json
 {

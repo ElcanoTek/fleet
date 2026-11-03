@@ -1,6 +1,10 @@
 # ADR-0069: A scheduled job works in its own directory under the workspace root
 
 Status: accepted; refines #180 (git worktree isolation) and #287 (`workspace_path`).
+Amended by [ADR-0097](0097-scheduled-sandbox-mounts-only-its-job-directory.md):
+as first shipped, the sandbox still mounted the whole root, so `bash` and
+`run_python` could read other jobs' directories (#1897); the sandbox now
+mounts only the job's own directory.
 
 ## Context
 
@@ -42,7 +46,9 @@ allowlists the root still reads a report written there.
 ## Consequences
 
 - One job's leftovers never feed another job's reasoning or audit, and a job
-  still reuses its own previous downloads across occurrences.
+  still reuses its own previous downloads across occurrences. (As first
+  shipped this held for the working directory and the file tools only; the
+  shells could still read the whole root until ADR-0097 scoped the mount.)
 - The first run of an existing job after this lands starts in an empty
   directory and re-fetches what it needs; from then on its directory
   accumulates as the root used to.
