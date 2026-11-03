@@ -114,6 +114,8 @@ const ARITY: Record<string, [number, number]> = {
   ceil: [1, 1],
   round: [1, 2],
   fixed: [2, 2],
+  commas: [1, 2],
+  compact: [1, 2],
   number: [1, 1],
   string: [1, 1],
   upper: [1, 1],
@@ -510,6 +512,15 @@ function uniqueValues(items: Value[]): Value[] {
   return out;
 }
 
+function addCommas(s: string): string {
+  if (s.includes("e") || s.includes("E")) return s;
+  const [rawInt, dec] = s.split(".");
+  const sign = rawInt.startsWith("-") ? "-" : "";
+  const digits = sign ? rawInt.slice(1) : rawInt;
+  const grouped = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return dec !== undefined ? `${sign}${grouped}.${dec}` : `${sign}${grouped}`;
+}
+
 const FUNCS: Record<string, (args: Value[]) => Value> = {
   len: ([v]) => (typeof v === "string" ? Array.from(v).length : list(v).length),
   count: ([v]) => list(v).length,
@@ -550,6 +561,24 @@ const FUNCS: Record<string, (args: Value[]) => Value> = {
     const n = num(v);
     const digits = Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
     return Number.isFinite(n) ? roundTo(n, digits).toFixed(digits) : null;
+  },
+  commas: ([v, d]) => {
+    const n = num(v);
+    if (!Number.isFinite(n)) return null;
+    if (d === undefined) return addCommas(toText(n));
+    const digits = Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
+    return addCommas(roundTo(n, digits).toFixed(digits));
+  },
+  compact: ([v, d]) => {
+    const n = num(v);
+    if (!Number.isFinite(n)) return null;
+    const digits = d === undefined ? 1 : Math.max(0, Math.min(10, Math.trunc(num(d)) || 0));
+    const abs = Math.abs(n);
+    if (abs >= 1e12) return `${toText(roundTo(n / 1e12, digits))}T`;
+    if (abs >= 1e9) return `${toText(roundTo(n / 1e9, digits))}B`;
+    if (abs >= 1e6) return `${toText(roundTo(n / 1e6, digits))}M`;
+    if (abs >= 1e3) return `${toText(roundTo(n / 1e3, digits))}K`;
+    return toText(roundTo(n, digits));
   },
   number: ([v]) => numOrNull(num(v)),
   string: ([v]) => toText(v),

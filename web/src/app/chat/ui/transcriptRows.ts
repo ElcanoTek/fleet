@@ -6,7 +6,7 @@
 // testable without jsdom (which does no layout, so a virtualized transcript
 // renders nothing there).
 
-import type { Message } from "./history";
+import { APPROVAL_RESUME_KIND, CHAT_PATROL_KIND, type Message } from "./history";
 import { isRenderableCardCall } from "./genui/transcript";
 
 export type TranscriptRow =
@@ -98,6 +98,57 @@ export function canRetryTurn(
   isStreaming: boolean,
 ): boolean {
   return message.id === lastAssistantMessageId && !isStreaming;
+}
+
+/**
+ * Maps each assistant message id to the senderEmail of the user turn it
+ * answers (or undefined when the preceding user turn was unattributed, i.e.
+ * sent by the conversation owner).
+ */
+export function turnSendersByMessageId(messages: readonly Message[]): Map<number, string | undefined> {
+  const out = new Map<number, string | undefined>();
+  let currentSender: string | undefined;
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (m.senderEmail !== undefined || (m.kind !== APPROVAL_RESUME_KIND && m.kind !== CHAT_PATROL_KIND)) {
+        currentSender = m.senderEmail;
+      }
+      continue;
+    }
+    if (m.role === "assistant" && m.kind !== "summary") {
+      out.set(m.id, m.senderEmail ?? currentSender);
+    }
+  }
+  return out;
+}
+
+/**
+ * Returns true when an assistant turn's execution details (tool calls,
+ * reasoning, and token/cost summary) are hidden because the turn ran under
+ * another user's credentials in a multiplayer or shared conversation.
+ */
+export function hasHiddenOtherUserTurnDetails(
+  message: Message,
+  turnSenderEmail: string | undefined,
+  viewerEmail: string | undefined,
+  isConversationOwner: boolean,
+): boolean {
+  if (message.role !== "assistant" || message.kind === "summary") return false;
+  const sender = (turnSenderEmail ?? "").trim().toLowerCase();
+  const viewer = (viewerEmail ?? "").trim().toLowerCase();
+  const isOtherUser = sender
+    ? viewer !== ""
+      ? sender !== viewer
+      : !isConversationOwner
+    : !isConversationOwner;
+  if (!isOtherUser) return false;
+  const hasTrail = (message.toolCalls?.length ?? 0) > 0 || (message.pythonStreams?.length ?? 0) > 0;
+  if (hasTrail || message.reasoning || message.narration) return false;
+  const s = message.summary;
+  if (s && (s.costUsd > 0 || s.promptTokens > 0 || s.completionTokens > 0 || s.durationMs > 0)) {
+    return false;
+  }
+  return true;
 }
 
 export type BuildTranscriptRowsInput = {

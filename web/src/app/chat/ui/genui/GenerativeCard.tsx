@@ -33,6 +33,7 @@ import {
   buildSubmissionMessage,
   children,
   collect,
+  initialValues,
   normalizeValues,
   isInput,
   isVisible,
@@ -942,6 +943,26 @@ function CardBody({
   );
 
   const scope = scopeFor(values);
+  const defaults = useMemo(() => initialValues(spec), [spec]);
+  const isModified = useMemo(() => JSON.stringify(values) !== JSON.stringify(defaults), [values, defaults]);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+    },
+    [],
+  );
+
+  const resetCard = useCallback(() => {
+    replaceValues(initialValues(spec));
+    if (!readOnly) saveDraft(storeId, null);
+    clearedRef.current = new Set();
+    setClearedServerErrors(clearedRef.current);
+    setShowErrors(false);
+    setNotice(null);
+    setConfirming(null);
+  }, [spec, readOnly, storeId]);
 
   const send = async (action: Action) => {
     if (!onSubmit) return;
@@ -955,7 +976,7 @@ function CardBody({
     try {
       const message =
         action.kind === "message"
-          ? buildReplyMessage(cardId, action.id, str(action.message))
+          ? buildReplyMessage(cardId, action.id, renderTemplate(str(action.message), scope))
           : buildSubmissionMessage(cardId, action.id, submitValues);
       const bytes = submissionBytes(message);
       if (bytes > MAX_SUBMISSION_BYTES) {
@@ -1059,8 +1080,10 @@ function CardBody({
   /** Runs the action's gates; true when it may proceed. */
   const passesGates = (action: Action): boolean => {
     if (!isVisible(action, scope)) return false;
+    if (action.kind === "reset" && !isModified) return false;
     if (typeof action.disabled_if === "string" && truthy(evaluateSafe(action.disabled_if, scope, false))) return false;
-    if (action.kind !== "message" && action.validate !== false) {
+    const isSubmit = !action.kind || action.kind === "submit";
+    if (isSubmit && action.validate !== false) {
       const paths = blockingPaths();
       if (paths.length > 0) {
         setShowErrors(true);
@@ -1072,13 +1095,34 @@ function CardBody({
     return true;
   };
 
+  const runAction = (action: Action) => {
+    if (action.kind === "reset") {
+      if (!isModified) return;
+      resetCard();
+      return;
+    }
+    if (action.kind === "copy") {
+      const text = renderTemplate(str(action.message), scope);
+      try {
+        void navigator.clipboard?.writeText?.(text)?.catch(() => {});
+      } catch {
+        /* clipboard unavailable */
+      }
+      setCopiedId(action.id);
+      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
+      copyTimerRef.current = window.setTimeout(() => setCopiedId((cur) => (cur === action.id ? null : cur)), 2000);
+      return;
+    }
+    void send(action);
+  };
+
   const onAction = (action: Action) => {
     if (!passesGates(action)) return;
     if (typeof action.confirm === "string" && action.confirm.trim()) {
       setConfirming(action);
       return;
     }
-    void send(action);
+    runAction(action);
   };
 
   // The card stays editable while the confirmation is open, so the gates run
@@ -1096,7 +1140,8 @@ function CardBody({
       setConfirming(null);
       return;
     }
-    void send(action);
+    setConfirming(null);
+    runAction(action);
   };
 
   const actions = (spec.actions ?? []).filter((a) => isVisible(a, scope));
@@ -1163,14 +1208,40 @@ function CardBody({
         }
       >
         {variant === "panel" ? (
-          spec.description ? (
-            <div className="px-3.5 pt-2 text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+          spec.description || (!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset")) ? (
+            <div className="flex items-start justify-between gap-2 px-3.5 pt-2">
+              <div className="min-w-0 text-[0.75rem] text-[var(--color-text-muted)]">
+                {spec.description ? renderTemplate(spec.description, scope) : null}
+              </div>
+              {!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset") ? (
+                <button
+                  type="button"
+                  data-testid="genui-reset"
+                  onClick={resetCard}
+                  className="shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[0.72rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
           ) : null
         ) : (
-          <div className="border-b border-[var(--color-border)] px-3.5 py-2.5">
-            <div className="font-medium">{spec.title}</div>
-            {spec.description ? (
-              <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+          <div className="flex items-start justify-between gap-2 border-b border-[var(--color-border)] px-3.5 py-2.5">
+            <div className="min-w-0">
+              <div className="font-medium">{spec.title}</div>
+              {spec.description ? (
+                <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+              ) : null}
+            </div>
+            {!fieldsLocked && isModified && !editing && !(spec.actions ?? []).some((a) => a.kind === "reset") ? (
+              <button
+                type="button"
+                data-testid="genui-reset"
+                onClick={resetCard}
+                className="shrink-0 rounded-[var(--radius-sm)] px-2 py-0.5 text-[0.72rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)]"
+              >
+                Reset
+              </button>
             ) : null}
           </div>
         )}
@@ -1190,7 +1261,7 @@ function CardBody({
             {locked && sentLabel && !superseded ? (
               <div className="flex flex-wrap items-center gap-2 text-[0.75rem] text-[var(--color-text-muted)]">
                 <span data-testid="genui-submitted">Sent · {sentLabel}</span>
-                {!readOnly && !retired && onSubmit && submission && (spec.actions ?? []).some((a) => a.kind !== "message") ? (
+                {!readOnly && !retired && onSubmit && submission && (spec.actions ?? []).some((a) => !a.kind || a.kind === "submit") ? (
                   <button type="button" className="underline hover:text-[var(--color-text-primary)]" onClick={() => setEditing(true)}>
                     Edit and resend
                   </button>
@@ -1230,11 +1301,13 @@ function CardBody({
             {!locked && !confirmingVisible && !awaiting && actions.length > 0 ? (
               <div className="flex flex-wrap items-center gap-2">
                 {actions.map((a) => {
+                  const isLocal = a.kind === "copy" || a.kind === "reset";
                   const disabled =
                     sending !== null ||
-                    !onSubmit ||
+                    (!isLocal && !onSubmit) ||
+                    (a.kind === "reset" && !isModified) ||
                     (typeof a.disabled_if === "string" && truthy(evaluateSafe(a.disabled_if, scope, false)));
-                  const style = a.style ?? (a.kind === "message" ? "secondary" : "primary");
+                  const style = a.style ?? (a.kind === "message" || isLocal ? "secondary" : "primary");
                   return (
                     <button
                       key={a.id}
@@ -1250,7 +1323,7 @@ function CardBody({
                             : actionButton + " py-1.5"
                       }
                     >
-                      {sending === a.id ? "Sending…" : a.label}
+                      {sending === a.id ? "Sending…" : copiedId === a.id ? "Copied" : a.label}
                     </button>
                   );
                 })}
@@ -1645,10 +1718,11 @@ function Facts({ c }: { c: Component }) {
   );
 }
 
-function cellText(v: unknown): string {
+function cellText(v: unknown, scope?: Scope): string {
   if (v === null || v === undefined) return "—";
   if (typeof v === "number") return Number.isInteger(v) ? v.toLocaleString() : toText(v);
   if (typeof v === "boolean") return v ? "Yes" : "No";
+  if (typeof v === "string") return scope ? renderTemplate(v, scope) : v;
   return String(v);
 }
 
@@ -1657,6 +1731,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   // onChange (to the card, or to the current repeater item) and draws its
   // label and errors. A display-only table renders bare.
   const { locked } = useCard();
+  const scope = useScope();
   // One radio group per single-select table, so arrow keys move between rows
   // and assistive technology announces the rows as one exclusive choice.
   const groupName = useId();
@@ -1740,7 +1815,7 @@ function Table({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
                       className="border-b border-[var(--color-border)] px-2 py-1.5 tabular-nums"
                       style={{ textAlign: col.align as "left" | "right" | "center" }}
                     >
-                      {cellText(Object.prototype.hasOwnProperty.call(r, col.key) ? r[col.key] : undefined)}
+                      {cellText(Object.prototype.hasOwnProperty.call(r, col.key) ? r[col.key] : undefined, scope)}
                     </td>
                   ))}
                 </tr>
@@ -1817,12 +1892,13 @@ function Progress({ c }: { c: Component }) {
   const raw = Number(evaluateSafe(str(c.value), scope, 0));
   const v = Number.isFinite(raw) ? raw : 0;
   const pct = max > 0 ? Math.max(0, Math.min(100, (v / max) * 100)) : 0;
+  const t = c.tone ? TONE[tone(c.tone)].fg : "var(--color-accent)";
   return (
     <div className="grid gap-1">
       <div className="flex items-center justify-between text-[0.75rem] text-[var(--color-text-muted)]">
         <span>{str(c.label).trim()}</span>
         <span className="tabular-nums">
-          {toText(v)} / {toText(max)}
+          {c.caption ? renderTemplate(str(c.caption), scope) : `${toText(v)} / ${toText(max)}`}
         </span>
       </div>
       <div
@@ -1834,7 +1910,7 @@ function Progress({ c }: { c: Component }) {
         aria-valuenow={max > 0 ? Math.max(0, Math.min(max, v)) : 0}
         aria-label={str(c.label).trim() || "Progress"}
       >
-        <div className="h-full rounded-full bg-[var(--color-accent)]" style={{ width: `${pct}%` }} />
+        <div className="h-full rounded-full transition-[width] duration-150" style={{ width: `${pct}%`, background: t }} />
       </div>
     </div>
   );
@@ -1852,10 +1928,22 @@ const SERIES_COLORS = [
 ];
 
 function Chart({ c }: { c: Component }) {
+  const scope = useScope();
   const labels = Array.isArray(c.labels) ? c.labels.map((l) => String(l)) : [];
   const series = objs(c.series).map((s, si) => ({
     name: str(s.name).trim() || `Series ${si + 1}`,
-    values: Array.isArray(s.values) ? s.values.map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)) : [],
+    values: Array.isArray(s.values)
+      ? s.values.map((v) => {
+          if (typeof v === "number") return Number.isFinite(v) ? v : null;
+          if (typeof v === "string") {
+            const raw = v.trim();
+            const src = raw.startsWith("{{") && raw.endsWith("}}") && !raw.slice(2, -2).includes("{{") ? raw.slice(2, -2).trim() : raw;
+            const n = Number(evaluateSafe(src, scope, null));
+            return Number.isFinite(n) ? n : null;
+          }
+          return null;
+        })
+      : [],
   }));
   const unit = str(c.unit);
   const all = series.flatMap((s) => s.values.filter((v): v is number => v !== null));
@@ -2203,23 +2291,39 @@ function Slider({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
   const min = numOr(c.min) ?? 0;
   const max = numOr(c.max) ?? 100;
   const v = typeof value === "number" ? value : min;
+  const prefix = str(c.prefix);
+  const suffix = str(c.suffix) ? ` ${str(c.suffix)}` : "";
   return (
-    <div className="flex min-w-0 items-center gap-3">
-      <input
-        id={inputId}
-        type="range"
-        className="min-w-0 flex-1 accent-[var(--color-primary)]"
-        min={min}
-        max={max}
-        step={numOr(c.step) ?? 1}
-        value={v}
-        onChange={(e) => onChange?.(Number(e.target.value))}
-      />
-      <span className="shrink-0 tabular-nums text-[var(--color-text-secondary)]">
-        {str(c.prefix)}
-        {v.toLocaleString()}
-        {str(c.suffix) ? ` ${str(c.suffix)}` : ""}
-      </span>
+    <div className="grid min-w-0 gap-1">
+      <div className="flex min-w-0 items-center gap-3">
+        <input
+          id={inputId}
+          type="range"
+          className="min-w-0 flex-1 accent-[var(--color-primary)]"
+          min={min}
+          max={max}
+          step={numOr(c.step) ?? 1}
+          value={v}
+          onChange={(e) => onChange?.(Number(e.target.value))}
+        />
+        <span className="shrink-0 font-medium tabular-nums text-[var(--color-text-primary)]" data-testid="genui-slider-value">
+          {prefix}
+          {v.toLocaleString()}
+          {suffix}
+        </span>
+      </div>
+      <div className="flex items-center justify-between text-[0.68rem] tabular-nums text-[var(--color-text-muted)]" aria-hidden="true">
+        <span>
+          {prefix}
+          {min.toLocaleString()}
+          {suffix}
+        </span>
+        <span>
+          {prefix}
+          {max.toLocaleString()}
+          {suffix}
+        </span>
+      </div>
     </div>
   );
 }

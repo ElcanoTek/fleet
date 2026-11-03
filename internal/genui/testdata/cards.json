@@ -18220,6 +18220,278 @@
      }
     ]
    }
+  },
+  {
+   "name": "self-contained calculator with reactive table, chart and copy/reset actions",
+   "valid": true,
+   "card": {
+    "title": "Media Budget Simulator",
+    "description": "Simulating ${{ commas(budget) }} across {{ compact(budget / cpm * 1000) }} impressions",
+    "components": [
+     {
+      "type": "slider",
+      "id": "budget",
+      "label": "Monthly Budget",
+      "min": 10000,
+      "max": 250000,
+      "step": 5000,
+      "prefix": "$",
+      "value": 50000
+     },
+     {
+      "type": "slider",
+      "id": "cpm",
+      "label": "Blended CPM",
+      "min": 5,
+      "max": 40,
+      "step": 1,
+      "prefix": "$",
+      "value": 15
+     },
+     {
+      "type": "stat",
+      "label": "Est. Impressions",
+      "value": "{{ compact(budget / cpm * 1000, 1) }}",
+      "caption": "{{ commas(round(budget / cpm * 1000)) }} total"
+     },
+     {
+      "type": "progress",
+      "label": "Share of $250k Cap",
+      "value": "budget",
+      "max": 250000,
+      "tone": "info",
+      "caption": "${{ commas(budget) }} of $250,000 allocated"
+     },
+     {
+      "type": "table",
+      "label": "Channel Split",
+      "columns": [
+       {
+        "key": "channel",
+        "label": "Channel"
+       },
+       {
+        "key": "spend",
+        "label": "Spend",
+        "align": "right"
+       },
+       {
+        "key": "imps",
+        "label": "Impressions",
+        "align": "right"
+       }
+      ],
+      "rows": [
+       {
+        "channel": "CTV (60%)",
+        "spend": "${{ commas(round(budget * 0.6)) }}",
+        "imps": "{{ compact(budget * 0.6 / cpm * 1000) }}"
+       },
+       {
+        "channel": "Display (40%)",
+        "spend": "${{ commas(round(budget * 0.4)) }}",
+        "imps": "{{ compact(budget * 0.4 / cpm * 1000) }}"
+       }
+      ]
+     },
+     {
+      "type": "chart",
+      "kind": "bar",
+      "title": "Projected Spend ($)",
+      "labels": [
+       "CTV",
+       "Display"
+      ],
+      "unit": "$",
+      "series": [
+       {
+        "name": "Spend",
+        "values": [
+         "round(budget * 0.6)",
+         "{{ round(budget * 0.4) }}"
+        ]
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "copy_summary",
+      "label": "Copy summary",
+      "kind": "copy",
+      "message": "Budget: ${{ commas(budget) }} at ${{ cpm }} CPM ({{ compact(budget / cpm * 1000) }} imps)"
+     },
+     {
+      "id": "reset_defaults",
+      "label": "Reset defaults",
+      "kind": "reset"
+     }
+    ]
+   }
+  },
+  {
+   "name": "self-contained interactive checklist without actions",
+   "valid": true,
+   "card": {
+    "title": "Launch Readiness",
+    "components": [
+     {
+      "type": "toggle",
+      "id": "creative_qa",
+      "label": "Creative QA passed",
+      "value": true
+     },
+     {
+      "type": "toggle",
+      "id": "pixels_verified",
+      "label": "Conversion pixels verified",
+      "value": false
+     },
+     {
+      "type": "progress",
+      "label": "Checklist Progress",
+      "value": "(creative_qa ? 1 : 0) + (pixels_verified ? 1 : 0)",
+      "max": 2,
+      "tone": "success",
+      "caption": "{{ (creative_qa ? 1 : 0) + (pixels_verified ? 1 : 0) }} of 2 complete"
+     }
+    ]
+   }
+  },
+  {
+   "name": "copy action without message",
+   "valid": false,
+   "error_contains": "required for kind \"copy\"",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "hello"
+     }
+    ],
+    "actions": [
+     {
+      "id": "cp",
+      "label": "Copy",
+      "kind": "copy"
+     }
+    ]
+   }
+  },
+  {
+   "name": "reset action with message",
+   "valid": false,
+   "error_contains": "only kind \"message\" or \"copy\" takes a message",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "slider",
+      "id": "s",
+      "label": "S",
+      "min": 0,
+      "max": 10
+     },
+     {
+      "type": "stat",
+      "label": "V",
+      "value": "{{ s }}"
+     }
+    ],
+    "actions": [
+     {
+      "id": "rst",
+      "label": "Reset",
+      "kind": "reset",
+      "message": "nope"
+     }
+    ]
+   }
+  },
+  {
+   "name": "reset action on display-only card",
+   "valid": false,
+   "error_contains": "requires at least one editable input",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "text",
+      "text": "hello"
+     }
+    ],
+    "actions": [
+     {
+      "id": "rst",
+      "label": "Reset",
+      "kind": "reset"
+     }
+    ]
+   }
+  },
+  {
+   "name": "selectable table with template in row_key",
+   "valid": false,
+   "error_contains": "static string identifier",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "number",
+      "id": "n",
+      "label": "N"
+     },
+     {
+      "type": "table",
+      "id": "t",
+      "label": "T",
+      "select": "single",
+      "row_key": "id",
+      "columns": [
+       {
+        "key": "id"
+       }
+      ],
+      "rows": [
+       {
+        "id": "{{ n }}"
+       }
+      ]
+     }
+    ],
+    "actions": [
+     {
+      "id": "go",
+      "label": "Go"
+     }
+    ]
+   }
+  },
+  {
+   "name": "chart series expression reading unknown field",
+   "valid": false,
+   "error_contains": "not an input id",
+   "card": {
+    "title": "x",
+    "components": [
+     {
+      "type": "chart",
+      "kind": "bar",
+      "labels": [
+       "a"
+      ],
+      "series": [
+       {
+        "name": "s",
+        "values": [
+         "unknown_field * 2"
+        ]
+       }
+      ]
+     }
+    ]
+   }
   }
  ]
 }

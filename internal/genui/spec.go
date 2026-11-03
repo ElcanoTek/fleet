@@ -238,6 +238,7 @@ var components = map[string]compSpec{
 	})}},
 	"progress": {props: map[string]prop{
 		"label": p(kString), "value": req(kExpr), "max": p(kNumber),
+		"caption": p(kTemplate), "tone": enum(tones...),
 	}},
 	"chart": {props: map[string]prop{
 		"kind":  {kind: kEnum, required: true, enum: []string{"bar", "line"}},
@@ -310,9 +311,9 @@ var commonProps = map[string]prop{
 var actionProps = map[string]prop{
 	"id":          req(kString),
 	"label":       req(kString),
-	"kind":        enum("submit", "message"),
+	"kind":        enum("submit", "message", "copy", "reset"),
 	"style":       enum("primary", "secondary", "danger"),
-	"message":     p(kString),
+	"message":     p(kTemplate),
 	"validate":    p(kBool),
 	"confirm":     p(kNonBlank),
 	"visible_if":  p(kExpr),
@@ -544,7 +545,7 @@ func (v *validator) component(path string, raw any, depth int, repeater string) 
 			}
 		}
 	} else if hasID && !idRe.MatchString(id) {
-		v.addf(path+".id", "ids must match %s", idRe.String())
+		v.addf(path+".id", "ids must match %s (letters, digits and '_' only; use '_' instead of '-')", idRe.String())
 	}
 
 	v.componentRules(path, typ, obj)
@@ -610,7 +611,7 @@ func (v *validator) inputKinds(validating bool) map[string]inputKind {
 
 func (v *validator) declare(path, id, typ, repeater string) {
 	if !idRe.MatchString(id) {
-		v.addf(path+".id", "ids must match %s", idRe.String())
+		v.addf(path+".id", "ids must match %s (letters, digits and '_' only; use '_' instead of '-')", idRe.String())
 		return
 	}
 	if reservedNames[id] {
@@ -809,8 +810,16 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 			return
 		}
 		for i, e := range arr {
-			if _, ok := e.(float64); !ok && e != nil {
-				v.addf(fmt.Sprintf("%s[%d]", path, i), "must be a number (or null for a gap)")
+			switch s := e.(type) {
+			case float64, nil:
+			case string:
+				src := strings.TrimSpace(s)
+				if strings.HasPrefix(src, "{{") && strings.HasSuffix(src, "}}") && !strings.Contains(src[2:len(src)-2], "{{") {
+					src = strings.TrimSpace(src[2 : len(src)-2])
+				}
+				v.exprs = append(v.exprs, exprRef{path: fmt.Sprintf("%s[%d]", path, i), src: src, repeater: repeater})
+			default:
+				v.addf(fmt.Sprintf("%s[%d]", path, i), "must be a number, expression string, or null (for a gap)")
 				return
 			}
 		}
@@ -865,8 +874,10 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 				return
 			}
 			for k, cell := range obj {
-				switch cell.(type) {
-				case string, float64, bool, nil:
+				switch s := cell.(type) {
+				case string:
+					v.checkProp(fmt.Sprintf("%s[%d].%s", path, i, k), p(kTemplate), s, repeater)
+				case float64, bool, nil:
 				default:
 					v.addf(fmt.Sprintf("%s[%d].%s", path, i, k), "cells must be strings, numbers, booleans or null")
 				}
@@ -1592,6 +1603,8 @@ func (v *validator) selectableRowKeys(path, rk string, obj map[string]any) {
 		switch {
 		case !ok || strings.TrimSpace(key) == "":
 			v.addf(rp, "every row of a selectable table needs a non-empty string %q (the value submitted for that row)", rk)
+		case strings.Contains(key, "{{"):
+			v.addf(rp, "row_key %q must be a static string identifier, not a {{ }} template", rk)
 		case seen[key]:
 			v.addf(rp, "duplicate row_key value %q; each row needs its own", key)
 		default:
@@ -1922,7 +1935,7 @@ func collectInputs(kids []any, into map[string]map[string]any) {
 
 func (v *validator) actions(raw any, hasInput bool) {
 	if raw == nil {
-		if hasInput {
+		if hasInput && !v.allInputsReadByExprs() {
 			v.addf("actions", "the card has inputs but no actions; add one with kind \"submit\" so the user can send their answers")
 		}
 		return
@@ -1959,7 +1972,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 		}
 		id, _ := obj["id"].(string)
 		if !idRe.MatchString(id) {
-			v.addf(ap+".id", "ids must match %s", idRe.String())
+			v.addf(ap+".id", "ids must match %s (letters, digits and '_' only; use '_' instead of '-')", idRe.String())
 		}
 		if seen[id] {
 			v.addf(ap+".id", "duplicate action id %q", id)
@@ -1992,7 +2005,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 		vis, _ := obj["visible_if"].(string)
 		dis, _ := obj["disabled_if"].(string)
 		actKind, _ := obj["kind"].(string)
-		validating := actKind != "message" && obj["validate"] != false
+		validating := (actKind == "" || actKind == "submit") && obj["validate"] != false
 		if (vis != "" || dis != "") && neverUsable(vis, dis, v.inputKinds(validating)) {
 			v.addf(ap, "can never be pressed: whatever the inputs are, it is hidden or disabled (check visible_if and disabled_if together)")
 		}
@@ -2003,20 +2016,89 @@ func (v *validator) actions(raw any, hasInput bool) {
 		if kind == "" {
 			kind = "submit"
 		}
-		if kind == "message" {
+		switch kind {
+		case "message", "copy":
 			if m, _ := obj["message"].(string); strings.TrimSpace(m) == "" {
-				v.addf(ap+".message", "required for kind \"message\": the text sent as the user's reply")
+				v.addf(ap+".message", "required for kind %q: the text sent or copied", kind)
 			}
-		} else {
+		case "reset":
+			if _, has := obj["message"]; has {
+				v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
+			}
+			if len(v.reach) == 0 {
+				v.addf(ap+".kind", "kind \"reset\" requires at least one editable input on the card")
+			}
+		default:
 			submit = true
 			if _, has := obj["message"]; has {
-				v.addf(ap+".message", "only kind \"message\" takes a message")
+				v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
 			}
 		}
 	}
-	if hasInput && !submit {
+	if hasInput && !submit && !v.allInputsReadByExprs() {
 		v.addf("actions", "the card has inputs but no submit action; add one with kind \"submit\"")
 	}
+}
+
+// allInputsReadByExprs reports whether every input on the card is reachable
+// and read by at least one expression outside its own props (so a submit-less
+// card is a live calculator, checklist or what-if explorer rather than a form
+// with dead inputs).
+func (v *validator) allInputsReadByExprs() bool {
+	if len(v.fields) == 0 || len(v.exprs) == 0 {
+		return false
+	}
+	for id := range v.fields {
+		if !v.reach[id] {
+			return false
+		}
+	}
+	isInputProp := func(path string) bool {
+		for _, f := range v.fields {
+			if f.typ != "repeater" && strings.HasPrefix(path, f.path+".") {
+				return true
+			}
+		}
+		return false
+	}
+	read := map[string]bool{}
+	readMember := map[string]bool{}
+	hasOutputExpr := false
+	for _, e := range v.exprs {
+		refs, paths, err := parseExprPaths(e.src)
+		if err != nil || len(refs) == 0 {
+			continue
+		}
+		if !isInputProp(e.path) {
+			hasOutputExpr = true
+		}
+		for _, r := range refs {
+			if f, ok := v.fields[r]; ok && f.typ != "repeater" && strings.HasPrefix(e.path, f.path+".") {
+				continue
+			}
+			read[r] = true
+		}
+		for _, mp := range paths {
+			if len(mp) >= 2 {
+				readMember[mp[0]+"."+mp[1]] = true
+			}
+		}
+	}
+	if !hasOutputExpr {
+		return false
+	}
+	for id, f := range v.fields {
+		if f.repeater != "" {
+			if !read[id] && !readMember[f.repeater+"."+id] {
+				return false
+			}
+			continue
+		}
+		if !read[id] {
+			return false
+		}
+	}
+	return true
 }
 
 // immutable: an enabled input whose own shape leaves the user nothing to

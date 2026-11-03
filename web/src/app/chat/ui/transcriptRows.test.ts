@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildTranscriptRows,
   canRetryTurn,
+  hasHiddenOtherUserTurnDetails,
   messageHasRenderableContent,
   showsEmptyReplyNotice,
+  turnSendersByMessageId,
   type BuildTranscriptRowsInput,
 } from "./transcriptRows";
 import type { Message } from "./history";
@@ -218,3 +220,72 @@ describe("canRetryTurn", () => {
     expect(canRetryTurn(stopped(4), null, false)).toBe(false);
   });
 });
+
+describe("turnSendersByMessageId and hasHiddenOtherUserTurnDetails", () => {
+  it("flags teammate turns in a multiplayer chat and owner turns when viewed by a teammate", () => {
+    const msgs: Message[] = [
+      { id: 1, role: "user", content: "owner question", state: "done" },
+      { id: 2, role: "assistant", content: "owner answer", state: "done" },
+      { id: 3, role: "user", content: "teammate question", senderEmail: "alice@elcanotek.com", state: "done" },
+      { id: 4, role: "assistant", content: "teammate answer", state: "done" },
+      { id: 5, role: "user", content: "my question", senderEmail: "brad@elcanotek.com", state: "done" },
+      {
+        id: 6,
+        role: "assistant",
+        content: "my answer",
+        state: "done",
+        summary: {
+          costUsd: 0.03,
+          promptTokens: 1200,
+          completionTokens: 300,
+          cachedTokens: 0,
+          cacheCreationTokens: 0,
+          durationMs: 2500,
+          model: "anthropic/claude-sonnet-4.6",
+        },
+      },
+    ];
+    const senders = turnSendersByMessageId(msgs);
+    expect(senders.get(2)).toBeUndefined();
+    expect(senders.get(4)).toBe("alice@elcanotek.com");
+    expect(senders.get(6)).toBe("brad@elcanotek.com");
+
+    // As the conversation owner (Brad):
+    // - Turn 2 (owner's own unattributed turn): not another user's turn.
+    expect(hasHiddenOtherUserTurnDetails(msgs[1], senders.get(2), "brad@elcanotek.com", true)).toBe(false);
+    // - Turn 4 (Alice's turn in Brad's multiplayer chat): hidden turn details!
+    expect(hasHiddenOtherUserTurnDetails(msgs[3], senders.get(4), "brad@elcanotek.com", true)).toBe(true);
+    // - Turn 6 (Brad's own attributed turn): not another user's turn.
+    expect(hasHiddenOtherUserTurnDetails(msgs[5], senders.get(6), "brad@elcanotek.com", true)).toBe(false);
+
+    // As a non-owner participant (Brad viewing Alice's multiplayer chat):
+    // - Turn 2 (unattributed owner turn): hidden turn details!
+    expect(hasHiddenOtherUserTurnDetails(msgs[1], senders.get(2), "brad@elcanotek.com", false)).toBe(true);
+    // - Turn 4 (Alice's turn): hidden turn details!
+    expect(hasHiddenOtherUserTurnDetails(msgs[3], senders.get(4), "brad@elcanotek.com", false)).toBe(true);
+    // - Turn 6 (Brad's own turn in Alice's chat): Brad's own turn -> false.
+    expect(hasHiddenOtherUserTurnDetails(msgs[5], senders.get(6), "brad@elcanotek.com", false)).toBe(false);
+  });
+
+  it("still flags a cancelled or failed teammate turn whose summary was redacted to zero metrics", () => {
+    const msg: Message = {
+      id: 2,
+      role: "assistant",
+      content: "",
+      cancelled: true,
+      state: "done",
+      summary: {
+        costUsd: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cachedTokens: 0,
+        cacheCreationTokens: 0,
+        durationMs: 0,
+        cancelled: true,
+        model: "anthropic/claude-sonnet-4.6",
+      },
+    };
+    expect(hasHiddenOtherUserTurnDetails(msg, "alice@elcanotek.com", "brad@elcanotek.com", true)).toBe(true);
+  });
+});
+

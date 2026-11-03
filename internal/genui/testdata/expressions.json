@@ -304,6 +304,56 @@
    "want": "1234.50"
   },
   {
+   "expr": "commas(1234567)",
+   "valid": true,
+   "refs": [],
+   "want": "1,234,567"
+  },
+  {
+   "expr": "commas(1234.5, 2)",
+   "valid": true,
+   "refs": [],
+   "want": "1,234.50"
+  },
+  {
+   "expr": "commas(-9876543.21, 1)",
+   "valid": true,
+   "refs": [],
+   "want": "-9,876,543.2"
+  },
+  {
+   "expr": "compact(1250000)",
+   "valid": true,
+   "refs": [],
+   "want": "1.3M"
+  },
+  {
+   "expr": "compact(1250000, 2)",
+   "valid": true,
+   "refs": [],
+   "want": "1.25M"
+  },
+  {
+   "expr": "compact(1500)",
+   "valid": true,
+   "refs": [],
+   "want": "1.5K"
+  },
+  {
+   "expr": "compact(450)",
+   "valid": true,
+   "refs": [],
+   "want": "450"
+  },
+  {
+   "expr": "commas()",
+   "valid": false
+  },
+  {
+   "expr": "compact(1, 2, 3)",
+   "valid": false
+  },
+  {
    "expr": "abs(-3) + floor(1.9) + ceil(1.1)",
    "valid": true,
    "refs": [],

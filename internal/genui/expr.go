@@ -44,6 +44,8 @@ var exprFuncs = map[string][2]int{
 	"ceil":     {1, 1},
 	"round":    {1, 2},
 	"fixed":    {2, 2},
+	"commas":   {1, 2},
+	"compact":  {1, 2},
 	"number":   {1, 1},
 	"string":   {1, 1},
 	"upper":    {1, 1},

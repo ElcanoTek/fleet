@@ -22,7 +22,7 @@ import { EmptyStatePrompts, ProtocolPillForm } from "./EmptyStatePrompts";
 import { getPill, type ProtocolPill } from "./protocolPills";
 import { Icon } from "./Icon";
 import { PythonOutput, ToolChip, isStagedForApproval, stagedApprovalIds, taskTrackerDisplayForMessage } from "./ToolChips";
-import { CopyButton, SummaryBanner, TurnSummaryChip } from "./ChatChips";
+import { CopyButton, OtherUserTurnDetailsPill, SummaryBanner, TurnSummaryChip } from "./ChatChips";
 import {
   ApprovalCard,
   MemoryProposalCard,
@@ -88,7 +88,9 @@ import { InjectedContextNote } from "./InjectedContextNote";
 import {
   buildTranscriptRows,
   canRetryTurn,
+  hasHiddenOtherUserTurnDetails,
   showsEmptyReplyNotice,
+  turnSendersByMessageId,
   type TranscriptRow,
 } from "./transcriptRows";
 import { useStickToBottom } from "./stickToBottom";
@@ -168,6 +170,7 @@ export type ChatTranscriptProps = {
   editLastUserSignal: { id: number; nonce: number } | null;
   selectedModel: string;
   isConversationOwner?: boolean;
+  viewerEmail?: string;
 
   // Turn / message actions
   patchAssistantMessage: (
@@ -294,6 +297,7 @@ export function ChatTranscript({
   editLastUserSignal,
   selectedModel,
   isConversationOwner = true,
+  viewerEmail,
   patchAssistantMessage,
   resendUserMessage,
   retryLastUserMessage,
@@ -330,6 +334,7 @@ export function ChatTranscript({
       }),
     [messages, summaryIndex, summaryExpanded, isSummarizing, summarizeError],
   );
+  const turnSenderMap = useMemo(() => turnSendersByMessageId(messages), [messages]);
 
   // Keep the transcript pinned to its end, guarded against the measure →
   // follow-scroll → measure oscillation a dynamically-measured virtual list
@@ -1197,7 +1202,18 @@ export function ChatTranscript({
                                 </div>
                               ) : null}
 
-                              {showStats && message.summary ? (
+                              {showStats &&
+                              hasHiddenOtherUserTurnDetails(
+                                message,
+                                turnSenderMap.get(message.id),
+                                viewerEmail,
+                                isConversationOwner,
+                              ) ? (
+                                <OtherUserTurnDetailsPill
+                                  cancelled={message.summary?.cancelled}
+                                  model={message.summary?.model}
+                                />
+                              ) : showStats && message.summary ? (
                                 <TurnSummaryChip
                                   summary={message.summary}
                                   toolCalls={toolCalls}
