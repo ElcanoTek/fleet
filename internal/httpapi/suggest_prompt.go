@@ -44,9 +44,7 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !strings.EqualFold(conv.UserEmail, user) {
-		history = redactHistoryForSender(history, user, conv.UserEmail)
-	}
+	history = redactHistoryForSender(history, user, conv.UserEmail)
 	transcript := workflowTranscriptFromHistory(history)
 	if strings.TrimSpace(transcript) == "" {
 		http.Error(w, "conversation has no content to save as a prompt", http.StatusUnprocessableEntity)

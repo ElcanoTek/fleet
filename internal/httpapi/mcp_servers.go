@@ -488,7 +488,7 @@ func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user 
 	}
 	isOwner := (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
 		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user))
-	if isOwner && !conv.Multiplayer && (s.remoteMCP == nil || !s.remoteMCP.Enabled()) {
+	if isOwner && (s.remoteMCP == nil || !s.remoteMCP.Enabled()) {
 		return raw
 	}
 	if s.agent == nil {
@@ -628,29 +628,26 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	sort.Strings(clean)
 	ownerEmail := convOwnerEmail(conv, user)
 	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
-	persisted := clean
-	if !isOwner || (conv != nil && conv.Multiplayer) {
-		// Preserve another user's private remote connectors that were hidden
-		// from this caller's picker so toggling a shared connector never wipes
-		// another user's private remote server opt-ins.
-		merged := append([]string(nil), clean...)
-		mergedSeen := make(map[string]bool, len(merged))
-		for _, n := range merged {
-			mergedSeen[n] = true
-		}
-		if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr == nil && fresh != nil {
-			conv = fresh
-		}
-		for _, raw := range rawConversationOptionalMCPServers(conv) {
-			norm := strings.ToLower(strings.TrimSpace(raw))
-			if norm != "" && !valid[norm] && !mergedSeen[norm] {
-				mergedSeen[norm] = true
-				merged = append(merged, norm)
-			}
-		}
-		sort.Strings(merged)
-		persisted = merged
+	// Preserve another user's private remote connectors that were hidden
+	// from this caller's picker so toggling a shared connector never wipes
+	// another user's private remote server opt-ins.
+	merged := append([]string(nil), clean...)
+	mergedSeen := make(map[string]bool, len(merged))
+	for _, n := range merged {
+		mergedSeen[n] = true
 	}
+	if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr == nil && fresh != nil {
+		conv = fresh
+	}
+	for _, raw := range rawConversationOptionalMCPServers(conv) {
+		norm := strings.ToLower(strings.TrimSpace(raw))
+		if norm != "" && !valid[norm] && !mergedSeen[norm] {
+			mergedSeen[norm] = true
+			merged = append(merged, norm)
+		}
+	}
+	sort.Strings(merged)
+	persisted := merged
 	if err := s.store.SetOptionalMCPServers(r.Context(), ownerEmail, id, persisted); err != nil {
 		writeConversationMutationError(w, err)
 		return

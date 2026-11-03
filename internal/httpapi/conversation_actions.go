@@ -202,10 +202,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	if serr != nil || schedules == nil {
 		schedules = []store.ChatSchedule{}
 	}
-	historyPayload := historyForClient(history)
-	if !isOwner || conv.Multiplayer {
-		historyPayload = historyForParticipant(history, user, conv.UserEmail)
-	}
+	historyPayload := historyForParticipant(history, user, conv.UserEmail)
 	if !isOwner {
 		sanitized := *conv
 		sanitized.OptionalMCPServersEnabled = nil
@@ -611,12 +608,8 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
 	exportConv := conv
-	exportHistory := history
-	historyPayload := historyForClient(history)
-	if !isOwner || conv.Multiplayer {
-		exportHistory = redactHistoryForSender(history, user, conv.UserEmail)
-		historyPayload = historyForParticipant(history, user, conv.UserEmail)
-	}
+	exportHistory := redactHistoryForSender(history, user, conv.UserEmail)
+	historyPayload := historyForParticipant(history, user, conv.UserEmail)
 	if !isOwner {
 		sanitized := *conv
 		sanitized.OptionalMCPServersEnabled = nil
