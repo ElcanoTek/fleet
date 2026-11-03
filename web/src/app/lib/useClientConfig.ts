@@ -78,6 +78,7 @@ export type UseClientConfig = {
     // Operator pins (FLEET_PINNED_MODELS) from the same payload.
     pinned: ReadonlyArray<PinnedModel>;
   } | null;
+  teamChatsSharedByDefault?: boolean;
   loading: boolean;
 };
 
@@ -85,6 +86,7 @@ type ClientConfigResponse = {
   branding?: Partial<ClientBranding>;
   empty_state?: { cards?: ProtocolPill[] };
   models?: ModelTiersConfig;
+  team_chats_shared_by_default?: boolean;
 };
 
 // The last successful /api/client-config payload, cached at module scope.
@@ -106,6 +108,7 @@ let cachedConfig: {
     // Operator pins (FLEET_PINNED_MODELS) from the same payload.
     pinned: ReadonlyArray<PinnedModel>;
   } | null;
+  teamChatsSharedByDefault: boolean;
 } | null = null;
 
 // Module-scope reader so the useState initializers don't read a mutable
@@ -168,6 +171,7 @@ export async function refreshClientConfig(): Promise<boolean> {
         advancedModel: currentAdvancedModel(),
         pinned: currentPinnedModels(),
       },
+      teamChatsSharedByDefault: Boolean(data.team_chats_shared_by_default),
     };
     publishCachedConfig();
     return true;
@@ -186,6 +190,9 @@ export function useClientConfig(enabled = true): UseClientConfig {
   const [pills, setPills] = useState<ProtocolPill[]>(() => readCachedConfig()?.pills ?? DEFAULT_PILLS);
   const [models, setModels] = useState<UseClientConfig["models"]>(
     () => readCachedConfig()?.models ?? null,
+  );
+  const [teamChatsSharedByDefault, setTeamChatsSharedByDefault] = useState<boolean>(
+    () => readCachedConfig()?.teamChatsSharedByDefault ?? false,
   );
   const [loading, setLoading] = useState(() => enabled && readCachedConfig() === null);
 
@@ -211,6 +218,7 @@ export function useClientConfig(enabled = true): UseClientConfig {
       setBranding(cached.branding);
       setPills(cached.pills);
       setModels(cached.models);
+      setTeamChatsSharedByDefault(cached.teamChatsSharedByDefault);
       setLoading(false);
     };
     subscribers.add(apply);
@@ -219,5 +227,5 @@ export function useClientConfig(enabled = true): UseClientConfig {
     };
   }, []);
 
-  return { branding, pills, models, loading };
+  return { branding, pills, models, teamChatsSharedByDefault, loading };
 }

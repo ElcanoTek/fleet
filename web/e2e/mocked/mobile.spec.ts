@@ -102,6 +102,9 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
   expect(rows.centres.length).toBeGreaterThan(3);
   expect(Math.max(...rows.centres) - Math.min(...rows.centres)).toBeLessThanOrEqual(2);
   expect(rows.overflowRight).toBeLessThanOrEqual(1);
+
+  // Share lives right in the composer from the start of the chat.
+  await expect(page.getByTestId("composer-share-button")).toBeVisible();
 });
 
 test("the sidebar is a hamburger-toggled drawer on mobile", async ({ page }) => {

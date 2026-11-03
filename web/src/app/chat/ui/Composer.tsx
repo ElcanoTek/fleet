@@ -183,6 +183,7 @@ export type ComposerProps = {
   // Persona picker: the workspace (bundle) roster plus the user's own
   // personas (Settings → Personas), selected by their "user:<name>" ref.
   personas: string[];
+  defaultPersona?: string;
   userPersonas?: UserPersonaOption[];
   selectedPersona: string;
   setSelectedPersona: Dispatch<SetStateAction<string>>;
@@ -271,6 +272,16 @@ export type ComposerProps = {
   // In-chat recurring patrols & one-shot timers
   onStartPatrol?: (input: CreatePatrolInput) => boolean | void | Promise<boolean | void>;
   activePatrolCount?: number;
+
+  // Sharing entry point right in the composer from the start of the chat.
+  onOpenShare?: () => void;
+  shareConversation?: {
+    team_visible?: boolean;
+    share_token?: string;
+    multiplayer?: boolean;
+  } | null;
+  shareTeam?: string;
+  shareBusy?: boolean;
 };
 
 export function Composer({
@@ -297,6 +308,7 @@ export function Composer({
   spreadsheetNudge,
   setSpreadsheetNudgeDismissed,
   personas,
+  defaultPersona,
   userPersonas = [],
   selectedPersona,
   setSelectedPersona,
@@ -345,6 +357,10 @@ export function Composer({
   isPendingKey,
   onStartPatrol,
   activePatrolCount = 0,
+  onOpenShare,
+  shareConversation,
+  shareTeam,
+  shareBusy = false,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
   // - `isComposerFocused` drives the keyboard-hint line under the composer:
@@ -377,7 +393,10 @@ export function Composer({
     Math.max(skillMatches.length - 1, 0),
   );
   const skillPopoverOpen =
-    skillMatches.length > 0 && !skillPopoverDismissed && !isStreaming;
+    skillMatches.length > 0 &&
+    !skillPopoverDismissed &&
+    !isStreaming &&
+    !shareBusy;
   const [sendOnEnter, setSendOnEnter] = useState<boolean>(() => {
     if (typeof window === "undefined") return true;
     try {
@@ -398,6 +417,10 @@ export function Composer({
   const patrolButtonRef = useRef<HTMLButtonElement | null>(null);
   const patrolPopoverRef = useRef<HTMLDivElement | null>(null);
   const [patrolPopoverOpen, setPatrolPopoverOpen] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement | null>(null);
+  const moreButtonRef = useRef<HTMLButtonElement | null>(null);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const openPromptLibraryRef = useRef<(() => void) | null>(null);
   // The Tools library modal (null = closed), optionally opened on one
   // connection from a dimmed popover row.
   const [toolsLibrary, setToolsLibrary] = useState<{ selected?: string } | null>(null);
@@ -462,6 +485,22 @@ export function Composer({
   }, [modelPickerOpen, isStreaming, modelInputRef]);
 
   useEffect(() => {
+    if (!personaPickerOpen) return;
+    const selectedOption = personaPickerRef.current?.querySelector<HTMLElement>(
+      '[role="option"][aria-selected="true"], [role="option"]',
+    );
+    (selectedOption ?? personaButtonRef.current)?.focus();
+  }, [personaPickerOpen, personaPickerRef]);
+
+  useEffect(() => {
+    if (!patrolPopoverOpen) return;
+    const firstDialogControl = patrolPopoverRef.current?.querySelector<HTMLElement>(
+      '[role="dialog"] button:not([disabled]), [role="dialog"] input:not([disabled]), [role="dialog"] textarea:not([disabled])',
+    );
+    (firstDialogControl ?? patrolButtonRef.current ?? moreButtonRef.current)?.focus();
+  }, [patrolPopoverOpen]);
+
+  useEffect(() => {
     if (!patrolPopoverOpen) return;
     const handleMouseDown = (event: MouseEvent) => {
       if (
@@ -474,6 +513,24 @@ export function Composer({
     document.addEventListener("mousedown", handleMouseDown);
     return () => document.removeEventListener("mousedown", handleMouseDown);
   }, [patrolPopoverOpen]);
+
+  useEffect(() => {
+    if (!moreMenuOpen) return;
+    const firstItem = moreMenuRef.current?.querySelector<HTMLElement>(
+      '[role="menu"] [role^="menuitem"]:not([disabled])',
+    );
+    firstItem?.focus();
+    const handleMouseDown = (event: MouseEvent) => {
+      if (
+        moreMenuRef.current &&
+        !moreMenuRef.current.contains(event.target as Node)
+      ) {
+        setMoreMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleMouseDown);
+    return () => document.removeEventListener("mousedown", handleMouseDown);
+  }, [moreMenuOpen]);
 
   return (
     <>
@@ -519,6 +576,7 @@ export function Composer({
           event.preventDefault();
           dragCounterRef.current = 0;
           setIsDraggingOver(false);
+          if (shareBusy) return;
           addAttachmentFiles(event.dataTransfer.files);
         }}
       >
@@ -610,11 +668,13 @@ export function Composer({
               : promptPlaceholder
           }
           rows={1}
+          readOnly={shareBusy}
           suppressHydrationWarning
           value={prompt}
           onFocus={() => setIsComposerFocused(true)}
           onBlur={() => setIsComposerFocused(false)}
           onChange={(event) => {
+            if (shareBusy) return;
             const value = event.target.value;
             setPrompt(value);
             // Every edit resets the skill-popover highlight to the top
@@ -674,10 +734,16 @@ export function Composer({
             const shouldSend = sendOnEnter ? !event.shiftKey : modifierSend;
             if (shouldSend) {
               event.preventDefault();
-              void submitPrompt(prompt);
+              if (!shareBusy) {
+                void submitPrompt(prompt);
+              }
             }
           }}
           onPaste={(event) => {
+            if (shareBusy) {
+              event.preventDefault();
+              return;
+            }
             // Pasting files / screenshots from clipboard runs
             // through the same addAttachmentFiles path as the
             // file-picker and drag-and-drop. Only intercept when
@@ -718,8 +784,10 @@ export function Composer({
             </span>
             <button
               type="button"
-              className="font-medium text-[var(--color-accent)] hover:underline"
+              disabled={shareBusy}
+              className="font-medium text-[var(--color-accent)] hover:underline disabled:opacity-40"
               onClick={() => {
+                if (shareBusy) return;
                 setPrompt((p) => `\`\`\`\n${p}\n\`\`\``);
                 setShowCodeNudge(false);
               }}
@@ -744,7 +812,7 @@ export function Composer({
                 key={a.clientId}
                 attachment={a}
                 onRemove={() => removePendingAttachment(a.clientId)}
-                removalDisabled={isStreaming || isUploadingAttachments}
+                removalDisabled={isStreaming || isUploadingAttachments || shareBusy}
               />
             ))}
             {attachmentError ? (
@@ -782,9 +850,10 @@ export function Composer({
             <span className="flex items-center gap-2">
               <button
                 type="button"
-                className="rounded-[var(--radius-md)] border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                disabled={isStreaming}
+                className="rounded-[var(--radius-md)] border border-[var(--color-accent)] px-2.5 py-0.5 text-[0.7rem] text-[var(--color-text-primary)] transition hover:bg-[var(--color-accent)] hover:text-[var(--color-surface-1)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-40"
+                disabled={isStreaming || shareBusy}
                 onClick={() => {
+                  if (shareBusy) return;
                   setSelectedModel(spreadsheetNudge.recommendedModel);
                   setSpreadsheetNudgeDismissed(true);
                 }}
@@ -807,8 +876,13 @@ export function Composer({
           ref={fileInputRef}
           type="file"
           multiple
+          disabled={isStreaming || isUploadingAttachments || shareBusy}
           className="hidden"
           onChange={(event) => {
+            if (shareBusy) {
+              event.target.value = "";
+              return;
+            }
             addAttachmentFiles(event.target.files);
             // Reset so picking the same file twice in a row still fires onChange.
             event.target.value = "";
@@ -848,7 +922,7 @@ export function Composer({
                 type="button"
                 aria-haspopup="listbox"
                 aria-expanded={modelPickerOpen}
-                disabled={isStreaming}
+                disabled={isStreaming || shareBusy}
                 title={
                   modelError
                     ? modelError.message
@@ -911,7 +985,7 @@ export function Composer({
                   className="size-[0.8rem] shrink-0 text-[var(--color-text-muted)]"
                 />
               </button>
-              {modelPickerOpen && !isStreaming ? (
+              {modelPickerOpen && !isStreaming && !shareBusy ? (
                 <div className={COMPOSER_POP_WIDE}>
                   <input
                     ref={modelInputRef}
@@ -1101,144 +1175,12 @@ export function Composer({
               aria-hidden="true"
               className="mx-[0.05rem] h-[1.1rem] w-px shrink-0 bg-[var(--color-border-strong)] sm:mx-[0.15rem]"
             />
-            {(() => {
-              // Persona is locked server-side once a conversation has any
-              // turns, so once the chat is underway the picker is read-only
-              // noise. Hide it entirely after the first turn (and during
-              // the very first stream) to keep the composer toolbar tidy.
-              const personaLocked =
-                isStreaming ||
-                (activeConversationId !== null && messages.length > 0);
-              if (personaLocked) return null;
-              // The workspace roster, keeping a selection that is not on it
-              // (a stale snapshot) visible rather than silently unselected.
-              const workspaceOptions =
-                personas.length > 0
-                  ? personas
-                  : isUserPersonaRef(selectedPersona)
-                    ? []
-                    : [selectedPersona];
-              const currentLabel = personaLabel(selectedPersona, userPersonas);
-              const pick = (p: string) => {
-                setSelectedPersona(p);
-                setPersonaPickerOpen(false);
-                personaButtonRef.current?.focus();
-              };
-              const option = (value: string, title: string, sub?: string) => {
-                const selected = value === selectedPersona;
-                return (
-                  <button
-                    key={value}
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
-                    onClick={() => pick(value)}
-                  >
-                    <span className="grid min-w-0">
-                      <span className={`${POP_TITLE} truncate`}>{title}</span>
-                      {sub ? (
-                        <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                          {sub}
-                        </span>
-                      ) : null}
-                    </span>
-                    {selected ? (
-                      <span
-                        aria-hidden="true"
-                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                      />
-                    ) : null}
-                  </button>
-                );
-              };
-              const groupHead =
-                "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.66rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]";
-              return (
-                // Positioning anchor only (see the model picker above):
-                // presentational wrapper, Escape delegated so it works from
-                // the trigger button or from any row of the open popover.
-                <div
-                  ref={personaPickerRef}
-                  role="presentation"
-                  className="relative inline-flex"
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape" && personaPickerOpen) {
-                      event.stopPropagation();
-                      setPersonaPickerOpen(false);
-                      personaButtonRef.current?.focus();
-                    }
-                  }}
-                >
-                  {/* Icon-only .tool-btn (the design has no persona
-                            control; it joins the icon cluster per review).
-                            The active persona is announced via the
-                            aria-label and shown in the hover tip; the
-                            popover marks it with the selected state. */}
-                  <button
-                    ref={personaButtonRef}
-                    type="button"
-                    aria-haspopup="listbox"
-                    aria-expanded={personaPickerOpen}
-                    aria-label={`Persona — ${currentLabel}`}
-                    data-tip-top={`Persona — ${currentLabel}`}
-                    className={`${TOOL_BTN} ${personaPickerOpen || isUserPersonaRef(selectedPersona) ? TOOL_BTN_ACTIVE : ""}`}
-                    onClick={() => setPersonaPickerOpen((open) => !open)}
-                  >
-                    <Icon name="persona" className="size-3.5" />
-                  </button>
-                  {personaPickerOpen ? (
-                    <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
-                      <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
-                        {userPersonas.length > 0 ? (
-                          <>
-                            <div role="group" aria-label="Your personas" className="grid gap-[0.1rem]">
-                              <div aria-hidden="true" className={groupHead}>
-                                Yours
-                              </div>
-                              {userPersonas.map((p) =>
-                                option(
-                                  p.ref,
-                                  p.display_name || p.name,
-                                  [
-                                    p.kind === "twin" ? "Digital twin" : null,
-                                    p.autonomy === "act" ? "acts for you" : "suggests actions",
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · "),
-                                ),
-                              )}
-                            </div>
-                            <div role="group" aria-label="Workspace personas" className="grid gap-[0.1rem]">
-                              <div aria-hidden="true" className={groupHead}>
-                                Workspace
-                              </div>
-                              {workspaceOptions.map((p) => option(p, formatBundlePersona(p)))}
-                            </div>
-                          </>
-                        ) : (
-                          workspaceOptions.map((p) => option(p, formatBundlePersona(p)))
-                        )}
-                      </div>
-                      <Link
-                        href="/settings/personas"
-                        className="mt-[0.2rem] flex items-center gap-[0.4rem] rounded-[0.5rem] border-t border-[var(--color-border-subtle)] px-[0.6rem] py-[0.45rem] text-[0.76rem] text-[var(--color-text-secondary)] no-underline transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                      >
-                        <Icon name="plus" className="size-3" />
-                        {userPersonas.length > 0 ? "Manage your personas" : "Create your own persona"}
-                      </Link>
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })()}
-            <PromptLibrary currentText={prompt} onInsert={setPrompt} compact />
             <button
               type="button"
               aria-label="Attach files"
               data-tip-top="Attach files"
               className={TOOL_BTN}
-              disabled={isStreaming || isUploadingAttachments}
+              disabled={isStreaming || isUploadingAttachments || shareBusy}
               onClick={() => fileInputRef.current?.click()}
             >
               <Icon name="paperclip" className="size-3.5" />
@@ -1267,7 +1209,7 @@ export function Composer({
                   aria-label="Tools"
                   aria-haspopup="true"
                   aria-expanded={mcpPickerOpen}
-                  disabled={isStreaming}
+                  disabled={isStreaming || shareBusy}
                   // No tooltip while the menu is open: it would sit over the
                   // menu's footer, and a tap leaves it showing on a phone.
                   data-tip-top={mcpPickerOpen ? undefined : `Tools, ${toolsBadge} on`}
@@ -1297,7 +1239,7 @@ export function Composer({
                     </span>
                   ) : null}
                 </button>
-                {mcpPickerOpen && !isStreaming ? (
+                {mcpPickerOpen && !isStreaming && !shareBusy ? (
                   <ToolsPopover
                     servers={mcpServers}
                     categories={pickerCategories}
@@ -1321,7 +1263,7 @@ export function Composer({
                     }}
                   />
                 ) : null}
-                {toolsLibrary ? (
+                {toolsLibrary && !shareBusy ? (
                   <ToolsLibrary
                     servers={mcpServers}
                     categories={pickerCategories}
@@ -1343,89 +1285,654 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {onStartPatrol && !sealed ? (
-              <div
-                ref={patrolPopoverRef}
-                role="presentation"
-                className="relative inline-flex"
-              >
-                <button
-                  ref={patrolButtonRef}
-                  type="button"
-                  aria-label="Patrol & recurring schedule"
-                  aria-haspopup="true"
-                  aria-expanded={patrolPopoverOpen}
-                  data-testid="chat-patrol-button"
-                  data-tip-top={
-                    patrolPopoverOpen
-                      ? undefined
-                      : activePatrolCount > 0
-                        ? `Patrols (${activePatrolCount} active)`
-                        : "Start recurring patrol or timer"
-                  }
-                  className={`${TOOL_BTN} ${
-                    patrolPopoverOpen
-                      ? TOOLS_BTN_OPEN
-                      : activePatrolCount > 0
-                        ? TOOL_BTN_ACTIVE
-                        : ""
-                  }`}
-                  onClick={() => setPatrolPopoverOpen((v) => !v)}
-                >
-                  <Icon name="clock" className="size-3.5" />
-                  {activePatrolCount > 0 ? (
-                    <span
-                      data-testid="chat-patrol-badge"
-                      className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
-                    >
-                      {activePatrolCount}
-                    </span>
-                  ) : null}
-                </button>
-                {patrolPopoverOpen ? (
-                  <PatrolPopover
-                    initialPrompt={prompt}
-                    onStartPatrol={async (input) => {
-                      const ok = await onStartPatrol(input);
-                      if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
-                        setPrompt("");
-                      }
-                      return ok;
-                    }}
-                    onClose={() => {
-                      setPatrolPopoverOpen(false);
-                      patrolButtonRef.current?.focus();
-                    }}
-                  />
-                ) : null}
-              </div>
+            {/* Keep PromptLibrary mounted at the toolbar root so its portalled
+                dialog stays open after the overflow menu closes. */}
+            {!shareBusy ? (
+              <PromptLibrary
+                currentText={prompt}
+                onInsert={(next) => {
+                  if (!shareBusy) setPrompt(next);
+                }}
+                compact
+                returnFocusRef={moreButtonRef}
+                renderTrigger={(openLibrary) => {
+                  openPromptLibraryRef.current = openLibrary;
+                  return null;
+                }}
+              />
             ) : null}
-            {activeConversationId && messages.length >= 2 && isConversationOwner !== false ? (
-              <div className="relative inline-flex">
-                {/* One-shot toast above the ring. Absolute so the */}
-                {/* toolbar layout doesn't reflow as it appears /  */}
-                {/* disappears. pointer-events-none so it can      */}
-                {/* never steal a click meant for the ring below. */}
-                {compactToastVisible && !isSummarizing ? (
+            {(() => {
+              const personaLocked =
+                isStreaming ||
+                (activeConversationId !== null && !isPendingKey(activeConversationId));
+              const workspaceOptions =
+                personas.length > 0
+                  ? personas
+                  : isUserPersonaRef(selectedPersona)
+                    ? []
+                    : [selectedPersona];
+              const currentPersonaLabel = personaLabel(selectedPersona, userPersonas);
+              const effectiveDefaultPersona = defaultPersona || personas[0] || "";
+              const isNonDefaultPersona =
+                isUserPersonaRef(selectedPersona) ||
+                (effectiveDefaultPersona !== "" &&
+                  selectedPersona !== effectiveDefaultPersona);
+              const canCompact =
+                Boolean(activeConversationId) &&
+                messages.length >= 2 &&
+                isConversationOwner !== false;
+              const usagePct =
+                contextUsage?.fraction != null
+                  ? Math.min(999, Math.round(contextUsage.fraction * 100))
+                  : null;
+              const hasActiveSecondary =
+                isAutoApprove ||
+                activePatrolCount > 0 ||
+                (!personaLocked && isNonDefaultPersona);
+              return (
+                <>
+                  {/* Overflow menu ("More options"): consolidates Prompt library,
+                      Persona, Patrol schedule, Auto-approve tools, Compact, and
+                      Send on Enter into a clean labeled popover so the primary
+                      composer bar stays calm on both mobile and desktop. */}
                   <div
-                    role="status"
-                    aria-live="polite"
-                    className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+                    ref={moreMenuRef}
+                    role="presentation"
+                    className="relative inline-flex"
+                    onKeyDown={(event) => {
+                      if (!moreMenuOpen) return;
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        setMoreMenuOpen(false);
+                        moreButtonRef.current?.focus();
+                        return;
+                      }
+                      if (
+                        event.key === "ArrowDown" ||
+                        event.key === "ArrowUp" ||
+                        event.key === "Home" ||
+                        event.key === "End"
+                      ) {
+                        const items = Array.from(
+                          moreMenuRef.current?.querySelectorAll<HTMLElement>(
+                            '[role="menu"] [role^="menuitem"]:not([disabled])',
+                          ) ?? [],
+                        );
+                        if (items.length === 0) return;
+                        event.preventDefault();
+                        const currentIndex = items.indexOf(
+                          document.activeElement as HTMLElement,
+                        );
+                        let nextIndex = 0;
+                        if (event.key === "Home") {
+                          nextIndex = 0;
+                        } else if (event.key === "End") {
+                          nextIndex = items.length - 1;
+                        } else if (event.key === "ArrowDown") {
+                          nextIndex =
+                            currentIndex >= 0
+                              ? (currentIndex + 1) % items.length
+                              : 0;
+                        } else {
+                          nextIndex =
+                            currentIndex > 0
+                              ? currentIndex - 1
+                              : items.length - 1;
+                        }
+                        items[nextIndex]?.focus();
+                      }
+                    }}
                   >
-                    Token limit hit — you should compact
+                    <button
+                      ref={moreButtonRef}
+                      type="button"
+                      data-testid="composer-more-button"
+                      aria-label="More options"
+                      aria-haspopup="true"
+                      aria-expanded={moreMenuOpen}
+                      disabled={shareBusy}
+                      data-tip-top={moreMenuOpen ? undefined : "Prompts, persona, schedule & more"}
+                      className={`${TOOL_BTN} ${
+                        moreMenuOpen
+                          ? TOOLS_BTN_OPEN
+                          : hasActiveSecondary
+                            ? TOOL_BTN_ACTIVE
+                            : ""
+                      }`}
+                      onClick={() => setMoreMenuOpen((v) => !v)}
+                    >
+                      <Icon name="dots" className="size-4 rotate-90" />
+                      {hasActiveSecondary && !moreMenuOpen ? (
+                        <span
+                          aria-hidden="true"
+                          className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-[var(--color-accent)]"
+                        />
+                      ) : null}
+                    </button>
+                    {moreMenuOpen && !shareBusy ? (
+                      <div
+                        data-testid="composer-more-popover"
+                        role="menu"
+                        aria-label="More composer options"
+                        className={`${COMPOSER_POP_WIDE} sm:w-[20.5rem]`}
+                      >
+                        <button
+                          type="button"
+                          role="menuitem"
+                          aria-label="Open prompt library"
+                          className={POP_ROW}
+                          onClick={() => {
+                            setMoreMenuOpen(false);
+                            moreButtonRef.current?.focus();
+                            openPromptLibraryRef.current?.();
+                          }}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="book" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>Prompt library</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                Browse and insert reusable prompts
+                              </span>
+                            </span>
+                          </span>
+                          <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                        </button>
+
+                        {!personaLocked ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            aria-label={`Persona — ${currentPersonaLabel}`}
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              setPersonaPickerOpen(true);
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="persona" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Persona</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Voice and instructions for this chat
+                                </span>
+                              </span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
+                              <span className="max-w-[6.5rem] truncate">{currentPersonaLabel}</span>
+                              <Icon name="chevron-right" className="size-3" />
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {onStartPatrol && !sealed ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="chat-patrol-button"
+                            aria-label="Patrol & recurring schedule"
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
+                              setPatrolPopoverOpen(true);
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="clock" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Patrol & schedule</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  {activePatrolCount > 0
+                                    ? `${activePatrolCount} recurring schedule active`
+                                    : "Run this chat on a recurring schedule"}
+                                </span>
+                              </span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
+                              {activePatrolCount > 0 ? `${activePatrolCount} active` : "Set up"}
+                              <Icon name="chevron-right" className="size-3.5" />
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {toggleAutoApprove ? (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={isAutoApprove}
+                            aria-label={
+                              isAutoApprove
+                                ? "Auto-approve tools in this chat is on (click to turn off)"
+                                : "Auto-approve tools in this chat (click to turn on)"
+                            }
+                            className={POP_ROW}
+                            onClick={() => toggleAutoApprove()}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span
+                                className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${
+                                  isAutoApprove
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                                    : "bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]"
+                                }`}
+                              >
+                                <Icon name="zap" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Auto-approve tools</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Skip approval cards for routine actions
+                                </span>
+                              </span>
+                            </span>
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                isAutoApprove
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {isAutoApprove ? "On" : "Off"}
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {canCompact ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            disabled={isStreaming || isSummarizing}
+                            aria-label={
+                              isSummarizing
+                                ? "Compacting conversation…"
+                                : usagePct !== null
+                                  ? `Compact conversation (${usagePct}% full)`
+                                  : "Compact this conversation"
+                            }
+                            className={`${POP_ROW} disabled:opacity-40`}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
+                              setConfirmSummarize(true);
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="compress" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Compact conversation</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  {isSummarizing
+                                    ? "Compacting earlier turns…"
+                                    : usagePct !== null
+                                      ? `${usagePct}% of context window used`
+                                      : "Summarize earlier turns to save context"}
+                                </span>
+                              </span>
+                            </span>
+                            <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                          </button>
+                        ) : null}
+
+                        <button
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={sendOnEnter}
+                          aria-label={
+                            sendOnEnter
+                              ? "Send on Enter (click to switch to Ctrl+Enter)"
+                              : "Send on Ctrl+Enter (click to switch to Enter)"
+                          }
+                          className={POP_ROW}
+                          onClick={() => setSendOnEnter((v) => !v)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="return-key" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>Send on Enter</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                {sendOnEnter
+                                  ? "Enter sends · Shift+Enter adds a line"
+                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                              </span>
+                            </span>
+                          </span>
+                          <span
+                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                              sendOnEnter
+                                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                            }`}
+                          >
+                            {sendOnEnter ? "On" : "Off"}
+                          </span>
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-                <ContextRing
-                  usage={contextUsage}
-                  isSummarizing={isSummarizing}
-                  disabled={isStreaming || isSummarizing}
-                  onClick={() => setConfirmSummarize(true)}
-                />
-              </div>
-            ) : null}
+
+                  {/* Contextual Persona chip + picker: rendered on the bar when
+                      a non-default persona is active or while the picker is open.
+                      Passive status chip is hidden on phone viewports (< sm) so
+                      active secondary indicators never crowd Share/Send. */}
+                  {!personaLocked && (isNonDefaultPersona || personaPickerOpen) ? (
+                    <div
+                      ref={personaPickerRef}
+                      role="presentation"
+                      className={`relative ${
+                        personaPickerOpen ? "inline-flex" : "hidden sm:inline-flex"
+                      }`}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape" && personaPickerOpen) {
+                          event.stopPropagation();
+                          setPersonaPickerOpen(false);
+                          (isNonDefaultPersona
+                            ? personaButtonRef.current
+                            : moreButtonRef.current
+                          )?.focus();
+                        }
+                      }}
+                    >
+                      <button
+                        ref={personaButtonRef}
+                        type="button"
+                        aria-haspopup="listbox"
+                        aria-expanded={personaPickerOpen}
+                        disabled={isStreaming || shareBusy}
+                        aria-label={`Persona — ${currentPersonaLabel}`}
+                        data-tip-top={`Persona — ${currentPersonaLabel}`}
+                        className={`${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
+                        onClick={() => setPersonaPickerOpen((open) => !open)}
+                      >
+                        <Icon name="persona" className="size-3.5" />
+                      </button>
+                      {personaPickerOpen && !shareBusy ? (
+                        <div className={`${COMPOSER_POP_WIDE} max-h-[min(26rem,70vh)] overflow-y-auto`}>
+                          <div role="listbox" aria-label="Persona" className="grid gap-[0.1rem]">
+                            {(() => {
+                              const pick = (p: string) => {
+                                const nextIsNonDefault =
+                                  isUserPersonaRef(p) ||
+                                  (effectiveDefaultPersona !== "" &&
+                                    p !== effectiveDefaultPersona);
+                                setSelectedPersona(p);
+                                setPersonaPickerOpen(false);
+                                (nextIsNonDefault
+                                  ? personaButtonRef.current
+                                  : moreButtonRef.current
+                                )?.focus();
+                              };
+                              const option = (value: string, title: string, sub?: string) => {
+                                const selected = value === selectedPersona;
+                                return (
+                                  <button
+                                    key={value}
+                                    type="button"
+                                    role="option"
+                                    aria-selected={selected}
+                                    className={`${POP_ROW} ${selected ? POP_ROW_SELECTED : ""}`}
+                                    onClick={() => pick(value)}
+                                  >
+                                    <span className="grid min-w-0">
+                                      <span className={`${POP_TITLE} truncate`}>{title}</span>
+                                      {sub ? (
+                                        <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                          {sub}
+                                        </span>
+                                      ) : null}
+                                    </span>
+                                    {selected ? (
+                                      <span
+                                        aria-hidden="true"
+                                        className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                                      />
+                                    ) : null}
+                                  </button>
+                                );
+                              };
+                              const groupHead =
+                                "px-[0.6rem] pb-[0.15rem] pt-[0.35rem] text-[0.66rem] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]";
+                              return userPersonas.length > 0 ? (
+                                <>
+                                  <div role="group" aria-label="Your personas" className="grid gap-[0.1rem]">
+                                    <div aria-hidden="true" className={groupHead}>
+                                      Yours
+                                    </div>
+                                    {userPersonas.map((p) =>
+                                      option(
+                                        p.ref,
+                                        p.display_name || p.name,
+                                        [
+                                          p.kind === "twin" ? "Digital twin" : null,
+                                          p.autonomy === "act" ? "acts for you" : "suggests actions",
+                                        ]
+                                          .filter(Boolean)
+                                          .join(" · "),
+                                      ),
+                                    )}
+                                  </div>
+                                  <div role="group" aria-label="Workspace personas" className="grid gap-[0.1rem]">
+                                    <div aria-hidden="true" className={groupHead}>
+                                      Workspace
+                                    </div>
+                                    {workspaceOptions.map((p) => option(p, formatBundlePersona(p)))}
+                                  </div>
+                                </>
+                              ) : (
+                                workspaceOptions.map((p) => option(p, formatBundlePersona(p)))
+                              );
+                            })()}
+                          </div>
+                          <Link
+                            href="/settings/personas"
+                            className="mt-[0.2rem] flex items-center gap-[0.4rem] rounded-[0.5rem] border-t border-[var(--color-border-subtle)] px-[0.6rem] py-[0.45rem] text-[0.76rem] text-[var(--color-text-secondary)] no-underline transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+                          >
+                            <Icon name="plus" className="size-3" />
+                            {userPersonas.length > 0 ? "Manage your personas" : "Create your own persona"}
+                          </Link>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* Contextual Patrol indicator + popover: rendered on the bar when
+                      at least one patrol schedule is active or while the popover is open. */}
+                  {onStartPatrol && !sealed && (activePatrolCount > 0 || patrolPopoverOpen) ? (
+                    <div
+                      ref={patrolPopoverRef}
+                      role="presentation"
+                      className={`relative ${
+                        patrolPopoverOpen ? "inline-flex" : "hidden sm:inline-flex"
+                      }`}
+                    >
+                      <button
+                        ref={patrolButtonRef}
+                        type="button"
+                        aria-label="Patrol & recurring schedule"
+                        aria-haspopup="true"
+                        aria-expanded={patrolPopoverOpen}
+                        disabled={shareBusy}
+                        data-testid="chat-patrol-button"
+                        data-tip-top={
+                          patrolPopoverOpen
+                            ? undefined
+                            : activePatrolCount > 0
+                              ? `Patrols (${activePatrolCount} active)`
+                              : "Start recurring patrol or timer"
+                        }
+                        className={`${TOOL_BTN} ${
+                          patrolPopoverOpen ? TOOLS_BTN_OPEN : TOOL_BTN_ACTIVE
+                        }`}
+                        onClick={() => setPatrolPopoverOpen((v) => !v)}
+                      >
+                        <Icon name="clock" className="size-3.5" />
+                        {activePatrolCount > 0 ? (
+                          <span
+                            data-testid="chat-patrol-badge"
+                            className="pointer-events-none absolute -right-[5px] -top-[7px] inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-[var(--radius-pill)] bg-[var(--color-accent-strong)] px-[3px] text-[0.6rem] font-semibold tabular-nums text-[var(--color-on-accent-strong)]"
+                          >
+                            {activePatrolCount}
+                          </span>
+                        ) : null}
+                      </button>
+                      {patrolPopoverOpen && !shareBusy ? (
+                        <PatrolPopover
+                          initialPrompt={prompt}
+                          onStartPatrol={async (input) => {
+                            const ok = await onStartPatrol(input);
+                            if (ok !== false && prompt.trim() && input.prompt === prompt.trim()) {
+                              setPrompt("");
+                            }
+                            return ok;
+                          }}
+                          onClose={() => {
+                            setPatrolPopoverOpen(false);
+                            (activePatrolCount > 0
+                              ? patrolButtonRef.current
+                              : moreButtonRef.current
+                            )?.focus();
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {/* Context Ring: shown once context usage exists (or while
+                      compacting / when the token-limit toast fires), and also
+                      reachable inside More options. */}
+                  {canCompact && (contextUsage !== null || isSummarizing || compactToastVisible) ? (
+                    <div className="relative inline-flex">
+                      {compactToastVisible && !isSummarizing ? (
+                        <div
+                          role="status"
+                          aria-live="polite"
+                          className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
+                        >
+                          Token limit hit — you should compact
+                        </div>
+                      ) : null}
+                      <ContextRing
+                        usage={contextUsage}
+                        isSummarizing={isSummarizing}
+                        disabled={isStreaming || isSummarizing}
+                        onClick={() => setConfirmSummarize(true)}
+                      />
+                    </div>
+                  ) : null}
+
+                  {/* Active Auto-approve indicator: shown directly on the desktop toolbar when
+                      Auto-approve is ON so the user always sees it at a glance and can
+                      turn it off in a single tap (on phone viewports More options carries
+                      the active dot and toggle to avoid crowding Share/Send). */}
+                  {toggleAutoApprove && isAutoApprove ? (
+                    <button
+                      type="button"
+                      disabled={shareBusy}
+                      aria-label="Auto-approve tools in this chat is on (click to turn off)"
+                      data-tip-top="Auto-approve on for this chat"
+                      aria-pressed={true}
+                      className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
+                      onClick={toggleAutoApprove}
+                    >
+                      <Icon name="zap" className="size-3.5" />
+                      <span className="sr-only">Auto-approve on</span>
+                    </button>
+                  ) : null}
+                </>
+              );
+            })()}
           </div>
 
           <div className="flex shrink-0 items-center gap-[0.35rem]">
+            {onOpenShare ? (
+              (() => {
+                const isMultiplayer = Boolean(shareConversation?.multiplayer);
+                const isTeamShared = Boolean(
+                  shareConversation?.team_visible && !shareConversation?.multiplayer,
+                );
+                const isLinkShared = Boolean(
+                  shareConversation?.share_token &&
+                    !shareConversation?.team_visible &&
+                    !shareConversation?.multiplayer,
+                );
+                const isSharedAny = isMultiplayer || isTeamShared || isLinkShared;
+                const ariaLabel = isMultiplayer
+                  ? "Multiplayer — open sharing"
+                  : isTeamShared
+                    ? shareTeam
+                      ? `Shared with ${shareTeam} — open sharing`
+                      : "Shared with team — open sharing"
+                    : isLinkShared
+                      ? "Public link — open sharing"
+                      : "Share this chat";
+                const tipText = isMultiplayer
+                  ? "Multiplayer chat is on — click to manage participants or sharing"
+                  : isTeamShared
+                    ? "Shared with your team — click to manage sharing"
+                    : isLinkShared
+                      ? "Public link active — click to manage sharing"
+                      : "Share this chat or start multiplayer";
+                return (
+                  <button
+                    type="button"
+                    data-testid="composer-share-button"
+                    disabled={
+                      shareBusy ||
+                      isStreaming ||
+                      isUploadingAttachments ||
+                      ((activeConversationId === null ||
+                        isPendingKey(activeConversationId)) &&
+                        messages.length > 0)
+                    }
+                    aria-label={ariaLabel}
+                    data-tip-top={tipText}
+                    onClick={() => {
+                      setMoreMenuOpen(false);
+                      setMcpPickerOpen(false);
+                      setToolsLibrary(null);
+                      setPersonaPickerOpen(false);
+                      setModelPickerOpen(false);
+                      setPatrolPopoverOpen(false);
+                      onOpenShare();
+                    }}
+                    className={`inline-flex h-[1.95rem] shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[0.75rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50 ${
+                      isSharedAny
+                        ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-text-primary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]"
+                        : "border-[var(--color-border)] bg-[var(--color-overlay-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
+                    }`}
+                  >
+                    <Icon
+                      name={isMultiplayer || isTeamShared ? "persona" : "external-link"}
+                      className={`size-3.5 shrink-0 ${isSharedAny ? "text-[var(--color-accent)]" : ""}`}
+                    />
+                    {isMultiplayer ? (
+                      <>
+                        <span>Multiplayer</span>
+                        <span
+                          aria-hidden="true"
+                          className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
+                        />
+                      </>
+                    ) : isTeamShared || isLinkShared ? (
+                      <span>Shared</span>
+                    ) : (
+                      <span>Share</span>
+                    )}
+                  </button>
+                );
+              })()
+            ) : null}
             {isStreaming ? (
               <button
                 aria-label="Stop generating"
@@ -1433,17 +1940,8 @@ export function Composer({
                 className="inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
                 type="button"
                 onClick={() => {
-                  // Tell the server to actually stop the turn.
-                  // The server now keeps generating after the SSE
-                  // drops (so phone-lock + long turns don't lose
-                  // work), so an explicit cancel signal is the
-                  // only thing that brings the work to a halt.
-                  // Per-conv: only the chat the user is currently
-                  // looking at — other in-flight chats keep going.
                   const convKey =
                     activeConversationIdRef.current ?? PENDING_CONV_KEY;
-                  // Local first: aborting our own stream needs no
-                  // server round trip and must not wait on one.
                   abortControllersRef.current.get(convKey)?.abort();
                   if (isPendingKey(convKey)) return;
                   const cancelUrl = conversationApiUrl(convKey, "/cancel");
@@ -1456,22 +1954,6 @@ export function Composer({
                     } catch {
                       cancelled = false;
                     }
-                    // A turn whose stream died while the server was
-                    // unreachable is held open by the recovery chain,
-                    // and by then there is no controller left to abort.
-                    // Stop must end that chain too, or the conversation
-                    // stays busy while it probes for a turn the user has
-                    // just cancelled (#1584).
-                    //
-                    // Only once the server CONFIRMS the cancellation.
-                    // Stop is pressed most often during exactly the
-                    // outage that created the chain, and a cancel
-                    // request that never landed leaves the turn running
-                    // for its full timeout — discarding the chain there
-                    // would throw away the only way back to its answer.
-                    // An unconfirmed Stop therefore leaves recovery in
-                    // place, and the chain resolves the turn's real
-                    // outcome, cancelled or not.
                     if (cancelled) cancelRecovery(convKey);
                   })();
                 }}
@@ -1480,83 +1962,23 @@ export function Composer({
                 <span className="sr-only">Stop</span>
               </button>
             ) : null}
-            {/* Per-conversation Auto-approve toggle: pre-approves executable
-                      critical tools in this chat without parking on an inline
-                      approval card. Enabled even while streaming so a user can
-                      turn it on or off mid-turn. */}
-            {toggleAutoApprove ? (
-              <button
-                type="button"
-                aria-label={
-                  isAutoApprove
-                    ? "Auto-approve tools in this chat is on (click to turn off)"
-                    : "Auto-approve tools in this chat (click to turn on)"
-                }
-                data-tip-top={
-                  isAutoApprove
-                    ? "Auto-approve on for this chat"
-                    : "Auto-approve tools in this chat"
-                }
-                aria-pressed={isAutoApprove}
-                className={`${TOOL_BTN} ${isAutoApprove ? TOOL_BTN_ACTIVE : ""}`}
-                onClick={toggleAutoApprove}
-              >
-                <Icon name="zap" className="size-3.5" />
-                <span className="sr-only">
-                  {isAutoApprove ? "Auto-approve on" : "Auto-approve off"}
-                </span>
-              </button>
-            ) : null}
-            {/* Send-key preference toggle (issue #315), restyled as the
-                      design's .tool-btn with the return-key glyph; the active
-                      state marks "Send on Enter" on. The mode is announced
-                      via aria-label and the hover tip; clicking flips +
-                      persists it. Sits right next to Send so the toggle is
-                      in the same glance as the key it configures. */}
-            <button
-              type="button"
-              aria-label={
-                sendOnEnter
-                  ? "Send on Enter (click to switch to Ctrl+Enter)"
-                  : "Send on Ctrl+Enter (click to switch to Enter)"
-              }
-              data-tip-top={
-                sendOnEnter ? "Send on Enter" : "Send on Ctrl+Enter"
-              }
-              aria-pressed={sendOnEnter}
-              className={`${TOOL_BTN} ${sendOnEnter ? TOOL_BTN_ACTIVE : ""}`}
-              onClick={() => setSendOnEnter((v) => !v)}
-            >
-              <Icon name="return-key" className="size-3.5" />
-              <span className="sr-only">
-                {sendOnEnter ? "Enter" : "Ctrl+Enter"}
-              </span>
-            </button>
-            {/* The design's .send-btn: a 2.1rem circle that lights up
-                      with the action gradient once there is content to send.
-                      It is the measured gradient (--gradient-action-fill),
-                      not the raw primary → secondary one: every point of it
-                      holds the arrow at 4.5:1 for any bundle palette (on the
-                      raw one a yellow primary with white on_primary put it
-                      under 3:1). The image: hint keeps the gradient token in
-                      background-image. */}
             <button
               aria-label="Send message"
               className={`inline-flex size-[2.1rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed ${
                 prompt.trim() &&
                 !isStreaming &&
                 !isUploadingAttachments &&
+                !shareBusy &&
                 !modelError
                   ? "bg-[image:var(--gradient-action-fill)] text-[var(--color-on-primary-fill)] hover:-translate-y-px enabled:hover:bg-[image:var(--gradient-action-fill-hover)]"
                   : "bg-[var(--color-surface-2)] text-[var(--color-text-disabled)]"
               }`}
               type="submit"
-              // modelError: submitPrompt refuses to send while the
-              // model is rejected, so an enabled button here was a
-              // click that did nothing. Disable it and put the reason
-              // in the title, the same text the model chip shows.
               disabled={
-                !prompt.trim() || isUploadingAttachments || modelError !== null
+                !prompt.trim() ||
+                isUploadingAttachments ||
+                shareBusy ||
+                modelError !== null
               }
               title={
                 modelError

@@ -244,6 +244,7 @@ above fails otherwise.
 - [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
+- [`COMPOSER-TOOLBAR-AND-SHARE.md`](COMPOSER-TOOLBAR-AND-SHARE.md) — Composer toolbar declutter & Share from the start of a chat
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
 - [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
 - [`CONNECTION-SHARING.md`](CONNECTION-SHARING.md) — Sharing a remote MCP connection

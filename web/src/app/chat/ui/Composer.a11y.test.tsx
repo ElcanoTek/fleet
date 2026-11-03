@@ -542,9 +542,74 @@ describe("Composer — persona picker with user personas", () => {
 
   it("without user personas lists the workspace roster flat and invites creating one", () => {
     render(<Host overrides={{ personas: ["assistant"], selectedPersona: "assistant" }} />);
-    fireEvent.click(screen.getByRole("button", { name: "Persona — Assistant" }));
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Persona — Assistant" }));
     expect(screen.queryByRole("group", { name: "Your personas" })).toBeNull();
     expect(screen.getByRole("option", { name: "Assistant" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("link", { name: /Create your own persona/ })).toBeInTheDocument();
+  });
+});
+
+describe("Composer — share button and overflow options menu", () => {
+  it("renders the Share button from the start of a chat and reflects active Multiplayer/Shared state", () => {
+    const onOpenShare = vi.fn();
+    const { rerender } = render(
+      <Host
+        overrides={{
+          onOpenShare,
+          shareConversation: null,
+        }}
+      />,
+    );
+    const shareBtn = screen.getByTestId("composer-share-button");
+    expect(shareBtn).toHaveAccessibleName("Share this chat");
+    fireEvent.click(shareBtn);
+    expect(onOpenShare).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <Host
+        overrides={{
+          onOpenShare,
+          shareConversation: { multiplayer: true, team_visible: true },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("composer-share-button")).toHaveAccessibleName(
+      "Multiplayer — open sharing",
+    );
+  });
+
+  it("groups secondary controls in More options and closes on Escape", () => {
+    const toggleAutoApprove = vi.fn();
+    render(
+      <Host
+        overrides={{
+          isAutoApprove: false,
+          toggleAutoApprove,
+          onStartPatrol: vi.fn(),
+        }}
+      />,
+    );
+    const moreBtn = screen.getByTestId("composer-more-button");
+    fireEvent.click(moreBtn);
+    const menu = screen.getByTestId("composer-more-popover");
+    const promptItem = within(menu).getByRole("menuitem", { name: "Open prompt library" });
+    const personaItem = within(menu).getByRole("menuitem", { name: /Persona/ });
+    const patrolItem = within(menu).getByRole("menuitem", { name: "Patrol & recurring schedule" });
+    expect(promptItem).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowDown" });
+    expect(personaItem).toHaveFocus();
+    fireEvent.keyDown(menu, { key: "ArrowUp" });
+    expect(promptItem).toHaveFocus();
+    expect(patrolItem).toBeInTheDocument();
+    const autoApproveItem = within(menu).getByRole("menuitemcheckbox", {
+      name: /Auto-approve tools in this chat/,
+    });
+    fireEvent.click(autoApproveItem);
+    expect(toggleAutoApprove).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(menu, { key: "Escape" });
+    expect(screen.queryByTestId("composer-more-popover")).toBeNull();
+    expect(moreBtn).toHaveFocus();
   });
 });

@@ -225,6 +225,7 @@ export type ServerConfig = {
   // it so oversize files are refused immediately with an explanation
   // instead of failing after a full upload round-trip.
   uploadMaxBytes: number;
+  teamChatsSharedByDefault?: boolean;
 };
 
 // parseServerConfigPayload maps GET /api/server-config onto ServerConfig.
@@ -235,6 +236,7 @@ export function parseServerConfigPayload(cfg: {
   lockdown_only?: boolean;
   lockdown_allowed_models?: string[] | null;
   upload_max_bytes?: number;
+  team_chats_shared_by_default?: boolean;
 }): ServerConfig {
   return {
     lockdownAvailable: cfg.lockdown_available === true,
@@ -246,6 +248,7 @@ export function parseServerConfigPayload(cfg: {
       typeof cfg.upload_max_bytes === "number" && cfg.upload_max_bytes > 0
         ? cfg.upload_max_bytes
         : DEFAULT_UPLOAD_MAX_BYTES,
+    teamChatsSharedByDefault: cfg.team_chats_shared_by_default === true,
   };
 }
 
@@ -713,6 +716,9 @@ export function ChatExperience({
   const [personas, setPersonas] = useState<string[]>(
     () => restoredSession?.personas ?? [],
   );
+  const [defaultPersona, setDefaultPersona] = useState<string>(
+    () => restoredSession?.defaultPersona ?? "",
+  );
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
@@ -726,7 +732,12 @@ export function ChatExperience({
   // Runtime client config: branding strings + the empty-state quick-start
   // cards, fetched from the member-gated /api/client-config so the UI is
   // client-agnostic. Falls back to neutral defaults on error / while loading.
-  const { branding, pills, models: workspaceModelTiers } = useClientConfig();
+  const {
+    branding,
+    pills,
+    models: workspaceModelTiers,
+    teamChatsSharedByDefault = false,
+  } = useClientConfig();
   // Visibility only (the Tools library's admin-only links); the server
   // authorizes every admin action on its own.
   const adminState = useIsAdmin();
@@ -976,7 +987,7 @@ export function ChatExperience({
   //     the empty state all light up by default)
   const isLockdown =
     activeConversation?.lockdown === true ||
-    (isPendingKey(activeConversationId) &&
+    ((activeConversationId === null || isPendingKey(activeConversationId)) &&
       (pendingLockdown || serverConfig.lockdownOnly));
   const activePendingKey =
     activeConversationId === null
@@ -1267,6 +1278,7 @@ export function ChatExperience({
       archivedConversations,
       activeConversationId,
       personas,
+      defaultPersona,
       selectedPersona,
       selectedModel,
       skills,
@@ -1280,6 +1292,7 @@ export function ChatExperience({
     archivedConversations,
     activeConversationId,
     personas,
+    defaultPersona,
     selectedPersona,
     selectedModel,
     skills,
@@ -2494,25 +2507,47 @@ export function ChatExperience({
     );
   };
 
+  const deletedConvIdsRef = useRef<Set<string>>(new Set());
+  const deleteAllUnpinnedSeqRef = useRef(0);
+  const conversationsRefreshSeqRef = useRef(0);
+  const conversationsRefreshAppliedSeqRef = useRef(0);
+  const shareCreatedSummariesRef = useRef<
+    Map<
+      string,
+      { summary: ConversationSummary; seq: number; deleteAllSeq: number }
+    >
+  >(new Map());
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   const refreshConversations = async () => {
+    conversationsRefreshSeqRef.current += 1;
+    const refreshSeq = conversationsRefreshSeqRef.current;
     const seqAtStart = new Map(autoApproveSeqRef.current);
     const reconcileAutoApprove = (list: ConversationSummary[]) =>
-      list.map((c) => {
-        const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
-        const startSeq = seqAtStart.get(c.id) ?? 0;
-        const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
-        if (
-          (inFlight || curSeq !== startSeq) &&
-          autoApproveDisplayedRef.current.has(c.id)
-        ) {
-          return {
-            ...c,
-            auto_approve: autoApproveDisplayedRef.current.get(c.id),
-          };
-        }
-        autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
-        return c;
-      });
+      list
+        .filter((c) => !deletedConvIdsRef.current.has(c.id))
+        .map((c) => {
+          const curSeq = autoApproveSeqRef.current.get(c.id) ?? 0;
+          const startSeq = seqAtStart.get(c.id) ?? 0;
+          const inFlight = (autoApproveInFlightRef.current.get(c.id) ?? 0) > 0;
+          if (
+            (inFlight || curSeq !== startSeq) &&
+            autoApproveDisplayedRef.current.has(c.id)
+          ) {
+            return {
+              ...c,
+              auto_approve: autoApproveDisplayedRef.current.get(c.id),
+            };
+          }
+          autoApproveCommittedRef.current.set(c.id, c.auto_approve === true);
+          return c;
+        });
     try {
       // Active and archived lists in parallel (#282). The archived fetch is
       // best-effort — a failure leaves the previous archived list in place
@@ -2521,19 +2556,43 @@ export function ChatExperience({
         fetch("/api/conversations", { cache: "no-store" }),
         fetch("/api/conversations?archived=true", { cache: "no-store" }),
       ]);
-      if (activeRes.ok) {
-        const data = (await activeRes.json()) as {
-          conversations: ConversationSummary[] | null;
-        };
-        setConversations(reconcileAutoApprove(data.conversations ?? []));
-      }
+      if (refreshSeq <= conversationsRefreshAppliedSeqRef.current) return;
+      conversationsRefreshAppliedSeqRef.current = refreshSeq;
+      let nextArchived: ConversationSummary[] | null = null;
       if (archivedRes.ok) {
         const data = (await archivedRes.json()) as {
           conversations: ConversationSummary[] | null;
         };
-        setArchivedConversations(
-          reconcileAutoApprove(data.conversations ?? []),
-        );
+        nextArchived = reconcileAutoApprove(data.conversations ?? []);
+        setArchivedConversations(nextArchived);
+      }
+      if (activeRes.ok) {
+        const data = (await activeRes.json()) as {
+          conversations: ConversationSummary[] | null;
+        };
+        const reconciledActive = reconcileAutoApprove(data.conversations ?? []);
+        const activeIds = new Set(reconciledActive.map((c) => c.id));
+        const archivedIds = new Set((nextArchived ?? []).map((c) => c.id));
+        setConversations((curr) => {
+          const preserved: ConversationSummary[] = [];
+          for (const [id, entry] of shareCreatedSummariesRef.current) {
+            if (
+              deletedConvIdsRef.current.has(id) ||
+              deleteAllUnpinnedSeqRef.current !== entry.deleteAllSeq ||
+              refreshSeq > entry.seq ||
+              activeIds.has(id) ||
+              archivedIds.has(id)
+            ) {
+              shareCreatedSummariesRef.current.delete(id);
+              continue;
+            }
+            const existing = curr.find((c) => c.id === id) ?? entry.summary;
+            preserved.push(existing);
+          }
+          return preserved.length > 0
+            ? [...preserved, ...reconciledActive]
+            : reconciledActive;
+        });
       }
       void loadTeamSharedChatCounts();
     } catch {
@@ -2617,6 +2676,7 @@ export function ChatExperience({
     // that chain replaces its slot, after which the chain finds its slot
     // missing and lets go (#1584).
     const recoveryTokenAtStart = recoveryTokenRef.current(conversationId);
+    const deleteAllSeqAtStart = deleteAllUnpinnedSeqRef.current;
     // background: a warm-return revalidation already has the cached transcript
     // on screen, so it must NOT flash the blocking spinner — it swaps in the
     // fresh server copy underneath the rendered messages.
@@ -2694,6 +2754,7 @@ export function ChatExperience({
       if (attachedConvIdsRef.current.has(conversationId)) return;
       if (recoveryTokenRef.current(conversationId) !== recoveryTokenAtStart)
         return;
+      if (deletedConvIdsRef.current.has(conversationId)) return;
       // A BACKGROUND reload must not move the user. Recovery reconciles
       // conversations that are not on screen, and one finishing after the
       // user has navigated elsewhere would otherwise switch the active
@@ -2704,6 +2765,9 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
+      const canInsertMissingRow =
+        movesTheUser &&
+        deleteAllUnpinnedSeqRef.current === deleteAllSeqAtStart;
       if (
         data.conversation.user_email &&
         userEmail.trim() &&
@@ -2717,6 +2781,38 @@ export function ChatExperience({
             next[idx] = { ...prev[idx], ...data.conversation };
             return next;
           }
+          return [data.conversation, ...prev];
+        });
+      } else if (data.conversation.archived_at != null) {
+        setConversations((prev) =>
+          prev.some((c) => c.id === data.conversation.id)
+            ? prev.filter((c) => c.id !== data.conversation.id)
+            : prev,
+        );
+        setArchivedConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          if (!canInsertMissingRow) return prev;
+          return [data.conversation, ...prev];
+        });
+      } else {
+        setArchivedConversations((prev) =>
+          prev.some((c) => c.id === data.conversation.id)
+            ? prev.filter((c) => c.id !== data.conversation.id)
+            : prev,
+        );
+        setConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          if (!canInsertMissingRow) return prev;
           return [data.conversation, ...prev];
         });
       }
@@ -2945,6 +3041,7 @@ export function ChatExperience({
     // deletion looked like it had taken the projects with it, which is exactly
     // the moment a user would panic. The predicate lives in one module shared
     // with the confirm dialog's count, so the two cannot disagree.
+    deleteAllUnpinnedSeqRef.current += 1;
     const remaining = afterDeleteAllUnpinned(conversations);
     setConversations(remaining);
     const active = activeConversationId
@@ -3029,6 +3126,9 @@ export function ChatExperience({
       return false;
     }
     const removed = new Set(ids);
+    for (const id of ids) {
+      deletedConvIdsRef.current.add(id);
+    }
     const remaining = conversations.filter((c) => !removed.has(c.id));
     setConversations(remaining);
     setArchivedConversations((current) =>
@@ -3114,6 +3214,7 @@ export function ChatExperience({
       showRailError(`Couldn't delete the chat (HTTP ${response.status}).`);
       return false;
     }
+    deletedConvIdsRef.current.add(conversationId);
     const remaining = conversations.filter((c) => c.id !== conversationId);
     setConversations(remaining);
     // Also drop it from the archived list (#282): delete is reachable from the
@@ -4166,6 +4267,205 @@ export function ChatExperience({
     setShareLinkCopied(false);
     setShareError(null);
     setShareDialog({ id: conversation.id });
+  };
+
+  // openShareFromComposer lets the user open sharing from the composer toolbar
+  // at any point — including at the very start of a brand-new chat before the
+  // first message is sent. When no conversation row exists yet, it materializes
+  // a draft conversation on the spot, promotes the composer draft onto it, and
+  // opens the Share dialog immediately.
+  const [creatingShareOrigin, setCreatingShareOrigin] = useState<{
+    activeId: string | null;
+    draftKey: string;
+  } | null>(null);
+  const creatingShareForCurrentView =
+    creatingShareOrigin !== null &&
+    activeConversationId === creatingShareOrigin.activeId &&
+    draftKey === creatingShareOrigin.draftKey;
+  const openShareFromComposer = async () => {
+    if (activeConversation) {
+      openShareDialog(activeConversation);
+      return;
+    }
+    if (activeConversationId !== null && !isPendingKey(activeConversationId)) {
+      openShareDialog({
+        id: activeConversationId,
+        title: "Conversation",
+        persona: selectedPersona || "default",
+        model: selectedModel || "",
+        pinned: false,
+        updated_at: Math.floor(Date.now() / 1000),
+      });
+      return;
+    }
+    if (creatingShareForCurrentView || isStreaming || isUploadingAttachments)
+      return;
+    if (
+      (activeConversationId === null || isPendingKey(activeConversationId)) &&
+      getConvMessages(currentConvKey).length > 0
+    ) {
+      showRailError(
+        "Send or retry your first message before sharing this chat.",
+      );
+      return;
+    }
+    const originActiveId = activeConversationIdRef.current;
+    const originDraftKey = draftKeyRef.current;
+    const originConvKey = currentConvKey;
+    const pendingKey = activePendingKey ?? originDraftKey;
+    const hadPendingAutoApprove = Boolean(
+      pendingKey && pendingAutoApproveByKey[pendingKey],
+    );
+    const draftText = prompt.trim();
+    const initialTitle = draftText
+      ? draftText.length > 80
+        ? `${draftText.slice(0, 80)}…`
+        : draftText
+      : "New conversation";
+    const enabledOptional =
+      mcpServers.length > 0
+        ? enabledOptionalMcpServerNames(mcpServers)
+        : undefined;
+    const mcpAccounts = mcpAccountOverrides(mcpServers);
+    setCreatingShareOrigin({
+      activeId: originActiveId,
+      draftKey: originDraftKey,
+    });
+    try {
+      const response = await fetch("/api/conversations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: initialTitle,
+          persona: selectedPersona || undefined,
+          model: selectedModel || undefined,
+          lockdown: isLockdown || undefined,
+          enabled_optional: enabledOptional,
+          mcp_accounts:
+            Object.keys(mcpAccounts).length > 0 ? mcpAccounts : undefined,
+          auto_approve: hadPendingAutoApprove || undefined,
+        }),
+      });
+      if (!response.ok) {
+        if (!mountedRef.current) return;
+        const errText = (await response.text().catch(() => "")).trim();
+        showRailError(
+          errText ||
+            `Couldn't open sharing for this chat (HTTP ${response.status}).`,
+        );
+        return;
+      }
+      const created = (await response.json()) as Partial<ConversationSummary> & {
+        optional_mcp_servers_enabled?: unknown;
+      };
+      if (!created?.id) {
+        if (mountedRef.current) {
+          showRailError("Couldn't open sharing for this chat.");
+        }
+        return;
+      }
+      const createdId = created.id;
+      const isStillOnOriginDraft = (): boolean =>
+        mountedRef.current &&
+        activeConversationIdRef.current === originActiveId &&
+        draftKeyRef.current === originDraftKey;
+      const deleteStaleDraftWithRetry = async (attempt = 0): Promise<void> => {
+        deletedConvIdsRef.current.add(createdId);
+        const delUrl = conversationApiUrl(createdId);
+        if (!delUrl) return;
+        try {
+          const delRes = await fetch(delUrl, { method: "DELETE" });
+          if (delRes.ok || delRes.status === 404) {
+            return;
+          }
+        } catch {
+          // retry below
+        }
+        if (attempt < 2) {
+          setTimeout(() => {
+            void deleteStaleDraftWithRetry(attempt + 1);
+          }, 1000 * (attempt + 1));
+        }
+      };
+      if (!isStillOnOriginDraft()) {
+        await deleteStaleDraftWithRetry();
+        return;
+      }
+      let autoApprovePersisted = Boolean(created.auto_approve);
+      if (hadPendingAutoApprove && !autoApprovePersisted) {
+        const autoUrl = conversationApiUrl(created.id, "/auto-approve");
+        if (autoUrl) {
+          try {
+            const autoRes = await fetch(autoUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ auto_approve: true }),
+            });
+            autoApprovePersisted = autoRes.ok;
+          } catch {
+            autoApprovePersisted = false;
+          }
+        }
+      }
+      if (!isStillOnOriginDraft()) {
+        await deleteStaleDraftWithRetry();
+        return;
+      }
+      const summary: ConversationSummary = {
+        id: created.id,
+        title: created.title || initialTitle,
+        persona: created.persona || selectedPersona || "default",
+        model: created.model || selectedModel || "",
+        pinned: Boolean(created.pinned),
+        updated_at: created.updated_at || Math.floor(Date.now() / 1000),
+        user_email: created.user_email || userEmail || undefined,
+        project_id: created.project_id,
+        team_visible: created.team_visible,
+        multiplayer: created.multiplayer,
+        share_token: created.share_token,
+        lockdown: created.lockdown ?? (isLockdown || undefined),
+        auto_approve: autoApprovePersisted,
+      };
+      if (pendingKey && hadPendingAutoApprove) {
+        setPendingAutoApproveForKey(pendingKey, false);
+      }
+      if (Array.isArray(created.optional_mcp_servers_enabled)) {
+        const persisted = created.optional_mcp_servers_enabled.filter(
+          (n): n is string => typeof n === "string",
+        );
+        setMcpServers((curr) => reconcileMcpSelection(curr, persisted));
+      }
+      shareCreatedSummariesRef.current.set(summary.id, {
+        summary,
+        seq: conversationsRefreshSeqRef.current,
+        deleteAllSeq: deleteAllUnpinnedSeqRef.current,
+      });
+      setConversations((curr) => [
+        summary,
+        ...curr.filter((c) => c.id !== summary.id),
+      ]);
+      promoteComposerKey(originConvKey, summary.id);
+      setPendingLockdown(false);
+      activeConversationIdRef.current = summary.id;
+      setActiveConversationId(summary.id);
+      openShareDialog(summary);
+    } catch {
+      if (mountedRef.current) {
+        showRailError(
+          "Couldn't reach the server to open sharing for this chat.",
+        );
+      }
+    } finally {
+      if (mountedRef.current) {
+        setCreatingShareOrigin((curr) =>
+          curr &&
+          curr.activeId === originActiveId &&
+          curr.draftKey === originDraftKey
+            ? null
+            : curr,
+        );
+      }
+    }
   };
 
   // buildShareUrl turns a share token into the absolute, copy-paste link a
@@ -5658,6 +5958,7 @@ export function ChatExperience({
           const pd = (await pr.json()) as PersonasResponse;
           if (!cancelled) {
             setPersonas(pd.personas);
+            if (pd.default) setDefaultPersona(pd.default);
             setUserPersonas(pd.user_personas ?? []);
             if (!willLoadConversation) {
               setSelectedPersona(newChatLink?.persona ?? pd.default);
@@ -6985,6 +7286,7 @@ export function ChatExperience({
                   conversation={activeConversation}
                   team={activeChatTeamAudience}
                   onOpen={() => openShareDialog(activeConversation)}
+                  hideShareButton
                 />
               ) : null}
             </div>
@@ -7116,10 +7418,19 @@ export function ChatExperience({
               messages={messages}
               pills={pills}
               activePillId={activePillId}
-              setActivePillId={setActivePillId}
-              submitPrompt={submitPrompt}
+              setActivePillId={(id) => {
+                if (creatingShareForCurrentView) return;
+                setActivePillId(id);
+              }}
+              submitPrompt={(text, opts) => {
+                if (creatingShareForCurrentView) return Promise.resolve(false);
+                return submitPrompt(text, opts);
+              }}
               resumeHeldCardSend={resumeHeldCardSend}
-              setPrompt={setPrompt}
+              setPrompt={(next) => {
+                if (creatingShareForCurrentView) return;
+                setPrompt(next);
+              }}
               isSummarizing={isSummarizing}
               summarizeStartedAt={summarizeStartedAt}
               summarizeStream={summarizeStream}
@@ -7269,10 +7580,16 @@ export function ChatExperience({
                 onStartPatrol={handleStartPatrol}
                 activePatrolCount={activePatrolCount}
                 prompt={prompt}
-                setPrompt={setPrompt}
+                setPrompt={(next) => {
+                  if (creatingShareForCurrentView) return;
+                  setPrompt(next);
+                }}
                 promptPlaceholder={promptPlaceholder}
                 promptRef={promptRef}
-                submitPrompt={submitPrompt}
+                submitPrompt={(text) => {
+                  if (creatingShareForCurrentView) return Promise.resolve(false);
+                  return submitPrompt(text);
+                }}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
                 toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
@@ -7291,6 +7608,7 @@ export function ChatExperience({
                 spreadsheetNudge={spreadsheetNudge}
                 setSpreadsheetNudgeDismissed={setSpreadsheetNudgeDismissed}
                 personas={personas}
+                defaultPersona={defaultPersona}
                 userPersonas={userPersonas}
                 selectedPersona={selectedPersona}
                 setSelectedPersona={setSelectedPersona}
@@ -7336,6 +7654,18 @@ export function ChatExperience({
                 activeConversationIdRef={activeConversationIdRef}
                 abortControllersRef={abortControllersRef}
                 isPendingKey={isPendingKey}
+                onOpenShare={() => void openShareFromComposer()}
+                shareConversation={
+                  activeConversation ??
+                  ((serverConfig.teamChatsSharedByDefault ||
+                    teamChatsSharedByDefault) &&
+                  myTeam &&
+                  !isLockdown
+                    ? { multiplayer: true, team_visible: true }
+                    : null)
+                }
+                shareTeam={activeChatTeamAudience}
+                shareBusy={creatingShareForCurrentView}
               />
             </section>
           </div>

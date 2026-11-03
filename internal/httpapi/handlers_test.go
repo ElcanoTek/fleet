@@ -331,6 +331,50 @@ func TestConversationRename_LocksTitle(t *testing.T) {
 	}
 }
 
+// TestConversationCreate_PreChatSeedsAndHeuristicTitle proves POST /conversations
+// seeds auto_approve and enabled_optional for Share-first chats, and that a
+// Share-first chat created with "New conversation" gets upgraded to a heuristic
+// title on its first POST /chat turn.
+func TestConversationCreate_PreChatSeedsAndHeuristicTitle(t *testing.T) {
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	s := newDefaultChatServer(t, engine, st)
+	h := s.Routes()
+
+	w := do(t, h, http.MethodPost, "/conversations", map[string]any{
+		"title":            "New conversation",
+		"persona":          "default",
+		"auto_approve":     true,
+		"enabled_optional": []string{},
+	}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: %d body=%s", w.Code, w.Body.String())
+	}
+	var conv store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &conv); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !conv.AutoApprove {
+		t.Errorf("want auto_approve=true on created conversation, got false")
+	}
+
+	w = do(t, h, http.MethodPost, "/chat", map[string]any{
+		"conversation_id": conv.ID,
+		"message":         "Analyze Q3 revenue trends across regions",
+	}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("chat: %d body=%s", w.Code, w.Body.String())
+	}
+
+	updated, err := s.store.Get(context.Background(), "u@x.com", conv.ID)
+	if err != nil || updated == nil {
+		t.Fatalf("Get: err=%v conv=%v", err, updated)
+	}
+	if updated.Title == "" || updated.Title == "New conversation" {
+		t.Errorf("want heuristic title on first turn of Share-first chat, got %q", updated.Title)
+	}
+}
+
 // TestConversationArchiveRoute exercises POST /conversations/{id}/archive plus
 // the GET ?archived=true filter (#282): archiving hides the conversation from
 // the default list, unpins it, and surfaces it in the archived list;

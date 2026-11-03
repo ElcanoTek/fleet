@@ -38,6 +38,10 @@ export type DialogA11yOptions = {
   // element (historical behavior); the New Task modal points this at its
   // Prompt textarea so opening the form starts at the field that matters.
   initialFocusRef?: RefObject<HTMLElement | null>;
+  // Optional explicit element to restore focus to when the dialog closes
+  // (for example when the dialog was opened from an overflow menu item that
+  // unmounted on activation).
+  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 export function useDialogA11y(
@@ -64,6 +68,7 @@ export function useDialogA11y(
     const trigger = (typeof document !== "undefined" ? document.activeElement : null) as
       | HTMLElement
       | null;
+    const returnFocus = optionsRef.current?.returnFocusRef?.current ?? null;
 
     const focusables = (): HTMLElement[] =>
       container
@@ -127,7 +132,10 @@ export function useDialogA11y(
       document.removeEventListener("keydown", onKeyDown, true);
       const at = dialogStack.indexOf(token);
       if (at >= 0) dialogStack.splice(at, 1);
-      if (trigger && typeof trigger.focus === "function") trigger.focus();
+      const restoreTarget = returnFocus ?? trigger;
+      if (restoreTarget && typeof restoreTarget.focus === "function") {
+        restoreTarget.focus();
+      }
     };
   }, [open, containerRef]);
 }

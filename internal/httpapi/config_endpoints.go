@@ -82,7 +82,8 @@ type clientConfigResponse struct {
 	// live agentcore holders the admin settings apply into. The web reads this
 	// on every shell mount, which is what makes the admin setting live without
 	// a rebuild: the compiled-in web constants remain only its fallback.
-	Models clientConfigModels `json:"models"`
+	Models                   clientConfigModels `json:"models"`
+	TeamChatsSharedByDefault bool               `json:"team_chats_shared_by_default"`
 }
 
 type clientConfigModels struct {
@@ -162,6 +163,7 @@ func (s *Server) clientConfigHandler(w http.ResponseWriter, r *http.Request) {
 	if s.cfg != nil {
 		resp.Models.TaskFallbackModel = strings.TrimSpace(s.cfg.TaskFallbackModel)
 		resp.Models.Pinned = s.cfg.PinnedModels
+		resp.TeamChatsSharedByDefault = s.cfg.LiveTeamChatsSharedByDefault()
 	}
 	if s.clientConfig != nil {
 		b := s.clientConfig

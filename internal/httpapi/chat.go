@@ -433,6 +433,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		// from the chat request so pre-chat Tools picker selections take
 		// effect on this first turn.
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+			s.rollbackCreatedConversation(user, conv.ID)
 			return
 		}
 		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
@@ -525,6 +526,19 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 		return nil, unlockFirst, false
 	}
 	return conv, unlockFirst, true
+}
+
+func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, conv *store.Conversation, historyLen int, message string, userWords bool) {
+	if historyLen != 0 || conv.Title != "New conversation" || conv.TitleLocked || !userWords {
+		return
+	}
+	nextTitle := agent.HeuristicTitle(message)
+	if nextTitle == "" || nextTitle == conv.Title {
+		return
+	}
+	if err := s.store.UpdateTitle(ctx, convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
+		conv.Title = nextTitle
+	}
 }
 
 // replayAcceptedInput answers a resend of an input_id that was already
@@ -1207,6 +1221,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 	}
 
+	// If this conversation was materialized before its first message (for
+	// example via Share in the composer on an empty draft) and still carries the
+	// placeholder "New conversation" title without a manual rename, give it a
+	// heuristic title from the admitted opening message right before emitting
+	// the `conversation` event so a rejected turn never mutates the title.
+	s.maybeSetPlaceholderTurnTitle(turnCtx, user, conv, len(history), req.Message, userWords)
+
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
 	// `user.message` event is replay-only — reattach reconstructs the
@@ -1364,7 +1385,7 @@ func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conv
 // /conversations/{id}/mcp-servers); a seat the user does not hold is a 400
 // rather than a silent drop. Returns false after writing an error response.
 func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, enabledOptional []string, mcpAccounts map[string]string, autoApprove *bool) bool {
-	if len(enabledOptional) > 0 {
+	if enabledOptional != nil {
 		valid := s.optionalServerWhitelist(r.Context(), user)
 		seen := make(map[string]bool, len(enabledOptional))
 		clean := make([]string, 0, len(enabledOptional))
@@ -1377,13 +1398,13 @@ func (s *Server) seedConversationMCP(w http.ResponseWriter, r *http.Request, use
 			clean = append(clean, n)
 		}
 		sort.Strings(clean)
-		if len(clean) > 0 {
+		if len(clean) > 0 || len(conv.OptionalMCPServersEnabled) > 0 {
 			if err := s.store.SetOptionalMCPServers(r.Context(), user, conv.ID, clean); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return false
 			}
-			conv.OptionalMCPServersEnabled = clean
 		}
+		conv.OptionalMCPServersEnabled = clean
 	}
 	if len(mcpAccounts) > 0 {
 		accounts, verr := s.cleanMCPAccounts(r.Context(), user, mcpAccounts)

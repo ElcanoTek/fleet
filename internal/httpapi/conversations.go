@@ -7,11 +7,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -41,6 +44,13 @@ type createConversationRequest struct {
 	// seedMaxChars; the tail is kept (the end of a transcript — the
 	// result — matters more than the beginning).
 	Seed string `json:"seed,omitempty"`
+	// EnabledOptional, MCPAccounts, and AutoApprove seed pre-chat composer
+	// selections when a draft conversation is materialized before its first
+	// message turn (for example, when the user clicks Share in the composer on
+	// a brand-new chat).
+	EnabledOptional []string          `json:"enabled_optional,omitempty"`
+	MCPAccounts     map[string]string `json:"mcp_accounts,omitempty"`
+	AutoApprove     *bool             `json:"auto_approve,omitempty"`
 }
 
 // seedMaxChars bounds a seeded first message so a pathological caller can't
@@ -55,6 +65,17 @@ func clampSeed(seed string) string {
 		return seed
 	}
 	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
+}
+
+func (s *Server) rollbackCreatedConversation(user, convID string) {
+	if convID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.Delete(ctx, user, convID); err != nil {
+		log.Printf("rollback created conversation %s: %v", logSafe(convID), logSafe(err.Error()))
+	}
 }
 
 func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request, user string) {
@@ -232,16 +253,25 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return
 		}
+		if len(req.MCPAccounts) > 0 {
+			if _, err := s.cleanMCPAccounts(r.Context(), user, req.MCPAccounts); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
 		if !ok {
+			return
+		}
+		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+			s.rollbackCreatedConversation(user, conv.ID)
 			return
 		}
 		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
 		// without running a turn, so the next real turn sees it as history.
 		// Best-effort ordering is NOT acceptable here — a discussion opened
 		// on a missing seed is an empty chat with a misleading title — so a
-		// failed append fails the request (the empty conversation row is
-		// harmless and reachable from the sidebar).
+		// failed append fails the request and rolls back the created row.
 		if seed := strings.TrimSpace(req.Seed); seed != "" {
 			content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
 			if err == nil {
@@ -249,10 +279,12 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
 			}
 			if err != nil {
+				s.rollbackCreatedConversation(user, conv.ID)
 				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
+		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 		writeJSON(w, conv)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

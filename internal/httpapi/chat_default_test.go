@@ -496,7 +496,25 @@ func (s *fakeChatStore) StageEnableMCPConnectorsApproval(_ context.Context, user
 		ResumeState:    store.ApprovalResumeArmed,
 	}, 0, nil
 }
-func (s *fakeChatStore) UpdateTitle(context.Context, string, string, string) error { return nil }
+func (s *fakeChatStore) SetAutoApprove(_ context.Context, _, convID string, enabled bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.AutoApprove = enabled
+	}
+	return nil
+}
+func (s *fakeChatStore) UpdateTitle(_ context.Context, _, convID, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		if c.TitleLocked {
+			return store.ErrTitleLocked
+		}
+		c.Title = title
+	}
+	return nil
+}
 
 func (s *fakeChatStore) SetConversationTeamVisibleWithOptions(_ context.Context, _, convID string, visible, _ bool) (bool, error) {
 	s.mu.Lock()

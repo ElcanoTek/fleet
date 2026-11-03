@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
@@ -32,6 +32,11 @@ type Props = {
   // template, from "Insert raw prompt" — never the YAML file itself.
   onInsert: (content: string, name?: string) => void;
   compact?: boolean;
+  // Optional custom trigger renderer so callers like Composer can keep the
+  // dialog mounted while placing the trigger button inside an overflow menu.
+  renderTrigger?: (openLibrary: () => void) => React.ReactNode;
+  // Optional element to return focus to when the dialog closes.
+  returnFocusRef?: RefObject<HTMLElement | null>;
 };
 
 const FIELD =
@@ -48,6 +53,8 @@ export function PromptLibrary({
   currentText,
   onInsert,
   compact = false,
+  renderTrigger,
+  returnFocusRef,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<PromptLibraryItem[]>([]);
@@ -63,6 +70,7 @@ export function PromptLibrary({
 
   useDialogA11y(open, modalRef, () => setOpen(false), {
     initialFocusRef: searchRef,
+    returnFocusRef,
   });
 
   const load = async () => {
@@ -175,30 +183,36 @@ export function PromptLibrary({
     URL.revokeObjectURL(url);
   };
 
+  const openLibrary = () => {
+    setOpen(true);
+    void load();
+  };
+
   return (
     <>
-      <button
-        type="button"
-        aria-label="Open prompt library"
-        // Styled hover/focus tooltip (the app's data-tip system) instead of a
-        // native title, matching the composer's other tool buttons. Only in
-        // compact (icon-only) mode — the full button already shows the label.
-        data-tip-top={compact ? "Prompt library: reuse prompts" : undefined}
-        className={
-          compact
-            ? "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-            : "btn btn-secondary btn-small"
-        }
-        onClick={() => {
-          setOpen(true);
-          void load();
-        }}
-      >
-        <Icon name="book" className="size-4" />
-        {!compact ? (
-          <span style={{ marginLeft: 6 }}>Prompt library</span>
-        ) : null}
-      </button>
+      {renderTrigger ? (
+        renderTrigger(openLibrary)
+      ) : (
+        <button
+          type="button"
+          aria-label="Open prompt library"
+          // Styled hover/focus tooltip (the app's data-tip system) instead of a
+          // native title, matching the composer's other tool buttons. Only in
+          // compact (icon-only) mode — the full button already shows the label.
+          data-tip-top={compact ? "Prompt library: reuse prompts" : undefined}
+          className={
+            compact
+              ? "relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+              : "btn btn-secondary btn-small"
+          }
+          onClick={openLibrary}
+        >
+          <Icon name="book" className="size-4" />
+          {!compact ? (
+            <span style={{ marginLeft: 6 }}>Prompt library</span>
+          ) : null}
+        </button>
+      )}
 
       {open
         ? createPortal(
