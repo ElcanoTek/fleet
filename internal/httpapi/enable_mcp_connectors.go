@@ -597,20 +597,26 @@ func (s *Server) autoApproveEnableMCPConnectors(
 		UserEmail:                 conv.UserEmail,
 		OptionalMCPServersEnabled: merged,
 	})
-	participantMerged := callerMerged
-	if conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user) {
-		participantMerged = s.effectiveOptionalMCPServersForCaller(ctx, "__participant__", &store.Conversation{
+	ownerMerged := callerMerged
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+		ownerMerged = s.effectiveOptionalMCPServersForCaller(ctx, conv.UserEmail, &store.Conversation{
 			UserEmail:                 conv.UserEmail,
 			OptionalMCPServersEnabled: merged,
 		})
 	}
+	participantMerged := s.effectiveOptionalMCPServersForCaller(ctx, "__participant__", &store.Conversation{
+		UserEmail:                 conv.UserEmail,
+		OptionalMCPServersEnabled: merged,
+	})
 	conv.OptionalMCPServersEnabled = callerMerged
 
 	if buf != nil {
 		buf.Emit("mcp.servers_updated", map[string]any{
 			"enabled_optional":             callerMerged,
 			"added":                        newlyAdded,
+			"owner_enabled_optional":       ownerMerged,
 			"participant_enabled_optional": participantMerged,
+			"user_email":                   user,
 		})
 		buf.Emit("tool.action_recorded", map[string]any{
 			"approval_id":      approval.ID,

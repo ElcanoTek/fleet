@@ -526,7 +526,8 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT email FROM users
-		WHERE ($1 = '' OR team_id = $1)
+		WHERE enabled = TRUE
+		  AND ($1 = '' OR team_id = $1)
 		ORDER BY email ASC`, team)
 	if err != nil {
 		return nil, err
@@ -541,6 +542,16 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 			out = append(out, e)
 		}
 	}
+	addIfEnabled := func(e string) {
+		e = normalizeEmail(e)
+		if e == "" || seen[e] {
+			return
+		}
+		var isEnabled bool
+		if err := s.db.QueryRowContext(ctx, `SELECT enabled FROM users WHERE email = $1`, e).Scan(&isEnabled); err == nil && isEnabled {
+			add(e)
+		}
+	}
 	add(conv.UserEmail)
 	add(callerEmail)
 	for rows.Next() {
@@ -550,10 +561,10 @@ func (s *Store) ListMultiplayerRoster(ctx context.Context, callerEmail, convID s
 		}
 	}
 	for _, p := range conv.MultiplayerParticipants {
-		add(p)
+		addIfEnabled(p)
 	}
 	for _, ex := range conv.MultiplayerExcluded {
-		add(ex)
+		addIfEnabled(ex)
 	}
 	sort.Strings(out)
 	return out, rows.Err()

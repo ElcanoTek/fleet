@@ -76,14 +76,40 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		}
 	}
 	defer releaseSwap()
-	if isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath))) {
-		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
+	rawWsDir := tools.WorkspaceDirForConversation(convID)
+	baseRawDir := rawWsDir
+	cleanRel := filepath.ToSlash(filepath.Clean(relPath))
+	participantActive := s.isParticipantWorkspaceActive(convID, conv.UserEmail)
+	callerIsActiveParticipant := !isOwner && s.isActiveParticipantUser(convID, user)
+	if isPrivateWorkspacePath(cleanRel) {
+		if isOwner {
+			if participantActive {
+				stashRoot, serr := s.privateWorkspaceStashDir(convID)
+				if serr != nil {
+					http.Error(w, "file not found", http.StatusNotFound)
+					return
+				}
+				baseRawDir = filepath.Join(stashRoot, "owner")
+			}
+		} else if !callerIsActiveParticipant {
+			if cleanRel != uploadsDir && !strings.HasPrefix(cleanRel, uploadsDir+"/") {
+				http.Error(w, "file not found", http.StatusNotFound)
+				return
+			}
+			stashRoot, serr := s.privateWorkspaceStashDir(convID)
+			if serr != nil {
+				http.Error(w, "file not found", http.StatusNotFound)
+				return
+			}
+			baseRawDir = filepath.Join(stashRoot, "participants", participantDigest(user))
+		}
+	}
+	wsDir, err := tools.SafeWorkspaceJoin(baseRawDir, ".")
+	if err != nil {
+		if baseRawDir != rawWsDir {
 			http.Error(w, "file not found", http.StatusNotFound)
 			return
 		}
-	}
-	wsDir, err := tools.SafeWorkspaceJoin(tools.WorkspaceDirForConversation(convID), ".")
-	if err != nil {
 		http.Error(w, "workspace unavailable", http.StatusNotFound)
 		return
 	}
@@ -118,8 +144,9 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
-	if isPrivateWorkspacePath(filepath.ToSlash(rel)) {
-		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
+	if baseRawDir == rawWsDir && isPrivateWorkspacePath(filepath.ToSlash(rel)) {
+		allowedInWs := (isOwner && !participantActive) || callerIsActiveParticipant
+		if !allowedInWs {
 			http.Error(w, "file not found", http.StatusNotFound)
 			return
 		}
@@ -208,6 +235,16 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
 	if userEmail == "" {
 		return
 	}
+	s.inflightMu.Lock()
+	for convID, activeUser := range s.activeParticipantWorkspaces {
+		if strings.EqualFold(activeUser, userEmail) {
+			if s.purgedParticipantWorkspaces == nil {
+				s.purgedParticipantWorkspaces = make(map[string]bool)
+			}
+			s.purgedParticipantWorkspaces[convID+"\x00"+userEmail] = true
+		}
+	}
+	s.inflightMu.Unlock()
 	root, err := s.privateWorkspaceStashRoot()
 	if err != nil || root == "" {
 		return
@@ -226,11 +263,49 @@ func (s *Server) purgeParticipantPrivateStashes(userEmail string) {
 			continue
 		}
 		unlock := s.workspaceSwapLocks.lock(convID)
-		if !s.isParticipantWorkspaceActiveInMemory(convID, "") {
-			_ = os.RemoveAll(filepath.Join(root, convID, "participants", digest)) //nolint:gosec // server-derived stash path
+		if s.isActiveParticipantUser(convID, userEmail) {
+			s.markParticipantWorkspacePurged(convID, userEmail)
 		}
+		_ = os.RemoveAll(filepath.Join(root, convID, "participants", digest)) //nolint:gosec // server-derived stash path
 		unlock()
 	}
+}
+
+func (s *Server) markParticipantWorkspacePurged(convID, userEmail string) {
+	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	if convID == "" || userKey == "" {
+		return
+	}
+	s.inflightMu.Lock()
+	if s.purgedParticipantWorkspaces == nil {
+		s.purgedParticipantWorkspaces = make(map[string]bool)
+	}
+	s.purgedParticipantWorkspaces[convID+"\x00"+userKey] = true
+	s.inflightMu.Unlock()
+}
+
+func (s *Server) takeParticipantWorkspacePurged(convID, userEmail string) bool {
+	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	if convID == "" || userKey == "" {
+		return false
+	}
+	k := convID + "\x00" + userKey
+	s.inflightMu.Lock()
+	purged := s.purgedParticipantWorkspaces[k]
+	delete(s.purgedParticipantWorkspaces, k)
+	s.inflightMu.Unlock()
+	return purged
+}
+
+func (s *Server) isActiveParticipantUser(convID, userEmail string) bool {
+	userKey := strings.ToLower(strings.TrimSpace(userEmail))
+	if convID == "" || userKey == "" {
+		return false
+	}
+	s.inflightMu.Lock()
+	active := s.activeParticipantWorkspaces[convID]
+	s.inflightMu.Unlock()
+	return active != "" && strings.EqualFold(active, userKey)
 }
 
 func (s *Server) setParticipantWorkspaceActive(convID, user string, unlock func()) {
@@ -356,6 +431,7 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 		s.setParticipantWorkspaceActive(conv.ID, "", unlock)
 		return nil
 	}
+	_ = s.takeParticipantWorkspacePurged(conv.ID, user)
 	if _, err := tools.EnsureWorkspaceDir(conv.ID); err != nil {
 		unlock()
 		return err
@@ -414,6 +490,9 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 		if stashRoot, err := s.privateWorkspaceStashDir(conv.ID); err == nil {
 			wsDir := tools.WorkspaceDirForConversation(conv.ID)
 			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+			if s.takeParticipantWorkspacePurged(conv.ID, user) {
+				_ = os.RemoveAll(filepath.Join(stashRoot, "participants", participantDigest(user))) //nolint:gosec // server-derived stash path
+			}
 		}
 	}
 	s.clearParticipantWorkspaceActive(conv.ID)

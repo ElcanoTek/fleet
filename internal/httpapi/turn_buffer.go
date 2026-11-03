@@ -606,14 +606,31 @@ func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail str
 		return data, true
 	}
 	partRaw, hasPart := m["participant_enabled_optional"]
+	ownerRaw, hasOwner := m["owner_enabled_optional"]
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	delete(m, "participant_enabled_optional")
+	delete(m, "owner_enabled_optional")
+	delete(m, "user_email")
 	if !hasPart {
 		return data, true
 	}
-	delete(m, "participant_enabled_optional")
-	if viewerEmail != "" && convOwnerEmail != "" && !strings.EqualFold(viewerEmail, convOwnerEmail) {
-		m["enabled_optional"] = partRaw
+	isSender := viewerEmail != "" && uEmail != "" && strings.EqualFold(viewerEmail, uEmail)
+	if viewerEmail != "" && !isSender {
+		targetRaw := partRaw
+		if convOwnerEmail != "" && strings.EqualFold(viewerEmail, convOwnerEmail) {
+			if hasOwner {
+				targetRaw = ownerRaw
+			} else if uEmail == "" {
+				if b, err := json.Marshal(m); err == nil {
+					return b, true
+				}
+				return data, true
+			}
+		}
+		m["enabled_optional"] = targetRaw
 		allowed := map[string]bool{}
-		if arr, ok := partRaw.([]any); ok {
+		if arr, ok := targetRaw.([]any); ok {
 			for _, v := range arr {
 				if s, ok := v.(string); ok {
 					allowed[strings.ToLower(strings.TrimSpace(s))] = true

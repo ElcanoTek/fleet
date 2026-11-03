@@ -895,6 +895,52 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM conversations WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete conversations: %w", err)
 	}
+	// Scrub the deleted account from foreign conversations' explicit
+	// multiplayer invite/exclusion lists and per-participant MCP account seats,
+	// and remove any queued inputs, pending approvals, or schedules it created
+	// in other users' multiplayer conversations so a later account
+	// re-provisioned with the same email never inherits them.
+	mcpPrefix := MultiplayerMCPAccountPrefix(email)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE conversations
+		   SET multiplayer_participants = COALESCE((
+		         SELECT jsonb_agg(elem)
+		           FROM jsonb_array_elements_text(multiplayer_participants::jsonb) AS elem
+		          WHERE lower(elem) <> $1
+		       ), '[]'::jsonb)::text,
+		       multiplayer_excluded = COALESCE((
+		         SELECT jsonb_agg(elem)
+		           FROM jsonb_array_elements_text(multiplayer_excluded::jsonb) AS elem
+		          WHERE lower(elem) <> $1
+		       ), '[]'::jsonb)::text,
+		       mcp_accounts = COALESCE((
+		         SELECT jsonb_object_agg(key, value)
+		           FROM jsonb_each(mcp_accounts)
+		          WHERE left(key, length($2)) <> $2
+		       ), '{}'::jsonb)
+		 WHERE (multiplayer_participants::jsonb ? $1)
+		    OR (multiplayer_excluded::jsonb ? $1)
+		    OR EXISTS (
+		         SELECT 1
+		           FROM jsonb_object_keys(mcp_accounts) AS k
+		          WHERE left(k, length($2)) = $2
+		       )`,
+		email, mcpPrefix,
+	); err != nil {
+		return fmt.Errorf("scrub multiplayer references: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_input_queue WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete queued inputs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM approvals WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete approvals: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_schedules WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete chat schedules: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM memories WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete memories: %w", err)

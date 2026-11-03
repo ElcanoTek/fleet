@@ -421,6 +421,10 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	reconcileSeeds := append([]string{}, roster...)
+	reconcileSeeds = append(reconcileSeeds, conv.MultiplayerParticipants...)
+	reconcileSeeds = append(reconcileSeeds, body.Remove...)
+	s.enforceMultiplayerRevocation(r.Context(), convID, updated, reconcileSeeds)
 	if err != nil {
 		if errors.Is(err, store.ErrConversationNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -429,7 +433,6 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.enforceMultiplayerRevocation(r.Context(), convID, updated, roster)
 	writeJSON(w, map[string]any{
 		"multiplayer":  updated.Multiplayer,
 		"team_visible": updated.TeamVisible,

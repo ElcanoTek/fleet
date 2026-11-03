@@ -119,6 +119,7 @@ type Server struct {
 	inflight                    map[string]inflightEntry
 	activeParticipantWorkspaces map[string]string
 	activeWorkspaceUnlocks      map[string]func()
+	purgedParticipantWorkspaces map[string]bool
 	multiplayerEpochs           map[string]uint64
 	workspaceLocks              keyedLocks
 	workspaceSwapLocks          keyedLocks
