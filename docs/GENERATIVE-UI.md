@@ -84,7 +84,8 @@ instead:
   defaults to `show_ui`. A JSON string met on the way is decoded and walked
   into, so a card a script printed works too (bash's result:
   `"path": "stdout.show_ui"`). The value there must be a JSON object.
-- **What else may be given.** Only `replaces` and `field_errors`. They are laid
+- **What else may be given.** Only `replaces`, `field_errors` and `panel`
+  (a [dashboard panel key](DASHBOARD-VIEW.md)). They are laid
   over the tool's card, so a refinement re-shows the same card with errors.
   Any other key beside `from_result` (`title`, `components`, …) is refused.
 - **Checks.** The resolved card goes through `genui.Validate` and the
@@ -124,6 +125,23 @@ Honest scope:
   shortens what the model sees. The conversation and the user are the same,
   the card is still validated, and the newest result of a tool is the one a
   reduction keeps longest.
+
+## Dashboard panels (`panel`)
+
+A card may carry a top-level `panel` key: 1–40 characters of `a-z`, `0-9`,
+`-` and `_` (`genui.ValidPanelKey`). It makes the card a living tile:
+
+- **In the transcript**, a later card with the same `panel` key supersedes the
+  earlier one exactly as `replaces` would (the old card collapses to a
+  "replaced" note), so the agent refreshes a tile by showing it again.
+- **In [dashboard view](DASHBOARD-VIEW.md)**, the key is the panel's slot on the
+  board: the newest card with it is the panel.
+- **The acknowledgement** names the panel and the key to reuse
+  (`It is dashboard panel "revenue": show_ui again with panel "revenue" to
+  update it in place.`).
+
+It is display metadata only. It changes nothing a card can do or send, and a
+panel card is validated, redacted and submitted like any other.
 
 ## The component catalog
 

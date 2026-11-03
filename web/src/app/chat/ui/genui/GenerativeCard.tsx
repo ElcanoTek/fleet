@@ -152,6 +152,12 @@ export type GenerativeCardProps = {
   /** Shared / read-only transcripts: render, never submit. */
   readOnly?: boolean;
   /**
+   * "panel": drawn inside a dashboard panel (docs/DASHBOARD-VIEW.md), which
+   * supplies the frame and the title, so the card drops its own border,
+   * background and title row. Behaviour is identical.
+   */
+  variant?: "inline" | "panel";
+  /**
    * Namespaces this card's browser-stored draft and pending hold, normally by
    * conversation id. A branched conversation copies the tool call — card id
    * included — so without it a draft typed in one would appear in the other.
@@ -240,8 +246,32 @@ export function keyDigest(key: string): string {
   return d;
 }
 
+// Drafts are also kept in memory for this page's life (bounded like the
+// stored ones), so a card that remounts — dashboard view draws it on the
+// board, normal view in the transcript — keeps what was typed even when
+// localStorage is blocked. The memory copy is read only when storage
+// throws; while storage works it is the one source.
+const memoryDrafts = new Map<string, string>();
+// Keys whose last write did not reach storage (blocked writes, a full
+// quota): storage holds an older draft or none, so memory is read instead.
+const memoryOnlyDrafts = new Set<string>();
+function rememberDraft(key: string, json: string) {
+  memoryDrafts.delete(key);
+  memoryDrafts.set(key, json);
+  while (memoryDrafts.size > MAX_DRAFTS) memoryDrafts.delete(memoryDrafts.keys().next().value as string);
+}
+
 function readDraft(key: string): StoredDraft | null {
-  const raw = window.localStorage.getItem(key);
+  let raw: string | null;
+  if (memoryOnlyDrafts.has(key)) raw = memoryDrafts.get(key) ?? null;
+  else {
+    try {
+      raw = window.localStorage.getItem(key);
+    } catch {
+      // Storage unusable: the in-memory copy is the only one.
+      raw = memoryDrafts.get(key) ?? null;
+    }
+  }
   if (!raw) return null;
   const v = JSON.parse(raw) as Partial<StoredDraft> | null;
   if (!v || typeof v.at !== "number" || !v.values || typeof v.values !== "object" || Array.isArray(v.values)) return null;
@@ -258,6 +288,8 @@ function loadDraft(cardId: string, answerKey: string): StoredDraft | null {
     const d = readDraft(key);
     const k = keyDigest(answerKey);
     if (d && Date.now() - d.at <= DRAFT_TTL_MS && d.after === k && draftSent(cardId, d) !== k) return d;
+    memoryDrafts.delete(key);
+    memoryOnlyDrafts.delete(key);
     window.localStorage.removeItem(key);
     return null;
   } catch {
@@ -301,17 +333,25 @@ function pruneDrafts(keep: string) {
 
 function saveDraft(cardId: string, values: Values | null, after = "", cleared: Iterable<string> = []) {
   const key = DRAFT_PREFIX + cardId;
+  if (!values) {
+    sentMemory.delete(cardId);
+    memoryDrafts.delete(key);
+    memoryOnlyDrafts.delete(key);
+  } else {
+    sentMemory.delete(cardId);
+    rememberDraft(key, JSON.stringify({ values, at: Date.now(), after: keyDigest(after), cleared: [...cleared] }));
+  }
   try {
     if (!values) {
-      sentMemory.delete(cardId);
       window.localStorage.removeItem(key);
       return;
     }
     // Pruning scans every draft: only when this card starts one, not per edit.
     if (window.localStorage.getItem(key) === null) pruneDrafts(key);
-    sentMemory.delete(cardId);
-    putDraft(key, JSON.stringify({ values, at: Date.now(), after: keyDigest(after), cleared: [...cleared] }));
+    if (putDraft(key, memoryDrafts.get(key) as string)) memoryOnlyDrafts.delete(key);
+    else memoryOnlyDrafts.add(key);
   } catch {
+    if (values) memoryOnlyDrafts.add(key);
     // Private mode: a draft is a convenience, never state we rely on.
   }
 }
@@ -354,7 +394,13 @@ function markDraftSent(storeId: string, sentKey: string) {
   try {
     const d = readDraft(key);
     if (!d) return;
-    if (putDraft(key, JSON.stringify({ ...d, sent: sent || undefined }))) sentMemory.delete(storeId);
+    const json = JSON.stringify({ ...d, sent: sent || undefined });
+    // The page copy carries the marker too, whichever copy is read later.
+    rememberDraft(key, json);
+    if (putDraft(key, json)) {
+      sentMemory.delete(storeId);
+      memoryOnlyDrafts.delete(key);
+    } else memoryOnlyDrafts.add(key);
   } catch {
     // A draft is a convenience; the in-memory marker still holds.
   }
@@ -591,6 +637,7 @@ export default function GenerativeCard(props: GenerativeCardProps) {
 function CardBody({
   cardId,
   spec,
+  variant,
   submission,
   reply,
   superseded,
@@ -1108,14 +1155,25 @@ function CardBody({
         data-testid="genui-card"
         data-card-id={cardId}
         data-state={superseded ? "superseded" : submittedAction && !editing ? "submitted" : "open"}
-        className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+        data-variant={variant ?? "inline"}
+        className={
+          variant === "panel"
+            ? "min-w-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+            : "min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border-strong)] bg-[color-mix(in_srgb,var(--color-overlay-soft)_55%,transparent)] text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]"
+        }
       >
-        <div className="border-b border-[var(--color-border)] px-3.5 py-2.5">
-          <div className="font-medium">{spec.title}</div>
-          {spec.description ? (
-            <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
-          ) : null}
-        </div>
+        {variant === "panel" ? (
+          spec.description ? (
+            <div className="px-3.5 pt-2 text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+          ) : null
+        ) : (
+          <div className="border-b border-[var(--color-border)] px-3.5 py-2.5">
+            <div className="font-medium">{spec.title}</div>
+            {spec.description ? (
+              <div className="text-[0.75rem] text-[var(--color-text-muted)]">{renderTemplate(spec.description, scope)}</div>
+            ) : null}
+          </div>
+        )}
         {/* Inputs disable themselves when locked (InputField); layout controls
             — tabs, collapsible sections, repeater items — stay usable so a
             submitted card can still be read in full. */}

@@ -21,6 +21,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { PENDING_CONV_KEY } from "./workspaceHref";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
+import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
   ContextRing,
   ModelValidationBadge,
@@ -139,6 +140,12 @@ const POP_ROW_SELECTED =
 const POP_TITLE = "text-[0.82rem] font-medium text-[var(--color-text-primary)]";
 
 export type ComposerProps = {
+  /**
+   * Dashboard view (docs/DASHBOARD-VIEW.md): whether it is on, and the
+   * toggle the More options menu offers. Omitted: no menu row.
+   */
+  dashboardView?: boolean;
+  onToggleDashboardView?: () => void;
   // Textarea value + draft handling
   prompt: string;
   setPrompt: Dispatch<SetStateAction<string>>;
@@ -285,6 +292,8 @@ export type ComposerProps = {
 };
 
 export function Composer({
+  dashboardView = false,
+  onToggleDashboardView,
   prompt,
   setPrompt,
   promptPlaceholder,
@@ -1618,6 +1627,41 @@ export function Composer({
                             {sendOnEnter ? "On" : "Off"}
                           </span>
                         </button>
+
+                        {onToggleDashboardView ? (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={dashboardView}
+                            data-testid="composer-dashboard-toggle"
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              onToggleDashboardView();
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="grid" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Dashboard view</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Live panels beside the chat · press D
+                                </span>
+                              </span>
+                            </span>
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                dashboardView
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {dashboardView ? "On" : "Off"}
+                            </span>
+                          </button>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
@@ -1812,7 +1856,21 @@ export function Composer({
                       compacting / when the token-limit toast fires), and also
                       reachable inside More options. */}
                   {canCompact && (contextUsage !== null || isSummarizing || compactToastVisible) ? (
-                    <div className="relative inline-flex">
+                    // On a phone the ring shows only when it needs attention
+                    // (filling up, compacting, or the token-limit toast);
+                    // otherwise Compact conversation in More options carries
+                    // the same percentage, and the bar stays calm.
+                    <div
+                      data-testid="composer-context-ring"
+                      className={`relative ${
+                        isSummarizing ||
+                        compactToastVisible ||
+                        contextUsage?.severity === "warn" ||
+                        contextUsage?.severity === "danger"
+                          ? "inline-flex"
+                          : "hidden sm:inline-flex"
+                      }`}
+                    >
                       {compactToastVisible && !isSummarizing ? (
                         <div
                           role="status"
@@ -1867,19 +1925,23 @@ export function Composer({
                     !shareConversation?.multiplayer,
                 );
                 const isSharedAny = isMultiplayer || isTeamShared || isLinkShared;
+                // A public link can sit beside team or multiplayer sharing; it
+                // is never hidden behind them (anyone with the URL can read).
+                const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
+                const linkSuffix = alsoLink ? " and by public link" : "";
                 const ariaLabel = isMultiplayer
-                  ? "Multiplayer — open sharing"
+                  ? `Multiplayer${linkSuffix} — open sharing`
                   : isTeamShared
                     ? shareTeam
-                      ? `Shared with ${shareTeam} — open sharing`
-                      : "Shared with team — open sharing"
+                      ? `Shared with ${shareTeam}${linkSuffix} — open sharing`
+                      : `Shared with team${linkSuffix} — open sharing`
                     : isLinkShared
                       ? "Public link — open sharing"
                       : "Share this chat";
                 const tipText = isMultiplayer
-                  ? "Multiplayer chat is on — click to manage participants or sharing"
+                  ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
                   : isTeamShared
-                    ? "Shared with your team — click to manage sharing"
+                    ? `Shared with your team${linkSuffix} — click to manage sharing`
                     : isLinkShared
                       ? "Public link active — click to manage sharing"
                       : "Share this chat or start multiplayer";
@@ -1906,29 +1968,36 @@ export function Composer({
                       setPatrolPopoverOpen(false);
                       onOpenShare();
                     }}
-                    className={`inline-flex h-[1.95rem] shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[0.75rem] font-medium transition focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-50 ${
-                      isSharedAny
-                        ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-text-primary)] hover:bg-[color-mix(in_srgb,var(--color-accent)_22%,transparent)]"
-                        : "border-[var(--color-border)] bg-[var(--color-overlay-subtle)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)] hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                    }`}
+                    // Icon-only, like the toolbar's other controls: the glyph
+                    // says who can see the chat (people = team / multiplayer,
+                    // chain = public link, arrow = private), the accent tint
+                    // says it is shared, and a dot marks multiplayer. The
+                    // label and tooltip carry the words.
+                    className={`${TOOL_BTN} ${isSharedAny ? TOOL_BTN_ACTIVE : ""}`}
                   >
-                    <Icon
-                      name={isMultiplayer || isTeamShared ? "persona" : "external-link"}
-                      className={`size-3.5 shrink-0 ${isSharedAny ? "text-[var(--color-accent)]" : ""}`}
-                    />
-                    {isMultiplayer ? (
-                      <>
-                        <span>Multiplayer</span>
-                        <span
-                          aria-hidden="true"
-                          className="size-1.5 shrink-0 rounded-full bg-[var(--color-accent)]"
-                        />
-                      </>
-                    ) : isTeamShared || isLinkShared ? (
-                      <span>Shared</span>
+                    {isMultiplayer || isTeamShared ? (
+                      <TeamGlyph className="size-4 shrink-0" />
+                    ) : isLinkShared ? (
+                      <ShareGlyph className="size-4 shrink-0" />
                     ) : (
-                      <span>Share</span>
+                      <Icon name="external-link" className="size-[0.95rem] shrink-0" />
                     )}
+                    {alsoLink ? (
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-share-link-badge"
+                        className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
+                      >
+                        <ShareGlyph className="size-[0.55rem]" />
+                      </span>
+                    ) : null}
+                    {isMultiplayer ? (
+                      <span
+                        aria-hidden="true"
+                        data-testid="composer-share-multiplayer-dot"
+                        className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
+                      />
+                    ) : null}
                   </button>
                 );
               })()

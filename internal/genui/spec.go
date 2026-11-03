@@ -81,6 +81,9 @@ const (
 	// maxCardIDLen bounds replaces: a card_id is a tool call id.
 	maxCardIDLen       = 256
 	maxNamesInHintText = 30
+	// MaxPanelKeyLen bounds a card's panel key: a short slug the browser
+	// uses as the board slot's identity, never shown as the title.
+	MaxPanelKeyLen = 40
 )
 
 // Issue is one validation problem, addressed by a JSON-ish path into the
@@ -107,6 +110,12 @@ type Card struct {
 	Actions     []any  `json:"actions,omitempty"`
 	Replaces    string `json:"replaces,omitempty"`
 	FieldErrors []any  `json:"field_errors,omitempty"`
+	// Panel names the dashboard panel this card lives in
+	// (docs/DASHBOARD-VIEW.md). A later card with the same panel takes the
+	// panel over, so a card can be a living tile the agent refreshes rather
+	// than a new message each time. Display metadata only: it never changes
+	// what the card can do or send.
+	Panel string `json:"panel,omitempty"`
 }
 
 type kind int
@@ -389,6 +398,23 @@ func (v *validator) addf(path, format string, args ...any) {
 	v.issues = append(v.issues, Issue{Path: path, Message: fmt.Sprintf(format, args...)})
 }
 
+// ValidPanelKey reports whether s is a usable dashboard panel key: 1 to
+// MaxPanelKeyLen characters of lowercase ASCII letters, digits, '-' and '_'.
+// The browser matches keys exactly, so the alphabet is kept small enough that
+// two keys a person would read as the same are the same string.
+func ValidPanelKey(s string) bool {
+	if s == "" || len(s) > MaxPanelKeyLen {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // Validate checks a raw show_ui argument payload and returns every issue
 // found (capped). An empty slice means the card is renderable.
 func Validate(raw []byte) (Card, []Issue) {
@@ -401,10 +427,10 @@ func Validate(raw []byte) (Card, []Issue) {
 		return c, []Issue{{Message: "arguments are not a JSON object: " + err.Error()}}
 	}
 	v := &validator{fields: map[string]*field{}}
-	allowedTop := map[string]bool{"title": true, "description": true, "components": true, "actions": true, "replaces": true, "field_errors": true}
+	allowedTop := map[string]bool{"title": true, "description": true, "components": true, "actions": true, "replaces": true, "field_errors": true, "panel": true}
 	for k := range top {
 		if !allowedTop[k] {
-			v.addf(k, "unknown top-level key (allowed: title, description, components, actions, replaces, field_errors)")
+			v.addf(k, "unknown top-level key (allowed: title, description, components, actions, replaces, field_errors, panel)")
 		}
 	}
 	title, _ := top["title"].(string)
@@ -452,6 +478,11 @@ func Validate(raw []byte) (Card, []Issue) {
 			// The browser matches the id exactly; padding would leave the
 			// old card live while the model is told it collapsed.
 			v.addf("replaces", "must be the card_id exactly, without surrounding spaces")
+		}
+	}
+	if pk, ok := top["panel"]; ok {
+		if s, isStr := pk.(string); !isStr || !ValidPanelKey(s) {
+			v.addf("panel", "must be a short panel key: 1-%d characters of a-z, 0-9, '-' or '_' (e.g. \"revenue\" or \"open-deals\"); reuse the same key to update that panel", MaxPanelKeyLen)
 		}
 	}
 	v.fieldErrors(top["field_errors"])

@@ -254,6 +254,7 @@ above fails otherwise.
 - [`CONVERSATION-AUTO-APPROVE.md`](CONVERSATION-AUTO-APPROVE.md) — Per-conversation auto-approve and 24-hour default approval timeout
 - [`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md) — Critical tool aliases: one audited action under two tool names (ADR-0071)
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
+- [`DASHBOARD-VIEW.md`](DASHBOARD-VIEW.md) — Dashboard view: the chat as a live board of show_ui panels beside a chat rail (`panel` key, `view: "dashboard"`)
 - [`DATASETS.md`](DATASETS.md) — Dataset / table agent
 - [`DEAD-LETTER-RECURRENCE.md`](DEAD-LETTER-RECURRENCE.md) — A dead-lettered recurring occurrence spawns its successor (ADR-0070)
 - [`SCHEDULED-COMPACTION-CHECKPOINTS.md`](SCHEDULED-COMPACTION-CHECKPOINTS.md) — Scheduled runs pause their tool loop at the resend budget so compaction recurs, and summarize for real; when the prompt floor crowds the budget, the budget applies to the history alone (#1600); stale bulky tool results are trimmed to previews before a summary is bought (#1742)

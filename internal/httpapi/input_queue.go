@@ -295,6 +295,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 		ID: uuid.NewString(), ConversationID: conv.ID, UserEmail: user,
 		ClientInputID: clientID, SubmissionID: submissionID,
 		Message: req.Message, Attachments: attachments, Mode: mode,
+		ViewContext: encodeQueuedViewContext(req),
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -599,6 +600,9 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 		// finally runs it from any other.
 		SubmissionID: row.SubmissionID,
 	}
+	// A submission queued from dashboard view drains with the same note a
+	// direct send gets (docs/DASHBOARD-VIEW.md).
+	req.View, req.Board = decodeQueuedViewContext(row.ViewContext)
 	switch row.Mode {
 	case store.InputModeResume:
 		// The turn fleet starts after a settled approval card

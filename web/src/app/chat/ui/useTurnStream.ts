@@ -503,6 +503,17 @@ type UploadedAttachmentMeta = {
 // drift at the point of omission, not just inside a body. Every field here is
 // referenced by at least one moved body.
 export interface TurnStreamDeps {
+  /**
+   * The chat is open in dashboard view (docs/DASHBOARD-VIEW.md): each POST
+   * carries view:"dashboard" so the server notes it in the turn's injected
+   * context. A presentation hint only.
+   */
+  dashboardView?: boolean;
+  /**
+   * The panels on the dashboard board, in order, sent as `board` with
+   * view:"dashboard" so the agent can tell which card "this chart" is.
+   */
+  dashboardBoard?: { title: string; card_id: string; panel?: string; pinned?: boolean }[];
   // Per-conversation message store + assorted component callbacks.
   setConvMessages: (
     convId: string,
@@ -739,6 +750,8 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     selectedPersona,
     mcpServers,
     pendingLockdown,
+    dashboardView,
+    dashboardBoard,
     userEmail,
     modelError,
     markConvStreaming,
@@ -4308,6 +4321,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
             input_id: crypto.randomUUID(),
             submission_id: queueSubmissionId,
             mode: "queue",
+            ...(dashboardView ? { view: "dashboard", board: dashboardBoard ?? [] } : {}),
           }),
         });
         const kind = classifyQueueSubmitResponse(res);
@@ -4536,6 +4550,10 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       model: trimmedModel,
       submission_id: submissionId,
     };
+    if (dashboardView) {
+      body.view = "dashboard";
+      body.board = dashboardBoard ?? [];
+    }
     if (uploadedAttachments.length > 0) {
       body.attachments = uploadedAttachments;
     }

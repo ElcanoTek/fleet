@@ -724,3 +724,28 @@ func TestStopRequested_QueuedRowIsNeverLaunched(t *testing.T) {
 		})
 	}
 }
+
+// A row's view context (migration 094) is kept as given and comes back on the
+// claim that drains it; a row without one reads back as "".
+func TestEnqueueInput_ViewContextRoundTrips(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	convID := seedConvAndTurn(t, s, "t1")
+	const vc = `{"view":"dashboard","board":[{"title":"Revenue","card_id":"c1","panel":"revenue"}]}`
+	if _, _, err := s.EnqueueInput(ctx, InputQueueRow{
+		ID: "iq-vc", ConversationID: convID, UserEmail: "u@example.com",
+		ClientInputID: "cli-vc", Message: "refresh revenue", Attachments: "[]", Mode: InputModeQueued, ViewContext: vc,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	enqueue(t, s, convID, "cli-plain", "plain", InputModeQueued)
+
+	a, err := s.ClaimNextQueuedInput(ctx, convID, "turn-a")
+	if err != nil || a == nil || a.ViewContext != vc {
+		t.Fatalf("claim 1 = %+v err=%v, want its view context", a, err)
+	}
+	b, err := s.ClaimNextQueuedInput(ctx, convID, "turn-b")
+	if err != nil || b == nil || b.ViewContext != "" {
+		t.Fatalf("claim 2 = %+v err=%v, want no view context", b, err)
+	}
+}

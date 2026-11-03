@@ -192,3 +192,23 @@ func TestShowUIDescriptionPrefersTheReference(t *testing.T) {
 		}
 	}
 }
+
+// A referenced card can be placed on the dashboard: panel rides beside
+// from_result like replaces, and is validated with the card.
+func TestShowUIRef_Panel(t *testing.T) {
+	results := []PriorToolResult{{CallID: "c1", Tool: "mcp_p_intake_card", Text: `{"show_ui":` + refCard + `}`}}
+	shown := shownCards{}
+	seam := refSeam(results, shown)
+	resp := runShowUIWith(t, &seam, `{"from_result":{"call_id":"c1"},"panel":"intake"}`)
+	if resp.IsError || !strings.Contains(resp.Content, `dashboard panel "intake"`) {
+		t.Fatalf("resp %+v", resp)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal([]byte(shown["ui_1"]), &spec); err != nil || spec["panel"] != "intake" {
+		t.Fatalf("shown spec %s (%v)", shown["ui_1"], err)
+	}
+	bad := runShowUIWith(t, &seam, `{"from_result":{"call_id":"c1"},"panel":"Not A Key"}`)
+	if !bad.IsError || !strings.HasPrefix(bad.Content, "UI_INVALID") {
+		t.Fatalf("a bad panel key beside from_result was accepted: %+v", bad)
+	}
+}

@@ -3,7 +3,8 @@
 // or, for a card shown by reference to a tool's result, the validated spec
 // the show_ui result carries (`card`),
 // its submission IS a later user message (parseSubmissionMessage), and
-// "replaced" IS a later card's `replaces`. Deriving all three from the
+// "replaced" IS a later card's `replaces` (or a later card with the same
+// dashboard `panel` key). Deriving all three from the
 // messages means a reload and a second tab agree on every card's state with
 // nothing extra to store.
 
@@ -127,6 +128,12 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
   const submissions = new Map<string, Submission>();
   const superseded = new Set<string>();
   const replies = new Map<string, Reply>();
+  // panel key → the card id currently showing it. A card with a panel key
+  // takes that panel over (docs/DASHBOARD-VIEW.md), so the card it displaces
+  // reads as replaced exactly as if it had been named in `replaces`.
+  const panelOwner = new Map<string, string>();
+  // card id → the panel it was placed in (by key or by inheritance).
+  const panelOf = new Map<string, string>();
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
     if (m.role === "user") {
@@ -172,6 +179,11 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
         submissions.delete(tc.id);
         replies.delete(tc.id);
         superseded.delete(tc.id);
+        // …and so did its panel: an unrelated card reusing the id must not
+        // be taken for that panel's owner (and superseded by its refresh).
+        const stale = panelOf.get(tc.id);
+        if (stale !== undefined && panelOwner.get(stale) === tc.id) panelOwner.delete(stale);
+        panelOf.delete(tc.id);
       }
       cards.set(tc.id, spec);
       owners.set(tc.id, tc);
@@ -181,6 +193,24 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
       // A card never replaces itself (a refinement whose reused id equals
       // the one it names).
       if (spec.replaces && spec.replaces !== tc.id) superseded.add(spec.replaces);
+      // The panel a refinement takes over: its own key, or (without one) the
+      // panel of the card it replaces, when that card still holds it — so a
+      // later same-key card supersedes the refinement, not the original.
+      const inherited = !spec.panel && spec.replaces ? panelOf.get(spec.replaces) : undefined;
+      const panel = spec.panel ?? (inherited !== undefined && panelOwner.get(inherited) === spec.replaces ? inherited : undefined);
+      // A card that replaces a panel's owner but names a different key moves
+      // that lineage: the old panel no longer has an owner, so a later
+      // refinement of the replaced card does not inherit it.
+      if (spec.replaces && spec.replaces !== tc.id) {
+        const from = panelOf.get(spec.replaces);
+        if (from !== undefined && from !== panel && panelOwner.get(from) === spec.replaces) panelOwner.delete(from);
+      }
+      if (panel) {
+        const prev = panelOwner.get(panel);
+        if (prev !== undefined && prev !== tc.id) superseded.add(prev);
+        panelOwner.set(panel, tc.id);
+        panelOf.set(tc.id, panel);
+      }
     }
   }
   return { cards, owners, occurrences, answerSpecs, submissions, superseded, replies };

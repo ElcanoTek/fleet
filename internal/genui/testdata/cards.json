@@ -5649,6 +5649,63 @@
    }
   },
   {
+   "name": "dashboard panel card",
+   "valid": true,
+   "card": {
+    "title": "Revenue",
+    "panel": "revenue",
+    "components": [
+     {
+      "type": "stat",
+      "label": "MTD",
+      "value": "$1.2M",
+      "tone": "success"
+     },
+     {
+      "type": "chart",
+      "kind": "line",
+      "labels": ["W1", "W2", "W3"],
+      "series": [
+       {
+        "name": "Revenue",
+        "values": [310, 290, 402]
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "panel key that is not a slug",
+   "valid": false,
+   "error_contains": "short panel key",
+   "card": {
+    "title": "x",
+    "panel": "Open Deals",
+    "components": [
+     {
+      "type": "text",
+      "text": "hi"
+     }
+    ]
+   }
+  },
+  {
+   "name": "panel key that is not a string",
+   "valid": false,
+   "error_contains": "short panel key",
+   "card": {
+    "title": "x",
+    "panel": 3,
+    "components": [
+     {
+      "type": "text",
+      "text": "hi"
+     }
+    ]
+   }
+  },
+  {
    "name": "replaces with surrounding spaces",
    "valid": false,
    "error_contains": "without surrounding spaces",

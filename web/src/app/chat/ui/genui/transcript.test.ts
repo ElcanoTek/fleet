@@ -277,3 +277,68 @@ describe("derivation cost", () => {
     expect(deriveGenUiState([shown, edited]).submissions.get("c1")?.values).toEqual({ n: "y" });
   });
 });
+
+describe("dashboard panel keys", () => {
+  it("a later card with the same panel key replaces the earlier one", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Revenue", { panel: "revenue" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "b", input: card("Deals", { panel: "deals" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(3, [{ id: "c", input: card("Revenue", { panel: "revenue" }), resultText: "UI_DISPLAYED card_id=c" }]),
+    ]);
+    expect([...s.superseded]).toEqual(["a"]);
+    expect(s.cards.get("c")?.panel).toBe("revenue");
+  });
+
+  it("drops a panel key the server would refuse", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("R", { panel: "Not A Key" }), resultText: "UI_DISPLAYED card_id=a" }]),
+    ]);
+    expect(s.cards.get("a")?.panel).toBeUndefined();
+  });
+});
+
+describe("panel ownership through replacements", () => {
+  it("a keyless refinement takes its panel over, so the next same-key card supersedes it", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "b", input: card("Rev fixed", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(3, [{ id: "c", input: card("Rev v3", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=c" }]),
+    ]);
+    expect(s.superseded.has("a")).toBe(true);
+    expect(s.superseded.has("b")).toBe(true);
+    expect(s.superseded.has("c")).toBe(false);
+  });
+
+  it("a refinement of a card that no longer holds the panel does not take it", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "c", input: card("Rev v2", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=c" }]),
+      assistant(3, [{ id: "b", input: card("Old fixed", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+    ]);
+    expect(s.superseded.has("c")).toBe(false);
+  });
+});
+
+describe("panel ownership and reused ids", () => {
+  it("an unrelated card reusing a panel card's id is not superseded by that panel's refresh", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "x" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "a", input: card("Unrelated"), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(3, [{ id: "b", input: card("Rev v2", { panel: "x" }), resultText: "UI_DISPLAYED card_id=b" }]),
+    ]);
+    expect(s.superseded.has("a")).toBe(false);
+    expect(s.cards.get("a")?.title).toBe("Unrelated");
+  });
+});
+
+describe("panel moves retire the old owner", () => {
+  it("a stale card's later refinement does not inherit the panel its lineage left", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("A", { panel: "x" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "c", input: card("C", { panel: "y", replaces: "a" }), resultText: "UI_DISPLAYED card_id=c" }]),
+      assistant(3, [{ id: "b", input: card("B", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(4, [{ id: "n", input: card("New X", { panel: "x" }), resultText: "UI_DISPLAYED card_id=n" }]),
+    ]);
+    expect(s.superseded.has("b")).toBe(false);
+  });
+});
