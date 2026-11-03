@@ -751,7 +751,7 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 	if abs, err := filepath.Abs(dir); err == nil {
 		dir = abs
 	}
-	if rel, err := filepath.Rel(root, dir); err != nil || rel == "." || !filepath.IsLocal(rel) {
+	if !strictlyInside(root, dir) {
 		return nil, nil
 	}
 	runsBase := agentcore.PerRunMCPWorkspaceBase(root)
@@ -766,13 +766,20 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 		// off the config; they are one directory on every real deployment.
 		// If they ever differ the dir was never inside the sandbox's mounts,
 		// so leave it out rather than fail the scoped take.
-		if rel, rerr := filepath.Rel(root, runDir); rerr == nil && filepath.IsLocal(rel) {
+		if strictlyInside(root, runDir) {
 			scope.ReadOnly = append(scope.ReadOnly, runDir)
 		} else {
 			log.Printf("scheduled task %s: MCP run dir %s is outside the workspace root %s; not mounted in the scoped sandbox", task.ID, runDir, root)
 		}
 	}
 	return scope, nil
+}
+
+// strictlyInside reports whether path lies strictly beneath root (lexically,
+// both already absolute): not root itself, not outside it.
+func strictlyInside(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != "." && filepath.IsLocal(rel)
 }
 
 // configureRunWorkspace binds every sandbox and in-process file resolver to
