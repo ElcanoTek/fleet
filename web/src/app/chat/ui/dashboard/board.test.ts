@@ -114,6 +114,41 @@ describe("deriveBoard", () => {
     expect(b.panels.map((p) => p.key)).toEqual(["p:x", "c:c"]);
   });
 
+  it("keys that alternate between panels keep a bounded alias set", () => {
+    const msgs = [assistant(0, [{ id: "c0", input: display("P", { panel: "a" }) }])];
+    for (let i = 1; i <= 60; i++) {
+      msgs.push(assistant(i, [{ id: `c${i}`, input: display("P", { panel: i % 2 ? "b" : "a", replaces: `c${i - 1}` }) }]));
+    }
+    const started = performance.now();
+    const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, removed: ["p:zzz"] });
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(b.panels).toHaveLength(1);
+    expect(b.panels[0]).toMatchObject({ key: "p:a", cardId: "c60", version: 61 });
+  });
+
+  it("per-card choices belong to one occurrence of a reused card id", () => {
+    const reused = [
+      assistant(1, [{ id: "r", input: form("Old form") }]),
+      assistant(2, [{ id: "r", input: form("New form") }]),
+    ];
+    // The pin was made on the first occurrence ("r"): the later card is a
+    // different card and stays in the chat.
+    expect(boardOf(reused, { ...EMPTY_BOARD_PREFS, pinned: ["r"] }).panels).toHaveLength(0);
+    // Pinning the later one uses its own reference.
+    expect(boardOf(reused, { ...EMPTY_BOARD_PREFS, pinned: ["r#1"] }).panels.map((p) => p.key)).toEqual(["c:r#1"]);
+  });
+
+  it("removing a pinned panel a display card refreshed keeps it off the board", () => {
+    const msgs = [
+      assistant(1, [{ id: "f", input: form("Follow up") }]),
+      assistant(2, [{ id: "g", input: display("Follow up (sent)", { replaces: "f" }) }]),
+    ];
+    // Removal keeps the pin (DashboardBoard's onRemove) and adds the slot key.
+    const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, pinned: ["f"], removed: ["c:f"] });
+    expect(b.panels).toHaveLength(0);
+    expect(b.cardSlots.has("g")).toBe(false);
+  });
+
   it("follows the user's order, then age, and their width choice over the heuristic", () => {
     const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, order: ["c:sys"], wide: { "c:sys": true } });
     expect(b.panels.map((p) => p.key)).toEqual(["c:sys", "p:revenue"]);

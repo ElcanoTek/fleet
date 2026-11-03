@@ -10,7 +10,7 @@ import { createContext } from "react";
 export type DashboardTranscriptValue = {
   cardSlots: Map<string, string>;
   focusPanel: (key: string) => void;
-  pinCard: (cardId: string, panelKey?: string) => void;
+  pinCard: (cardId: string, occurrence: number, panelKey?: string) => void;
   /**
    * A request to bring a message into the rail (the HUD's "approvals
    * waiting" light): the transcript is virtualized, so a card far from the

@@ -85,8 +85,12 @@ function HelpPopover({ onClose }: { onClose: () => void }) {
         onClose();
       }
     };
+    // "Outside" means outside the popover AND its trigger (the wrapper they
+    // share): a press on the trigger is its own toggle, and closing here too
+    // would let that click reopen it.
     const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+      const boundary = ref.current?.parentElement ?? ref.current;
+      if (boundary && !boundary.contains(e.target as Node)) onClose();
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("mousedown", onDown);
@@ -547,7 +551,9 @@ export function DashboardBoard({
       ...p,
       removed: [...p.removed.filter((k) => k !== key), key],
       order: p.order.filter((k) => k !== key),
-      pinned: p.pinned.filter((id) => `c:${id}` !== key),
+      // The pin stays: it is what gives a refreshed pinned card's lineage its
+      // slot, and the removal hides that slot. Unpinning would let a
+      // display-only refresh fall back to a slot of its own and reappear.
     }));
   };
   const max = maximized ? panels.find((p) => p.key === maximized) : undefined;

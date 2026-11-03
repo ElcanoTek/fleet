@@ -194,6 +194,12 @@ test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async 
   await page.keyboard.press("d");
   await expect(page.getByTestId("dashboard-hud")).toBeVisible();
 
+  // The help button opens and closes its popover.
+  await page.getByTestId("dashboard-help-button").click();
+  await expect(page.getByTestId("dashboard-help")).toBeVisible();
+  await page.getByTestId("dashboard-help-button").click();
+  await expect(page.getByTestId("dashboard-help")).toHaveCount(0);
+
   const keys = () => page.getByTestId("dashboard-panel").evaluateAll((els) => els.map((e) => e.getAttribute("data-panel-key")));
   expect(await keys()).toEqual(["p:revenue", "p:pipeline", "c:call-health-1"]);
   // Arrow keys on a panel's grip move it.

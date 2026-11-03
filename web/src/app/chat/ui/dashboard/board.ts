@@ -22,7 +22,7 @@ import { isInput, walkInputs, type CardSpec, type Component } from "../genui/mod
 import { isRenderableCardCall, type GenUiState } from "../genui/transcript";
 
 export type BoardPrefs = {
-  /** Card ids the user pinned to the board (forms included). */
+  /** Cards the user pinned to the board (forms included), as cardRef. */
   pinned: string[];
   /** Panel keys the user took off the board; their cards return to the chat. */
   removed: string[];
@@ -69,6 +69,14 @@ export type Board = {
    */
   cardSlots: Map<string, string>;
 };
+
+/**
+ * A card's identity for the user's per-card board choices: its tool-call id,
+ * plus "#<occurrence>" for a later card that reused the id.
+ */
+export function cardRef(cardId: string, occurrence: number): string {
+  return occurrence > 0 ? `${cardId}#${occurrence}` : cardId;
+}
 
 /** A card with inputs or footer buttons can send something. */
 export function isInteractiveSpec(spec: CardSpec): boolean {
@@ -118,8 +126,9 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
   const slotOf = new Map<string, string>();
   const slots = new Map<string, BoardPanel>();
   const firstSeen = new Map<string, number>();
-  // slot key → the keys it had before it moved (see below).
-  const aliases = new Map<string, string[]>();
+  // slot key → the keys it had before it moved (see below). A set, never
+  // the slot's own key: alternating keys must not make it grow.
+  const aliases = new Map<string, Set<string>>();
   let seq = 0;
   for (let idx = 0; idx < messages.length; idx++) {
     const m = messages[idx];
@@ -137,11 +146,16 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       const replacedSlot = spec.replaces ? slotOf.get(spec.replaces) : undefined;
       const lineage =
         replacedSlot !== undefined && slots.get(replacedSlot)?.cardId === spec.replaces ? replacedSlot : undefined;
+      // A provider can reuse a tool-call id: the user's per-card choices
+      // (pin, and the c: slot's removal, order and width) belong to one
+      // occurrence of it, never to an unrelated later card.
+      const ref = cardRef(tc.id, genUi.occurrences.get(tc) ?? 0);
+      const isPinned = pinned.has(ref);
       let key: string | undefined;
       if (spec.panel) key = `p:${spec.panel}`;
-      else if (pinned.has(tc.id)) key = `c:${tc.id}`;
+      else if (isPinned) key = `c:${ref}`;
       else if (lineage) key = lineage;
-      else if (isDisplayOnly(spec)) key = `c:${tc.id}`;
+      else if (isDisplayOnly(spec)) key = `c:${ref}`;
       if (!key) continue;
       let prev = slots.get(key);
       if (lineage && lineage !== key) {
@@ -157,7 +171,10 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
           prev = moved;
           firstSeen.set(key, firstSeen.get(lineage) ?? seq++);
         }
-        aliases.set(key, [...(aliases.get(key) ?? []), lineage, ...(aliases.get(lineage) ?? [])]);
+        const merged = new Set([...(aliases.get(key) ?? []), lineage, ...(aliases.get(lineage) ?? [])]);
+        merged.delete(key);
+        aliases.set(key, merged);
+        aliases.delete(lineage);
         for (const [cid, k] of slotOf) if (k === lineage) slotOf.set(cid, key);
       }
       slotOf.set(tc.id, key);
@@ -173,12 +190,12 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
         messageIndex: idx,
         interactive: isInteractiveSpec(spec),
         wide: false,
-        pinned: pinned.has(tc.id) || (prev?.pinned ?? false),
+        pinned: isPinned || (prev?.pinned ?? false),
       });
     }
   }
   // A slot's earlier keys (after a move) still carry the user's choices.
-  const keysOf = (key: string) => [key, ...(aliases.get(key) ?? [])];
+  const keysOf = (key: string) => [key, ...(aliases.get(key) ?? new Set<string>())];
   const order = new Map(prefs.order.map((k, i) => [k, i]));
   const orderOf = (key: string) => keysOf(key).map((k) => order.get(k)).find((o) => o !== undefined);
   const wideOf = (key: string) => keysOf(key).map((k) => prefs.wide[k]).find((w) => w !== undefined);

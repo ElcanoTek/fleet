@@ -152,7 +152,7 @@ import {
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
 import { deriveGenUiState } from "./genui/transcript";
-import { boardManifest, boardStatus, deriveBoard } from "./dashboard/board";
+import { boardManifest, boardStatus, cardRef, deriveBoard } from "./dashboard/board";
 import { DashboardTranscriptContext, panelDomId, type DashboardTranscriptValue } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
 import {
@@ -3722,15 +3722,16 @@ export function ChatExperience({
         ? {
             cardSlots: board.cardSlots,
             focusPanel: focusDashboardPanel,
-            pinCard: (cardId, panelKey) => {
+            pinCard: (cardId, occurrence, panelKey) => {
+              const ref = cardRef(cardId, occurrence);
               updateBoardPrefs((p) => ({
                 ...p,
-                pinned: p.pinned.includes(cardId) ? p.pinned : [...p.pinned, cardId],
+                pinned: p.pinned.includes(ref) ? p.pinned : [...p.pinned, ref],
                 removed: p.removed.filter(
-                  (k) => k !== `c:${cardId}` && (!panelKey || k !== `p:${panelKey}`),
+                  (k) => k !== `c:${ref}` && (!panelKey || k !== `p:${panelKey}`),
                 ),
               }));
-              focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${cardId}`);
+              focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${ref}`);
             },
             jumpRequest: dashboardJump,
           }

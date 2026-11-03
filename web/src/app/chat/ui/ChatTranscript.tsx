@@ -975,7 +975,7 @@ export function ChatTranscript({
                                             type="button"
                                             data-testid="dashboard-pin-card"
                                             className="mt-1 inline-flex items-center gap-1.5 self-start rounded-full px-2 py-1 text-[0.75rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-                                            onClick={() => dashboard.pinCard(tc.id, spec.panel)}
+                                            onClick={() => dashboard.pinCard(tc.id, genUi.occurrences.get(tc) ?? 0, spec.panel)}
                                           >
                                             <Icon name="pin" className="size-3.5" />
                                             Pin to board
