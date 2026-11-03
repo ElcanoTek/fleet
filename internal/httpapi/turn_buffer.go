@@ -544,6 +544,8 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 //     delivering to the matching user.
 func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
 	switch name {
+	case "conversation":
+		return sanitizeConversationEvent(data, viewerEmail, convOwnerEmail)
 	case "user.message":
 		if viewerEmail == "" || len(data) == 0 {
 			return data, true
@@ -597,6 +599,24 @@ func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwner
 	default:
 		return data, true
 	}
+}
+
+func sanitizeConversationEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 || viewerEmail == "" || convOwnerEmail == "" || strings.EqualFold(viewerEmail, convOwnerEmail) {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	if _, ok := m["auto_approve"]; !ok {
+		return data, true
+	}
+	delete(m, "auto_approve")
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
 }
 
 func sanitizeTerminalTurnEvent(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {

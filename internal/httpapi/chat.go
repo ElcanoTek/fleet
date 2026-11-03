@@ -511,7 +511,6 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 		return nil, unlockFirst, false
 	}
 	if strings.TrimSpace(req.InputID) != "" &&
-		!strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") &&
 		((conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) || strings.HasPrefix(strings.TrimSpace(req.InputID), multiplayerInputKeyPrefix)) {
 		req.InputID = effectiveMultiplayerInputID(user, req.InputID)
 	}
@@ -544,7 +543,7 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	var existing *store.InputQueueRow
 	var err error
 	if strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
-		existing, err = s.store.LookupInputForUser(r.Context(), user, clientID)
+		existing, err = s.lookupUserScopedInput(r.Context(), user, clientID)
 	} else {
 		existing, err = s.store.LookupInput(r.Context(), convID, clientID)
 	}
@@ -566,6 +565,24 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	return true
 }
 
+func (s *Server) lookupUserScopedInput(ctx context.Context, user, clientID string) (*store.InputQueueRow, error) {
+	existing, err := s.store.LookupInputForUser(ctx, user, clientID)
+	if err != nil || existing != nil {
+		return existing, err
+	}
+	ext := externalClientInputID(clientID)
+	if ext != clientID {
+		existing, err = s.store.LookupInputForUser(ctx, user, ext)
+		if err != nil || existing != nil {
+			return existing, err
+		}
+	}
+	if pref := effectiveMultiplayerInputID(user, ext); pref != clientID {
+		return s.store.LookupInputForUser(ctx, user, pref)
+	}
+	return nil, nil
+}
+
 // lockUserScopedKey takes the per-(user, key) lock for a submission that
 // declares user-unique keys and returns its (idempotent) unlock; for any
 // other submission it locks nothing. The lock is in-process: fleet's control
@@ -577,7 +594,7 @@ func (s *Server) lockUserScopedKey(user string, req chatRequest) (unlock func())
 	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
 		return func() {}
 	}
-	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
+	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + externalClientInputID(clientID)))
 }
 
 // recoverFirstSubmission answers a first submission (no conversation yet)
@@ -596,7 +613,7 @@ func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, 
 		return func() {}, false
 	}
 	unlock = s.lockUserScopedKey(user, req)
-	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
+	existing, err := s.lookupUserScopedInput(r.Context(), user, clientID)
 	if err != nil {
 		unlock()
 		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
