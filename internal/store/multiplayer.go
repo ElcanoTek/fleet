@@ -126,30 +126,30 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 				team_visible = CASE
 					WHEN EXISTS (
 						SELECT 1 FROM projects p
+						JOIN teams t ON t.name = p.team_id
 						WHERE p.id = conversations.project_id
-						  AND p.deleted_at IS NULL
-						  AND p.team_shared_with = conversations.team_shared_with
-						  AND p.team_shared_with_id = conversations.team_shared_with_id
+						  AND p.team_id = conversations.team_shared_with
+						  AND t.id = conversations.team_shared_with_id
 					) THEN team_visible
 					ELSE FALSE
 				END,
 				team_shared_with = CASE
 					WHEN EXISTS (
 						SELECT 1 FROM projects p
+						JOIN teams t ON t.name = p.team_id
 						WHERE p.id = conversations.project_id
-						  AND p.deleted_at IS NULL
-						  AND p.team_shared_with = conversations.team_shared_with
-						  AND p.team_shared_with_id = conversations.team_shared_with_id
+						  AND p.team_id = conversations.team_shared_with
+						  AND t.id = conversations.team_shared_with_id
 					) THEN team_shared_with
 					ELSE NULL
 				END,
 				team_shared_with_id = CASE
 					WHEN EXISTS (
 						SELECT 1 FROM projects p
+						JOIN teams t ON t.name = p.team_id
 						WHERE p.id = conversations.project_id
-						  AND p.deleted_at IS NULL
-						  AND p.team_shared_with = conversations.team_shared_with
-						  AND p.team_shared_with_id = conversations.team_shared_with_id
+						  AND p.team_id = conversations.team_shared_with
+						  AND t.id = conversations.team_shared_with_id
 					) THEN team_shared_with_id
 					ELSE NULL
 				END,

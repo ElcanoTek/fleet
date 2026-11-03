@@ -753,16 +753,47 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		writeStopResult(w, res, "the input had already finished")
 		return
 	}
-	if !isOwner && inputID == "" {
-		http.Error(w, "only the conversation owner can stop all turns in this conversation", http.StatusForbidden)
-		return
-	}
 	if turnID != "" {
+		if !isOwner {
+			entry, ok := s.getInflight(id)
+			if !ok || entry.turnID != turnID || entry.steer == nil || !strings.EqualFold(entry.steer.user, user) {
+				http.Error(w, "only the conversation owner or the active turn's sender can stop this turn", http.StatusForbidden)
+				return
+			}
+		}
 		// Nothing stopped (the named turn had ended, or completed as the
 		// cancel landed) is said so, not a bare 204, so a caller that
 		// watched the turn reads its real outcome instead of reporting it
 		// cancelled.
 		writeStopResult(w, stopFromTurn(s.cancelInflightTurn(id, turnID)), "the named turn is not running")
+		return
+	}
+	if !isOwner {
+		// Allow a non-owner multiplayer participant to stop their own active
+		// turn and/or their own queued inputs via bodyless POST /cancel, while
+		// refusing attempts to cancel another user's turn.
+		stoppedOwnTurn := false
+		if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+			_ = s.cancelInflightTurn(id, entry.turnID)
+			stoppedOwnTurn = true
+		}
+		cancelledQueued := 0
+		if scope == "all" {
+			epoch := s.store.AcceptedInputSeq()
+			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+				log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+			} else if n > 0 {
+				cancelledQueued = n
+				s.emitQueueUpdate(qctx, user, id)
+			}
+			qcancel()
+		}
+		if !stoppedOwnTurn && cancelledQueued == 0 {
+			http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if scope == "all" {

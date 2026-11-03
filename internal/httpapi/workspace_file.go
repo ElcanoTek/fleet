@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -92,6 +93,11 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	rel, err := filepath.Rel(wsDir, resolvedAbs)
 	if err != nil || !filepath.IsLocal(rel) {
 		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	if !isOwner && (isPrivateWorkspacePath(filepath.ToSlash(rel)) || isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath)))) {
+		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 	f, err := root.Open(rel)

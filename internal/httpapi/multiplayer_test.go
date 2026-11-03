@@ -229,4 +229,16 @@ func verifyMultiplayerAccessControl(t *testing.T, srv *Server, convID string) {
 	if wBobRestored.Code != http.StatusOK {
 		t.Fatalf("expected 200 for Bob after re-adding, got %d", wBobRestored.Code)
 	}
+
+	// Alice turns off Multiplayer mode on the conversation.
+	wAliceDisable := doAuthedJSONRequest(t, srv, http.MethodPost, "/conversations/"+convID+"/multiplayer", "alice@reklaim.com", map[string]any{
+		"multiplayer": false,
+	})
+	if wAliceDisable.Code != http.StatusOK {
+		t.Fatalf("disable multiplayer status = %d: %s", wAliceDisable.Code, wAliceDisable.Body.String())
+	}
+	wBobAfterDisable := doAuthedJSONRequest(t, srv, http.MethodGet, "/conversations/"+convID, "bob@reklaim.com", nil)
+	if wBobAfterDisable.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for Bob after multiplayer disabled, got %d", wBobAfterDisable.Code)
+	}
 }

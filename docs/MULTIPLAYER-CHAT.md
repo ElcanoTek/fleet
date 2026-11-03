@@ -97,10 +97,6 @@ Operators can enable **Multiplayer team chats by default** via
   `excluded`), and lets the conversation owner toggle `multiplayer` or add/remove
   participant emails. Non-owners are rejected with `403 Forbidden` on all
   mutations.
-- `GET /conversations/{id}/team-link`: returns `status: "multiplayer"` when a
-  shared link points to an active multiplayer conversation the caller can join,
-  routing `/chat/shared/{id}` straight into `/chat?c={id}` instead of the
-  read-only branch view.
 
 ## Shipped scope and deliberate deferrals
 

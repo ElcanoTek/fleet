@@ -666,8 +666,9 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			return
 		}
 		// Running turn: offer the promoted row to the steer boundary too (the
-		// queued->injected flip still gates on the boundary's Acknowledge).
-		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil {
+		// queued->injected flip still gates on the boundary's Acknowledge),
+		// only when the active turn belongs to the same sender.
+		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
 			items, lerr := s.store.ListQueuedInputs(r.Context(), user, convID)
 			if lerr == nil {
 				for _, it := range items {
