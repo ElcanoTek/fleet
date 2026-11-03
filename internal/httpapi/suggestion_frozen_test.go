@@ -22,7 +22,7 @@ func (s *frozenSuggestionStore) Get(context.Context, string, string) (*store.Con
 func (s *frozenSuggestionStore) LatestApprovalByTool(context.Context, string, string) (*store.Approval, error) {
 	return nil, nil
 }
-func (s *frozenSuggestionStore) SupersedePendingApprovals(context.Context, string, string) (int64, error) {
+func (s *frozenSuggestionStore) SupersedePendingApprovals(context.Context, string, string, string) (int64, error) {
 	return 0, nil
 }
 func (s *frozenSuggestionStore) CreateApproval(_ context.Context, conv, user, tool, call, args string, expiry int64, _ store.ApprovalSeat) (*store.Approval, error) {

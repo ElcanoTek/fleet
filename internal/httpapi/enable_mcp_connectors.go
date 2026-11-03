@@ -444,7 +444,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		defer unlock()
 
 		// Load fresh conversation state so we validate against its seat overrides and merge against the latest enabled list.
-		fresh, gerr := s.store.Get(ctx, user, conv.ID)
+		fresh, gerr := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID)
 		if gerr != nil || fresh == nil {
 			if gerr == nil {
 				gerr = fmt.Errorf("conversation not found")
@@ -696,14 +696,23 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	if err != nil {
 		return nil, fmt.Errorf("stage connector approval: %w", err)
 	}
-	if superseded > 0 && buf != nil {
-		buf.Emit("tool.approval_superseded", map[string]any{
-			"tool":  tools.EnableMCPConnectorsToolName,
-			"count": superseded,
-		})
+	if superseded > 0 {
+		if turnStager != nil {
+			turnStager.emitUserScoped("tool.approval_superseded", map[string]any{
+				"tool":  tools.EnableMCPConnectorsToolName,
+				"count": superseded,
+			})
+		} else if buf != nil {
+			buf.Emit("tool.approval_superseded", map[string]any{
+				"tool":  tools.EnableMCPConnectorsToolName,
+				"count": superseded,
+			})
+		}
 	}
 
-	if buf != nil {
+	if turnStager != nil {
+		turnStager.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
+	} else if buf != nil {
 		buf.Emit("tool.approval_required", approvalRequiredEvent(approval, approval.ArgsJSON, conv.ID))
 	}
 	if turnStager != nil {
@@ -747,7 +756,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 
 	if s.cfg != nil && s.cfg.MockMode {
-		if conv, err := s.store.Get(ctx, user, convID); err == nil && conv != nil {
+		if conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID); err == nil && conv != nil {
 			merged := append([]string(nil), conv.OptionalMCPServersEnabled...)
 			seen := make(map[string]bool, len(merged))
 			for _, m := range merged {
@@ -762,13 +771,16 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 				}
 			}
 			sort.Strings(merged)
-			_ = s.store.SetOptionalMCPServers(ctx, user, convID, merged)
+			_ = s.store.SetOptionalMCPServers(ctx, convOwnerEmail(conv, user), convID, merged)
 		}
 		return fmt.Sprintf("Enabled optional MCP connector(s) for this conversation: %s. Their tools are now active and mounted in your roster — proceed with the user's request.", strings.Join(promptSafeSlice(args.Connectors), ", ")), nil
 	}
 
-	conv, err := s.store.Get(ctx, user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID)
 	if err != nil || conv == nil {
+		if err == nil {
+			err = fmt.Errorf("conversation not found")
+		}
 		return "", fmt.Errorf("load conversation: %w", err)
 	}
 
@@ -792,7 +804,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 	}
 	sort.Strings(merged)
 
-	if err := s.store.SetOptionalMCPServers(ctx, user, convID, merged); err != nil {
+	if err := s.store.SetOptionalMCPServers(ctx, convOwnerEmail(conv, user), convID, merged); err != nil {
 		return "", fmt.Errorf("persist enabled connectors: %w", err)
 	}
 	return fmt.Sprintf(

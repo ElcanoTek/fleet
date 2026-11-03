@@ -264,7 +264,7 @@ type chatStore interface {
 	// check on ClaimApproval is what makes the deny authoritative.
 	ListExpiredApprovals(ctx context.Context, now int64) ([]store.Approval, error)
 	LatestApprovalByTool(ctx context.Context, convID, toolName string) (*store.Approval, error)
-	SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error)
+	SupersedePendingApprovals(ctx context.Context, userEmail, convID, toolName string) (int64, error)
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): arm a staged
 	// card of an opted-in tool, and claim the settled armed cards of a
 	// conversation into one resume queue row (or a recorded skip), atomically.

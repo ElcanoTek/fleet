@@ -971,6 +971,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if err != nil {
 		return out, fmt.Errorf("marshal optional mcp servers: %w", err)
 	}
+	if _, err := s.getOwnedOrMultiplayer(ctx, req.UserEmail, req.ConversationID); err != nil {
+		return out, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
@@ -979,8 +982,8 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 
 	var owner string
 	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		req.ConversationID, req.UserEmail,
+		`SELECT user_email FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		req.ConversationID,
 	).Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, ErrConversationNotFound
@@ -998,8 +1001,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		  WHERE conversation_id = $2
 		    AND tool_name = $3
+		    AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		    AND status = 'pending'`,
-		now, req.ConversationID, req.ToolName,
+		now, req.ConversationID, req.ToolName, strings.TrimSpace(req.UserEmail),
 	)
 	if err != nil {
 		return out, err
@@ -1009,7 +1013,7 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
 		  WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, now, req.ConversationID, req.UserEmail,
+		payload, now, req.ConversationID, owner,
 	); err != nil {
 		return out, err
 	}
@@ -1091,10 +1095,14 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		if len(priorIDs) > 0 {
 			firstID = priorIDs[0]
 		}
+		resumeUser := strings.TrimSpace(req.UserEmail)
+		if resumeUser == "" {
+			resumeUser = owner
+		}
 		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 			ID:             uuid.NewString(),
 			ConversationID: req.ConversationID,
-			UserEmail:      owner,
+			UserEmail:      resumeUser,
 			ClientInputID:  "approval-resume:" + firstID,
 			Message:        ApprovalResumeInputText(out.ResumeClaimed),
 			Attachments:    "[]",
@@ -1228,6 +1236,9 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 	expiresAt int64,
 	buildArgs func(supersededArgsJSON []string) string,
 ) (*Approval, int64, error) {
+	if _, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID); err != nil {
+		return nil, 0, err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, 0, err
@@ -1236,8 +1247,8 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 
 	var owner string
 	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		convID, userEmail,
+		`SELECT user_email FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
+		convID,
 	).Scan(&owner)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, 0, ErrConversationNotFound
@@ -1255,9 +1266,10 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		  WHERE conversation_id = $2
 		    AND tool_name = $3
+		    AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		    AND status = 'pending'
 		  RETURNING COALESCE(args_json, '')`,
-		now, convID, toolName,
+		now, convID, toolName, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, 0, err
@@ -3102,9 +3114,13 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil
 	}
+	conv, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID)
+	if err != nil {
+		return false, err
+	}
 	res, err = tx.ExecContext(ctx,
 		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		model, now, convID, userEmail,
+		model, now, convID, conv.UserEmail,
 	)
 	if err != nil {
 		return false, err
@@ -3255,7 +3271,7 @@ func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, ca
 // stacked cards and the user has to dismiss each one manually.
 // Returns the number of rows updated so the caller can decide
 // whether to log or inject a history entry.
-func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error) {
+func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID, toolName string) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals
 		   SET status = 'rejected',
@@ -3267,8 +3283,9 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName 
 		       resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		 WHERE conversation_id = $2
 		   AND tool_name = $3
+		   AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		   AND status = 'pending'`,
-		time.Now().Unix(), convID, toolName,
+		time.Now().Unix(), convID, toolName, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return 0, err

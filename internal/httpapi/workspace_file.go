@@ -329,12 +329,12 @@ func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user str
 	for _, dirName := range privateWorkspaceDirs {
 		wsSub := filepath.Join(wsDir, dirName)
 		if err := movePrivateDirIfPresent(wsSub, filepath.Join(ownerStash, dirName)); err != nil {
-			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			_ = rollbackOwnerStash(wsDir, stashRoot)
 			unlock()
 			return fmt.Errorf("stash owner %s: %w", dirName, err)
 		}
 		if _, statErr := os.Lstat(wsSub); !os.IsNotExist(statErr) { //nolint:gosec // server-derived workspace path
-			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, "")
+			_ = rollbackOwnerStash(wsDir, stashRoot)
 			unlock()
 			return fmt.Errorf("owner %s remained in workspace after stashing", dirName)
 		}
@@ -402,6 +402,27 @@ func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail strin
 	return nil
 }
 
+func rollbackOwnerStash(wsDir, stashRoot string) error {
+	ownerStash := filepath.Join(stashRoot, "owner")
+	for _, dirName := range privateWorkspaceDirs {
+		stashSub := filepath.Join(ownerStash, dirName)
+		wsSub := filepath.Join(wsDir, dirName)
+		if _, err := os.Lstat(stashSub); err != nil {
+			continue
+		}
+		if _, err := os.Lstat(wsSub); !os.IsNotExist(err) { //nolint:gosec // server-derived workspace path
+			continue
+		}
+		if err := movePrivateDirIfPresent(stashSub, wsSub); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(filepath.Join(stashRoot, "active-participant")); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
 func movePrivateDirIfPresent(src, dst string) error {
 	info, err := os.Lstat(src) //nolint:gosec // server-derived workspace/stash paths
 	if err != nil {
@@ -422,7 +443,14 @@ func movePrivateDirIfPresent(src, dst string) error {
 	if err := os.Rename(src, dst); err == nil { //nolint:gosec // server-derived workspace/stash paths
 		return nil
 	}
-	if err := copyDirRecursive(src, dst); err != nil {
+	tmpDst := dst + ".tmp"
+	_ = os.RemoveAll(tmpDst) //nolint:gosec // server-derived staging path
+	if err := copyDirRecursive(src, tmpDst); err != nil {
+		_ = os.RemoveAll(tmpDst) //nolint:gosec // clean up partial copy without touching dst or src
+		return err
+	}
+	if err := os.Rename(tmpDst, dst); err != nil { //nolint:gosec // atomic swap on destination filesystem
+		_ = os.RemoveAll(tmpDst) //nolint:gosec // server-derived staging path
 		return err
 	}
 	return os.RemoveAll(src) //nolint:gosec // server-derived source

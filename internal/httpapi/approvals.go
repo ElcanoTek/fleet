@@ -500,7 +500,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// clears all pending cards for the tool on live clients), so pending
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	if toolName != tools.ScheduleTaskToolName {
-		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
+		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
 			log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
 		} else if n > 0 {
 			// Tell the UI to mark the old card as resolved. The client
@@ -772,10 +772,10 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 
 	// Supersede any older pending cards for this same tool so the UI
 	// stays clean if a rare race writes two in quick succession.
-	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
+	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
 		log.Printf("supersede suggestions (conv=%s): %v", a.conversationID, err)
 	} else if n > 0 {
-		a.sink.Emit("tool.approval_superseded", map[string]any{
+		a.emitUserScoped("tool.approval_superseded", map[string]any{
 			"tool":  tools.SuggestAdvancedModelToolName,
 			"count": n,
 		})

@@ -100,7 +100,7 @@ type stageStore struct {
 	created *store.Approval
 }
 
-func (s *stageStore) SupersedePendingApprovals(context.Context, string, string) (int64, error) {
+func (s *stageStore) SupersedePendingApprovals(context.Context, string, string, string) (int64, error) {
 	return 0, nil
 }
 

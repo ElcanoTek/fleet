@@ -338,7 +338,7 @@ func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
 		t.Fatalf("an unarmed card resumed: %+v", res)
 	}
 	old := stageResume(t, s, conv.ID, "mcp_deals_create_deal", true)
-	if _, err := s.SupersedePendingApprovals(ctx, conv.ID, "mcp_deals_create_deal"); err != nil {
+	if _, err := s.SupersedePendingApprovals(ctx, "", conv.ID, "mcp_deals_create_deal"); err != nil {
 		t.Fatal(err)
 	}
 	if got := resumeState(t, s, old.ID); got != ApprovalResumeSuperseded {

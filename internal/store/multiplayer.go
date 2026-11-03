@@ -295,6 +295,22 @@ func (s *Store) mutateConversationMultiplayer(
 	return updated, nil
 }
 
+// getOwnedOrMultiplayer returns convID if userEmail owns it or is an authorized
+// multiplayer participant, or ErrConversationNotFound otherwise.
+func (s *Store) getOwnedOrMultiplayer(ctx context.Context, userEmail, convID string) (*Conversation, error) {
+	if conv, err := s.Get(ctx, userEmail, convID); err != nil {
+		return nil, err
+	} else if conv != nil {
+		return conv, nil
+	}
+	if conv, err := s.GetMultiplayerConversation(ctx, userEmail, convID); err != nil {
+		return nil, err
+	} else if conv != nil {
+		return conv, nil
+	}
+	return nil, ErrConversationNotFound
+}
+
 // GetMultiplayerConversation returns the conversation when convID has
 // multiplayer = TRUE (and is not deleted, archived, or lockdown) AND
 // callerEmail is allowed to participate in it. Returns (nil, nil) otherwise.
