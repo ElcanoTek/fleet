@@ -318,7 +318,7 @@ export function SummaryBanner({
   collapsedRangeCount: number;
   summaryExpanded: boolean;
   onToggleExpand: () => void;
-  onResummarize: () => void;
+  onResummarize?: () => void;
   isSummarizing: boolean;
 }) {
   const meta = message.summaryMeta;
@@ -340,15 +340,17 @@ export function SummaryBanner({
               {summaryExpanded ? `Collapse earlier ${collapsedRangeCount} turn${collapsedRangeCount === 1 ? "" : "s"}` : `Show earlier ${collapsedRangeCount} turn${collapsedRangeCount === 1 ? "" : "s"}`}
             </button>
           ) : null}
-          <button
-            type="button"
-            className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
-            onClick={onResummarize}
-            disabled={isSummarizing}
-            title="Compact again against the current scroll. Replace semantics: this banner's text is swapped, not chained."
-          >
-            {isSummarizing ? "Compacting…" : "Compact again"}
-          </button>
+          {onResummarize ? (
+            <button
+              type="button"
+              className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
+              onClick={onResummarize}
+              disabled={isSummarizing}
+              title="Compact again against the current scroll. Replace semantics: this banner's text is swapped, not chained."
+            >
+              {isSummarizing ? "Compacting…" : "Compact again"}
+            </button>
+          ) : null}
         </span>
       </div>
       <div className="whitespace-pre-wrap text-[0.86rem] leading-[1.55] text-[var(--color-text-primary)] sm:text-[0.92rem]">

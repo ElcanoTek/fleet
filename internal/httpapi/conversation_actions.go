@@ -212,7 +212,6 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.Labels = nil
 		sanitized.ShareToken = ""
 		sanitized.ParentConversationID = ""
-		sanitized.MCPAccounts = nil
 		sanitized.AutoApprove = false
 		conv = &sanitized
 	}

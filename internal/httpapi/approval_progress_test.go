@@ -337,6 +337,10 @@ func (r resumeSkipStore) ClaimApprovalResume(context.Context, store.ApprovalResu
 	}, nil
 }
 
+func (r resumeSkipStore) HasArmedApprovals(context.Context, string) (bool, error) {
+	return false, nil
+}
+
 // A resume blocked by the hourly cap (or a full queue) tells the owner with a
 // high-urgency push: the task now waits for them. A deleted conversation does not.
 func TestDecideApprovalResume_PushesWhenTheContinueIsSkipped(t *testing.T) {

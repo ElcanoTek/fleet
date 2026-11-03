@@ -7228,7 +7228,7 @@ export function ChatExperience({
                   schedules={activeSchedules}
                   isAutoApprove={isAutoApprove}
                   isStreaming={isStreaming}
-                  onToggleAutoApprove={toggleAutoApprove}
+                  onToggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
                   onRunNow={(id) => void handleRunPatrolNow(id)}
                   onTogglePause={(id, status) =>
                     void handleTogglePausePatrol(id, status)
@@ -7258,7 +7258,8 @@ export function ChatExperience({
                 submitPrompt={submitPrompt}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
-                toggleAutoApprove={toggleAutoApprove}
+                toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
+                isConversationOwner={isActiveConversationOwner}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}
                 isDraggingOver={isDraggingOver}

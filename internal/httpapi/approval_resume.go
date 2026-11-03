@@ -185,6 +185,11 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
 		log.Printf("audit: approval resume skipped for conversation %q (%s; %d in the last hour, cap %d) after %q",
 			convID, res.Skipped, res.RecentResumes, maxPerHour, approvalResumeIDs(res.Claimed))
+		if res.Skipped != store.ApprovalResumeSkipConversationGone {
+			if armed, err := s.store.HasArmedApprovals(ctx, convID); err == nil && armed {
+				s.scheduleApprovalResume(convID, approvalResumeDebounce, 0)
+			}
+		}
 		return
 	}
 	metrics.RecordApprovalResume("queued")

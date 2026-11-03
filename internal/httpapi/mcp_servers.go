@@ -646,11 +646,38 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		writeConversationMutationError(w, err)
 		return
 	}
-	if isOwner {
-		if err := s.store.SetConversationMCPAccounts(r.Context(), ownerEmail, id, accounts); err != nil {
-			writeConversationMutationError(w, err)
-			return
+	mergedAccounts := make(map[string]string)
+	if ownerConv, gerr := s.store.Get(r.Context(), ownerEmail, id); gerr == nil && ownerConv != nil {
+		if isOwner {
+			for k, v := range ownerConv.RawMCPAccounts {
+				if strings.HasPrefix(k, "mp-user:") {
+					mergedAccounts[k] = v
+				}
+			}
+		} else {
+			prefix := store.MultiplayerMCPAccountPrefix(user)
+			for k, v := range ownerConv.RawMCPAccounts {
+				if !strings.HasPrefix(k, prefix) {
+					mergedAccounts[k] = v
+				}
+			}
 		}
+	}
+	if isOwner {
+		for k, v := range accounts {
+			if !strings.HasPrefix(k, "mp-user:") {
+				mergedAccounts[k] = v
+			}
+		}
+	} else {
+		prefix := store.MultiplayerMCPAccountPrefix(user)
+		for k, v := range accounts {
+			mergedAccounts[prefix+k] = v
+		}
+	}
+	if err := s.store.SetConversationMCPAccounts(r.Context(), ownerEmail, id, mergedAccounts); err != nil {
+		writeConversationMutationError(w, err)
+		return
 	}
 	writeJSON(w, map[string]any{"enabled_optional": clean, "accounts": accounts})
 }

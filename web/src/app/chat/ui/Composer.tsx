@@ -155,6 +155,7 @@ export type ComposerProps = {
   // tools in this chat without parking on an approval card.
   isAutoApprove?: boolean;
   toggleAutoApprove?: () => void;
+  isConversationOwner?: boolean;
 
   // Turn / upload gating
   isStreaming: boolean;
@@ -281,6 +282,7 @@ export function Composer({
   sealed,
   isAutoApprove = false,
   toggleAutoApprove,
+  isConversationOwner = true,
   isStreaming,
   isUploadingAttachments,
   isDraggingOver,
@@ -1398,7 +1400,7 @@ export function Composer({
                 ) : null}
               </div>
             ) : null}
-            {activeConversationId && messages.length >= 2 ? (
+            {activeConversationId && messages.length >= 2 && isConversationOwner !== false ? (
               <div className="relative inline-flex">
                 {/* One-shot toast above the ring. Absolute so the */}
                 {/* toolbar layout doesn't reflow as it appears /  */}

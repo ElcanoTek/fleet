@@ -10,6 +10,55 @@ import (
 	"time"
 )
 
+const multiplayerMCPAccountPrefix = "mp-user:"
+
+// MultiplayerMCPAccountPrefix returns the key prefix used to store a non-owner
+// multiplayer participant's per-connector seat overrides inside
+// conversations.mcp_accounts without colliding with the owner's or another
+// participant's choices.
+func MultiplayerMCPAccountPrefix(email string) string {
+	return multiplayerMCPAccountPrefix + normalizeEmail(email) + ":"
+}
+
+func filterOwnerMCPAccounts(raw map[string]string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out map[string]string
+	for k, v := range raw {
+		if strings.HasPrefix(k, multiplayerMCPAccountPrefix) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(raw))
+		}
+		out[k] = v
+	}
+	return out
+}
+
+func filterParticipantMCPAccounts(raw map[string]string, callerEmail string) map[string]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	prefix := MultiplayerMCPAccountPrefix(callerEmail)
+	var out map[string]string
+	for k, v := range raw {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		server := strings.TrimPrefix(k, prefix)
+		if server == "" {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[server] = v
+	}
+	return out
+}
+
 func scanEmailJSONArray(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || raw == "[]" || raw == "null" {
@@ -396,13 +445,14 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 		// Never leak owner-private fields to a non-owner participant in HTTP
 		// JSON responses, while retaining an unexported (`json:"-"`) copy of
 		// the enabled optional connector names so participant turns can mount
-		// connectors they also have access to.
+		// connectors they also have access to, and scoping MCPAccounts to this
+		// participant's own persisted seat overrides.
 		c.ParticipantOptionalMCPServers = c.OptionalMCPServersEnabled
 		c.OptionalMCPServersEnabled = nil
 		c.Labels = nil
 		c.ShareToken = ""
 		c.ParentConversationID = ""
-		c.MCPAccounts = nil
+		c.MCPAccounts = filterParticipantMCPAccounts(c.RawMCPAccounts, callerEmail)
 		c.AutoApprove = false
 	}
 	return &c, nil

@@ -657,7 +657,7 @@ export function ChatTranscript({
                                   collapsedRangeCount={summaryIndex}
                                   summaryExpanded={summaryExpanded}
                                   onToggleExpand={() => setSummaryExpanded((v) => !v)}
-                                  onResummarize={() => setConfirmSummarize(true)}
+                                  onResummarize={isConversationOwner ? () => setConfirmSummarize(true) : undefined}
                                   isSummarizing={isSummarizing}
                                 />
                               );

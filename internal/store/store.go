@@ -117,6 +117,9 @@ type Conversation struct {
 	// connectors; the is_default hosted seat for remote ones). Stored as
 	// JSONB; nil/empty = no overrides.
 	MCPAccounts map[string]string `json:"mcp_accounts,omitempty"`
+	// RawMCPAccounts holds the unredacted conversations.mcp_accounts map
+	// including any "mp-user:<email>:<server>" participant seat overrides.
+	RawMCPAccounts map[string]string `json:"-"`
 	// ProjectID scopes this conversation to a project/space (#509). Set at
 	// creation or re-filed later via SetConversationProject; empty = no
 	// project. The turn path uses it to inject the project's standing
@@ -584,30 +587,47 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, err
 	}
 	if parent == nil {
-		// Not the caller's own — the one other readable case is a chat a
-		// teammate shared with the team. The gate only: the copy below reads
-		// the messages itself (narrowed to what the gate lets a teammate
-		// read), so loading the whole transcript here would be a second full
-		// read of the owner's history for nothing.
+		// Not the caller's own — the readable cases are a chat a teammate
+		// shared with the team or a multiplayer conversation the caller is
+		// allowed to participate in (including an explicit external invitee).
+		// The gate only: the copy below reads the messages itself (narrowed to
+		// what the gate lets a non-owner read), so loading the whole transcript
+		// here would be a second full read of the owner's history for nothing.
 		shared, terr := s.GetTeamVisibleConversationMeta(ctx, userEmail, parentConvID)
 		if terr != nil {
 			return nil, terr
 		}
-		if shared == nil {
-			return nil, sql.ErrNoRows
-		}
-		parent = &Conversation{
-			ID:        shared.ID,
-			UserEmail: shared.OwnerEmail,
-			Title:     shared.Title,
-			Persona:   shared.Persona,
-			Model:     shared.Model,
-			ProjectID: shared.ProjectID,
-			// Lockdown rides along (see the redaction note below): the parent
-			// was created --network=none under a restricted model allowlist,
-			// and a fork that quietly drops that would turn "branch to build
-			// on it" into a way to lift the owner's isolation.
-			Lockdown: shared.Lockdown,
+		if shared != nil {
+			parent = &Conversation{
+				ID:        shared.ID,
+				UserEmail: shared.OwnerEmail,
+				Title:     shared.Title,
+				Persona:   shared.Persona,
+				Model:     shared.Model,
+				ProjectID: shared.ProjectID,
+				// Lockdown rides along (see the redaction note below): the parent
+				// was created --network=none under a restricted model allowlist,
+				// and a fork that quietly drops that would turn "branch to build
+				// on it" into a way to lift the owner's isolation.
+				Lockdown: shared.Lockdown,
+			}
+		} else {
+			mp, merr := s.GetMultiplayerConversation(ctx, userEmail, parentConvID)
+			if merr != nil {
+				return nil, merr
+			}
+			if mp == nil {
+				return nil, sql.ErrNoRows
+			}
+			parent = &Conversation{
+				ID:        mp.ID,
+				UserEmail: mp.UserEmail,
+				Title:     mp.Title,
+				Persona:   mp.Persona,
+				Model:     mp.Model,
+				ProjectID: mp.ProjectID,
+				Lockdown:  mp.Lockdown,
+			}
 		}
 		// The fork copies the PARENT'S messages, so it must copy no more than
 		// the brancher was allowed to READ. GetTeamVisibleConversation hands a
@@ -2050,7 +2070,8 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
-	c.MCPAccounts = scanMCPAccounts(accountsRaw)
+	c.RawMCPAccounts = scanMCPAccounts(accountsRaw)
+	c.MCPAccounts = filterOwnerMCPAccounts(c.RawMCPAccounts)
 	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
 	c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
