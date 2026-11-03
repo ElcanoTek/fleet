@@ -85,11 +85,11 @@ func TestMaybeRegisterSessionPolicy_SkipsNoSessionTool(t *testing.T) {
 	noSessionPolicy(t)
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_deals_create_deal", approvalRequest{Approved: true, Scope: "session"})
-	if _, ok := s.sessionApprovals.Match("c1", "mcp_deals_create_deal", `{}`); ok {
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_deals_create_deal", `{}`); ok {
 		t.Fatal("a session policy was registered for a no-session tool")
 	}
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_pages_deploy_page", approvalRequest{Approved: true, Scope: "session"})
-	if _, ok := s.sessionApprovals.Match("c1", "mcp_pages_deploy_page", `{}`); !ok {
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_pages_deploy_page", `{}`); !ok {
 		t.Fatal("apply-all must keep working for a tool without the rule")
 	}
 }
@@ -100,7 +100,7 @@ type stageStore struct {
 	created *store.Approval
 }
 
-func (s *stageStore) SupersedePendingApprovals(context.Context, string, string) (int64, error) {
+func (s *stageStore) SupersedePendingApprovals(context.Context, string, string, string) (int64, error) {
 	return 0, nil
 }
 

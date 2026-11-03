@@ -45,28 +45,34 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 
 	// session approve → policy present, mode approve.
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_t", approvalRequest{Approved: true, Scope: "session"})
-	if p, ok := s.sessionApprovals.Match("c1", "mcp_t", `{}`); !ok || p.Mode != "approve" {
+	if p, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_t", `{}`); !ok || p.Mode != "approve" {
 		t.Errorf("session approve should register an approve policy: ok=%v mode=%q", ok, p.Mode)
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "other@e.com", "mcp_t", `{}`); ok {
+		t.Error("session approve policy must not leak to another multiplayer participant")
 	}
 
 	// session deny → mode deny.
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_d", approvalRequest{Approved: false, Scope: "session"})
-	if p, ok := s.sessionApprovals.Match("c1", "mcp_d", `{}`); !ok || p.Mode != "deny" {
+	if p, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_d", `{}`); !ok || p.Mode != "deny" {
 		t.Errorf("session deny should register a deny policy: ok=%v mode=%q", ok, p.Mode)
+	}
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "other@e.com", "mcp_d", `{}`); ok {
+		t.Error("session deny policy must not leak to another multiplayer participant")
 	}
 
 	// "once" (and empty) → nothing registered.
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_o", approvalRequest{Approved: true, Scope: "once"})
-	if _, ok := s.sessionApprovals.Match("c1", "mcp_o", `{}`); ok {
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_o", `{}`); ok {
 		t.Error(`scope "once" must not register a session policy`)
 	}
 
 	// pattern scope carries the glob.
 	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_p", approvalRequest{Approved: true, Scope: "pattern", Pattern: "to=*@ok.com"})
-	if _, ok := s.sessionApprovals.Match("c1", "mcp_p", `{"to":"x@ok.com"}`); !ok {
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_p", `{"to":"x@ok.com"}`); !ok {
 		t.Error("pattern policy should match a conforming call")
 	}
-	if _, ok := s.sessionApprovals.Match("c1", "mcp_p", `{"to":"x@no.com"}`); ok {
+	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_p", `{"to":"x@no.com"}`); ok {
 		t.Error("pattern policy should not match a non-conforming call")
 	}
 }

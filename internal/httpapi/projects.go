@@ -235,17 +235,26 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 			}
 			patch.TeamID = &team
 		}
+		var affectedConvIDs []string
+		if patch.TeamID != nil {
+			affectedConvIDs = s.projectConvIDsBestEffort(r.Context(), id)
+		}
 		updated, err := s.store.UpdateProject(r.Context(), user, id, patch)
 		if err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}
+		if patch.TeamID != nil {
+			s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
+		}
 		writeJSON(w, updated)
 	case http.MethodDelete:
+		affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), id)
 		if err := s.store.DeleteProject(r.Context(), user, id); err != nil {
 			writeMemoryStoreError(w, err)
 			return
 		}
+		s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -409,6 +418,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 	if admin {
 		actingOwner = ""
 	}
+	affectedConvIDs := s.projectConvIDsBestEffort(r.Context(), projectID)
 	updated, err := s.store.TransferProjectOwnership(r.Context(), projectID, req.ToEmail, actingOwner)
 	if err != nil {
 		if errors.Is(err, store.ErrNotProjectOwner) {
@@ -431,6 +441,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		http.Error(w, "transfer failed", http.StatusInternalServerError)
 		return
 	}
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied project id cannot forge a log line; the two emails are an authenticated caller and a normalized DB value.
 	log.Printf("projects: %q transferred project %q to %q", user, projectID, updated.OwnerEmail)
 	writeJSON(w, updated)
@@ -1310,14 +1321,25 @@ func projectMemoryContents(memories []store.Memory) []string {
 // projectTurnContext resolves the turn-time project injection (#509): the
 // standing instructions plus the shared memories as tagged bullets. Empty for
 // non-project conversations; best-effort (a load failure degrades to no
-// project context rather than failing the turn).
-func (s *Server) projectTurnContext(ctx context.Context, conv *store.Conversation) (string, []string) {
+// project context rather than failing the turn). For a non-owner multiplayer
+// participant, only injects project context when the project is accessible to
+// the participant.
+func (s *Server) projectTurnContext(ctx context.Context, user string, conv *store.Conversation) (string, []string) {
 	if conv.ProjectID == "" {
 		return "", nil
 	}
 	proj, err := s.store.GetProject(ctx, conv.ProjectID)
 	if err != nil || proj == nil {
 		return "", nil
+	}
+	if conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user) {
+		callerTeam := ""
+		if u, uerr := s.store.GetUser(ctx, user); uerr == nil && u != nil {
+			callerTeam = u.TeamID
+		}
+		if !proj.MemberOf(user, callerTeam) {
+			return "", nil
+		}
 	}
 	var bullets []string
 	if pm, merr := s.store.ListProjectMemories(ctx, conv.ProjectID); merr == nil {
@@ -1374,5 +1396,6 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 			conv.OptionalMCPServersEnabled = defaults
 		}
 	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	return conv, true
 }

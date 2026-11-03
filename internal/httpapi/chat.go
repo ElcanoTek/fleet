@@ -218,7 +218,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		return false
 	}
 	if reqModel != conv.Model {
-		if err := s.store.SetModel(r.Context(), user, conv.ID, reqModel); err != nil {
+		if err := s.store.SetModel(r.Context(), convOwnerEmail(conv, user), conv.ID, reqModel); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
@@ -227,18 +227,27 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 	return true
 }
 
+func convOwnerEmail(conv *store.Conversation, fallback string) string {
+	if conv != nil && conv.UserEmail != "" {
+		return conv.UserEmail
+	}
+	return fallback
+}
+
 func (s *Server) applyTurnConversationFlags(w http.ResponseWriter, r *http.Request, user string, conv *store.Conversation, autoApprove *bool) bool {
+	ownerEmail := convOwnerEmail(conv, user)
+	isOwner := strings.EqualFold(ownerEmail, user)
 	// Sending a message to an archived conversation un-archives it (#282) —
 	// mirrors how replying to an archived email brings it back to the inbox.
 	if conv.ArchivedAt != nil {
-		if err := s.store.SetArchived(r.Context(), user, conv.ID, false); err != nil {
+		if err := s.store.SetArchived(r.Context(), ownerEmail, conv.ID, false); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
 		conv.ArchivedAt = nil
 	}
-	if autoApprove != nil && *autoApprove != conv.AutoApprove {
-		if err := s.store.SetAutoApprove(r.Context(), user, conv.ID, *autoApprove); err != nil {
+	if autoApprove != nil && *autoApprove != conv.AutoApprove && isOwner {
+		if err := s.store.SetAutoApprove(r.Context(), ownerEmail, conv.ID, *autoApprove); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return false
 		}
@@ -325,7 +334,7 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 	if next == "" {
 		return nil
 	}
-	if err := s.store.SetModel(ctx, user, conv.ID, next); err != nil {
+	if err := s.store.SetModel(ctx, convOwnerEmail(conv, user), conv.ID, next); err != nil {
 		return err
 	}
 	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
@@ -374,40 +383,9 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	defer func() { unlockFirst() }()
 	reqModel := strings.TrimSpace(req.Model)
 	if req.ConversationID != "" {
-		conv, err = s.store.Get(r.Context(), user, req.ConversationID)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.Error(w, "conversation not found", http.StatusNotFound)
-			return
-		}
-		// A user-unique key is claimable in any conversation, and the
-		// database's uniqueness is per conversation: its lock is held from
-		// the lookup below until the key is claimed (or queued), so a
-		// concurrent send of the same key into another conversation finds
-		// this one's row instead of claiming the key a second time.
-		unlockFirst = s.lockUserScopedKey(user, req)
-		// A resend of an accepted input is answered before anything below
-		// touches the conversation: a replay must not re-apply the original
-		// request's model or un-archive the conversation.
-		if s.replayAcceptedInput(w, r, user, conv.ID, req) {
-			return
-		}
-		// The web echoes the conversation's stored model on every turn. An echo
-		// is "no opinion" — it can never be an override — so it must not trip
-		// the lockdown guard when that stored model has since been delisted.
-		// The migration itself happens where the turn LAUNCHES (startTurn, the
-		// path shared by direct and queue-drained turns), whose `conversation`
-		// event then tells the client the new model. Doing it here would also
-		// run for a busy-path steer, which launches no turn and so would leave
-		// the browser holding a slug the server had already replaced. A
-		// genuinely different disallowed slug still 400s below.
-		if reqModel == conv.Model {
-			reqModel = ""
-		}
-		if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
+		var ok bool
+		conv, unlockFirst, ok = s.resolveExistingChatConversation(w, r, user, &req, reqModel)
+		if !ok {
 			return
 		}
 	} else {
@@ -457,6 +435,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
 			return
 		}
+		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	}
 
 	// Busy path (#785): a running turn means this submission QUEUES — never an
@@ -519,6 +498,35 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.Request, user string, req *chatRequest, reqModel string) (conv *store.Conversation, unlockFirst func(), ok bool) {
+	unlockFirst = func() {}
+	var err error
+	conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, req.ConversationID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, unlockFirst, false
+	}
+	if conv == nil {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return nil, unlockFirst, false
+	}
+	if strings.TrimSpace(req.InputID) != "" &&
+		((conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) || strings.HasPrefix(strings.TrimSpace(req.InputID), multiplayerInputKeyPrefix)) {
+		req.InputID = effectiveMultiplayerInputID(user, req.InputID)
+	}
+	unlockFirst = s.lockUserScopedKey(user, *req)
+	if s.replayAcceptedInput(w, r, user, conv.ID, *req) {
+		return nil, unlockFirst, false
+	}
+	if reqModel == conv.Model {
+		reqModel = ""
+	}
+	if !s.applyTurnModelOverride(w, r, user, conv, reqModel) || !s.applyTurnConversationFlags(w, r, user, conv, req.AutoApprove) {
+		return nil, unlockFirst, false
+	}
+	return conv, unlockFirst, true
+}
+
 // replayAcceptedInput answers a resend of an input_id that was already
 // ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
 // so it never runs a duplicate turn — even when the retry lands after the
@@ -535,7 +543,7 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	var existing *store.InputQueueRow
 	var err error
 	if strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
-		existing, err = s.store.LookupInputForUser(r.Context(), user, clientID)
+		existing, err = s.lookupUserScopedInput(r.Context(), user, clientID)
 	} else {
 		existing, err = s.store.LookupInput(r.Context(), convID, clientID)
 	}
@@ -549,8 +557,30 @@ func (s *Server) replayAcceptedInput(w http.ResponseWriter, r *http.Request, use
 	if existing == nil {
 		return false
 	}
+	if existing.UserEmail != "" && !strings.EqualFold(existing.UserEmail, user) {
+		http.Error(w, "input_id belongs to another user in this conversation", http.StatusConflict)
+		return true
+	}
 	s.writeQueueAck(r.Context(), w, http.StatusOK, existing.ConversationID, *existing)
 	return true
+}
+
+func (s *Server) lookupUserScopedInput(ctx context.Context, user, clientID string) (*store.InputQueueRow, error) {
+	existing, err := s.store.LookupInputForUser(ctx, user, clientID)
+	if err != nil || existing != nil {
+		return existing, err
+	}
+	ext := externalClientInputID(clientID)
+	if ext != clientID {
+		existing, err = s.store.LookupInputForUser(ctx, user, ext)
+		if err != nil || existing != nil {
+			return existing, err
+		}
+	}
+	if pref := effectiveMultiplayerInputID(user, ext); pref != clientID {
+		return s.store.LookupInputForUser(ctx, user, pref)
+	}
+	return nil, nil
 }
 
 // lockUserScopedKey takes the per-(user, key) lock for a submission that
@@ -564,7 +594,7 @@ func (s *Server) lockUserScopedKey(user string, req chatRequest) (unlock func())
 	if clientID == "" || !strings.EqualFold(strings.TrimSpace(req.InputIDScope), "user") {
 		return func() {}
 	}
-	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + clientID))
+	return sync.OnceFunc(s.inputKeyLocks.lock(user + "\x00" + externalClientInputID(clientID)))
 }
 
 // recoverFirstSubmission answers a first submission (no conversation yet)
@@ -583,7 +613,7 @@ func (s *Server) recoverFirstSubmission(w http.ResponseWriter, r *http.Request, 
 		return func() {}, false
 	}
 	unlock = s.lockUserScopedKey(user, req)
-	existing, err := s.store.LookupInputForUser(r.Context(), user, clientID)
+	existing, err := s.lookupUserScopedInput(r.Context(), user, clientID)
 	if err != nil {
 		unlock()
 		http.Error(w, "input lookup failed: "+err.Error(), http.StatusInternalServerError)
@@ -969,11 +999,12 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusInternalServerError, err)
 		return true
 	}
+	history = redactHistoryForSender(history, user, conv.UserEmail)
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
 	// "[project] ") alongside personal memory.
-	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, conv)
+	projectInstructions, projectMemoryBullets := s.projectTurnContext(reqCtx, user, conv)
 	memories, err := s.store.ListMemories(reqCtx, user)
 	if err != nil {
 		fail(http.StatusInternalServerError, err)
@@ -996,8 +1027,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		fail(http.StatusServiceUnavailable, errors.New("server is shutting down"))
 		return true
 	}
-	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	steer := newSteerMailbox(s.store, user, conv.ID, "", nil)
+	if !s.revalidateMultiplayerTurnAccess(reqCtx, user, conv, steer, queued, releaseSlot, fail) {
+		return true
+	}
+	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
 	if swept && queued == nil {
 		// A Stop scope=all began while this direct claim's turn was being
@@ -1072,10 +1106,19 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 
+	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		s.maybeDrainQueue(conv.ID)
+		fail(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+		return true
+	}
+
 	// Track the goroutine on activeTurns BEFORE attaching the persister or
 	// emitting metadata events so graceful shutdown (DrainTurns) and external
 	// update drains never seal a half-initialized turn as completed.
 	if !s.admitActiveTurnOrAbort(conv.ID, buf, turnToken, turnCancel, fail) {
+		s.restoreTurnPrivateWorkspace(conv, user)
 		return true
 	}
 
@@ -1147,7 +1190,8 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// "Enabled" is judged against the conversation's PERSISTED opt-in list —
 		// the set the turn runs with — not only the creation-time request seed,
 		// which later turns never carry.
-		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+		injected = s.applyConnectorRecommendations(injected, req.Message, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), req.EnabledOptional)
+		injected = appendMultiplayerSenderBlock(injected, conv, user)
 	}
 
 	// Lockdown model migration, at the last moment before the client can be
@@ -1196,10 +1240,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Not the user's words when fleet started the turn: the same marker the
 	// persisted entry carries (TextContent.Kind), so a reattach renders the
 	// notice row the reload path renders.
-	userEvent := withInputKind(map[string]any{"text": req.Message}, "kind", req.inputKind)
-	if injected != "" {
-		userEvent["injected_context"] = injected
-	}
+	userEvent := buildUserMessageEvent(req.Message, req.inputKind, injected, conv, userWords, user)
 	buf.Emit("user.message", userEvent)
 	if queueRowID != "" {
 		// Same reason as the metadata events above: seed the queue snapshot so
@@ -1279,7 +1320,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// capabilities (#194) filter which event types it receives; absent header =
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
-		if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
+		if err := buf.AttachForViewer(r.Context(), 0, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 	}
@@ -1294,6 +1335,25 @@ func withInputKind(frame map[string]any, key, kind string) map[string]any {
 		frame[key] = kind
 	}
 	return frame
+}
+
+func appendMultiplayerSenderBlock(injected string, conv *store.Conversation, user string) string {
+	if conv != nil && conv.Multiplayer && user != "" {
+		return injected + "\n\n[Multiplayer chat: message sent by " + user + "]"
+	}
+	return injected
+}
+
+func buildUserMessageEvent(message, inputKind, injected string, conv *store.Conversation, userWords bool, user string) map[string]any {
+	_ = userWords
+	userEvent := withInputKind(map[string]any{"text": message}, "kind", inputKind)
+	if injected != "" {
+		userEvent["injected_context"] = injected
+	}
+	if conv != nil && (conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user))) && user != "" {
+		userEvent["sender_email"] = user
+	}
+	return userEvent
 }
 
 // seedConversationMCP persists a brand-new conversation's pre-chat Tools
@@ -1386,6 +1446,7 @@ func (s *Server) runTurnAsync(
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.
 	defer s.finishTurn(conv.ID, turnToken)
+	defer s.restoreTurnPrivateWorkspace(conv, user)
 	defer turnCancel()
 	// This goroutine is intentionally detached from the HTTP request, so an
 	// unrecovered panic here would crash the whole single-host process. Recover
@@ -1411,7 +1472,7 @@ func (s *Server) runTurnAsync(
 	// Availability layer (unified connector UX): drop opted-in servers the
 	// user has since disabled on the connections page, and carry their default
 	// credential-account seats into the turn.
-	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled, conv.MCPAccounts)
+	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), conv.MCPAccounts)
 
 	// User-authored skills (docs/SKILLS.md phase 2): sync the caller's active
 	// skills into this conversation's workspace and hand the roster to the
@@ -1439,13 +1500,28 @@ func (s *Server) runTurnAsync(
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
-	// A "user:<name>" persona runs as its bundle base plus the owner's layer.
-	turnPersona, personaLayer := s.resolveTurnPersona(turnCtx, conv)
+	// A "user:<name>" persona runs as its bundle base plus the owner's layer
+	// (only when the turn sender is the owner; non-owner participants run on
+	// the caller's own persona layer or the bundle base without exposing the
+	// owner's private user persona instructions).
+	var turnPersona string
+	var personaLayer *agent.UserPersonaLayer
+	if strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == "" {
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, conv)
+	} else {
+		callerConv := *conv
+		callerConv.UserEmail = user
+		turnPersona, personaLayer = s.resolveTurnPersona(turnCtx, &callerConv)
+	}
 
 	turnStager := s.newTurnStager(turnCtx, conv, user, buf)
 	turnStager.inputKind = inputKind
 	availableOptional := s.availableOptionalConnectorsForUser(turnCtx, user, conv.MCPAccounts)
 	turnCtx = tools.WithEnableMCPConnectorsHandler(turnCtx, s.newEnableMCPConnectorsHandler(conv, user, buf, turnStager, availableOptional))
+	senderEmail := ""
+	if conv.Multiplayer || (conv.UserEmail != "" && !strings.EqualFold(conv.UserEmail, user)) {
+		senderEmail = user
+	}
 	res, err := s.agent.RunTurn(turnCtx, TurnInput{
 		UserMessage:                 userInput,
 		InjectedContext:             injectedContext,
@@ -1480,6 +1556,7 @@ func (s *Server) runTurnAsync(
 		CommitTerminal: commits.commitTerminal,
 		SteerSource:    steerSourceOrNil(steer),
 		InputKind:      inputKind,
+		SenderEmail:    senderEmail,
 		MCPUser:        mcpUser,
 	}, buf)
 	if err != nil {
@@ -1498,12 +1575,12 @@ func (s *Server) runTurnAsync(
 			// turn.error here would read as a failure of the turn's own —
 			// and so would an "error" log line, which is what operators grep.
 			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
-			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled"})
+			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}
 		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
 		if !errors.Is(err, ErrModelSelectionRequired) {
-			buf.Emit("turn.error", map[string]any{"message": err.Error()})
+			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})
 		}
 		return
 	}
@@ -1585,7 +1662,7 @@ func (s *Server) runTurnAsync(
 			// UpdateTitle is locked-guarded (#302): if the user manually renamed
 			// the conversation mid-turn it returns ErrTitleLocked — a benign skip,
 			// not an error, and we must NOT emit the overwrite to the sidebar.
-			switch err := s.store.UpdateTitle(persistCtx, user, conv.ID, title); {
+			switch err := s.store.UpdateTitle(persistCtx, convOwnerEmail(conv, user), conv.ID, title); {
 			case err == nil:
 				buf.Emit("conversation.title_updated", map[string]any{
 					"id":    conv.ID,
@@ -1661,6 +1738,7 @@ func (s *Server) sweepRetention(ctx context.Context) {
 		log.Printf("post-turn sweep error: %v", err)
 	} else if expired > 0 || evicted > 0 {
 		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
+		s.sweepOrphanPrivateWorkspaceStashes(ctx)
 	}
 	if purged, err := s.store.PurgeTerminalInputs(ctx,
 		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
@@ -1693,9 +1771,12 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		// construction so an edit governs the next staged card, no restart.
 		globalTimeoutSeconds: s.cfg.LiveApprovalTimeoutSeconds(),
 		convTimeoutSeconds:   conv.ApprovalTimeoutSeconds,
-		convAutoApprove:      conv.AutoApprove,
+		convAutoApprove:      strings.EqualFold(convOwnerEmail(conv, user), user) && conv.AutoApprove,
 		liveAutoApprove: func(c context.Context) bool {
-			latest, err := s.store.Get(c, user, conv.ID)
+			if !strings.EqualFold(convOwnerEmail(conv, user), user) {
+				return false
+			}
+			latest, err := s.store.Get(c, convOwnerEmail(conv, user), conv.ID)
 			if err != nil || latest == nil {
 				return false
 			}
@@ -1709,4 +1790,37 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		modelAllowed:      s.cfg.LockdownAllows,
 		lockdownOnly:      s.cfg.LockdownOnly,
 	}
+}
+
+func (s *Server) revalidateMultiplayerTurnAccess(
+	ctx context.Context,
+	user string,
+	conv *store.Conversation,
+	steer *steerMailbox,
+	queued *queuedLaunch,
+	releaseSlot func(),
+	fail func(int, error),
+) bool {
+	if conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+		return true
+	}
+	steer.nonOwner = true
+	steer.mpEpoch = s.currentMultiplayerEpoch(conv.ID)
+	rechecked, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID)
+	if err != nil {
+		fail(http.StatusInternalServerError, err)
+		return false
+	}
+	if rechecked == nil {
+		if queued != nil {
+			if releaseSlot != nil {
+				releaseSlot()
+			}
+			s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateCancelled)
+			return false
+		}
+		fail(http.StatusNotFound, errors.New("conversation not found"))
+		return false
+	}
+	return true
 }

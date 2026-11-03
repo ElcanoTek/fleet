@@ -420,7 +420,7 @@ func (a *approvalStager) RecordActionResult(toolName, toolCallID, resultText str
 	if card == nil {
 		return
 	}
-	a.sink.Emit("tool.action_record_card", map[string]any{
+	a.emitUserScoped("tool.action_record_card", map[string]any{
 		"approval_id": approvalID,
 		"tool":        toolName,
 		"result_card": card,

@@ -128,6 +128,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	// Users tab, and gating their own row differently would just push them
 	// there for no gain.
 	admin := s.isAdmin(caller) || roleFromCtx(r.Context()) == store.RoleAdmin
+	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	u, err := s.store.SetOwnTeam(r.Context(), caller, *body.TeamID, admin)
 	if err != nil {
 		if errors.Is(err, store.ErrTeamExists) {
@@ -137,6 +138,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 		s.writeUserLookupError(w, err)
 		return
 	}
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	// %q escapes CR/LF, so the request-supplied team cannot forge a log line.
 	log.Printf("teams: %q set own team to %q", u.Email, u.TeamID)
 	writeJSON(w, s.meResponseFor(u))

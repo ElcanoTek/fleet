@@ -54,12 +54,13 @@ type Server struct {
 	// approvalStops holds the stop signal of each running call of a tool in
 	// critical_tool_stop, by approval id (approval_stop.go): armed at the
 	// claim, dropped when the call's outcome is recorded.
-	approvalStops approvalStopRegistry
-	cfg           *config.Config
-	agent         turnEngine
-	store         chatStore
-	sharedToken   string
-	rate          *ratelimit.Limiter
+	approvalStops      approvalStopRegistry
+	executingApprovals executingApprovalRegistry
+	cfg                *config.Config
+	agent              turnEngine
+	store              chatStore
+	sharedToken        string
+	rate               *ratelimit.Limiter
 	// concurrent caps simultaneous in-flight turns per user. nil disables it
 	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
 	concurrent *ratelimit.ConcurrencyLimiter
@@ -115,8 +116,14 @@ type Server struct {
 	// Each entry carries a monotonic token so a turn whose handler is
 	// cleaning up doesn't accidentally clobber a fresher entry that
 	// another submit installed in the meantime.
-	inflightMu sync.Mutex
-	inflight   map[string]inflightEntry
+	inflightMu                  sync.Mutex
+	inflight                    map[string]inflightEntry
+	activeParticipantWorkspaces map[string]string
+	activeWorkspaceUnlocks      map[string]func()
+	purgedParticipantWorkspaces map[string]bool
+	multiplayerEpochs           map[string]uint64
+	workspaceLocks              keyedLocks
+	workspaceSwapLocks          keyedLocks
 	// sharedFilesMu serializes shared-file-library staging (upload/rename/
 	// delete handlers) against the maintenance reconciler, so a Sync pass can
 	// never observe — and "repair" — a mutation's intermediate on-disk state.
@@ -791,8 +798,18 @@ func (s *Server) registerTurn(convID string, cancel context.CancelFunc) (*turnBu
 // against does not hold the row back: that sweep's set never contained it.
 // swept reports a refusal so the caller cancels the row instead of
 // un-claiming it.
+func (s *Server) currentMultiplayerEpoch(convID string) uint64 {
+	s.inflightMu.Lock()
+	defer s.inflightMu.Unlock()
+	return s.multiplayerEpochs[convID]
+}
+
 func (s *Server) registerTurnGated(convID string, cancel context.CancelFunc, steer *steerMailbox, queued *queuedLaunch, submissionID string) (buf *turnBuffer, turnID string, token uint64, ok, swept bool) {
 	s.inflightMu.Lock()
+	if steer != nil && steer.nonOwner && s.multiplayerEpochs[convID] != steer.mpEpoch {
+		s.inflightMu.Unlock()
+		return nil, "", 0, false, true
+	}
 	if queued != nil && s.stopSweepGens[convID] != queued.sweepGen {
 		s.inflightMu.Unlock()
 		return nil, "", 0, false, true

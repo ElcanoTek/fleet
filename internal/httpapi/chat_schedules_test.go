@@ -97,7 +97,7 @@ func (s *scheduleFakeStore) ListChatSchedules(_ context.Context, userEmail, conv
 	defer s.mu.Unlock()
 	var out []store.ChatSchedule
 	for _, sc := range s.schedules {
-		if sc.ConversationID != convID || sc.UserEmail != userEmail {
+		if sc.ConversationID != convID || (userEmail != "" && sc.UserEmail != userEmail) {
 			continue
 		}
 		if !includeTerminal && sc.Status != store.ChatScheduleStatusActive && sc.Status != store.ChatScheduleStatusPaused {

@@ -341,7 +341,7 @@ func (a *approvalStager) RecordAction(toolName, toolCallID, rawInput, undoHint s
 		a.recordIDs[toolCallID] = approval.ID
 		a.recordMu.Unlock()
 	}
-	a.sink.Emit("tool.action_recorded", map[string]any{
+	a.emitUserScoped("tool.action_recorded", map[string]any{
 		"approval_id": approval.ID,
 		"tool":        toolName,
 		"summary":     summarizeApprovalInput(toolName, rawInput, a.conversationID),
@@ -362,6 +362,13 @@ func (a *approvalStager) isAutoApprove() bool {
 	return a.convAutoApprove
 }
 
+func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
+	if a.userEmail != "" {
+		payload["user_email"] = a.userEmail
+	}
+	a.sink.Emit(name, payload)
+}
+
 func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, error) {
 	// A task prompt the create/edit seam will refuse is refused BEFORE a card
 	// exists (#1601): the model learns the error now, and nobody is asked to
@@ -376,7 +383,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// the decision. Runs before staging so no approval row or card is created.
 	// NEVER enable this in production — it bypasses the human-in-the-loop gate.
 	if a.autoApproveInTest && !handlerOnlyApproval(toolName) {
-		a.sink.Emit("tool.auto_resolved", map[string]any{
+		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "auto_approve_in_test",
@@ -394,8 +401,8 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// a session policy, even one registered before that rule existed or by a
 	// path that skipped the POST refusal: every call stages its own card.
 	if a.sessionRegistry != nil && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		if p, ok := a.sessionRegistry.Match(a.conversationID, toolName, rawInput); ok {
-			a.sink.Emit("tool.auto_resolved", map[string]any{
+		if p, ok := a.sessionRegistry.MatchForUser(a.conversationID, a.userEmail, toolName, rawInput); ok {
+			a.emitUserScoped("tool.auto_resolved", map[string]any{
 				"tool":    toolName,
 				"mode":    p.Mode,
 				"pattern": p.Pattern,
@@ -413,7 +420,7 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.
 	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
-		a.sink.Emit("tool.auto_resolved", map[string]any{
+		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",
 			"via":  "conversation_auto_approve",
@@ -493,13 +500,13 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// clears all pending cards for the tool on live clients), so pending
 	// schedule_task cards are never auto-superseded by subsequent calls.
 	if toolName != tools.ScheduleTaskToolName {
-		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, toolName); err != nil {
+		if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, toolName); err != nil {
 			log.Printf("supersede approvals (tool=%s conv=%s): %v", toolName, a.conversationID, err)
 		} else if n > 0 {
 			// Tell the UI to mark the old card as resolved. The client
 			// already handles rejected approvals — this just nudges any
 			// open stream to refresh its approval state.
-			a.sink.Emit("tool.approval_superseded", map[string]any{
+			a.emitUserScoped("tool.approval_superseded", map[string]any{
 				"tool":  toolName,
 				"count": n,
 			})
@@ -538,14 +545,14 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	if cardFallback != "" {
 		// Observable without reading server logs: the card a declared
 		// describer should have produced fell back to the generic one.
-		a.sink.Emit("tool.approval_card_fallback", map[string]any{
+		a.emitUserScoped("tool.approval_card_fallback", map[string]any{
 			"approval_id": approval.ID,
 			"tool":        toolName,
 			"reason":      cardFallback,
 		})
 	}
 
-	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
+	a.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, rawInput, a.conversationID))
 	a.firePushNotification(toolName)
 	return approval.ID, nil
 }
@@ -642,6 +649,9 @@ func (m *memoryProposer) propose(p store.MemoryProposalParams, supersededContent
 		"proposal_id": memory.ID,
 		"content":     memory.Content,
 		"kind":        memory.Kind,
+	}
+	if m.userEmail != "" {
+		payload["user_email"] = m.userEmail
 	}
 	if memory.Supersedes != "" {
 		payload["supersedes_id"] = memory.Supersedes
@@ -765,10 +775,10 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 
 	// Supersede any older pending cards for this same tool so the UI
 	// stays clean if a rare race writes two in quick succession.
-	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
+	if n, err := a.store.SupersedePendingApprovals(a.ctx, a.userEmail, a.conversationID, tools.SuggestAdvancedModelToolName); err != nil {
 		log.Printf("supersede suggestions (conv=%s): %v", a.conversationID, err)
 	} else if n > 0 {
-		a.sink.Emit("tool.approval_superseded", map[string]any{
+		a.emitUserScoped("tool.approval_superseded", map[string]any{
 			"tool":  tools.SuggestAdvancedModelToolName,
 			"count": n,
 		})
@@ -786,7 +796,7 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		return "", "", err
 	}
 
-	a.sink.Emit("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
+	a.emitUserScoped("tool.approval_required", approvalRequiredEvent(approval, string(rawInput), a.conversationID))
 
 	msg := fmt.Sprintf(
 		"SUGGESTION_DISPLAYED: the user is now seeing your model-switch suggestion (suggestion_id=%s). The card has three actions — Switch & retry (default), Just switch, Dismiss — and the user picks. Do NOT call suggest_advanced_model again. Briefly summarize what you've done so far and stop iterating; the user's choice will arrive on the next turn.",
@@ -1757,7 +1767,7 @@ func (s *Server) maybeRegisterSessionPolicy(convID, user, toolName string, req a
 	case scope == "pattern":
 		pattern = strings.TrimSpace(req.Pattern)
 	}
-	s.sessionApprovals.Register(convID, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
+	s.sessionApprovals.RegisterForUser(convID, user, toolName, SessionApprovalPolicy{Mode: mode, Pattern: pattern, CreatedAt: time.Now()})
 	//nolint:gosec // G706: every interpolated value is rendered with %q, which escapes any CR/LF, so a request-supplied scope/pattern cannot forge a log line.
 	log.Printf("audit: %q pre-%s %q for conversation %q (scope=%q pattern=%q)", user, mode, toolName, convID, scope, pattern)
 }
@@ -1894,7 +1904,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		}
 		if claimed {
 			appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-				resolutionCallID(approval), resultText)
+				resolutionCallID(approval), resultText, approval.UserEmail)
 			s.noteApprovalSettled(convID, approval)
 			return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected", "result_text": resultText}, approval))
 		}
@@ -1921,7 +1931,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 		// original tool_call id so the chip in the UI updates instead
 		// of orphaning a second result row keyed off the approval id.
 		appendToolResultToHistory(execCtx, s.store, convID, approval.ToolName,
-			resolutionCallID(approval), historyMsg)
+			resolutionCallID(approval), historyMsg, approval.UserEmail)
 		s.maybeRegisterSessionPolicy(convID, user, approval.ToolName, req)
 		s.noteApprovalSettled(convID, approval)
 		return approvalBody(s.resumeReplyFlag(execCtx, map[string]any{"status": "rejected"}, approval))
@@ -1955,8 +1965,10 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	if stoppable {
 		s.armApprovalStop(approvalID)
 	}
+	s.executingApprovals.register(execCtx, convID, user, approvalID)
 	claimed, err := s.claimApproved(ctx, user, convID, approval, narrowing)
 	if err != nil || !claimed {
+		s.executingApprovals.unregister(approvalID)
 		if stoppable {
 			s.disarmApprovalStop(approvalID)
 		}
@@ -1987,6 +1999,7 @@ func (s *Server) decideApproval(ctx context.Context, done <-chan struct{}, user,
 	go func() {
 		defer s.approvalRuns.leave()
 		defer s.disarmApprovalStop(approvalID)
+		defer s.executingApprovals.unregister(approvalID)
 		defer safe.Recover("httpapi.approval_execute", func(any) {
 			// A panic before the outcome write leaves the sentinel standing:
 			// the action may have run, so the honest answer is "unknown",
@@ -2129,13 +2142,15 @@ func (s *Server) attachApprovedOptionalMCPServers(execCtx context.Context, reply
 	if approval.ToolName != tools.EnableMCPConnectorsToolName || toolErr != nil || isErr {
 		return
 	}
-	if conv, gerr := s.store.Get(execCtx, user, convID); gerr == nil && conv != nil {
-		reply["enabled_optional"] = conv.OptionalMCPServersEnabled
+	if conv, gerr := s.getOwnedOrMultiplayerConversation(execCtx, user, convID); gerr == nil && conv != nil {
+		reply["enabled_optional"] = s.effectiveOptionalMCPServersForCaller(execCtx, user, conv)
 	}
 }
 
 func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, approvalID string, approval *store.Approval, req approvalRequest) map[string]any {
-	text, toolErr := s.runClaimedApprovalAction(execCtx, user, convID, approval, req)
+	actionCtx := s.executingApprovals.register(execCtx, convID, user, approvalID)
+	text, toolErr := s.runClaimedApprovalAction(actionCtx, user, convID, approval, req)
+	s.executingApprovals.unregister(approvalID)
 	// The call has returned, so nothing listens to its stop signal any more:
 	// close the stop window now (approval_stop.go). A Stop accepted before
 	// this point is recorded AND in the stop line below; one after it is
@@ -2233,6 +2248,95 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 // RecoverStrandedApprovals records it as outcome unknown.
 func (s *Server) DrainApprovalRuns(ctx context.Context) bool {
 	return s.approvalRuns.drain(ctx)
+}
+
+type executingApprovalEntry struct {
+	convID     string
+	userEmail  string
+	approvalID string
+	ctx        context.Context
+	cancel     context.CancelFunc
+}
+
+type executingApprovalRegistry struct {
+	mu sync.Mutex
+	m  map[string]executingApprovalEntry
+}
+
+func (r *executingApprovalRegistry) register(parent context.Context, convID, userEmail, approvalID string) context.Context {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m == nil {
+		r.m = make(map[string]executingApprovalEntry)
+	}
+	if existing, ok := r.m[approvalID]; ok && existing.ctx != nil {
+		return existing.ctx
+	}
+	ctx, cancel := context.WithCancel(parent)
+	r.m[approvalID] = executingApprovalEntry{
+		convID:     strings.TrimSpace(convID),
+		userEmail:  strings.ToLower(strings.TrimSpace(userEmail)),
+		approvalID: approvalID,
+		ctx:        ctx,
+		cancel:     cancel,
+	}
+	return ctx
+}
+
+func (r *executingApprovalRegistry) unregister(approvalID string) {
+	r.mu.Lock()
+	entry, ok := r.m[approvalID]
+	if ok {
+		delete(r.m, approvalID)
+	}
+	r.mu.Unlock()
+	if ok && entry.cancel != nil {
+		entry.cancel()
+	}
+}
+
+func (r *executingApprovalRegistry) convIDs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []string
+	for _, e := range r.m {
+		if e.convID != "" {
+			out = append(out, e.convID)
+		}
+	}
+	return out
+}
+
+func (r *executingApprovalRegistry) cancelUnauthorized(convID, ownerEmail string, allowed map[string]bool, stops *approvalStopRegistry) []string {
+	ownerKey := strings.ToLower(strings.TrimSpace(ownerEmail))
+	r.mu.Lock()
+	var toCancel []executingApprovalEntry
+	for _, e := range r.m {
+		if convID != "" && e.convID != convID {
+			continue
+		}
+		if e.userEmail == "" || e.userEmail == ownerKey || allowed[e.userEmail] {
+			continue
+		}
+		toCancel = append(toCancel, e)
+	}
+	r.mu.Unlock()
+	senders := make([]string, 0, len(toCancel))
+	for _, e := range toCancel {
+		senders = append(senders, e.userEmail)
+		if stops != nil {
+			stops.mu.Lock()
+			h := stops.m[e.approvalID]
+			stops.mu.Unlock()
+			if h != nil {
+				h.stop()
+			}
+		}
+		if e.cancel != nil {
+			e.cancel()
+		}
+	}
+	return senders
 }
 
 // approvalRunGate admits and counts approved executions for the shutdown
@@ -2415,8 +2519,8 @@ func (s *Server) resolvedApprovalDecision(ctx context.Context, user, approvalID 
 		state["model"] = conv.Model
 	}
 	if latest.ToolName == tools.EnableMCPConnectorsToolName && latest.Status == "approved" {
-		if conv, err := s.store.Get(ctx, user, latest.ConversationID); err == nil && conv != nil {
-			state["enabled_optional"] = conv.OptionalMCPServersEnabled
+		if conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, latest.ConversationID); err == nil && conv != nil {
+			state["enabled_optional"] = s.effectiveOptionalMCPServersForCaller(ctx, user, conv)
 		}
 	}
 	return approvalBody(state)
@@ -2459,7 +2563,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 		}
 		metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "dismissed")
 		appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-			"User dismissed the model-switch suggestion. Continue working with the current model.")
+			"User dismissed the model-switch suggestion. Continue working with the current model.", approval.UserEmail)
 		// Not a resume tool, but a deferred resume may be waiting on it.
 		s.noteApprovalSettled(approval.ConversationID, approval)
 		writeJSON(w, map[string]any{
@@ -2500,7 +2604,7 @@ func (s *Server) handleSuggestAdvancedApproval(execCtx context.Context, w http.R
 	}
 	metrics.RecordModelEscalation(suggestionSource(approval.ArgsJSON), "accepted_"+action)
 	appendToolResultToHistory(execCtx, s.store, approval.ConversationID, approval.ToolName, resolutionCallID(approval),
-		resultText)
+		resultText, approval.UserEmail)
 	s.noteApprovalSettled(approval.ConversationID, approval)
 
 	writeJSON(w, map[string]any{
@@ -2600,7 +2704,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 			continue
 		}
 		appendToolResultToHistory(ctx, s.store, a.ConversationID, a.ToolName,
-			resolutionCallID(&a), resultText)
+			resolutionCallID(&a), resultText, a.UserEmail)
 		// A timed-out card is settled too: an opted-in one resumes (the model
 		// learns the action was not taken), and any other may release a
 		// resume that was waiting on it.
@@ -2991,7 +3095,41 @@ func (s *Server) takeApprovalSandbox(ctx context.Context, approval *store.Approv
 	if pool == nil {
 		return nil, func() {}, fmt.Errorf("approval handler: no sandbox pool wired (chat-server boot misconfigured?)")
 	}
-	return takeStagedBashSandbox(ctx, pool, lockdown)
+	var isolatedConv *store.Conversation
+	if s.store != nil && approval != nil && approval.ConversationID != "" {
+		conv, cerr := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
+		if cerr != nil {
+			return nil, func() {}, fmt.Errorf("resolve conversation for approval workspace: %w", cerr)
+		}
+		if conv == nil {
+			return nil, func() {}, fmt.Errorf("resolve conversation for approval workspace: conversation %s not found", approval.ConversationID)
+		}
+		if err := s.activateTurnPrivateWorkspace(conv, approval.UserEmail); err != nil {
+			return nil, func() {}, fmt.Errorf("isolate participant workspace for approval: %w", err)
+		}
+		s.materializeUserSkills(ctx, approval.UserEmail, approval.ConversationID)
+		isolatedConv = conv
+	}
+	sb, cleanup, err := takeStagedBashSandbox(ctx, pool, lockdown)
+	if err != nil {
+		if isolatedConv != nil {
+			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
+		}
+		return nil, func() {}, err
+	}
+	if isolatedConv != nil {
+		origCleanup := cleanup
+		cleanup = func() {
+			if sb != nil {
+				sb.Close()
+			}
+			if origCleanup != nil {
+				origCleanup()
+			}
+			s.restoreTurnPrivateWorkspace(isolatedConv, approval.UserEmail)
+		}
+	}
+	return sb, cleanup, nil
 }
 
 // stagedBashLockdown resolves whether an approved bash command must run
@@ -3005,7 +3143,7 @@ func (s *Server) stagedBashLockdown(ctx context.Context, approval *store.Approva
 	if s.cfg.LockdownOnly {
 		return true, nil
 	}
-	conv, err := s.store.Get(ctx, approval.UserEmail, approval.ConversationID)
+	conv, err := s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
 	if err != nil {
 		return false, fmt.Errorf("resolve conversation lockdown state: %w", err)
 	}
@@ -3265,17 +3403,21 @@ func (s *Server) orchestratorTaskLink() string {
 
 // appendToolResultToHistory writes a synthetic tool_result row so the
 // conversation transcript reflects the outcome of the (async) approval.
-func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string) {
+func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolName, callID, text string, senderEmail ...string) {
 	entry := agent.HistoryEntry{
 		Role: "tool",
 		Type: "tool_result",
 	}
-	payload, _ := json.Marshal(map[string]any{
+	payloadMap := map[string]any{
 		"id":     callID,
 		"name":   toolName,
 		"text":   text,
 		"is_err": false,
-	})
+	}
+	if len(senderEmail) > 0 && strings.TrimSpace(senderEmail[0]) != "" {
+		payloadMap["sender_email"] = strings.TrimSpace(senderEmail[0])
+	}
+	payload, _ := json.Marshal(payloadMap)
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)

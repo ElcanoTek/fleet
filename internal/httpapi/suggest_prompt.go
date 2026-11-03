@@ -29,8 +29,7 @@ import (
 func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, convID, user string) {
 	ctx := r.Context()
 
-	// Ownership: Get is user-scoped, so a foreign/unknown id yields nil → 404.
-	conv, err := s.store.Get(ctx, user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -45,6 +44,7 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	history = redactHistoryForSender(history, user, conv.UserEmail)
 	transcript := workflowTranscriptFromHistory(history)
 	if strings.TrimSpace(transcript) == "" {
 		http.Error(w, "conversation has no content to save as a prompt", http.StatusUnprocessableEntity)
@@ -55,7 +55,7 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		Transcript: transcript,
 		Title:      conv.Title,
 		Persona:    conv.Persona,
-		Connectors: conv.OptionalMCPServersEnabled,
+		Connectors: s.effectiveOptionalMCPServersForCaller(ctx, user, conv),
 	})
 	if err != nil || draft == nil {
 		http.Error(w, "could not synthesize a prompt from this conversation; try again", http.StatusBadGateway)

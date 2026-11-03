@@ -156,6 +156,7 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, "refusing to delete your own account", http.StatusBadRequest)
 		return
 	}
+	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	if err := s.store.DeleteUser(r.Context(), email); err != nil {
 		if errors.Is(err, store.ErrUserNotFound) {
 			http.Error(w, "user not found", http.StatusNotFound)
@@ -187,6 +188,9 @@ func (s *Server) handleAdminUserDelete(w http.ResponseWriter, r *http.Request, e
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.sessionApprovals.ForgetUser(email)
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
+	s.purgeParticipantPrivateStashes(email)
 	s.removeOpsAdmin(r, email)
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
 	log.Printf("admin users: deleted %q by %q", email, actor)
@@ -303,6 +307,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON body", http.StatusBadRequest)
 		return
 	}
+	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	usersN, projectsN, err := s.store.RenameTeam(r.Context(), body.From, body.To)
 	if err != nil {
 		// Only the store's typed input failures (blank/equal names, an
@@ -315,6 +320,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.reconcileAllMultiplayerAccess(r.Context(), affectedConvIDs...)
 	log.Printf("admin teams: renamed %q -> %q (%d users, %d projects) by %q",
 		body.From, body.To, usersN, projectsN, userFromCtx(r.Context()))
 	writeJSON(w, map[string]any{"users_updated": usersN, "projects_updated": projectsN})

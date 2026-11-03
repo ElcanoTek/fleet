@@ -117,6 +117,9 @@ type Conversation struct {
 	// connectors; the is_default hosted seat for remote ones). Stored as
 	// JSONB; nil/empty = no overrides.
 	MCPAccounts map[string]string `json:"mcp_accounts,omitempty"`
+	// RawMCPAccounts holds the unredacted conversations.mcp_accounts map
+	// including any "mp-user:<email>:<server>" participant seat overrides.
+	RawMCPAccounts map[string]string `json:"-"`
 	// ProjectID scopes this conversation to a project/space (#509). Set at
 	// creation or re-filed later via SetConversationProject; empty = no
 	// project. The turn path uses it to inject the project's standing
@@ -187,6 +190,16 @@ type Conversation struct {
 	// are different and a single unlabeled icon conflated them. Set via
 	// POST /conversations/{id}/share-with-team.
 	TeamVisible bool `json:"team_visible,omitempty"`
+	// Multiplayer is true when teammates / workspace members can jump into this
+	// conversation directly and send messages with their own account and MCP
+	// connectors (migration 093).
+	Multiplayer             bool     `json:"multiplayer,omitempty"`
+	MultiplayerParticipants []string `json:"multiplayer_participants,omitempty"`
+	MultiplayerExcluded     []string `json:"multiplayer_excluded,omitempty"`
+	// ParticipantOptionalMCPServers preserves the conversation's optional
+	// connector opt-in list for non-owner multiplayer turns while
+	// OptionalMCPServersEnabled is redacted from HTTP JSON responses.
+	ParticipantOptionalMCPServers []string `json:"-"`
 	// BranchOrigin is set, by the handlers that serve it, on a TEAMMATE'S
 	// branch only (ADR-0079): whose chat it came from and which shared files
 	// were copied in. Never scanned from the conversations row — it lives in
@@ -574,30 +587,47 @@ func (s *Store) BranchConversation(ctx context.Context, userEmail, parentConvID 
 		return nil, err
 	}
 	if parent == nil {
-		// Not the caller's own — the one other readable case is a chat a
-		// teammate shared with the team. The gate only: the copy below reads
-		// the messages itself (narrowed to what the gate lets a teammate
-		// read), so loading the whole transcript here would be a second full
-		// read of the owner's history for nothing.
+		// Not the caller's own — the readable cases are a chat a teammate
+		// shared with the team or a multiplayer conversation the caller is
+		// allowed to participate in (including an explicit external invitee).
+		// The gate only: the copy below reads the messages itself (narrowed to
+		// what the gate lets a non-owner read), so loading the whole transcript
+		// here would be a second full read of the owner's history for nothing.
 		shared, terr := s.GetTeamVisibleConversationMeta(ctx, userEmail, parentConvID)
 		if terr != nil {
 			return nil, terr
 		}
-		if shared == nil {
-			return nil, sql.ErrNoRows
-		}
-		parent = &Conversation{
-			ID:        shared.ID,
-			UserEmail: shared.OwnerEmail,
-			Title:     shared.Title,
-			Persona:   shared.Persona,
-			Model:     shared.Model,
-			ProjectID: shared.ProjectID,
-			// Lockdown rides along (see the redaction note below): the parent
-			// was created --network=none under a restricted model allowlist,
-			// and a fork that quietly drops that would turn "branch to build
-			// on it" into a way to lift the owner's isolation.
-			Lockdown: shared.Lockdown,
+		if shared != nil {
+			parent = &Conversation{
+				ID:        shared.ID,
+				UserEmail: shared.OwnerEmail,
+				Title:     shared.Title,
+				Persona:   shared.Persona,
+				Model:     shared.Model,
+				ProjectID: shared.ProjectID,
+				// Lockdown rides along (see the redaction note below): the parent
+				// was created --network=none under a restricted model allowlist,
+				// and a fork that quietly drops that would turn "branch to build
+				// on it" into a way to lift the owner's isolation.
+				Lockdown: shared.Lockdown,
+			}
+		} else {
+			mp, merr := s.GetMultiplayerConversation(ctx, userEmail, parentConvID)
+			if merr != nil {
+				return nil, merr
+			}
+			if mp == nil {
+				return nil, sql.ErrNoRows
+			}
+			parent = &Conversation{
+				ID:        mp.ID,
+				UserEmail: mp.UserEmail,
+				Title:     mp.Title,
+				Persona:   mp.Persona,
+				Model:     mp.Model,
+				ProjectID: mp.ProjectID,
+				Lockdown:  mp.Lockdown,
+			}
 		}
 		// The fork copies the PARENT'S messages, so it must copy no more than
 		// the brancher was allowed to READ. GetTeamVisibleConversation hands a
@@ -899,10 +929,19 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	if err != nil {
 		return fmt.Errorf("marshal optional mcp servers: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
 		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, time.Now().Unix(), convID, userEmail,
+		payload, time.Now().Unix(), convID, ownerEmail,
 	)
 	if err != nil {
 		return err
@@ -911,7 +950,7 @@ func (s *Store) SetOptionalMCPServers(ctx context.Context, userEmail, convID str
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // AutoApproveConnectorsRequest carries the inputs for AutoApproveEnableMCPConnectors.
@@ -967,14 +1006,7 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		req.ConversationID, req.UserEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return out, ErrConversationNotFound
-	}
+	owner, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, req.UserEmail, req.ConversationID)
 	if err != nil {
 		return out, err
 	}
@@ -988,8 +1020,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		  WHERE conversation_id = $2
 		    AND tool_name = $3
+		    AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		    AND status = 'pending'`,
-		now, req.ConversationID, req.ToolName,
+		now, req.ConversationID, req.ToolName, strings.TrimSpace(req.UserEmail),
 	)
 	if err != nil {
 		return out, err
@@ -999,14 +1032,19 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET optional_mcp_servers_enabled = $1, updated_at = $2
 		  WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, now, req.ConversationID, req.UserEmail,
+		payload, now, req.ConversationID, owner,
 	); err != nil {
 		return out, err
 	}
 
+	resumeUser := strings.TrimSpace(req.UserEmail)
+	if resumeUser == "" {
+		resumeUser = owner
+	}
+
 	canEnqueue := req.AllowResume
 	if canEnqueue {
-		hasOutstanding, qerr := hasOutstandingApprovalsTx(ctx, tx, req.ConversationID, req.IgnoreOutstanding)
+		hasOutstanding, qerr := hasOutstandingApprovalsTx(ctx, tx, req.ConversationID, resumeUser, req.IgnoreOutstanding)
 		if qerr != nil {
 			return out, qerr
 		}
@@ -1018,8 +1056,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if canEnqueue {
 		if err := tx.QueryRowContext(ctx,
 			`SELECT count(*) FROM chat_input_queue
-			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2`,
-			req.ConversationID, now-3600,
+			  WHERE conversation_id = $1 AND mode = 'resume' AND created_at > $2
+			    AND ($3 = '' OR LOWER(user_email) = LOWER($3))`,
+			req.ConversationID, now-3600, resumeUser,
 		).Scan(&out.RecentResumes); err != nil {
 			return out, err
 		}
@@ -1064,7 +1103,7 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	var priorIDs []string
 	if canEnqueue || out.ResumeSkipped != "" {
 		var cerr error
-		priorClaimed, priorIDs, cerr = claimSettledArmedApprovalsTx(ctx, tx, req.ConversationID)
+		priorClaimed, priorIDs, cerr = claimSettledArmedApprovalsTx(ctx, tx, req.ConversationID, resumeUser)
 		if cerr != nil {
 			return out, cerr
 		}
@@ -1084,7 +1123,7 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 			ID:             uuid.NewString(),
 			ConversationID: req.ConversationID,
-			UserEmail:      owner,
+			UserEmail:      resumeUser,
 			ClientInputID:  "approval-resume:" + firstID,
 			Message:        ApprovalResumeInputText(out.ResumeClaimed),
 			Attachments:    "[]",
@@ -1120,14 +1159,15 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	return out, nil
 }
 
-func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID string, ignore func(string) bool) (bool, error) {
+func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userEmail string, ignore func(string) bool) (bool, error) {
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id FROM approvals
 		  WHERE conversation_id = $1
+		    AND ($3 = '' OR LOWER(user_email) = LOWER($3))
 		    AND ((status = 'pending' AND tool_name <> 'preview_email')
 		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
 		  ORDER BY created_at, id`,
-		convID, ApprovalExecutingSentinel,
+		convID, ApprovalExecutingSentinel, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return false, err
@@ -1152,13 +1192,14 @@ func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID string, i
 	return hasOutstanding, nil
 }
 
-func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID string) ([]ApprovalResumeItem, []string, error) {
+func claimSettledArmedApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userEmail string) ([]ApprovalResumeItem, []string, error) {
 	rows, err := tx.QueryContext(ctx,
 		`UPDATE approvals SET resume_state = 'claimed'
 		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
+		    AND ($3 = '' OR LOWER(user_email) = LOWER($3))
 		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
 		  RETURNING id, tool_name, status, COALESCE(result_text, ''), is_err, COALESCE(resolved_at, 0), created_at`,
-		convID, ApprovalExecutingSentinel,
+		convID, ApprovalExecutingSentinel, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, nil, err
@@ -1224,15 +1265,7 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		convID, userEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
 		return nil, 0, err
 	}
 
@@ -1245,9 +1278,10 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 		        resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		  WHERE conversation_id = $2
 		    AND tool_name = $3
+		    AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		    AND status = 'pending'
 		  RETURNING COALESCE(args_json, '')`,
-		now, convID, toolName,
+		now, convID, toolName, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, 0, err
@@ -1389,10 +1423,19 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 	if err != nil {
 		return fmt.Errorf("marshal mcp accounts: %w", err)
 	}
-	res, err := s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx,
 		`UPDATE conversations SET mcp_accounts = $1, updated_at = $2
 		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		payload, time.Now().Unix(), convID, userEmail,
+		payload, time.Now().Unix(), convID, ownerEmail,
 	)
 	if err != nil {
 		return err
@@ -1401,7 +1444,7 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 	if n == 0 {
 		return ErrConversationNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // SetModel updates the per-chat OpenRouter slug. Empty model clears the
@@ -1506,7 +1549,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
-			team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
+			team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
@@ -1675,10 +1718,31 @@ func (s *Store) GetConversationByShareToken(ctx context.Context, token string, n
 			// contract deliberately omits internal identifiers — a global BIGSERIAL id
 			// would leak cross-conversation row ordering/volume to an anonymous viewer.
 			m.ID = 0
+			m.Content = stripPublicShareContentFields(m.Content)
 			out.Messages = append(out.Messages, m)
 		}
 	}
 	return &out, nil
+}
+
+func stripPublicShareContentFields(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return raw
+	}
+	if _, has := obj["sender_email"]; !has {
+		return raw
+	}
+	delete(obj, "sender_email")
+	delete(obj, "images")
+	out, err := json.Marshal(obj)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // AutoArchiveOlderThan archives unpinned, not-already-archived conversations
@@ -1696,7 +1760,7 @@ func (s *Store) AutoArchiveOlderThan(ctx context.Context, d time.Duration) (int,
 	cutoff := time.Now().Add(-d).Unix()
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, updated_at = $2
-		 WHERE pinned = FALSE AND archived_at IS NULL AND project_id IS NULL AND updated_at < $3`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND project_id IS NULL AND COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE AND updated_at < $3`,
 		now, now, cutoff,
 	)
 	if err != nil {
@@ -1953,7 +2017,7 @@ func (s *Store) ListFiltered(ctx context.Context, userEmail string, f ListFilter
 // conversationColumns is the SELECT list (in scan order) every conversation query
 // shares, so Get, ListFiltered and ListTeamConversations stay in lockstep with
 // scanConversation. (Bare column names, so a `c.`-aliased query can use it too.)
-const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve`
+const conversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, optional_mcp_servers_enabled, labels, approval_timeout_seconds, COALESCE(share_token, ''), COALESCE(parent_conversation_id, ''), COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), mcp_accounts, team_visible, auto_approve, multiplayer, COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]')`
 
 // teamConversationColumns is conversationColumns with everything a teammate
 // has no business reading blanked out. Column count and scan order stay
@@ -1974,7 +2038,7 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 //   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
 //   - parent_conversation_id — reveals that a shared chat was branched from a
 //     private one, and hands over that private chat's id.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, multiplayer, '[]' AS multiplayer_participants, '[]' AS multiplayer_excluded`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -2024,13 +2088,17 @@ func scanConversation(sc rowScanner) (Conversation, error) {
 	var approvalTimeout sql.NullInt64
 	var thinkingRaw []byte
 	var accountsRaw []byte
-	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove); err != nil {
+	var mpParticipantsRaw, mpExcludedRaw string
+	if err := sc.Scan(&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown, &c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw, textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID, &c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw, &c.TeamVisible, &c.AutoApprove, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw); err != nil {
 		return Conversation{}, err
 	}
 	c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
-	c.MCPAccounts = scanMCPAccounts(accountsRaw)
+	c.RawMCPAccounts = scanMCPAccounts(accountsRaw)
+	c.MCPAccounts = filterOwnerMCPAccounts(c.RawMCPAccounts)
 	c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
 	c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
+	c.MultiplayerParticipants = scanEmailJSONArray(mpParticipantsRaw)
+	c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
 	return c, nil
 }
 
@@ -2145,11 +2213,21 @@ var (
 // Opting OUT is never refused. Revocation must work from whatever state a row
 // is in, including one a pre-054 client created.
 func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error) {
+	return s.SetConversationTeamVisibleWithOptions(ctx, ownerEmail, convID, visible, false)
+}
+
+// SetConversationTeamVisibleWithOptions is SetConversationTeamVisible with an
+// explicit allowUnfiled flag: when allowUnfiled is true (used when the instance
+// enables FLEET_TEAM_CHATS_SHARED_BY_DEFAULT), an unfiled conversation
+// (project_id IS NULL / ”) may be shared directly with the owner's team
+// without requiring a team-shared project. Conversations filed inside a
+// personal project still require the project to be team-shared.
+func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, ownerEmail, convID string, visible, allowUnfiled bool) (bool, error) {
 	ownerEmail = normalizeEmail(ownerEmail)
 	now := time.Now().Unix()
 	if !visible {
 		res, err := s.db.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
 			 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
 			now, convID, ownerEmail)
 		if err != nil {
@@ -2164,14 +2242,14 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	// Ownership first, so the three refusals keep their precedence: a caller
 	// who owns no such chat learns nothing about teams or projects (404), and
 	// only an owner sees which of the two share preconditions they are missing.
-	var homeTeam sql.NullString
+	var projectID, homeTeam sql.NullString
 	var archived bool
 	if err := s.db.QueryRowContext(ctx, `
-		SELECT p.team_id, c.archived_at IS NOT NULL
+		SELECT c.project_id, p.team_id, c.archived_at IS NOT NULL
 		FROM conversations c
 		LEFT JOIN projects p ON p.id = c.project_id
 		WHERE c.id = $1 AND c.user_email = $2 AND c.deleted_at IS NULL`,
-		convID, ownerEmail).Scan(&homeTeam, &archived); err != nil {
+		convID, ownerEmail).Scan(&projectID, &homeTeam, &archived); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, ErrConversationNotFound
 		}
@@ -2189,7 +2267,9 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 	if team == "" {
 		return false, ErrNoTeamToShareWith
 	}
-	if strings.TrimSpace(homeTeam.String) != team {
+	unfiled := strings.TrimSpace(projectID.String) == ""
+	canShareUnfiled := allowUnfiled && unfiled
+	if strings.TrimSpace(homeTeam.String) != team && !canShareUnfiled {
 		return false, ErrNoTeamShareHome
 	}
 	// The share names its audience by the team's ID as well as its label
@@ -2226,8 +2306,9 @@ func (s *Store) SetConversationTeamVisible(ctx context.Context, ownerEmail, conv
 			team_shared_with_id = (SELECT id FROM t), updated_at = $2
 		 WHERE c.id = $3 AND c.user_email = $4 AND c.deleted_at IS NULL
 		   AND c.archived_at IS NULL
-		   AND EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)`,
-		team, now, convID, ownerEmail)
+		   AND (EXISTS (SELECT 1 FROM projects p WHERE p.id = c.project_id AND p.team_id = $1)
+		        OR ($5 AND COALESCE(c.project_id, '') = ''))`,
+		team, now, convID, ownerEmail, allowUnfiled)
 	if err != nil {
 		return false, err
 	}
@@ -2572,9 +2653,9 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(narrowable_arg, '')
 		 FROM approvals
-		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
+		 WHERE conversation_id = $1 AND ($2 = '' OR LOWER(user_email) = LOWER($2)) AND status = 'pending'
 		 ORDER BY created_at ASC`,
-		convID, userEmail,
+		convID, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, err
@@ -2984,9 +3065,65 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 // whether SweepExpiredApprovals has run yet. Rows with NULL/0
 // expires_at never expire. The expiry sweep uses ClaimExpiredApproval
 // so it can still flip those rows for notification/audit.
+func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
+	var convID string
+	err = tx.QueryRowContext(ctx,
+		`SELECT conversation_id FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
+		approvalID, userEmail, now,
+	).Scan(&convID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
+		if errors.Is(err, ErrConversationNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	var res sql.Result
+	if narrowedJSON != "" {
+		res, err = tx.ExecContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
+			 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
+			resultText, now, narrowedJSON, approvalID, userEmail, now,
+		)
+	} else {
+		res, err = tx.ExecContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+			 WHERE id = $3 AND user_email = $4 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
+			resultText, now, approvalID, userEmail, now,
+		)
+	}
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error) {
 	if !validApprovalResolution(newStatus) {
 		return false, fmt.Errorf("invalid approval status %q", newStatus)
+	}
+	if newStatus == approvalStatusApproved {
+		return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "")
 	}
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
@@ -3031,18 +3168,7 @@ func (s *Store) ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID
 	if narrowedJSON == "" {
 		return false, errors.New("ClaimApprovalNarrowed: empty narrowing record")
 	}
-	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
-		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
-		resultText, now, narrowedJSON, approvalID, userEmail, now,
-	)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, narrowedJSON)
 }
 
 // ClaimApprovalAndSetModel resolves a pending approval as "approved" AND pins
@@ -3064,6 +3190,21 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	}
 	defer func() { _ = tx.Rollback() }()
 	now := time.Now().Unix()
+	var pending int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT 1 FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
+		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
+		approvalID, userEmail, now,
+	).Scan(&pending); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
+	if err != nil {
+		return false, err
+	}
 	res, err := tx.ExecContext(ctx,
 		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, is_err = FALSE
 		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
@@ -3078,7 +3219,7 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	}
 	res, err = tx.ExecContext(ctx,
 		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		model, now, convID, userEmail,
+		model, now, convID, ownerEmail,
 	)
 	if err != nil {
 		return false, err
@@ -3140,7 +3281,11 @@ func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, re
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr})
+	payloadMap := map[string]any{"id": callID, "name": tool, "text": resultText, "is_err": isErr}
+	if sender := strings.TrimSpace(userEmail); sender != "" {
+		payloadMap["sender_email"] = sender
+	}
+	payload, err := json.Marshal(payloadMap)
 	if err != nil {
 		return err
 	}
@@ -3229,7 +3374,7 @@ func (s *Store) CountUserMessagesAfterResolution(ctx context.Context, convID, ca
 // stacked cards and the user has to dismiss each one manually.
 // Returns the number of rows updated so the caller can decide
 // whether to log or inject a history entry.
-func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName string) (int64, error) {
+func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID, toolName string) (int64, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE approvals
 		   SET status = 'rejected',
@@ -3241,8 +3386,9 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, convID, toolName 
 		       resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
 		 WHERE conversation_id = $2
 		   AND tool_name = $3
+		   AND ($4 = '' OR LOWER(user_email) = LOWER($4))
 		   AND status = 'pending'`,
-		time.Now().Unix(), convID, toolName,
+		time.Now().Unix(), convID, toolName, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return 0, err
@@ -3575,13 +3721,14 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 	//    are exempt just like pinned/project conversations so a scheduled patrol
 	//    is never reaped between runs.
 	const noActiveScheduleClause = `NOT EXISTS (SELECT 1 FROM chat_schedules cs WHERE cs.conversation_id = conversations.id AND cs.status IN ('active', 'paused'))`
+	const notSharedOrMultiplayerClause = `COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE`
 	if s.softDelete {
 		// Tombstone instead of hard-delete: the row survives for the 30-day
 		// restore window. Only touches live rows (deleted_at IS NULL) so a
 		// re-sweep never re-tombstones.
 		res, err := s.db.ExecContext(ctx,
 			`UPDATE conversations SET deleted_at = NOW(), updated_at = $1
-			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $2`,
+			 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $2`,
 			time.Now().Unix(), cutoff,
 		)
 		if err != nil {
@@ -3591,7 +3738,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		expired += int(n)
 	} else {
 		res, err := s.db.ExecContext(ctx,
-			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+` AND updated_at < $1`,
+			`DELETE FROM conversations WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+` AND updated_at < $1`,
 			cutoff,
 		)
 		if err != nil {
@@ -3618,7 +3765,7 @@ func (s *Store) SweepExpired(ctx context.Context, ttl time.Duration, unpinnedCap
 		            PARTITION BY user_email ORDER BY updated_at DESC, id DESC
 		        ) AS rn
 		        FROM conversations
-		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+noActiveScheduleClause+`
+		        WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND `+notSharedOrMultiplayerClause+` AND `+noActiveScheduleClause+`
 		    ) ranked
 		    WHERE rn > $1
 		 )`,

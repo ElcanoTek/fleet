@@ -204,7 +204,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 			return
 		}
 	}
-	stored, err := s.store.SetConversationTeamVisible(r.Context(), user, convID, body.Visible)
+	allowUnfiled := s.cfg != nil && s.cfg.LiveTeamChatsSharedByDefault()
+	stored, err := s.store.SetConversationTeamVisibleWithOptions(r.Context(), user, convID, body.Visible, allowUnfiled)
 	if err != nil {
 		// A chat with no team, no team-shared project to appear in, or that
 		// is archived cannot be shared — 409 with the store's sentence, which
@@ -225,6 +226,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		return
 	}
 	if !body.Visible {
+		s.enforceMultiplayerRevocation(r.Context(), convID, &store.Conversation{UserEmail: user}, nil)
 		countCtx, cancel := context.WithTimeout(r.Context(), unshareCountTimeout)
 		var cerr error
 		outs, _, cerr = s.ownerOutputs(countCtx, convID)
@@ -252,6 +254,404 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		"shared_files": sharedFiles,
 		"total_files":  len(outs),
 	})
+}
+
+// autoShareNewConversationIfConfigured marks a newly created or branched
+// non-lockdown conversation as Multiplayer (and team-visible when on a team)
+// when the instance has FLEET_TEAM_CHATS_SHARED_BY_DEFAULT /
+// team_chats_shared_by_default enabled and the user belongs to a team. It is
+// best-effort: a conversation created inside a personal project or by a
+// teamless user stays private without failing creation.
+func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user string, conv *store.Conversation) {
+	if conv == nil || conv.Lockdown || s.cfg == nil || !s.cfg.LiveTeamChatsSharedByDefault() {
+		return
+	}
+	u, err := s.store.GetUser(ctx, user)
+	if err != nil || u == nil || strings.TrimSpace(u.TeamID) == "" {
+		return
+	}
+	if conv.ProjectID != "" {
+		stored, err := s.store.SetConversationTeamVisibleWithOptions(ctx, user, conv.ID, true, true)
+		if err != nil {
+			if !errors.Is(err, store.ErrNoTeamToShareWith) && !errors.Is(err, store.ErrNoTeamShareHome) && !errors.Is(err, store.ErrArchivedNotShareable) {
+				log.Printf("auto-share: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			}
+			return
+		}
+		if stored {
+			conv.TeamVisible = true
+			if err := s.store.MarkProjectSharedChat(ctx, conv.ID, user); err != nil {
+				log.Printf("auto-share: record has_shared_chat for %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			}
+		}
+	}
+	updated, err := s.store.SetConversationMultiplayer(ctx, user, conv.ID, true, nil, nil)
+	if err != nil {
+		if !errors.Is(err, store.ErrArchivedNotShareable) && !errors.Is(err, store.ErrConversationNotFound) {
+			log.Printf("auto-multiplayer: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		}
+		return
+	}
+	if updated != nil {
+		conv.Multiplayer = updated.Multiplayer
+		conv.TeamVisible = updated.TeamVisible
+	}
+}
+
+// getOwnedOrMultiplayerConversation resolves a conversation the caller either
+// owns or is permitted to participate in via Multiplayer mode (migration 092).
+func (s *Server) getOwnedOrMultiplayerConversation(ctx context.Context, user, convID string) (*store.Conversation, error) {
+	conv, err := s.store.Get(ctx, user, convID)
+	if err != nil || conv != nil {
+		return conv, err
+	}
+	return s.store.GetMultiplayerConversation(ctx, user, convID)
+}
+
+func nonNilStrings(in []string) []string {
+	if in == nil {
+		return []string{}
+	}
+	return in
+}
+
+// handleConversationMultiplayerGet serves GET /conversations/{id}/multiplayer:
+// returns the conversation's multiplayer state, explicit participant/exclusion
+// lists, and resolved active roster. Accessible to the owner and to active
+// multiplayer participants.
+func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http.Request, convID, user string) {
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	if err != nil && !errors.Is(err, store.ErrConversationNotFound) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"multiplayer":  conv.Multiplayer,
+		"team_visible": conv.TeamVisible,
+		"owner_email":  conv.UserEmail,
+		"is_owner":     strings.EqualFold(conv.UserEmail, user),
+		"participants": nonNilStrings(conv.MultiplayerParticipants),
+		"excluded":     nonNilStrings(conv.MultiplayerExcluded),
+		"roster":       nonNilStrings(roster),
+	})
+}
+
+// handleConversationMultiplayerSet serves POST /conversations/{id}/multiplayer:
+// toggles Multiplayer mode (owner-only) and/or adds/removes specific people
+// from the multiplayer chat.
+func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http.Request, convID, user string) {
+	var body struct {
+		Multiplayer  *bool     `json:"multiplayer"`
+		Participants *[]string `json:"participants"`
+		Excluded     *[]string `json:"excluded"`
+		Add          []string  `json:"add"`
+		Remove       []string  `json:"remove"`
+	}
+	if !decodeOptionalJSONBody(w, r, &body) {
+		return
+	}
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if conv == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	isOwner := strings.EqualFold(conv.UserEmail, user)
+	if !isOwner {
+		http.Error(w, "only the conversation owner can change multiplayer settings", http.StatusForbidden)
+		return
+	}
+	var partArg, exclArg []string
+	if body.Participants != nil {
+		partArg = *body.Participants
+	}
+	if body.Excluded != nil {
+		exclArg = *body.Excluded
+	}
+	var priorRoster []string
+	if conv.Multiplayer {
+		priorRoster, _ = s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	}
+	updated := conv
+	if body.Multiplayer != nil || body.Participants != nil || body.Excluded != nil {
+		targetMultiplayer := conv.Multiplayer
+		if body.Multiplayer != nil {
+			targetMultiplayer = *body.Multiplayer
+		}
+		updated, err = s.store.SetConversationMultiplayer(r.Context(), user, convID, targetMultiplayer, partArg, exclArg)
+		if err != nil {
+			if errors.Is(err, store.ErrArchivedNotShareable) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			if errors.Is(err, store.ErrConversationNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if len(body.Add) > 0 || len(body.Remove) > 0 {
+		updated, err = s.store.UpdateConversationMultiplayerAccess(r.Context(), user, convID, body.Add, body.Remove)
+		if err != nil {
+			if errors.Is(err, store.ErrConversationNotFound) {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if updated == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if updated.TeamVisible && updated.ProjectID != "" {
+		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
+			log.Printf("multiplayer: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		}
+	}
+	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
+	reconcileSeeds := append([]string{}, priorRoster...)
+	reconcileSeeds = append(reconcileSeeds, roster...)
+	reconcileSeeds = append(reconcileSeeds, conv.MultiplayerParticipants...)
+	reconcileSeeds = append(reconcileSeeds, body.Remove...)
+	s.enforceMultiplayerRevocation(r.Context(), convID, updated, reconcileSeeds)
+	if err != nil {
+		if errors.Is(err, store.ErrConversationNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"multiplayer":  updated.Multiplayer,
+		"team_visible": updated.TeamVisible,
+		"owner_email":  updated.UserEmail,
+		"is_owner":     isOwner,
+		"participants": nonNilStrings(updated.MultiplayerParticipants),
+		"excluded":     nonNilStrings(updated.MultiplayerExcluded),
+		"roster":       nonNilStrings(roster),
+	})
+}
+
+// enforceMultiplayerRevocation cancels any active turn or queued inputs in
+// convID belonging to a user who is no longer authorized to participate, and
+// detaches live SSE subscribers whose multiplayer access was revoked.
+func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string, conv *store.Conversation, roster []string) {
+	qctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	ownerEmail, ownerKey, allowed, revokedCandidates := s.buildMultiplayerAllowedSet(qctx, convID, conv, roster)
+	s.inflightMu.Lock()
+	if s.multiplayerEpochs == nil {
+		s.multiplayerEpochs = make(map[string]uint64)
+	}
+	s.multiplayerEpochs[convID]++
+	entry, ok := s.inflight[convID]
+	s.inflightMu.Unlock()
+	s.sessionApprovals.ForgetUnauthorizedUsers(convID, ownerEmail, allowed)
+	for _, sender := range s.executingApprovals.cancelUnauthorized(convID, ownerEmail, allowed, &s.approvalStops) {
+		revokedCandidates[sender] = true
+	}
+	if ok {
+		if entry.buf != nil {
+			entry.buf.detachUnauthorizedViewers(ownerEmail, allowed)
+		}
+		if entry.IsRunning() && entry.steer != nil {
+			sender := strings.ToLower(strings.TrimSpace(entry.steer.user))
+			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
+				_ = s.cancelInflightTurn(convID, entry.turnID)
+			}
+		}
+	}
+	if s.store == nil {
+		return
+	}
+	s.revokeMultiplayerStoreItems(qctx, convID, ownerKey, allowed, revokedCandidates)
+}
+
+func (s *Server) buildMultiplayerAllowedSet(qctx context.Context, convID string, conv *store.Conversation, roster []string) (ownerEmail, ownerKey string, allowed, revokedCandidates map[string]bool) {
+	multiplayer := false
+	if conv != nil {
+		ownerEmail = conv.UserEmail
+		multiplayer = conv.Multiplayer
+	}
+	ownerKey = strings.ToLower(strings.TrimSpace(ownerEmail))
+	allowed = map[string]bool{}
+	revokedCandidates = map[string]bool{}
+	if ownerKey != "" {
+		allowed[ownerKey] = true
+	}
+	if !multiplayer {
+		for _, r := range roster {
+			if e := strings.ToLower(strings.TrimSpace(r)); e != "" && e != ownerKey {
+				revokedCandidates[e] = true
+			}
+		}
+		if conv != nil {
+			for _, p := range conv.MultiplayerParticipants {
+				if e := strings.ToLower(strings.TrimSpace(p)); e != "" && e != ownerKey {
+					revokedCandidates[e] = true
+				}
+			}
+			for _, ex := range conv.MultiplayerExcluded {
+				if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+					revokedCandidates[e] = true
+				}
+			}
+		}
+		return ownerEmail, ownerKey, allowed, revokedCandidates
+	}
+	for _, r := range roster {
+		e := strings.ToLower(strings.TrimSpace(r))
+		if e == "" {
+			continue
+		}
+		if e == ownerKey {
+			allowed[e] = true
+			continue
+		}
+		if s.store == nil {
+			allowed[e] = true
+			continue
+		}
+		if mc, merr := s.store.GetMultiplayerConversation(qctx, e, convID); merr == nil && mc != nil {
+			allowed[e] = true
+		} else {
+			revokedCandidates[e] = true
+		}
+	}
+	if conv != nil {
+		for _, ex := range conv.MultiplayerExcluded {
+			if e := strings.ToLower(strings.TrimSpace(ex)); e != "" && e != ownerKey {
+				delete(allowed, e)
+				revokedCandidates[e] = true
+			}
+		}
+	}
+	return ownerEmail, ownerKey, allowed, revokedCandidates
+}
+
+func (s *Server) revokeMultiplayerStoreItems(qctx context.Context, convID, ownerKey string, allowed, revokedCandidates map[string]bool) {
+	if items, err := s.store.ListQueuedInputs(qctx, "", convID); err == nil {
+		for _, item := range items {
+			if item.State != store.InputStateQueued {
+				continue
+			}
+			sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
+			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
+				_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
+			}
+		}
+	}
+	if approvals, err := s.store.ListPendingApprovals(qctx, "", convID); err == nil {
+		for _, a := range approvals {
+			sender := strings.ToLower(strings.TrimSpace(a.UserEmail))
+			if sender != "" && !allowed[sender] {
+				revokedCandidates[sender] = true
+				_, _ = s.store.ClaimApproval(qctx, a.UserEmail, a.ID, "rejected", "Multiplayer access to this conversation was revoked.")
+			}
+		}
+	}
+	if scheds, serr := s.store.ListChatSchedules(qctx, "", convID, false); serr == nil {
+		for _, sc := range scheds {
+			sender := strings.ToLower(strings.TrimSpace(sc.UserEmail))
+			if sender != "" && sender != ownerKey && !allowed[sender] {
+				revokedCandidates[sender] = true
+				_, _ = s.store.CancelChatSchedule(qctx, sc.UserEmail, convID, sc.ID)
+			}
+		}
+	}
+	for sender := range revokedCandidates {
+		if sender == "" || sender == ownerKey || allowed[sender] {
+			continue
+		}
+		if scheds, serr := s.store.ListChatSchedules(qctx, sender, convID, false); serr == nil {
+			for _, sc := range scheds {
+				_, _ = s.store.CancelChatSchedule(qctx, sender, convID, sc.ID)
+			}
+		}
+	}
+}
+
+func (s *Server) activeMultiplayerAndPendingConvIDsBestEffort(ctx context.Context) []string {
+	if s.store == nil {
+		return nil
+	}
+	if lister, ok := s.store.(interface {
+		ListActiveMultiplayerAndPendingConversationIDs(context.Context) ([]string, error)
+	}); ok {
+		ids, _ := lister.ListActiveMultiplayerAndPendingConversationIDs(ctx)
+		return ids
+	}
+	return nil
+}
+
+func (s *Server) projectConvIDsBestEffort(ctx context.Context, projectID string) []string {
+	if s.store == nil || projectID == "" {
+		return nil
+	}
+	ids, _ := s.store.ListProjectConversationIDs(ctx, projectID)
+	return ids
+}
+
+func (s *Server) reconcileAllMultiplayerAccess(ctx context.Context, extraConvIDs ...string) {
+	seen := make(map[string]bool)
+	var convIDs []string
+	add := func(id string) {
+		id = strings.TrimSpace(id)
+		if id != "" && !seen[id] {
+			seen[id] = true
+			convIDs = append(convIDs, id)
+		}
+	}
+	for _, id := range extraConvIDs {
+		add(id)
+	}
+	s.inflightMu.Lock()
+	for id := range s.inflight {
+		add(id)
+	}
+	s.inflightMu.Unlock()
+	for _, id := range s.executingApprovals.convIDs() {
+		add(id)
+	}
+	for _, id := range s.activeMultiplayerAndPendingConvIDsBestEffort(ctx) {
+		add(id)
+	}
+	if len(convIDs) == 0 || s.store == nil {
+		return
+	}
+	getter, _ := s.store.(interface {
+		GetConversationOwnerAndMultiplayer(context.Context, string) (*store.Conversation, error)
+	})
+	for _, convID := range convIDs {
+		var conv *store.Conversation
+		if getter != nil {
+			conv, _ = getter.GetConversationOwnerAndMultiplayer(ctx, convID)
+		}
+		var roster []string
+		if conv != nil && conv.Multiplayer {
+			roster, _ = s.store.ListMultiplayerRoster(ctx, conv.UserEmail, convID)
+		}
+		s.enforceMultiplayerRevocation(ctx, convID, conv, roster)
+	}
 }
 
 // unshareCountTimeout bounds the best-effort count an unshare reports after

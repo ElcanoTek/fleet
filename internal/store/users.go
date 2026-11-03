@@ -496,8 +496,8 @@ func unshareOnTeamChangeTx(ctx context.Context, tx *sql.Tx, email, newTeam strin
 	}
 	if old != "" {
 		if _, err := tx.ExecContext(ctx, `
-			UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
-			WHERE user_email = $2 AND team_visible = TRUE AND team_shared_with = $3`,
+			UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			WHERE user_email = $2 AND (team_visible = TRUE OR multiplayer = TRUE) AND team_shared_with = $3`,
 			time.Now().Unix(), email, old); err != nil {
 			return err
 		}
@@ -615,7 +615,7 @@ func renameTeamSharesTx(ctx context.Context, tx *sql.Tx, from, to string, now in
 	// live share (every share since migration 084 carries the id); clear it
 	// rather than leave a label that a future team named `from` could match.
 	_, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE team_shared_with = $1`, from, now)
 	return err
 }
@@ -650,7 +650,7 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE team_shared_with_id = $1`, id, now); err != nil {
 		return err
 	}
@@ -895,6 +895,52 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM conversations WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete conversations: %w", err)
 	}
+	// Scrub the deleted account from foreign conversations' explicit
+	// multiplayer invite/exclusion lists and per-participant MCP account seats,
+	// and remove any queued inputs, pending approvals, or schedules it created
+	// in other users' multiplayer conversations so a later account
+	// re-provisioned with the same email never inherits them.
+	mcpPrefix := MultiplayerMCPAccountPrefix(email)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE conversations
+		   SET multiplayer_participants = COALESCE((
+		         SELECT jsonb_agg(elem)
+		           FROM jsonb_array_elements_text(multiplayer_participants::jsonb) AS elem
+		          WHERE lower(elem) <> $1
+		       ), '[]'::jsonb)::text,
+		       multiplayer_excluded = COALESCE((
+		         SELECT jsonb_agg(elem)
+		           FROM jsonb_array_elements_text(multiplayer_excluded::jsonb) AS elem
+		          WHERE lower(elem) <> $1
+		       ), '[]'::jsonb)::text,
+		       mcp_accounts = COALESCE((
+		         SELECT jsonb_object_agg(key, value)
+		           FROM jsonb_each(mcp_accounts)
+		          WHERE left(key, length($2)) <> $2
+		       ), '{}'::jsonb)
+		 WHERE (multiplayer_participants::jsonb ? $1)
+		    OR (multiplayer_excluded::jsonb ? $1)
+		    OR EXISTS (
+		         SELECT 1
+		           FROM jsonb_object_keys(mcp_accounts) AS k
+		          WHERE left(k, length($2)) = $2
+		       )`,
+		email, mcpPrefix,
+	); err != nil {
+		return fmt.Errorf("scrub multiplayer references: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_input_queue WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete queued inputs: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM approvals WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete approvals: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM chat_schedules WHERE user_email = $1`, email); err != nil {
+		return fmt.Errorf("delete chat schedules: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM memories WHERE user_email = $1`, email); err != nil {
 		return fmt.Errorf("delete memories: %w", err)
@@ -937,7 +983,7 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 	// deleted account's OWN chats went with it in the statement above, so no
 	// row is left pointing at a project whose owner is gone.
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
+		`UPDATE conversations SET project_id = NULL, team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $2
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email, time.Now().Unix()); err != nil {
 		return fmt.Errorf("detach project conversations: %w", err)
 	}

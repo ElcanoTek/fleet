@@ -60,8 +60,25 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if shared == nil {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
+			mp, merr := s.store.GetMultiplayerConversation(r.Context(), user, parentConvID)
+			if merr != nil {
+				http.Error(w, merr.Error(), http.StatusInternalServerError)
+				return
+			}
+			if mp == nil {
+				http.Error(w, "not found", http.StatusNotFound)
+				return
+			}
+			shared = &store.TeamSharedConversation{
+				ID:         mp.ID,
+				OwnerEmail: mp.UserEmail,
+				Title:      mp.Title,
+				Persona:    mp.Persona,
+				Model:      mp.Model,
+				ProjectID:  mp.ProjectID,
+				Lockdown:   mp.Lockdown,
+				UpdatedAt:  mp.UpdatedAt,
+			}
 		}
 		parentTitle = shared.Title
 	}
@@ -115,6 +132,7 @@ func (s *Server) handleConversationBranch(w http.ResponseWriter, r *http.Request
 		// message of this source, so it is a real source id.)
 		branch.BranchOrigin = s.carrySharedFilesIntoBranch(r.Context(), shared, branch, body.BranchPointMessageID)
 	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, branch)
 	writeJSONStatus(w, http.StatusCreated, branch)
 }
 
@@ -189,6 +207,14 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 			// fails closed.
 			gate := func(p string) branchCopyDecision {
 				ok, gerr := s.store.CanTeamRead(copyCtx, branch.UserEmail, src.ID)
+				if gerr == nil && !ok {
+					mp, merr := s.store.GetMultiplayerConversation(copyCtx, branch.UserEmail, src.ID)
+					if merr != nil {
+						gerr = merr
+					} else if mp != nil {
+						ok = true
+					}
+				}
 				if gerr != nil {
 					log.Printf("branch files: re-check %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
 				}

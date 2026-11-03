@@ -198,6 +198,8 @@ func Registry() []Spec {
 			EnvVar: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED"},
 		{Key: "context_handles_enabled", Kind: KindBool,
 			EnvVar: "FLEET_CONTEXT_HANDLES_ENABLED"},
+		{Key: "team_chats_shared_by_default", Kind: KindBool,
+			EnvVar: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT"},
 		// Shared file library total-size cap in MB (docs/SHARED-FILES.md).
 		// MinZeroOK: 0 = unlimited, for deployments that genuinely want a very
 		// large library and accept the disk cost. Live: the upload handler

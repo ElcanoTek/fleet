@@ -166,6 +166,7 @@ export type ChatTranscriptProps = {
   // null = no request yet.
   editLastUserSignal: { id: number; nonce: number } | null;
   selectedModel: string;
+  isConversationOwner?: boolean;
 
   // Turn / message actions
   patchAssistantMessage: (
@@ -291,6 +292,7 @@ export function ChatTranscript({
   lastAssistantMessageId,
   editLastUserSignal,
   selectedModel,
+  isConversationOwner = true,
   patchAssistantMessage,
   resendUserMessage,
   retryLastUserMessage,
@@ -655,7 +657,7 @@ export function ChatTranscript({
                                   collapsedRangeCount={summaryIndex}
                                   summaryExpanded={summaryExpanded}
                                   onToggleExpand={() => setSummaryExpanded((v) => !v)}
-                                  onResummarize={() => setConfirmSummarize(true)}
+                                  onResummarize={isConversationOwner ? () => setConfirmSummarize(true) : undefined}
                                   isSummarizing={isSummarizing}
                                 />
                               );
@@ -677,8 +679,11 @@ export function ChatTranscript({
                     // since its numbers don't exist until then.
                     const showExecutionTrail = showStats && hasExecutionTrail;
                     // Retry and Regenerate both re-run the conversation's LAST
-                    // turn, so they are offered only under it (canRetryTurn).
-                    const canRetry = canRetryTurn(message, lastAssistantMessageId, isStreaming);
+                    // turn, so they are offered only under it (canRetryTurn) and
+                    // only to the conversation owner (truncation is owner-scoped).
+                    const canRetry =
+                      isConversationOwner &&
+                      canRetryTurn(message, lastAssistantMessageId, isStreaming);
                     // Two signals feed the thinking indicator:
                     //
                     //   activeToolName — the most recent tool call's
@@ -764,7 +769,10 @@ export function ChatTranscript({
                           {message.role === "user" ? (
                             <UserTurn
                               message={message}
-                              isLastUser={message.id === lastUserMessageId}
+                              isLastUser={
+                                isConversationOwner &&
+                                message.id === lastUserMessageId
+                              }
                               isStreaming={isStreaming}
                               editRequestSignal={
                                 editLastUserSignal && editLastUserSignal.id === message.id
@@ -1004,6 +1012,7 @@ export function ChatTranscript({
                                     ) : null}
                                   </div>
                                   <p>{message.modelRequired.message}</p>
+                                  {isConversationOwner ? (
                                   <div className="flex flex-wrap items-center gap-3 pt-0.5">
                                     {mustSwap ? (
                                       <>
@@ -1051,6 +1060,7 @@ export function ChatTranscript({
                                       </>
                                     )}
                                   </div>
+                                  ) : null}
                                 </div>
                                 );
                               })() : message.failed ? (
@@ -1239,7 +1249,7 @@ export function ChatTranscript({
                                       kebab needs the chat found and hovered first. It saves the
                                       WHOLE chat as a workflow template, not this one exchange:
                                       the reply is where the user is standing, not the scope. */}
-                                  {!isStreaming ? (
+                                  {!isStreaming && isConversationOwner ? (
                                     <button
                                       type="button"
                                       className="touch-target text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
@@ -1546,6 +1556,14 @@ function UserBubble({
 
   return (
     <div>
+      {message.senderEmail ? (
+        <div
+          data-testid="user-message-sender"
+          className="mb-1 flex justify-end text-[0.68rem] font-medium text-[var(--color-text-muted)]"
+        >
+          <span>{message.senderEmail}</span>
+        </div>
+      ) : null}
       {/* [overflow-wrap:anywhere] (not Tailwind's break-words = break-word)
           lets the bubble's intrinsic min-width drop to a single character,
           so a pasted long URL/token wraps inside the max-w-[88%] cap

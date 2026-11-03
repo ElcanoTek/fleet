@@ -156,6 +156,19 @@ func (c *Config) SetContextHandlesEnabled(v bool) {
 	c.setLive(func() { c.ContextHandlesEnabled = v })
 }
 
+// LiveTeamChatsSharedByDefault reports whether non-lockdown conversations
+// created by team members start shared with their team by default,
+// admin-override-aware.
+func (c *Config) LiveTeamChatsSharedByDefault() bool {
+	return c.liveBool(func() bool { return c.TeamChatsSharedByDefault })
+}
+
+// SetTeamChatsSharedByDefault applies the admin override for default team chat
+// sharing.
+func (c *Config) SetTeamChatsSharedByDefault(v bool) {
+	c.setLive(func() { c.TeamChatsSharedByDefault = v })
+}
+
 // SetMaxCostUSDOverride installs (override=true) or clears (override=false)
 // the admin override of the per-run cost ceiling. The env-derived MaxCostUSD
 // field is left alone, so FLEET_MAX_COST_USD and the #286 env-file reload keep

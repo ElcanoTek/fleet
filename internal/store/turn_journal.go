@@ -628,16 +628,17 @@ func buildRecoveredEntries(journal []TurnJournalRow, events []TurnEvent) ([]agen
 			// turn_seq=1 and would duplicate. A resilience rollback re-drive
 			// can re-emit the same steer, so dedupe by input_id.
 			var p struct {
-				Text    string `json:"text"`
-				Steered bool   `json:"steered"`
-				InputID string `json:"input_id"`
+				Text        string `json:"text"`
+				Steered     bool   `json:"steered"`
+				InputID     string `json:"input_id"`
+				SenderEmail string `json:"sender_email"`
 			}
 			if json.Unmarshal(ev.Data, &p) != nil || !p.Steered || p.InputID == "" || seenSteer[p.InputID] {
 				continue
 			}
 			seenSteer[p.InputID] = true
 			flushText()
-			appendJSON("user", "text", agent.TextContent{Text: p.Text, Steered: true})
+			appendJSON("user", "text", agent.TextContent{Text: p.Text, Steered: true, SenderEmail: strings.TrimSpace(p.SenderEmail)})
 		case "reasoning.end":
 			var p struct {
 				Text string `json:"text"`

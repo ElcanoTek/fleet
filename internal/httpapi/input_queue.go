@@ -33,12 +33,14 @@ import (
 // queued->injected flip), so a missed or unconsumed offer automatically
 // degrades to the durable fallback — the row drains as the next turn.
 type steerMailbox struct {
-	store  chatStore
-	turnID string
-	buf    *turnBuffer
-	user   string
-	convID string
-	slot   chan agentcore.SteerMessage
+	store    chatStore
+	turnID   string
+	buf      *turnBuffer
+	user     string
+	convID   string
+	nonOwner bool
+	mpEpoch  uint64
+	slot     chan agentcore.SteerMessage
 }
 
 func newSteerMailbox(st chatStore, user, convID, turnID string, buf *turnBuffer) *steerMailbox {
@@ -94,7 +96,29 @@ func (m *steerMailbox) emitQueueSnapshot() {
 	if err != nil {
 		return
 	}
-	m.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items)})
+	m.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items), "user_email": m.user})
+}
+
+const multiplayerInputKeyPrefix = "mp-user:"
+
+func effectiveMultiplayerInputID(user, rawID string) string {
+	rawID = strings.TrimSpace(rawID)
+	user = strings.ToLower(strings.TrimSpace(user))
+	if rawID == "" || user == "" {
+		return rawID
+	}
+	return multiplayerInputKeyPrefix + user + ":" + rawID
+}
+
+func externalClientInputID(storedID string) string {
+	if !strings.HasPrefix(storedID, multiplayerInputKeyPrefix) {
+		return storedID
+	}
+	rest := strings.TrimPrefix(storedID, multiplayerInputKeyPrefix)
+	if idx := strings.IndexByte(rest, ':'); idx >= 0 {
+		return rest[idx+1:]
+	}
+	return storedID
 }
 
 // queueItemsPayload is the wire shape of one queue snapshot (full snapshot on
@@ -105,7 +129,7 @@ func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 		preview := truncate.Clamp(it.Message, 160, "…")
 		out = append(out, map[string]any{
 			"id":              it.ID,
-			"client_input_id": it.ClientInputID,
+			"client_input_id": externalClientInputID(it.ClientInputID),
 			// The submitting client's own identity for the row (#1592), so a
 			// browser whose POST response was lost can confirm its input was
 			// queued before reporting it sent.
@@ -122,6 +146,20 @@ func queueItemsPayload(items []store.InputQueueRow) []map[string]any {
 	return out
 }
 
+// queueItemsPayloadForBuffer is queueItemsPayload with each row's user_email
+// attached so sanitizeTurnEventForViewer can filter a conversation-wide
+// queue.updated snapshot (emitted after Stop scope=all) down to the viewing
+// user's own rows before stripping user_email on delivery.
+func queueItemsPayloadForBuffer(items []store.InputQueueRow) []map[string]any {
+	out := queueItemsPayload(items)
+	for i, it := range items {
+		if i < len(out) {
+			out[i]["user_email"] = it.UserEmail
+		}
+	}
+	return out
+}
+
 // emitQueueUpdate publishes the queue snapshot into the conversation's live
 // buffer, when one is running (nil-safe otherwise — the GET endpoint is the
 // authoritative snapshot for idle conversations).
@@ -134,7 +172,7 @@ func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
 	if err != nil {
 		return
 	}
-	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items)})
+	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayloadForBuffer(items), "user_email": user})
 }
 
 // maxPendingInputs caps how many still-queued rows one conversation may hold.
@@ -164,7 +202,7 @@ const maxPendingInputs = 20
 // rather than a wrong one.
 func (s *Server) writeQueueAck(ctx context.Context, w http.ResponseWriter, status int, convID string, row store.InputQueueRow) {
 	input := map[string]any{
-		"id": row.ID, "client_input_id": row.ClientInputID,
+		"id": row.ID, "client_input_id": externalClientInputID(row.ClientInputID),
 		"mode": row.Mode, "state": row.State, "position": row.Position,
 	}
 	// A row the ack already reports as not queued is not in line; only a
@@ -288,7 +326,7 @@ func (s *Server) handleBusySubmit(w http.ResponseWriter, r *http.Request, user s
 	}
 
 	if created && row.Mode == store.InputModeSteer && row.State != store.InputStateCancelled {
-		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil {
+		if entry, ok := s.getInflight(conv.ID); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
 			entry.steer.offer(row.ID, req.Message)
 		}
 	}
@@ -506,7 +544,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	user := row.UserEmail
 	lctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	conv, err := s.store.Get(lctx, user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(lctx, user, convID)
 	if err != nil {
 		// TRANSIENT store failure: the 202-acknowledged input must survive.
 		// Back to queued + a bounded re-kick; never cancelled for weather.
@@ -522,7 +560,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	}
 	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
 		defaultModel := agentcore.CurrentDefaultModel()
-		if err := s.store.SetModel(lctx, user, convID, defaultModel); err != nil {
+		if err := s.store.SetModel(lctx, convOwnerEmail(conv, user), convID, defaultModel); err != nil {
 			log.Printf("input queue: conversation %s set default model failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
 			s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 			s.rekickDrainAfter(convID, 3*time.Second)
@@ -624,7 +662,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 // GET (snapshot), DELETE {inputID} (remove), POST {inputID}/send-now
 // (promote; offered to the running turn when the row is steerable).
 func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user, convID, subArg string) {
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -666,8 +704,9 @@ func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user,
 			return
 		}
 		// Running turn: offer the promoted row to the steer boundary too (the
-		// queued->injected flip still gates on the boundary's Acknowledge).
-		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil {
+		// queued->injected flip still gates on the boundary's Acknowledge),
+		// only when the active turn belongs to the same sender.
+		if entry, running := s.getInflight(convID); running && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
 			items, lerr := s.store.ListQueuedInputs(r.Context(), user, convID)
 			if lerr == nil {
 				for _, it := range items {

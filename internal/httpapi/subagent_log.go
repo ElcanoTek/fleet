@@ -28,7 +28,7 @@ import (
 // spawn's tool result (role, spend, answer) remains in the conversation.
 func (s *Server) handleSubagentLog(w http.ResponseWriter, r *http.Request, convID, childID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		// A store failure is the server's problem, not a missing row: a 500
 		// keeps a Postgres blip from being read as "this transcript is gone"
@@ -51,18 +51,29 @@ func (s *Server) handleSubagentLog(w http.ResponseWriter, r *http.Request, convI
 		return
 	}
 	linked := false
+	initiatingSender := strings.TrimSpace(conv.UserEmail)
+	currentTurnSender := initiatingSender
 	needle := `\"child_session_id\":\"` + childID + `\"`
 	for _, entry := range history {
+		if entry.Role == "user" {
+			var tc agent.TextContent
+			if err := json.Unmarshal(entry.Content, &tc); err == nil && strings.TrimSpace(tc.SenderEmail) != "" {
+				currentTurnSender = strings.TrimSpace(tc.SenderEmail)
+			} else {
+				currentTurnSender = strings.TrimSpace(conv.UserEmail)
+			}
+		}
 		// The spawn tool result is a JSON string embedded in the tool_result
 		// entry's content, so the child id appears with escaped quotes; check
 		// the raw form too for robustness across encoders.
 		if strings.Contains(string(entry.Content), needle) ||
 			strings.Contains(string(entry.Content), `"child_session_id":"`+childID+`"`) {
 			linked = true
+			initiatingSender = currentTurnSender
 			break
 		}
 	}
-	if !linked {
+	if !linked || (initiatingSender != "" && !strings.EqualFold(initiatingSender, user)) {
 		http.Error(w, "no sub-agent with this id is recorded in this conversation", http.StatusNotFound)
 		return
 	}

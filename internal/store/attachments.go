@@ -118,6 +118,22 @@ func (s *Store) SweepOrphanWorkspaces(ctx context.Context, root string) (int, er
 		}
 		removed++
 	}
+	// Also sweep the sibling .fleet-private-<base> stash root if present.
+	if absRoot, absErr := filepath.Abs(root); absErr == nil {
+		absRoot = filepath.Clean(absRoot)
+		siblingStash := filepath.Join(filepath.Dir(absRoot), ".fleet-private-"+filepath.Base(absRoot))
+		if stEntries, rerr := os.ReadDir(siblingStash); rerr == nil {
+			for _, e := range stEntries {
+				if !e.IsDir() || !looksLikeConversationID(e.Name()) {
+					continue
+				}
+				if _, alive := live[e.Name()]; alive {
+					continue
+				}
+				_ = removeWorkspaceTree(siblingStash, e.Name())
+			}
+		}
+	}
 	return removed, errors.Join(errs...)
 }
 
@@ -229,8 +245,8 @@ func (s *Store) StorageConversationStats(ctx context.Context, cutoff time.Time) 
 		`SELECT
 		   COUNT(*) FILTER (WHERE deleted_at IS NULL),
 		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND pinned),
-		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND (pinned OR archived_at IS NOT NULL OR share_token IS NOT NULL OR project_id IS NOT NULL)),
-		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT pinned AND archived_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1)
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND (pinned OR archived_at IS NOT NULL OR share_token IS NOT NULL OR project_id IS NOT NULL OR COALESCE(multiplayer, FALSE) OR COALESCE(team_visible, FALSE))),
+		   COUNT(*) FILTER (WHERE deleted_at IS NULL AND NOT pinned AND archived_at IS NULL AND share_token IS NULL AND project_id IS NULL AND NOT COALESCE(multiplayer, FALSE) AND NOT COALESCE(team_visible, FALSE) AND updated_at < $1)
 		 FROM conversations`,
 		cutoff.Unix(),
 	).Scan(&out.Total, &out.Pinned, &out.Protected, &out.ReclaimableAtCutoff)
@@ -250,7 +266,7 @@ func (s *Store) StorageConversationStats(ctx context.Context, cutoff time.Time) 
 func (s *Store) DeleteUnpinnedOlderThan(ctx context.Context, cutoff time.Time) (int, error) {
 	res, err := s.db.ExecContext(ctx,
 		`DELETE FROM conversations
-		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND updated_at < $1`,
+		 WHERE pinned = FALSE AND archived_at IS NULL AND deleted_at IS NULL AND share_token IS NULL AND project_id IS NULL AND COALESCE(multiplayer, FALSE) = FALSE AND COALESCE(team_visible, FALSE) = FALSE AND updated_at < $1`,
 		cutoff.Unix(),
 	)
 	if err != nil {

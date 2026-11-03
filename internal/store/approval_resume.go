@@ -190,45 +190,23 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 	out.Owner = owner
 
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM approvals
-		  WHERE conversation_id = $1
-		    AND ((status = 'pending' AND tool_name <> 'preview_email')
-		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
-		  ORDER BY created_at, id`,
-		req.ConversationID, ApprovalExecutingSentinel)
+	resumeUser, outstanding, err := selectApprovalResumeUserTx(ctx, tx, req, owner)
 	if err != nil {
 		return out, err
 	}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return out, err
-		}
-		if req.IgnoreOutstanding != nil && req.IgnoreOutstanding(id) {
-			continue
-		}
-		out.Outstanding = append(out.Outstanding, id)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return out, err
-	}
-	_ = rows.Close()
-	if len(out.Outstanding) > 0 {
+	if resumeUser == "" {
+		out.Outstanding = outstanding
 		return out, nil // rolled back: nothing changed
 	}
+	out.Owner = resumeUser
 
-	// An approved card whose sentinel still stands (its outcome write failed)
-	// is not settled: it stays armed, and boot recovery drops it with a note
-	// once RecoverStrandedApprovals has recorded it as unknown.
-	rows, err = tx.QueryContext(ctx,
+	rows, err := tx.QueryContext(ctx,
 		`UPDATE approvals SET resume_state = 'claimed'
 		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
 		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
+		    AND LOWER(COALESCE(NULLIF(TRIM(user_email), ''), $3)) = LOWER($4)
 		  RETURNING id, tool_name, status, COALESCE(result_text, ''), is_err, COALESCE(resolved_at, 0), created_at`,
-		req.ConversationID, ApprovalExecutingSentinel)
+		req.ConversationID, ApprovalExecutingSentinel, owner, resumeUser)
 	if err != nil {
 		return out, err
 	}
@@ -305,7 +283,7 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
-		ID: uuid.NewString(), ConversationID: req.ConversationID, UserEmail: owner,
+		ID: uuid.NewString(), ConversationID: req.ConversationID, UserEmail: resumeUser,
 		ClientInputID: "approval-resume:" + ids[0],
 		Message:       ApprovalResumeInputText(out.Claimed),
 		Attachments:   "[]", Mode: InputModeResume, State: InputStateQueued,
@@ -318,6 +296,88 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 	}
 	out.Input = &row
 	return out, nil
+}
+
+// selectApprovalResumeUserTx selects the earliest participant with settled
+// armed approvals who has no outstanding pending/executing approvals of their
+// own, or returns the blocking outstanding approval IDs when none can resume.
+func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalResumeRequest, owner string) (string, []string, error) {
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, COALESCE(NULLIF(TRIM(user_email), ''), $3) FROM approvals
+		  WHERE conversation_id = $1
+		    AND ((status = 'pending' AND tool_name <> 'preview_email')
+		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
+		  ORDER BY created_at, id`,
+		req.ConversationID, ApprovalExecutingSentinel, owner)
+	if err != nil {
+		return "", nil, err
+	}
+	outstandingByUser := make(map[string][]string)
+	var allOutstanding []string
+	for rows.Next() {
+		var id, uEmail string
+		if err := rows.Scan(&id, &uEmail); err != nil {
+			_ = rows.Close()
+			return "", nil, err
+		}
+		if req.IgnoreOutstanding != nil && req.IgnoreOutstanding(id) {
+			continue
+		}
+		uKey := strings.ToLower(strings.TrimSpace(uEmail))
+		outstandingByUser[uKey] = append(outstandingByUser[uKey], id)
+		allOutstanding = append(allOutstanding, id)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", nil, err
+	}
+	_ = rows.Close()
+
+	armedRows, err := tx.QueryContext(ctx,
+		`SELECT COALESCE(NULLIF(TRIM(user_email), ''), $3)
+		   FROM approvals
+		  WHERE conversation_id = $1 AND resume_state = 'armed' AND status <> 'pending'
+		    AND NOT (status = 'approved' AND is_err IS NULL AND result_text = $2)
+		  ORDER BY COALESCE(resolved_at, 0), created_at, id`,
+		req.ConversationID, ApprovalExecutingSentinel, owner)
+	if err != nil {
+		return "", nil, err
+	}
+	var (
+		resumeUser     string
+		blockedOut     []string
+		seenBlockedUsr = make(map[string]bool)
+		anyArmed       bool
+	)
+	for armedRows.Next() {
+		var uEmail string
+		if err := armedRows.Scan(&uEmail); err != nil {
+			_ = armedRows.Close()
+			return "", nil, err
+		}
+		anyArmed = true
+		uKey := strings.ToLower(strings.TrimSpace(uEmail))
+		if len(outstandingByUser[uKey]) == 0 {
+			resumeUser = uEmail
+			break
+		}
+		if !seenBlockedUsr[uKey] {
+			seenBlockedUsr[uKey] = true
+			blockedOut = append(blockedOut, outstandingByUser[uKey]...)
+		}
+	}
+	if err := armedRows.Err(); err != nil {
+		_ = armedRows.Close()
+		return "", nil, err
+	}
+	_ = armedRows.Close()
+	if resumeUser != "" {
+		return resumeUser, nil, nil
+	}
+	if anyArmed {
+		return "", blockedOut, nil
+	}
+	return "", allOutstanding, nil
 }
 
 // approvalResumeOutcome names a settled card's outcome from its row.

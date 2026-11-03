@@ -141,6 +141,19 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
         },
       });
     }
+    if (url.searchParams.get("scope") === "shared") {
+      return r.fulfill({
+        json: {
+          conversations: seededConversations.filter(
+            (c) =>
+              ((c as { team_visible?: boolean }).team_visible ||
+                (c as { multiplayer?: boolean }).multiplayer) &&
+              (c as { user_email?: string }).user_email &&
+              (c as { user_email?: string }).user_email !== "e2e@example.com",
+          ),
+        },
+      });
+    }
     const archived = url.searchParams.get("archived") === "true";
     return r.fulfill({
       json: {

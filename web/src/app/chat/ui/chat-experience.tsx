@@ -196,6 +196,12 @@ export type ConversationSummary = {
   // share_token — a chat can be link-shared, team-shared, both, or neither,
   // and the rail badges them distinctly because the audiences differ.
   team_visible?: boolean;
+  // multiplayer opts this chat into live collaborative multiplayer mode where
+  // teammates and explicitly added participants can send messages directly.
+  multiplayer?: boolean;
+  multiplayer_participants?: string[];
+  multiplayer_excluded?: string[];
+  user_email?: string;
   // project_id binds the conversation to a project/space (#509). Set at
   // creation or by re-filing (drag onto a rail project / kebab "Move to
   // project"). In the rail a project conversation lives only under its
@@ -937,13 +943,31 @@ export function ChatExperience({
   // moves out of `conversations` into `archivedConversations`, but the chat view
   // stays on it — so the header title, lockdown badge, and tab title must still
   // resolve it rather than going blank.
+  const [teamSharedConversations, setTeamSharedConversations] = useState<
+    ConversationSummary[]
+  >([]);
   const activeConversation = useMemo(
     () =>
       conversations.find((c) => c.id === activeConversationId) ??
       archivedConversations.find((c) => c.id === activeConversationId) ??
+      teamSharedConversations.find((c) => c.id === activeConversationId) ??
       null,
-    [conversations, archivedConversations, activeConversationId],
+    [
+      conversations,
+      archivedConversations,
+      teamSharedConversations,
+      activeConversationId,
+    ],
   );
+  const isActiveConversationOwner =
+    !activeConversationId ||
+    isPendingKey(activeConversationId) ||
+    conversations.some((c) => c.id === activeConversationId) ||
+    archivedConversations.some((c) => c.id === activeConversationId) ||
+    !activeConversation?.user_email ||
+    !userEmail.trim() ||
+    activeConversation.user_email.toLowerCase() ===
+      userEmail.trim().toLowerCase();
   // Lockdown state for the current view:
   //   - Active conversation flagged lockdown → use that
   //   - Pending new chat that the user clicked "+ Lockdown" for → true
@@ -2511,6 +2535,7 @@ export function ChatExperience({
           reconcileAutoApprove(data.conversations ?? []),
         );
       }
+      void loadTeamSharedChatCounts();
     } catch {
       // non-fatal
     }
@@ -2572,7 +2597,10 @@ export function ChatExperience({
     let followResume = false;
     if (attachedConvIdsRef.current.has(conversationId) || recoveryHoldsIt) {
       setActiveConversationId(conversationId);
-      const conv = conversations.find((c) => c.id === conversationId);
+      const conv =
+        conversations.find((c) => c.id === conversationId) ??
+        archivedConversations.find((c) => c.id === conversationId) ??
+        teamSharedConversations.find((c) => c.id === conversationId);
       if (conv) {
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || currentDefaultModel());
@@ -2676,6 +2704,22 @@ export function ChatExperience({
       const movesTheUser =
         !options.background ||
         activeConversationIdRef.current === conversationId;
+      if (
+        data.conversation.user_email &&
+        userEmail.trim() &&
+        data.conversation.user_email.toLowerCase() !==
+          userEmail.trim().toLowerCase()
+      ) {
+        setTeamSharedConversations((prev) => {
+          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...prev[idx], ...data.conversation };
+            return next;
+          }
+          return [data.conversation, ...prev];
+        });
+      }
       if (movesTheUser) {
         setActiveConversationId(data.conversation.id);
         // Opening a conversation clears the keyboard focus cursor (#306): the
@@ -3429,15 +3473,29 @@ export function ChatExperience({
   >(undefined);
   const loadTeamSharedChatCounts = useCallback(async () => {
     try {
-      const res = await fetch("/api/conversations?scope=team", {
-        cache: "no-store",
-      });
-      if (!res.ok) {
+      const [teamRes, sharedRes] = await Promise.all([
+        fetch("/api/conversations?scope=team", { cache: "no-store" }),
+        fetch("/api/conversations?scope=shared", { cache: "no-store" }).catch(
+          () => null,
+        ),
+      ]);
+      if (sharedRes && sharedRes.ok) {
+        const sharedData = (await sharedRes.json()) as {
+          conversations?: ConversationSummary[];
+        };
+        const mine = userEmail.trim().toLowerCase();
+        setTeamSharedConversations(
+          (sharedData.conversations ?? []).filter(
+            (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
+          ),
+        );
+      }
+      if (!teamRes.ok) {
         // 400 is "you have no team": a KNOWN empty, not an unknown.
-        if (res.status === 400) setTeamSharedChatCounts({});
+        if (teamRes.status === 400) setTeamSharedChatCounts({});
         return;
       }
-      const data = (await res.json()) as {
+      const data = (await teamRes.json()) as {
         conversations?: { project_id?: string; user_email?: string }[];
       };
       const mine = userEmail.trim().toLowerCase();
@@ -5995,6 +6053,16 @@ export function ChatExperience({
           onDeleteProject={(projectID) => setPendingProjectDelete(projectID)}
           projects={projects}
           teamSharedChatCounts={teamSharedChatCounts}
+          teamSharedConversations={teamSharedConversations}
+          onSelectTeamSharedConversation={(c) => {
+            setProjectHome(null);
+            if (c.multiplayer) {
+              setTeamChatView(null);
+              void loadConversation(c.id);
+            } else {
+              setTeamChatView(c.id);
+            }
+          }}
           onMoveToProject={(conversationId, projectID) =>
             void moveConversationToProject(conversationId, projectID)
           }
@@ -6575,6 +6643,7 @@ export function ChatExperience({
             conversation={
               conversations.find((c) => c.id === shareDialog.id) ??
               archivedConversations.find((c) => c.id === shareDialog.id) ??
+              teamSharedConversations.find((c) => c.id === shareDialog.id) ??
               null
             }
             project={
@@ -6587,12 +6656,19 @@ export function ChatExperience({
                   p.id ===
                   ((
                     conversations.find((c) => c.id === shareDialog.id) ??
-                    archivedConversations.find((c) => c.id === shareDialog.id)
+                    archivedConversations.find((c) => c.id === shareDialog.id) ??
+                    teamSharedConversations.find((c) => c.id === shareDialog.id)
                   )?.project_id ?? ""),
               ) ?? null
             }
             myTeam={myTeam}
             isAdmin={myTeamAdmin}
+            isOwner={
+              shareDialog.id === activeConversationId
+                ? isActiveConversationOwner
+                : conversations.some((c) => c.id === shareDialog.id) ||
+                  archivedConversations.some((c) => c.id === shareDialog.id)
+            }
             teamSharedProjects={teamSharedProjects}
             error={shareError}
             busy={shareBusy}
@@ -6613,6 +6689,21 @@ export function ChatExperience({
             // Stays open after the move: the dialog re-renders in the shared
             // state (A5) with the team link one click away.
             onMoveAndShare={(c, projectID) => moveAndShareWithTeam(c, projectID)}
+            onMultiplayerChange={(convId, mpState) => {
+              const patch = (c: ConversationSummary): ConversationSummary =>
+                c.id === convId
+                  ? {
+                      ...c,
+                      multiplayer: mpState.multiplayer,
+                      team_visible: mpState.team_visible,
+                      multiplayer_participants: mpState.participants,
+                      multiplayer_excluded: mpState.excluded,
+                    }
+                  : c;
+              setConversations((cur) => cur.map(patch));
+              setArchivedConversations((cur) => cur.map(patch));
+              setTeamSharedConversations((cur) => cur.map(patch));
+            }}
             // A1b: New project with the team preselected; on create the chat
             // moves in and is shared (the New project dialog owns that).
             onCreateSharedProject={(c) => {
@@ -6855,7 +6946,7 @@ export function ChatExperience({
                   }}
                   className="min-w-0 flex-1 rounded-md border border-[var(--color-accent)] bg-transparent py-1 pl-0 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] outline-none sm:text-[1.25rem]"
                 />
-              ) : (
+              ) : isActiveConversationOwner ? (
                 <h2 className="min-w-0">
                   <button
                     type="button"
@@ -6865,6 +6956,10 @@ export function ChatExperience({
                   >
                     {title}
                   </button>
+                </h2>
+              ) : (
+                <h2 className="min-w-0 truncate py-1 pr-1.5 text-[1.0625rem] font-semibold text-[var(--color-text-primary)] sm:text-[1.25rem]">
+                  {title}
                 </h2>
               )}
               {isLockdown ? (
@@ -7044,6 +7139,7 @@ export function ChatExperience({
               lockdownAllowedModels={serverConfig.lockdownAllowedModels}
               lockdownOnly={serverConfig.lockdownOnly}
               selectedModel={selectedModel}
+              isConversationOwner={isActiveConversationOwner}
               patchAssistantMessage={patchAssistantMessage}
               resendUserMessage={resendUserMessage}
               retryLastUserMessage={retryLastUserMessage}
@@ -7149,7 +7245,7 @@ export function ChatExperience({
                   schedules={activeSchedules}
                   isAutoApprove={isAutoApprove}
                   isStreaming={isStreaming}
-                  onToggleAutoApprove={toggleAutoApprove}
+                  onToggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
                   onRunNow={(id) => void handleRunPatrolNow(id)}
                   onTogglePause={(id, status) =>
                     void handleTogglePausePatrol(id, status)
@@ -7179,7 +7275,8 @@ export function ChatExperience({
                 submitPrompt={submitPrompt}
                 sealed={isLockdown}
                 isAutoApprove={isAutoApprove}
-                toggleAutoApprove={toggleAutoApprove}
+                toggleAutoApprove={isActiveConversationOwner ? toggleAutoApprove : undefined}
+                isConversationOwner={isActiveConversationOwner}
                 isStreaming={isStreaming}
                 isUploadingAttachments={isUploadingAttachments}
                 isDraggingOver={isDraggingOver}

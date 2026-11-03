@@ -901,10 +901,18 @@ function ConvRow({
                 unlabeled chain link stood for "shared" and, inside a
                 team-shared project, read as "my team can see this" — which it
                 never meant. A chat can carry one badge, both, or neither. */}
-            {conversation.team_visible ? (
+            {conversation.team_visible || conversation.multiplayer ? (
               <span
-                aria-label="Shared with your team"
-                title="Shared with your team — teammates can read it"
+                aria-label={
+                  conversation.multiplayer
+                    ? "Multiplayer chat"
+                    : "Shared with your team"
+                }
+                title={
+                  conversation.multiplayer
+                    ? "Multiplayer — teammates can chat here"
+                    : "Shared with your team — teammates can read it"
+                }
               >
                 <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
               </span>
@@ -1046,6 +1054,8 @@ export function ConversationSidebar({
   onDeleteProject,
   projects,
   teamSharedChatCounts,
+  teamSharedConversations = [],
+  onSelectTeamSharedConversation,
   onMoveToProject,
 }: {
   sidebarOpen: boolean;
@@ -1155,6 +1165,9 @@ export function ConversationSidebar({
   // The shared chats themselves stay OUT of the rail (ADR-0057: the project
   // home is the one discovery surface) — this is a count, not a listing.
   teamSharedChatCounts?: Record<string, number>;
+  // Shared and Multiplayer conversations from teammates (GET /conversations?scope=shared).
+  teamSharedConversations?: ConversationSummary[];
+  onSelectTeamSharedConversation?: (conversation: ConversationSummary) => void;
   // Re-files a conversation into a project ("" = unfile) — drag-and-drop and
   // the kebab's "Move to project" both land here; the parent owns the
   // optimistic state + POST.
@@ -1234,6 +1247,7 @@ export function ConversationSidebar({
   // drop-target highlight.
   const [dragOverProject, setDragOverProject] = useState<string | null>(null);
   const [labelsOpen, setLabelsOpen] = useState(true);
+  const [teamChatsOpen, setTeamChatsOpen] = useState(true);
   const [bulkPanel, setBulkPanel] = useState<"none" | "labels">("none");
   const bulkLabelsRef = useRef<HTMLButtonElement | null>(null);
   // The transient per-row "copied ✓" flash is gone with the kebab's copy
@@ -1968,6 +1982,65 @@ export function ConversationSidebar({
                   recent.map(renderRow)
                 )}
               </div>
+              {teamSharedConversations.length > 0 ? (
+                <div className="mb-1 mt-2 border-t border-[var(--color-border)] pt-2">
+                  <SectionToggle
+                    icon="message"
+                    label={`Team chats (${teamSharedConversations.length})`}
+                    open={teamChatsOpen}
+                    onToggle={() => setTeamChatsOpen((o) => !o)}
+                  />
+                  {teamChatsOpen
+                    ? teamSharedConversations.map((c) => {
+                        const active = activeConversationId === c.id;
+                        const ownerShort = c.user_email
+                          ? c.user_email.split("@")[0]
+                          : "";
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            data-testid="team-shared-conv-row"
+                            className={[
+                              "flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[0.84rem] transition",
+                              active
+                                ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]"
+                                : "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
+                            ].join(" ")}
+                            onClick={() => {
+                              setSidebarOpen(false);
+                              if (onSelectTeamSharedConversation) {
+                                onSelectTeamSharedConversation(c);
+                              } else {
+                                void loadConversation(c.id);
+                              }
+                            }}
+                            title={
+                              c.user_email
+                                ? `${c.title} (${c.user_email})`
+                                : c.title
+                            }
+                          >
+                            <TeamGlyph className="size-3 shrink-0 text-[var(--color-accent)]" />
+                            <span className="min-w-0 flex-1 truncate">
+                              {c.title}
+                            </span>
+                            {c.multiplayer ? (
+                              <span className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]">
+                                Live
+                              </span>
+                            ) : null}
+                            {ownerShort ? (
+                              <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.66rem] text-[var(--color-text-muted)]">
+                                {ownerShort}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })
+                    : null}
+                </div>
+              ) : null}
             </>
           )}
 

@@ -1,0 +1,3 @@
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS multiplayer BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS multiplayer_participants TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS multiplayer_excluded TEXT NOT NULL DEFAULT '[]';

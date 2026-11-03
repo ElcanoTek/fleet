@@ -354,7 +354,7 @@ type groupStageStore struct {
 	n int
 }
 
-func (g *groupStageStore) SupersedePendingApprovals(context.Context, string, string) (int64, error) {
+func (g *groupStageStore) SupersedePendingApprovals(context.Context, string, string, string) (int64, error) {
 	return 0, nil
 }
 

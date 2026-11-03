@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -64,6 +65,8 @@ type turnBuffer struct {
 	// "evicted" frame — without it a congested client saw the same clean EOF
 	// a finished turn produces and rendered a still-generating turn as done.
 	evictedSubs map[uint64]bool
+	revokedSubs map[uint64]bool
+	subViewers  map[uint64]string
 	nextSubID   uint64
 	closed      bool
 	finishedAt  time.Time
@@ -121,6 +124,8 @@ func newTurnBuffer(convID, turnID string) *turnBuffer {
 		turnID:      turnID,
 		subscribers: make(map[uint64]chan bufferedEvent),
 		evictedSubs: make(map[uint64]bool),
+		revokedSubs: make(map[uint64]bool),
+		subViewers:  make(map[uint64]string),
 		maxBytes:    sseMaxBytesPerTurn,
 	}
 }
@@ -529,6 +534,233 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 	return store.TurnStatusCompleted
 }
 
+// sanitizeTurnEventForViewer filters or redacts sender-private fields from a
+// turn event before it is delivered to viewerEmail:
+//   - user.message: strips injected_context when viewerEmail is not the message
+//     sender (defaulting to convOwnerEmail when sender_email is absent).
+//   - queue.updated: skips the event when user_email is set to another user so
+//     one multiplayer participant's queue updates never overwrite another
+//     participant's visible queue, and strips the internal user_email tag when
+//     delivering to the matching user.
+func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	switch name {
+	case "conversation":
+		return sanitizeConversationEvent(data, viewerEmail, convOwnerEmail)
+	case "user.message":
+		if viewerEmail == "" || len(data) == 0 {
+			return data, true
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return data, true
+		}
+		if _, hasInjected := m["injected_context"]; !hasInjected {
+			return data, true
+		}
+		sender, _ := m["sender_email"].(string)
+		sender = strings.TrimSpace(sender)
+		if sender == "" {
+			sender = strings.TrimSpace(convOwnerEmail)
+		}
+		if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+			delete(m, "injected_context")
+			if b, err := json.Marshal(m); err == nil {
+				return b, true
+			}
+		}
+		return data, true
+	case "mcp.servers_updated":
+		return sanitizeMCPServersUpdatedEvent(data, viewerEmail, convOwnerEmail)
+	case "queue.updated":
+		return sanitizeQueueUpdatedEvent(data, viewerEmail)
+	case "turn.completed", "turn.cancelled", "turn.error", "turn.model_required":
+		return sanitizeTerminalTurnEvent(name, data, viewerEmail, convOwnerEmail)
+	case "tool.approval_required", "tool.approval_card_fallback", "tool.approval_superseded", "tool.action_recorded", "tool.action_record_card", "tool.auto_resolved", "tool.call", "tool.result", "subagent.progress", "reasoning.start", "reasoning.delta", "reasoning.end", "memory.proposed", "patrol.updated":
+		if len(data) == 0 {
+			return data, true
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return data, true
+		}
+		uEmail, _ := m["user_email"].(string)
+		uEmail = strings.TrimSpace(uEmail)
+		if uEmail == "" {
+			return data, true
+		}
+		if viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+			return nil, false
+		}
+		delete(m, "user_email")
+		if b, err := json.Marshal(m); err == nil {
+			return b, true
+		}
+		return data, true
+	default:
+		return data, true
+	}
+}
+
+func sanitizeConversationEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 || viewerEmail == "" || convOwnerEmail == "" || strings.EqualFold(viewerEmail, convOwnerEmail) {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	if _, ok := m["auto_approve"]; !ok {
+		return data, true
+	}
+	delete(m, "auto_approve")
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
+func sanitizeTerminalTurnEvent(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	delete(m, "user_email")
+	sender := uEmail
+	if sender == "" {
+		sender = strings.TrimSpace(convOwnerEmail)
+	}
+	if viewerEmail != "" && sender != "" && !strings.EqualFold(viewerEmail, sender) {
+		switch name {
+		case "turn.completed":
+			return []byte("{}"), true
+		case "turn.cancelled":
+			return []byte(`{"reason":"cancelled"}`), true
+		case "turn.error":
+			return []byte(`{"message":"Turn failed."}`), true
+		case "turn.model_required":
+			out := map[string]any{"message": "Turn failed."}
+			if reason, ok := m["reason"].(string); ok && reason != "" {
+				out["reason"] = reason
+			}
+			if b, err := json.Marshal(out); err == nil {
+				return b, true
+			}
+			return []byte(`{"message":"Turn failed."}`), true
+		}
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
+func sanitizeMCPServersUpdatedEvent(data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	partRaw, hasPart := m["participant_enabled_optional"]
+	ownerRaw, hasOwner := m["owner_enabled_optional"]
+	viewerMap, _ := m["viewer_enabled_optional"].(map[string]any)
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	delete(m, "participant_enabled_optional")
+	delete(m, "owner_enabled_optional")
+	delete(m, "viewer_enabled_optional")
+	delete(m, "user_email")
+	if !hasPart {
+		return data, true
+	}
+	isSender := viewerEmail != "" && uEmail != "" && strings.EqualFold(viewerEmail, uEmail)
+	if viewerEmail != "" && !isSender {
+		targetRaw := partRaw
+		viewerKey := strings.ToLower(strings.TrimSpace(viewerEmail))
+		if vSpecific, ok := viewerMap[viewerKey]; ok {
+			targetRaw = vSpecific
+		} else if convOwnerEmail != "" && strings.EqualFold(viewerEmail, convOwnerEmail) {
+			if hasOwner {
+				targetRaw = ownerRaw
+			} else if uEmail == "" {
+				if b, err := json.Marshal(m); err == nil {
+					return b, true
+				}
+				return data, true
+			}
+		}
+		m["enabled_optional"] = targetRaw
+		allowed := map[string]bool{}
+		if arr, ok := targetRaw.([]any); ok {
+			for _, v := range arr {
+				if s, ok := v.(string); ok {
+					allowed[strings.ToLower(strings.TrimSpace(s))] = true
+				}
+			}
+		}
+		if addedArr, ok := m["added"].([]any); ok && len(addedArr) > 0 {
+			var filteredAdded []string
+			for _, v := range addedArr {
+				if s, ok := v.(string); ok && allowed[strings.ToLower(strings.TrimSpace(s))] {
+					filteredAdded = append(filteredAdded, s)
+				}
+			}
+			if len(filteredAdded) == 0 {
+				return nil, false
+			}
+			m["added"] = filteredAdded
+		}
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
+func sanitizeQueueUpdatedEvent(data []byte, viewerEmail string) ([]byte, bool) {
+	if len(data) == 0 {
+		return data, true
+	}
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		return data, true
+	}
+	uEmail, _ := m["user_email"].(string)
+	uEmail = strings.TrimSpace(uEmail)
+	if uEmail != "" && viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+		return nil, false
+	}
+	delete(m, "user_email")
+	if rawItems, ok := m["items"].([]any); ok {
+		filtered := make([]any, 0, len(rawItems))
+		for _, rawItem := range rawItems {
+			itemMap, ok := rawItem.(map[string]any)
+			if !ok {
+				filtered = append(filtered, rawItem)
+				continue
+			}
+			itemUser, _ := itemMap["user_email"].(string)
+			itemUser = strings.TrimSpace(itemUser)
+			delete(itemMap, "user_email")
+			if uEmail == "" && viewerEmail != "" && itemUser != "" && !strings.EqualFold(viewerEmail, itemUser) {
+				continue
+			}
+			filtered = append(filtered, itemMap)
+		}
+		m["items"] = filtered
+	}
+	if b, err := json.Marshal(m); err == nil {
+		return b, true
+	}
+	return data, true
+}
+
 // Attach writes every event with ID > lastEventID to w in SSE framing,
 // then streams any subsequent events as they arrive. Returns when the
 // buffer is sealed and fully drained, or when ctx is cancelled (client
@@ -540,22 +772,25 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 // otherwise governed events the client didn't declare are suppressed. Lifecycle
 // and control frames always flow — see shouldEmit.
 func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool) error {
+	return b.AttachForViewer(ctx, lastEventID, w, caps, "", "")
+}
+
+// AttachForViewer is Attach with per-viewer sanitization of sender-only context
+// (`user.message.injected_context`) and user-scoped `queue.updated` frames in
+// multiplayer conversations.
+func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string) error {
+	return b.AttachForViewerChecked(ctx, lastEventID, w, caps, viewerEmail, convOwnerEmail, nil)
+}
+
+// AttachForViewerChecked is AttachForViewer with an optional allowCheck hook
+// evaluated after subscriber registration and during replay so a concurrent
+// multiplayer access revocation cannot slip between the route's initial lookup
+// and subscriber registration.
+func (b *turnBuffer) AttachForViewerChecked(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string, allowCheck func() bool) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache, no-transform")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	setSupportedCapabilitiesHeader(w)
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
-
-	// Advertise supported capabilities as the very first frame so a client that
-	// can't read response headers (browser EventSource) still discovers them.
-	// Best-effort: a write error here is surfaced by the replay/live writes below.
-	_ = writeCapabilitiesFrame(w, flusher)
 
 	// Atomically grab the replay slice and register a live subscription.
 	// Registering under the same lock the publisher uses guarantees no
@@ -575,8 +810,28 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 		subID = b.nextSubID
 		ch = make(chan bufferedEvent, 256)
 		b.subscribers[subID] = ch
+		b.subViewers[subID] = strings.ToLower(strings.TrimSpace(viewerEmail))
 	}
 	b.mu.Unlock()
+
+	if (allowCheck != nil && !allowCheck()) || b.isSubRevoked(subID) {
+		b.unsubscribe(subID)
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return nil
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	setSupportedCapabilitiesHeader(w)
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	// Advertise supported capabilities as the very first frame so a client that
+	// can't read response headers (browser EventSource) still discovers them.
+	// Best-effort: a write error here is surfaced by the replay/live writes below.
+	_ = writeCapabilitiesFrame(w, flusher)
 
 	// If the sliding window evicted events the client hadn't seen yet (the oldest
 	// surviving event is newer than its next-expected id), tell it up front so the
@@ -590,11 +845,20 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 		}
 	}
 
-	// Pump replay (filtered by the client's declared capabilities).
+	// Pump replay (filtered by the client's declared capabilities and viewer scope).
 	for _, e := range replay {
+		if b.isSubRevoked(subID) || (allowCheck != nil && !allowCheck()) {
+			b.unsubscribe(subID)
+			return nil
+		}
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
+		sanitizedData, keep := sanitizeTurnEventForViewer(e.Name, e.Data, viewerEmail, convOwnerEmail)
+		if !keep {
+			continue
+		}
+		e.Data = sanitizedData
 		if err := writeSSEFrame(w, flusher, e); err != nil {
 			b.unsubscribe(subID)
 			return err
@@ -638,6 +902,11 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 			if !shouldEmit(caps, ev.Name) {
 				continue
 			}
+			sanitizedData, keep := sanitizeTurnEventForViewer(ev.Name, ev.Data, viewerEmail, convOwnerEmail)
+			if !keep {
+				continue
+			}
+			ev.Data = sanitizedData
 			if err := writeSSEFrame(w, flusher, ev); err != nil {
 				b.unsubscribe(subID)
 				return err
@@ -676,6 +945,53 @@ func (b *turnBuffer) unsubscribe(id uint64) {
 		close(ch)
 		delete(b.subscribers, id)
 	}
+	delete(b.subViewers, id)
+}
+
+// subscriberEmails returns the deduplicated viewer emails of all currently
+// attached live SSE subscribers on this buffer.
+func (b *turnBuffer) subscriberEmails() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	seen := make(map[string]bool, len(b.subViewers))
+	var out []string
+	for subID := range b.subscribers {
+		v := strings.ToLower(strings.TrimSpace(b.subViewers[subID]))
+		if v != "" && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// detachUnauthorizedViewers closes and removes any live subscriber whose
+// viewerEmail is neither the conversation owner nor in allowedViewers.
+func (b *turnBuffer) detachUnauthorizedViewers(ownerEmail string, allowedViewers map[string]bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for subID, ch := range b.subscribers {
+		v := b.subViewers[subID]
+		if v == "" || strings.EqualFold(v, ownerEmail) || allowedViewers[v] {
+			continue
+		}
+		if b.revokedSubs == nil {
+			b.revokedSubs = make(map[uint64]bool)
+		}
+		b.revokedSubs[subID] = true
+		close(ch)
+		delete(b.subscribers, subID)
+		delete(b.subViewers, subID)
+	}
+}
+
+func (b *turnBuffer) isSubRevoked(subID uint64) bool {
+	if subID == 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.revokedSubs[subID]
 }
 
 // writeSSEFrame formats one event as an SSE frame and flushes. Any

@@ -46,6 +46,10 @@ type serverConfigResponse struct {
 	// reject oversize files client-side instead of discovering the limit
 	// after a full upload round-trip ends in a 413.
 	UploadMaxBytes int64 `json:"upload_max_bytes"`
+	// TeamChatsSharedByDefault: when enabled on this Fleet instance,
+	// non-lockdown chats created by team members automatically start shared
+	// with their team and unfiled chats can be shared directly with the team.
+	TeamChatsSharedByDefault bool `json:"team_chats_shared_by_default"`
 }
 
 func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
@@ -54,9 +58,10 @@ func (s *Server) serverConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := serverConfigResponse{
-		LockdownAvailable: s.cfg.LockdownAvailable(),
-		LockdownOnly:      s.cfg.LockdownOnly,
-		UploadMaxBytes:    s.cfg.UploadMaxBytes,
+		LockdownAvailable:        s.cfg.LockdownAvailable(),
+		LockdownOnly:             s.cfg.LockdownOnly,
+		UploadMaxBytes:           s.cfg.UploadMaxBytes,
+		TeamChatsSharedByDefault: s.cfg.LiveTeamChatsSharedByDefault(),
 	}
 	if resp.LockdownAvailable {
 		resp.LockdownAllowedModels = append(resp.LockdownAllowedModels, s.cfg.LockdownModels()...)

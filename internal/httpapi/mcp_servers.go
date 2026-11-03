@@ -455,17 +455,54 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", user, err)
+			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 		}
 		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 			for _, srv := range shared {
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", user, err)
+			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 		}
 	}
 	return valid
+}
+
+// effectiveOptionalMCPServersForCaller returns the conversation's enabled
+// optional MCP servers for user. For non-owner participants (whose
+// conv.OptionalMCPServersEnabled is nil for JSON redaction and whose raw list
+// is held in conv.ParticipantOptionalMCPServers), the list is intersected with
+// the caller's optionalServerWhitelist so bundled and caller-accessible
+// connectors remain enabled for participant turns without leaking private
+// owner-only remote MCP names.
+func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user string, conv *store.Conversation) []string {
+	if conv == nil {
+		return nil
+	}
+	raw := conv.OptionalMCPServersEnabled
+	if len(raw) == 0 {
+		raw = conv.ParticipantOptionalMCPServers
+	}
+	if len(raw) == 0 {
+		return nil
+	}
+	isOwner := (conv.UserEmail == "" && len(conv.OptionalMCPServersEnabled) > 0) ||
+		(conv.UserEmail != "" && strings.EqualFold(conv.UserEmail, user))
+	if isOwner && (s.remoteMCP == nil || !s.remoteMCP.Enabled()) {
+		return raw
+	}
+	if s.agent == nil {
+		return raw
+	}
+	valid := s.optionalServerWhitelist(ctx, user)
+	out := make([]string, 0, len(raw))
+	for _, n := range raw {
+		key := strings.ToLower(strings.TrimSpace(n))
+		if valid[key] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // handleConversationMCPServersGet serves GET /conversations/{id}/mcp-servers.
@@ -481,8 +518,9 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 // state. Reads from Manager's frozen catalogs + the conversation's fresh
 // opt-in list from Postgres.
 func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.Request, user, _ string, conv *store.Conversation) {
-	enabled := make(map[string]bool, len(conv.OptionalMCPServersEnabled))
-	for _, n := range conv.OptionalMCPServersEnabled {
+	eff := s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
+	enabled := make(map[string]bool, len(eff))
+	for _, n := range eff {
 		enabled[n] = true
 	}
 	// Availability layer: a connector the user disabled on the connections
@@ -557,7 +595,7 @@ func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.
 // the failure this feature exists to prevent. "accounts" omitted = clear
 // every override (a client that never sends it keeps pre-#988 behaviour:
 // the user's defaults).
-func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string) {
+func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	var req struct {
 		EnabledOptional []string          `json:"enabled_optional"`
 		Accounts        map[string]string `json:"accounts"`
@@ -565,7 +603,7 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 	if !decodeJSONBody(w, r, &req) {
 		return
 	}
-	unlock := s.connectorLocks.lock(user + "\x00" + id)
+	unlock := s.connectorLocks.lock(id)
 	defer unlock()
 
 	accounts, err := s.cleanMCPAccounts(r.Context(), user, req.Accounts)
@@ -588,11 +626,72 @@ func (s *Server) handleConversationMCPServersSet(w http.ResponseWriter, r *http.
 		clean = append(clean, n)
 	}
 	sort.Strings(clean)
-	if err := s.store.SetOptionalMCPServers(r.Context(), user, id, clean); err != nil {
+	ownerEmail := convOwnerEmail(conv, user)
+	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
+	callerEmail := strings.TrimSpace(user)
+	if callerEmail == "" {
+		callerEmail = ownerEmail
+	}
+	// Preserve another user's private remote connectors that were hidden
+	// from this caller's picker so toggling a shared connector never wipes
+	// another user's private remote server opt-ins.
+	merged := append([]string(nil), clean...)
+	mergedSeen := make(map[string]bool, len(merged))
+	for _, n := range merged {
+		mergedSeen[n] = true
+	}
+	if fresh, ferr := s.getOwnedOrMultiplayerConversation(r.Context(), user, id); ferr != nil {
+		http.Error(w, ferr.Error(), http.StatusInternalServerError)
+		return
+	} else if fresh != nil {
+		conv = fresh
+	} else if !isOwner {
+		http.Error(w, "conversation not found", http.StatusNotFound)
+		return
+	}
+	for _, raw := range rawConversationOptionalMCPServers(conv) {
+		norm := strings.ToLower(strings.TrimSpace(raw))
+		if norm != "" && !valid[norm] && !mergedSeen[norm] {
+			mergedSeen[norm] = true
+			merged = append(merged, norm)
+		}
+	}
+	sort.Strings(merged)
+	persisted := merged
+	if err := s.store.SetOptionalMCPServers(r.Context(), callerEmail, id, persisted); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
-	if err := s.store.SetConversationMCPAccounts(r.Context(), user, id, accounts); err != nil {
+	mergedAccounts := make(map[string]string)
+	if ownerConv, gerr := s.store.Get(r.Context(), ownerEmail, id); gerr == nil && ownerConv != nil {
+		if isOwner {
+			for k, v := range ownerConv.RawMCPAccounts {
+				if strings.HasPrefix(k, "mp-user:") {
+					mergedAccounts[k] = v
+				}
+			}
+		} else {
+			prefix := store.MultiplayerMCPAccountPrefix(user)
+			for k, v := range ownerConv.RawMCPAccounts {
+				if !strings.HasPrefix(k, prefix) {
+					mergedAccounts[k] = v
+				}
+			}
+		}
+	}
+	if isOwner {
+		for k, v := range accounts {
+			if !strings.HasPrefix(k, "mp-user:") {
+				mergedAccounts[k] = v
+			}
+		}
+	} else {
+		prefix := store.MultiplayerMCPAccountPrefix(user)
+		for k, v := range accounts {
+			mergedAccounts[prefix+k] = v
+		}
+	}
+	if err := s.store.SetConversationMCPAccounts(r.Context(), callerEmail, id, mergedAccounts); err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}

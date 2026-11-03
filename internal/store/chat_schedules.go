@@ -271,15 +271,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		in.ConversationID, in.UserEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, in.UserEmail, in.ConversationID); err != nil {
 		return nil, err
 	}
 
@@ -375,7 +367,7 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 	}
 	query := `SELECT ` + chatScheduleSelectCols + `
 		FROM chat_schedules
-		WHERE conversation_id = $1 AND user_email = $2`
+		WHERE conversation_id = $1 AND ($2 = '' OR user_email = $2)`
 	if !includeTerminal {
 		query += ` AND status IN ('active', 'paused')`
 	}
@@ -566,15 +558,7 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND user_email = $2 AND deleted_at IS NULL FOR UPDATE`,
-		convID, userEmail,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
 		return nil, err
 	}
 
@@ -596,15 +580,17 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	}
 
 	// Coalesce repeated Run-now clicks when a patrol turn is already queued or
-	// running in this conversation, so clicking Run-now while busy does not stack
-	// duplicate patrol turns or burn run_count against MaxRuns.
+	// running for this schedule's owner in this conversation, so clicking
+	// Run-now while busy does not stack duplicate patrol turns or burn run_count
+	// against MaxRuns.
 	existingInput, err := scanInputRow(tx.QueryRowContext(ctx,
 		inputQueueSelect+`
 		  WHERE conversation_id = $1
+		    AND user_email = $2
 		    AND state IN ('queued', 'running')
-		    AND (mode = 'patrol' OR client_input_id LIKE $2)
+		    AND (mode = 'patrol' OR client_input_id LIKE $3)
 		  ORDER BY position ASC LIMIT 1`,
-		convID, ChatPatrolInputKeyPrefix+"%",
+		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
 	))
 	if err == nil {
 		if cerr := tx.Commit(); cerr != nil {
@@ -657,7 +643,7 @@ func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, s
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),
 		ConversationID: convID,
-		UserEmail:      owner,
+		UserEmail:      sched.UserEmail,
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",
@@ -768,18 +754,30 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 	if err != nil {
 		return nil, err
 	}
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, sched.UserEmail, convID); err != nil {
+		if errors.Is(err, ErrConversationNotFound) {
+			_, _ = tx.ExecContext(ctx,
+				`UPDATE chat_schedules SET status = 'cancelled', updated_at = $1 WHERE id = $2`,
+				nowUnix, scheduleID,
+			)
+			return nil, tx.Commit()
+		}
+		return nil, err
+	}
 
-	// Check whether an earlier patrol turn is still queued/running, an approval
-	// card is awaiting human action, or the queue is full.
+	// Check whether an earlier patrol turn for this schedule's owner is still
+	// queued/running, an approval card for this owner is awaiting human action,
+	// or the conversation queue is full.
 	var hasInFlightPatrol bool
 	if err := tx.QueryRowContext(ctx,
 		`SELECT EXISTS (
 			SELECT 1 FROM chat_input_queue
 			 WHERE conversation_id = $1
+			   AND user_email = $2
 			   AND state IN ('queued', 'running')
-			   AND (mode = 'patrol' OR client_input_id LIKE $2)
+			   AND (mode = 'patrol' OR client_input_id LIKE $3)
 		)`,
-		convID, ChatPatrolInputKeyPrefix+"%",
+		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
 	).Scan(&hasInFlightPatrol); err != nil {
 		return nil, err
 	}
@@ -789,10 +787,11 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		`SELECT EXISTS (
 			SELECT 1 FROM approvals
 			 WHERE conversation_id = $1
+			   AND user_email = $2
 			   AND status = 'pending'
 			   AND tool_name <> 'preview_email'
 		)`,
-		convID,
+		convID, sched.UserEmail,
 	).Scan(&hasPendingApproval); err != nil {
 		return nil, err
 	}
@@ -863,7 +862,7 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),
 		ConversationID: convID,
-		UserEmail:      owner,
+		UserEmail:      sched.UserEmail,
 		ClientInputID:  clientInputID,
 		Message:        ChatPatrolInputText(updated, newRunCount),
 		Attachments:    "[]",

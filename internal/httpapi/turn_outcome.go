@@ -143,7 +143,7 @@ func newTurnOutcomeResponse(rec *store.TurnOutcomeRecord, liveRunning bool) turn
 // not own even if this handler's check were later dropped (#1112).
 func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convID, turnID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.store.Get(r.Context(), user, convID)
+	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -172,5 +172,13 @@ func (s *Server) handleTurnOutcome(w http.ResponseWriter, r *http.Request, convI
 		http.Error(w, "turn not found", http.StatusNotFound)
 		return
 	}
-	writeJSON(w, newTurnOutcomeResponse(rec, liveRunning))
+	out := newTurnOutcomeResponse(rec, liveRunning)
+	if len(out.Detail) > 0 && rec.TerminalEvent != "" {
+		if sanitized, keep := sanitizeTurnEventForViewer(rec.TerminalEvent, out.Detail, user, conv.UserEmail); keep && json.Valid(sanitized) {
+			out.Detail = json.RawMessage(sanitized)
+		} else if !keep {
+			out.Detail = nil
+		}
+	}
+	writeJSON(w, out)
 }

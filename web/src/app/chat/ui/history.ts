@@ -1088,6 +1088,11 @@ export type Message = {
   notices?: string[];
   content: string;
   /**
+   * Email of the user who sent this turn in a multiplayer chat. Present only
+   * when recorded on the persisted or streamed user entry.
+   */
+  senderEmail?: string;
+  /**
    * Server-injected context for a user turn — everything fleet appended to the
    * message before the model saw it (see HistoryEntry.injected_context). Never
    * part of `content`, which is what the user typed. The transcript renders it
@@ -1469,12 +1474,22 @@ export function historyToMessages(entries: HistoryEntry[]): Message[] {
       // plain truthiness check, and a whitespace-only column value (nothing a
       // reader could learn from) never draws an empty disclosure.
       const injected = String(e.injected_context ?? "");
-      const userContent = e.content as { text?: string; kind?: string };
+      const userContent = e.content as {
+        text?: string;
+        kind?: string;
+        sender_email?: string;
+      };
+      const senderEmail =
+        typeof userContent.sender_email === "string" &&
+        userContent.sender_email.trim()
+          ? userContent.sender_email.trim()
+          : undefined;
       messages.push({
         id: nextId++,
         dbId: e.id,
         role: "user",
         content: String(userContent.text ?? ""),
+        ...(senderEmail ? { senderEmail } : {}),
         injectedContext: injected.trim() ? injected : undefined,
         // A turn fleet started itself after an approval card was settled or
         // when an in-chat patrol/timer fired: the row is fleet's notice, not

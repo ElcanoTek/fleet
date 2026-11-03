@@ -187,24 +187,42 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	// A teammate's branch carries where it came from and which shared files
 	// were copied in (ADR-0079) — the branch banner and its "Your copy"
 	// labels. Display data: a failed read degrades to no banner.
-	origin, oerr := s.store.GetBranchOrigin(r.Context(), user, id)
-	if oerr != nil {
-		log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
-		origin = nil
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	var origin *store.BranchOrigin
+	if isOwner {
+		var oerr error
+		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
+		if oerr != nil {
+			log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			origin = nil
+		}
 	}
 	conv.BranchOrigin = origin
 	schedules, serr := s.store.ListChatSchedules(r.Context(), user, id, false)
 	if serr != nil || schedules == nil {
 		schedules = []store.ChatSchedule{}
 	}
+	historyPayload := historyForParticipant(history, user, conv.UserEmail)
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.AutoApprove = false
+		conv = &sanitized
+	} else if len(conv.OptionalMCPServersEnabled) > 0 {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
+		conv = &sanitized
+	}
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
-		// historyForClient, not the raw entries: the owner's own read is the
-		// one surface that carries each turn's `injected_context` as its own
-		// field, so the transcript can render server-injected context outside
-		// the user's bubble (history_response.go, ADR-0058).
-		"history":                  historyForClient(history),
+		// historyForClient for the owner (carries `injected_context`), or
+		// historyForParticipant for a non-owner multiplayer participant (omits
+		// `injected_context` so owner attachment paths are not exposed).
+		"history":                  historyPayload,
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
 		"pending_memory_proposals": memProposals,
@@ -262,6 +280,8 @@ func (s *Server) handleConversationDelete(w http.ResponseWriter, r *http.Request
 		writeConversationMutationError(w, err)
 		return
 	}
+	s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
+	s.removeConversationPrivateStash(id)
 	// Reclaim the conversation's persistent run_python sandbox (#213), if any,
 	// and its in-memory session pre-approvals (#300).
 	s.releasePersistentSandbox(id)
@@ -328,6 +348,9 @@ func (s *Server) handleConversationArchive(w http.ResponseWriter, r *http.Reques
 		writeConversationMutationError(w, err)
 		return
 	}
+	if req.Archived {
+		s.enforceMultiplayerRevocation(r.Context(), id, &store.Conversation{UserEmail: user}, nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -374,6 +397,9 @@ func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		writeConversationMutationError(w, err)
 		return
+	}
+	if updated, gerr := s.store.Get(r.Context(), user, id); gerr == nil && updated != nil && !updated.Multiplayer {
+		s.enforceMultiplayerRevocation(r.Context(), id, updated, nil)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -430,8 +456,9 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	model := strings.TrimSpace(req.Model)
+	ownerEmail := user
 	if model != "" {
-		conv, err := s.store.Get(r.Context(), user, id)
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -444,8 +471,15 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
 			return
 		}
+		ownerEmail = convOwnerEmail(conv, user)
 	}
-	if err := s.store.SetModel(r.Context(), user, id, model); err != nil {
+	err := s.store.SetModel(r.Context(), ownerEmail, id, model)
+	if errors.Is(err, store.ErrConversationNotFound) && model == "" {
+		if mpConv, mpErr := s.store.GetMultiplayerConversation(r.Context(), user, id); mpErr == nil && mpConv != nil {
+			err = s.store.SetModel(r.Context(), mpConv.UserEmail, id, model)
+		}
+	}
+	if err != nil {
 		writeConversationMutationError(w, err)
 		return
 	}
@@ -566,11 +600,29 @@ func (s *Server) handleThinkingConfigDelete(w http.ResponseWriter, r *http.Reque
 // JSON export of the full conversation (metadata + history).
 // Returned as a downloadable attachment so the browser triggers
 // a Save dialog; reuses the same fields as GET /conversations/{id}.
-func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request, _, id string, conv *store.Conversation) {
+func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	history, err := s.store.LoadHistory(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	exportConv := conv
+	exportHistory := redactHistoryForSender(history, user, conv.UserEmail)
+	historyPayload := historyForParticipant(history, user, conv.UserEmail)
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.MCPAccounts = nil
+		sanitized.AutoApprove = false
+		exportConv = &sanitized
+	} else if len(conv.OptionalMCPServersEnabled) > 0 {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
+		exportConv = &sanitized
 	}
 	exportedAt := time.Now().UTC()
 	// Every format below is served as an attachment, so the browser saves the
@@ -591,24 +643,23 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "html", "chat")),
+			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "html", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationHTML(conv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationHTML(exportConv, exportHistory, exportedAt, scope))
 	case "markdown", "md":
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md", "chat")),
+			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "md", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationMarkdown(exportConv, exportHistory, exportedAt, scope))
 	default:
 		body := map[string]any{
-			"conversation": conv,
+			"conversation": exportConv,
 			// historyForClient so the ARCHIVAL shape really does carry every
-			// field: each entry's server-injected context rides as its own
-			// `injected_context` (history_response.go), not merged into the
-			// user's text the way it was before migration 056.
-			"history":     historyForClient(history),
+			// field for the owner (or historyForParticipant for multiplayer
+			// participants so another sender's injected_context is omitted).
+			"history":     historyPayload,
 			"exported_at": exportedAt.Format(time.RFC3339),
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -656,12 +707,12 @@ func writeStopResult(w http.ResponseWriter, res inputStop, finishedMsg string) {
 
 // handleConversationCancel serves POST /conversations/{id}/cancel.
 //
-// Explicit Stop button. Owner-scoped: the withOwnedConversation gate confirms
-// the conversation belongs to the caller before issuing the cancel so a token
-// leak can't cancel arbitrary chats. The scope decode below is deliberately
-// lenient (a malformed body means the default scope, not a 400), so it does
-// not use decodeJSONBody.
-func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, _ *store.Conversation) {
+// Explicit Stop button. Owner-scoped by default (scope=all / scope=turn), while
+// a non-owner multiplayer participant may stop their own input by `input_id`
+// (or cancel the active turn via `turn_id` / `scope=turn` without sweeping
+// other participants' queued inputs).
+func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
+	isOwner := conv == nil || conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user)
 	// Stop semantics (#785): default scope "all" covers the active turn
 	// AND every still-queued follow-up — Stop means "stop working", not
 	// "stop this one and surprise me with the next". scope=turn cancels
@@ -704,6 +755,31 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if inputID != "" {
+		if !isOwner {
+			mpInputID := effectiveMultiplayerInputID(user, inputID)
+			existing, err := s.store.LookupInput(r.Context(), id, mpInputID)
+			if err != nil {
+				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+				return
+			}
+			if existing != nil {
+				inputID = mpInputID
+			} else {
+				rawExisting, err := s.store.LookupInput(r.Context(), id, inputID)
+				if err != nil {
+					http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+					return
+				}
+				if rawExisting != nil {
+					if !strings.EqualFold(rawExisting.UserEmail, user) {
+						http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
+						return
+					}
+				} else {
+					inputID = mpInputID
+				}
+			}
+		}
 		res, ok := s.stopInput(r.Context(), user, id, inputID)
 		if !ok {
 			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
@@ -713,11 +789,46 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if turnID != "" {
+		if !isOwner {
+			entry, ok := s.getInflight(id)
+			if !ok || entry.turnID != turnID || entry.steer == nil || !strings.EqualFold(entry.steer.user, user) {
+				http.Error(w, "only the conversation owner or the active turn's sender can stop this turn", http.StatusForbidden)
+				return
+			}
+		}
 		// Nothing stopped (the named turn had ended, or completed as the
 		// cancel landed) is said so, not a bare 204, so a caller that
 		// watched the turn reads its real outcome instead of reporting it
 		// cancelled.
 		writeStopResult(w, stopFromTurn(s.cancelInflightTurn(id, turnID)), "the named turn is not running")
+		return
+	}
+	if !isOwner {
+		// Allow a non-owner multiplayer participant to stop their own active
+		// turn and/or their own queued inputs via bodyless POST /cancel, while
+		// refusing attempts to cancel another user's turn.
+		stoppedOwnTurn := false
+		if entry, ok := s.getInflight(id); ok && entry.IsRunning() && entry.steer != nil && strings.EqualFold(entry.steer.user, user) {
+			_ = s.cancelInflightTurn(id, entry.turnID)
+			stoppedOwnTurn = true
+		}
+		cancelledQueued := 0
+		if scope == "all" {
+			epoch := s.store.AcceptedInputSeq()
+			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
+			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+				log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
+			} else if n > 0 {
+				cancelledQueued = n
+				s.emitQueueUpdate(qctx, user, id)
+			}
+			qcancel()
+		}
+		if !stoppedOwnTurn && cancelledQueued == 0 {
+			http.Error(w, "only the conversation owner can stop another user's turns in this conversation", http.StatusForbidden)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 	if scope == "all" {
@@ -746,10 +857,10 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// follow-up submitted after Stop, while the cancelled turn was still
 		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
+		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
 			log.Printf("cancel queued inputs (conv=%s): %v", id, err) //nolint:gosec // G706: server-generated UUIDs + internal error — no request-authored text is logged.
 		} else if n > 0 {
-			s.emitQueueUpdate(qctx, user, id)
+			s.emitQueueUpdate(qctx, "", id)
 		}
 		qcancel()
 	} else {

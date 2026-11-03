@@ -57,41 +57,62 @@ func clampSeed(seed string) string {
 	return "[…seed truncated…]\n" + seed[len(seed)-seedMaxChars:]
 }
 
-func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
-	user := userFromCtx(r.Context())
-	switch r.Method {
-	case http.MethodGet:
-		// ?archived=true returns the archived conversations (the collapsed
-		// "Archived" sidebar section, #282); default returns active ones.
-		// ?label= (repeatable, AND semantics) restricts to conversations
-		// carrying every listed label (#258).
-		q := r.URL.Query()
-		// ?scope=team returns the conversations same-team members have shared
-		// (team_visible), read-only (#237) — the manager/teammate view. It is a
-		// distinct, opt-in read path: it never mixes the caller's private
-		// conversations in, and a caller with no team gets 400.
-		if q.Get("scope") == "team" {
-			list, err := s.store.ListTeamConversations(r.Context(), user)
-			if errors.Is(err, store.ErrNoTeam) {
-				http.Error(w, "no team", http.StatusBadRequest)
-				return
-			}
-			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
-				return
-			}
-			writeJSON(w, map[string]any{"conversations": list})
+func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request, user string) {
+	// ?archived=true returns the archived conversations (the collapsed
+	// "Archived" sidebar section, #282); default returns active ones.
+	// ?label= (repeatable, AND semantics) restricts to conversations
+	// carrying every listed label (#258).
+	q := r.URL.Query()
+	// ?scope=team returns the conversations same-team members have shared
+	// (team_visible), read-only (#237) — the manager/teammate view. It is a
+	// distinct, opt-in read path: it never mixes the caller's private
+	// conversations in, and a caller with no team gets 400.
+	if q.Get("scope") == "team" {
+		list, err := s.store.ListTeamConversations(r.Context(), user)
+		if errors.Is(err, store.ErrNoTeam) {
+			http.Error(w, "no team", http.StatusBadRequest)
 			return
 		}
-		list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
-			ArchivedOnly: q.Get("archived") == "true",
-			Labels:       q["label"],
-		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		writeJSON(w, map[string]any{"conversations": list})
+		return
+	}
+	// ?scope=shared returns all conversations shared with the caller via
+	// Multiplayer mode or team visibility (migration 092), even when the
+	// caller has not joined a named team.
+	if q.Get("scope") == "shared" {
+		list, err := s.store.ListSharedAndMultiplayerConversations(r.Context(), user)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"conversations": list})
+		return
+	}
+	list, err := s.store.ListFiltered(r.Context(), user, store.ListFilter{
+		ArchivedOnly: q.Get("archived") == "true",
+		Labels:       q["label"],
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	for i := range list {
+		if len(list[i].OptionalMCPServersEnabled) > 0 {
+			list[i].OptionalMCPServersEnabled = s.effectiveOptionalMCPServersForCaller(r.Context(), user, &list[i])
+		}
+	}
+	writeJSON(w, map[string]any{"conversations": list})
+}
+
+func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r.Context())
+	switch r.Method {
+	case http.MethodGet:
+		s.handleListConversations(w, r, user)
 	case http.MethodDelete:
 		// Bulk delete (#279). Two modes, mutually exclusive:
 		//
@@ -136,11 +157,14 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 				http.Error(w, "conversation_ids is mutually exclusive with all_matching", http.StatusBadRequest)
 				return
 			}
+			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllMatching(r.Context(), user, r.URL.Query().Get("label"))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
+			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		case len(req.ConversationIDs) > 0:
 			// Targeted bulk delete by explicit ID list.
@@ -162,17 +186,22 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			// DeleteAllUnpinned) return only a count, not IDs, so those rely on
 			// the pool's idle reaper to reclaim instead.
 			for _, cid := range req.ConversationIDs {
+				s.enforceMultiplayerRevocation(r.Context(), cid, &store.Conversation{UserEmail: user}, nil)
+				s.removeConversationPrivateStash(cid)
 				s.releasePersistentSandbox(cid)
 				s.sessionApprovals.Forget(cid)
 			}
 			writeJSON(w, map[string]any{"deleted": n})
 		default:
 			// Legacy bare DELETE /conversations → DeleteAllUnpinned.
+			priorIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 			n, err := s.store.DeleteAllUnpinned(r.Context(), user)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
+			s.reconcileAllMultiplayerAccess(r.Context(), priorIDs...)
+			s.sweepOrphanPrivateWorkspaceStashes(r.Context())
 			writeJSON(w, map[string]any{"deleted": n})
 		}
 	case http.MethodPost:
@@ -398,21 +427,16 @@ type conversationSubroute struct {
 type conversationSubrouteHandler func(s *Server, w http.ResponseWriter, r *http.Request, user, id string)
 
 // ownedConversationHandler is an action body that runs only after
-// withOwnedConversation resolved the caller's conversation: the ownership
-// gate has already passed and conv is non-nil.
+// withOwnedOrMultiplayerConversation resolved the caller's conversation: the
+// access gate has already passed and conv is non-nil.
 type ownedConversationHandler func(s *Server, w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation)
 
-// withOwnedConversation adapts an ownedConversationHandler by prepending the
-// ownership-check framing the old switch repeated per branch: resolve the
-// conversation for THIS caller (store.Get is scoped by user_email, so a
-// foreign or unknown id resolves nil), answer 500 on a store error or 404
-// when it doesn't resolve, and only then run handler. notFound is the 404
-// body — the historical branches answered either "not found" or
-// "conversation not found", and each table entry preserves its branch's
-// original text verbatim.
-func withOwnedConversation(notFound string, handler ownedConversationHandler) conversationSubrouteHandler {
+// withOwnedOrMultiplayerConversation adapts an ownedConversationHandler for
+// routes that both the conversation owner and allowed Multiplayer participants
+// (migration 092) may use.
+func withOwnedOrMultiplayerConversation(notFound string, handler ownedConversationHandler) conversationSubrouteHandler {
 	return func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
-		conv, err := s.store.Get(r.Context(), user, id)
+		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -478,7 +502,7 @@ func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) boo
 // switch matched to its action. Entries reference only functions (method
 // expressions or literals), so initialization is file-order-independent.
 var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler{
-	{sub: "", method: http.MethodGet}:                   withOwnedConversation("not found", (*Server).handleConversationGet),
+	{sub: "", method: http.MethodGet}:                   withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationGet),
 	{sub: "", method: http.MethodDelete}:                (*Server).handleConversationDelete,
 	{sub: "truncate", method: http.MethodPost}:          (*Server).handleConversationTruncate,
 	{sub: "pin", method: http.MethodPost}:               (*Server).handleConversationPin,
@@ -486,11 +510,11 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "project", method: http.MethodPost}:           (*Server).handleConversationRefile,
 	{sub: "rename", method: http.MethodPost}:            (*Server).handleConversationRename,
 	{sub: "model", method: http.MethodPost}:             (*Server).handleConversationModel,
-	{sub: "approval-timeout", method: http.MethodGet}:   withOwnedConversation("not found", (*Server).handleApprovalTimeoutGet),
+	{sub: "approval-timeout", method: http.MethodGet}:   withOwnedOrMultiplayerConversation("not found", (*Server).handleApprovalTimeoutGet),
 	{sub: "approval-timeout", method: http.MethodPost}:  (*Server).handleApprovalTimeoutSet,
-	{sub: "auto-approve", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleAutoApproveGet),
+	{sub: "auto-approve", method: http.MethodGet}:       withOwnedOrMultiplayerConversation("not found", (*Server).handleAutoApproveGet),
 	{sub: "auto-approve", method: http.MethodPost}:      (*Server).handleAutoApproveSet,
-	{sub: "thinking_config", method: http.MethodGet}:    withOwnedConversation("not found", (*Server).handleThinkingConfigGet),
+	{sub: "thinking_config", method: http.MethodGet}:    withOwnedOrMultiplayerConversation("not found", (*Server).handleThinkingConfigGet),
 	{sub: "thinking_config", method: http.MethodPut}:    (*Server).handleThinkingConfigPut,
 	{sub: "thinking_config", method: http.MethodDelete}: (*Server).handleThinkingConfigDelete,
 	// Fork this conversation at a chosen message into a new conversation (#454).
@@ -519,6 +543,13 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "share-with-team", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleConversationShareWithTeam(w, r, id, user)
 	},
+	// Multiplayer mode & participant management (migration 092).
+	{sub: "multiplayer", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationMultiplayerGet(w, r, id, user)
+	},
+	{sub: "multiplayer", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
+		s.handleConversationMultiplayerSet(w, r, id, user)
+	},
 	// Read a TEAMMATE's team-shared chat, read-only (ADR-0057). Deliberately
 	// NOT behind withOwnedConversation: this is the one conversation route a
 	// non-owner may reach, and its own two gates (shared team_id + the
@@ -532,10 +563,10 @@ var conversationSubroutes = map[conversationSubroute]conversationSubrouteHandler
 	{sub: "team-link", method: http.MethodGet}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleTeamLink(w, r, user, id)
 	},
-	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedConversation("not found", (*Server).handleConversationMCPServersGet),
-	{sub: "mcp-servers", method: http.MethodPost}: (*Server).handleConversationMCPServersSet,
-	{sub: "export", method: http.MethodGet}:       withOwnedConversation("not found", (*Server).handleConversationExport),
-	{sub: "cancel", method: http.MethodPost}:      withOwnedConversation("conversation not found", (*Server).handleConversationCancel),
+	{sub: "mcp-servers", method: http.MethodGet}:  withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationMCPServersGet),
+	{sub: "mcp-servers", method: http.MethodPost}: withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationMCPServersSet),
+	{sub: "export", method: http.MethodGet}:       withOwnedOrMultiplayerConversation("not found", (*Server).handleConversationExport),
+	{sub: "cancel", method: http.MethodPost}:      withOwnedOrMultiplayerConversation("conversation not found", (*Server).handleConversationCancel),
 	{sub: "summarize", method: http.MethodPost}: func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
 		s.handleSummarize(w, r, user, id)
 	},

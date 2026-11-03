@@ -235,6 +235,7 @@ too. Below that, conversations are grouped:
 | Group | What it holds |
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
+| **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Temporary** | Everything else, newest first. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
@@ -308,7 +309,7 @@ that support button across Chat, the Operations Center, Settings, and Guides;
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
 Every conversation also shows who can see it — **Only
-you**, **Shared with** your team, or **Public link** — and a **Share** button.
+you**, **Shared with** your team, **Multiplayer**, or **Public link** — and a **Share** button.
 Both open the share dialog.
 
 ### The transcript
@@ -1088,8 +1089,28 @@ come with it as your own copies** — the assistant in your branch can use them.
 Your copies never change afterwards, even if the original is unshared or deleted.
 When you open a chat you have already branched, a banner links to your branch and
 says whether the owner has added messages since; **Branch again** starts a fresh
-branch from the current version. Branch is the way to build on a colleague's
-work; co-writing a live conversation is not something the platform does.
+branch from the current version.
+
+**Multiplayer mode.** For teams that want to jump in and work inside the same
+live conversation together, the share dialog also includes a **Multiplayer mode**
+section (**Turn on** / **Turn off**). New chats start as **Only you** by default,
+unless an administrator has enabled **Multiplayer team chats by default** in
+**Settings → Admin → Features** (`FLEET_TEAM_CHATS_SHARED_BY_DEFAULT`), in which
+case new unfiled or team-project chats (outside Lockdown mode) created by team
+members start in **Multiplayer mode** automatically (chats created inside a
+personal project stay private until Multiplayer mode is turned on in the Share
+dialog). When Multiplayer mode is on:
+
+- Teammates (and anyone else added to the chat) see it under **Team chats** in
+  the rail with a **Live** badge, can open it directly in the chat view, and can
+  send messages into the shared thread.
+- Every message shows the sender's email above their bubble, and each turn runs
+  under **the sender's own account** — using the sender's email, personal
+  memories, skills, per-user connector accounts, and approval cards.
+- By default, everyone on the owner's team (or workspace) can participate. In the
+  share dialog under **People who can participate**, the owner can remove
+  specific people with `×`, restore removed people with `+`, or invite someone
+  with **Add person by email**.
 
 ### While a turn is running
 
