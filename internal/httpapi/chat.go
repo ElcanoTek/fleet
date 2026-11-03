@@ -1469,6 +1469,45 @@ func dashboardBoardLines(board []dashboardBoardPanel) []string {
 	return lines
 }
 
+// queuedViewContext is what a queued submission keeps of its view
+// (chat_input_queue.view_context, migration 094).
+type queuedViewContext struct {
+	View  string                `json:"view"`
+	Board []dashboardBoardPanel `json:"board,omitempty"`
+}
+
+// encodeQueuedViewContext keeps a dashboard-view submission's view and board
+// on its queue row, so the turn that drains it carries the same note as a
+// direct send. "" for every other submission. The board is trimmed to what
+// the note can list.
+func encodeQueuedViewContext(req chatRequest) string {
+	if req.View != chatViewDashboard {
+		return ""
+	}
+	board := req.Board
+	if len(board) > maxDashboardBoardPanels+1 {
+		board = board[:maxDashboardBoardPanels+1]
+	}
+	raw, err := json.Marshal(queuedViewContext{View: req.View, Board: board})
+	if err != nil {
+		return ""
+	}
+	return string(raw)
+}
+
+// decodeQueuedViewContext reads a queue row's view context back. Anything
+// unreadable is no context: the turn runs without a dashboard note.
+func decodeQueuedViewContext(raw string) (string, []dashboardBoardPanel) {
+	if raw == "" {
+		return "", nil
+	}
+	var vc queuedViewContext
+	if json.Unmarshal([]byte(raw), &vc) != nil || vc.View != chatViewDashboard {
+		return "", nil
+	}
+	return vc.View, vc.Board
+}
+
 // appendDashboardViewBlock notes a dashboard-view turn in the injected
 // context, with the panels on the sender's board so "update that chart" can
 // be resolved to a card. Like every injected block it is persisted with the

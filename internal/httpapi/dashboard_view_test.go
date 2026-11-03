@@ -69,3 +69,30 @@ func TestDashboardBoardIsListed(t *testing.T) {
 		t.Errorf("an oversized board is not bounded:\n%s", out)
 	}
 }
+
+// A submission queued from dashboard view keeps its view and board on the
+// queue row, and the drained turn reads them back; anything else (another
+// view, an old row, junk) drains with no dashboard note.
+func TestQueuedViewContextRoundTrips(t *testing.T) {
+	board := []dashboardBoardPanel{{Title: "Revenue", CardID: "c1", Panel: "revenue"}, {Title: "Pinned", CardID: "c2", Pinned: true}}
+	raw := encodeQueuedViewContext(chatRequest{View: chatViewDashboard, Board: board})
+	view, got := decodeQueuedViewContext(raw)
+	if view != chatViewDashboard || len(got) != 2 || got[1] != board[1] {
+		t.Fatalf("round trip = %q %+v from %s", view, got, raw)
+	}
+	if encodeQueuedViewContext(chatRequest{View: "chat", Board: board}) != "" {
+		t.Error("a non-dashboard submission stored a view context")
+	}
+	for _, junk := range []string{"", "not json", `{"view":"chat"}`, `[]`} {
+		if v, b := decodeQueuedViewContext(junk); v != "" || b != nil {
+			t.Errorf("%q decoded to %q %+v", junk, v, b)
+		}
+	}
+	many := make([]dashboardBoardPanel, 200)
+	for i := range many {
+		many[i] = dashboardBoardPanel{Title: "P", CardID: fmt.Sprintf("c%d", i)}
+	}
+	if _, b := decodeQueuedViewContext(encodeQueuedViewContext(chatRequest{View: chatViewDashboard, Board: many})); len(b) != maxDashboardBoardPanels+1 {
+		t.Errorf("stored board has %d entries, want it trimmed to %d", len(b), maxDashboardBoardPanels+1)
+	}
+}

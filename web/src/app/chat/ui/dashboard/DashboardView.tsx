@@ -332,6 +332,12 @@ function PanelMenu({
 
 function Panel(props: PanelProps) {
   const { panel, live, retired, maximized } = props;
+  // The focus layer mounts a new instance of the panel: move the keyboard
+  // focus into it (to its close button) so it is not dropped on <body>.
+  const restoreRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (maximized) restoreRef.current?.focus();
+  }, [maximized]);
   // A new card in this slot (the agent refreshed it): flash the frame once.
   const [flash, setFlash] = useState(false);
   const version = `${panel.cardId}#${panel.occurrence}`;
@@ -438,6 +444,7 @@ function Panel(props: PanelProps) {
             </button>
           ) : null}
           <button
+            ref={maximized ? restoreRef : undefined}
             type="button"
             className="dash-icon-btn"
             aria-label={maximized ? `Close focused ${panel.spec.title}` : `Focus ${panel.spec.title}`}
@@ -508,6 +515,18 @@ export function DashboardBoard({
   className,
 }: DashboardBoardProps) {
   const [dragging, setDragging] = useState<string | null>(null);
+  // Closing the focus layer (button or Esc) returns the keyboard focus to the
+  // Focus button of the panel it showed, now back on the grid.
+  const lastMaximized = useRef(maximized);
+  useEffect(() => {
+    const was = lastMaximized.current;
+    lastMaximized.current = maximized;
+    if (!was || maximized) return;
+    document
+      .getElementById(panelDomId(was))
+      ?.querySelector<HTMLElement>('[data-testid="dashboard-panel-focus"]')
+      ?.focus();
+  }, [maximized]);
   const keys = panels.map((p) => p.key);
   const setOrder = (next: string[]) => updatePrefs((p) => ({ ...p, order: next }));
   const onMove = (key: string, delta: number) => setOrder(moveKey(keys, key, delta));

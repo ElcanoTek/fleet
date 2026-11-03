@@ -63,7 +63,10 @@ the transcript shows exactly what the model was told. Any `view` other than
 with `replaces`. If the refresh also gives it a `panel` key, the slot moves to
 that key and keeps its place, version count and the user's width, order and
 removal choices (`deriveBoard` carries the old key as an alias), so later
-updates can simply reuse the key.
+updates can simply reuse the key. If the key already belongs to another panel,
+the refined card's old slot merges into that panel rather than staying on the
+board. Refining a version that is no longer current takes nothing over, which
+matches how the transcript decides what is superseded.
 
 **Moving between the views.** Toggling never remounts the transcript or
 composer: the layout wrapper is always rendered (`display: contents` in normal
@@ -71,6 +74,10 @@ view) and the conversation rail is hidden, not unmounted. Composer drafts, card
 drafts (stored under the same key whether the card is drawn on the board or in
 the transcript) and queued inputs survive any number of round
 trips, and leaving closes any focused panel and the phone sidebar drawer.
+The conversation-list shortcuts (`j`/`k`, `Enter`, `P`/`A`/`R`/`#`) are off
+while the rail is hidden, and `⌘K` leaves dashboard view so the search it
+focuses is on screen. Focusing a panel moves the keyboard focus into it, and
+closing returns it to that panel's Focus button.
 
 **The screen.**
 
@@ -137,11 +144,12 @@ themes.
   for it: on your message, a card submission, or an
   [in-chat patrol](CHAT-PATROLS.md) turn. Nothing in the browser polls a data
   source. A patrol that re-shows a panel is how a board "ticks".
-- **The hint rides direct sends only.** A message queued behind a running turn
-  (`mode: "queue"`) is stored without `view` or `board`, so that turn carries
-  no new note or board list. The earlier dashboard notes (and the board as it
-  was then) are still in the replayed history. Patrol and approval-resume turns
-  carry none either.
+- **Steers carry no note.** A message queued behind a running turn
+  (`mode: "queue"`) keeps its `view` and `board` on the queue row
+  (`chat_input_queue.view_context`, migration 094) and drains with the same
+  note as a direct send. A *steer* is injected into the running turn as text
+  and carries none (that turn already had the note if it was sent from
+  dashboard view), and patrol and approval-resume turns carry none either.
 - **The board list is the sender's.** In a multiplayer chat each participant's
   board is their own arrangement, so "the second panel" means the second panel
   on the board of whoever sent the message.

@@ -131,8 +131,12 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       if (genUi.owners.get(tc.id) !== tc) continue;
       const spec = genUi.cards.get(tc.id);
       if (!spec) continue;
-      // The slot of the card this one refines, if that card is on the board.
-      const lineage = spec.replaces ? slotOf.get(spec.replaces) : undefined;
+      // The slot of the card this one refines — only while that card is the
+      // one the slot shows. Refining a stale version takes nothing over,
+      // matching deriveGenUiState's panel ownership.
+      const replacedSlot = spec.replaces ? slotOf.get(spec.replaces) : undefined;
+      const lineage =
+        replacedSlot !== undefined && slots.get(replacedSlot)?.cardId === spec.replaces ? replacedSlot : undefined;
       let key: string | undefined;
       if (spec.panel) key = `p:${spec.panel}`;
       else if (pinned.has(tc.id)) key = `c:${tc.id}`;
@@ -140,14 +144,20 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
       else if (isDisplayOnly(spec)) key = `c:${tc.id}`;
       if (!key) continue;
       let prev = slots.get(key);
-      if (lineage && lineage !== key && !prev && slots.has(lineage)) {
+      if (lineage && lineage !== key) {
         // A refinement that also names a panel key (typically a pinned card
-        // the agent refreshed and gave a key): the slot moves to the new key
-        // and keeps its place, version count and the user's layout choices.
-        prev = slots.get(lineage);
+        // the agent refreshed and gave a key). The card it replaces is
+        // superseded, so its slot never stays on the board beside this one:
+        // - the key is new: the slot moves to it and keeps its place, version
+        //   count and the user's layout choices;
+        // - the key is taken: the old slot merges into that panel.
+        const moved = slots.get(lineage);
         slots.delete(lineage);
-        firstSeen.set(key, firstSeen.get(lineage) ?? seq++);
-        aliases.set(key, [...(aliases.get(lineage) ?? []), lineage]);
+        if (!prev) {
+          prev = moved;
+          firstSeen.set(key, firstSeen.get(lineage) ?? seq++);
+        }
+        aliases.set(key, [...(aliases.get(key) ?? []), lineage, ...(aliases.get(lineage) ?? [])]);
         for (const [cid, k] of slotOf) if (k === lineage) slotOf.set(cid, key);
       }
       slotOf.set(tc.id, key);

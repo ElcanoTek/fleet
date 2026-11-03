@@ -90,6 +90,30 @@ describe("deriveBoard", () => {
     expect(boardManifest(b.panels)[0]).toEqual({ title: "Follow up (sent)", card_id: "f2", panel: "follow", pinned: true });
   });
 
+  it("a refinement that names a taken panel key merges its old slot into that panel", () => {
+    const b = boardOf([
+      assistant(1, [
+        { id: "a", input: display("A") },
+        { id: "b", input: display("B", { panel: "x" }) },
+      ]),
+      assistant(2, [{ id: "c", input: display("C", { replaces: "a", panel: "x" }) }]),
+    ]);
+    expect(b.panels.map((p) => [p.key, p.cardId])).toEqual([["p:x", "c"]]);
+    expect(b.cardSlots.get("a")).toBe("p:x");
+  });
+
+  it("refining a stale version of a panel takes nothing over", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "a", input: display("A", { panel: "x" }) }]),
+      assistant(2, [{ id: "b", input: display("B", { panel: "x" }) }]),
+      assistant(3, [{ id: "c", input: display("C (from A)", { replaces: "a" }) }]),
+    ]);
+    const x = b.panels.find((p) => p.key === "p:x");
+    expect(x?.cardId).toBe("b");
+    // C is display-only, so it gets a panel of its own instead.
+    expect(b.panels.map((p) => p.key)).toEqual(["p:x", "c:c"]);
+  });
+
   it("follows the user's order, then age, and their width choice over the heuristic", () => {
     const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, order: ["c:sys"], wide: { "c:sys": true } });
     expect(b.panels.map((p) => p.key)).toEqual(["c:sys", "p:revenue"]);

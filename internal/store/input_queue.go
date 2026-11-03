@@ -70,6 +70,9 @@ type InputQueueRow struct {
 	// Rows written without one (an older binary mid-deploy) read back as 0,
 	// inside every Stop's swept set.
 	AcceptedSeq int64
+	// ViewContext is the JSON presentation context the submission was sent
+	// from (dashboard view, migration 094); "" for none. Opaque to the store.
+	ViewContext string
 }
 
 // AcceptedInputSeq returns the acceptance counter's current value: every row
@@ -229,12 +232,12 @@ func (s *Store) insertInputTx(ctx context.Context, tx *sql.Tx, r InputQueueRow) 
 	}
 	res, err := tx.ExecContext(ctx,
 		`INSERT INTO chat_input_queue
-		   (id, conversation_id, user_email, client_input_id, submission_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq)
+		   (id, conversation_id, user_email, client_input_id, submission_id, message, attachments, mode, state, position, created_at, updated_at, accepted_seq, view_context)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
 		         (SELECT COALESCE(MAX(position), 0) + 1 FROM chat_input_queue WHERE conversation_id = $2),
-		         $10, $10, $11)
+		         $10, $10, $11, NULLIF($12, ''))
 		 ON CONFLICT (conversation_id, client_input_id) DO NOTHING`,
-		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.SubmissionID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq,
+		r.ID, r.ConversationID, r.UserEmail, r.ClientInputID, r.SubmissionID, r.Message, r.Attachments, r.Mode, r.State, now, r.AcceptedSeq, r.ViewContext,
 	)
 	if err != nil {
 		return InputQueueRow{}, false, err
@@ -273,7 +276,7 @@ func (s *Store) getInputByClientID(ctx context.Context, convID, clientID string)
 const inputQueueColumns = `id, conversation_id, user_email, client_input_id,
        COALESCE(submission_id, ''), message, attachments,
        mode, state, position, COALESCE(turn_id, ''), created_at, updated_at,
-       COALESCE(accepted_seq, 0)`
+       COALESCE(accepted_seq, 0), COALESCE(view_context, '')`
 
 const inputQueueSelect = `SELECT ` + inputQueueColumns + `
   FROM chat_input_queue`
@@ -284,7 +287,7 @@ func scanInputRow(row rowScanner) (InputQueueRow, error) {
 	var r InputQueueRow
 	err := row.Scan(&r.ID, &r.ConversationID, &r.UserEmail, &r.ClientInputID, &r.SubmissionID,
 		&r.Message, &r.Attachments, &r.Mode, &r.State, &r.Position, &r.TurnID, &r.CreatedAt,
-		&r.UpdatedAt, &r.AcceptedSeq)
+		&r.UpdatedAt, &r.AcceptedSeq, &r.ViewContext)
 	return r, err
 }
 

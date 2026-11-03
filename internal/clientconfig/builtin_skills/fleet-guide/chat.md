@@ -396,6 +396,9 @@ not typing in the message box.
   how many approvals are waiting; click it to jump to the first one.
 - **On a phone**, the top bar has **Board** and **Chat** buttons to switch
   between the two.
+- **The conversation list is out of sight**, so its shortcuts (`J`/`K`, `P`,
+  `A`, `R`, `#`) do nothing in dashboard view, and `⌘ K` leaves dashboard view
+  to open search.
 - **Switch back any time.** Leaving dashboard view returns the normal chat with
   every card in place and whatever you had typed, in the message box or in a
   card, still there. Coming back restores the board as you left it.

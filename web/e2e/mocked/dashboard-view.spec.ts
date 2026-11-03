@@ -204,9 +204,12 @@ test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async 
   // Focus a panel full-board; Esc closes the focus first, then the view.
   await page.locator('[data-panel-key="p:pipeline"]').getByTestId("dashboard-panel-focus").click();
   await expect(page.getByTestId("dashboard-focus-layer")).toContainText("Initech expansion");
-  await page.locator("body").click({ position: { x: 5, y: 5 } });
+  // The keyboard focus moves into the focused panel, and comes back to the
+  // panel's Focus button when it closes.
+  await expect(page.getByTestId("dashboard-panel-restore")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("dashboard-focus-layer")).toHaveCount(0);
+  await expect(page.locator('[data-panel-key="p:pipeline"]').getByTestId("dashboard-panel-focus")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("dashboard-hud")).toHaveCount(0);
   await expect(page.getByTestId("dashboard-enter")).toBeVisible();
@@ -214,6 +217,11 @@ test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async 
   // The layout and the view are remembered for this chat in this browser.
   await page.keyboard.press("d");
   expect(await keys()).toEqual(["p:pipeline", "p:revenue", "c:call-health-1"]);
+
+  // The rail is hidden, so Ctrl+K leaves the view and focuses its search.
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("dashboard-hud")).toHaveCount(0);
+  await expect(page.getByTestId("search-input")).toBeFocused();
 });
 
 test("moving between dashboard view and the normal chat keeps drafts, cards and layout", async ({ page }) => {

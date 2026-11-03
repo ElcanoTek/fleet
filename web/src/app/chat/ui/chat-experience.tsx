@@ -5258,6 +5258,10 @@ export function ChatExperience({
     !bulkDeleteConfirm &&
     !selectMode;
 
+  // The conversation-list shortcuts (j/k, Enter, P/A/R/#) act on the rail,
+  // which dashboard view hides: off while it is on, so nothing moves or
+  // archives a row the user cannot see.
+  const railNavActive = listNavActive && !dashboardActive;
   const shortcuts = useMemo<KeyboardShortcut[]>(
     () => [
       {
@@ -5267,8 +5271,13 @@ export function ChatExperience({
         // The #308 palette merged into the rail's unified search bar — ⌘K
         // focuses it (opening the <sm drawer first so it's visible).
         handler: () => {
+          // In dashboard view the rail is hidden: leave the view first so
+          // the search bar is on screen (and stays in reach) when focused.
+          if (dashboardActive) toggleDashboardView();
           setSidebarOpen(true);
-          requestAnimationFrame(() => searchRef.current?.focus());
+          requestAnimationFrame(() =>
+            requestAnimationFrame(() => searchRef.current?.focus()),
+          );
         },
       },
       // Bindings deliberately NOT taken, so core browser features keep working:
@@ -5307,12 +5316,12 @@ export function ChatExperience({
       // j/k walk the cursor; the rest act on the focused row.
       {
         key: "j",
-        enabled: listNavActive,
+        enabled: railNavActive,
         handler: () => moveFocus(1),
       },
       {
         key: "k",
-        enabled: listNavActive,
+        enabled: railNavActive,
         handler: () => moveFocus(-1),
       },
       {
@@ -5321,7 +5330,7 @@ export function ChatExperience({
         // declines the match (so no preventDefault) if the focused element is an
         // interactive control that owns Enter itself.
         key: "Enter",
-        enabled: listNavActive && focusedConv !== null,
+        enabled: railNavActive && focusedConv !== null,
         when: () => !isInteractiveTarget(document.activeElement),
         handler: () => {
           if (focusedConv) void loadConversation(focusedConv.id);
@@ -5330,7 +5339,7 @@ export function ChatExperience({
       {
         // p pins / unpins the focused conversation.
         key: "p",
-        enabled: listNavActive && focusedConv !== null,
+        enabled: railNavActive && focusedConv !== null,
         handler: () => {
           if (focusedConv) void togglePin(focusedConv);
         },
@@ -5338,7 +5347,7 @@ export function ChatExperience({
       {
         // a archives the focused conversation (it leaves the main list).
         key: "a",
-        enabled: listNavActive && focusedConv !== null,
+        enabled: railNavActive && focusedConv !== null,
         handler: () => {
           if (focusedConv) void requestArchive(focusedConv, true);
         },
@@ -5346,7 +5355,7 @@ export function ChatExperience({
       {
         // r renames the focused conversation via the sidebar's inline editor.
         key: "r",
-        enabled: listNavActive && focusedConv !== null,
+        enabled: railNavActive && focusedConv !== null,
         handler: () => {
           if (focusedConv)
             setRenameSignal((s) => ({
@@ -5359,7 +5368,7 @@ export function ChatExperience({
         // "#" (Gmail-style) deletes the focused conversation through the
         // existing confirm dialog — no silent destructive path.
         key: "#",
-        enabled: listNavActive && focusedConv !== null,
+        enabled: railNavActive && focusedConv !== null,
         handler: () => {
           if (focusedConv)
             setPendingDeleteConversation({
@@ -5437,6 +5446,7 @@ export function ChatExperience({
       dashboardActive,
       dashboardFocus,
       toggleDashboardView,
+      railNavActive,
     ],
   );
   useKeyboardShortcuts(shortcuts);
