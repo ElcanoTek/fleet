@@ -2610,9 +2610,9 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
 		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(narrowable_arg, '')
 		 FROM approvals
-		 WHERE conversation_id = $1 AND user_email = $2 AND status = 'pending'
+		 WHERE conversation_id = $1 AND ($2 = '' OR LOWER(user_email) = LOWER($2)) AND status = 'pending'
 		 ORDER BY created_at ASC`,
-		convID, userEmail,
+		convID, strings.TrimSpace(userEmail),
 	)
 	if err != nil {
 		return nil, err
@@ -3022,9 +3022,36 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 // whether SweepExpiredApprovals has run yet. Rows with NULL/0
 // expires_at never expire. The expiry sweep uses ClaimExpiredApproval
 // so it can still flip those rows for notification/audit.
+func (s *Store) canApproveInConversation(ctx context.Context, userEmail, approvalID string) (bool, error) {
+	var convID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT conversation_id FROM approvals WHERE id = $1 AND user_email = $2`,
+		approvalID, userEmail,
+	).Scan(&convID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if _, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID); err != nil {
+		if errors.Is(err, ErrConversationNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newStatus, resultText string) (bool, error) {
 	if !validApprovalResolution(newStatus) {
 		return false, fmt.Errorf("invalid approval status %q", newStatus)
+	}
+	if newStatus == approvalStatusApproved {
+		ok, err := s.canApproveInConversation(ctx, userEmail, approvalID)
+		if err != nil || !ok {
+			return false, err
+		}
 	}
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
@@ -3068,6 +3095,9 @@ func (s *Store) MarkApprovalStopRequested(ctx context.Context, userEmail, approv
 func (s *Store) ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error) {
 	if narrowedJSON == "" {
 		return false, errors.New("ClaimApprovalNarrowed: empty narrowing record")
+	}
+	if ok, err := s.canApproveInConversation(ctx, userEmail, approvalID); err != nil || !ok {
+		return false, err
 	}
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,

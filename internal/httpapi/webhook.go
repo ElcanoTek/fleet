@@ -187,6 +187,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 
 	history, err := s.store.LoadHistory(r.Context(), conv.ID)
 	if err != nil {

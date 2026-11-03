@@ -137,6 +137,10 @@ type expiredClickFakeStore struct {
 	appendedText string
 }
 
+func (f *expiredClickFakeStore) Get(_ context.Context, _, convID string) (*store.Conversation, error) {
+	return &store.Conversation{ID: convID, UserEmail: f.approval.UserEmail}, nil
+}
+
 func (f *expiredClickFakeStore) GetApproval(_ context.Context, _, _ string) (*store.Approval, error) {
 	a := f.approval
 	return &a, nil

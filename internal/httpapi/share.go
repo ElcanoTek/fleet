@@ -493,16 +493,23 @@ func (s *Server) enforceMultiplayerRevocation(ctx context.Context, convID string
 	qctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	items, err := s.store.ListQueuedInputs(qctx, "", convID)
-	if err != nil {
-		return
-	}
-	for _, item := range items {
-		if item.State != store.InputStateQueued {
-			continue
+	if err == nil {
+		for _, item := range items {
+			if item.State != store.InputStateQueued {
+				continue
+			}
+			sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
+			if sender != "" && !allowed[sender] {
+				_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
+			}
 		}
-		sender := strings.ToLower(strings.TrimSpace(item.UserEmail))
-		if sender != "" && !allowed[sender] {
-			_, _ = s.store.RemoveQueuedInput(qctx, item.UserEmail, convID, item.ID)
+	}
+	if approvals, err := s.store.ListPendingApprovals(qctx, "", convID); err == nil {
+		for _, a := range approvals {
+			sender := strings.ToLower(strings.TrimSpace(a.UserEmail))
+			if sender != "" && !allowed[sender] {
+				_, _ = s.store.ClaimApproval(qctx, a.UserEmail, a.ID, "rejected", "Multiplayer access to this conversation was revoked.")
+			}
 		}
 	}
 }

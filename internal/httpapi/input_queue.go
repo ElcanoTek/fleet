@@ -96,7 +96,7 @@ func (m *steerMailbox) emitQueueSnapshot() {
 	if err != nil {
 		return
 	}
-	m.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items)})
+	m.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items), "user_email": m.user})
 }
 
 // queueItemsPayload is the wire shape of one queue snapshot (full snapshot on

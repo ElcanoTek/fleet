@@ -398,6 +398,9 @@ func (s *Server) handleConversationRefile(w http.ResponseWriter, r *http.Request
 		writeConversationMutationError(w, err)
 		return
 	}
+	if updated, gerr := s.store.Get(r.Context(), user, id); gerr == nil && updated != nil && !updated.Multiplayer {
+		s.enforceMultiplayerRevocation(r.Context(), id, updated, nil)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -750,6 +753,17 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if inputID != "" {
+		if !isOwner {
+			existing, err := s.store.LookupInput(r.Context(), id, inputID)
+			if err != nil {
+				http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
+				return
+			}
+			if existing == nil || !strings.EqualFold(existing.UserEmail, user) {
+				http.Error(w, "only the conversation owner or the message sender can cancel this input", http.StatusForbidden)
+				return
+			}
+		}
 		res, ok := s.stopInput(r.Context(), user, id, inputID)
 		if !ok {
 			http.Error(w, "the input could not be withdrawn from the queue", http.StatusInternalServerError)
