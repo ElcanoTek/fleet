@@ -3728,6 +3728,18 @@ export function ChatExperience({
             focusPanel: focusDashboardPanel,
             pinCard: (cardId, occurrence, panelKey) => {
               const ref = cardRef(cardId, occurrence);
+              // A card whose panel was taken off the board (its own slot or one
+              // it inherited through `replaces`): bring that slot back as it
+              // was, rather than pinning a second slot for the card.
+              const hidden = board.removedKeysOf.get(cardId);
+              if (hidden && hidden.length > 0) {
+                updateBoardPrefs((p) => ({
+                  ...p,
+                  removed: p.removed.filter((k) => !hidden.includes(k)),
+                }));
+                focusDashboardPanel(hidden[0]);
+                return;
+              }
               updateBoardPrefs((p) => ({
                 ...p,
                 pinned: p.pinned.includes(ref) ? p.pinned : [...p.pinned, ref],

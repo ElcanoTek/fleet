@@ -75,14 +75,14 @@ function StatusLight({ status, onApprovals }: { status: BoardStatus; onApprovals
   );
 }
 
-function HelpPopover({ onClose }: { onClose: () => void }) {
+function HelpPopover({ onClose, onEscape }: { onClose: () => void; onEscape: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     ref.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onEscape();
       }
     };
     // "Outside" means outside the popover AND its trigger (the wrapper they
@@ -98,7 +98,7 @@ function HelpPopover({ onClose }: { onClose: () => void }) {
       window.removeEventListener("keydown", onKey, true);
       window.removeEventListener("mousedown", onDown);
     };
-  }, [onClose]);
+  }, [onClose, onEscape]);
   return (
     <div
       ref={ref}
@@ -153,6 +153,13 @@ export function DashboardHud({
   const clock = useClock();
   const [helpOpen, setHelpOpen] = useState(false);
   const closeHelp = useCallback(() => setHelpOpen(false), []);
+  // Esc closes the popover from inside it (it holds the focus): hand the
+  // focus back to the button that opened it rather than dropping it.
+  const helpButtonRef = useRef<HTMLButtonElement>(null);
+  const escapeHelp = useCallback(() => {
+    setHelpOpen(false);
+    helpButtonRef.current?.focus();
+  }, []);
   return (
     <header data-testid="dashboard-hud" className="dash-hud">
       <div className="flex min-w-0 flex-1 items-center gap-3 sm:flex-none">
@@ -193,13 +200,14 @@ export function DashboardHud({
             type="button"
             aria-label="How dashboard view works"
             aria-expanded={helpOpen}
+            ref={helpButtonRef}
             data-testid="dashboard-help-button"
             className="dash-icon-btn"
             onClick={() => setHelpOpen((o) => !o)}
           >
             <Icon name="info" className="size-4" />
           </button>
-          {helpOpen ? <HelpPopover onClose={closeHelp} /> : null}
+          {helpOpen ? <HelpPopover onClose={closeHelp} onEscape={escapeHelp} /> : null}
         </div>
         <button type="button" data-testid="dashboard-exit" className="dash-exit" onClick={onExit}>
           <span>Exit</span>
@@ -556,7 +564,19 @@ export function DashboardBoard({
       // display-only refresh fall back to a slot of its own and reappear.
     }));
   };
-  const max = maximized ? panels.find((p) => p.key === maximized) : undefined;
+  // The focused panel by its key, or by a key it had before a refresh moved
+  // its slot (a pinned card that gained a panel key).
+  const max = maximized ? panels.find((p) => p.key === maximized || p.aliases.includes(maximized)) : undefined;
+  // Keep the focus layer's key current, and close it properly (focus back
+  // to the board) if its panel left the board.
+  useEffect(() => {
+    if (!maximized) return;
+    if (max && max.key !== maximized) setMaximized(max.key);
+    else if (!max) {
+      setMaximized("");
+      document.querySelector<HTMLElement>('[data-testid="dashboard-board"]')?.focus();
+    }
+  }, [maximized, max, setMaximized]);
   const panelProps = (panel: BoardPanel, index: number) => ({
     panel,
     index,
@@ -577,7 +597,7 @@ export function DashboardBoard({
     onDropOn,
   });
   return (
-    <div data-testid="dashboard-board" className={["dash-board", className ?? ""].join(" ")}>
+    <div data-testid="dashboard-board" tabIndex={-1} className={["dash-board outline-none", className ?? ""].join(" ")}>
       <div className="dash-board-scroll">
         {panels.length === 0 ? (
           <EmptyBoard onStarter={onStarter} />

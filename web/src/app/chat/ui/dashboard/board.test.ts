@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { deriveGenUiState } from "../genui/transcript";
 import { panelDomId } from "./context";
-import { boardManifest, boardStatus, deriveBoard, MAX_MANIFEST_PANELS, MAX_MANIFEST_TITLE, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
+import { boardManifest, boardStatus, cardRef, deriveBoard, MAX_MANIFEST_PANELS, MAX_MANIFEST_TITLE, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
 
 const display = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "stat", label: "x", value: "1" }], ...extra });
@@ -233,5 +233,25 @@ describe("manifest and ids", () => {
       assistant(2, [{ id: "r", input: display("Rev 2", { panel: "rev" }) }]),
     ]);
     expect(b.panels[0]).toMatchObject({ cardId: "r", occurrence: 1, spec: expect.objectContaining({ title: "Rev 2" }) });
+  });
+});
+
+describe("cardRef", () => {
+  it("never gives two different (id, occurrence) pairs one reference", () => {
+    const pairs: [string, number][] = [["call#1", 0], ["call", 1], ["call%231", 0], ["call", 0], ["a#b", 2]];
+    expect(new Set(pairs.map(([id, n]) => cardRef(id, n))).size).toBe(pairs.length);
+  });
+});
+
+describe("slot aliases on panels", () => {
+  it("a moved slot lists the key it had", () => {
+    const b = boardOf(
+      [
+        assistant(1, [{ id: "f", input: form("Follow up") }]),
+        assistant(2, [{ id: "g", input: display("Follow up (sent)", { replaces: "f", panel: "follow" }) }]),
+      ],
+      { ...EMPTY_BOARD_PREFS, pinned: ["f"] },
+    );
+    expect(b.panels[0]).toMatchObject({ key: "p:follow", aliases: ["c:f"] });
   });
 });

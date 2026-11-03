@@ -37,6 +37,8 @@ export const EMPTY_BOARD_PREFS: BoardPrefs = { pinned: [], removed: [], order: [
 export type BoardPanel = {
   /** Slot identity: "p:<panel key>" or "c:<first card id>". */
   key: string;
+  /** Keys this slot had before a refresh moved it (see deriveBoard). */
+  aliases: string[];
   /** The card's own panel key, when the agent named one. */
   panelKey?: string;
   /** The newest card in this slot — what the panel draws. */
@@ -81,7 +83,10 @@ export type Board = {
  * plus "#<occurrence>" for a later card that reused the id.
  */
 export function cardRef(cardId: string, occurrence: number): string {
-  return occurrence > 0 ? `${cardId}#${occurrence}` : cardId;
+  // Ids are opaque: escape "%" and "#" so the "#<n>" suffix is unambiguous
+  // ("call#1" the id and "call" the second time never share a reference).
+  const id = cardId.replace(/%/g, "%25").replace(/#/g, "%23");
+  return occurrence > 0 ? `${id}#${occurrence}` : id;
 }
 
 /** A card with inputs or footer buttons can send something. */
@@ -193,6 +198,7 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
         spec,
         version: (prev?.version ?? 0) + 1,
         occurrence: genUi.occurrences.get(tc) ?? 0,
+        aliases: [],
         messageIndex: idx,
         interactive: isInteractiveSpec(spec),
         wide: false,
@@ -207,7 +213,7 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
   const wideOf = (key: string) => keysOf(key).map((k) => prefs.wide[k]).find((w) => w !== undefined);
   const panels = [...slots.values()]
     .filter((p) => !keysOf(p.key).some((k) => removed.has(k)))
-    .map((p) => ({ ...p, wide: wideOf(p.key) ?? prefersWide(p.spec) }))
+    .map((p) => ({ ...p, aliases: [...(aliases.get(p.key) ?? [])], wide: wideOf(p.key) ?? prefersWide(p.spec) }))
     .sort((a, b) => {
       const oa = orderOf(a.key);
       const ob = orderOf(b.key);

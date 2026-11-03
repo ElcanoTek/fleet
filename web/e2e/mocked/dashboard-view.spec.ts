@@ -178,6 +178,19 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await expect(panels).toHaveCount(3);
   await expect(page.locator('[data-testid="genui-card"][data-card-id="call-health-1"]')).toBeVisible();
 
+  // Remove the revenue panel, then pin its card back: the same slot returns
+  // (p:revenue, v2), not a second panel for the card.
+  const revenuePanel = page.locator('[data-panel-key="p:revenue"]');
+  await revenuePanel.getByRole("button", { name: "More for Revenue" }).click();
+  await page.getByRole("menuitem", { name: "Remove from board" }).click();
+  await expect(panels).toHaveCount(2);
+  const revenueCard = page.locator('[data-testid="genui-card"][data-card-id="call-rev-2"]');
+  await expect(revenueCard).toBeVisible();
+  await revenueCard.locator("xpath=..").getByTestId("dashboard-pin-card").click();
+  await expect(panels).toHaveCount(3);
+  await expect(page.locator('[data-panel-key="p:revenue"]')).toContainText("v2");
+  await expect(page.locator('[data-panel-key="c:call-rev-2"]')).toHaveCount(0);
+
   // A message sent from dashboard view tells the server which view it is.
   const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
   await page.locator("#promptInput").fill("add a churn panel");
@@ -199,6 +212,13 @@ test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async 
   await expect(page.getByTestId("dashboard-help")).toBeVisible();
   await page.getByTestId("dashboard-help-button").click();
   await expect(page.getByTestId("dashboard-help")).toHaveCount(0);
+  // Esc closes it from inside and hands the focus back to its button.
+  await page.getByTestId("dashboard-help-button").click();
+  await expect(page.getByTestId("dashboard-help")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("dashboard-help")).toHaveCount(0);
+  await expect(page.getByTestId("dashboard-help-button")).toBeFocused();
+  await expect(page.getByTestId("dashboard-hud")).toBeVisible();
 
   const keys = () => page.getByTestId("dashboard-panel").evaluateAll((els) => els.map((e) => e.getAttribute("data-panel-key")));
   expect(await keys()).toEqual(["p:revenue", "p:pipeline", "c:call-health-1"]);
