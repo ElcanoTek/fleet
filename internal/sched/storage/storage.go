@@ -2129,7 +2129,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 
 	schedule, err := cron.ParseStandard(current.Recurrence)
 	if err != nil {
-		log.Printf("Error parsing recurrence for task %s: %v; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", current.ID, err)
+		log.Printf("Error parsing recurrence for task %s: %s; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", current.ID, logSafe(err.Error()))
 		if cerr := tx.Commit(); cerr != nil {
 			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
 			return false
@@ -2146,7 +2146,7 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		if l, lerr := time.LoadLocation(current.Timezone); lerr == nil {
 			loc = l
 		} else {
-			log.Printf("Task %s has invalid timezone %q; using server timezone: %v", current.ID, current.Timezone, lerr)
+			log.Printf("Task %s has invalid timezone %q; using server timezone: %s", current.ID, logSafe(current.Timezone), logSafe(lerr.Error()))
 		}
 	}
 	now := time.Now().In(loc)
@@ -2695,4 +2695,11 @@ func (s *Storage) ListA2APushWork(ctx context.Context, limit int) ([]models.A2AP
 // MarkA2APushAttempted records a delivery attempt. See db.MarkA2APushAttempted.
 func (s *Storage) MarkA2APushAttempted(ctx context.Context, taskID uuid.UUID, configID string, status models.TaskStatus) (bool, error) {
 	return s.db.MarkA2APushAttempted(ctx, taskID, configID, status)
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line (log-injection guard). strings.ReplaceAll is the spelling CodeQL's
+// go/log-injection query models as a sanitizer.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
