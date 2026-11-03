@@ -729,6 +729,17 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	if err != nil {
 		return nil, err
 	}
+	// The per-job scheduled workspaces tree (tasks/, ADR-0069) is read-only
+	// to every sandbox that mounts the whole root (#1897, ADR-0097): a
+	// scheduled job's scoped sandbox mounts only tasks/<lineage>, and a chat
+	// or worktree sandbox that could rename that directory could swap
+	// another job's in before the mount. Created here, before any sandbox
+	// exists, for the same kubelet subPath and missing-source reasons as
+	// mcp-runs/ above.
+	tasksDir, err := ensureTaskWorkspacesDir(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
 
 	// Normalize the OCI runtime name to what podman understands ("libkrun" →
 	// "krun") so the --runtime flag, the preflight, and the probe binary mapping
@@ -749,6 +760,9 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 		StartTimeout:   time.Duration(cfg.SandboxStartTimeoutSeconds) * time.Second,
 		BridgeDir:      filepath.Join(filepath.Dir(workspaceRoot), "data", "sandbox-bridge"),
 		ReadOnlyMounts: append(sandboxReadOnlyMounts(cfg, personasDir, protocolsDir, systemPromptsDir, skillsDir, sharedFilesDir), mcpRunsDir),
+		// Read-only only where the whole root is mounted; scoped and
+		// persistent sandboxes never see it (sandbox.ContainerConfig).
+		WholeRootReadOnly: []string{tasksDir},
 	}
 	// Kubernetes backend (#989): sandboxes are ephemeral pods in a cluster
 	// instead of co-located podman containers. All podman-specific boot work
@@ -1149,6 +1163,26 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 		kept = append(kept, m)
 	}
 	return kept
+}
+
+// ensureTaskWorkspacesDir creates the per-job scheduled workspaces tree
+// (<root>/tasks, tools.TaskWorkspacesDirName) before any sandbox exists and
+// returns it for the whole-root read-only set. A symlink or non-directory on
+// the name fails boot, exactly as for ensureMCPRunsDir: mounting it would
+// overlay its target, and the scoped take refuses a symlinked component.
+func ensureTaskWorkspacesDir(workspaceRoot string) (string, error) {
+	dir := filepath.Join(workspaceRoot, tools.TaskWorkspacesDirName)
+	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // traversable by the rootless container user, like the workspace root
+		return "", fmt.Errorf("ensure scheduled workspaces dir %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return "", fmt.Errorf("ensure scheduled workspaces dir %s: %w", dir, err)
+	}
+	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
+		return "", fmt.Errorf("scheduled workspaces dir %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", dir, info.Mode().Type())
+	}
+	return dir, nil
 }
 
 // ensureMCPRunsDir creates the MCP run-dir base

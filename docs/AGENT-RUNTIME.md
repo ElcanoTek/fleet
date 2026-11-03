@@ -1738,7 +1738,9 @@ MCP servers uses `${FLEET_WORKSPACE}` — its own `mcp-runs/task-<id>/`. Other
 jobs' directories, chat conversation directories and other occurrences' MCP
 run directories do not exist inside the container, so `bash` and `run_python`
 cannot list, read or write them (the file tools were already confined). The
-take always cold-starts, on both sandbox backends. Worktree runs and
+take always cold-starts, on both sandbox backends. Every sandbox that still
+mounts the whole root (chat, worktree runs) gets `tasks/` read-only, so it
+can read a job's files but not change, rename or replace them. Worktree runs and
 `FLEET_SCHEDULED_SHARED_WORKSPACE=1` keep the whole-root mount. See ADR-0097
 and [`SCHEDULED-SANDBOX-SCOPE.md`](SCHEDULED-SANDBOX-SCOPE.md).
 

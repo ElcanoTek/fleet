@@ -19,6 +19,15 @@ builds a `sandbox.WorkspaceScope` and `takeTaskSandbox` routes the run through
 | `<root>/shared/` (and `<root>/skills/` on kubernetes) | read-only | The shared file library and staged skills, as before. |
 | `<root>/mcp-runs/task-<id>/` | read-only | This occurrence's MCP ledger and staged inputs, only when one of its servers uses `${FLEET_WORKSPACE}`. |
 
+Every sandbox that still mounts the **whole** root — chat, worktree runs,
+`FLEET_SCHEDULED_SHARED_WORKSPACE=1` runs, approved bash — now gets
+`<root>/tasks/` **read-only** over its read-write root mount
+(`ContainerConfig.WholeRootReadOnly`, created at boot by
+`ensureTaskWorkspacesDir`, which refuses a symlink on the name). Those
+sandboxes can still read a job's files, but can no longer write, rename or
+replace anything under `tasks/` — which is what would let one swap another
+job's directory in for a scoped job's between the scope check and the mount.
+
 Not mounted: the root itself, every other `tasks/<lineage>/`, every chat
 conversation directory, `mcp-shared/`, and every other occurrence's
 `mcp-runs/task-<id>/`. `ls ..` from the job directory therefore shows only the
@@ -29,6 +38,10 @@ derive from one function (`ContainerConfig.workspaceMounts`), so the file tools
 trust exactly what the shells can reach.
 
 ## Failure behaviour
+
+The primary guard against a swapped job directory is the read-only `tasks/`
+above: no sandbox other than the job's own can change anything there, on
+either backend. The checks below are defence in depth on top of it.
 
 - The scope is validated before anything starts (`resolveWorkspaceScope`): the
   directory must exist and lie strictly inside the workspace root; a read-only
@@ -53,9 +66,9 @@ trust exactly what the shells can reach.
   kubernetes backend does not run the in-container check — a pod's view of
   the claim is another host's mount, where device and inode numbers are not
   guaranteed to match — and relies on the pinned walk plus the kubelet's own
-  `subPath` handling, which refuses a symlink that leaves the volume (a swap
-  to another directory inside the claim during pod start is the residual
-  there).
+  `subPath` handling, which refuses a symlink that leaves the volume — and,
+  as on podman, on `tasks/` being read-only to every other sandbox, so there
+  is nothing able to perform the swap.
 - Allowlisted egress without a proxy, and allowlisted egress on kubernetes,
   fail closed exactly as the unscoped takes do.
 - A pool with no container backend (host/mock test pools) answers

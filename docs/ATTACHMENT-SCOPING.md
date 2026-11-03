@@ -189,4 +189,5 @@ Scheduled runs have since taken that change for themselves (#1897,
 non-worktree scheduled run cold-starts a sandbox that mounts only its own job
 directory, so a scheduled job can no longer read a conversation's directory
 or another job's. Chat sandboxes still mount the whole root, so a chat can
-still read a scheduled job's directory, and another chat's.
+still read another chat's directory and a scheduled job's — though `tasks/`
+is now read-only to them, so they can no longer change a job's files.

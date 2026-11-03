@@ -220,6 +220,20 @@ type ContainerConfig struct {
 	// have to populate this list.
 	ReadOnlyMounts []string
 
+	// WholeRootReadOnly lists directories strictly inside WorkspaceHostDir
+	// that a sandbox mounting the WHOLE root gets read-only, over its
+	// read-write root mount (#1897). It holds the per-job scheduled
+	// workspaces tree (tasks/): a scoped scheduled sandbox mounts only
+	// tasks/<lineage>, and if a chat or worktree sandbox could still rename
+	// or replace that directory, it could swap another job's directory in
+	// between the scope check and the mount — on kubernetes nothing after
+	// the kubelet's subPath resolution could tell. Read-only here, nobody
+	// but the host (and each job's own scoped sandbox, inside its own
+	// directory) can change anything under tasks/. Ignored by a scoped
+	// sandbox and by one whose WorkspaceHostDir no longer contains the entry
+	// (a persistent conversation sandbox), so it never widens what those see.
+	WholeRootReadOnly []string
+
 	// Scope, when non-nil, narrows what of WorkspaceHostDir this sandbox
 	// mounts (#1897): Scope.Dir replaces the whole root as the read-write
 	// workspace mount and the working directory, and the read-only set is
@@ -277,7 +291,14 @@ type WorkspaceScope struct {
 // drift apart.
 func (cfg ContainerConfig) workspaceMounts() (rw string, ro []string) {
 	if cfg.Scope == nil {
-		return cfg.WorkspaceHostDir, cfg.ReadOnlyMounts
+		ro = make([]string, 0, len(cfg.ReadOnlyMounts)+len(cfg.WholeRootReadOnly))
+		ro = append(ro, cfg.ReadOnlyMounts...)
+		for _, dir := range cfg.WholeRootReadOnly {
+			if dir != "" && strictlyWithin(cfg.WorkspaceHostDir, dir) {
+				ro = append(ro, dir)
+			}
+		}
+		return cfg.WorkspaceHostDir, ro
 	}
 	withheld := make(map[string]bool, len(cfg.Scope.Withhold))
 	for _, w := range cfg.Scope.Withhold {
@@ -287,13 +308,25 @@ func (cfg ContainerConfig) workspaceMounts() (rw string, ro []string) {
 	}
 	ro = make([]string, 0, len(cfg.ReadOnlyMounts)+len(cfg.Scope.ReadOnly))
 	for _, dir := range cfg.ReadOnlyMounts {
-		if dir == "" || withheld[filepath.Clean(dir)] {
+		// A read-only mount at or above the scoped directory would re-expose
+		// its siblings (or shadow the writable workspace): never mount one.
+		if dir == "" || withheld[filepath.Clean(dir)] ||
+			filepath.Clean(dir) == filepath.Clean(cfg.Scope.Dir) || strictlyWithin(dir, cfg.Scope.Dir) {
 			continue
 		}
 		ro = append(ro, dir)
 	}
 	ro = append(ro, cfg.Scope.ReadOnly...)
 	return cfg.Scope.Dir, ro
+}
+
+// strictlyWithin reports, lexically, whether path lies strictly beneath root.
+func strictlyWithin(root, path string) bool {
+	if root == "" || path == "" {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
+	return err == nil && rel != "." && filepath.IsLocal(rel)
 }
 
 // NewContainer starts a fresh sandbox container and returns a Sandbox

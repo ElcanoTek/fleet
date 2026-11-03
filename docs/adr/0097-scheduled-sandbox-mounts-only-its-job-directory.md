@@ -41,7 +41,11 @@ mounts the job directory at its same path instead of the root; kubernetes
 mounts it as a `subPath` of the workspace claim at its same path. The fileop
 anchor reads the same plan, so the file tools trust exactly what is mounted.
 
-No path component below the root may be a symlink (a whole-root sandbox
+Every sandbox that still mounts the whole root gets `tasks/` read-only, so
+no sandbox but a job's own can write, rename or replace anything under it —
+on either backend, the swap a scoped mount would otherwise race has nobody
+to perform it. As defence in depth, no path component below the root may be
+a symlink (a whole-root sandbox
 can plant one, and podman follows a symlinked volume source): the walk goes
 through pinned `openat(O_NOFOLLOW)` descriptors, so it cannot be raced through
 a parent. On podman the take also checks, inside the started container, that
@@ -63,7 +67,8 @@ and interactive chat, whose warm pool is unchanged.
 
 - A scheduled job's shells can no longer list, read or write another job's
   directory, a conversation's directory, or another occurrence's MCP run
-  directory. ADR-0069's claim now holds for the shells as well as the file
+  directory. Chat and worktree sandboxes can still read `tasks/` but no
+  longer write anything under it. ADR-0069's claim now holds for the shells as well as the file
   tools.
 - Every non-worktree scheduled run cold-starts its sandbox. Sealed runs on a
   non-lockdown fleet already did (`TakeContainer`); networked runs on an open

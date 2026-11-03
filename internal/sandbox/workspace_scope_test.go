@@ -204,6 +204,98 @@ func TestWorkspaceMountsPlan(t *testing.T) {
 	}
 }
 
+// TestWholeRootReadOnlyTasks (#1897): a sandbox mounting the whole root gets
+// tasks/ read-only, so a chat or worktree sandbox cannot rename or replace a
+// job's directory and swap another one in before that job's scoped mount; a
+// scoped sandbox never gets tasks/ (it would re-expose every job), and a
+// persistent conversation sandbox, whose workspace is its own directory, is
+// not widened by it.
+func TestWholeRootReadOnlyTasks(t *testing.T) {
+	f := newScopeFixture(t)
+	tasks := filepath.Join(f.root, "tasks")
+	base := ContainerConfig{WorkspaceHostDir: f.root, ReadOnlyMounts: []string{f.shared}, WholeRootReadOnly: []string{tasks}}
+
+	if rw, ro := base.workspaceMounts(); rw != f.root || strings.Join(ro, ",") != f.shared+","+tasks {
+		t.Errorf("whole-root plan = %q %v; want the root with %v read-only", rw, ro, []string{f.shared, tasks})
+	}
+
+	scoped := base
+	scoped.Scope = &WorkspaceScope{Dir: f.job}
+	if _, ro := scoped.workspaceMounts(); strings.Join(ro, ",") != f.shared {
+		t.Errorf("scoped plan read-only = %v; want only %q (tasks/ would re-expose every job)", ro, f.shared)
+	}
+
+	persistent := base
+	persistent.WorkspaceHostDir = f.conv
+	if _, ro := persistent.workspaceMounts(); strings.Join(ro, ",") != f.shared {
+		t.Errorf("persistent plan read-only = %v; want only %q (tasks/ is outside its workspace)", ro, f.shared)
+	}
+
+	// Defensive: a pool read-only mount at or above the scoped directory is
+	// never mounted into a scoped sandbox, whichever list it came from.
+	ancestor := base
+	ancestor.ReadOnlyMounts = []string{f.shared, tasks, f.job}
+	ancestor.Scope = &WorkspaceScope{Dir: f.job}
+	if _, ro := ancestor.workspaceMounts(); strings.Join(ro, ",") != f.shared {
+		t.Errorf("scoped plan with ancestor mounts = %v; want only %q", ro, f.shared)
+	}
+
+	// The file tools agree: in a whole-root sandbox a job directory is a
+	// read-only anchor, so not even view_file's siblings can write there.
+	rw, ro := base.workspaceMounts()
+	if anchor, readOnly, err := fileOpAnchorFor(rw, ro, f.job); err != nil || anchor != tasks || !readOnly {
+		t.Errorf("whole-root anchor for a job dir = %q ro=%v err=%v; want %q, read-only", anchor, readOnly, err, tasks)
+	}
+}
+
+// TestWholeRootRunArgsMountTasksReadOnly pins the podman flag and the pod
+// spec for the whole-root case.
+func TestWholeRootRunArgsMountTasksReadOnly(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("podman arg assembly is linux-only")
+	}
+	t.Setenv(seccompProfileEnv, "")
+	f := newScopeFixture(t)
+	tasks := filepath.Join(f.root, "tasks")
+	bin, logPath := fakePodman(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	sb, err := NewContainer(ctx, ContainerConfig{
+		Image: "img", WorkspaceHostDir: f.root, BridgeScript: []byte("# unused\n"),
+		PodmanBinary: bin, StatsInterval: -1, WholeRootReadOnly: []string{tasks},
+	})
+	if err != nil {
+		t.Fatalf("NewContainer: %v", err)
+	}
+	defer sb.Close()
+	args := recordedArgs(t, logPath)
+	for _, want := range []string{
+		fmt.Sprintf("--volume=%s:%s:rw,z", f.root, f.root),
+		fmt.Sprintf("--volume=%s:%s:ro,z", tasks, tasks),
+	} {
+		if !hasArg(args, want) {
+			t.Errorf("missing %q in whole-root podman run argv", want)
+		}
+	}
+
+	cfg := testContainerConfig(t)
+	cfg.WorkspaceHostDir = f.root
+	cfg.WholeRootReadOnly = []string{tasks}
+	pod, err := buildSandboxPod(applyContainerDefaults(cfg), KubernetesConfig{Namespace: "ns", WorkspaceClaim: "claim"}, "fleet-sandbox-root")
+	if err != nil {
+		t.Fatalf("buildSandboxPod: %v", err)
+	}
+	found := false
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.MountPath == tasks {
+			found = m.ReadOnly && m.SubPath == "tasks" && m.Name == "workspace"
+		}
+	}
+	if !found {
+		t.Errorf("whole-root pod has no read-only subPath mount of tasks/; mounts = %+v", pod.Spec.Containers[0].VolumeMounts)
+	}
+}
+
 // TestScopedFileOpAnchorRefusesSiblings: the file tools of a scoped sandbox
 // trust only what it mounts, so another job's or conversation's directory has
 // no anchor at all — not even a read-only one.
