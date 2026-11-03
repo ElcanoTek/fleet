@@ -971,23 +971,13 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 	if err != nil {
 		return out, fmt.Errorf("marshal optional mcp servers: %w", err)
 	}
-	if _, err := s.getOwnedOrMultiplayer(ctx, req.UserEmail, req.ConversationID); err != nil {
-		return out, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return out, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
-		req.ConversationID,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return out, ErrConversationNotFound
-	}
+	owner, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, req.UserEmail, req.ConversationID)
 	if err != nil {
 		return out, err
 	}
@@ -1236,24 +1226,13 @@ func (s *Store) StageEnableMCPConnectorsApproval(
 	expiresAt int64,
 	buildArgs func(supersededArgsJSON []string) string,
 ) (*Approval, int64, error) {
-	if _, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID); err != nil {
-		return nil, 0, err
-	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
-		convID,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, 0, ErrConversationNotFound
-	}
-	if err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
 		return nil, 0, err
 	}
 
@@ -3022,22 +3001,44 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 // whether SweepExpiredApprovals has run yet. Rows with NULL/0
 // expires_at never expire. The expiry sweep uses ClaimExpiredApproval
 // so it can still flip those rows for notification/audit.
-func (s *Store) canApproveInConversation(ctx context.Context, userEmail, approvalID string) (bool, error) {
+func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, approvalID, resultText, narrowedJSON string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	now := time.Now().Unix()
 	var convID string
-	err := s.db.QueryRowContext(ctx,
-		`SELECT conversation_id FROM approvals WHERE id = $1 AND user_email = $2`,
-		approvalID, userEmail,
-	).Scan(&convID)
+	if narrowedJSON != "" {
+		err = tx.QueryRowContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
+			 WHERE id = $4 AND user_email = $5 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)
+			 RETURNING conversation_id`,
+			resultText, now, narrowedJSON, approvalID, userEmail, now,
+		).Scan(&convID)
+	} else {
+		err = tx.QueryRowContext(ctx,
+			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
+			 WHERE id = $3 AND user_email = $4 AND status = 'pending'
+			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)
+			 RETURNING conversation_id`,
+			resultText, now, approvalID, userEmail, now,
+		).Scan(&convID)
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	if _, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID); err != nil {
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
 		if errors.Is(err, ErrConversationNotFound) {
 			return false, nil
 		}
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -3048,10 +3049,7 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 		return false, fmt.Errorf("invalid approval status %q", newStatus)
 	}
 	if newStatus == approvalStatusApproved {
-		ok, err := s.canApproveInConversation(ctx, userEmail, approvalID)
-		if err != nil || !ok {
-			return false, err
-		}
+		return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "")
 	}
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
@@ -3096,21 +3094,7 @@ func (s *Store) ClaimApprovalNarrowed(ctx context.Context, userEmail, approvalID
 	if narrowedJSON == "" {
 		return false, errors.New("ClaimApprovalNarrowed: empty narrowing record")
 	}
-	if ok, err := s.canApproveInConversation(ctx, userEmail, approvalID); err != nil || !ok {
-		return false, err
-	}
-	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
-		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
-		resultText, now, narrowedJSON, approvalID, userEmail, now,
-	)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
+	return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, narrowedJSON)
 }
 
 // ClaimApprovalAndSetModel resolves a pending approval as "approved" AND pins
@@ -3144,13 +3128,13 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	if n, _ := res.RowsAffected(); n == 0 {
 		return false, nil
 	}
-	conv, err := s.getOwnedOrMultiplayer(ctx, userEmail, convID)
+	ownerEmail, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID)
 	if err != nil {
 		return false, err
 	}
 	res, err = tx.ExecContext(ctx,
 		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		model, now, convID, conv.UserEmail,
+		model, now, convID, ownerEmail,
 	)
 	if err != nil {
 		return false, err

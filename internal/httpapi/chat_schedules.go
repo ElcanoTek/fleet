@@ -111,6 +111,9 @@ func (s *Server) emitPatrolUpdate(ctx context.Context, user, convID string, buf 
 		"schedules":    list,
 		"auto_approve": autoApprove,
 	}
+	if user != "" {
+		payload["user_email"] = user
+	}
 	if buf != nil {
 		buf.Emit("patrol.updated", payload)
 		return

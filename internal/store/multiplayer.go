@@ -295,20 +295,55 @@ func (s *Store) mutateConversationMultiplayer(
 	return updated, nil
 }
 
-// getOwnedOrMultiplayer returns convID if userEmail owns it or is an authorized
-// multiplayer participant, or ErrConversationNotFound otherwise.
-func (s *Store) getOwnedOrMultiplayer(ctx context.Context, userEmail, convID string) (*Conversation, error) {
-	if conv, err := s.Get(ctx, userEmail, convID); err != nil {
-		return nil, err
-	} else if conv != nil {
-		return conv, nil
+// lockAndVerifyOwnedOrMultiplayerTx locks the conversation row for convID and
+// verifies that callerEmail is its owner or an authorized multiplayer
+// participant, returning the conversation owner's email.
+func (s *Store) lockAndVerifyOwnedOrMultiplayerTx(ctx context.Context, tx *sql.Tx, callerEmail, convID string) (string, error) {
+	callerEmail = normalizeEmail(callerEmail)
+	var (
+		ownerEmail   string
+		multiplayer  bool
+		partRaw      string
+		exclRaw      string
+		sharedTeam   sql.NullString
+		sharedTeamID sql.NullInt64
+		archivedAt   sql.NullInt64
+		lockdown     bool
+	)
+	err := tx.QueryRowContext(ctx, `
+		SELECT user_email, COALESCE(multiplayer, FALSE),
+		       COALESCE(multiplayer_participants, '[]'), COALESCE(multiplayer_excluded, '[]'),
+		       team_shared_with, team_shared_with_id, archived_at, COALESCE(lockdown, FALSE)
+		  FROM conversations
+		 WHERE id = $1 AND deleted_at IS NULL
+		 FOR UPDATE`, convID,
+	).Scan(&ownerEmail, &multiplayer, &partRaw, &exclRaw, &sharedTeam, &sharedTeamID, &archivedAt, &lockdown)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrConversationNotFound
 	}
-	if conv, err := s.GetMultiplayerConversation(ctx, userEmail, convID); err != nil {
-		return nil, err
-	} else if conv != nil {
-		return conv, nil
+	if err != nil {
+		return "", err
 	}
-	return nil, ErrConversationNotFound
+	if normalizeEmail(ownerEmail) == callerEmail {
+		return ownerEmail, nil
+	}
+	var archPtr *int64
+	if archivedAt.Valid {
+		archPtr = &archivedAt.Int64
+	}
+	c := &Conversation{
+		ID:                      convID,
+		UserEmail:               ownerEmail,
+		Multiplayer:             multiplayer,
+		MultiplayerParticipants: scanEmailJSONArray(partRaw),
+		MultiplayerExcluded:     scanEmailJSONArray(exclRaw),
+		ArchivedAt:              archPtr,
+		Lockdown:                lockdown,
+	}
+	if !s.canParticipateInMultiplayer(ctx, callerEmail, c, strings.TrimSpace(sharedTeam.String), sharedTeamID) {
+		return "", ErrConversationNotFound
+	}
+	return ownerEmail, nil
 }
 
 // GetMultiplayerConversation returns the conversation when convID has

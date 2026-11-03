@@ -97,6 +97,10 @@ func (s *Server) handleAdminStorage(w http.ResponseWriter, r *http.Request) {
 	// workspace twice.
 	workspaceRoot := tools.WorkspaceDirForConversation("")
 	resp.Workspaces, resp.LargestWorkspaces = s.workspaceUsage(r, workspaceRoot, 10)
+	if stashStats := duTree(ctx, filepath.Join(s.cfg.EmailAttachmentDir, "multiplayer-private")); stashStats.Bytes > 0 || stashStats.Files > 0 {
+		resp.Workspaces.Bytes += stashStats.Bytes
+		resp.Workspaces.Files += stashStats.Files
+	}
 
 	if total, avail, err := diskUsage(s.cfg.DataDir); err == nil {
 		resp.DiskTotalBytes = total
@@ -161,9 +165,10 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 
 	ctx := r.Context()
 	uploadsDir := filepath.Join(s.cfg.EmailAttachmentDir, "uploads")
+	stashDir := filepath.Join(s.cfg.EmailAttachmentDir, "multiplayer-private")
 	tempDir := filepath.Join(s.cfg.DataDir, "temp_uploads")
 	workspaceRoot := tools.WorkspaceDirForConversation("")
-	before := duTree(ctx, uploadsDir).Bytes + duTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes
+	before := duTree(ctx, uploadsDir).Bytes + duTree(ctx, tempDir).Bytes + duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
 
 	var resp storageCleanupResponse
 	age := time.Duration(req.OlderThanDays) * 24 * time.Hour
@@ -196,7 +201,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 
 	resp.RemainingUploadsBytes = duTree(ctx, uploadsDir).Bytes
 	resp.RemainingTempBytes = duTree(ctx, tempDir).Bytes
-	resp.RemainingWorkspaceByte = duTree(ctx, workspaceRoot).Bytes
+	resp.RemainingWorkspaceByte = duTree(ctx, workspaceRoot).Bytes + duTree(ctx, stashDir).Bytes
 	if freed := before - (resp.RemainingUploadsBytes + resp.RemainingTempBytes + resp.RemainingWorkspaceByte); freed > 0 {
 		resp.BytesFreed = freed
 	}

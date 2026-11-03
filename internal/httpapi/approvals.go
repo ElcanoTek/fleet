@@ -650,6 +650,9 @@ func (m *memoryProposer) propose(p store.MemoryProposalParams, supersededContent
 		"content":     memory.Content,
 		"kind":        memory.Kind,
 	}
+	if m.userEmail != "" {
+		payload["user_email"] = m.userEmail
+	}
 	if memory.Supersedes != "" {
 		payload["supersedes_id"] = memory.Supersedes
 		payload["supersedes_content"] = excerpt(supersededContent, 200)

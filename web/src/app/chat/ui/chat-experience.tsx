@@ -2588,7 +2588,10 @@ export function ChatExperience({
     let followResume = false;
     if (attachedConvIdsRef.current.has(conversationId) || recoveryHoldsIt) {
       setActiveConversationId(conversationId);
-      const conv = conversations.find((c) => c.id === conversationId);
+      const conv =
+        conversations.find((c) => c.id === conversationId) ??
+        teamSharedConversations.find((c) => c.id === conversationId) ??
+        projectSharedConversations.find((c) => c.id === conversationId);
       if (conv) {
         setSelectedPersona(conv.persona);
         setSelectedModel(conv.model || currentDefaultModel());

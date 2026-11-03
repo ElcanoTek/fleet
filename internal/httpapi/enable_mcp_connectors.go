@@ -440,7 +440,7 @@ func (s *Server) newEnableMCPConnectorsHandler(
 		if s.store == nil {
 			return nil, fmt.Errorf("enable_mcp_connectors requires a conversation store")
 		}
-		unlock := s.connectorLocks.lock(user + "\x00" + conv.ID)
+		unlock := s.connectorLocks.lock(conv.ID)
 		defer unlock()
 
 		// Load fresh conversation state so we validate against its seat overrides and merge against the latest enabled list.
@@ -468,7 +468,8 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			turnAdvertised = s.displayedPromptSetFromSnapshot(turnSnapshot, turnStartEnabled, agentcore.InteractiveHiddenTools(), policy)
 		}
 
-		currentEnabled := append([]string(nil), fresh.OptionalMCPServersEnabled...)
+		rawEnabled := rawConversationOptionalMCPServers(fresh)
+		currentEnabled := append([]string(nil), s.effectiveOptionalMCPServersForCaller(ctx, user, fresh)...)
 		toEnable, displayNames, err := s.validateEnableMCPConnectors(ctx, user, params.Connectors, currentEnabled, policy, fresh.MCPAccounts, turnAdvertised)
 		if err != nil {
 			return nil, err
@@ -495,11 +496,15 @@ func (s *Server) newEnableMCPConnectorsHandler(
 			}, nil
 		}
 
-		merged := append([]string(nil), currentEnabled...)
+		merged := append([]string(nil), rawEnabled...)
+		rawSeen := make(map[string]bool, len(merged))
+		for _, m := range merged {
+			rawSeen[strings.ToLower(strings.TrimSpace(m))] = true
+		}
 		for _, n := range newlyAdded {
 			norm := strings.ToLower(strings.TrimSpace(n))
-			if norm != "" && !enabledSet[norm] {
-				enabledSet[norm] = true
+			if norm != "" && !rawSeen[norm] {
+				rawSeen[norm] = true
 				merged = append(merged, n)
 			}
 		}
@@ -739,12 +744,22 @@ func (s *Server) stageEnableMCPConnectorsApproval(
 	}, nil
 }
 
+func rawConversationOptionalMCPServers(conv *store.Conversation) []string {
+	if conv == nil {
+		return nil
+	}
+	if len(conv.OptionalMCPServersEnabled) == 0 && len(conv.ParticipantOptionalMCPServers) > 0 {
+		return conv.ParticipantOptionalMCPServers
+	}
+	return conv.OptionalMCPServersEnabled
+}
+
 // runStagedEnableMCPConnectors executes a user-approved enable_mcp_connectors
 // card: re-validates the requested connectors, merges them into the
 // conversation's OptionalMCPServersEnabled list, persists the update, and
 // returns the model-visible tool_result text.
 func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID string, approval *store.Approval) (string, error) {
-	unlock := s.connectorLocks.lock(user + "\x00" + convID)
+	unlock := s.connectorLocks.lock(convID)
 	defer unlock()
 
 	var args stagedEnableMCPConnectorsArgs
@@ -757,7 +772,7 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 
 	if s.cfg != nil && s.cfg.MockMode {
 		if conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID); err == nil && conv != nil {
-			merged := append([]string(nil), conv.OptionalMCPServersEnabled...)
+			merged := append([]string(nil), rawConversationOptionalMCPServers(conv)...)
 			seen := make(map[string]bool, len(merged))
 			for _, m := range merged {
 				seen[strings.ToLower(strings.TrimSpace(m))] = true
@@ -784,13 +799,15 @@ func (s *Server) runStagedEnableMCPConnectors(ctx context.Context, user, convID 
 		return "", fmt.Errorf("load conversation: %w", err)
 	}
 
+	rawEnabled := rawConversationOptionalMCPServers(conv)
+	currentEnabled := append([]string(nil), s.effectiveOptionalMCPServersForCaller(ctx, user, conv)...)
 	effectivePersona, _ := s.resolveTurnPersona(ctx, conv)
-	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, conv.OptionalMCPServersEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts, advertisedSetFromNames(args.Connectors))
+	toEnable, _, err := s.validateEnableMCPConnectors(ctx, user, args.Connectors, currentEnabled, s.personaPolicyFor(effectivePersona), conv.MCPAccounts, advertisedSetFromNames(args.Connectors))
 	if err != nil {
 		return "", err
 	}
 
-	merged := append([]string(nil), conv.OptionalMCPServersEnabled...)
+	merged := append([]string(nil), rawEnabled...)
 	seen := make(map[string]bool, len(merged))
 	for _, m := range merged {
 		seen[strings.ToLower(strings.TrimSpace(m))] = true
