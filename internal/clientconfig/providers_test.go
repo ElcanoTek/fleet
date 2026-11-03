@@ -34,7 +34,13 @@ func TestValidateProviders(t *testing.T) {
 		{"azure without base_url", []ProviderDef{{Name: "az", Type: "azure", APIKeyEnv: "AZURE_OPENAI_API_KEY"}}, "requires base_url"},
 		{"valid google", []ProviderDef{{Name: "gemini", Type: "google", APIKeyEnv: "GEMINI_API_KEY"}}, ""},
 		{"google without api_key_env", []ProviderDef{{Name: "gemini", Type: "google"}}, "api_key_env is required"},
-		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "bedrock", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google"},
+		{"valid bedrock", []ProviderDef{{Name: "aws", Type: "bedrock", APIKeyEnv: "AWS_BEDROCK_API_KEY"}}, ""},
+		{"bedrock with a region", []ProviderDef{{Name: "aws", Type: "bedrock", APIKeyEnv: "AWS_BEDROCK_API_KEY", Region: "eu-central-1"}}, ""},
+		{"bedrock without api_key_env", []ProviderDef{{Name: "aws", Type: "bedrock", Region: "eu-central-1"}}, "api_key_env is required"},
+		{"bedrock region that is not a Region", []ProviderDef{{Name: "aws", Type: "bedrock", APIKeyEnv: "K", Region: "example.com/x"}}, "not an AWS Region name"},
+		{"bedrock base_url with a path", []ProviderDef{{Name: "aws", Type: "bedrock", APIKeyEnv: "K", BaseURL: "https://gateway.example/bedrock"}}, "no path"},
+		{"region on another type", []ProviderDef{{Name: "x", Type: "anthropic", APIKeyEnv: "K", Region: "us-east-1"}}, "applies only to a bedrock provider"},
+		{"unknown type lists every supported type", []ProviderDef{{Name: "x", Type: "kronk", APIKeyEnv: "K"}}, "want openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google|bedrock"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

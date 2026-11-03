@@ -389,6 +389,7 @@ export function NavRail({
 
         <AccountMenu
           email={account.email}
+          appName={brandName}
           onSignOut={account.onSignOut}
           railCollapsed={collapsed}
           current={activeView === "settings"}

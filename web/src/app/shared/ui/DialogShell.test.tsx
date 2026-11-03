@@ -186,6 +186,21 @@ describe("DialogShell", () => {
     expect(screen.getByRole("dialog").parentElement?.className).toContain(
       "z-[60]",
     );
+    // Above the 640–900px overlay rail (z-[380]/z-[390]) and its menus
+    // (z-[400]/z-[410]), for a dialog summoned from the rail.
+    rerender(
+      <DialogShell
+        label="Plain"
+        scrimLabel="Close it"
+        onDismiss={() => {}}
+        layer="rail"
+      >
+        <p>Body</p>
+      </DialogShell>,
+    );
+    expect(screen.getByRole("dialog").parentElement?.className).toContain(
+      "z-[420]",
+    );
   });
 
   it("keeps Tab in the top dialog and skips disabled or hidden controls", () => {

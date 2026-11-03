@@ -319,6 +319,93 @@ func TestAdminLLMProviderContextWindow(t *testing.T) {
 	}
 }
 
+// regionRecorder answers every request with 200 and records its URL, so a
+// probe of a bedrock row with no base_url stays offline.
+type regionRecorder struct{ urls []string }
+
+func (r *regionRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.urls = append(r.urls, req.URL.String())
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("{}")), Request: req}, nil
+}
+
+// A bedrock row's region (migration 092) is saved, kept by a PUT that omits
+// it (like context_window_tokens), cleared by an empty one, and reaches the
+// connection test, where it picks the host. A region that is not a Region
+// name, or one on another type, is a 400 whether the row is enabled or not.
+func TestAdminLLMProviderRegion(t *testing.T) {
+	s, h := llmFixture(t)
+	swaps := 0
+	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
+
+	for _, body := range []map[string]any{
+		{"name": "aws", "type": "bedrock", "api_key": "k", "region": "example.com/x"},
+		{"name": "oai", "type": "openai", "api_key": "k", "region": "us-east-1"},
+	} {
+		for _, enabled := range []bool{true, false} {
+			body["enabled"], body["context_window_tokens"] = enabled, 200000
+			w := do(t, h, http.MethodPost, "/admin/llm-providers", body, "boss@x.com")
+			if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "region") {
+				t.Fatalf("%v: status %d body %s, want 400 naming the region", body, w.Code, w.Body.String())
+			}
+		}
+	}
+	if swaps != 0 {
+		t.Fatalf("swap callback fired %d times after refused creates, want 0", swaps)
+	}
+
+	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
+		"name": "aws", "type": "bedrock", "api_key": "bedrock-key", "enabled": true,
+		"context_window_tokens": 200000, "region": "eu-central-1",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"region":"eu-central-1"`) {
+		t.Fatalf("create: status %d body %s, want 200 echoing the region", w.Code, w.Body.String())
+	}
+	var row store.LLMProvider
+	if err := json.Unmarshal(w.Body.Bytes(), &row); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+row.ID, map[string]any{
+		"name": "aws", "type": "bedrock", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"region":"eu-central-1"`) {
+		t.Fatalf("PUT without region: status %d body %s, want 200 keeping eu-central-1", w.Code, w.Body.String())
+	}
+
+	// The connection test calls the region's endpoint.
+	rec := &regionRecorder{}
+	prev := http.DefaultTransport
+	http.DefaultTransport = rec
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	w = do(t, h, http.MethodPost, "/admin/llm-providers/"+row.ID+"/test", nil, "boss@x.com")
+	http.DefaultTransport = prev
+	if w.Code != http.StatusOK || len(rec.urls) != 1 ||
+		rec.urls[0] != "https://bedrock-runtime.eu-central-1.amazonaws.com/async-invoke?maxResults=1" {
+		t.Fatalf("test: status %d body %s, probed %v; want eu-central-1's endpoint", w.Code, w.Body.String(), rec.urls)
+	}
+
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+row.ID, map[string]any{
+		"name": "aws", "type": "bedrock", "enabled": true, "region": "",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"region":""`) {
+		t.Fatalf("PUT with an empty region: status %d body %s, want 200 clearing it", w.Code, w.Body.String())
+	}
+
+	// A kept region is not carried to a type that takes none: a PUT that
+	// changes the type and omits region drops it instead of being refused.
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+row.ID, map[string]any{
+		"name": "aws", "type": "bedrock", "enabled": true, "region": "eu-central-1",
+	}, "boss@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("PUT setting the region again: status %d body %s", w.Code, w.Body.String())
+	}
+	w = do(t, h, http.MethodPut, "/admin/llm-providers/"+row.ID, map[string]any{
+		"name": "aws", "type": "anthropic", "enabled": true,
+	}, "boss@x.com")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"region":""`) {
+		t.Fatalf("PUT to another type without region: status %d body %s, want 200 dropping it", w.Code, w.Body.String())
+	}
+}
+
 // The test-connection probe endpoint: admin-gated, works on DISABLED rows
 // (verify before enabling), decrypts the stored key host-side, and returns a
 // key-free summary. End-to-end against a local httptest endpoint — no seam

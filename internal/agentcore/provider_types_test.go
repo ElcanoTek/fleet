@@ -28,12 +28,16 @@ import (
 // configured key, and nothing from the host's own environment, to the
 // configured endpoint, on both the Generate and the Stream path: the OpenAI-SDK
 // types (openaicompat, vercel, azure) nothing from OPENAI_*, and google nothing
-// from the GOOGLE_*/GEMINI_* settings, never reaching Vertex AI.
+// from the GOOGLE_*/GEMINI_* settings, never reaching Vertex AI. The bedrock
+// type's are in provider_bedrock_test.go.
 
 func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 	for _, typ := range ProviderTypes() {
 		t.Run(string(typ), func(t *testing.T) {
 			cfg := ProviderConfig{Name: "p", Type: typ, APIKey: "k", BaseURL: "http://203.0.113.10/v1"}
+			if typ == ProviderTypeBedrock {
+				cfg.BaseURL = "http://203.0.113.10" // an origin only
+			}
 			if _, err := buildProvider(cfg, DefaultProviderHeaders); err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -46,25 +50,26 @@ func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 
 func TestProviderTypeTable(t *testing.T) {
 	got := ProviderTypeChoices()
-	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google" {
+	if got != "openrouter|anthropic|openai|ollama|openaicompat|vercel|azure|google|bedrock" {
 		t.Fatalf("ProviderTypeChoices() = %q", got)
 	}
 	for _, tc := range []struct {
-		typ                ProviderType
-		needsKey, needsURL bool
+		typ                           ProviderType
+		needsKey, needsURL, hasRegion bool
 	}{
-		{ProviderTypeOpenRouter, true, false},
-		{ProviderTypeAnthropic, true, false},
-		{ProviderTypeOpenAI, true, false},
-		{ProviderTypeOllama, false, false},
-		{ProviderTypeOpenAICompat, false, true},
-		{ProviderTypeVercel, true, false},
-		{ProviderTypeAzure, true, true},
-		{ProviderTypeGoogle, true, false},
+		{ProviderTypeOpenRouter, true, false, false},
+		{ProviderTypeAnthropic, true, false, false},
+		{ProviderTypeOpenAI, true, false, false},
+		{ProviderTypeOllama, false, false, false},
+		{ProviderTypeOpenAICompat, false, true, false},
+		{ProviderTypeVercel, true, false, false},
+		{ProviderTypeAzure, true, true, false},
+		{ProviderTypeGoogle, true, false, false},
+		{ProviderTypeBedrock, true, false, true},
 	} {
 		spec, ok := LookupProviderType(string(tc.typ))
-		if !ok || spec.APIKeyRequired != tc.needsKey || spec.BaseURLRequired != tc.needsURL {
-			t.Errorf("LookupProviderType(%q) = %+v, %v; want key=%v url=%v", tc.typ, spec, ok, tc.needsKey, tc.needsURL)
+		if !ok || spec.APIKeyRequired != tc.needsKey || spec.BaseURLRequired != tc.needsURL || spec.Region != tc.hasRegion {
+			t.Errorf("LookupProviderType(%q) = %+v, %v; want key=%v url=%v region=%v", tc.typ, spec, ok, tc.needsKey, tc.needsURL, tc.hasRegion)
 		}
 	}
 	for _, name := range []string{"", "bogus", "OpenAI", " openai"} {

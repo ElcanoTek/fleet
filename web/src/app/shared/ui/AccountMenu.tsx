@@ -11,13 +11,23 @@
 //
 // Surface-specific wiring:
 //   - onSignOut is supplied per surface (chat posts a logout form; the
-//     orchestrator calls its session.logout()).
+//     orchestrator calls its session.logout()). Sign out asks first: the
+//     item opens a centred "Sign out?" confirm and only its Sign out button
+//     calls onSignOut, since signing out also ends the other apps that share
+//     the sign-in. The confirm is portalled to <body>: the rail is
+//     transformed and backdrop-filtered, which would otherwise make it the
+//     containing block of the dialog's fixed overlay and pin it to the rail.
+//     It takes DialogShell's "rail" layer, so it also paints above the rail
+//     where the rail floats over the page (the 640–900px overlay) and Cancel
+//     returns to the rail as it was.
 //   - Theme is driven by the shared useTheme hook via a System/Light/Dark
 //     segmented control (System follows the OS preference live).
 //   - `current` marks the settings surface: the anchor button and the
 //     Settings item take the primary tint (the design's `.current` state).
 
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { ConfirmDialog } from "@/app/chat/ui/ConfirmDialog";
 import { useTheme } from "@/app/shared/hooks/useTheme";
 import { Icon } from "./Icon";
 import { Menu, MenuItem, MenuSeparator } from "./Menu";
@@ -46,11 +56,15 @@ const THEME_OPTIONS = [
 
 export function AccountMenu({
   email,
+  appName,
   onSignOut,
   railCollapsed = false,
   current = false,
 }: {
   email: string;
+  // The deployment's name (branding.app_name), as the rail's brand row shows
+  // it, for the Sign out confirm.
+  appName: string;
   onSignOut: () => void;
   // Collapsed-rail mode (≥sm): the button shrinks to an avatar-only 2.5rem
   // square and the menu opens at a fixed 15rem instead of stretching to the
@@ -60,6 +74,7 @@ export function AccountMenu({
   current?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const { themePreference, setTheme } = useTheme();
   const close = () => setOpen(false);
@@ -153,13 +168,35 @@ export function AccountMenu({
         <MenuItem
           icon={<Icon name="logout" className="size-4" />}
           onClick={() => {
+            // Focus the anchor before the item unmounts: the confirm hands
+            // focus back to whatever held it when it opened.
+            anchorRef.current?.focus();
             close();
-            onSignOut();
+            setConfirmingSignOut(true);
           }}
         >
           Sign out
         </MenuItem>
       </Menu>
+
+      {confirmingSignOut && typeof document !== "undefined"
+        ? createPortal(
+            <ConfirmDialog
+              title="Sign out?"
+              confirmLabel="Sign out"
+              layer="rail"
+              testId="sign-out-confirm"
+              onCancel={() => setConfirmingSignOut(false)}
+              onConfirm={() => {
+                setConfirmingSignOut(false);
+                onSignOut();
+              }}
+            >
+              <p>This signs you out of {appName} and of every app that shares your sign-in.</p>
+            </ConfirmDialog>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

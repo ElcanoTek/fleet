@@ -47,6 +47,8 @@ export type LLMProvider = {
   has_api_key: boolean;
   // The endpoint's declared context limit; 0 = not declared.
   context_window_tokens: number;
+  // A bedrock row's AWS Region; "" = us-east-1. Every other type has none.
+  region: string;
   created_at: number;
   updated_at: number;
 };
@@ -54,10 +56,11 @@ export type LLMProvider = {
 // Central per-type presentation map (label + one-line hint + field labels),
 // so the form can explain each choice inline. The keys must match the server's
 // provider types (agentcore's provider type table); a scripts/ test pins them,
-// and keyNeeded/urlNeeded mirror that table's required fields. windowNeeded is
-// false only for OpenRouter, whose per-model catalog supplies the context
-// limit; every other type needs the admin to declare it before the row can be
-// enabled (the server enforces this too).
+// and keyNeeded/urlNeeded mirror that table's required fields and regionShown
+// its region flag (bedrock). windowNeeded is false only for OpenRouter, whose
+// per-model catalog supplies the context limit; every other type needs the
+// admin to declare it before the row can be enabled (the server enforces this
+// too).
 const PROVIDER_TYPES: Record<
   string,
   {
@@ -68,6 +71,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: boolean;
     keyLabel: string;
     keyNeeded: boolean;
+    regionShown: boolean;
     windowNeeded: boolean;
     windowPlaceholder: string;
   }
@@ -80,6 +84,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: false,
     windowPlaceholder: "",
   },
@@ -91,6 +96,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
   },
@@ -102,6 +108,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
   },
@@ -113,6 +120,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key (not needed)",
     keyNeeded: false,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "the server's num_ctx, e.g. 65536",
   },
@@ -124,6 +132,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: true,
     keyLabel: "API key (optional)",
     keyNeeded: false,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "the server's limit, e.g. 131072",
   },
@@ -135,6 +144,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "e.g. 200000",
   },
@@ -146,6 +156,7 @@ const PROVIDER_TYPES: Record<
     urlNeeded: true,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "e.g. 128000",
   },
@@ -157,8 +168,21 @@ const PROVIDER_TYPES: Record<
     urlNeeded: false,
     keyLabel: "API key",
     keyNeeded: true,
+    regionShown: false,
     windowNeeded: true,
     windowPlaceholder: "e.g. 1048576",
+  },
+  bedrock: {
+    label: "Amazon Bedrock",
+    hint: "Claude models on Amazon Bedrock, with a Bedrock API key. Set the Region the key was made in, and list Bedrock inference profile ids, like us.anthropic.claude-sonnet-4-5-20250929-v1:0: newer Claude models need one. Bedrock's other models are not supported.",
+    urlLabel: "Base URL (optional)",
+    urlPlaceholder: "(default: the Region's bedrock-runtime endpoint)",
+    urlNeeded: false,
+    keyLabel: "API key",
+    keyNeeded: true,
+    regionShown: true,
+    windowNeeded: true,
+    windowPlaceholder: "e.g. 200000",
   },
 };
 
@@ -173,6 +197,7 @@ type Draft = {
   clear_key: boolean;
   models: string; // textarea, one slug per line
   context_window: string; // digits; "" = not declared
+  region: string; // a bedrock row's AWS Region; "" = us-east-1
   enabled: boolean;
 };
 
@@ -185,6 +210,7 @@ const EMPTY_DRAFT: Draft = {
   clear_key: false,
   models: "",
   context_window: "",
+  region: "",
   enabled: true,
 };
 
@@ -198,6 +224,7 @@ function draftFrom(p: LLMProvider): Draft {
     clear_key: false,
     models: p.models.join("\n"),
     context_window: p.context_window_tokens > 0 ? String(p.context_window_tokens) : "",
+    region: p.region,
     enabled: p.enabled,
   };
 }
@@ -226,10 +253,29 @@ function contextWindowWarning(raw: string): string | null {
   return null;
 }
 
+// An AWS Region name (us-east-1, us-gov-west-1), as the server checks it: the
+// Region becomes part of the endpoint's host name.
+const AWS_REGION = /^[a-z]{2}(-[a-z]+)+-[0-9]+$/;
+
+// A bedrock Base URL is an origin only, as the server checks it: the Bedrock
+// client converts a request to Bedrock's /model/<id>/invoke only when its path
+// is exactly /v1/messages. The raw "?", "#" and "@" checks catch an empty query
+// or fragment and credentials, which URL parsing leaves no trace of.
+function isOrigin(raw: string): boolean {
+  if (/[?#@]/.test(raw)) return false;
+  try {
+    const u = new URL(raw);
+    return u.pathname === "" || u.pathname === "/";
+  } catch {
+    return false;
+  }
+}
+
 // validateDraft mirrors the server's checks so most mistakes surface before a
 // round trip: slug name, http(s) base URL, base URL presence for types with no
-// default endpoint, key presence for keyed types, and a context window before a
-// non-OpenRouter row can be enabled.
+// default endpoint, a bedrock row's Region and origin-only Base URL, key
+// presence for keyed types, and a context window before a non-OpenRouter row
+// can be enabled.
 function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   if (!/^[a-z0-9][a-z0-9._-]{0,63}$/.test(d.name.trim().toLowerCase())) {
     return "Name must be a lowercase slug (letters, digits, . _ -), no slashes or spaces.";
@@ -240,6 +286,18 @@ function validateDraft(d: Draft, editingHasKey: boolean): string | null {
   const t = PROVIDER_TYPES[d.type];
   if (t?.urlNeeded && !d.base_url.trim()) {
     return `${t.label} needs a Base URL.`;
+  }
+  if (t?.regionShown && d.region.trim() && !AWS_REGION.test(d.region.trim())) {
+    return "Region must be an AWS Region name, such as us-east-1.";
+  }
+  // A China (cn-…) or ISO (…-iso…) Region's endpoints are not under
+  // amazonaws.com, where the server would build the default one.
+  const region = d.region.trim();
+  if (t?.regionShown && !d.base_url.trim() && (region.startsWith("cn-") || region.includes("-iso"))) {
+    return "A China or ISO Region's endpoints are not under amazonaws.com: set the Base URL to its Bedrock Runtime endpoint.";
+  }
+  if (d.type === "bedrock" && d.base_url.trim() && !isOrigin(d.base_url.trim())) {
+    return "A Bedrock Base URL is an endpoint's origin with no path, query or credentials, such as https://bedrock-runtime.us-east-1.amazonaws.com.";
   }
   if (d.enabled && t?.keyNeeded && !d.api_key && !(d.id && editingHasKey)) {
     return `${t.label} needs an API key.`;
@@ -429,6 +487,9 @@ function ProvidersAdmin() {
         .map((s) => s.trim())
         .filter(Boolean),
       context_window_tokens: contextWindowFor(draft),
+      // Only bedrock takes a region; any other type sends "" (the server
+      // refuses one), which also drops a region left from a type change.
+      region: PROVIDER_TYPES[draft.type]?.regionShown ? draft.region.trim() : "",
       enabled: draft.enabled,
     };
     // Write-only key semantics: omit the field entirely to keep the stored
@@ -548,7 +609,7 @@ function ProvidersAdmin() {
           />
         </ConnPanelHead>
         <ClampInfo>
-          An OpenRouter, Anthropic, OpenAI, Vercel AI Gateway or Gemini key, an Azure OpenAI resource, or any
+          An OpenRouter, Anthropic, OpenAI, Vercel AI Gateway, Gemini or Amazon Bedrock key, an Azure OpenAI resource, or any
           OpenAI-compatible endpoint (Ollama, vLLM…). Several can run at once: a model picks its provider by explicit{" "}
           <CodeChip>provider/model</CodeChip> prefix or by its models list; a provider with an
           empty models list is a catch-all serving any slug. Changes apply on the next message —
@@ -681,6 +742,17 @@ function ProvidersAdmin() {
                 Remove the stored key (this type works without one)
               </label>
             ) : null}
+            {typeInfo?.regionShown ? (
+              <ConnField label="Region (the AWS Region the key was made in)">
+                <input
+                  id="providerRegion"
+                  value={draft.region}
+                  onChange={(e) => setDraft({ ...draft, region: e.target.value })}
+                  placeholder="us-east-1 (default)"
+                  className={SETTINGS_INPUT}
+                />
+              </ConnField>
+            ) : null}
             {typeInfo?.windowNeeded ? (
               <>
                 <ConnField label="Context window (tokens: the smallest limit among the models this provider serves; needed to enable)">
@@ -797,8 +869,8 @@ function ProvidersAdmin() {
         ) : providers.length === 0 && !draft ? (
           <ConnEmpty>
             No extra providers configured — the deployment is using its bundle/environment
-            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI, Vercel or
-            Gemini key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
+            provider (typically OpenRouter). Add one to bring your own Anthropic, OpenAI, Vercel,
+            Gemini or Bedrock key, an Azure OpenAI resource, or an OpenAI-compatible endpoint.
           </ConnEmpty>
         ) : (
           <ConnRows>
@@ -817,6 +889,9 @@ function ProvidersAdmin() {
                 windowUsed && p.context_window_tokens > 0
                   ? ` · ${p.context_window_tokens.toLocaleString()}-token context`
                   : "";
+              // With a Base URL set the Region picks nothing, so it is not shown.
+              const regionPart =
+                PROVIDER_TYPES[p.type]?.regionShown && !p.base_url ? ` · ${p.region || "us-east-1"}` : "";
               return (
                 <ConnRow
                   key={p.id}
@@ -835,7 +910,7 @@ function ProvidersAdmin() {
                       ) : null}
                     </>
                   }
-                  sub={`${typeLabel} · ${modelsPart}${windowPart}${p.enabled ? "" : " · disabled"}`}
+                  sub={`${typeLabel}${regionPart} · ${modelsPart}${windowPart}${p.enabled ? "" : " · disabled"}`}
                   actions={
                     <>
                       <button

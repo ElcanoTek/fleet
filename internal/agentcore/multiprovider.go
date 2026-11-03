@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/anthropic"
 	"charm.land/fantasy/providers/azure"
+	"charm.land/fantasy/providers/bedrock"
 	"charm.land/fantasy/providers/google"
 	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
@@ -24,8 +26,8 @@ import (
 // Multi-provider LLM support (#289). Fleet routed every model through OpenRouter
 // as a singleton gateway. This adds native provider backends — Anthropic,
 // OpenAI, Ollama (via its OpenAI-compatible API), and since #1703 any
-// OpenAI-compatible endpoint, the Vercel AI Gateway, Azure OpenAI and the
-// Gemini API — alongside OpenRouter, selected by a client-bundle `providers:`
+// OpenAI-compatible endpoint, the Vercel AI Gateway, Azure OpenAI, the Gemini
+// API and Amazon Bedrock — alongside OpenRouter, selected by a client-bundle `providers:`
 // block or admin-managed rows. The engine itself is already provider-agnostic
 // (it holds fantasy.LanguageModel interfaces); the coupling was entirely in
 // how those models were constructed (always the OpenRouter provider).
@@ -85,6 +87,16 @@ const (
 	// host, so fleet always uses the Gemini API backend and refuses the model
 	// ids fantasy would send to Vertex instead (geminiOnlyProvider).
 	ProviderTypeGoogle ProviderType = "google"
+	// ProviderTypeBedrock calls Amazon Bedrock with a Bedrock API key, through
+	// fantasy's bedrock provider. That provider is fantasy's anthropic provider
+	// over Bedrock's InvokeModel API, so it reaches Claude models only, by
+	// their Bedrock ids: an inference profile's (us.anthropic.claude-…), which
+	// newer Claude models need on demand, or a model's own (anthropic.claude-…).
+	// A key works only in the AWS Region it was made in, so the entry names
+	// that Region (Region; us-east-1 by default). AWS credentials found on the
+	// host (profiles, SSO, instance roles) are never used: an entry always
+	// carries its own key (bedrockKeyClient).
+	ProviderTypeBedrock ProviderType = "bedrock"
 )
 
 // ProviderTypeSpec is what every configuration surface needs to know about one
@@ -100,6 +112,9 @@ type ProviderTypeSpec struct {
 	// BaseURLRequired: the type has no default endpoint, so base_url must be
 	// set.
 	BaseURLRequired bool
+	// Region: the type's endpoint is picked by an AWS Region
+	// (ProviderConfig.Region). Every other type refuses one.
+	Region bool
 }
 
 // providerTypeSpecs is the supported set, in the order error messages and the
@@ -113,6 +128,7 @@ var providerTypeSpecs = []ProviderTypeSpec{
 	{Type: ProviderTypeVercel, APIKeyRequired: true},
 	{Type: ProviderTypeAzure, APIKeyRequired: true, BaseURLRequired: true},
 	{Type: ProviderTypeGoogle, APIKeyRequired: true},
+	{Type: ProviderTypeBedrock, APIKeyRequired: true, Region: true},
 }
 
 // LookupProviderType returns the spec for a provider type name (exact match;
@@ -143,6 +159,60 @@ func ProviderTypeChoices() string {
 		names[i] = string(spec.Type)
 	}
 	return strings.Join(names, "|")
+}
+
+// awsRegionPattern matches an AWS Region name of the form the endpoint host
+// bedrock-runtime.<region>.amazonaws.com is built from (us-east-1,
+// us-gov-west-1, ap-southeast-4). The Region becomes part of that host name,
+// so nothing else may pass. A Region whose endpoints are not under
+// amazonaws.com is reached through a base_url instead: a China or ISO Region
+// name is accepted only with one (regionOutsideAmazonawsCom), and a European
+// Sovereign Cloud one (eusc-…) does not match at all, so such an entry names
+// no region.
+var awsRegionPattern = regexp.MustCompile(`^[a-z]{2}(-[a-z]+)+-[0-9]+$`)
+
+// regionOutsideAmazonawsCom reports whether a Region's endpoints are not
+// under amazonaws.com: China's (cn-north-1, cn-northwest-1, under
+// amazonaws.com.cn) and the isolated ISO Regions' (us-iso-east-1,
+// us-isob-east-1, eu-isoe-west-1…). The endpoint bedrockRuntimeURL builds for
+// one would name a host that is not that Region's.
+func regionOutsideAmazonawsCom(region string) bool {
+	return strings.HasPrefix(region, "cn-") || strings.Contains(region, "-iso")
+}
+
+// CheckProviderFields checks an entry's region and base_url against what its
+// type accepts, beyond the presence rules of its spec. The bundle loader, the
+// admin store and buildProvider all call it, so an entry is refused the same
+// way wherever it is written:
+//
+//   - a region is accepted only by a type that takes one (bedrock), and must
+//     be an AWS Region name, since it is put into the endpoint's host name. A
+//     China or ISO Region needs a base_url, since its endpoints are not under
+//     amazonaws.com;
+//   - a bedrock base_url is an origin only. The Bedrock client rewrites a
+//     request's path to /model/<id>/invoke only when that path is exactly
+//     /v1/messages, so behind a path prefix it would send the Anthropic API's
+//     request instead. A query, a fragment or credentials in it would also
+//     make the connection test call another URL than turns do, or put the
+//     credentials into error text.
+func CheckProviderFields(spec ProviderTypeSpec, baseURL, region string) error {
+	baseURL, region = strings.TrimSpace(baseURL), strings.TrimSpace(region)
+	switch {
+	case region != "" && !spec.Region:
+		return fmt.Errorf("region applies only to a bedrock provider, not to type %s", spec.Type)
+	case region != "" && !awsRegionPattern.MatchString(region):
+		return fmt.Errorf("region %q is not an AWS Region name, such as us-east-1", region)
+	case region != "" && baseURL == "" && regionOutsideAmazonawsCom(region):
+		return fmt.Errorf("region %q has its endpoints outside amazonaws.com: set base_url to its Bedrock Runtime endpoint", region)
+	}
+	if spec.Type == ProviderTypeBedrock && baseURL != "" {
+		u, err := url.Parse(baseURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.ForceQuery || strings.Contains(baseURL, "#") {
+			return fmt.Errorf("a bedrock base_url is an endpoint's origin with no path, query or credentials, such as https://bedrock-runtime.us-east-1.amazonaws.com")
+		}
+	}
+	return nil
 }
 
 // defaultOllamaBaseURL is the OpenAI-compatible endpoint a local Ollama server
@@ -253,6 +323,9 @@ type ProviderConfig struct {
 	APIKey  string
 	BaseURL string
 	Models  []string
+	// Region is the AWS Region a bedrock entry calls (defaultBedrockRegion when
+	// empty). No other type takes one.
+	Region string
 	// ContextWindowTokens is the provider/model's actual input+output context
 	// limit when no authoritative catalog is available. Zero selects a
 	// conservative provider-specific fail-safe; negative values are invalid.
@@ -320,6 +393,9 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 	if spec.BaseURLRequired && base == "" {
 		return nil, fmt.Errorf("%s provider requires a base_url", cfg.Type)
 	}
+	if err := CheckProviderFields(spec, base, cfg.Region); err != nil {
+		return nil, err
+	}
 	switch cfg.Type {
 	case ProviderTypeOpenRouter:
 		return newOpenRouterProvider(cfg.APIKey, headers)
@@ -374,6 +450,8 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 			return nil, err
 		}
 		return geminiOnlyProvider{p}, nil
+	case ProviderTypeBedrock:
+		return bedrock.New(bedrockOptions(key, base, strings.TrimSpace(cfg.Region))...)
 	default:
 		// A type in providerTypeSpecs with no case here; the build test fails
 		// on this before it can ship.
@@ -464,7 +542,65 @@ func refuseCrossOriginRedirect(req *http.Request, via []*http.Request) error {
 	}
 	return &fantasy.ProviderError{
 		Title:      "endpoint redirected to another host",
-		Message:    fmt.Sprintf("refused a redirect to another origin (%s://%s): turns follow a redirect only within the base_url's origin", req.URL.Scheme, req.URL.Host),
+		Message:    fmt.Sprintf("refused a redirect to another origin (%s://%s): turns follow a redirect only within the endpoint's origin", req.URL.Scheme, req.URL.Host),
 		StatusCode: status,
 	}
+}
+
+// defaultBedrockRegion is the AWS Region a bedrock entry calls when it names
+// none, as fantasy's bedrock provider does.
+const defaultBedrockRegion = "us-east-1"
+
+// bedrockRuntimeURL is the Bedrock Runtime endpoint a bedrock entry calls,
+// for turns and for the connection test alike: its base_url when set, else
+// its Region's public endpoint, the one the Anthropic SDK would build.
+func bedrockRuntimeURL(base, region string) string {
+	if base != "" {
+		return strings.TrimRight(base, "/")
+	}
+	if region == "" {
+		region = defaultBedrockRegion
+	}
+	return "https://bedrock-runtime." + region + ".amazonaws.com"
+}
+
+// bedrockOptions name the entry's endpoint outright and send every request
+// with the entry's own key (bedrockKeyClient). Given a key, fantasy loads no
+// AWS configuration from the host (credentials, profiles, AWS_REGION); the
+// one host setting the SDK still reads, AWS_BEARER_TOKEN_BEDROCK, is
+// overwritten on every request. fantasy's bedrock path also skips the
+// Anthropic SDK's environment defaults (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL,
+// ANTHROPIC_CUSTOM_HEADERS and the rest).
+func bedrockOptions(apiKey, base, region string) []bedrock.Option {
+	if region == "" {
+		region = defaultBedrockRegion
+	}
+	return []bedrock.Option{
+		bedrock.WithAPIKey(apiKey),
+		bedrock.WithRegion(region),
+		bedrock.WithBaseURL(bedrockRuntimeURL(base, region)),
+		bedrock.WithHTTPClient(bedrockKeyClient{key: apiKey}),
+	}
+}
+
+// bedrockHTTPClient carries a bedrock entry's requests. It is built like
+// anthropicHTTPClient, for the same reasons: it keeps the Anthropic SDK's
+// response-header timeout, which a client of our own replaces, and it follows
+// a redirect only within the endpoint's origin, where the SDK's client would
+// follow one anywhere, the request body with it.
+var bedrockHTTPClient = &http.Client{Transport: anthropicTransport(), CheckRedirect: refuseCrossOriginRedirect}
+
+// bedrockKeyClient sends each Bedrock request with the entry's own key. The
+// Anthropic SDK's Bedrock adapter prefers the host's AWS_BEARER_TOKEN_BEDROCK
+// to the key it is given, so on a host with that variable set every bedrock
+// entry would send the host's token, to whatever endpoint the entry names.
+// The adapter has set Authorization by the time a request gets here, and a
+// request made with a key is not signed, so setting it again changes nothing
+// else.
+type bedrockKeyClient struct{ key string }
+
+func (c bedrockKeyClient) Do(req *http.Request) (*http.Response, error) {
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	//nolint:gosec // G704: the URL is the entry's own endpoint (bundle or admin-row config: its base_url or its Region's host), never request or model input; redirects stay within its origin.
+	return bedrockHTTPClient.Do(req)
 }

@@ -29,11 +29,34 @@ func isUnretriedMidStreamError(err error) bool {
 	return errors.As(err, &providerErr) && providerErr.StatusCode == 0 && providerErr.Title == "stream error"
 }
 
+// bedrockTransientStreamExceptions are the exceptions Bedrock's
+// InvokeModelWithResponseStream can send inside a stream that name a temporary
+// condition. The Anthropic SDK's Bedrock adapter turns each into an
+// Anthropic-style error event typed with the exception's name, which fantasy's
+// transient list (Anthropic's own type names) does not know, so a throttled
+// Bedrock stream would end the turn as fatal where an overloaded Anthropic one
+// is retried or handed to a fallback. validationException is left out: the
+// request itself was refused.
+var bedrockTransientStreamExceptions = map[string]bool{
+	"throttlingException":         true,
+	"serviceUnavailableException": true,
+	"internalServerException":     true,
+	"modelStreamErrorException":   true,
+	"modelTimeoutException":       true,
+}
+
 // Some OpenAI-compatible providers send numeric HTTP codes inside an SSE
 // error envelope. Fantasy's adapter decodes code as a string and can lose the
 // retry classification while preserving ResponseBody. Recover only structured
 // status/type information; never infer an HTTP status from prose or log the body.
+// A Bedrock in-stream exception is marked transient by its type alone
+// (bedrockTransientStreamExceptions).
 func normalizeStreamProviderError(original *fantasy.ProviderError) *fantasy.ProviderError {
+	if original != nil && !original.TransientError && bedrockTransientStreamExceptions[original.ErrorType] {
+		normalized := *original
+		normalized.TransientError = true
+		return &normalized
+	}
 	if original == nil || original.StatusCode != 0 || original.Title != "stream error" {
 		return original
 	}

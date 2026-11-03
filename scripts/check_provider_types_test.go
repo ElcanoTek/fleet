@@ -19,7 +19,8 @@ import (
 // required fields, so the form neither offers a type the server rejects nor
 // lets through a row the server will refuse. windowNeeded is pinned too: the
 // server requires a context window to enable every type except OpenRouter
-// (httpapi validateLLMProviderRow), whose resolver ignores a declared one.
+// (httpapi validateLLMProviderRow), whose resolver ignores a declared one. So
+// is regionShown: the server refuses a region on every type without one.
 func TestProviderTypesAreInSync(t *testing.T) {
 	root := repoRoot(t)
 	web := readFile(t, root, "web/src/app/settings/admin/providers/page.tsx")
@@ -64,6 +65,7 @@ func TestProviderTypesAreInSync(t *testing.T) {
 			{"keyNeeded", spec.APIKeyRequired},
 			{"urlNeeded", spec.BaseURLRequired},
 			{"windowNeeded", spec.Type != agentcore.ProviderTypeOpenRouter},
+			{"regionShown", spec.Region},
 		} {
 			got, ok := flag(e[2], f.name)
 			if !ok {
