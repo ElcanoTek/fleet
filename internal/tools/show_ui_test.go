@@ -165,4 +165,3 @@ func TestShowUISelfContainedCalculatorCard(t *testing.T) {
 		t.Fatalf("self-contained calculator card failed: %+v", resp)
 	}
 }
-

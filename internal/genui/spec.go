@@ -2012,31 +2012,39 @@ func (v *validator) actions(raw any, hasInput bool) {
 		if n := v.requiredMinBytes(); validating && n > MaxSubmissionBytes {
 			v.addf(ap, "the card's inputs (each key, the required fields' min_length and shortest options) add up to an answer of at least %d bytes, more than one answer carries (%d bytes); lower min_length, shorten the options or split the card", n, MaxSubmissionBytes)
 		}
-		kind, _ := obj["kind"].(string)
-		if kind == "" {
-			kind = "submit"
-		}
-		switch kind {
-		case "message", "copy":
-			if m, _ := obj["message"].(string); strings.TrimSpace(m) == "" {
-				v.addf(ap+".message", "required for kind %q: the text sent or copied", kind)
-			}
-		case "reset":
-			if _, has := obj["message"]; has {
-				v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
-			}
-			if len(v.reach) == 0 {
-				v.addf(ap+".kind", "kind \"reset\" requires at least one editable input on the card")
-			}
-		default:
+		if v.checkActionKind(ap, obj) {
 			submit = true
-			if _, has := obj["message"]; has {
-				v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
-			}
 		}
 	}
 	if hasInput && !submit && !v.allInputsReadByExprs() {
 		v.addf("actions", "the card has inputs but no submit action; add one with kind \"submit\"")
+	}
+}
+
+func (v *validator) checkActionKind(ap string, obj map[string]any) (isSubmit bool) {
+	kind, _ := obj["kind"].(string)
+	if kind == "" {
+		kind = "submit"
+	}
+	switch kind {
+	case "message", "copy":
+		if m, _ := obj["message"].(string); strings.TrimSpace(m) == "" {
+			v.addf(ap+".message", "required for kind %q: the text sent or copied", kind)
+		}
+		return false
+	case "reset":
+		if _, has := obj["message"]; has {
+			v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
+		}
+		if len(v.reach) == 0 {
+			v.addf(ap+".kind", "kind \"reset\" requires at least one editable input on the card")
+		}
+		return false
+	default:
+		if _, has := obj["message"]; has {
+			v.addf(ap+".message", "only kind \"message\" or \"copy\" takes a message")
+		}
+		return true
 	}
 }
 
