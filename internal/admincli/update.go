@@ -97,7 +97,15 @@ func cmdUpdate(argv []string) int {
 		return errf(5, "update: %v", err)
 	}
 	if ttyFD >= 0 {
-		defer reclaimForeground(ttyFD)
+		// Take the terminal back only if the script's group still holds it: a
+		// script resumed with `bg` exits while the shell owns the terminal, and
+		// reclaiming then would hand it to this (background) group as it exits.
+		childPgid := cmd.Process.Pid
+		defer func() {
+			if fg, err := unix.IoctlGetInt(ttyFD, unix.TIOCGPGRP); err == nil && fg == childPgid {
+				reclaimForeground(ttyFD)
+			}
+		}()
 	}
 	defer func() {
 		if cmd.Process != nil && cmd.Process.Pid > 0 {
