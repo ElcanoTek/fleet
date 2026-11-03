@@ -527,6 +527,19 @@ func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.
 	return conv, unlockFirst, true
 }
 
+func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, conv *store.Conversation, historyLen int, message string, userWords bool) {
+	if historyLen != 0 || conv.Title != "New conversation" || conv.TitleLocked || !userWords {
+		return
+	}
+	nextTitle := agent.HeuristicTitle(message)
+	if nextTitle == "" || nextTitle == conv.Title {
+		return
+	}
+	if err := s.store.UpdateTitle(ctx, convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
+		conv.Title = nextTitle
+	}
+}
+
 // replayAcceptedInput answers a resend of an input_id that was already
 // ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
 // so it never runs a duplicate turn — even when the retry lands after the
@@ -1212,13 +1225,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// placeholder "New conversation" title without a manual rename, give it a
 	// heuristic title from the admitted opening message right before emitting
 	// the `conversation` event so a rejected turn never mutates the title.
-	if len(history) == 0 && conv.Title == "New conversation" && !conv.TitleLocked && userWords {
-		if nextTitle := agent.HeuristicTitle(req.Message); nextTitle != "" && nextTitle != conv.Title {
-			if err := s.store.UpdateTitle(turnCtx, convOwnerEmail(conv, user), conv.ID, nextTitle); err == nil {
-				conv.Title = nextTitle
-			}
-		}
-	}
+	s.maybeSetPlaceholderTurnTitle(turnCtx, user, conv, len(history), req.Message, userWords)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The
