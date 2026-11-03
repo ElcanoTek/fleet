@@ -734,18 +734,24 @@ export function renderTemplate(s: string | undefined, scope: Scope): string {
 
 /**
  * Render an action payload's {{ expr }} holes without the display-only
- * MAX_TEMPLATE_CHARS (2,000-character) clip, so message and copy actions
- * preserve full list_input or repeater expansions up to the submission /
- * clipboard byte limit.
+ * MAX_TEMPLATE_CHARS (2,000-character) clip, while bounding total hole
+ * expansion to `maxChars` incrementally so repeated large expressions cannot
+ * allocate unbounded strings before the caller's byte-limit check.
  */
-export function renderActionTemplate(s: string | undefined, scope: Scope): string {
+export function renderActionTemplate(s: string | undefined, scope: Scope, maxChars = MAX_EXPR_STRING): string {
   if (!s || !s.includes("{{")) return s ?? "";
+  let left = Math.max(0, maxChars);
   return s.replace(/\{\{([\s\S]*?)\}\}/g, (_, src: string) => {
+    if (left <= 0) return "";
+    let t: string;
     try {
-      return toText(evaluate(src, scope));
+      t = toText(evaluate(src, scope));
     } catch {
       return "⚠";
     }
+    if (t.length > left) t = t.slice(0, left);
+    left -= t.length;
+    return t;
   });
 }
 

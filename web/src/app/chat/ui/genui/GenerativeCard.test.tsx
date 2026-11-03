@@ -2083,7 +2083,7 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
       ],
       actions: [
         { id: "copy", label: "Copy summary", kind: "copy", message: "Total: ${{ commas(budget) }} ({{ compact(budget) }})" },
-        { id: "ask", label: "Analyze scenario", kind: "message", message: "Analyze ${{ commas(budget) }} budget" },
+        { id: "ask", label: "Analyze scenario", kind: "message", message: "Explain {{ .Budget }} scenario" },
       ],
     });
     const onSubmit = vi.fn().mockResolvedValue(true);
@@ -2118,12 +2118,10 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
     expect(screen.getByText("$50,000 of $100,000")).toBeTruthy();
     expect(screen.queryByTestId("genui-reset")).toBeNull();
 
-    // Templated message action interpolates live scope into the quick reply.
-    await user.clear(input);
-    await user.type(input, "75000");
+    // Static message action preserves literal mustaches in fixed quick replies.
     await user.click(screen.getByRole("button", { name: "Analyze scenario" }));
     expect(onSubmit).toHaveBeenCalledWith(
-      buildReplyMessage("calc", "ask", "Analyze $75,000 budget"),
+      buildReplyMessage("calc", "ask", "Explain {{ .Budget }} scenario"),
       expect.any(Function),
       expect.any(Function),
       expect.any(Function),
@@ -2196,9 +2194,9 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
     expect(writeText).toHaveBeenCalledWith(`${longLine}!`);
   });
 
-  it("preserves null chart-expression results as gaps, excludes hidden inputs from message/copy templates, and reports clipboard failures", async () => {
+  it("preserves null chart-expression results as gaps, excludes hidden inputs from copy templates, and reports clipboard failures", async () => {
     const user = userEvent.setup();
-    const writeText = vi.fn().mockRejectedValue(new Error("Clipboard denied"));
+    const writeText = vi.fn().mockRejectedValueOnce(new Error("Clipboard denied")).mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       value: { writeText },
       configurable: true,
@@ -2219,11 +2217,9 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
       ],
       actions: [
         { id: "copy", label: "Copy code", kind: "copy", message: "Code={{ secret_code }}" },
-        { id: "msg", label: "Send code", kind: "message", message: "Code={{ secret_code }}" },
       ],
     });
-    const onSubmit = vi.fn().mockResolvedValue(true);
-    render(<GenerativeCard cardId="edge" spec={s} onSubmit={onSubmit} />);
+    render(<GenerativeCard cardId="edge" spec={s} />);
 
     // Blank optional number evaluates to null in chart series -> rendered as "No value" gap, not 0.
     const chartTable = screen.getByRole("table", { name: "Gap Chart" });
@@ -2234,15 +2230,10 @@ describe("self-contained interactive calculators, reactive tables/charts, and co
     expect(screen.queryByRole("button", { name: "Copied" })).toBeNull();
     expect(await screen.findByText("Could not copy. Try again.")).toBeTruthy();
 
-    // Hide secret_code via toggle -> outgoing message template omits the hidden value.
+    // Hide secret_code via toggle -> copy template omits the hidden value.
     await user.click(screen.getByRole("switch", { name: "Show secret" }));
-    await user.click(screen.getByRole("button", { name: "Send code" }));
-    expect(onSubmit).toHaveBeenCalledWith(
-      buildReplyMessage("edge", "msg", "Code="),
-      expect.any(Function),
-      expect.any(Function),
-      expect.any(Function),
-    );
+    await user.click(screen.getByRole("button", { name: "Copy code" }));
+    expect(writeText).toHaveBeenLastCalledWith("Code=");
   });
 });
 

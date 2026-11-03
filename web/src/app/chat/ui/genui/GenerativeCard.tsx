@@ -976,7 +976,7 @@ function CardBody({
     try {
       const message =
         action.kind === "message"
-          ? buildReplyMessage(cardId, action.id, renderActionTemplate(str(action.message), submitValues))
+          ? buildReplyMessage(cardId, action.id, str(action.message))
           : buildSubmissionMessage(cardId, action.id, submitValues);
       const bytes = submissionBytes(message);
       if (bytes > MAX_SUBMISSION_BYTES) {
@@ -1102,7 +1102,7 @@ function CardBody({
       return;
     }
     if (action.kind === "copy") {
-      const text = renderActionTemplate(str(action.message), submitValues);
+      const text = renderActionTemplate(str(action.message), submitValues, MAX_SUBMISSION_BYTES + 1);
       const bytes = submissionBytes(text);
       if (bytes > MAX_SUBMISSION_BYTES) {
         setCopiedId(null);
@@ -1177,7 +1177,7 @@ function CardBody({
         a.kind === "reset" &&
         !(typeof a.disabled_if === "string" && truthy(evaluateSafe(a.disabled_if, scope, false))),
     );
-  const showHeaderReset = !fieldsLocked && isModified && !editing && !hasUsableFooterReset;
+  const showHeaderReset = !fieldsLocked && isModified && !hasUsableFooterReset;
   // Discard it outright, so it does not silently return if the action shows again.
   if (confirming && !confirmingVisible) setConfirming(null);
   // Keyboard focus follows the confirmation: the action row it replaces

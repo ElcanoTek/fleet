@@ -314,7 +314,7 @@ var actionProps = map[string]prop{
 	"label":       req(kString),
 	"kind":        enum("submit", "message", "copy", "reset"),
 	"style":       enum("primary", "secondary", "danger"),
-	"message":     p(kTemplate),
+	"message":     p(kString),
 	"validate":    p(kBool),
 	"confirm":     p(kNonBlank),
 	"visible_if":  p(kExpr),
@@ -2043,9 +2043,21 @@ func (v *validator) checkActionKind(ap string, obj map[string]any) (isSubmit boo
 		kind = "submit"
 	}
 	switch kind {
-	case "message", "copy":
+	case "message":
 		if m, _ := obj["message"].(string); strings.TrimSpace(m) == "" {
-			v.addf(ap+".message", "required for kind %q: the text sent or copied", kind)
+			v.addf(ap+".message", "required for kind %q: the text sent as the user's reply", kind)
+		}
+		return false
+	case "copy":
+		m, _ := obj["message"].(string)
+		if strings.TrimSpace(m) == "" {
+			v.addf(ap+".message", "required for kind %q: the text copied to the clipboard", kind)
+		} else if holes, err := TemplateExprs(m); err != nil {
+			v.addf(ap+".message", "%v", err)
+		} else {
+			for _, h := range holes {
+				v.exprs = append(v.exprs, exprRef{path: ap + ".message", src: h})
+			}
 		}
 		return false
 	case "reset":
