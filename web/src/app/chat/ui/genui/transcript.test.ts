@@ -318,3 +318,15 @@ describe("panel ownership through replacements", () => {
     expect(s.superseded.has("c")).toBe(false);
   });
 });
+
+describe("panel ownership and reused ids", () => {
+  it("an unrelated card reusing a panel card's id is not superseded by that panel's refresh", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "x" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "a", input: card("Unrelated"), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(3, [{ id: "b", input: card("Rev v2", { panel: "x" }), resultText: "UI_DISPLAYED card_id=b" }]),
+    ]);
+    expect(s.superseded.has("a")).toBe(false);
+    expect(s.cards.get("a")?.title).toBe("Unrelated");
+  });
+});

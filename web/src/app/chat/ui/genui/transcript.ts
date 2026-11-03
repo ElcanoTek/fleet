@@ -179,6 +179,11 @@ export function deriveGenUiState(messages: Message[]): GenUiState {
         submissions.delete(tc.id);
         replies.delete(tc.id);
         superseded.delete(tc.id);
+        // …and so did its panel: an unrelated card reusing the id must not
+        // be taken for that panel's owner (and superseded by its refresh).
+        const stale = panelOf.get(tc.id);
+        if (stale !== undefined && panelOwner.get(stale) === tc.id) panelOwner.delete(stale);
+        panelOf.delete(tc.id);
       }
       cards.set(tc.id, spec);
       owners.set(tc.id, tc);

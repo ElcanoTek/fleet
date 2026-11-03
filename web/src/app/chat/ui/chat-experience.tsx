@@ -3680,7 +3680,11 @@ export function ChatExperience({
     approvalId: string;
     nonce: number;
   } | null>(null);
-  const [boardPrefs, updateBoardPrefs] = useBoardPrefs(dashboardConvId);
+  const [boardPrefs, updateBoardPrefs] = useBoardPrefs(
+    currentConvKey,
+    dashboardConvId,
+    PENDING_CONV_KEY,
+  );
   const dashboardGenUi = useMemo(
     () => (dashboardActive ? deriveGenUiState(messages) : null),
     [dashboardActive, messages],
@@ -3727,8 +3731,13 @@ export function ChatExperience({
               updateBoardPrefs((p) => ({
                 ...p,
                 pinned: p.pinned.includes(ref) ? p.pinned : [...p.pinned, ref],
+                // Every key the card's hidden slot answers to: it may have
+                // been removed under a key it has since moved away from.
                 removed: p.removed.filter(
-                  (k) => k !== `c:${ref}` && (!panelKey || k !== `p:${panelKey}`),
+                  (k) =>
+                    k !== `c:${ref}` &&
+                    (!panelKey || k !== `p:${panelKey}`) &&
+                    !(board.removedKeysOf.get(cardId) ?? []).includes(k),
                 ),
               }));
               focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${ref}`);

@@ -68,6 +68,12 @@ export type Board = {
    * pointer to the panel instead of a second copy of the card.
    */
   cardSlots: Map<string, string>;
+  /**
+   * Card id → every key (current and earlier) of the hidden slot it is in,
+   * for cards whose panel the user took off the board: pinning the card
+   * again clears all of them.
+   */
+  removedKeysOf: Map<string, string[]>;
 };
 
 /**
@@ -212,8 +218,12 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
     });
   const shown = new Set(panels.map((p) => p.key));
   const cardSlots = new Map<string, string>();
-  for (const [cardId, key] of slotOf) if (shown.has(key)) cardSlots.set(cardId, key);
-  return { panels, cardSlots };
+  const removedKeysOf = new Map<string, string[]>();
+  for (const [cardId, key] of slotOf) {
+    if (shown.has(key)) cardSlots.set(cardId, key);
+    else if (slots.has(key)) removedKeysOf.set(cardId, keysOf(key));
+  }
+  return { panels, cardSlots, removedKeysOf };
 }
 
 /** The order after moving `key` by `delta` places among `keys` (clamped). */

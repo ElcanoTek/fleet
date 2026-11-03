@@ -149,6 +149,18 @@ describe("deriveBoard", () => {
     expect(b.cardSlots.has("g")).toBe(false);
   });
 
+  it("reports every key of a removed slot, so re-pinning can clear them all", () => {
+    const msgs = [
+      assistant(1, [{ id: "a", input: display("A", { panel: "a" }) }]),
+      assistant(2, [{ id: "b", input: display("B", { panel: "b", replaces: "a" }) }]),
+    ];
+    // Removed while it was p:a; the slot has since moved to p:b.
+    const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, removed: ["p:a"] });
+    expect(b.panels).toHaveLength(0);
+    expect(b.removedKeysOf.get("b")).toEqual(["p:b", "p:a"]);
+    expect(b.cardSlots.has("b")).toBe(false);
+  });
+
   it("follows the user's order, then age, and their width choice over the heuristic", () => {
     const b = boardOf(msgs, { ...EMPTY_BOARD_PREFS, order: ["c:sys"], wide: { "c:sys": true } });
     expect(b.panels.map((p) => p.key)).toEqual(["c:sys", "p:revenue"]);

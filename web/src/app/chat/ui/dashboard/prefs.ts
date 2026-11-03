@@ -111,20 +111,27 @@ export function writeBoardPrefs(convId: string, prefs: BoardPrefs): void {
 }
 
 /**
- * The board layout overlay for one conversation. `convId` is null for a chat
- * that has no server id yet (a draft): its choices are kept in memory and
- * written once the conversation has an id.
+ * The board layout overlay for one conversation. `slotKey` is the chat slot
+ * (a conversation id or a pending key) and `convId` its server id, null for a
+ * draft: a draft's choices are kept in memory and carried onto its id when it
+ * becomes a conversation (through a per-submission pending key,
+ * "<pendingKey>:<n>"). Opening any other conversation — from a blank chat
+ * included — loads that conversation's own saved layout.
  */
-export function useBoardPrefs(convId: string | null): [BoardPrefs, (update: (prev: BoardPrefs) => BoardPrefs) => void] {
-  const [state, setState] = useState<{ convId: string | null; prefs: BoardPrefs }>(() => ({
+export function useBoardPrefs(
+  slotKey: string,
+  convId: string | null,
+  pendingKey: string,
+): [BoardPrefs, (update: (prev: BoardPrefs) => BoardPrefs) => void] {
+  const [state, setState] = useState<{ slotKey: string; convId: string | null; prefs: BoardPrefs }>(() => ({
+    slotKey,
     convId,
     prefs: readBoardPrefs(convId),
   }));
-  // A different conversation: load its layout (a draft that just got its id
-  // keeps what was chosen while it was a draft).
   let current = state;
-  if (state.convId !== convId) {
-    current = { convId, prefs: state.convId === null ? state.prefs : readBoardPrefs(convId) };
+  if (state.slotKey !== slotKey) {
+    const promoted = state.convId === null && convId !== null && state.slotKey.startsWith(`${pendingKey}:`);
+    current = { slotKey, convId, prefs: promoted || convId === null ? state.prefs : readBoardPrefs(convId) };
     setState(current);
   }
   useEffect(() => {

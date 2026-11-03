@@ -1,6 +1,7 @@
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_BOARD_PREFS } from "./board";
-import { dashboardViewAfterSwitch, MAX_REMEMBERED, readBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
+import { dashboardViewAfterSwitch, MAX_REMEMBERED, readBoardPrefs, useBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
 
 afterEach(() => {
   window.localStorage.clear();
@@ -72,5 +73,28 @@ describe("dashboardViewAfterSwitch", () => {
     // Conversation to conversation: each keeps its own.
     expect(dashboardViewAfterSwitch("saved-on", "plain-conv", true, "pending")).toBe(false);
     expect(dashboardViewAfterSwitch("plain-conv", "saved-on", false, "pending")).toBe(true);
+  });
+});
+
+describe("useBoardPrefs", () => {
+  const saved = { pinned: ["x"], removed: [], order: ["p:k"], wide: {} };
+
+  it("loads a conversation's own layout when opened from a blank chat", () => {
+    writeBoardPrefs("existing", saved);
+    const { result, rerender } = renderHook(({ key, id }) => useBoardPrefs(key, id, "pending"), {
+      initialProps: { key: "pending", id: null as string | null },
+    });
+    rerender({ key: "existing", id: "existing" });
+    expect(result.current[0]).toEqual(saved);
+  });
+
+  it("carries a draft's choices onto the id it gets", () => {
+    const { result, rerender } = renderHook(({ key, id }) => useBoardPrefs(key, id, "pending"), {
+      initialProps: { key: "pending:1", id: null as string | null },
+    });
+    act(() => result.current[1]((p) => ({ ...p, order: ["c:z"] })));
+    rerender({ key: "new-conv", id: "new-conv" });
+    expect(result.current[0].order).toEqual(["c:z"]);
+    expect(readBoardPrefs("new-conv").order).toEqual(["c:z"]);
   });
 });
