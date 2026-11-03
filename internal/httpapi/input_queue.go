@@ -134,7 +134,7 @@ func (s *Server) emitQueueUpdate(ctx context.Context, user, convID string) {
 	if err != nil {
 		return
 	}
-	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items)})
+	entry.buf.Emit("queue.updated", map[string]any{"items": queueItemsPayload(items), "user_email": user})
 }
 
 // maxPendingInputs caps how many still-queued rows one conversation may hold.

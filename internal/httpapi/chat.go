@@ -1157,7 +1157,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// "Enabled" is judged against the conversation's PERSISTED opt-in list —
 		// the set the turn runs with — not only the creation-time request seed,
 		// which later turns never carry.
-		injected = s.applyConnectorRecommendations(injected, req.Message, conv.OptionalMCPServersEnabled, req.EnabledOptional)
+		injected = s.applyConnectorRecommendations(injected, req.Message, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), req.EnabledOptional)
 		injected = appendMultiplayerSenderBlock(injected, conv, user)
 	}
 
@@ -1287,7 +1287,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// capabilities (#194) filter which event types it receives; absent header =
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
-		if err := buf.Attach(r.Context(), 0, w, caps); err != nil && !errors.Is(err, context.Canceled) {
+		if err := buf.AttachForViewer(r.Context(), 0, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Attach (user=%s conv=%s): %v", user, conv.ID, err) //nolint:gosec // G706: authenticated caller email + server-generated conv id + internal error — no request-authored text.
 		}
 	}
@@ -1437,7 +1437,7 @@ func (s *Server) runTurnAsync(
 	// Availability layer (unified connector UX): drop opted-in servers the
 	// user has since disabled on the connections page, and carry their default
 	// credential-account seats into the turn.
-	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, conv.OptionalMCPServersEnabled, conv.MCPAccounts)
+	optionalEnabled, accountDefaults := s.applyConnectorPrefs(turnCtx, user, s.effectiveOptionalMCPServersForCaller(turnCtx, user, conv), conv.MCPAccounts)
 
 	// User-authored skills (docs/SKILLS.md phase 2): sync the caller's active
 	// skills into this conversation's workspace and hand the roster to the

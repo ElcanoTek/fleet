@@ -52,7 +52,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// we currently have buffered, fall through to the DB lookup below.
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
 		s.sseReconnects.inc("within_buffer")
-		if err := entry.buf.Attach(r.Context(), lastEventID, w, caps); err != nil && !errors.Is(err, context.Canceled) {
+		if err := entry.buf.AttachForViewer(r.Context(), lastEventID, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
 		}
 		return
@@ -92,7 +92,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		outcome = "buffer_expired"
 	}
 	s.sseReconnects.inc(outcome)
-	if err := replayEventsFromDB(w, events, caps); err != nil && !errors.Is(err, context.Canceled) {
+	if err := replayEventsFromDB(w, events, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("DB replay (user=%q conv=%q turn=%q): %v", user, convID, requestedTurnID, err) //nolint:gosec // identifiers are %q-quoted
 		return
 	}
@@ -121,7 +121,7 @@ func writeBufferExpiredFrame(w http.ResponseWriter, turnID string) {
 // using the same framing the live buffer uses. Sets the SSE headers
 // + flushes per event. caps filters the replay by the client's declared
 // SSE capabilities (#194), matching the live Attach path; nil = no filter.
-func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps map[SSECapability]bool) error {
+func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
@@ -138,10 +138,14 @@ func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps ma
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
+		sanitizedData, keep := sanitizeTurnEventForViewer(e.Name, e.Data, viewerEmail, convOwnerEmail)
+		if !keep {
+			continue
+		}
 		if err := writeSSEFrame(w, flusher, bufferedEvent{
 			ID:   e.EventID,
 			Name: e.Name,
-			Data: e.Data,
+			Data: sanitizedData,
 		}); err != nil {
 			return err
 		}

@@ -414,32 +414,9 @@ type conversationSubroute struct {
 type conversationSubrouteHandler func(s *Server, w http.ResponseWriter, r *http.Request, user, id string)
 
 // ownedConversationHandler is an action body that runs only after
-// withOwnedConversation resolved the caller's conversation: the ownership
-// gate has already passed and conv is non-nil.
+// withOwnedOrMultiplayerConversation resolved the caller's conversation: the
+// access gate has already passed and conv is non-nil.
 type ownedConversationHandler func(s *Server, w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation)
-
-// withOwnedConversation adapts an ownedConversationHandler by prepending the
-// ownership-check framing the old switch repeated per branch: resolve the
-// conversation for THIS caller (store.Get is scoped by user_email, so a
-// foreign or unknown id resolves nil), answer 500 on a store error or 404
-// when it doesn't resolve, and only then run handler. notFound is the 404
-// body — the historical branches answered either "not found" or
-// "conversation not found", and each table entry preserves its branch's
-// original text verbatim.
-func withOwnedConversation(notFound string, handler ownedConversationHandler) conversationSubrouteHandler {
-	return func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
-		conv, err := s.store.Get(r.Context(), user, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.Error(w, notFound, http.StatusNotFound)
-			return
-		}
-		handler(s, w, r, user, id, conv)
-	}
-}
 
 // withOwnedOrMultiplayerConversation adapts an ownedConversationHandler for
 // routes that both the conversation owner and allowed Multiplayer participants

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -1628,7 +1629,8 @@ func (m *Manager) OpenApprovalRemoteMCPScope(ctx context.Context, email, server,
 // bridge already names them with the SSE event names the frontend reads
 // (text.delta / reasoning.* / tool.call / tool.result).
 type turnSink struct {
-	sink EventSink
+	sink        EventSink
+	senderEmail string
 }
 
 func (o turnSink) Observe(eventType string, payload map[string]any) {
@@ -1640,6 +1642,11 @@ func (o turnSink) Observe(eventType string, payload map[string]any) {
 	// internal marker never leaks to the browser as an unknown SSE event.
 	if eventType == "enforcement" {
 		return
+	}
+	if eventType == "user.message" && o.senderEmail != "" && payload != nil {
+		if _, ok := payload["sender_email"]; !ok {
+			payload["sender_email"] = o.senderEmail
+		}
 	}
 	o.sink.Emit(eventType, payload)
 }
@@ -1989,7 +1996,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 	}
 	tc.Overlay = overlay
 
-	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink})
+	res, runErr := RunInteractiveTurn(ctx, tc, turnSink{sink: sink, senderEmail: in.SenderEmail})
 	effectiveModelSlug := defaultIfEmpty(strings.TrimSpace(res.ModelSlug), modelSlug)
 
 	if runErr != nil {
@@ -1999,6 +2006,17 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return m.cancelledTurnResult(res, userEntry, effectiveModelSlug, startedAt, ctx.Err(), sink, in.CommitTerminal)
 	}
 	return m.completedTurnResult(res, userEntry, effectiveModelSlug, startedAt, sink, in.CommitTerminal)
+}
+
+func userEntrySender(userEntry HistoryEntry) string {
+	if userEntry.Role != "user" || userEntry.Type != "text" || len(userEntry.Content) == 0 {
+		return ""
+	}
+	var tc TextContent
+	if err := json.Unmarshal(userEntry.Content, &tc); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(tc.SenderEmail)
 }
 
 // cancelledTurnResult builds the partial TurnResult for a cancelled turn,
@@ -2026,11 +2044,11 @@ func hasToolEntries(entries []agentcore.RunEntry) bool {
 	return false
 }
 
-func commitPartialSideEffects(runErr error, res agentcore.Result, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
+func commitPartialSideEffects(runErr error, res agentcore.Result, senderEmail string, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
 	if (!errors.Is(runErr, agentcore.ErrCommittedSideEffects) && !hasToolEntries(res.Entries)) || len(res.Entries) == 0 || commit == nil {
 		return
 	}
-	entries := append(mapRunEntries(res.Entries), mustEntry("assistant", "turn_summary", summary))
+	entries := append(mapRunEntriesWithSender(res.Entries, senderEmail), mustEntry("assistant", "turn_summary", summary))
 	if cerr := commit(entries, false); cerr != nil {
 		log.Printf("RunTurn: committing partial side-effect transcript failed: %v", cerr)
 	}
@@ -2039,7 +2057,7 @@ func commitPartialSideEffects(runErr error, res agentcore.Result, summary TurnSu
 func (m *Manager) cancelledTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, ctxErr error, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
-	newHistory = append(newHistory, mapRunEntries(res.Entries)...)
+	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, userEntrySender(userEntry))...)
 	usage := res.Usage
 	summary := TurnSummaryContent{
 		CostUSD:              usage.CostUSD,
@@ -2114,7 +2132,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 	failure := turnFailureFor(reason, modelSlug, status, runErr)
 	usage := res.Usage
-	commitPartialSideEffects(runErr, res, TurnSummaryContent{
+	commitPartialSideEffects(runErr, res, userEntrySender(userEntry), TurnSummaryContent{
 		CostUSD:              usage.CostUSD,
 		PromptTokens:         usage.PromptTokens,
 		PromptTokensLastStep: usage.LastStepInputTokens,
@@ -2146,7 +2164,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEntry, modelSlug string, startedAt time.Time, sink EventSink, commitTerminal func([]HistoryEntry, bool) error) (*TurnResult, error) {
 	newHistory := make([]HistoryEntry, 0, len(res.Entries)+2)
 	newHistory = append(newHistory, userEntry)
-	newHistory = append(newHistory, mapRunEntries(res.Entries)...)
+	newHistory = append(newHistory, mapRunEntriesWithSender(res.Entries, userEntrySender(userEntry))...)
 
 	finalText := res.FinalText
 	usage := res.Usage
@@ -2202,6 +2220,10 @@ func (m *Manager) completedTurnResult(res agentcore.Result, userEntry HistoryEnt
 // records for persistence + replay. Mirrors the entry shapes session.go's
 // RunTurn produced (reasoning / tool_call / tool_result / assistant text).
 func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
+	return mapRunEntriesWithSender(entries, "")
+}
+
+func mapRunEntriesWithSender(entries []agentcore.RunEntry, senderEmail string) []HistoryEntry {
 	out := make([]HistoryEntry, 0, len(entries))
 	for _, e := range entries {
 		switch e.Type {
@@ -2212,7 +2234,7 @@ func mapRunEntries(entries []agentcore.RunEntry) []HistoryEntry {
 		case "user_text":
 			// A steered mid-turn user message (#785): persisted in stream order
 			// like every other entry, exactly once (the sink dedupes by SteerID).
-			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text, Steered: true}))
+			out = append(out, mustEntry("user", "text", TextContent{Text: e.Text, Steered: true, SenderEmail: senderEmail}))
 		case "tool_call":
 			out = append(out, mustEntry("assistant", entryTypeToolCall, ToolCallContent{
 				ID: e.ToolCallID, Name: e.ToolName, Input: e.ToolInput,

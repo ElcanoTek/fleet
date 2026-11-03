@@ -107,7 +107,11 @@ func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, co
 		Events: make([]turnEventJSON, 0, len(events)),
 	}
 	for _, e := range events {
-		data := json.RawMessage(e.Data)
+		sanitized, keep := sanitizeTurnEventForViewer(e.Name, e.Data, user, conv.UserEmail)
+		if !keep {
+			continue
+		}
+		data := json.RawMessage(sanitized)
 		if len(data) == 0 {
 			data = json.RawMessage("null")
 		}

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
@@ -58,17 +59,32 @@ func historyForClient(entries []agent.HistoryEntry) []historyEntryResponse {
 	return out
 }
 
-// historyForParticipant projects loaded history for a non-owner multiplayer
-// participant, omitting server-injected context (`InjectedContext`) so private
-// owner attachment paths or library listings are never exposed.
-func historyForParticipant(entries []agent.HistoryEntry) []historyEntryResponse {
+// historyForParticipant projects loaded history for viewerEmail, retaining each
+// entry's InjectedContext only when viewerEmail is the sender of that entry
+// (or the conversation owner for unattributed entries) so another user's
+// private attachment paths or library listings are never exposed.
+func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
 	for _, e := range entries {
+		injected := e.InjectedContext
+		if injected != "" && viewerEmail != "" {
+			sender := strings.TrimSpace(convOwnerEmail)
+			if e.Role == "user" && e.Type == "text" {
+				var tc agent.TextContent
+				if json.Unmarshal(e.Content, &tc) == nil && strings.TrimSpace(tc.SenderEmail) != "" {
+					sender = strings.TrimSpace(tc.SenderEmail)
+				}
+			}
+			if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+				injected = ""
+			}
+		}
 		out = append(out, historyEntryResponse{
-			ID:      e.ID,
-			Role:    e.Role,
-			Type:    e.Type,
-			Content: e.Content,
+			ID:              e.ID,
+			Role:            e.Role,
+			Type:            e.Type,
+			Content:         e.Content,
+			InjectedContext: injected,
 		})
 	}
 	return out

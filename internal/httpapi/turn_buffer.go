@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -529,6 +530,65 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 	return store.TurnStatusCompleted
 }
 
+// sanitizeTurnEventForViewer filters or redacts sender-private fields from a
+// turn event before it is delivered to viewerEmail:
+//   - user.message: strips injected_context when viewerEmail is not the message
+//     sender (defaulting to convOwnerEmail when sender_email is absent).
+//   - queue.updated: skips the event when user_email is set to another user so
+//     one multiplayer participant's queue updates never overwrite another
+//     participant's visible queue, and strips the internal user_email tag when
+//     delivering to the matching user.
+func sanitizeTurnEventForViewer(name string, data []byte, viewerEmail, convOwnerEmail string) ([]byte, bool) {
+	switch name {
+	case "user.message":
+		if viewerEmail == "" || len(data) == 0 {
+			return data, true
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return data, true
+		}
+		if _, hasInjected := m["injected_context"]; !hasInjected {
+			return data, true
+		}
+		sender, _ := m["sender_email"].(string)
+		sender = strings.TrimSpace(sender)
+		if sender == "" {
+			sender = strings.TrimSpace(convOwnerEmail)
+		}
+		if sender != "" && !strings.EqualFold(viewerEmail, sender) {
+			delete(m, "injected_context")
+			if b, err := json.Marshal(m); err == nil {
+				return b, true
+			}
+		}
+		return data, true
+	case "queue.updated":
+		if len(data) == 0 {
+			return data, true
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			return data, true
+		}
+		uEmail, _ := m["user_email"].(string)
+		uEmail = strings.TrimSpace(uEmail)
+		if uEmail == "" {
+			return data, true
+		}
+		if viewerEmail != "" && !strings.EqualFold(viewerEmail, uEmail) {
+			return nil, false
+		}
+		delete(m, "user_email")
+		if b, err := json.Marshal(m); err == nil {
+			return b, true
+		}
+		return data, true
+	default:
+		return data, true
+	}
+}
+
 // Attach writes every event with ID > lastEventID to w in SSE framing,
 // then streams any subsequent events as they arrive. Returns when the
 // buffer is sealed and fully drained, or when ctx is cancelled (client
@@ -540,6 +600,13 @@ func inferTerminalStatus(events []bufferedEvent) store.TurnStatus {
 // otherwise governed events the client didn't declare are suppressed. Lifecycle
 // and control frames always flow — see shouldEmit.
 func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool) error {
+	return b.AttachForViewer(ctx, lastEventID, w, caps, "", "")
+}
+
+// AttachForViewer is Attach with per-viewer sanitization of sender-only context
+// (`user.message.injected_context`) and user-scoped `queue.updated` frames in
+// multiplayer conversations.
+func (b *turnBuffer) AttachForViewer(ctx context.Context, lastEventID uint64, w http.ResponseWriter, caps map[SSECapability]bool, viewerEmail, convOwnerEmail string) error {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return errors.New("response writer does not support flushing")
@@ -590,11 +657,16 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 		}
 	}
 
-	// Pump replay (filtered by the client's declared capabilities).
+	// Pump replay (filtered by the client's declared capabilities and viewer scope).
 	for _, e := range replay {
 		if !shouldEmit(caps, e.Name) {
 			continue
 		}
+		sanitizedData, keep := sanitizeTurnEventForViewer(e.Name, e.Data, viewerEmail, convOwnerEmail)
+		if !keep {
+			continue
+		}
+		e.Data = sanitizedData
 		if err := writeSSEFrame(w, flusher, e); err != nil {
 			b.unsubscribe(subID)
 			return err
@@ -638,6 +710,11 @@ func (b *turnBuffer) Attach(ctx context.Context, lastEventID uint64, w http.Resp
 			if !shouldEmit(caps, ev.Name) {
 				continue
 			}
+			sanitizedData, keep := sanitizeTurnEventForViewer(ev.Name, ev.Data, viewerEmail, convOwnerEmail)
+			if !keep {
+				continue
+			}
+			ev.Data = sanitizedData
 			if err := writeSSEFrame(w, flusher, ev); err != nil {
 				b.unsubscribe(subID)
 				return err

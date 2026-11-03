@@ -455,17 +455,45 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", user, err)
+			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 		}
 		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 			for _, srv := range shared {
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", user, err)
+			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
 		}
 	}
 	return valid
+}
+
+// effectiveOptionalMCPServersForCaller returns the conversation's enabled
+// optional MCP servers for user. For non-owner participants (whose
+// conv.OptionalMCPServersEnabled is nil for JSON redaction and whose raw list
+// is held in conv.ParticipantOptionalMCPServers), the list is intersected with
+// the caller's optionalServerWhitelist so bundled and caller-accessible
+// connectors remain enabled for participant turns without leaking private
+// owner-only remote MCP names.
+func (s *Server) effectiveOptionalMCPServersForCaller(ctx context.Context, user string, conv *store.Conversation) []string {
+	if conv == nil {
+		return nil
+	}
+	if len(conv.OptionalMCPServersEnabled) > 0 {
+		return conv.OptionalMCPServersEnabled
+	}
+	if len(conv.ParticipantOptionalMCPServers) == 0 {
+		return nil
+	}
+	valid := s.optionalServerWhitelist(ctx, user)
+	out := make([]string, 0, len(conv.ParticipantOptionalMCPServers))
+	for _, n := range conv.ParticipantOptionalMCPServers {
+		key := strings.ToLower(strings.TrimSpace(n))
+		if valid[key] {
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // handleConversationMCPServersGet serves GET /conversations/{id}/mcp-servers.
@@ -481,8 +509,9 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 // state. Reads from Manager's frozen catalogs + the conversation's fresh
 // opt-in list from Postgres.
 func (s *Server) handleConversationMCPServersGet(w http.ResponseWriter, r *http.Request, user, _ string, conv *store.Conversation) {
-	enabled := make(map[string]bool, len(conv.OptionalMCPServersEnabled))
-	for _, n := range conv.OptionalMCPServersEnabled {
+	eff := s.effectiveOptionalMCPServersForCaller(r.Context(), user, conv)
+	enabled := make(map[string]bool, len(eff))
+	for _, n := range eff {
 		enabled[n] = true
 	}
 	// Availability layer: a connector the user disabled on the connections

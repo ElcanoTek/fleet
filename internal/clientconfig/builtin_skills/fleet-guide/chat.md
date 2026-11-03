@@ -1089,10 +1089,12 @@ branch from the current version.
 **Multiplayer mode.** For teams that want to jump in and work inside the same
 live conversation together, the share dialog also includes a **Multiplayer mode**
 section (**Turn on** / **Turn off**). New chats start as **Only you** by default,
-unless an administrator has enabled **Share team chats by default** in
+unless an administrator has enabled **Multiplayer team chats by default** in
 **Settings → Admin → Features** (`FLEET_TEAM_CHATS_SHARED_BY_DEFAULT`), in which
-case new non-lockdown chats created by team members start in **Multiplayer mode**
-automatically. When Multiplayer mode is on:
+case new unfiled or team-project chats (outside Lockdown mode) created by team
+members start in **Multiplayer mode** automatically (chats created inside a
+personal project stay private until Multiplayer mode is turned on in the Share
+dialog). When Multiplayer mode is on:
 
 - Teammates (and anyone else added to the chat) see it under **Team chats** in
   the rail with a **Live** badge, can open it directly in the chat view, and can

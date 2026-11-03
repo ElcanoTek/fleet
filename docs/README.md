@@ -299,6 +299,7 @@ above fails otherwise.
 - [`MIGRATIONS.md`](MIGRATIONS.md) — Database migrations
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Claude Haiku 5.5 as the everyday default (2026-10-15), Gemini 4 Argon as the strong tier (2026-10-14); the earlier Luna Pro / Opus swaps (2026-09-21, 2026-09-22), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
+- [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections

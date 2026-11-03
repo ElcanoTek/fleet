@@ -193,6 +193,10 @@ type Conversation struct {
 	Multiplayer             bool     `json:"multiplayer,omitempty"`
 	MultiplayerParticipants []string `json:"multiplayer_participants,omitempty"`
 	MultiplayerExcluded     []string `json:"multiplayer_excluded,omitempty"`
+	// ParticipantOptionalMCPServers preserves the conversation's optional
+	// connector opt-in list for non-owner multiplayer turns while
+	// OptionalMCPServersEnabled is redacted from HTTP JSON responses.
+	ParticipantOptionalMCPServers []string `json:"-"`
 	// BranchOrigin is set, by the handlers that serve it, on a TEAMMATE'S
 	// branch only (ADR-0079): whose chat it came from and which shared files
 	// were copied in. Never scanned from the conversations row — it lives in
@@ -2209,7 +2213,8 @@ func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, owner
 		return false, ErrNoTeamToShareWith
 	}
 	unfiled := strings.TrimSpace(projectID.String) == ""
-	if strings.TrimSpace(homeTeam.String) != team && !(allowUnfiled && unfiled) {
+	canShareUnfiled := allowUnfiled && unfiled
+	if strings.TrimSpace(homeTeam.String) != team && !canShareUnfiled {
 		return false, ErrNoTeamShareHome
 	}
 	// The share names its audience by the team's ID as well as its label

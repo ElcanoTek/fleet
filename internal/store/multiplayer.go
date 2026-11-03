@@ -114,17 +114,45 @@ func (s *Store) SetConversationMultiplayer(ctx context.Context, ownerEmail, conv
 	exclJSON := marshalEmailSlice(nextExcluded)
 
 	if !multiplayer {
-		// Turning off multiplayer clears multiplayer = FALSE. If the chat is
-		// unfiled (no project_id), it also clears team_visible so turning off
-		// multiplayer on an unfiled chat makes it private again.
+		// Turning off multiplayer clears multiplayer = FALSE. Preserve
+		// team_visible and the team audience stamp ONLY when the conversation
+		// currently lives in a project that is actually shared with that same
+		// team; unfiled chats and personal-project chats become private again.
 		_, err := s.db.ExecContext(ctx, `
 			UPDATE conversations SET
 				multiplayer = FALSE,
 				multiplayer_participants = $1,
 				multiplayer_excluded = $2,
-				team_visible = CASE WHEN COALESCE(project_id, '') = '' THEN FALSE ELSE team_visible END,
-				team_shared_with = CASE WHEN COALESCE(project_id, '') = '' THEN NULL ELSE team_shared_with END,
-				team_shared_with_id = CASE WHEN COALESCE(project_id, '') = '' THEN NULL ELSE team_shared_with_id END,
+				team_visible = CASE
+					WHEN EXISTS (
+						SELECT 1 FROM projects p
+						WHERE p.id = conversations.project_id
+						  AND p.deleted_at IS NULL
+						  AND p.team_shared_with = conversations.team_shared_with
+						  AND p.team_shared_with_id = conversations.team_shared_with_id
+					) THEN team_visible
+					ELSE FALSE
+				END,
+				team_shared_with = CASE
+					WHEN EXISTS (
+						SELECT 1 FROM projects p
+						WHERE p.id = conversations.project_id
+						  AND p.deleted_at IS NULL
+						  AND p.team_shared_with = conversations.team_shared_with
+						  AND p.team_shared_with_id = conversations.team_shared_with_id
+					) THEN team_shared_with
+					ELSE NULL
+				END,
+				team_shared_with_id = CASE
+					WHEN EXISTS (
+						SELECT 1 FROM projects p
+						WHERE p.id = conversations.project_id
+						  AND p.deleted_at IS NULL
+						  AND p.team_shared_with = conversations.team_shared_with
+						  AND p.team_shared_with_id = conversations.team_shared_with_id
+					) THEN team_shared_with_id
+					ELSE NULL
+				END,
 				updated_at = $3
 			WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 			partJSON, exclJSON, now, convID, ownerEmail,
@@ -268,7 +296,11 @@ func (s *Store) GetMultiplayerConversation(ctx context.Context, callerEmail, con
 		return nil, nil
 	}
 	if normalizeEmail(c.UserEmail) != callerEmail {
-		// Never leak owner-private fields to a non-owner participant.
+		// Never leak owner-private fields to a non-owner participant in HTTP
+		// JSON responses, while retaining an unexported (`json:"-"`) copy of
+		// the enabled optional connector names so participant turns can mount
+		// connectors they also have access to.
+		c.ParticipantOptionalMCPServers = c.OptionalMCPServersEnabled
 		c.OptionalMCPServersEnabled = nil
 		c.Labels = nil
 		c.ShareToken = ""

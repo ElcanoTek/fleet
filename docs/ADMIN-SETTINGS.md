@@ -76,6 +76,7 @@ needs a restart, ever.
 | `auto_title_enabled` | bool | `FLEET_AUTO_TITLE` | LLM-generated conversation titles (#302) |
 | `connector_recommendations_enabled` | bool | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | Reactive connector nudges (#512) |
 | `context_handles_enabled` | bool | `FLEET_CONTEXT_HANDLES_ENABLED` | Composer `@url:`/`@file:` handles ([CONTEXT-HANDLES.md](CONTEXT-HANDLES.md)) |
+| `team_chats_shared_by_default` | bool (default false) | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | Auto-enables Multiplayer mode on new unfiled or team-project non-lockdown conversations created by team members ([MULTIPLAYER-CHAT.md](MULTIPLAYER-CHAT.md)) |
 | `shared_files_max_total_mb` | int 1–16777216, or 0 = unlimited | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | Total-size cap (MB) on the cross-chat shared file library; read per upload ([SHARED-FILES.md](SHARED-FILES.md)) |
 | `escalation_signals_enabled` | bool (default true) | `FLEET_ESCALATION_SIGNALS_ENABLED` | Offer the advanced model after a chat turn that clearly struggled; free ([CHAT-ESCALATION.md](CHAT-ESCALATION.md)) |
 | `escalation_classifier_mode` | `off` \| `observe` \| `suggest` (default suggest) | `FLEET_ESCALATION_CLASSIFIER_MODE` | The decision-model frustration check on each chat message ([CHAT-ESCALATION.md](CHAT-ESCALATION.md)) |

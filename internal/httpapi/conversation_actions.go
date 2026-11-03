@@ -203,6 +203,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		schedules = []store.ChatSchedule{}
 	}
 	historyPayload := historyForClient(history)
+	if !isOwner || conv.Multiplayer {
+		historyPayload = historyForParticipant(history, user, conv.UserEmail)
+	}
 	if !isOwner {
 		sanitized := *conv
 		sanitized.OptionalMCPServersEnabled = nil
@@ -212,7 +215,6 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		sanitized.MCPAccounts = nil
 		sanitized.AutoApprove = false
 		conv = &sanitized
-		historyPayload = historyForParticipant(history)
 	}
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
@@ -590,11 +592,27 @@ func (s *Server) handleThinkingConfigDelete(w http.ResponseWriter, r *http.Reque
 // JSON export of the full conversation (metadata + history).
 // Returned as a downloadable attachment so the browser triggers
 // a Save dialog; reuses the same fields as GET /conversations/{id}.
-func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request, _, id string, conv *store.Conversation) {
+func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request, user, id string, conv *store.Conversation) {
 	history, err := s.store.LoadHistory(r.Context(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
+	exportConv := conv
+	historyPayload := historyForClient(history)
+	if !isOwner || conv.Multiplayer {
+		historyPayload = historyForParticipant(history, user, conv.UserEmail)
+	}
+	if !isOwner {
+		sanitized := *conv
+		sanitized.OptionalMCPServersEnabled = nil
+		sanitized.Labels = nil
+		sanitized.ShareToken = ""
+		sanitized.ParentConversationID = ""
+		sanitized.MCPAccounts = nil
+		sanitized.AutoApprove = false
+		exportConv = &sanitized
 	}
 	exportedAt := time.Now().UTC()
 	// Every format below is served as an attachment, so the browser saves the
@@ -615,24 +633,23 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "html", "chat")),
+			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "html", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationHTML(conv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationHTML(exportConv, history, exportedAt, scope))
 	case "markdown", "md":
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		w.Header().Set(
 			"Content-Disposition",
-			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(conv.Title, conv.ID, "md", "chat")),
+			fmt.Sprintf(`attachment; filename="%s"`, exportFilename(exportConv.Title, exportConv.ID, "md", "chat")),
 		)
-		_, _ = io.WriteString(w, renderConversationMarkdown(conv, history, exportedAt, scope))
+		_, _ = io.WriteString(w, renderConversationMarkdown(exportConv, history, exportedAt, scope))
 	default:
 		body := map[string]any{
-			"conversation": conv,
+			"conversation": exportConv,
 			// historyForClient so the ARCHIVAL shape really does carry every
-			// field: each entry's server-injected context rides as its own
-			// `injected_context` (history_response.go), not merged into the
-			// user's text the way it was before migration 056.
-			"history":     historyForClient(history),
+			// field for the owner (or historyForParticipant for multiplayer
+			// participants so another sender's injected_context is omitted).
+			"history":     historyPayload,
 			"exported_at": exportedAt.Format(time.RFC3339),
 		}
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
