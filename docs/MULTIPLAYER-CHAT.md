@@ -8,9 +8,9 @@ share links (`/shared/{token}`).
 
 ## How it works
 
-### Database & audience model (migration 092)
+### Database & audience model (migration 093)
 
-`092_multiplayer_conversations.sql` adds three columns to `conversations`:
+`093_conversation_multiplayer.sql` adds three columns to `conversations`:
 
 - `multiplayer BOOLEAN NOT NULL DEFAULT FALSE`
 - `multiplayer_participants TEXT NOT NULL DEFAULT '[]'` (JSON array of normalized emails explicitly added)
@@ -51,6 +51,17 @@ When an allowed participant submits `POST /chat` on a multiplayer conversation:
   - Personal memories (`ListMemories`), user skills (`materializeUserSkills`),
     and user persona layers resolve for the sender without exposing the owner's
     private persona instructions or memories.
+  - Private workspace subtrees (`attachments/` and `user-skills/`) are isolated
+    per sender via `activateTurnPrivateWorkspace` and
+    `restoreTurnPrivateWorkspace`: before a non-owner participant's turn stages
+    attachments or materializes user skills, the owner's `attachments/` and
+    `user-skills/` are moved out of the conversation workspace into a host-only
+    control-plane stash directory (outside `FLEET_WORKSPACE_ROOT`) and replaced
+    with the participant's own staged `attachments/` for the duration of the
+    turn; when the turn finishes (before the turn lock is released), the
+    participant's `user-skills/` directory is removed, their `attachments/` are
+    moved back to their per-participant stash, and the owner's `attachments/`
+    and `user-skills/` are restored.
   - Approval cards (`newTurnStager`), memory proposals, and input-queue rows are
     scoped to the sender.
 - **Steer isolation:** Mid-turn `mode: "steer"` submissions are injected into a
@@ -100,7 +111,7 @@ Operators can enable **Multiplayer team chats by default** via
 
 ## Shipped scope and deliberate deferrals
 
-- **Shipped:** Migration `092_multiplayer_conversations.sql`, store and HTTP
+- **Shipped:** Migration `093_conversation_multiplayer.sql`, store and HTTP
   access control, owner-gated participant add/remove controls in the Share
   dialog, per-turn sender identity for MCP/memories/skills/approvals, sender
   badges on user bubbles, the **Team chats** sidebar section, and the

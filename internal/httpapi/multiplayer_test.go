@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 func doAuthedJSONRequest(t *testing.T, srv *Server, method, path, userEmail string, body any) *httptest.ResponseRecorder {
@@ -241,4 +244,98 @@ func verifyMultiplayerAccessControl(t *testing.T, srv *Server, convID string) {
 	if wBobAfterDisable.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for Bob after multiplayer disabled, got %d", wBobAfterDisable.Code)
 	}
+}
+
+func TestMultiplayerPrivateWorkspaceIsolation(t *testing.T) {
+	t.Setenv("FLEET_WORKSPACE_ROOT", t.TempDir())
+	fakeStore := newFakeChatStore()
+	fakeStore.users["alice@reklaim.com"] = &store.User{Email: "alice@reklaim.com", Role: "member", TeamID: "reklaim"}
+	fakeStore.users["bob@reklaim.com"] = &store.User{Email: "bob@reklaim.com", Role: "member", TeamID: "reklaim"}
+	srv := newDefaultChatServer(t, &fakeEngine{}, fakeStore)
+	srv.cfg.EmailAttachmentDir = t.TempDir()
+
+	conv, err := fakeStore.CreateConversation(context.Background(), "alice@reklaim.com", "Shared Deal Thread", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := fakeStore.SetConversationMultiplayer(context.Background(), "alice@reklaim.com", conv.ID, true, nil, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	conv, _ = fakeStore.Get(context.Background(), "alice@reklaim.com", conv.ID)
+
+	wsDir, err := tools.EnsureWorkspaceDir(conv.ID)
+	if err != nil {
+		t.Fatalf("EnsureWorkspaceDir: %v", err)
+	}
+	ownerAtt := filepath.Join(wsDir, uploadsDir, "slug1", "alice-secret.csv")
+	ownerSkill := filepath.Join(wsDir, userSkillsRoot, "alice-playbook", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(ownerAtt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownerAtt, []byte("alice_private_attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(ownerSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(ownerSkill, []byte("alice_private_skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Activate Bob's non-owner participant turn workspace.
+	srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com")
+
+	// Alice's attachments/ and user-skills/ must not be present in wsDir during Bob's turn.
+	if _, err := os.Stat(ownerAtt); !os.IsNotExist(err) {
+		t.Fatalf("expected owner attachment to be stashed outside wsDir during participant turn, got err=%v", err)
+	}
+	if _, err := os.Stat(ownerSkill); !os.IsNotExist(err) {
+		t.Fatalf("expected owner user-skill to be stashed outside wsDir during participant turn, got err=%v", err)
+	}
+
+	// Simulate Bob staging an attachment and materializing a private skill during his turn.
+	bobAtt := filepath.Join(wsDir, uploadsDir, "slug2", "bob-upload.csv")
+	bobSkill := filepath.Join(wsDir, userSkillsRoot, "bob-skill", "SKILL.md")
+	if err := os.MkdirAll(filepath.Dir(bobAtt), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bobAtt, []byte("bob_private_attachment"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(bobSkill), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bobSkill, []byte("bob_private_skill"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// While Bob's participant workspace is active, Alice cannot download Bob's private skill via /workspace/.
+	wAliceMidTurn := doAuthedJSONRequest(t, srv, http.MethodGet, "/conversations/"+conv.ID+"/workspace/user-skills/bob-skill/SKILL.md", "alice@reklaim.com", nil)
+	if wAliceMidTurn.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 when owner fetches participant skill mid-turn, got %d", wAliceMidTurn.Code)
+	}
+
+	// Restore workspace at the end of Bob's turn.
+	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
+
+	// Bob's skill and attachment are no longer in wsDir, and Alice's are restored.
+	if _, err := os.Stat(bobSkill); !os.IsNotExist(err) {
+		t.Fatalf("expected participant skill to be removed after turn, got err=%v", err)
+	}
+	if _, err := os.Stat(bobAtt); !os.IsNotExist(err) {
+		t.Fatalf("expected participant attachment to be stashed after turn, got err=%v", err)
+	}
+	if got, err := os.ReadFile(ownerAtt); err != nil || string(got) != "alice_private_attachment" {
+		t.Fatalf("expected owner attachment restored, got %q err=%v", string(got), err)
+	}
+	if got, err := os.ReadFile(ownerSkill); err != nil || string(got) != "alice_private_skill" {
+		t.Fatalf("expected owner skill restored, got %q err=%v", string(got), err)
+	}
+
+	// On Bob's next turn, Bob's previously staged attachment is swapped back in for Bob.
+	srv.activateTurnPrivateWorkspace(conv, "bob@reklaim.com")
+	if got, err := os.ReadFile(bobAtt); err != nil || string(got) != "bob_private_attachment" {
+		t.Fatalf("expected Bob's attachment to be restored on Bob's next turn, got %q err=%v", string(got), err)
+	}
+	srv.restoreTurnPrivateWorkspace(conv, "bob@reklaim.com")
 }

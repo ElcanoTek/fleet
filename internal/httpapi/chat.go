@@ -1093,6 +1093,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
 	s.attachTurnPersister(buf, user, conv.ID)
+	s.activateTurnPrivateWorkspace(conv, user)
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
@@ -1412,6 +1413,7 @@ func (s *Server) runTurnAsync(
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.
 	defer s.finishTurn(conv.ID, turnToken)
+	defer s.restoreTurnPrivateWorkspace(conv, user)
 	defer turnCancel()
 	// This goroutine is intentionally detached from the HTTP request, so an
 	// unrecovered panic here would crash the whole single-host process. Recover

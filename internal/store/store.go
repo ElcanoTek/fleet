@@ -189,7 +189,7 @@ type Conversation struct {
 	TeamVisible bool `json:"team_visible,omitempty"`
 	// Multiplayer is true when teammates / workspace members can jump into this
 	// conversation directly and send messages with their own account and MCP
-	// connectors (migration 092).
+	// connectors (migration 093).
 	Multiplayer             bool     `json:"multiplayer,omitempty"`
 	MultiplayerParticipants []string `json:"multiplayer_participants,omitempty"`
 	MultiplayerExcluded     []string `json:"multiplayer_excluded,omitempty"`

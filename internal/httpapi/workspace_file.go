@@ -4,13 +4,18 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -96,9 +101,11 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 		return
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user) || conv.UserEmail == ""
-	if !isOwner && (isPrivateWorkspacePath(filepath.ToSlash(rel)) || isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath)))) {
-		http.Error(w, "file not found", http.StatusNotFound)
-		return
+	if isPrivateWorkspacePath(filepath.ToSlash(rel)) || isPrivateWorkspacePath(filepath.ToSlash(filepath.Clean(relPath))) {
+		if !isOwner || s.isParticipantWorkspaceActive(convID, conv.UserEmail) {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
 	}
 	f, err := root.Open(rel)
 	if err != nil {
@@ -131,4 +138,174 @@ func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, con
 	w.Header().Set("Cache-Control", "private, no-cache")
 
 	http.ServeContent(w, r, filepath.Base(resolvedAbs), info.ModTime(), f)
+}
+
+func participantDigest(userEmail string) string {
+	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(userEmail))))
+	return hex.EncodeToString(sum[:])[:32]
+}
+
+// privateWorkspaceStashDir returns the host-only control-plane directory used
+// to isolate per-sender private workspace trees (attachments/ and user-skills/)
+// outside the conversation workspace mounted into sandboxes.
+func (s *Server) privateWorkspaceStashDir(convID string) (string, error) {
+	if convID == "" || !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+		return "", errors.New("invalid conversation id")
+	}
+	if base := strings.TrimSpace(s.cfg.EmailAttachmentDir); base != "" {
+		abs, err := filepath.Abs(base)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(filepath.Clean(abs), "multiplayer-private", convID), nil
+	}
+	wsRoot, err := filepath.Abs(tools.WorkspaceDirForConversation(""))
+	if err != nil {
+		return "", err
+	}
+	wsRoot = filepath.Clean(wsRoot)
+	return filepath.Join(filepath.Dir(wsRoot), ".fleet-private-"+filepath.Base(wsRoot), convID), nil
+}
+
+func (s *Server) isParticipantWorkspaceActive(convID, ownerEmail string) bool {
+	if ownerEmail == "" {
+		return false
+	}
+	if entry, ok := s.getInflight(convID); ok && entry.IsRunning() && entry.steer != nil && entry.steer.user != "" && !strings.EqualFold(entry.steer.user, ownerEmail) {
+		return true
+	}
+	stashRoot, err := s.privateWorkspaceStashDir(convID)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(stashRoot, "active-participant"))
+	return err == nil
+}
+
+// activateTurnPrivateWorkspace isolates privateWorkspaceDirs (attachments/ and
+// user-skills/) for the active turn's sender before attachments or user skills
+// are staged into the conversation workspace. When a non-owner participant
+// runs a turn, the owner's attachments/ and user-skills/ are moved out of the
+// mounted workspace into the host-only control-plane stash and replaced with
+// the participant's own staged attachments (if any from an earlier turn).
+func (s *Server) activateTurnPrivateWorkspace(conv *store.Conversation, user string) {
+	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
+		return
+	}
+	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		return
+	}
+	wsDir := tools.WorkspaceDirForConversation(conv.ID)
+	recoverInterruptedParticipantWorkspace(wsDir, stashRoot)
+	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+		return
+	}
+	if _, err := tools.EnsureWorkspaceDir(conv.ID); err != nil {
+		return
+	}
+	ownerStash := filepath.Join(stashRoot, "owner")
+	if err := os.MkdirAll(ownerStash, 0o750); err != nil {
+		return
+	}
+	marker := filepath.Join(stashRoot, "active-participant")
+	_ = os.WriteFile(marker, []byte(strings.ToLower(strings.TrimSpace(user))), 0o600) //nolint:gosec // host-side control-plane marker
+	for _, dirName := range privateWorkspaceDirs {
+		movePrivateDirIfPresent(filepath.Join(wsDir, dirName), filepath.Join(ownerStash, dirName))
+	}
+	partAtt := filepath.Join(stashRoot, "participants", participantDigest(user), uploadsDir)
+	movePrivateDirIfPresent(partAtt, filepath.Join(wsDir, uploadsDir))
+}
+
+// restoreTurnPrivateWorkspace removes a non-owner participant's materialized
+// user-skills/, stashes their staged attachments/ outside the mounted
+// workspace, and restores the conversation owner's attachments/ and
+// user-skills/ before the turn lock is released.
+func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user string) {
+	if conv == nil || conv.ID == "" || !filepath.IsLocal(conv.ID) || strings.ContainsAny(conv.ID, `/\`) {
+		return
+	}
+	if conv.UserEmail == "" || strings.EqualFold(conv.UserEmail, user) {
+		return
+	}
+	stashRoot, err := s.privateWorkspaceStashDir(conv.ID)
+	if err != nil {
+		return
+	}
+	wsDir := tools.WorkspaceDirForConversation(conv.ID)
+	restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
+}
+
+func recoverInterruptedParticipantWorkspace(wsDir, stashRoot string) {
+	marker := filepath.Join(stashRoot, "active-participant")
+	raw, err := os.ReadFile(marker) //nolint:gosec // server-derived stashRoot
+	if err != nil {
+		return
+	}
+	restoreParticipantWorkspaceToOwner(wsDir, stashRoot, strings.TrimSpace(string(raw)))
+}
+
+func restoreParticipantWorkspaceToOwner(wsDir, stashRoot, participantEmail string) {
+	_ = os.RemoveAll(filepath.Join(wsDir, userSkillsRoot)) //nolint:gosec // server-derived conversation workspace
+	if participantEmail != "" {
+		partAtt := filepath.Join(stashRoot, "participants", participantDigest(participantEmail), uploadsDir)
+		movePrivateDirIfPresent(filepath.Join(wsDir, uploadsDir), partAtt)
+	} else {
+		_ = os.RemoveAll(filepath.Join(wsDir, uploadsDir)) //nolint:gosec // server-derived conversation workspace
+	}
+	ownerStash := filepath.Join(stashRoot, "owner")
+	for _, dirName := range privateWorkspaceDirs {
+		movePrivateDirIfPresent(filepath.Join(ownerStash, dirName), filepath.Join(wsDir, dirName))
+	}
+	_ = os.Remove(filepath.Join(stashRoot, "active-participant"))
+}
+
+func movePrivateDirIfPresent(src, dst string) {
+	info, err := os.Lstat(src) //nolint:gosec // server-derived workspace/stash paths
+	if err != nil || !info.IsDir() {
+		return
+	}
+	_ = os.RemoveAll(dst)                                         //nolint:gosec // server-derived destination
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil { //nolint:gosec // workspace/stash parent dir
+		return
+	}
+	if err := os.Rename(src, dst); err == nil { //nolint:gosec // server-derived workspace/stash paths
+		return
+	}
+	if copyDirRecursive(src, dst) == nil {
+		_ = os.RemoveAll(src) //nolint:gosec // server-derived source
+	}
+}
+
+func copyDirRecursive(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error { //nolint:gosec // G703: src and dst are server-derived workspace/stash paths
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil || !filepath.IsLocal(rel) {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755) //nolint:gosec // sandbox-readable workspace dir
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		in, err := os.Open(path) //nolint:gosec // server-derived source
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644) //nolint:gosec // sandbox-readable workspace file
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			_ = out.Close()
+			return err
+		}
+		return out.Close()
+	})
 }
