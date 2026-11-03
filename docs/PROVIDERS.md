@@ -165,8 +165,13 @@ endpoint. Given a key, the client loads no other AWS configuration
 Anthropic client's own settings (`ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`,
 `ANTHROPIC_CUSTOM_HEADERS` and the rest).
 
-fantasy also ships a `kronk` provider. It is not configurable yet; issue #1703
-tracks it.
+fantasy also ships a `kronk` provider, which downloads llama.cpp and a model's
+weights at run time and runs the model inside the calling process. Fleet does
+not support it: `kronk` is not one of the types above, so an entry of that
+type is refused like any unknown type. For a local model, serve it with Ollama
+(an `ollama` entry) or another OpenAI-compatible server, such as llama.cpp's
+`llama-server` or vLLM (an `openaicompat` entry, which needs its `base_url`),
+and set the entry's `context_window_tokens`.
 
 ## How a model slug is routed
 
