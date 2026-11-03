@@ -153,6 +153,31 @@ func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 	}
 }
 
+// TestBootstrapRefusesQuotedDBPassword — a single quote would end the
+// password's SQL literal early, and psql's error would then quote the rest of
+// the password as a token the redaction cannot recognise. The plan warns that
+// a real run refuses, naming the variable and never the value.
+func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
+	const quoted = "half'thenRest42"
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + quoted + "@127.0.0.1:5432/chat?sslmode=disable\n"
+	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local")
+	if err != nil {
+		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "CHAT_DB_PASSWORD contains a single quote") || !strings.Contains(out, "a real run would REFUSE here") {
+		t.Errorf("plan does not say a real run refuses the quoted password\n--- output ---\n%s", out)
+	}
+	for _, fragment := range []string{quoted, "thenRest42"} {
+		if strings.Contains(out, fragment) {
+			t.Errorf("plan printed (part of) the quoted password\n--- output ---\n%s", out)
+		}
+	}
+}
+
 func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
 	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--chat-db-name", "bad-name;drop")

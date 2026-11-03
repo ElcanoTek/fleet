@@ -191,6 +191,9 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # Name the box after its --domain (bootstrap only; update never renames).
 # shellcheck source=lib/hostname.sh
 . "$SCRIPT_DIR/lib/hostname.sh"
+# The local Postgres roles + databases, never printing their passwords.
+# shellcheck source=lib/pgprovision.sh
+. "$SCRIPT_DIR/lib/pgprovision.sh"
 # Retiring the Next.js web tier on a box provisioned before ADR-0091.
 # shellcheck source=lib/web-tier.sh
 . "$SCRIPT_DIR/lib/web-tier.sh"
@@ -1250,18 +1253,6 @@ guard_preexisting() {
   die "$msg"
 }
 
-# role_db_sql USER PASSWORD DB — the SQL that provisions one role + database:
-# CREATE ROLE if missing, ALTER it to PASSWORD, CREATE DATABASE if missing.
-role_db_sql() {
-  cat <<SQL
-SELECT 'CREATE ROLE ${1} LOGIN PASSWORD ''${2}'''
- WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='${1}')\gexec
-ALTER ROLE ${1} WITH LOGIN PASSWORD '${2}';
-SELECT 'CREATE DATABASE ${3} OWNER ${1}'
- WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='${3}')\gexec
-SQL
-}
-
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(env_dsn_password FLEET_CHAT_DATABASE_URL)}"
@@ -1325,20 +1316,36 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
   # rotate a pre-existing (e.g. legacy) role's password.
   # PSQL_PLAN is the same SQL with a placeholder for each password: the
   # --dry-run prints it, and on an installed box the passwords are the live
-  # ones read back out of the env file's DSNs (env_dsn_password above).
+  # ones read back out of the env file's DSNs (env_dsn_password above). A real
+  # run's psql errors are shown with the same placeholders (lib/pgprovision.sh).
   PSQL_SQL=""
   PSQL_PLAN=""
+  # A single quote would end the password's SQL literal early: the statement
+  # fails, and psql's error then quotes the rest of the password as a token no
+  # redaction can recognise. Refuse it before any SQL is built (the message
+  # names the variable, never the value).
+  for _pw_var in CHAT_DB_PASSWORD SCHED_DB_PASSWORD; do
+    [[ "$_pw_var" == CHAT_DB_PASSWORD && "$ADOPT_CHAT_DB" == "1" ]] && continue
+    [[ "$_pw_var" == SCHED_DB_PASSWORD && "$ADOPT_SCHED_DB" == "1" ]] && continue
+    if [[ "${!_pw_var}" == *"'"* ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        warn "${_pw_var} contains a single quote, which the provisioning SQL cannot carry; a real run would REFUSE here."
+      else
+        die "${_pw_var} contains a single quote, which the provisioning SQL cannot carry; set a password without one (in the env file's DSN, or ${_pw_var})."
+      fi
+    fi
+  done
   if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
     info "chat: --adopt-existing-chat-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
   else
-    PSQL_SQL+="$(role_db_sql "$CHAT_DB_USER" "$CHAT_DB_PASSWORD" "$CHAT_DB_NAME")"$'\n'
-    PSQL_PLAN+="$(role_db_sql "$CHAT_DB_USER" '<chat db password>' "$CHAT_DB_NAME")"$'\n'
+    PSQL_SQL+="$(fleet_role_db_sql "$CHAT_DB_USER" "$CHAT_DB_PASSWORD" "$CHAT_DB_NAME")"$'\n'
+    PSQL_PLAN+="$(fleet_role_db_sql "$CHAT_DB_USER" "$FLEET_CHAT_PW_PLACEHOLDER" "$CHAT_DB_NAME")"$'\n'
   fi
   if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
     info "sched: --adopt-existing-sched-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
   else
-    PSQL_SQL+="$(role_db_sql "$SCHED_DB_USER" "$SCHED_DB_PASSWORD" "$SCHED_DB_NAME")"$'\n'
-    PSQL_PLAN+="$(role_db_sql "$SCHED_DB_USER" '<sched db password>' "$SCHED_DB_NAME")"$'\n'
+    PSQL_SQL+="$(fleet_role_db_sql "$SCHED_DB_USER" "$SCHED_DB_PASSWORD" "$SCHED_DB_NAME")"$'\n'
+    PSQL_PLAN+="$(fleet_role_db_sql "$SCHED_DB_USER" "$FLEET_SCHED_PW_PLACEHOLDER" "$SCHED_DB_NAME")"$'\n'
   fi
   if [[ -z "$PSQL_SQL" ]]; then
     info "both databases adopted — nothing to provision."
@@ -1346,7 +1353,7 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     info "[dry-run] would run as postgres:"
     printf '%s\n' "$PSQL_PLAN" | sed 's/^/    /'
   else
-    printf '%s\n' "$PSQL_SQL" | runuser -u postgres -- psql -v ON_ERROR_STOP=1 >/dev/null \
+    printf '%s\n' "$PSQL_SQL" | fleet_psql_provision "$CHAT_DB_PASSWORD" "$SCHED_DB_PASSWORD" \
       || die "role/database provisioning failed"
   fi
 
