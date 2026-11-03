@@ -123,10 +123,11 @@ func jobControlled() bool {
 type procStat struct{ ppid, pgrp, session int }
 
 func readProcStat(pid string) (procStat, bool) {
-	if pid == "" || pid[0] < '0' || pid[0] > '9' {
+	n, err := strconv.Atoi(pid)
+	if err != nil || n <= 0 {
 		return procStat{}, false
 	}
-	data, err := os.ReadFile("/proc/" + pid + "/stat")
+	data, err := os.ReadFile("/proc/" + strconv.Itoa(n) + "/stat")
 	if err != nil {
 		return procStat{}, false
 	}
