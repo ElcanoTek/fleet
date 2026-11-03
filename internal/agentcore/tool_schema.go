@@ -73,6 +73,12 @@ var (
 //     `required` array.
 //   - `pattern` values using `\p{…}` Unicode property escapes are dropped:
 //     OpenAI's function-calling validator accepts ECMA-262 only.
+//   - local `$ref` pointers into top-level `#/$defs/<Name>` or
+//     `#/definitions/<Name>` (emitted by FastMCP / Pydantic for structured
+//     tool parameters) are inlined into the schema tree so `mcpTool.Info()` —
+//     which extracts `{properties, required}` without `$defs` — never sends a
+//     dangling `$ref` to Gemini (`400 INVALID_ARGUMENT: reference to undefined
+//     schema`) or hides nested fields from `tool_describe`.
 func normalizeToolSchema(schema map[string]any) map[string]any {
 	out, _ := normalizeToolSchemaWithNotes(schema)
 	return out
@@ -82,14 +88,16 @@ func normalizeToolSchema(schema map[string]any) map[string]any {
 // older-draft rewrite, each prefixed with the JSON Pointer of the schema it
 // changed ("/properties/expect/…: positional items array rewritten to
 // prefixItems"), so an operator can tell a connector's authors exactly what to
-// update. Stripping a `\p{` pattern is an OpenAI compatibility step, not an
-// outdated construct, and is not noted.
+// update. Stripping a `\p{` pattern and inlining top-level `$defs`/`definitions`
+// references are provider/boundary compatibility steps, not outdated constructs,
+// and are not noted.
 func normalizeToolSchemaWithNotes(schema map[string]any) (map[string]any, []string) {
 	var notes []string
 	out, _ := normalizeSchemaNode(schema, "", &notes).(map[string]any)
 	if out == nil {
 		out = map[string]any{}
 	}
+	inlineLocalRefs(out)
 	return out, notes
 }
 
@@ -196,6 +204,92 @@ func noteRewrite(notes *[]string, path, what string) {
 // jsonPointerToken escapes one JSON Pointer reference token (RFC 6901).
 func jsonPointerToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
+}
+
+// unescapeJSONPointerToken decodes one RFC 6901 JSON Pointer reference token.
+func unescapeJSONPointerToken(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "~1", "/"), "~0", "~")
+}
+
+// inlineLocalRefs resolves `#/$defs/<Name>` and `#/definitions/<Name>`
+// references inside root against root's top-level `$defs` / `definitions` maps.
+// Unresolvable references and recursive cycles are left untouched.
+func inlineLocalRefs(root map[string]any) {
+	defs, _ := root["$defs"].(map[string]any)
+	definitions, _ := root["definitions"].(map[string]any)
+	if len(defs) == 0 && len(definitions) == 0 {
+		return
+	}
+	inlineSchemaMapFields(root, defs, definitions, nil)
+}
+
+func inlineSchemaNodeRefs(node any, defs, definitions map[string]any, active map[string]bool) any {
+	obj, ok := node.(map[string]any)
+	if !ok {
+		return node
+	}
+	if ref, hasRef := obj["$ref"].(string); hasRef && !active[ref] {
+		if target, found := lookupLocalDef(ref, defs, definitions); found {
+			nextActive := make(map[string]bool, len(active)+1)
+			for k, v := range active {
+				nextActive[k] = v
+			}
+			nextActive[ref] = true
+			resolved, _ := inlineSchemaNodeRefs(copyJSONValue(target), defs, definitions, nextActive).(map[string]any)
+			if resolved != nil {
+				if len(obj) > 1 {
+					siblings := make(map[string]any, len(obj)-1)
+					for k, v := range obj {
+						if k != "$ref" {
+							siblings[k] = copyJSONValue(v)
+						}
+					}
+					inlineSchemaMapFields(siblings, defs, definitions, active)
+					for k, v := range siblings {
+						resolved[k] = v
+					}
+				}
+				return resolved
+			}
+		}
+	}
+	inlineSchemaMapFields(obj, defs, definitions, active)
+	return obj
+}
+
+func inlineSchemaMapFields(obj map[string]any, defs, definitions map[string]any, active map[string]bool) {
+	for key, value := range obj {
+		switch {
+		case schemaValuedKeywords[key]:
+			obj[key] = inlineSchemaNodeRefs(value, defs, definitions, active)
+		case schemaArrayKeywords[key]:
+			if items, isArray := value.([]any); isArray {
+				for i, item := range items {
+					items[i] = inlineSchemaNodeRefs(item, defs, definitions, active)
+				}
+			}
+		case schemaMapKeywords[key]:
+			if members, isMap := value.(map[string]any); isMap {
+				for name, member := range members {
+					members[name] = inlineSchemaNodeRefs(member, defs, definitions, active)
+				}
+			}
+		}
+	}
+}
+
+func lookupLocalDef(ref string, defs, definitions map[string]any) (map[string]any, bool) {
+	if name, ok := strings.CutPrefix(ref, "#/$defs/"); ok && !strings.Contains(name, "/") {
+		if d, ok := defs[unescapeJSONPointerToken(name)].(map[string]any); ok {
+			return d, true
+		}
+	}
+	if name, ok := strings.CutPrefix(ref, "#/definitions/"); ok && !strings.Contains(name, "/") {
+		if d, ok := definitions[unescapeJSONPointerToken(name)].(map[string]any); ok {
+			return d, true
+		}
+	}
+	return nil, false
 }
 
 // foldExclusiveBound rewrites the draft-04 boolean exclusive bound and reports

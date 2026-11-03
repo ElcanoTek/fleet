@@ -442,3 +442,128 @@ func TestToolSchemaRecordConcurrentTurns(t *testing.T) {
 		t.Fatalf("record after concurrent turns = %+v, want tuple + broken", got)
 	}
 }
+
+// TestInfoInlinesTopLevelDefsForFastMCPSchemas reproduces the Raptive
+// ix_publisher_mcp failure on Gemini (2026-11-03): FastMCP / Pydantic emits
+// top-level `$defs` and `"$ref": "#/$defs/ReportFilter"` under
+// `properties.filters.anyOf.0.items`. Because mcpTool.Info() extracts only
+// `{properties, required}`, leaving `$ref` un-inlined produced a dangling
+// reference that Gemini rejected with 400 INVALID_ARGUMENT ("reference to
+// undefined schema at properties.filters.anyOf.0.items") and hid the nested
+// object fields from tool_describe.
+func TestInfoInlinesTopLevelDefsForFastMCPSchemas(t *testing.T) {
+	const ixRunReportSchema = `{
+	  "$defs": {
+	    "ReportFilter": {
+	      "description": "One report filter; all filters must match (AND).",
+	      "properties": {
+	        "field": {"type": "string"},
+	        "operator": {"type": "string", "enum": ["=", "!=", "isAnyOf"]},
+	        "values": {"type": "array", "items": {"type": "string"}}
+	      },
+	      "required": ["field", "operator", "values"],
+	      "title": "ReportFilter",
+	      "type": "object"
+	    }
+	  },
+	  "properties": {
+	    "filters": {
+	      "anyOf": [
+	        {"type": "array", "items": {"$ref": "#/$defs/ReportFilter"}},
+	        {"type": "null"}
+	      ],
+	      "default": null,
+	      "title": "Filters"
+	    }
+	  },
+	  "type": "object"
+	}`
+
+	raw := jsonMap(t, ixRunReportSchema)
+	before := jsonMap(t, ixRunReportSchema)
+	mt := &mcpTool{serverName: "ix_publisher_mcp", tool: mcp.Tool{Name: "ixpub_run_report", Description: "Run report", InputSchema: raw}}
+
+	info := mt.Info()
+	encoded, err := json.Marshal(info.Parameters)
+	if err != nil {
+		t.Fatalf("marshal Parameters: %v", err)
+	}
+	if strings.Contains(string(encoded), `"$ref"`) {
+		t.Fatalf("mcpTool.Info().Parameters still contains a dangling $ref: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"operator"`) || !strings.Contains(string(encoded), `"isAnyOf"`) {
+		t.Fatalf("inlined ReportFilter fields missing from Parameters: %s", encoded)
+	}
+	if !reflect.DeepEqual(raw, before) {
+		t.Fatal("mcpTool.Info() mutated the catalog InputSchema")
+	}
+	if issue, ok := CheckMCPToolSchema("ix_publisher_mcp", mt.tool); ok {
+		t.Fatalf("valid 2020-12 $defs schema reported as schema issue: %+v", issue)
+	}
+}
+
+func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
+	const nestedAndCyclic = `{
+	  "$defs": {
+	    "Leaf~Name/1": {
+	      "type": "object",
+	      "properties": {"v": {"type": "number", "minimum": 0, "exclusiveMinimum": true}},
+	      "required": ["v"]
+	    },
+	    "Wrapper": {
+	      "type": "object",
+	      "description": "generic wrapper",
+	      "properties": {"leaf": {"$ref": "#/$defs/Leaf~0Name~11"}}
+	    },
+	    "Node": {
+	      "type": "object",
+	      "properties": {
+	        "name": {"type": "string"},
+	        "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}
+	      }
+	    }
+	  },
+	  "definitions": {
+	    "LegacyTag": {"type": "string", "minLength": 1}
+	  },
+	  "type": "object",
+	  "properties": {
+	    "wrapped": {"$ref": "#/$defs/Wrapper", "description": "custom override"},
+	    "tag": {"$ref": "#/definitions/LegacyTag"},
+	    "tree": {"$ref": "#/$defs/Node"},
+	    "dangling": {"$ref": "#/$defs/DoesNotExist"}
+	  }
+	}`
+
+	got := normalizeToolSchema(jsonMap(t, nestedAndCyclic))
+	props := got["properties"].(map[string]any)
+
+	wrapped := props["wrapped"].(map[string]any)
+	if wrapped["description"] != "custom override" || wrapped["type"] != "object" {
+		t.Fatalf("wrapped sibling override or inlined type lost: %v", wrapped)
+	}
+	leaf := wrapped["properties"].(map[string]any)["leaf"].(map[string]any)
+	leafV := leaf["properties"].(map[string]any)["v"].(map[string]any)
+	if leafV["exclusiveMinimum"] != float64(0) {
+		t.Fatalf("older-draft rewrite inside nested $defs not preserved: %v", leafV)
+	}
+
+	tag := props["tag"].(map[string]any)
+	if tag["type"] != "string" || tag["minLength"] != float64(1) {
+		t.Fatalf("definitions $ref not inlined: %v", tag)
+	}
+
+	tree := props["tree"].(map[string]any)
+	if tree["type"] != "object" {
+		t.Fatalf("cyclic Node not inlined at top level: %v", tree)
+	}
+	childrenItems := tree["properties"].(map[string]any)["children"].(map[string]any)["items"].(map[string]any)
+	if childrenItems["$ref"] != "#/$defs/Node" {
+		t.Fatalf("cyclic back-reference should stop at cycle boundary, got: %v", childrenItems)
+	}
+
+	dangling := props["dangling"].(map[string]any)
+	if dangling["$ref"] != "#/$defs/DoesNotExist" {
+		t.Fatalf("unresolvable $ref should be left intact, got: %v", dangling)
+	}
+}
