@@ -777,7 +777,7 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 		computed, err := s.storage.ComputeNextRun(task)
 		switch {
 		case err != nil:
-			log.Printf("Error computing next run for skipped task %s: %v", task.ID, err)
+			log.Printf("Error computing next run for skipped task %s: %s", task.ID, logSafe(err.Error()))
 		case task.RecurrenceUntil != nil && computed.After(*task.RecurrenceUntil):
 			// The recurrence's end date falls before the next cron tick: there is
 			// no future occurrence to advance to, so cancel the row instead of
@@ -883,4 +883,11 @@ func clampSkipReason(reason string) string {
 	// json.Marshal replaces a rune split by the byte clamp with U+FFFD, so the
 	// cut is safe even mid-UTF-8.
 	return reason[:maxSkipReasonLogBytes] + "…[truncated]"
+}
+
+// logSafe strips CR/LF from a value before it is interpolated into a log
+// line (log-injection guard). strings.ReplaceAll is the spelling CodeQL's
+// go/log-injection query models as a sanitizer.
+func logSafe(s string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
