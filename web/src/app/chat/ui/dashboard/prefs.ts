@@ -43,6 +43,25 @@ export function readDashboardView(convId: string | null): boolean {
   return strList(read<unknown>(VIEW_KEY, [])).includes(convId);
 }
 
+/**
+ * Whether dashboard view is on after the chat slot changes from `prevKey` to
+ * the conversation `nextConvId` (null: a draft). A draft keeps the current
+ * view, and so does a draft becoming a conversation — which happens through a
+ * per-submission pending key ("<pending>:<n>") renamed to the real id. Any
+ * other switch, from a blank chat to an existing conversation included,
+ * restores that conversation's own saved view.
+ */
+export function dashboardViewAfterSwitch(
+  prevKey: string,
+  nextConvId: string | null,
+  current: boolean,
+  pendingKey: string,
+): boolean {
+  if (nextConvId === null) return current;
+  if (current && prevKey.startsWith(`${pendingKey}:`)) return true;
+  return readDashboardView(nextConvId);
+}
+
 /** Records (or forgets) that this conversation opens in dashboard view. */
 export function writeDashboardView(convId: string, on: boolean): void {
   const ids = strList(read<unknown>(VIEW_KEY, [])).filter((id) => id !== convId);

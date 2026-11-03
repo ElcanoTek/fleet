@@ -45,6 +45,11 @@ export type BoardPanel = {
   spec: CardSpec;
   /** How many cards have fed this slot (1 = never updated). */
   version: number;
+  /**
+   * Which use of its card id the newest card is (providers can reuse ids):
+   * namespaces its drafts and remounts the card when a reused id arrives.
+   */
+  occurrence: number;
   /** Index of the message holding the newest card (for "retired" and age). */
   messageIndex: number;
   /** Has inputs or buttons: the panel can send a message. */
@@ -154,6 +159,7 @@ export function deriveBoard(messages: Message[], genUi: GenUiState, prefs: Board
         call: tc,
         spec,
         version: (prev?.version ?? 0) + 1,
+        occurrence: genUi.occurrences.get(tc) ?? 0,
         messageIndex: idx,
         interactive: isInteractiveSpec(spec),
         wide: false,
@@ -227,10 +233,18 @@ export function boardStatus(messages: Message[], isStreaming: boolean): BoardSta
 /** What the server is told about the board on a dashboard-view turn. */
 export type BoardManifestEntry = { title: string; card_id: string; panel?: string; pinned?: boolean };
 
-/** The board, in order, as POST /api/chat's `board` (docs/DASHBOARD-VIEW.md). */
+/** Mirror internal/httpapi's maxDashboardBoardPanels / maxDashboardTitleRunes. */
+export const MAX_MANIFEST_PANELS = 24;
+export const MAX_MANIFEST_TITLE = 80;
+
+/**
+ * The board, in order, as POST /api/chat's `board` (docs/DASHBOARD-VIEW.md).
+ * Bounded here to the limits the server applies anyway, so a large board can
+ * never push a message past the request size cap.
+ */
 export function boardManifest(panels: BoardPanel[]): BoardManifestEntry[] {
-  return panels.map((p) => ({
-    title: p.spec.title,
+  return panels.slice(0, MAX_MANIFEST_PANELS).map((p) => ({
+    title: Array.from(p.spec.title).slice(0, MAX_MANIFEST_TITLE).join(""),
     card_id: p.cardId,
     ...(p.panelKey ? { panel: p.panelKey } : {}),
     ...(p.pinned ? { pinned: true } : {}),

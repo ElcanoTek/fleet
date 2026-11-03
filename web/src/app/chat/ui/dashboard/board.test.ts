@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { deriveGenUiState } from "../genui/transcript";
-import { boardManifest, boardStatus, deriveBoard, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
+import { panelDomId } from "./context";
+import { boardManifest, boardStatus, deriveBoard, MAX_MANIFEST_PANELS, MAX_MANIFEST_TITLE, dropKey, EMPTY_BOARD_PREFS, moveKey, prefersWide, type BoardPrefs } from "./board";
 
 const display = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "stat", label: "x", value: "1" }], ...extra });
@@ -136,5 +137,30 @@ describe("boardStatus", () => {
     running.toolCalls![0].name = "web_search";
     expect(boardStatus([running], true)).toEqual({ kind: "working", label: "web_search" });
     expect(boardStatus([running], false)).toEqual({ kind: "standby" });
+  });
+});
+
+describe("manifest and ids", () => {
+  it("bounds the manifest to the server's limits", () => {
+    const many = Array.from({ length: 40 }, (_, i) =>
+      assistant(i + 1, [{ id: `c${i}`, input: display("T".repeat(500)) }]),
+    );
+    const m = boardManifest(boardOf(many).panels);
+    expect(m).toHaveLength(MAX_MANIFEST_PANELS);
+    expect(Array.from(m[0].title)).toHaveLength(MAX_MANIFEST_TITLE);
+  });
+
+  it("panelDomId never maps two slot keys to one id", () => {
+    const keys = ["c:call:1", "c:call/1", "c:call_1", "c:call_3a_1", "p:a-b"];
+    expect(new Set(keys.map(panelDomId)).size).toBe(keys.length);
+    expect(panelDomId("p:rev")).toMatch(/^dash-panel-[A-Za-z0-9_-]+$/);
+  });
+
+  it("a reused card id in a panel is a new occurrence", () => {
+    const b = boardOf([
+      assistant(1, [{ id: "r", input: display("Rev", { panel: "rev" }) }]),
+      assistant(2, [{ id: "r", input: display("Rev 2", { panel: "rev" }) }]),
+    ]);
+    expect(b.panels[0]).toMatchObject({ cardId: "r", occurrence: 1, spec: expect.objectContaining({ title: "Rev 2" }) });
   });
 });

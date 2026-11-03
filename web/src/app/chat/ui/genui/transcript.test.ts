@@ -296,3 +296,25 @@ describe("dashboard panel keys", () => {
     expect(s.cards.get("a")?.panel).toBeUndefined();
   });
 });
+
+describe("panel ownership through replacements", () => {
+  it("a keyless refinement takes its panel over, so the next same-key card supersedes it", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "b", input: card("Rev fixed", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+      assistant(3, [{ id: "c", input: card("Rev v3", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=c" }]),
+    ]);
+    expect(s.superseded.has("a")).toBe(true);
+    expect(s.superseded.has("b")).toBe(true);
+    expect(s.superseded.has("c")).toBe(false);
+  });
+
+  it("a refinement of a card that no longer holds the panel does not take it", () => {
+    const s = deriveGenUiState([
+      assistant(1, [{ id: "a", input: card("Rev", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=a" }]),
+      assistant(2, [{ id: "c", input: card("Rev v2", { panel: "rev" }), resultText: "UI_DISPLAYED card_id=c" }]),
+      assistant(3, [{ id: "b", input: card("Old fixed", { replaces: "a" }), resultText: "UI_DISPLAYED card_id=b" }]),
+    ]);
+    expect(s.superseded.has("c")).toBe(false);
+  });
+});

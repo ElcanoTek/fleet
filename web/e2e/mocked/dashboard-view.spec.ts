@@ -281,6 +281,10 @@ test("dashboard view on a phone switches between the board and the chat", async 
   // A pointer in the chat jumps back to its panel on the board.
   await page.getByTestId("dashboard-card-pointer").first().click();
   await expect(page.getByTestId("dashboard-board")).toBeVisible();
+  // The approvals light switches to the chat and brings the card into view.
+  await page.getByTestId("dashboard-status").click();
+  await expect(page.getByTestId("dashboard-board")).toBeHidden();
+  await expect(page.locator('[data-approval-id="ap-email-1"]')).toBeInViewport();
 });
 
 // axe over the HUD and the board (the chat rail's own components are covered

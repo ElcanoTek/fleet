@@ -491,6 +491,22 @@ export function ChatTranscript({
   const genUi = useMemo(() => deriveGenUiState(messages), [messages]);
   const dashboard = useContext(DashboardTranscriptContext);
 
+  // Dashboard view's "approvals waiting" light asks for a message that may
+  // not be mounted (virtualized): scroll its row in, then centre the card.
+  const dashboardJump = dashboard?.jumpRequest;
+  useEffect(() => {
+    if (!dashboardJump) return;
+    const rowIndex = rows.findIndex((r) => r.kind === "message" && r.message.id === dashboardJump.messageId);
+    if (rowIndex >= 0) virtualizer.scrollToIndex(rowIndex, { align: "start" });
+    const t = window.setTimeout(() => {
+      const el = document.querySelector(`[data-approval-id="${CSS.escape(dashboardJump.approvalId)}"]`);
+      el?.scrollIntoView?.({ block: "center" });
+    }, 120);
+    return () => window.clearTimeout(t);
+    // Fire once per request (the nonce changes); rows/virtualizer are read live.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dashboardJump]);
+
   const jumpToMessage = (id: number) => {
     const entry = minimapEntries.find((e) => e.id === id);
     if (!entry) return;

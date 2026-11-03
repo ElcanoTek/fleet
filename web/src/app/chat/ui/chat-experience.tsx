@@ -155,7 +155,12 @@ import { deriveGenUiState } from "./genui/transcript";
 import { boardManifest, boardStatus, deriveBoard } from "./dashboard/board";
 import { DashboardTranscriptContext, panelDomId, type DashboardTranscriptValue } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
-import { readDashboardView, useBoardPrefs, writeDashboardView } from "./dashboard/prefs";
+import {
+  dashboardViewAfterSwitch,
+  readDashboardView,
+  useBoardPrefs,
+  writeDashboardView,
+} from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
@@ -3648,13 +3653,21 @@ export function ChatExperience({
   const [dashboardView, setDashboardView] = useState(() =>
     readDashboardView(dashboardConvId),
   );
-  const [dashboardConvSeen, setDashboardConvSeen] = useState(dashboardConvId);
-  if (dashboardConvSeen !== dashboardConvId) {
-    setDashboardConvSeen(dashboardConvId);
-    if (dashboardConvId !== null && !(dashboardConvSeen === null && dashboardView)) {
-      const stored = readDashboardView(dashboardConvId);
-      if (stored !== dashboardView) setDashboardView(stored);
-    }
+  // The slot key last seen. A draft becomes a conversation by way of a
+  // per-submission pending key ("<PENDING>:<n>", renamed to the real id when
+  // the server names it): only that path keeps the current view. Opening any
+  // other conversation, from a blank chat included, restores that
+  // conversation's own saved view.
+  const [dashboardKeySeen, setDashboardKeySeen] = useState(currentConvKey);
+  if (dashboardKeySeen !== currentConvKey) {
+    setDashboardKeySeen(currentConvKey);
+    const next = dashboardViewAfterSwitch(
+      dashboardKeySeen,
+      dashboardConvId,
+      dashboardView,
+      PENDING_CONV_KEY,
+    );
+    if (next !== dashboardView) setDashboardView(next);
   }
   useEffect(() => {
     if (dashboardConvId) writeDashboardView(dashboardConvId, dashboardView);
@@ -3662,6 +3675,11 @@ export function ChatExperience({
   const dashboardActive = dashboardView && !fullPageOverlay;
   const [dashboardPane, setDashboardPane] = useState<"board" | "chat">("board");
   const [dashboardFocus, setDashboardFocus] = useState("");
+  const [dashboardJump, setDashboardJump] = useState<{
+    messageId: number;
+    approvalId: string;
+    nonce: number;
+  } | null>(null);
   const [boardPrefs, updateBoardPrefs] = useBoardPrefs(dashboardConvId);
   const dashboardGenUi = useMemo(
     () => (dashboardActive ? deriveGenUiState(messages) : null),
@@ -3714,26 +3732,27 @@ export function ChatExperience({
               }));
               focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${cardId}`);
             },
+            jumpRequest: dashboardJump,
           }
         : null,
-    [board, focusDashboardPanel, updateBoardPrefs],
+    [board, focusDashboardPanel, updateBoardPrefs, dashboardJump],
   );
+  // The HUD's "approvals waiting" light: the transcript is virtualized, so
+  // the rail is asked to scroll the message holding the first pending
+  // approval into view (ChatTranscript), which then centres the card.
   const showDashboardApprovals = useCallback(() => {
     setDashboardPane("chat");
-    let id: string | null = null;
     for (const m of messages) {
-      for (const a of m.approvals ?? []) {
-        if (a.status === "pending" && id === null) id = a.id;
+      const a = (m.approvals ?? []).find((x) => x.status === "pending");
+      if (a) {
+        setDashboardJump((prev) => ({
+          messageId: m.id,
+          approvalId: a.id,
+          nonce: (prev?.nonce ?? 0) + 1,
+        }));
+        return;
       }
     }
-    if (id === null) return;
-    const target = id;
-    window.setTimeout(() => {
-      const el = document.querySelector(
-        `[data-approval-id="${CSS.escape(target)}"]`,
-      );
-      el?.scrollIntoView?.({ block: "center", behavior: "smooth" });
-    }, 60);
   }, [messages]);
 
   // A teammate's branch (B20): the banner, and the outputs its transcript

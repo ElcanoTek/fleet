@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_BOARD_PREFS } from "./board";
-import { MAX_REMEMBERED, readBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
+import { dashboardViewAfterSwitch, MAX_REMEMBERED, readBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
 
 afterEach(() => {
   window.localStorage.clear();
@@ -56,5 +56,21 @@ describe("board prefs", () => {
     expect(() => writeBoardPrefs("c1", EMPTY_BOARD_PREFS)).not.toThrow();
     expect(() => writeDashboardView("c1", true)).not.toThrow();
     expect(readDashboardView("c1")).toBe(false);
+  });
+});
+
+describe("dashboardViewAfterSwitch", () => {
+  it("keeps the view for a draft and a draft becoming a conversation, restores it otherwise", () => {
+    writeDashboardView("saved-on", true);
+    // A new draft keeps whatever view you were in.
+    expect(dashboardViewAfterSwitch("conv-a", null, true, "pending")).toBe(true);
+    // The draft's first send: pending:<n> → its real id keeps dashboard view.
+    expect(dashboardViewAfterSwitch("pending:3", "new-conv", true, "pending")).toBe(true);
+    // Opening an existing conversation from a blank chat restores ITS view.
+    expect(dashboardViewAfterSwitch("pending", "plain-conv", true, "pending")).toBe(false);
+    expect(dashboardViewAfterSwitch("pending", "saved-on", false, "pending")).toBe(true);
+    // Conversation to conversation: each keeps its own.
+    expect(dashboardViewAfterSwitch("saved-on", "plain-conv", true, "pending")).toBe(false);
+    expect(dashboardViewAfterSwitch("plain-conv", "saved-on", false, "pending")).toBe(true);
   });
 });

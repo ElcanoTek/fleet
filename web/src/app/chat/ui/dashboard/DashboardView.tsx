@@ -334,14 +334,15 @@ function Panel(props: PanelProps) {
   const { panel, live, retired, maximized } = props;
   // A new card in this slot (the agent refreshed it): flash the frame once.
   const [flash, setFlash] = useState(false);
-  const seen = useRef(panel.cardId);
+  const version = `${panel.cardId}#${panel.occurrence}`;
+  const seen = useRef(version);
   useEffect(() => {
-    if (seen.current === panel.cardId) return;
-    seen.current = panel.cardId;
+    if (seen.current === version) return;
+    seen.current = version;
     setFlash(true);
     const t = window.setTimeout(() => setFlash(false), 1600);
     return () => window.clearTimeout(t);
-  }, [panel.cardId]);
+  }, [version]);
   const onDragStart = (e: ReactDragEvent) => {
     e.dataTransfer.effectAllowed = "move";
     e.dataTransfer.setData("text/plain", panel.key);
@@ -453,9 +454,10 @@ function Panel(props: PanelProps) {
       <div className="dash-panel-body">
         <Suspense fallback={<div className="px-3.5 py-3 text-[0.75rem] text-[var(--color-text-muted)]">Loading…</div>}>
           <GenerativeCard
-            key={panel.cardId}
+            key={`${panel.cardId}#${panel.occurrence}`}
             variant="panel"
             cardId={panel.cardId}
+            occurrence={panel.occurrence}
             spec={panel.spec}
             submission={props.submission}
             reply={props.reply}
