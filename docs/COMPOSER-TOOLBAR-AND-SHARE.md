@@ -6,13 +6,13 @@
    - **Left cluster (everyday actions):** **Model selector** (`Model`), **Attach files**, **Tools** (connectors with live count badge), and **More options** (`•••`).
    - **More options (`•••`) menu (`composer-more-popover`):** A clean, labeled popover menu with descriptions and status badges for secondary and session-level controls:
      - **Prompt library** — opens the Prompt Library modal and restores focus to **More options** when closed.
-     - **Persona** — selects the workspace or personal persona before the first message is sent.
+     - **Persona** — selects the workspace or personal persona on a new draft before the conversation is created (by sending the first message or materializing via **Share**).
      - **Patrol & schedule** — opens the recurring patrol / one-shot timer popover.
      - **Auto-approve tools** — toggles per-conversation auto-approve for session-approvable tools.
      - **Compact conversation** — summarizes earlier turns to free context window space once a conversation has messages.
      - **Send on Enter** — toggles `Enter` vs `Ctrl/Cmd+Enter` send behavior.
    - **Contextual status pills on the primary bar (desktop `sm:` and above; mobile accent dot):** Secondary settings stay out of the way when at their defaults. When any secondary setting is active, **More options** (`•••`) displays an accent dot on both mobile and desktop; on desktop viewports (`sm:` and wider), compact one-click status pills also surface directly on the toolbar:
-     - Non-default **Persona** pill (before the first message; hidden below `sm` while closed, rendered when opened from **More options**)
+     - Non-default **Persona** pill (on a new draft before the conversation is created; hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Auto-approve** (`⚡`) toggle badge (`hidden sm:inline-flex`)
      - **Context ring** (and the `"Token limit hit — you should compact"` status toast) once context usage exists
