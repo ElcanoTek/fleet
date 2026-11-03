@@ -182,7 +182,14 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   // Esc out of a panel's menu hands the focus back to its button.
   const menuButton = page.locator('[data-panel-key="c:call-health-1"]').getByRole("button", { name: "More for Systems" });
   await menuButton.click();
-  await page.getByRole("menuitem", { name: "Move earlier" }).focus();
+  // Opening focuses the first enabled item; arrow keys move between items.
+  await expect(page.getByRole("menuitem", { name: "Move earlier" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Move later" })).toBeFocused();
+  await page.keyboard.press("End");
+  await expect(page.getByRole("menuitem", { name: "Remove from board" })).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(page.getByRole("menuitem", { name: "Move earlier" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(page.getByRole("menu")).toHaveCount(0);
   await expect(menuButton).toBeFocused();

@@ -1,11 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EMPTY_BOARD_PREFS } from "./board";
-import { dashboardViewAfterSwitch, MAX_REMEMBERED, readBoardPrefs, useBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
+import { dashboardViewAfterSwitch, MAX_REMEMBERED, readBoardPrefs, resetPrefsMemory, useBoardPrefs, readDashboardView, writeBoardPrefs, writeDashboardView } from "./prefs";
 
 afterEach(() => {
   window.localStorage.clear();
   vi.restoreAllMocks();
+  resetPrefsMemory();
 });
 
 describe("dashboard view preference", () => {
@@ -56,7 +57,10 @@ describe("board prefs", () => {
     expect(readBoardPrefs("c1")).toEqual(EMPTY_BOARD_PREFS);
     expect(() => writeBoardPrefs("c1", EMPTY_BOARD_PREFS)).not.toThrow();
     expect(() => writeDashboardView("c1", true)).not.toThrow();
-    expect(readDashboardView("c1")).toBe(false);
+    // …and still hold for this page: switching chats and back keeps them.
+    expect(readDashboardView("c1")).toBe(true);
+    writeBoardPrefs("c2", { pinned: ["p"], removed: [], order: ["c:x"], wide: {} });
+    expect(readBoardPrefs("c2").order).toEqual(["c:x"]);
   });
 });
 
@@ -125,5 +129,16 @@ describe("useBoardPrefs", () => {
     rerender({ key: "new-conv", id: "new-conv" });
     expect(result.current[0].order).toEqual(["c:z"]);
     expect(readBoardPrefs("new-conv").order).toEqual(["c:z"]);
+  });
+});
+
+describe("prefs when only writes fail (quota)", () => {
+  it("reads the newer page copy, not the stale stored value", () => {
+    writeDashboardView("q1", false);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota");
+    });
+    writeDashboardView("q1", true);
+    expect(readDashboardView("q1")).toBe(true);
   });
 });

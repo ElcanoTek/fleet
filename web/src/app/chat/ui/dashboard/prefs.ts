@@ -16,10 +16,31 @@ const BOARD_KEY = "fleet.dashboard.board.v2";
 /** Chats remembered as dashboards / boards remembered, newest first. */
 export const MAX_REMEMBERED = 60;
 
+// Page-lifetime copies of both preference keys: when storage is blocked or
+// full, the view and layout still hold across conversation switches in this
+// page (they are simply forgotten on reload). A key whose last write failed
+// is read from memory, since storage holds an older value or none.
+const memory = new Map<string, string>();
+const memoryOnly = new Set<string>();
+
+/** Test hook: forget the page-lifetime copies. */
+export function resetPrefsMemory(): void {
+  memory.clear();
+  memoryOnly.clear();
+}
+
 function read<T>(key: string, fallback: T): T {
+  let raw: string | null | undefined;
+  if (memoryOnly.has(key)) raw = memory.get(key);
+  else {
+    try {
+      raw = window.localStorage.getItem(key);
+    } catch {
+      raw = memory.get(key);
+    }
+  }
+  if (!raw) return fallback;
   try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return fallback;
     const v = JSON.parse(raw) as unknown;
     return (v ?? fallback) as T;
   } catch {
@@ -28,10 +49,14 @@ function read<T>(key: string, fallback: T): T {
 }
 
 function write(key: string, value: unknown): void {
+  const json = JSON.stringify(value);
+  memory.set(key, json);
   try {
-    window.localStorage.setItem(key, JSON.stringify(value));
+    window.localStorage.setItem(key, json);
+    memoryOnly.delete(key);
   } catch {
     // Full or blocked storage: the preference lasts for this page only.
+    memoryOnly.add(key);
   }
 }
 

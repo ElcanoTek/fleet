@@ -287,8 +287,14 @@ function PanelMenu({
   const menuId = useId();
   const wrapRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
+    // The menu keyboard contract: focus goes to the first enabled item;
+    // ArrowUp/Down move (wrapping), Home/End jump, Tab leaves and closes.
+    const items = () =>
+      Array.from(menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)') ?? []);
+    items()[0]?.focus();
     const onDown = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     };
@@ -298,7 +304,24 @@ function PanelMenu({
         setOpen(false);
         // Back to the menu's own button, not to <body>.
         triggerRef.current?.focus();
+        return;
       }
+      if (e.key === "Tab") {
+        setOpen(false);
+        return;
+      }
+      const list = items();
+      if (list.length === 0) return;
+      const at = list.indexOf(document.activeElement as HTMLButtonElement);
+      let next = -1;
+      if (e.key === "ArrowDown") next = (at + 1) % list.length;
+      else if (e.key === "ArrowUp") next = (at - 1 + list.length) % list.length;
+      else if (e.key === "Home") next = 0;
+      else if (e.key === "End") next = list.length - 1;
+      if (next < 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      list[next].focus();
     };
     window.addEventListener("mousedown", onDown);
     window.addEventListener("keydown", onKey, true);
@@ -343,7 +366,7 @@ function PanelMenu({
         <Icon name="dots" className="size-3.5" />
       </button>
       {open ? (
-        <div id={menuId} role="menu" className="dash-popover absolute right-0 top-[calc(100%+0.25rem)] z-30 grid min-w-[11rem] p-1">
+        <div ref={menuRef} id={menuId} role="menu" className="dash-popover absolute right-0 top-[calc(100%+0.25rem)] z-30 grid min-w-[11rem] p-1">
           {item("Move earlier", () => onMove(panel.key, -1), index === 0)}
           {item("Move later", () => onMove(panel.key, 1), index === count - 1)}
           {item("Remove from board", () => onRemove(panel.key), false, true)}
