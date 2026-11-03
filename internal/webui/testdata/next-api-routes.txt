@@ -54,6 +54,8 @@ GET /api/conversations/{conversationId}/inflight
 GET /api/conversations/{conversationId}/mcp-servers
 POST /api/conversations/{conversationId}/mcp-servers
 POST /api/conversations/{conversationId}/model
+GET /api/conversations/{conversationId}/multiplayer
+POST /api/conversations/{conversationId}/multiplayer
 GET /api/conversations/{conversationId}/outputs
 POST /api/conversations/{conversationId}/outputs/share
 POST /api/conversations/{conversationId}/pin

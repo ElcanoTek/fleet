@@ -183,6 +183,7 @@ func TestQueryForwardingIsPerRoute(t *testing.T) {
 	cases := []struct{ target, want string }{
 		{"/api/conversations?archived=true&x=1", "/conversations?archived=true"},
 		{"/api/conversations?scope=team&archived=true", "/conversations?scope=team"},
+		{"/api/conversations?scope=shared&archived=true", "/conversations?scope=shared"},
 		{"/api/conversations?evil=1", "/conversations"},
 		{"/api/search?q=hello%20world&limit=5", "/search?q=hello%20world&limit=5"},
 		{"/api/admin/doctor?deep=1", "/admin/doctor?deep=1"},
@@ -603,5 +604,27 @@ func TestProxyWriterKeepsOneContentType(t *testing.T) {
 	_, _ = io.WriteString(pw, "{}")
 	if v := rec.Header().Values("Content-Type"); len(v) != 1 || v[0] != "application/json" {
 		t.Fatalf("Content-Type values = %q, want exactly the first", v)
+	}
+}
+
+func TestMultiplayerRoutesPassthrough(t *testing.T) {
+	e := newTestEnv(t)
+	origin := []string{"Origin", "http://fleet.example.com"}
+
+	res := e.do(signedIn(t, req("GET", "/api/conversations/c%2F1/multiplayer", "")))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("GET multiplayer status %d", res.StatusCode)
+	}
+	if got := e.chat.last(t); got.Method != "GET" || got.URI != "/conversations/c%2F1/multiplayer" {
+		t.Fatalf("GET multiplayer upstream %s %q", got.Method, got.URI)
+	}
+
+	res = e.do(signedIn(t, req("POST", "/api/conversations/c%2F1/multiplayer", `{"multiplayer":true}`, origin...)))
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST multiplayer status %d", res.StatusCode)
+	}
+	got := e.chat.last(t)
+	if got.Method != "POST" || got.URI != "/conversations/c%2F1/multiplayer" || got.Body != `{"multiplayer":true}` || got.Header.Get("Content-Type") != "application/json" {
+		t.Fatalf("POST multiplayer upstream %s %q body %q ct %q", got.Method, got.URI, got.Body, got.Header.Get("Content-Type"))
 	}
 }

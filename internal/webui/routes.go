@@ -275,6 +275,8 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			switch {
 			case q.Get("scope") == "team":
 				return "/conversations?scope=team"
+			case q.Get("scope") == "shared":
+				return "/conversations?scope=shared"
 			case q.Get("archived") == "true":
 				return "/conversations?archived=true"
 			}
@@ -305,6 +307,8 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"GET /api/conversations/{id}/mcp-servers", func(r *http.Request) string { return conv(r) + "/mcp-servers" }, noBody, textJSON},
 		{"POST /api/conversations/{id}/mcp-servers", func(r *http.Request) string { return conv(r) + "/mcp-servers" }, jsonBodyIfAny, textJSON},
 		{"POST /api/conversations/{id}/model", func(r *http.Request) string { return conv(r) + "/model" }, jsonBodyIfAny, textOK},
+		{"GET /api/conversations/{id}/multiplayer", func(r *http.Request) string { return conv(r) + "/multiplayer" }, noBody, textJSON},
+		{"POST /api/conversations/{id}/multiplayer", func(r *http.Request) string { return conv(r) + "/multiplayer" }, jsonBodyIfAny, textJSON},
 		{"GET /api/conversations/{id}/outputs", func(r *http.Request) string { return conv(r) + "/outputs" }, noBody, passthroughJSON},
 		{"POST /api/conversations/{id}/outputs/share", func(r *http.Request) string { return conv(r) + "/outputs/share" }, jsonBodyIfAny, passthroughJSON},
 		{"POST /api/conversations/{id}/pin", func(r *http.Request) string { return conv(r) + "/pin" }, jsonBodyIfAny, textOK},
