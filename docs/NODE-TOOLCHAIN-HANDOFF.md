@@ -416,7 +416,11 @@ Record: [ADR-0078](adr/0078-track-the-latest-node-major.md).
   change. `node-lts-reminder.yml`, which carried a hardcoded v26 LTS date,
   became `node-latest-reminder.yml`. Each week it compares `.nvmrc` with
   `nodejs.org/dist/index.json`, and the vendored release keys with
-  nodejs/release-keys, and files an issue on drift.
+  nodejs/release-keys, and files an issue on drift. It reads the newest
+  *released* version (`vMAJOR.MINOR.PATCH`) and skips prereleases. index.json
+  also lists a major's alpha builds months before it ships, and the first
+  version of the reminder filed #1903 for `v27.0.0-alpha.0.0.0` because it
+  took the top entry.
 - **Install path.** Fedora 43/44 carry no `nodejs26`. So
   `fleet_node_tarball_install` (`scripts/lib/node-version.sh`) installs the
   newest signed v26.x from nodejs.org, as the last step after both dnf
