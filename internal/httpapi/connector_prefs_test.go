@@ -18,7 +18,31 @@ import (
 // without a database.
 type prefsFakeStore struct {
 	*fakeChatStore
-	prefs map[string]store.ConnectorPref
+	prefs    map[string]store.ConnectorPref
+	projects map[string]*store.Project
+}
+
+func (s *prefsFakeStore) GetProject(_ context.Context, id string) (*store.Project, error) {
+	if s.projects == nil {
+		return nil, nil
+	}
+	return s.projects[id], nil
+}
+
+func (s *prefsFakeStore) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*store.Conversation, error) {
+	conv, err := s.CreateConversation(ctx, userEmail, title, persona, model, lockdown)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	conv.ProjectID = projectID
+	if mcpServers == nil {
+		conv.OptionalMCPServersEnabled = []string{}
+	} else {
+		conv.OptionalMCPServersEnabled = append([]string(nil), mcpServers...)
+	}
+	s.mu.Unlock()
+	return conv, nil
 }
 
 func (s *prefsFakeStore) SetConnectorPref(_ context.Context, _ string, p store.ConnectorPref) error {
@@ -217,5 +241,103 @@ func TestCreateConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
 	}
 	if stored.Model != agentcore.CurrentDefaultModel() {
 		t.Fatalf("persisted Model = %q, want %q", stored.Model, agentcore.CurrentDefaultModel())
+	}
+}
+
+// POST /conversations with a project_id (used by startProjectChat when clicking
+// "+ New chat" inside a project) must inherit the caller's default-on optional
+// MCP connectors when the project itself has no curated mcp_servers override,
+// while preserving explicit project mcp_servers / default_persona / default_model
+// when configured.
+func TestCreateProjectConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
+	fs := &prefsFakeStore{
+		fakeChatStore: newFakeChatStore(),
+		prefs: map[string]store.ConnectorPref{
+			store.ConnectorPrefKey(store.ConnectorKindBundled, "ix_pub"): {
+				Kind:        store.ConnectorKindBundled,
+				ConnectorID: "ix_pub",
+				Enabled:     true,
+				AutoEnable:  true,
+			},
+			store.ConnectorPrefKey(store.ConnectorKindBundled, "mg_pub"): {
+				Kind:        store.ConnectorKindBundled,
+				ConnectorID: "mg_pub",
+				Enabled:     true,
+				AutoEnable:  true,
+			},
+			store.ConnectorPrefKey(store.ConnectorKindBundled, "muted_default"): {
+				Kind:        store.ConnectorKindBundled,
+				ConnectorID: "muted_default",
+				Enabled:     false,
+			},
+		},
+		projects: map[string]*store.Project{
+			"proj-default": {
+				ID:         "proj-default",
+				OwnerEmail: "u@x.com",
+				Name:       "Untapped Optimizations",
+				MCPServers: []string{},
+			},
+			"proj-curated": {
+				ID:             "proj-curated",
+				OwnerEmail:     "u@x.com",
+				Name:           "Curated Space",
+				DefaultPersona: "analyst",
+				DefaultModel:   "anthropic/claude-sonnet-4.6",
+				MCPServers:     []string{"pages"},
+			},
+		},
+	}
+	engine := &catalogEngine{
+		catalog: []agent.OptionalServerInfo{
+			{Name: "Pages", EnabledByDefault: true},
+			{Name: "muted_default", EnabledByDefault: true},
+			{Name: "ix_pub", EnabledByDefault: false},
+			{Name: "mg_pub", EnabledByDefault: false},
+		},
+	}
+	srv := newDefaultChatServer(t, engine, fs)
+
+	// 1. Project with empty mcp_servers inherits user's default-on connectors,
+	// server default persona, and current default model.
+	w := do(t, srv.Routes(), http.MethodPost, "/conversations",
+		map[string]any{"title": "New conversation", "project_id": "proj-default"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /conversations (proj-default): %d %s", w.Code, w.Body.String())
+	}
+	var conv store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &conv); err != nil {
+		t.Fatalf("decode conversation: %v", err)
+	}
+	want := []string{"ix_pub", "mg_pub", "pages"}
+	if strings.Join(conv.OptionalMCPServersEnabled, ",") != strings.Join(want, ",") {
+		t.Fatalf("proj-default OptionalMCPServersEnabled = %v, want %v", conv.OptionalMCPServersEnabled, want)
+	}
+	if conv.Persona != "generic" {
+		t.Fatalf("proj-default Persona = %q, want %q", conv.Persona, "generic")
+	}
+	if conv.Model != agentcore.CurrentDefaultModel() {
+		t.Fatalf("proj-default Model = %q, want %q", conv.Model, agentcore.CurrentDefaultModel())
+	}
+
+	// 2. Project with explicit mcp_servers / default_persona / default_model
+	// keeps those project-level defaults when the request leaves them blank.
+	w = do(t, srv.Routes(), http.MethodPost, "/conversations",
+		map[string]any{"title": "New conversation", "project_id": "proj-curated"}, "u@x.com")
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST /conversations (proj-curated): %d %s", w.Code, w.Body.String())
+	}
+	var curated store.Conversation
+	if err := json.Unmarshal(w.Body.Bytes(), &curated); err != nil {
+		t.Fatalf("decode curated conversation: %v", err)
+	}
+	if strings.Join(curated.OptionalMCPServersEnabled, ",") != "pages" {
+		t.Fatalf("proj-curated OptionalMCPServersEnabled = %v, want [pages]", curated.OptionalMCPServersEnabled)
+	}
+	if curated.Persona != "analyst" {
+		t.Fatalf("proj-curated Persona = %q, want %q", curated.Persona, "analyst")
+	}
+	if curated.Model != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("proj-curated Model = %q, want %q", curated.Model, "anthropic/claude-sonnet-4.6")
 	}
 }
