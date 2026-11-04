@@ -24,6 +24,15 @@ const (
 	// DefaultMCPHTTPTimeout is the default timeout for HTTP requests to MCP servers
 	DefaultMCPHTTPTimeout = 2 * time.Minute
 
+	// MaxToolsPerServer bounds the number of tools a single MCP server may
+	// advertise in tools/list so an untrusted connector cannot flood catalog
+	// discovery or schema validation with tens of thousands of definitions.
+	MaxToolsPerServer = 512
+
+	// MaxToolsListBytes bounds the raw tools/list JSON-RPC result payload from a
+	// single MCP server (separate from the 64 MiB tools/call capture cap).
+	MaxToolsListBytes = 4 * 1024 * 1024
+
 	// nullString is the string representation of a JSON null
 	nullString = "null"
 
@@ -742,12 +751,18 @@ func (s *Server) initialize(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("tools/list call failed: %w", err)
 	}
+	if len(toolsResult) > MaxToolsListBytes {
+		return fmt.Errorf("tools/list response is %d bytes (max %d)", len(toolsResult), MaxToolsListBytes)
+	}
 
 	var toolsResponse struct {
 		Tools []Tool `json:"tools"`
 	}
 	if err := json.Unmarshal(toolsResult, &toolsResponse); err != nil {
 		return fmt.Errorf("failed to parse tools response: %w", err)
+	}
+	if len(toolsResponse.Tools) > MaxToolsPerServer {
+		return fmt.Errorf("tools/list returned %d tools (max %d)", len(toolsResponse.Tools), MaxToolsPerServer)
 	}
 
 	s.toolsMu.Lock()

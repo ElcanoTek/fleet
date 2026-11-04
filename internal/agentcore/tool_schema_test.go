@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -440,5 +441,569 @@ func TestToolSchemaRecordConcurrentTurns(t *testing.T) {
 	wg.Wait()
 	if got := ToolSchemaIssues(); len(got) != 2 {
 		t.Fatalf("record after concurrent turns = %+v, want tuple + broken", got)
+	}
+}
+
+// TestInfoInlinesTopLevelDefsForFastMCPSchemas reproduces the Raptive
+// ix_publisher_mcp failure on Gemini (2026-11-03): FastMCP / Pydantic emits
+// top-level `$defs` and `"$ref": "#/$defs/ReportFilter"` under
+// `properties.filters.anyOf.0.items`. Because mcpTool.Info() extracts only
+// `{properties, required}`, leaving `$ref` un-inlined produced a dangling
+// reference that Gemini rejected with 400 INVALID_ARGUMENT ("reference to
+// undefined schema at properties.filters.anyOf.0.items") and hid the nested
+// object fields from tool_describe.
+func TestInfoInlinesTopLevelDefsForFastMCPSchemas(t *testing.T) {
+	const ixRunReportSchema = `{
+	  "$defs": {
+	    "ReportFilter": {
+	      "description": "One report filter; all filters must match (AND).",
+	      "properties": {
+	        "field": {"type": "string"},
+	        "operator": {"type": "string", "enum": ["=", "!=", "isAnyOf"]},
+	        "values": {"type": "array", "items": {"type": "string"}}
+	      },
+	      "required": ["field", "operator", "values"],
+	      "title": "ReportFilter",
+	      "type": "object"
+	    }
+	  },
+	  "properties": {
+	    "filters": {
+	      "anyOf": [
+	        {"type": "array", "items": {"$ref": "#/$defs/ReportFilter"}},
+	        {"type": "null"}
+	      ],
+	      "default": null,
+	      "title": "Filters"
+	    }
+	  },
+	  "type": "object"
+	}`
+
+	raw := jsonMap(t, ixRunReportSchema)
+	before := jsonMap(t, ixRunReportSchema)
+	mt := &mcpTool{serverName: "ix_publisher_mcp", tool: mcp.Tool{Name: "ixpub_run_report", Description: "Run report", InputSchema: raw}}
+
+	info := mt.Info()
+	encoded, err := json.Marshal(info.Parameters)
+	if err != nil {
+		t.Fatalf("marshal Parameters: %v", err)
+	}
+	if strings.Contains(string(encoded), `"$ref"`) {
+		t.Fatalf("mcpTool.Info().Parameters still contains a dangling $ref: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), `"operator"`) || !strings.Contains(string(encoded), `"isAnyOf"`) {
+		t.Fatalf("inlined ReportFilter fields missing from Parameters: %s", encoded)
+	}
+	if !reflect.DeepEqual(raw, before) {
+		t.Fatal("mcpTool.Info() mutated the catalog InputSchema")
+	}
+	if issue, ok := CheckMCPToolSchema("ix_publisher_mcp", mt.tool); ok {
+		t.Fatalf("valid 2020-12 $defs schema reported as schema issue: %+v", issue)
+	}
+}
+
+func TestNormalizeToolSchemaInlinesNestedAndCyclicDefs(t *testing.T) {
+	const nestedAndCyclic = `{
+	  "$defs": {
+	    "Leaf~Name/1": {
+	      "type": "object",
+	      "properties": {"v": {"type": "number", "minimum": 0, "exclusiveMinimum": true}},
+	      "required": ["v"]
+	    },
+	    "Postal code": {
+	      "type": "string",
+	      "pattern": "^[0-9]{5}$"
+	    },
+	    "EmbeddedRes": {
+	      "$id": "https://example.com/embedded.json",
+	      "$defs": {"Code": {"type": "integer"}},
+	      "type": "object",
+	      "properties": {"code": {"$ref": "#/$defs/Code"}}
+	    },
+	    "OpenTarget": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}}
+	    },
+	    "ClosedUnevalTarget": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}},
+	      "unevaluatedProperties": false
+	    },
+	    "Wrapper": {
+	      "type": "object",
+	      "description": "generic wrapper",
+	      "properties": {"leaf": {"$ref": "#/$defs/Leaf~0Name~11"}}
+	    },
+	    "Node": {
+	      "type": "object",
+	      "title": "Node",
+	      "properties": {
+	        "name": {"type": "string"},
+	        "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}
+	      }
+	    },
+	    "Always": true,
+	    "Never": false,
+	    "LongString": {"type": "string", "minLength": 10},
+	    "RootOnly": {"type": "string"}
+	  },
+	  "definitions": {
+	    "LegacyTag": {"type": "string", "minLength": 1}
+	  },
+	  "type": "object",
+	  "properties": {
+	    "wrapped": {"$ref": "#/$defs/Wrapper", "description": "custom override"},
+	    "postal": {"$ref": "#/$defs/Postal%20code"},
+	    "emb1": {"$ref": "#/$defs/EmbeddedRes"},
+	    "emb2": {"$ref": "#/$defs/EmbeddedRes"},
+	    "sib_uneval": {"$ref": "#/$defs/OpenTarget", "unevaluatedProperties": false},
+	    "target_uneval": {"$ref": "#/$defs/ClosedUnevalTarget", "properties": {"b": {"type": "string"}}},
+	    "tag": {"$ref": "#/definitions/LegacyTag", "maxLength": 20},
+	    "conflicting": {"$ref": "#/$defs/LongString", "minLength": 1},
+	    "always_ok": {"$ref": "#/$defs/Always"},
+	    "never_ok": {"$ref": "#/$defs/Never", "description": "ignored on false"},
+	    "tree": {"$ref": "#/$defs/Node"},
+	    "nested_resource": {
+	      "$id": "https://example.com/sub.json",
+	      "$defs": {
+	        "LongString": {"type": "integer"}
+	      },
+	      "type": "object",
+	      "properties": {
+	        "local_def": {"$ref": "#/$defs/LongString"},
+	        "outer_def": {"$ref": "#/$defs/RootOnly"}
+	      }
+	    },
+	    "dangling": {"$ref": "#/$defs/DoesNotExist"}
+	  }
+	}`
+
+	got := normalizeToolSchema(jsonMap(t, nestedAndCyclic))
+	props := got["properties"].(map[string]any)
+
+	wrapped := props["wrapped"].(map[string]any)
+	if wrapped["description"] != "custom override" || wrapped["type"] != "object" {
+		t.Fatalf("wrapped sibling override or inlined type lost: %v", wrapped)
+	}
+	leaf := wrapped["properties"].(map[string]any)["leaf"].(map[string]any)
+	leafV := leaf["properties"].(map[string]any)["v"].(map[string]any)
+	if leafV["exclusiveMinimum"] != float64(0) {
+		t.Fatalf("older-draft rewrite inside nested $defs not preserved: %v", leafV)
+	}
+
+	postal := props["postal"].(map[string]any)
+	if postal["type"] != "string" || postal["pattern"] != "^[0-9]{5}$" {
+		t.Fatalf("percent-encoded fragment token not resolved: %v", postal)
+	}
+
+	for _, name := range []string{"emb1", "emb2"} {
+		emb := props[name].(map[string]any)
+		if _, hasID := emb["$id"]; hasID {
+			t.Fatalf("inlined copy %s retained duplicate $id: %v", name, emb)
+		}
+		codeProp := emb["properties"].(map[string]any)["code"].(map[string]any)
+		if codeProp["type"] != "integer" {
+			t.Fatalf("inlined embedded resource %s did not resolve local $defs: %v", name, codeProp)
+		}
+	}
+
+	sibUneval := props["sib_uneval"].(map[string]any)
+	if sibUneval["unevaluatedProperties"] != false || sibUneval["properties"] == nil {
+		t.Fatalf("sibling unevaluatedProperties should stay at top level alongside target properties: %v", sibUneval)
+	}
+	if _, hasAllOf := sibUneval["allOf"]; hasAllOf {
+		t.Fatalf("sibling unevaluatedProperties should not be isolated in allOf: %v", sibUneval)
+	}
+
+	targetUneval := props["target_uneval"].(map[string]any)
+	if _, hasTopUneval := targetUneval["unevaluatedProperties"]; hasTopUneval {
+		t.Fatalf("target unevaluatedProperties must stay inside allOf subschema, not on outer sibling scope: %v", targetUneval)
+	}
+	targetAllOf, ok := targetUneval["allOf"].([]any)
+	if !ok || len(targetAllOf) != 1 || targetAllOf[0].(map[string]any)["unevaluatedProperties"] != false {
+		t.Fatalf("target unevaluatedProperties not preserved in allOf subschema: %v", targetUneval)
+	}
+
+	tag := props["tag"].(map[string]any)
+	if tag["type"] != "string" || tag["minLength"] != float64(1) || tag["maxLength"] != float64(20) {
+		t.Fatalf("definitions $ref or non-conflicting sibling not inlined: %v", tag)
+	}
+
+	conflicting := props["conflicting"].(map[string]any)
+	if conflicting["minLength"] != float64(10) {
+		t.Fatalf("conflicting sibling overwrote referenced minLength=10: %v", conflicting)
+	}
+	allOf, ok := conflicting["allOf"].([]any)
+	if !ok || len(allOf) != 1 || allOf[0].(map[string]any)["minLength"] != float64(1) {
+		t.Fatalf("conflicting sibling constraint not preserved in allOf: %v", conflicting)
+	}
+
+	if props["always_ok"] != true {
+		t.Fatalf("boolean true $defs target not inlined: %v", props["always_ok"])
+	}
+	if props["never_ok"] != false {
+		t.Fatalf("boolean false $defs target not inlined: %v", props["never_ok"])
+	}
+
+	tree := props["tree"].(map[string]any)
+	if tree["type"] != "object" {
+		t.Fatalf("cyclic Node not inlined at top level: %v", tree)
+	}
+	childrenItems := tree["properties"].(map[string]any)["children"].(map[string]any)["items"].(map[string]any)
+	if _, hasRef := childrenItems["$ref"]; hasRef || childrenItems["type"] != "object" || childrenItems["title"] != "Node" {
+		t.Fatalf("cyclic back-reference should be converted to provider-safe object stub without $ref, got: %v", childrenItems)
+	}
+
+	nestedProps := props["nested_resource"].(map[string]any)["properties"].(map[string]any)
+	localDef := nestedProps["local_def"].(map[string]any)
+	if localDef["type"] != "integer" {
+		t.Fatalf("nested $id resource should resolve against its own $defs, got: %v", localDef)
+	}
+	outerDef := nestedProps["outer_def"].(map[string]any)
+	if outerDef["$ref"] != "#/$defs/RootOnly" {
+		t.Fatalf("nested $id resource should not resolve missing fragment against root $defs, got: %v", outerDef)
+	}
+
+	dangling := props["dangling"].(map[string]any)
+	if dangling["$ref"] != "#/$defs/DoesNotExist" {
+		t.Fatalf("unresolvable $ref should be left intact, got: %v", dangling)
+	}
+}
+
+func TestInfoInlinesRootRefSchema(t *testing.T) {
+	const rootRefSchema = `{
+	  "$ref": "#/$defs/Input",
+	  "$defs": {
+	    "Input": {
+	      "type": "object",
+	      "properties": {
+	        "query": {"type": "string"}
+	      },
+	      "required": ["query"]
+	    }
+	  }
+	}`
+	mt := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "search", Description: "Search", InputSchema: jsonMap(t, rootRefSchema)}}
+	info := mt.Info()
+	if !reflect.DeepEqual(info.Required, []string{"query"}) {
+		t.Fatalf("root $ref Required = %v, want [query]", info.Required)
+	}
+	q, ok := info.Parameters["query"].(map[string]any)
+	if !ok || q["type"] != "string" {
+		t.Fatalf("root $ref Parameters = %v, want query:string", info.Parameters)
+	}
+}
+
+func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
+	// A large linear enum (5,000 scalar values in 1 schema object) must be
+	// preserved intact without triggering the schema-node budget.
+	largeEnum := make([]any, 5000)
+	for i := range largeEnum {
+		largeEnum[i] = "val"
+	}
+	enumSchema := map[string]any{
+		"$defs": map[string]any{
+			"BigEnum": map[string]any{"type": "string", "enum": largeEnum},
+		},
+		"type":       "object",
+		"properties": map[string]any{"choice": map[string]any{"$ref": "#/$defs/BigEnum"}},
+	}
+	enumTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "enum_ok", Description: "enum", InputSchema: enumSchema}}
+	if issue, ok := CheckMCPToolSchema("srv", enumTool.tool); ok {
+		t.Fatalf("large linear enum definition wrongly flagged as schema issue: %+v", issue)
+	}
+	choice := enumTool.Info().Parameters["choice"].(map[string]any)
+	if gotEnum, _ := choice["enum"].([]any); len(gotEnum) != 5000 {
+		t.Fatalf("large enum values lost during $ref inlining: len=%d, want 5000", len(gotEnum))
+	}
+
+	// A 25-level 2-way DAG (2^25 = 33M nodes if expanded naively) must be
+	// bounded during Info() and withheld by CheckMCPToolSchema (Gate 5)
+	// rather than advertising a lossy half-expanded schema.
+	defs := map[string]any{
+		"D0": map[string]any{
+			"type":       "object",
+			"title":      "Leaf",
+			"properties": map[string]any{"v": map[string]any{"type": "string"}},
+		},
+	}
+	for i := 1; i <= 25; i++ {
+		var prev string
+		if i-1 < 10 {
+			prev = "#/$defs/D" + string(rune('0'+(i-1)))
+		} else {
+			prev = "#/$defs/D" + string(rune('0'+(i-1)/10)) + string(rune('0'+(i-1)%10))
+		}
+		name := "D" + string(rune('0'+i))
+		if i >= 10 {
+			name = "D" + string(rune('0'+i/10)) + string(rune('0'+i%10))
+		}
+		defs[name] = map[string]any{
+			"type":  "object",
+			"title": name,
+			"properties": map[string]any{
+				"left":  map[string]any{"$ref": prev},
+				"right": map[string]any{"$ref": prev},
+			},
+		}
+	}
+	schema := map[string]any{
+		"$defs": defs,
+		"type":  "object",
+		"properties": map[string]any{
+			"root": map[string]any{"$ref": "#/$defs/D25"},
+		},
+	}
+	mt := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "dag", Description: "dag", InputSchema: schema}}
+	info := mt.Info()
+	encoded, err := json.Marshal(info.Parameters)
+	if err != nil {
+		t.Fatalf("marshal bounded DAG Parameters: %v", err)
+	}
+	if strings.Contains(string(encoded), `"$ref"`) {
+		t.Fatalf("bounded DAG still contains dangling $ref: %s", encoded)
+	}
+	if len(encoded) > maxNormalizedToolSchemaBytes {
+		t.Fatalf("bounded DAG exceeded maxNormalizedToolSchemaBytes: %d > %d", len(encoded), maxNormalizedToolSchemaBytes)
+	}
+	issue, ok := CheckMCPToolSchema("srv", mt.tool)
+	if !ok || issue.Status != ToolSchemaInvalid || !strings.Contains(issue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on DAG bomb = (%+v, %v), want ToolSchemaInvalid budget exceeded", issue, ok)
+	}
+
+	// A 1 MiB description referenced 32 times must abort on the byte budget
+	// before copying or marshaling 32 MiB of strings.
+	hugeDesc := strings.Repeat("x", 1024*1024)
+	hugeProps := make(map[string]any, 32)
+	for i := 0; i < 32; i++ {
+		hugeProps["p"+string(rune('a'+i%26))+string(rune('0'+i/26))] = map[string]any{"$ref": "#/$defs/HugeDesc"}
+	}
+	hugeSchema := map[string]any{
+		"$defs": map[string]any{
+			"HugeDesc": map[string]any{"type": "string", "description": hugeDesc},
+		},
+		"type":       "object",
+		"properties": hugeProps,
+	}
+	hugeTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "huge_desc", Description: "huge", InputSchema: hugeSchema}}
+	hugeIssue, hugeOK := CheckMCPToolSchema("srv", hugeTool.tool)
+	if !hugeOK || hugeIssue.Status != ToolSchemaInvalid || !strings.Contains(hugeIssue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on 32x 1MiB description = (%+v, %v), want ToolSchemaInvalid budget exceeded", hugeIssue, hugeOK)
+	}
+
+	// Percent-encoded structural separators (#%2F$defs%2FPostal%20code) and
+	// legacy draft-04 "id" resource boundaries must resolve properly.
+	encodedAndLegacy := jsonMap(t, `{
+	  "$defs": {
+	    "Postal code": {"type": "string", "pattern": "^[0-9]{5}$"}
+	  },
+	  "definitions": {
+	    "Shared": {"type": "string"}
+	  },
+	  "type": "object",
+	  "properties": {
+	    "zip": {"$ref": "#%2F$defs%2FPostal%20code"},
+	    "legacy_resource": {
+	      "id": "https://example.com/legacy-embedded.json",
+	      "definitions": {
+	        "Shared": {"type": "integer"}
+	      },
+	      "type": "object",
+	      "properties": {
+	        "val": {"$ref": "#/definitions/Shared"}
+	      }
+	    }
+	  }
+	}`)
+	normEncoded := normalizeToolSchema(encodedAndLegacy)
+	normProps := normEncoded["properties"].(map[string]any)
+	if zip, _ := normProps["zip"].(map[string]any); zip["type"] != "string" {
+		t.Fatalf("percent-encoded separator ref not inlined: %v", zip)
+	}
+	legacyVal := normProps["legacy_resource"].(map[string]any)["properties"].(map[string]any)["val"].(map[string]any)
+	if legacyVal["type"] != "integer" {
+		t.Fatalf("legacy id resource boundary did not scope #/definitions/Shared to integer: %v", legacyVal)
+	}
+
+	// A $ref whose sibling required array exceeds the byte budget must preserve
+	// the budget-exceeded sentinel rather than swallowing it in mergeRequiredAny.
+	nearBudgetDesc := strings.Repeat("d", maxNormalizedToolSchemaBytes-1024)
+	sibReqSchema := map[string]any{
+		"$defs": map[string]any{
+			"BaseObj": map[string]any{
+				"type":        "object",
+				"description": nearBudgetDesc,
+				"required":    []any{"a"},
+				"properties":  map[string]any{"a": map[string]any{"type": "string"}},
+			},
+		},
+		"type": "object",
+		"properties": map[string]any{
+			"item": map[string]any{
+				"$ref":     "#/$defs/BaseObj",
+				"required": []any{strings.Repeat("r", 2048)},
+			},
+		},
+	}
+	sibIssue, sibOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "sib_req_budget", InputSchema: sibReqSchema})
+	if !sibOK || sibIssue.Status != ToolSchemaInvalid || !strings.Contains(sibIssue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on budget-exceeding sibling required = (%+v, %v), want ToolSchemaInvalid budget exceeded", sibIssue, sibOK)
+	}
+
+	// Catalog-wide budget and cancellation in CheckMCPToolSchemas: a catalog of
+	// uniquely titled DAG tools stops expanding after the catalog ceiling, and a
+	// cancelled context aborts immediately.
+	dagCatalog := make([]mcp.ServerTool, 20)
+	for i := range dagCatalog {
+		toolCopy, _ := copyJSONValue(schema).(map[string]any)
+		toolCopy["title"] = "unique_" + string(rune('A'+i))
+		dagCatalog[i] = mcp.ServerTool{
+			ServerName: "srv",
+			Tool:       mcp.Tool{Name: "dag_" + string(rune('a'+i)), InputSchema: toolCopy},
+		}
+	}
+	catIssues, err := CheckMCPToolSchemas(context.Background(), dagCatalog)
+	if err != nil {
+		t.Fatalf("CheckMCPToolSchemas: %v", err)
+	}
+	if len(catIssues) != len(dagCatalog) {
+		t.Fatalf("CheckMCPToolSchemas flagged %d/%d DAG tools, want all withheld", len(catIssues), len(dagCatalog))
+	}
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := CheckMCPToolSchemas(cancelCtx, dagCatalog); err == nil {
+		t.Fatalf("CheckMCPToolSchemas with cancelled context succeeded, want context.Canceled")
+	}
+
+	// Repeated identical schemas that individually fit the per-tool budget must
+	// still charge the catalog budget on cache hits so 20 copies of a 7-level
+	// DAG (~127 expansions each) exceed maxCatalogRefExpansions (1024).
+	smallDAGSchema := map[string]any{
+		"$defs": defs,
+		"type":  "object",
+		"properties": map[string]any{
+			"root": map[string]any{"$ref": "#/$defs/D6"},
+		},
+	}
+	if singleIssue, singleOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "d6_single", InputSchema: smallDAGSchema}); singleOK {
+		t.Fatalf("single 6-level DAG should fit per-tool budget, got: %+v", singleIssue)
+	}
+	repeatedCatalog := make([]mcp.ServerTool, 20)
+	for i := range repeatedCatalog {
+		repeatedCatalog[i] = mcp.ServerTool{
+			ServerName: "srv",
+			Tool:       mcp.Tool{Name: "d6_copy_" + string(rune('a'+i)), InputSchema: smallDAGSchema},
+		}
+	}
+	repIssues, err := CheckMCPToolSchemas(context.Background(), repeatedCatalog)
+	if err != nil {
+		t.Fatalf("CheckMCPToolSchemas on repeated cached DAGs: %v", err)
+	}
+	if len(repIssues) == 0 {
+		t.Fatalf("repeated cached DAGs did not trip catalog budget on cache hits")
+	}
+}
+
+func TestNormalizeToolSchemaEdgeCases(t *testing.T) {
+	// Root self-reference ($ref: "#") in an object input schema remains valid
+	// after Info() rebuilds the root object and must be preserved.
+	rootSelfRef := jsonMap(t, `{
+	  "type": "object",
+	  "properties": {
+	    "name": {"type": "string"},
+	    "child": {"$ref": "#"}
+	  },
+	  "required": ["name"]
+	}`)
+	selfRefTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "tree_node", InputSchema: rootSelfRef}}
+	if childProp, _ := selfRefTool.Info().Parameters["child"].(map[string]any); childProp["$ref"] != "#" {
+		t.Fatalf("root self-reference $ref: '#' was not preserved: %v", childProp)
+	}
+
+	// Malformed sibling required array ([42]) beside a valid referenced required
+	// array must not be silently filtered to valid strings by mergeRequiredAny.
+	malformedSibReq := jsonMap(t, `{
+	  "$defs": {
+	    "ValidBase": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}},
+	      "required": ["a"]
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "bad": {
+	      "$ref": "#/$defs/ValidBase",
+	      "required": [42]
+	    }
+	  }
+	}`)
+	badReqIssue, badReqOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "bad_sib_req", InputSchema: malformedSibReq})
+	if !badReqOK || badReqIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on malformed sibling required [42] = (%+v, %v), want ToolSchemaInvalid", badReqIssue, badReqOK)
+	}
+
+	// Deep JSON Pointer into $defs (#/$defs/Input/properties/query),
+	// complementary additionalProperties: false sibling alongside referenced
+	// properties, and malformed target allOf preserved for validation.
+	deepAndComplementary := jsonMap(t, `{
+	  "$defs": {
+	    "Input": {
+	      "type": "object",
+	      "properties": {
+	        "query": {"type": "string", "minLength": 2}
+	      },
+	      "required": ["query"]
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "q": {"$ref": "#/$defs/Input/properties/query"},
+	    "strict_input": {
+	      "$ref": "#/$defs/Input",
+	      "additionalProperties": false
+	    }
+	  }
+	}`)
+	normDeep := normalizeToolSchema(deepAndComplementary)
+	deepProps := normDeep["properties"].(map[string]any)
+	if qProp, _ := deepProps["q"].(map[string]any); qProp["type"] != "string" || qProp["minLength"] != float64(2) {
+		t.Fatalf("deep JSON Pointer #/$defs/Input/properties/query not inlined: %v", qProp)
+	}
+	strictInput := deepProps["strict_input"].(map[string]any)
+	if strictInput["additionalProperties"] != false {
+		t.Fatalf("complementary additionalProperties: false should stay on the merged schema object, got: %v", strictInput)
+	}
+	if _, hasAllOf := strictInput["allOf"]; hasAllOf {
+		t.Fatalf("complementary additionalProperties: false should not be isolated into allOf: %v", strictInput)
+	}
+
+	badTargetAllOf := jsonMap(t, `{
+	  "$defs": {
+	    "BadAllOf": {
+	      "type": "object",
+	      "allOf": "not-an-array"
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "item": {
+	      "$ref": "#/$defs/BadAllOf",
+	      "allOf": [{"type": "object"}]
+	    }
+	  }
+	}`)
+	badAllOfIssue, badAllOfOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "bad_target_allof", InputSchema: badTargetAllOf})
+	if !badAllOfOK || badAllOfIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on malformed target allOf = (%+v, %v), want ToolSchemaInvalid", badAllOfIssue, badAllOfOK)
+	}
+
+	// Root $ref resolving to boolean false must be classified as invalid rather
+	// than advertised as an empty-object schema.
+	falseRoot := jsonMap(t, `{"$ref":"#/$defs/Never","$defs":{"Never":false}}`)
+	falseIssue, falseOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "never_tool", InputSchema: falseRoot})
+	if !falseOK || falseIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on false root $ref = (%+v, %v), want ToolSchemaInvalid", falseIssue, falseOK)
 	}
 }
