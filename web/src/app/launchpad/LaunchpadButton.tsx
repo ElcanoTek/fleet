@@ -91,6 +91,22 @@ export function LaunchpadButton({
   const [seen, setSeen] = useState(() => readSeen() || readDeepLink());
   const anchorRef = useRef<HTMLButtonElement | null>(null);
 
+  // Read the index once on mount, so the button can say what it opens before
+  // the first press (a menu when there are patrols, the wizard when there are
+  // none). Until that is known it declares no popup type rather than a wrong
+  // one. Clicks still re-read it, since patrols change in other tabs.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchPatrols().then((list) => {
+      if (cancelled) return;
+      setLoadFailed(list === null);
+      setPatrols(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Consume the one-shot deep link so a reload or a shared URL does not
   // reopen the wizard forever.
   useEffect(() => {
@@ -140,7 +156,9 @@ export function LaunchpadButton({
         ref={anchorRef}
         type="button"
         data-testid="launchpad-button"
-        aria-haspopup={(patrols && patrols.length > 0) || loadFailed ? "menu" : "dialog"}
+        aria-haspopup={
+          loadFailed || (patrols !== null && patrols.length > 0) ? "menu" : patrols !== null ? "dialog" : undefined
+        }
         aria-expanded={menuOpen || undefined}
         data-tip={dataTip}
         title={dataTip ? undefined : "Your patrols, and the Launchpad to set up a new one"}

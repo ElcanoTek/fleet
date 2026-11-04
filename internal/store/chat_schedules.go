@@ -407,17 +407,14 @@ type UserPatrol struct {
 	ConversationOwner string `json:"-"`
 }
 
-// maxUserPatrols bounds the index; a person with more than this many live
-// patrols still finds the rest in Chat.
-const maxUserPatrols = 100
-
 // ListUserPatrols returns the active and paused recurring patrols (not
 // one-shot timers) that userEmail created, in any non-deleted conversation —
 // their own, or a teammate's multiplayer chat they took part in — active ones
 // first and each group soonest-next-run first. It does NOT check access to a
 // conversation the user does not own; the caller must (multiplayer access can
-// be revoked after the patrol was made).
-func (s *Store) ListUserPatrols(ctx context.Context, userEmail string) ([]UserPatrol, error) {
+// be revoked after the patrol was made), so it pages with limit/offset rather
+// than capping: rows the caller then drops must not crowd out ones it keeps.
+func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]UserPatrol, error) {
 	if s == nil || s.db == nil {
 		return []UserPatrol{}, nil
 	}
@@ -431,8 +428,8 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string) ([]UserPa
 		    AND cs.cron_expr <> ''
 		    AND cs.status IN ('active', 'paused')
 		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
-		  LIMIT $2`,
-		userEmail, maxUserPatrols,
+		  LIMIT $2 OFFSET $3`,
+		userEmail, limit, offset,
 	)
 	if err != nil {
 		return nil, err

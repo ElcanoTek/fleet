@@ -1539,6 +1539,10 @@ function LaunchStep({
         value={title}
         maxLength={80}
         onChange={(e) => onEdit({ title: e.target.value })}
+        // Read-only while the assistant drafts: its reply replaces both
+        // fields, and an edit made meanwhile would be silently lost.
+        readOnly={drafting}
+        aria-busy={drafting}
         data-testid="launchpad-title"
       />
 
@@ -1591,6 +1595,7 @@ function LaunchStep({
         className={`${SETTINGS_INPUT} mt-1.5 min-h-[13rem] resize-y font-[family-name:var(--font-code-ui)] text-[0.8rem] leading-relaxed ${drafting ? "opacity-60" : ""}`}
         value={prompt}
         onChange={(e) => onEdit({ prompt: e.target.value })}
+        readOnly={drafting}
         aria-busy={drafting}
         data-testid="launchpad-prompt"
       />

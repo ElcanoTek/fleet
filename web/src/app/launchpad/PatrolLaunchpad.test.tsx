@@ -369,6 +369,9 @@ describe("PatrolLaunchpad", () => {
     await walkToLaunch(calls);
     fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
     await waitFor(() => expect((screen.getByTestId("launchpad-launch") as HTMLButtonElement).disabled).toBe(true));
+    // The fields the draft will replace are read-only meanwhile.
+    expect((screen.getByTestId("launchpad-title") as HTMLInputElement).readOnly).toBe(true);
+    expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).readOnly).toBe(true);
     fireEvent.click(screen.getByTestId("launchpad-launch"));
     expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
   });

@@ -221,3 +221,51 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 		t.Error("the in-flight mark must be released when the draft returns")
 	}
 }
+
+// TestPatrols_RevokedRowsDoNotCrowdOut: patrols in chats the caller can no
+// longer open are dropped after the query, so the index must page past them —
+// a full page of revoked rows sorted first must not hide a patrol the caller
+// can still open (or make the rail think there are none and open the wizard).
+func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me, owner = "crowd@x.com", "owner@x.com"
+	seedUser(t, s.concreteStore(t), me)
+	for i := 0; i < patrolsIndexMax; i++ {
+		c := seedConv(t, s, owner)
+		if _, err := s.store.SetConversationMultiplayer(ctx, owner, c.ID, true, []string{me}, nil); err != nil {
+			t.Fatalf("SetConversationMultiplayer: %v", err)
+		}
+		// Hourly: sorts ahead of the weekly patrol below.
+		if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+			ConversationID: c.ID, UserEmail: me, Title: "revoked", Prompt: "check", CronExpr: "0 * * * *", Timezone: "UTC",
+		}); err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+		if _, err := s.store.SetConversationMultiplayer(ctx, owner, c.ID, false, nil, nil); err != nil {
+			t.Fatalf("SetConversationMultiplayer off: %v", err)
+		}
+	}
+	mine := seedConv(t, s, me)
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: mine.ID, UserEmail: me, Title: "Still mine", Prompt: "check", CronExpr: "0 9 * * 1", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	var body struct {
+		Patrols []struct {
+			Title string `json:"title"`
+		} `json:"patrols"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v (%s)", err, rec.Body.String())
+	}
+	if len(body.Patrols) != 1 || body.Patrols[0].Title != "Still mine" {
+		t.Fatalf("patrols = %+v, want only Still mine", body.Patrols)
+	}
+}

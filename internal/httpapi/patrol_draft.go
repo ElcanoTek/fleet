@@ -107,6 +107,14 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// patrolsIndexMax bounds the Patrols index (a person with more live patrols
+// still finds the rest in Chat); patrolsIndexMaxPages bounds how far it reads
+// past rows the caller can no longer open.
+const (
+	patrolsIndexMax      = 100
+	patrolsIndexMaxPages = 10
+)
+
 // handlePatrols backs GET /patrols: the caller's active and paused recurring
 // patrols across their chats, for the Patrols hub in the navigation rail. A
 // patrol lives in its chat; this is only the index of them.
@@ -116,24 +124,34 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := userFromCtx(r.Context())
-	items, err := s.store.ListUserPatrols(r.Context(), user)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
 	// A patrol in a teammate's multiplayer chat is listed only while the
 	// caller can still open that chat — the same rule the schedule routes
 	// apply (getOwnedOrMultiplayerConversation), so the index never links to
-	// a chat that would answer 404.
-	out := make([]store.UserPatrol, 0, len(items))
-	for _, p := range items {
-		if !strings.EqualFold(p.ConversationOwner, user) {
-			conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
-			if err != nil || conv == nil {
-				continue
-			}
+	// a chat that would answer 404. The check runs per row, after the query,
+	// so the index pages until it has its fill of rows the caller can open:
+	// revoked rows never crowd out ones they still can.
+	out := make([]store.UserPatrol, 0, patrolsIndexMax)
+	for page := 0; page < patrolsIndexMaxPages && len(out) < patrolsIndexMax; page++ {
+		items, err := s.store.ListUserPatrols(r.Context(), user, patrolsIndexMax, page*patrolsIndexMax)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		out = append(out, p)
+		for _, p := range items {
+			if len(out) == patrolsIndexMax {
+				break
+			}
+			if !strings.EqualFold(p.ConversationOwner, user) {
+				conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
+				if err != nil || conv == nil {
+					continue
+				}
+			}
+			out = append(out, p)
+		}
+		if len(items) < patrolsIndexMax {
+			break // no more rows
+		}
 	}
 	writeJSON(w, map[string]any{"patrols": out})
 }

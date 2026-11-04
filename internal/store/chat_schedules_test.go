@@ -183,7 +183,7 @@ func TestListUserPatrols(t *testing.T) {
 		t.Fatalf("CreateChatSchedule (teammate's chat): %v", err)
 	}
 
-	got, err := s.ListUserPatrols(ctx, me)
+	got, err := s.ListUserPatrols(ctx, me, 100, 0)
 	if err != nil {
 		t.Fatalf("ListUserPatrols: %v", err)
 	}

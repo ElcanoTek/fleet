@@ -104,4 +104,16 @@ describe("LaunchpadButton", () => {
     expect(await screen.findByTestId("patrols-menu-item-s1")).toBeTruthy();
     expect(screen.queryByTestId("patrols-menu-error")).toBeNull();
   });
+
+  it("declares what it opens once the index is known, and nothing before", async () => {
+    stubPatrols([{ id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "x", cron: "0 * * * *", status: "active" }]);
+    render(<LaunchpadButton />);
+    const button = screen.getByTestId("launchpad-button");
+    expect(button.getAttribute("aria-haspopup")).toBeNull();
+    await waitFor(() => expect(button.getAttribute("aria-haspopup")).toBe("menu"));
+    cleanup();
+    stubPatrols([]);
+    render(<LaunchpadButton />);
+    await waitFor(() => expect(screen.getByTestId("launchpad-button").getAttribute("aria-haspopup")).toBe("dialog"));
+  });
 });
