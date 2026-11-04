@@ -462,13 +462,50 @@ type defScope struct {
 	root           map[string]any
 	defs           map[string]any
 	definitions    map[string]any
+	anchors        map[string]any
 	isDocumentRoot bool
 }
 
 func newDefScope(resource map[string]any, isDocumentRoot bool) defScope {
 	defs, _ := resource["$defs"].(map[string]any)
 	definitions, _ := resource["definitions"].(map[string]any)
-	return defScope{root: resource, defs: defs, definitions: definitions, isDocumentRoot: isDocumentRoot}
+	anchors := map[string]any{}
+	collectScopeAnchors(resource, true, anchors)
+	return defScope{root: resource, defs: defs, definitions: definitions, anchors: anchors, isDocumentRoot: isDocumentRoot}
+}
+
+func collectScopeAnchors(node any, isRoot bool, out map[string]any) {
+	obj, ok := node.(map[string]any)
+	if !ok {
+		return
+	}
+	if !isRoot && hasNonFragmentID(obj) {
+		return
+	}
+	if a, ok := obj["$anchor"].(string); ok && a != "" {
+		out[a] = obj
+	}
+	if a, ok := obj["$dynamicAnchor"].(string); ok && a != "" {
+		out[a] = obj
+	}
+	for k, v := range obj {
+		switch {
+		case schemaValuedKeywords[k]:
+			collectScopeAnchors(v, false, out)
+		case schemaArrayKeywords[k]:
+			if items, ok := v.([]any); ok {
+				for _, item := range items {
+					collectScopeAnchors(item, false, out)
+				}
+			}
+		case schemaMapKeywords[k]:
+			if members, ok := v.(map[string]any); ok {
+				for _, member := range members {
+					collectScopeAnchors(member, false, out)
+				}
+			}
+		}
+	}
 }
 
 func hasNonFragmentID(obj map[string]any) bool {
@@ -510,7 +547,12 @@ func inlineLocalRefs(root map[string]any, budget *inlineBudget) map[string]any {
 		return r
 	case bool:
 		if !r {
-			return map[string]any{"not": map[string]any{}}
+			return map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"$x_fleet_false_root_schema": map[string]any{"type": false},
+				},
+			}
 		}
 		return map[string]any{}
 	default:
@@ -629,15 +671,7 @@ func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string
 }
 
 func isRefActive(active map[string]bool, canonKey string) bool {
-	if active[canonKey] {
-		return true
-	}
-	for k := range active {
-		if k != "#" && strings.HasPrefix(canonKey, k+"/") {
-			return true
-		}
-	}
-	return false
+	return active[canonKey]
 }
 
 func cloneActiveRefs(active map[string]bool, addKey string) map[string]bool {
@@ -916,6 +950,15 @@ func lookupLocalDef(ref string, scope defScope) (any, string, bool) {
 	if rest, ok := strings.CutPrefix(pointer, "/definitions/"); ok {
 		if target, canon, valid := resolveJSONPointerSteps(scope.definitions, rest, "definitions"); valid {
 			return target, canon, true
+		}
+	}
+	if !strings.HasPrefix(pointer, "/") {
+		if target, exists := scope.anchors[pointer]; exists && isSchemaValue(target) {
+			if targetMap, ok := target.(map[string]any); ok && scope.root != nil &&
+				reflect.ValueOf(targetMap).Pointer() == reflect.ValueOf(scope.root).Pointer() {
+				return target, "#", true
+			}
+			return target, "anchor:" + pointer, true
 		}
 	}
 	return nil, "", false

@@ -998,4 +998,12 @@ func TestNormalizeToolSchemaEdgeCases(t *testing.T) {
 	if !badAllOfOK || badAllOfIssue.Status != ToolSchemaInvalid {
 		t.Fatalf("CheckMCPToolSchema on malformed target allOf = (%+v, %v), want ToolSchemaInvalid", badAllOfIssue, badAllOfOK)
 	}
+
+	// Root $ref resolving to boolean false must be classified as invalid rather
+	// than advertised as an empty-object schema.
+	falseRoot := jsonMap(t, `{"$ref":"#/$defs/Never","$defs":{"Never":false}}`)
+	falseIssue, falseOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "never_tool", InputSchema: falseRoot})
+	if !falseOK || falseIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on false root $ref = (%+v, %v), want ToolSchemaInvalid", falseIssue, falseOK)
+	}
 }
