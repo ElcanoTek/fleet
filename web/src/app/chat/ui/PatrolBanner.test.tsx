@@ -128,8 +128,13 @@ describe("PatrolPopover", () => {
       />,
     );
 
-    expect(screen.getByTestId("patrol-popover")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Every 1h" }));
+    const popover = screen.getByTestId("patrol-popover");
+    expect(popover).toBeInTheDocument();
+    expect(popover).toHaveClass("picker-modal");
+    const oneHourBtn = screen.getByRole("button", { name: "Every 1h" });
+    expect(oneHourBtn).toHaveClass("pill-btn");
+    fireEvent.click(oneHourBtn);
+    expect(oneHourBtn).toHaveAttribute("aria-pressed", "true");
     fireEvent.click(screen.getByRole("button", { name: "Start patrol" }));
 
     await waitFor(() => expect(onStartPatrol).toHaveBeenCalledTimes(1));

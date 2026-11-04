@@ -7,6 +7,7 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -397,5 +398,141 @@ func TestPromptCachingStep_SkipsBudgetWindDownNotice(t *testing.T) {
 	}
 	if !hasCacheMarker(out[0]) || hasCacheMarker(out[1]) {
 		t.Errorf("system=%v u1=%v; want system marked, u1 unmarked", hasCacheMarker(out[0]), hasCacheMarker(out[1]))
+	}
+}
+
+func TestPromptCachingStep_RuntimeTodayFourthBreakpoint(t *testing.T) {
+	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
+	rt1, _ := RuntimeDateMessage("2026-11-03")
+	rt2, _ := RuntimeDateMessage("2026-11-03")
+	msgs := []fantasy.Message{
+		fantasy.NewSystemMessage("sys"),
+		fantasy.NewUserMessage("u1"),
+		rt1,
+		newAssistantMessage("a1"),
+		fantasy.NewUserMessage("u2"),
+		rt2,
+		{
+			Role:    fantasy.MessageRoleAssistant,
+			Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "tc1", ToolName: "bash", Input: `{}`}},
+		},
+		{
+			Role: fantasy.MessageRoleTool,
+			Content: []fantasy.MessagePart{fantasy.ToolResultPart{
+				ToolCallID: "tc1",
+				Output:     fantasy.ToolResultOutputContentText{Text: "ok"},
+			}},
+		},
+	}
+	step := promptCachingStep("anthropic/claude-opus-5.5", WithCompactionSummaryBreakpoint(nil))
+	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := res.Messages
+	// Expect 4 breakpoints: system (0), latest unmarked runtime_today rt2 (5),
+	// and the last two messages (6, 7). Earlier runtime_today rt1 (2) stays unmarked.
+	want := map[int]bool{0: true, 5: true, 6: true, 7: true}
+	for i, m := range out {
+		if hasCacheMarker(m) != want[i] {
+			t.Errorf("msg[%d] (role=%s) marker=%v, want %v", i, m.Role, hasCacheMarker(m), want[i])
+		}
+	}
+}
+
+func TestPromptCachingStep_CoalescesMultiPartAssistantText(t *testing.T) {
+	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
+	msgs := []fantasy.Message{
+		fantasy.NewSystemMessage("sys"),
+		{
+			Role: fantasy.MessageRoleAssistant,
+			Content: []fantasy.MessagePart{
+				fantasy.TextPart{Text: "first part"},
+				fantasy.TextPart{Text: "second part"},
+			},
+		},
+		fantasy.NewUserMessage("follow up"),
+	}
+	step := promptCachingStep("anthropic/claude-opus-5.5")
+	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant := res.Messages[1]
+	if !hasCacheMarker(assistant) {
+		t.Fatal("assistant message should carry a cache marker")
+	}
+	if len(assistant.Content) != 1 {
+		t.Fatalf("assistant content parts = %d, want 1 coalesced TextPart", len(assistant.Content))
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](assistant.Content[0])
+	if !ok || tp.Text != "first part\nsecond part" {
+		t.Errorf("coalesced text = %q, want %q", tp.Text, "first part\nsecond part")
+	}
+}
+
+func TestNormalizeOpenRouterCacheControl(t *testing.T) {
+	raw := []byte(`{
+		"model": "anthropic/claude-opus-5.5",
+		"messages": [
+			{"role": "system", "content": "sys", "cache_control": {"type": "ephemeral"}},
+			{"role": "user", "content": "u1"},
+			{"role": "assistant", "content": "a1", "cache_control": {"type": "ephemeral"}},
+			{"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "bash", "arguments": "{}"}, "cache_control": {"type": "ephemeral"}}]},
+			{"role": "tool", "tool_call_id": "c1", "content": "out", "cache_control": {"type": "ephemeral"}},
+			{"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}], "cache_control": {"type": "ephemeral"}},
+			{"role": "user", "content": "u2", "cache_control": {"type": "ephemeral"}}
+		]
+	}`)
+	got := normalizeOpenRouterCacheControl(raw)
+	var parsed struct {
+		Messages []map[string]json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(got, &parsed); err != nil {
+		t.Fatalf("unmarshal rewritten body: %v", err)
+	}
+	// 0: system keeps top-level cache_control and string content.
+	if _, ok := parsed.Messages[0]["cache_control"]; !ok {
+		t.Error("system message lost top-level cache_control")
+	}
+	// 1: unmarked user message normalized to content-part array without cache_control.
+	var u1Parts []map[string]any
+	if err := json.Unmarshal(parsed.Messages[1]["content"], &u1Parts); err != nil || len(u1Parts) != 1 || u1Parts[0]["text"] != "u1" {
+		t.Errorf("u1 content = %s, want 1-element text block array", parsed.Messages[1]["content"])
+	}
+	// 2: marked assistant message moves cache_control inside content[0].
+	if _, ok := parsed.Messages[2]["cache_control"]; ok {
+		t.Error("marked assistant message should not keep top-level cache_control")
+	}
+	var a1Parts []map[string]any
+	if err := json.Unmarshal(parsed.Messages[2]["content"], &a1Parts); err != nil || len(a1Parts) != 1 || a1Parts[0]["cache_control"] == nil {
+		t.Errorf("a1 content = %s, want cache_control inside content[0]", parsed.Messages[2]["content"])
+	}
+	// 3: tool-call assistant message with empty string content stays string "".
+	var tcContent string
+	if err := json.Unmarshal(parsed.Messages[3]["content"], &tcContent); err != nil || tcContent != "" {
+		t.Errorf("tool-call assistant content = %s, want empty string", parsed.Messages[3]["content"])
+	}
+	// 5: multi-part user message moves top-level cache_control onto last part.
+	if _, ok := parsed.Messages[5]["cache_control"]; ok {
+		t.Error("multi-part user message should not keep top-level cache_control")
+	}
+	var multiParts []map[string]any
+	if err := json.Unmarshal(parsed.Messages[5]["content"], &multiParts); err != nil || len(multiParts) != 2 || multiParts[1]["cache_control"] == nil {
+		t.Errorf("multi-part user content = %s, want cache_control on last part", parsed.Messages[5]["content"])
+	}
+	// 6: marked user message moves cache_control inside content[0].
+	if _, ok := parsed.Messages[6]["cache_control"]; ok {
+		t.Error("u2 should not keep top-level cache_control")
+	}
+	var u2Parts []map[string]any
+	if err := json.Unmarshal(parsed.Messages[6]["content"], &u2Parts); err != nil || len(u2Parts) != 1 || u2Parts[0]["cache_control"] == nil {
+		t.Errorf("u2 content = %s, want cache_control inside content[0]", parsed.Messages[6]["content"])
+	}
+
+	// Implicit-cache family (openai/) must be returned byte-for-byte unchanged.
+	implicitRaw := []byte(`{"model":"openai/gpt-6-luna-pro","messages":[{"role":"user","content":"hello"}]}`)
+	if gotImplicit := normalizeOpenRouterCacheControl(implicitRaw); !slices.Equal(gotImplicit, implicitRaw) {
+		t.Errorf("implicit-cache body was modified: %s", gotImplicit)
 	}
 }

@@ -42,6 +42,14 @@ type FinalizeInput struct {
 	Tools        []fantasy.AgentTool
 	Observer     Observer
 	SystemPrompt string
+	// Model is the active language model the finishing round ran on (the
+	// fallback model after a resilience swap). Recovery calls prefer it over
+	// the configured primary so they keep hitting the active model's warm
+	// prompt cache instead of calling a failed or circuit-open primary.
+	Model fantasy.LanguageModel
+	// StablePrefixTokens is the estimated token count of the governed tool
+	// definitions cached with the system prefix (WithStablePrefixTokens).
+	StablePrefixTokens int
 	// OnToolCall/OnToolResult route a finalize retry's tool events back into the
 	// SAME run sink as the ordinary loop. A retry that executes (or contains a
 	// panic from) a tool must persist one call/result pair and participate in the

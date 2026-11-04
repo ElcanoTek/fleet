@@ -1,15 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
 import type { ChatSchedule } from "./history";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import {
   describeCronExpression,
   describeCronExpressionShort,
 } from "@/app/shared/lib/cron";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
+import { openedByTouch } from "./toolsPicker";
 
 export function formatScheduleCadence(sc: ChatSchedule): string {
   if (sc.kind === "timer") {
@@ -140,17 +144,14 @@ export function PatrolBanner({
               {onToggleAutoApprove ? (
                 <button
                   type="button"
+                  aria-pressed={Boolean(isAutoApprove)}
                   onClick={onToggleAutoApprove}
                   title={
                     isAutoApprove
                       ? "Auto-approve is ON for this patrol chat (click to turn off)"
                       : "Enable Auto-approve so unattended patrol runs don't pause on approval cards"
                   }
-                  className={`inline-flex items-center gap-1 rounded-[var(--radius-pill)] border px-2 py-0.5 text-[0.68rem] font-medium transition ${
-                    isAutoApprove
-                      ? "border-[color-mix(in_srgb,var(--color-accent)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]"
-                      : "border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-[var(--color-border-strong)] hover:text-[var(--color-text-primary)]"
-                  }`}
+                  className="pill-btn inline-flex items-center gap-1"
                 >
                   <Icon name="zap" className="size-3" />
                   <span>{isAutoApprove ? "Auto-approve on" : "Auto-approve off"}</span>
@@ -167,7 +168,7 @@ export function PatrolBanner({
                     setBusyId(null);
                   }
                 }}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-40"
+                className="pill-btn font-medium disabled:opacity-40"
               >
                 Run now
               </button>
@@ -182,7 +183,7 @@ export function PatrolBanner({
                     setBusyId(null);
                   }
                 }}
-                className="rounded-[var(--radius-md)] border border-[var(--color-border)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] disabled:opacity-40"
+                className="pill-btn disabled:opacity-40"
               >
                 {isPaused ? "Resume" : "Pause"}
               </button>
@@ -199,7 +200,7 @@ export function PatrolBanner({
                     setBusyId(null);
                   }
                 }}
-                className="rounded-[var(--radius-md)] p-1 text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] disabled:opacity-40"
+                className="inline-flex size-[22px] items-center justify-center rounded-[var(--radius-pill)] border border-[var(--color-pill-border)] text-[var(--color-text-muted)] transition hover:border-[var(--color-status-error-border)] hover:bg-[var(--color-status-error-bg)] hover:text-[var(--color-status-error-fg)] disabled:opacity-40"
               >
                 <Icon name="close" className="size-3" />
               </button>
@@ -263,6 +264,12 @@ export function PatrolPopover({
   );
   const [autoApprove, setAutoApprove] = useState<boolean>(true);
   const [submitting, setSubmitting] = useState<boolean>(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useDialogA11y(true, panelRef, onClose, {
+    initialFocusRef: openedByTouch() ? panelRef : promptInputRef,
+  });
 
   const selectedPreset = PATROL_PRESETS.find((p) => p.id === presetId) ?? PATROL_PRESETS[1];
   const isCustom = selectedPreset.id === "custom";
@@ -293,246 +300,277 @@ export function PatrolPopover({
       ? customTz.trim() || "UTC"
       : browserTimeZone();
 
-  return (
-    <div
-      role="dialog"
-      aria-label="Configure in-chat patrol"
-      data-testid="patrol-popover"
-      className="fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom,0px)+5rem)] z-30 flex max-h-[calc(100dvh-6rem)] flex-col gap-2.5 overflow-y-auto rounded-[0.85rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] p-3.5 shadow-[var(--shadow-md)] motion-safe:animate-pop-up sm:absolute sm:inset-x-auto sm:bottom-[calc(100%+0.55rem)] sm:left-0 sm:w-[24rem]"
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5">
-          <Icon name="clock" className="size-3.5 text-[var(--color-accent)]" />
-          <span className="text-[0.82rem] font-semibold text-[var(--color-text-primary)]">
-            In-Chat Patrol & Timer
+  const modalContent = (
+    <div className="scrim fixed inset-0 z-[1200] flex items-stretch justify-center p-0 sm:items-center sm:p-4">
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        onClick={onClose}
+        className="absolute inset-0 cursor-default"
+      />
+      <div
+        ref={panelRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Configure in-chat patrol"
+        data-testid="patrol-popover"
+        className="picker-modal relative z-10 outline-none"
+      >
+        <header className="picker-modal__head">
+          <span aria-hidden="true" className="picker-icon-tile shrink-0">
+            <Icon name="clock" className="size-4" />
           </span>
-        </div>
-        <button
-          type="button"
-          aria-label="Close patrol setup"
-          onClick={onClose}
-          className="rounded p-1 text-[var(--color-text-muted)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]"
-        >
-          <Icon name="close" className="size-3.5" />
-        </button>
-      </div>
-
-      <p className="text-[0.72rem] leading-[1.45] text-[var(--color-text-muted)]">
-        Wakes this conversation on your cadence with full history, workspace files, and enabled connectors.
-      </p>
-
-      <div className="flex flex-wrap gap-1">
-        {PATROL_PRESETS.map((preset) => {
-          const active = preset.id === presetId;
-          return (
-            <button
-              key={preset.id}
-              type="button"
-              onClick={() => setPresetId(preset.id)}
-              className={`rounded-[var(--radius-pill)] border px-2 py-0.5 text-[0.7rem] font-medium transition ${
-                active
-                  ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                  : "border-[var(--color-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]"
-              }`}
-            >
-              {preset.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {isCustom ? (
-        <div className="grid gap-2" data-testid="patrol-custom-builder">
-          <div className="grid grid-cols-2 gap-1 rounded-[0.5rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5">
-            <button
-              type="button"
-              aria-pressed={customKind === "patrol"}
-              onClick={() => setCustomKind("patrol")}
-              className={`rounded-[0.38rem] px-2 py-1 text-[0.72rem] font-medium transition ${
-                customKind === "patrol"
-                  ? "bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              }`}
-            >
-              Recurring schedule
-            </button>
-            <button
-              type="button"
-              aria-pressed={customKind === "timer"}
-              onClick={() => setCustomKind("timer")}
-              className={`rounded-[0.38rem] px-2 py-1 text-[0.72rem] font-medium transition ${
-                customKind === "timer"
-                  ? "bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                  : "text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]"
-              }`}
-            >
-              One-time timer
-            </button>
+          <div className="min-w-0 flex-1">
+            <h2 className="picker-modal__title">In-Chat Patrol &amp; Timer</h2>
+            <p className="m-0 text-[0.75rem] leading-[1.35] text-[var(--color-text-subtle)]">
+              Wakes this conversation on your cadence with full history, workspace files, and enabled connectors.
+            </p>
           </div>
+          <CloseButton
+            label="Close patrol setup"
+            onClick={onClose}
+            className="any-pointer-coarse:size-11"
+          />
+        </header>
 
-          {customKind === "patrol" ? (
-            <PatrolSchedulePicker
-              compact
-              cron={customCron}
-              timezone={customTz}
-              onChangeCron={setCustomCron}
-              onChangeTimezone={setCustomTz}
-              testIdPrefix="patrol-popover-schedule"
-            />
-          ) : (
-            <div
-              data-testid="patrol-custom-timer"
-              className="grid gap-2 rounded-[0.55rem] border border-[var(--color-border)] bg-[var(--color-surface-inset)] p-2.5"
-            >
-              <div className="flex flex-wrap gap-1">
-                {CUSTOM_TIMER_PRESETS.map((tp) => {
-                  const active =
-                    customTimerAmount === tp.value &&
-                    customTimerUnit === tp.unit;
-                  return (
-                    <button
-                      key={tp.label}
-                      type="button"
-                      onClick={() => {
-                        setCustomTimerAmount(tp.value);
-                        setCustomTimerUnit(tp.unit);
-                      }}
-                      className={`rounded-[var(--radius-pill)] border px-2 py-0.5 text-[0.7rem] font-medium transition ${
-                        active
-                          ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                          : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]"
-                      }`}
-                    >
-                      In {tp.label}
-                    </button>
-                  );
-                })}
+        <div className="picker-modal__rail">
+          <div className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
+            Cadence
+          </div>
+          <div
+            className="flex flex-wrap gap-1.5"
+            role="group"
+            aria-label="Patrol cadence presets"
+          >
+            {PATROL_PRESETS.map((preset) => {
+              const active = preset.id === presetId;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => setPresetId(preset.id)}
+                  className="pill-btn hit-area-touch h-7 px-3 text-[0.75rem]"
+                >
+                  {preset.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="picker-modal__body grid content-start gap-3">
+          {isCustom ? (
+            <div className="grid gap-2.5" data-testid="patrol-custom-builder">
+              <div
+                className="seg w-full"
+                role="group"
+                aria-label="Schedule mode"
+              >
+                <button
+                  type="button"
+                  aria-pressed={customKind === "patrol"}
+                  onClick={() => setCustomKind("patrol")}
+                  className="seg-option flex-1 justify-center"
+                >
+                  Recurring schedule
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={customKind === "timer"}
+                  onClick={() => setCustomKind("timer")}
+                  className="seg-option flex-1 justify-center"
+                >
+                  One-time timer
+                </button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="grid gap-1 text-[0.68rem] font-medium text-[var(--color-text-muted)]">
-                  <span>Run once in</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={maxTimerAmount}
-                    aria-label="Timer duration"
-                    value={customTimerAmount}
-                    onChange={(e) =>
-                      setCustomTimerAmount(
-                        Math.min(
-                          maxTimerAmount,
-                          Math.max(1, Math.round(Number(e.target.value) || 1)),
-                        ),
-                      )
-                    }
-                    className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                  />
-                </label>
-                <label className="grid gap-1 text-[0.68rem] font-medium text-[var(--color-text-muted)]">
-                  <span>Unit</span>
-                  <select
-                    aria-label="Timer unit"
-                    value={customTimerUnit}
-                    onChange={(e) => {
-                      const nextUnit = e.target.value as "minutes" | "hours";
-                      const nextMax = nextUnit === "hours" ? 168 : 1440;
-                      setCustomTimerUnit(nextUnit);
-                      setCustomTimerAmount((prev) =>
-                        Math.min(nextMax, Math.max(1, Math.round(prev || 1))),
+
+              {customKind === "patrol" ? (
+                <PatrolSchedulePicker
+                  compact
+                  cron={customCron}
+                  timezone={customTz}
+                  onChangeCron={setCustomCron}
+                  onChangeTimezone={setCustomTz}
+                  testIdPrefix="patrol-popover-schedule"
+                />
+              ) : (
+                <div
+                  data-testid="patrol-custom-timer"
+                  className="grid gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-inset)] p-3"
+                >
+                  <div className="flex flex-wrap gap-1.5">
+                    {CUSTOM_TIMER_PRESETS.map((tp) => {
+                      const active =
+                        customTimerAmount === tp.value &&
+                        customTimerUnit === tp.unit;
+                      return (
+                        <button
+                          key={tp.label}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => {
+                            setCustomTimerAmount(tp.value);
+                            setCustomTimerUnit(tp.unit);
+                          }}
+                          className="pill-btn hit-area-touch h-6 px-2.5 text-[0.72rem]"
+                        >
+                          In {tp.label}
+                        </button>
                       );
-                    }}
-                    className="w-full rounded-[0.45rem] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                  >
-                    <option value="minutes">Minutes</option>
-                    <option value="hours">Hours</option>
-                  </select>
-                </label>
+                    })}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="grid gap-1 text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
+                      <span>Run once in</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxTimerAmount}
+                        aria-label="Timer duration"
+                        value={customTimerAmount}
+                        onChange={(e) =>
+                          setCustomTimerAmount(
+                            Math.min(
+                              maxTimerAmount,
+                              Math.max(1, Math.round(Number(e.target.value) || 1)),
+                            ),
+                          )
+                        }
+                        className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      />
+                    </label>
+                    <label className="grid gap-1 text-[0.72rem] font-medium text-[var(--color-text-secondary)]">
+                      <span>Unit</span>
+                      <select
+                        aria-label="Timer unit"
+                        value={customTimerUnit}
+                        onChange={(e) => {
+                          const nextUnit = e.target.value as "minutes" | "hours";
+                          const nextMax = nextUnit === "hours" ? 168 : 1440;
+                          setCustomTimerUnit(nextUnit);
+                          setCustomTimerAmount((prev) =>
+                            Math.min(nextMax, Math.max(1, Math.round(prev || 1))),
+                          );
+                        }}
+                        className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+                      >
+                        <option value="minutes">Minutes</option>
+                        <option value="hours">Hours</option>
+                      </select>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          <label className="grid gap-1">
+            <span className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
+              Patrol label
+            </span>
+            <input
+              type="text"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="Recurring Patrol"
+              className="h-9 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 text-[0.8125rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+          </label>
+
+          <label className="grid gap-1">
+            <span className="font-[family-name:var(--font-code)] text-[0.6875rem] uppercase tracking-[0.12em] text-[var(--color-text-subtle)]">
+              What to check &amp; do each run
+            </span>
+            <textarea
+              ref={promptInputRef}
+              rows={3}
+              value={patrolPrompt}
+              onChange={(e) => setPatrolPrompt(e.target.value)}
+              className="w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
+            />
+          </label>
+
+          <div className="picker-row picker-row--active m-0 items-center justify-between">
+            <div className="picker-row__body">
+              <div className="picker-row__name">
+                <Icon name="zap" className="size-3.5 text-[var(--color-accent)]" />
+                <span>Auto-approve tools while patrolling</span>
+              </div>
+              <div className="picker-row__desc">
+                Skip interactive approval cards during unattended patrol runs.
               </div>
             </div>
-          )}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={autoApprove}
+              aria-label="Auto-approve tools while patrolling"
+              onClick={() => setAutoApprove((v) => !v)}
+              className="switch"
+            >
+              <span className="switch__knob" />
+            </button>
+          </div>
         </div>
-      ) : null}
 
-      <label className="grid gap-1">
-        <span className="text-[0.68rem] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
-          Patrol label
-        </span>
-        <input
-          type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Recurring Patrol"
-          className="w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[0.78rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-        />
-      </label>
-
-      <label className="grid gap-1">
-        <span className="text-[0.68rem] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
-          What to check & do each run
-        </span>
-        <textarea
-          rows={3}
-          value={patrolPrompt}
-          onChange={(e) => setPatrolPrompt(e.target.value)}
-          className="w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[0.76rem] leading-[1.45] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-        />
-      </label>
-
-      <label className="flex cursor-pointer items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2.5 py-1.5 text-[0.74rem] text-[var(--color-text-secondary)]">
-        <span className="flex items-center gap-1.5">
-          <Icon name="zap" className="size-3.5 text-[var(--color-accent)]" />
-          <span>Auto-approve tools while patrolling</span>
-        </span>
-        <input
-          type="checkbox"
-          checked={autoApprove}
-          onChange={(e) => setAutoApprove(e.target.checked)}
-          className="accent-[var(--color-accent)]"
-        />
-      </label>
-
-      <div className="flex items-center justify-end gap-2 pt-0.5">
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-[var(--radius-md)] px-2.5 py-1 text-[0.75rem] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          disabled={
-            !patrolPrompt.trim() ||
-            (effectiveKind === "patrol" && !effectiveCron) ||
-            submitting
-          }
-          onClick={async () => {
-            setSubmitting(true);
-            try {
-              const ok = await onStartPatrol({
-                title: title.trim() || "Chat Patrol",
-                prompt: patrolPrompt.trim(),
-                cron: effectiveCron,
-                timezone: tz,
-                durationSeconds: effectiveDurationSeconds,
-                autoApprove,
-              });
-              if (ok !== false) {
-                onClose();
+        <footer className="picker-modal__foot">
+          <span className="min-w-0 truncate text-[0.75rem] text-[var(--color-text-subtle)]">
+            {effectiveKind === "timer"
+              ? "Runs once in this conversation"
+              : `Recurring schedule (${tz})`}
+          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={
+                !patrolPrompt.trim() ||
+                (effectiveKind === "patrol" && !effectiveCron) ||
+                submitting
               }
-            } finally {
-              setSubmitting(false);
-            }
-          }}
-          className="rounded-[var(--radius-md)] bg-[image:var(--gradient-action-fill)] px-3 py-1 text-[0.76rem] font-medium text-[var(--color-on-primary-fill)] transition enabled:hover:bg-[image:var(--gradient-action-fill-hover)] disabled:opacity-40"
-        >
-          {submitting
-            ? "Starting…"
-            : effectiveKind === "timer"
-              ? "Start timer"
-              : "Start patrol"}
-        </button>
+              onClick={async () => {
+                setSubmitting(true);
+                try {
+                  const ok = await onStartPatrol({
+                    title: title.trim() || "Chat Patrol",
+                    prompt: patrolPrompt.trim(),
+                    cron: effectiveCron,
+                    timezone: tz,
+                    durationSeconds: effectiveDurationSeconds,
+                    autoApprove,
+                  });
+                  if (ok !== false) {
+                    onClose();
+                  }
+                } finally {
+                  setSubmitting(false);
+                }
+              }}
+              className="btn btn-primary btn-sm"
+            >
+              {submitting
+                ? "Starting…"
+                : effectiveKind === "timer"
+                  ? "Start timer"
+                  : "Start patrol"}
+            </button>
+          </div>
+        </footer>
       </div>
     </div>
   );
+
+  if (typeof document === "undefined") {
+    return modalContent;
+  }
+  return createPortal(modalContent, document.body);
 }

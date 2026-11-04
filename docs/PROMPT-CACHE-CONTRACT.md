@@ -142,10 +142,31 @@ request):
 1. The **last system message** — anchors the stable system-prompt + tool prefix.
 2. The **compaction summary** (`WithCompactionSummaryBreakpoint`, enabled in the
    shared loop) — a stable boundary between the cached head and the evolving
-   tail after a compaction pass.
+   tail after a compaction pass. When no compaction summary is present yet,
+   Anthropic's spare 4th breakpoint is placed on the **most recent unmarked
+   `runtime_today` message** before the rolling tail: during a multi-step tool
+   turn this keeps the turn-start prefix refreshed across every tool step, and
+   on the next user turn (after `replayHistory` drops extended-thinking blocks
+   from the prior turn's tool calls) it gives Anthropic an explicit breakpoint
+   directly on that turn-start boundary even when the prior turn made >10 tool
+   calls (>20 content blocks, past Anthropic's 20-block lookback window).
 3. The **last two non-system messages** — a rolling recency window. **Not for
    Gemini** (`stablePrefixOnly`, below), which also drops 1 and 2 once the
    rest of the prompt outgrows them.
+
+**OpenRouter wire normalization (`openRouterCacheControlTransport`).**
+`fantasy`'s OpenRouter hook serializes single-text-part `user` and `assistant`
+messages as plain string `"content": "..."` with top-level `"cache_control"` on
+the message object. OpenRouter's OpenAI-to-Anthropic/Gemini translator honors
+top-level `"cache_control"` on `system` and `tool` messages, but ignores it on
+`user` and `assistant` messages unless `"content"` is a content-part array whose
+text block carries `"cache_control"`. `openRouterCacheControlTransport`
+(`internal/agentcore/provider.go`) normalizes non-empty string `"content"` on
+`user` and `assistant` messages for explicit-breakpoint families into a
+one-element `[{"type": "text", "text": "..."}]` array and moves any top-level
+`"cache_control"` onto the last content block (when `tool_calls` is empty), so
+Step 0 and every rolling `user`/`assistant` breakpoint write and read the full
+conversation history cache.
 
 **Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
 of a Gemini request into an explicit context cache — a billed write with a

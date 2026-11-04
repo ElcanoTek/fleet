@@ -220,7 +220,8 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		"You are a strict verifier judging whether a worker agent satisfied a requirement. "+
 			"Reply with a single word: YES if it is satisfied, otherwise NO."))
 	out, err := verifyAgent.Generate(vctx, fantasy.AgentCall{
-		Messages: []fantasy.Message{fantasy.NewUserMessage(user)},
+		Messages:        []fantasy.Message{fantasy.NewUserMessage(user)},
+		ProviderOptions: agentcore.RoutingProviderOptions(verifier.Model()),
 	})
 	if err != nil {
 		log.Printf("scheduled loop: llm verifier call failed: %v", err)

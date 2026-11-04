@@ -3744,11 +3744,16 @@ export function ChatExperience({
     dashboardToggledRef.current = false;
     // Not if the toggle came from inside a dialog that keeps the focus.
     if (document.activeElement?.closest('[role="dialog"]')) return;
-    document
-      .querySelector<HTMLElement>(
-        dashboardActive ? '[data-testid="dashboard-exit"]' : '[data-testid="dashboard-enter"]',
-      )
-      ?.focus();
+    if (dashboardActive) {
+      document.querySelector<HTMLElement>('[data-testid="dashboard-exit"]')?.focus();
+    } else {
+      const enterBtn = document.querySelector<HTMLElement>('[data-testid="dashboard-enter"]');
+      if (enterBtn && enterBtn.getClientRects().length > 0) {
+        enterBtn.focus();
+      } else {
+        document.querySelector<HTMLElement>('[data-testid="composer-more-button"]')?.focus();
+      }
+    }
   }, [dashboardActive]);
   const focusDashboardPanel = useCallback((key: string) => {
     setDashboardFocus("");
@@ -7414,7 +7419,7 @@ export function ChatExperience({
                     data-tip-bottom="Dashboard view (D)"
                     type="button"
                     onClick={toggleDashboardView}
-                    className="group/tbtn dash-enter inline-flex h-11 items-center justify-center gap-1.5 rounded-md px-2.5 text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:h-8 sm:rounded-full sm:border sm:border-[var(--color-border-strong)] sm:px-3"
+                    className="group/tbtn dash-enter hidden h-11 items-center justify-center gap-1.5 rounded-md px-2.5 text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex sm:h-8 sm:rounded-full sm:border sm:border-[var(--color-border-strong)] sm:px-3"
                   >
                     <Icon
                       name="grid"
@@ -7427,7 +7432,7 @@ export function ChatExperience({
                 ) : null}
                 <button
                   aria-label="Keyboard shortcuts"
-                  className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
+                  className="group/tbtn hidden size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:inline-flex sm:size-8"
                   data-tip-bottom="Keyboard shortcuts"
                   data-testid="shortcuts-button"
                   type="button"

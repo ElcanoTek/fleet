@@ -343,14 +343,29 @@ func buildInteractiveFinalize(tc TurnConfig) agentcore.FinalizeHook {
 	}
 }
 
+// finalizeModel picks the model a finalize recovery call runs on: the model
+// the finishing round actually drove (in.Model is the fallback after a
+// resilience swap), else the one the turn was configured with.
+func finalizeModel(in agentcore.FinalizeInput, configured fantasy.LanguageModel) fantasy.LanguageModel {
+	if in.Model != nil {
+		return in.Model
+	}
+	return configured
+}
+
 // streamLeakedToolCallRetry re-runs the turn WITH tools after a leaked call,
 // appending the leaked-call nudge, and returns the recovered final text.
 func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
+	model := finalizeModel(in, tc.Model)
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveLeakedToolCallNudge))
 	prepare := chainPrepareSteps(
 		agentcore.ToolCallInputSanitizeStep(),
 		agentcore.ModelContextBudgetStep(in.SystemPrompt, in.Tools, tc.MaxTokens),
-		agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
+		agentcore.PromptCachingStep(
+			model.Model(),
+			agentcore.WithCompactionSummaryBreakpoint(nil),
+			agentcore.WithStablePrefixTokens(in.StablePrefixTokens),
+		),
 	)
 	// Stream under the run's own ceilings: the budget guard blocks the next
 	// paid completion once the cost/token ceiling is hit — without it this
@@ -359,7 +374,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	if in.GuardStep != nil {
 		prepare = in.GuardStep(prepare)
 	}
-	agent := fantasy.NewAgent(tc.Model,
+	agent := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		// Reuse agentcore.Run's final governed roster. This keeps the finalize
 		// retry inside the same policy/credential/panic boundaries as the main
@@ -371,7 +386,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 	temp := tc.Temperature
 	var repair fantasy.RepairToolCallFunction
 	if in.RepairToolCall != nil {
-		repair = in.RepairToolCall(tc.Model.Model())
+		repair = in.RepairToolCall(model.Model())
 	}
 	var sb strings.Builder
 	// The retry is a multi-step loop like the main stream, so its steps get
@@ -381,6 +396,7 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 		// The run's out-of-roster recovery (#1744), as on the main stream.
 		RepairToolCall: repair,
 		// The run's step cap (CHAT_MAX_ITERATIONS) applies to the retry too —
@@ -444,13 +460,14 @@ func streamLeakedToolCallRetry(ctx context.Context, tc TurnConfig, in agentcore.
 // a usable answer instead of a truncated one. If this ever grows tools or a
 // loop, it needs the guard.
 func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.FinalizeInput) (string, error) {
+	model := finalizeModel(in, tc.Model)
 	convo := append(append([]fantasy.Message{}, in.Messages...), fantasy.NewUserMessage(interactiveForceFinalSummaryNudge))
-	agent := fantasy.NewAgent(tc.Model,
+	agent := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(in.SystemPrompt),
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			agentcore.ToolCallInputSanitizeStep(),
 			agentcore.ModelContextBudgetStep(in.SystemPrompt, nil, tc.MaxTokens),
-			agentcore.PromptCachingStep(tc.Model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
+			agentcore.PromptCachingStep(model.Model(), agentcore.WithCompactionSummaryBreakpoint(nil)),
 		)),
 	)
 	maxTokens := int64(tc.MaxTokens)
@@ -460,6 +477,7 @@ func streamForceFinalSummary(ctx context.Context, tc TurnConfig, in agentcore.Fi
 		Messages:        convo,
 		MaxOutputTokens: &maxTokens,
 		Temperature:     &temp,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 		OnTextDelta: func(_, text string) error {
 			sb.WriteString(text)
 			if in.Observer != nil {

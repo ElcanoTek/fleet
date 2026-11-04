@@ -245,8 +245,30 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 			if i == summaryIdx || isBudgetWindDownNotice(msgs[i]) {
 				continue
 			}
+			msgs[i] = withAssistantTextCoalesced(msgs[i])
 			msgs[i].ProviderOptions = cc
 			marked++
+		}
+
+		// Spare 4th breakpoint when no compaction summary is present: anchor
+		// the most recent unmarked runtime_today message before the rolling
+		// tail. During a multi-step tool turn this keeps the turn-start prefix
+		// (system + prior history + current user message + runtime_today)
+		// refreshed across every tool round; on the NEXT user turn (after
+		// replayHistory strips extended-thinking blocks from the tool rounds)
+		// it gives Anthropic an explicit breakpoint directly on that turn-start
+		// boundary even when the turn made >10 tool calls (>20 content blocks,
+		// past Anthropic's 20-block lookback window).
+		if rolling > 0 && summaryIdx < 0 {
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].ProviderOptions != nil {
+					continue
+				}
+				if isRuntimeDateMessage(msgs[i]) {
+					msgs[i].ProviderOptions = cc
+					break
+				}
+			}
 		}
 
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
@@ -347,4 +369,45 @@ func isCompactionSummaryMessage(m fantasy.Message) bool {
 		return strings.HasPrefix(tp.Text, compactionSummaryPrefix)
 	}
 	return false
+}
+
+const runtimeDateMessagePrefix = "## Runtime today (authoritative)\n\n- runtime_today: "
+
+// isRuntimeDateMessage reports whether m is a per-turn runtime_today note
+// produced by RuntimeDateTurnSuffix / RuntimeDateMessage.
+func isRuntimeDateMessage(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser || len(m.Content) != 1 {
+		return false
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](m.Content[0])
+	return ok && strings.HasPrefix(tp.Text, runtimeDateMessagePrefix)
+}
+
+// withAssistantTextCoalesced collapses an assistant message whose Content
+// consists solely of multiple TextParts into a single TextPart joined by "\n"
+// (the exact concatenation fantasy's OpenRouter hook performs). In fantasy's
+// OpenRouter hook (language_model_hooks.go), an assistant message with
+// len(Content) > 1 and no tool calls attaches cache_control via
+// assistantMsg.Content.SetExtraFields, which openai-go drops when marshaling
+// the union wrapper; collapsing to len(Content) == 1 takes the single-part
+// branch that preserves cache_control on the message object.
+func withAssistantTextCoalesced(m fantasy.Message) fantasy.Message {
+	if m.Role != fantasy.MessageRoleAssistant || len(m.Content) <= 1 {
+		return m
+	}
+	var parts []string
+	for _, part := range m.Content {
+		tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part)
+		if !ok {
+			return m
+		}
+		if tp.Text != "" {
+			parts = append(parts, tp.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return m
+	}
+	m.Content = []fantasy.MessagePart{fantasy.TextPart{Text: strings.Join(parts, "\n")}}
+	return m
 }

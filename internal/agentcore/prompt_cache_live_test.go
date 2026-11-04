@@ -205,7 +205,10 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	transport := &liveCacheTransport{}
 	provider, err := openrouter.New(
 		openrouter.WithAPIKey(key),
-		openrouter.WithHTTPClient(&http.Client{Transport: transport, Timeout: 10 * time.Minute}),
+		openrouter.WithHTTPClient(&http.Client{
+			Transport: &openRouterCacheControlTransport{next: transport},
+			Timeout:   10 * time.Minute,
+		}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -321,6 +324,19 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	}
 	if implicitMisses > 1 {
 		t.Errorf("%s: %d requests left to the implicit cache read nothing from it (1 miss allowed)", slug, implicitMisses)
+	}
+	// For explicit rolling-window families (Anthropic), request 2 (Turn 2 Step 0)
+	// must read Turn 1's user history in addition to the system prompt, and
+	// later requests (Turn 2 Step 1, Turn 3) must read strictly more cached
+	// tokens than request 2 as the cached conversation prefix grows.
+	if explicit && !stablePrefixOnly(slug) && len(transport.records) >= 3 {
+		req2Cached := transport.records[1].CachedTokens
+		for i := 2; i < len(transport.records); i++ {
+			if transport.records[i].CachedTokens <= req2Cached {
+				t.Errorf("%s: request %d cached_tokens=%d did not grow past request 2 cached_tokens=%d (rolling history breakpoint did not take effect)",
+					slug, i+1, transport.records[i].CachedTokens, req2Cached)
+			}
+		}
 	}
 }
 

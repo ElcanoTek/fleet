@@ -338,7 +338,12 @@ test("dashboard view on a phone switches between the board and the chat", async 
   await page.setViewportSize({ width: 1280, height: 844 });
   await openDashboardChat(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.getByTestId("dashboard-enter").click();
+  // On phone viewports, the top-bar duplicate Dashboard and Keyboard shortcuts
+  // buttons are hidden; Dashboard view is entered from the composer More menu.
+  await expect(page.getByTestId("dashboard-enter")).toBeHidden();
+  await expect(page.getByTestId("shortcuts-button")).toBeHidden();
+  await page.getByTestId("composer-more-button").click();
+  await page.getByTestId("composer-dashboard-toggle").click();
   await expect(page.getByTestId("dashboard-board")).toBeVisible();
   await expect(page.getByTestId("dashboard-panel")).toHaveCount(3);
   await page.getByRole("button", { name: "Chat", exact: true }).click();

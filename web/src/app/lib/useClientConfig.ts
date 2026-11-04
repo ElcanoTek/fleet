@@ -31,6 +31,7 @@ const APP_NAME = "Fleet";
 
 export type ClientSupportContact = {
   label: string;
+  mobile_label?: string;
   email: string;
   title?: string;
   message?: string;

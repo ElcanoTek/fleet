@@ -10,6 +10,7 @@ package agentcore
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"charm.land/fantasy"
@@ -63,5 +64,57 @@ func TestStreamRound_CompactionSummaryBreakpointWired(t *testing.T) {
 	// system + summary + last-two window = 4, Anthropic's per-request maximum.
 	if len(markedRoles) != 4 {
 		t.Errorf("marked messages = %d (%v), want 4 (system + summary + last two)", len(markedRoles), markedRoles)
+	}
+}
+
+type generateCapturingMockModel struct {
+	namedMockModel
+	generateFunc func(ctx context.Context, call fantasy.Call) (*fantasy.Response, error)
+}
+
+func (m *generateCapturingMockModel) Generate(ctx context.Context, call fantasy.Call) (*fantasy.Response, error) {
+	return m.generateFunc(ctx, call)
+}
+
+func TestTerminalStructuredOutput_PlacesCacheBreakpoints(t *testing.T) {
+	var marked int
+	model := &generateCapturingMockModel{
+		namedMockModel: namedMockModel{name: "anthropic/claude-opus-5.5"},
+	}
+	model.generateFunc = func(_ context.Context, call fantasy.Call) (*fantasy.Response, error) {
+		for _, msg := range call.Prompt {
+			if _, ok := msg.ProviderOptions[anthropic.Name]; ok {
+				marked++
+			}
+		}
+		return &fantasy.Response{
+			Content: []fantasy.Content{
+				fantasy.ToolCallContent{
+					ToolCallID: "tc-struct",
+					ToolName:   structuredOutputToolName,
+					Input:      `{"ok":true}`,
+				},
+			},
+			FinishReason: fantasy.FinishReasonToolCalls,
+		}, nil
+	}
+
+	e := newMockEngine(t, model)
+	orch := newOrchestrationState(e.logSession, 50)
+	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
+	msgs := []fantasy.Message{
+		fantasy.NewUserMessage("check the status"),
+		newAssistantMessage("checked"),
+	}
+	out, err := e.generateTerminalStructuredOutput(context.Background(), model, "system prompt", msgs, schema, 1024, orch)
+	if err != nil {
+		t.Fatalf("generateTerminalStructuredOutput failed: %v", err)
+	}
+	if string(out) != `{"ok":true}` {
+		t.Fatalf("output = %s, want {\"ok\":true}", out)
+	}
+	// system + last two non-system messages = 3 breakpoints.
+	if marked != 3 {
+		t.Errorf("terminal structured output marked %d messages, want 3", marked)
 	}
 }

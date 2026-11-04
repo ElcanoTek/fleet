@@ -502,28 +502,6 @@ export function Composer({
   }, [personaPickerOpen, personaPickerRef]);
 
   useEffect(() => {
-    if (!patrolPopoverOpen) return;
-    const firstDialogControl = patrolPopoverRef.current?.querySelector<HTMLElement>(
-      '[role="dialog"] button:not([disabled]), [role="dialog"] input:not([disabled]), [role="dialog"] textarea:not([disabled])',
-    );
-    (firstDialogControl ?? patrolButtonRef.current ?? moreButtonRef.current)?.focus();
-  }, [patrolPopoverOpen]);
-
-  useEffect(() => {
-    if (!patrolPopoverOpen) return;
-    const handleMouseDown = (event: MouseEvent) => {
-      if (
-        patrolPopoverRef.current &&
-        !patrolPopoverRef.current.contains(event.target as Node)
-      ) {
-        setPatrolPopoverOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handleMouseDown);
-    return () => document.removeEventListener("mousedown", handleMouseDown);
-  }, [patrolPopoverOpen]);
-
-  useEffect(() => {
     if (!moreMenuOpen) return;
     const firstItem = moreMenuRef.current?.querySelector<HTMLElement>(
       '[role="menu"] [role^="menuitem"]:not([disabled])',

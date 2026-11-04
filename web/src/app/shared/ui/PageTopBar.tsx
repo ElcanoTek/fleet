@@ -116,13 +116,18 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
                   setCopied(false);
                   setDialogOpen(true);
                 }}
-                className="inline-flex h-8 max-w-[9.5rem] shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:max-w-[16rem] sm:px-3"
+                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:max-w-[16rem] sm:px-3"
               >
                 <Icon
                   name="mail"
                   className="size-3.5 shrink-0 text-[var(--color-primary)]"
                 />
-                <span className="truncate">{activeSupport.label}</span>
+                <span className="sm:hidden">
+                  {activeSupport.mobile_label?.trim() || "Help"}
+                </span>
+                <span className="hidden truncate sm:inline">
+                  {activeSupport.label}
+                </span>
               </button>
             ) : null}
             {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
