@@ -21,6 +21,8 @@ test("a signed-in user can open the guides from the rail and read a guide", asyn
   });
 
   await page.goto("/chat");
+  // The guides live in the account menu, beside Settings.
+  await page.getByRole("button", { name: /account menu/i }).click();
   await page.getByTestId("nav-to-help").click();
 
   // The index: both guides, as cards.

@@ -90,6 +90,13 @@ async function walkToLaunch(calls: Call[], onClose: () => void = () => {}) {
   // The preamble: the expanding-mind ladder and the trust path.
   expect(screen.getByTestId("launchpad-mind").querySelectorAll("li")).toHaveLength(4);
   expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Suggest & ask");
+  // Each rung has its own picture; the meme's brain badge grows rung by rung.
+  const brains = screen
+    .getAllByTestId("launchpad-mind-brain")
+    .map((b) => b.querySelector("svg")?.getAttribute("class")?.split(" ")[0]);
+  expect(brains).toEqual(["size-3.5", "size-4", "size-5", "size-6"]);
+  const mollick = screen.getByRole("link", { name: "Dr. Ethan Mollick" });
+  expect(mollick.getAttribute("href")).toBe("https://www.oneusefulthing.org/");
   next();
   await screen.findByTestId("launchpad-readiness");
   await waitFor(() => expect(screen.getByTestId("launchpad-readiness").textContent).not.toMatch(/Checking tools/));
@@ -146,6 +153,8 @@ describe("PatrolLaunchpad", () => {
     expect(prompt).toMatch(/\(use Deal Desk\)/);
     expect(prompt).toMatch(/\(use Gmail\)/);
     expect(screen.getByTestId("launchpad-summary").textContent).toContain("Gmail, Deal Desk");
+    // It says where the patrol will live: in Chat, under its name.
+    expect(screen.getByTestId("launchpad-where").textContent).toMatch(/In Chat.*as Deals & inbox patrol/);
 
     fireEvent.click(screen.getByTestId("launchpad-launch"));
     await screen.findByTestId("launchpad-done");

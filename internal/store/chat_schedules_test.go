@@ -122,3 +122,60 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 		t.Errorf("expected 0 active/paused schedules after completion+cancel, got %d", len(activeList))
 	}
 }
+
+// TestListUserPatrols is the Patrols hub's index: the user's own live
+// recurring patrols across chats, with each chat's title — not timers, not
+// cancelled patrols, not another user's, and not patrols in deleted chats.
+func TestListUserPatrols(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me, other = "me@elcanotek.com", "other@elcanotek.com"
+
+	mk := func(user, convTitle, title, cron string) (*Conversation, *ChatSchedule) {
+		t.Helper()
+		conv, err := s.CreateConversation(ctx, user, convTitle, "victoria", "", false)
+		if err != nil {
+			t.Fatalf("CreateConversation: %v", err)
+		}
+		in := ChatScheduleInput{ConversationID: conv.ID, UserEmail: user, Title: title, Prompt: "check", CronExpr: cron, Timezone: "UTC"}
+		if cron == "" {
+			in.DurationSeconds = 600
+		}
+		sched, err := s.CreateChatSchedule(ctx, in)
+		if err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+		return conv, sched
+	}
+
+	_, active := mk(me, "Deals chat", "Deal sweep", "0 8 * * 1-5")
+	pausedConv, paused := mk(me, "Inbox chat", "Inbox triage", "0 */2 * * *")
+	st := ChatScheduleStatusPaused
+	if _, err := s.UpdateChatSchedule(ctx, me, pausedConv.ID, paused.ID, ChatSchedulePatch{Status: &st}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	mk(me, "Timer chat", "One-shot", "")
+	cancelConv, cancelled := mk(me, "Old chat", "Old patrol", "0 9 * * 1")
+	if _, err := s.CancelChatSchedule(ctx, me, cancelConv.ID, cancelled.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	gone, _ := mk(me, "Deleted chat", "Gone patrol", "0 9 * * *")
+	if err := s.Delete(ctx, me, gone.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	mk(other, "Their chat", "Their patrol", "0 9 * * *")
+
+	got, err := s.ListUserPatrols(ctx, me)
+	if err != nil {
+		t.Fatalf("ListUserPatrols: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d patrols, want 2 (active + paused): %+v", len(got), got)
+	}
+	if got[0].ID != active.ID || got[0].ConversationTitle != "Deals chat" || got[0].Status != ChatScheduleStatusActive {
+		t.Errorf("first row should be the active patrol with its chat title, got %+v", got[0])
+	}
+	if got[1].ID != paused.ID || got[1].ConversationTitle != "Inbox chat" || got[1].Status != ChatScheduleStatusPaused {
+		t.Errorf("second row should be the paused patrol, got %+v", got[1])
+	}
+}

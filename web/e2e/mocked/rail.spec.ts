@@ -47,7 +47,10 @@ test("the rail marks the active surface and links to the other", async ({ page }
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   await expect(page.getByRole("link", { name: "Chat" })).toHaveAttribute("aria-current", "page");
-  await expect(page.getByRole("link", { name: "Operations Center" })).toBeVisible();
+  // The rail names the ways of working: Chat · Tasks (the Operations Center) ·
+  // Patrols (an index of patrol chats, and the Launchpad wizard).
+  await expect(page.getByRole("link", { name: "Tasks" })).toBeVisible();
+  await expect(page.getByTestId("launchpad-button")).toHaveText(/Patrols/);
 });
 
 test("the account menu carries Settings (+subtext) + Theme + Sign out on chat", async ({ page }) => {

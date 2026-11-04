@@ -91,3 +91,19 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 		"summary": draft.Summary,
 	})
 }
+
+// handlePatrols backs GET /patrols: the caller's active and paused recurring
+// patrols across their chats, for the Patrols hub in the navigation rail. A
+// patrol lives in its chat; this is only the index of them.
+func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	items, err := s.store.ListUserPatrols(r.Context(), userFromCtx(r.Context()))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"patrols": items})
+}

@@ -406,6 +406,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       label="Patrol Launchpad"
       scrimLabel="Close the Patrol Launchpad"
       onDismiss={close}
+      // Above the rail's overlay drawer (640–900px), which it is opened from.
+      layer="rail"
       testId="patrol-launchpad"
       className="flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-[46rem] flex-col overflow-hidden"
     >
@@ -610,7 +612,7 @@ function LaunchpadHeader({
           <div>
             <h2 className="text-lg font-semibold leading-tight text-[var(--color-text-primary)]">Patrol Launchpad</h2>
             <p className="text-[0.82rem] text-[var(--color-text-secondary)]">
-              Put an assistant on patrol over your tools — in about two minutes.
+              Set up a new patrol in about two minutes. Once launched, it lives in Chat.
             </p>
           </div>
         </div>
@@ -673,39 +675,109 @@ const CARD =
 
 /* ── 0 · Why (the expanding mind) ───────────────────────────────────────── */
 
-// The rungs of the expanding-mind meme: each one hands the assistant a
-// little more of the work. The brain grows and glows as you climb; the top
-// rung is where a patrol with auto-approve lives.
-const MIND_RUNGS = [
+// The rungs of the expanding-mind meme. Each rung has its own scene (what the
+// assistant is doing) and a one-line quote (what you would say to it); the
+// little brain badge in the corner is the meme's joke, growing and glowing a
+// size per rung until the top one is spinning in its own galaxy.
+type MindRung = {
+  title: string;
+  quote: string;
+  text: string;
+  meme: string;
+  scene: "chat" | "report" | "radar" | "galaxy";
+  brain: string;
+};
+
+const MIND_RUNGS: MindRung[] = [
   {
     title: "Chat with Fleet",
-    text: "You ask, it answers. Useful — and it only works while you do.",
+    quote: "“Hey Fleet, what did we spend yesterday?”",
+    text: "You ask, it answers — then waits politely for you to ask again.",
     meme: "Small brain",
-    size: "size-4",
-    glow: "0%",
+    scene: "chat",
+    brain: "size-3.5",
   },
   {
     title: "Schedule reports",
-    text: "The numbers arrive every Monday. You still read them and decide.",
+    quote: "“Email me the pacing report every Monday.”",
+    text: "The numbers show up on time. Reading them and deciding is still all you.",
     meme: "Bigger brain",
-    size: "size-5",
-    glow: "28%",
+    scene: "report",
+    brain: "size-4",
   },
   {
     title: "Patrols that analyze and decide",
-    text: "It watches your tools, spots what matters and tells you what to do about it.",
+    quote: "“Watch my deals. Tell me what’s broken and how to fix it.”",
+    text: "It checks your tools on a schedule and brings you findings, not spreadsheets.",
     meme: "Glowing brain",
-    size: "size-7",
-    glow: "55%",
+    scene: "radar",
+    brain: "size-5",
   },
   {
     title: "Let it act on your behalf",
-    text: "Routine fixes happen while you sleep — every action listed for you to check.",
+    quote: "“Fix the routine stuff while I sleep. Brief me over coffee.”",
+    text: "Routine fixes just happen — every action listed for you to check.",
     meme: "Galaxy brain",
-    size: "size-10",
-    glow: "95%",
+    scene: "galaxy",
+    brain: "size-6",
   },
-] as const;
+];
+
+/** MindScene draws a rung's picture from Flag icons; it is decoration only. */
+function MindScene({ rung }: { rung: MindRung }) {
+  const badge = (glow: string) => (
+    <span
+      className={`absolute -bottom-1 -right-1 inline-flex items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5 text-[var(--color-primary)] ${glow}`}
+      data-testid="launchpad-mind-brain"
+    >
+      <Icon name="brain" className={rung.brain} />
+    </span>
+  );
+  if (rung.scene === "chat") {
+    return (
+      <span className="relative inline-flex size-12 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]">
+        <Icon name="message" className="size-5" />
+        {badge("")}
+      </span>
+    );
+  }
+  if (rung.scene === "report") {
+    return (
+      <span className="relative inline-flex size-12 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface-1))] text-[var(--color-text-secondary)]">
+        <Icon name="calendar" className="size-5" />
+        <Icon name="file-text" className="absolute left-1 top-1 size-3 text-[var(--color-text-muted)]" />
+        {badge("shadow-[0_0_6px_color-mix(in_srgb,var(--color-primary)_30%,transparent)]")}
+      </span>
+    );
+  }
+  if (rung.scene === "radar") {
+    return (
+      <span className="relative inline-flex size-12 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--color-primary)_55%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_14%,var(--color-surface-1))] text-[var(--color-primary)]">
+        <span className="absolute inset-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] motion-safe:animate-ping" />
+        <Icon name="target" className="size-5" />
+        <Icon name="activity" className="absolute -left-1 top-0 size-3.5" />
+        {badge("shadow-[0_0_10px_color-mix(in_srgb,var(--color-primary)_55%,transparent)]")}
+      </span>
+    );
+  }
+  return (
+    <span className="relative inline-flex size-12 items-center justify-center">
+      {/* The galaxy: a slow-turning halo with sparkles in orbit. */}
+      <span className="absolute -inset-1.5 rounded-full bg-[conic-gradient(from_0deg,color-mix(in_srgb,var(--color-primary)_55%,transparent),color-mix(in_srgb,var(--color-accent)_55%,transparent),transparent,color-mix(in_srgb,var(--color-primary)_55%,transparent))] opacity-80 blur-[2px] motion-safe:animate-[spin_7s_linear_infinite]" />
+      <span className="absolute -inset-1.5 motion-safe:animate-[spin_4s_linear_infinite_reverse]">
+        <Icon name="sparkles" className="absolute left-0 top-0 size-3 text-[var(--color-accent)]" />
+        <Icon name="zap" className="absolute bottom-0 right-0 size-3.5 text-[var(--color-primary)]" />
+      </span>
+      {/* The top rung's brain is the whole picture: galaxy-sized, at the centre. */}
+      <span
+        className="relative inline-flex size-11 items-center justify-center rounded-full bg-[var(--color-primary-fill)] shadow-[0_0_14px_color-mix(in_srgb,var(--color-primary)_80%,transparent)]"
+        data-testid="launchpad-mind-brain"
+      >
+        <Icon name="brain" className={`${rung.brain} text-[var(--color-on-primary-fill)]`} />
+      </span>
+    </span>
+  );
+}
 
 function WhyStep({ readOnly }: { readOnly: boolean }) {
   return (
@@ -720,23 +792,14 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           return (
             <li
               key={r.title}
-              className={`grid grid-cols-[3.25rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
+              className={`grid grid-cols-[3.75rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
                 top
-                  ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_22%,transparent),transparent_70%)]"
+                  ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_18%,transparent),transparent_70%)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
               }`}
             >
-              <span
-                aria-hidden="true"
-                className={`relative inline-flex size-12 items-center justify-center rounded-full text-[var(--color-primary)] ${
-                  top ? "motion-safe:animate-pulse" : ""
-                }`}
-                style={{
-                  background: `radial-gradient(circle, color-mix(in srgb, var(--color-primary) ${r.glow}, transparent) 0%, transparent 70%)`,
-                }}
-              >
-                <Icon name="brain" className={r.size} />
-                {top ? <Icon name="sparkles" className="absolute -right-1 -top-1 size-4" /> : null}
+              <span aria-hidden="true" className="flex justify-center">
+                <MindScene rung={r} />
               </span>
               <span className="min-w-0">
                 <span className="flex flex-wrap items-baseline justify-between gap-x-2">
@@ -745,7 +808,10 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
                     {r.meme}
                   </span>
                 </span>
-                <span className="block text-[0.8rem] text-[var(--color-text-secondary)]">{r.text}</span>
+                <q className="block text-[0.8rem] italic text-[var(--color-text-primary)] before:content-none after:content-none">
+                  {r.quote}
+                </q>
+                <span className="block text-[0.76rem] text-[var(--color-text-secondary)]">{r.text}</span>
               </span>
             </li>
           );
@@ -753,7 +819,16 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
       </ol>
       <div className={`${CARD} mt-4 px-4 py-3 text-[0.82rem] leading-relaxed text-[var(--color-text-secondary)]`}>
         <p>
-          Ethan Mollick calls the gap between what AI can already do and what we actually use it for a{" "}
+          <a
+            className="text-[var(--color-link)] underline underline-offset-2"
+            href="https://www.oneusefulthing.org/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Dr. Ethan Mollick
+          </a>{" "}
+          — Wharton professor and author of the <em>One Useful Thing</em> newsletter — calls the gap between what AI
+          can already do and what we actually use it for a{" "}
           <strong className="text-[var(--color-text-primary)]">capability overhang</strong> (
           <a
             className="text-[var(--color-link)] underline underline-offset-2"
@@ -846,7 +921,42 @@ function WelcomeStep({
           {memories === null ? "Checking memories…" : `${memories.length} memor${memories.length === 1 ? "y" : "ies"} saved`}
         </ReadyChip>
       </div>
+      <WhereItLives />
     </div>
+  );
+}
+
+// WhereItLives answers the question the Launchpad otherwise invites: "where
+// are my patrols?" Not here. This wizard only sets new ones up; each patrol is
+// an ordinary chat that wakes on its schedule, so it lives in the Chat list,
+// with the Patrol bar on top for Run now, Pause and Stop.
+function WhereItLives({ title }: { title?: string }) {
+  return (
+    <p
+      className={`${CARD} mt-4 flex items-start gap-2.5 px-3.5 py-2.5 text-[0.8rem] leading-relaxed text-[var(--color-text-secondary)]`}
+      data-testid="launchpad-where"
+    >
+      <Icon name="message" className="mt-0.5 size-4 shrink-0 text-[var(--color-primary)]" />
+      <span>
+        <strong className="text-[var(--color-text-primary)]">Where does a patrol live?</strong> In Chat. Each patrol is
+        a chat that wakes up on its own schedule — after launch you’ll find it in your chat list
+        {title ? (
+          <>
+            {" "}
+            as <strong className="text-[var(--color-text-primary)]">{title}</strong>
+          </>
+        ) : null}
+        , with the Patrol bar on top to run, pause or stop it. This Launchpad only sets new patrols up.{" "}
+        <a
+          className="text-[var(--color-link)] underline underline-offset-2"
+          href="/help/chat#in-chat-patrols-and-timers"
+          target="_blank"
+          rel="noopener"
+        >
+          How patrols work
+        </a>
+      </span>
+    </p>
   );
 }
 
@@ -1217,7 +1327,7 @@ function WatchStep({
                 <span className="min-w-0">
                   <span className="block text-[0.88rem] font-medium text-[var(--color-text-primary)]">{g.title}</span>
                   <span className="block text-[0.78rem] text-[var(--color-text-secondary)]">{g.blurb}</span>
-                  <span className="mt-1 block text-[0.72rem] text-[var(--color-text-muted)]">
+                  <span className="mt-1 block text-[0.72rem] text-[var(--color-text-secondary)]">
                     {using.length > 0 ? `Uses ${using.map(connectorLabel).slice(0, 3).join(", ")}` : `Needs ${g.needs}`}
                   </span>
                 </span>
@@ -1440,6 +1550,8 @@ function LaunchStep({
         Check the plan, polish the instructions if you like, then launch. Nothing is created until you press{" "}
         <strong className="text-[var(--color-text-primary)]">Launch patrol</strong>.
       </StepTitle>
+      <WhereItLives title={title.trim() || "My patrol"} />
+      <div className="h-3" aria-hidden="true" />
       <dl className={`${CARD} grid gap-2 px-4 py-3`} data-testid="launchpad-summary">
         {rows.map((r) => (
           <div key={r.label} className="grid grid-cols-[1.25rem_5.5rem_1fr] items-start gap-2 text-[0.83rem]">
@@ -1571,7 +1683,8 @@ function LaunchProgress({
                   not start right now — press <strong>Run now</strong> in the Patrol bar, or it runs at its next scheduled time.
                 </span>
               )}{" "}
-              After that it reports back on schedule — {cadence}. Pause or stop it from the Patrol bar, or ask in the chat to change it.
+              After that it reports back on schedule — {cadence}. Find it any time in your Chat list; pause or stop it from
+              the Patrol bar at the top of that chat, or ask there to change it.
             </p>
             {mode !== "act" ? (
               <p className="mx-auto mt-3 max-w-md rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8rem] text-[var(--color-text-secondary)]">

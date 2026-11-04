@@ -10,7 +10,7 @@ import { loginViaCookie } from "./_session";
 
 type Call = { url: string; method: string; body: unknown };
 
-async function mockShell(page: Page, calls: Call[]) {
+async function mockShell(page: Page, calls: Call[], patrols: unknown[] = []) {
   const record = (r: Route) => {
     const req = r.request();
     let body: unknown = undefined;
@@ -47,6 +47,7 @@ async function mockShell(page: Page, calls: Call[]) {
     record(r);
     return r.fulfill({ json: { id: "m1" } });
   });
+  await page.route("**/api/patrols", (r) => r.fulfill({ json: { patrols } }));
   await page.route("**/api/me", (r) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
   await page.route("**/api/personas", (r) =>
     r.fulfill({ json: { personas: ["assistant", "trader"], default: "assistant", user_personas: [] } }),
@@ -155,3 +156,19 @@ for (const scheme of ["light", "dark"] as const) {
     });
   });
 }
+
+test("with patrols already running, Patrols lists them and offers New patrol", async ({ page }) => {
+  await mockShell(page, [], [
+    { id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "Deals chat", cron: "0 8 * * 1-5", status: "active" },
+    { id: "s2", conversation_id: "c2", title: "Inbox triage", conversation_title: "Inbox triage", cron: "0 */2 * * *", status: "paused" },
+  ]);
+  await page.goto("/help");
+  await page.getByTestId("launchpad-button").click();
+  const menu = page.getByRole("menu", { name: "Patrols" });
+  await expect(menu).toBeVisible({ timeout: 15_000 });
+  await expect(menu.getByText("Each patrol is a chat")).toBeVisible();
+  await expect(page.getByTestId("patrols-menu-item-s2")).toContainText("Paused");
+  await expect(page.getByRole("dialog", { name: "Patrol Launchpad" })).toHaveCount(0);
+  await page.getByTestId("patrols-menu-new").click();
+  await expect(page.getByRole("dialog", { name: "Patrol Launchpad" })).toBeVisible();
+});

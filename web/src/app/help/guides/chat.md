@@ -103,13 +103,20 @@ sent before pressing the card's run button.
 
 ### Patrol Launchpad: your first patrol in five steps
 
-The quickest way to put the assistant on patrol is the **Launchpad** button
-(sparkles) in the top-right corner of Chat, the Operations Center, Settings and
-these Guides. Until you have opened it once it carries a small pulsing dot. It
-opens the **Patrol Launchpad**, a guided wizard that takes you from nothing set
-up to a running patrol. It starts with **Why patrol?**, a short "expanding
-mind" ladder from chatting, to scheduled reports, to patrols that analyze and
-decide, to letting the assistant act on your behalf, with the suggested path:
+The quickest way to put the assistant on patrol is **Patrols** (sparkles) in
+the left rail, right under **Chat** and **Tasks**, on every surface (in the
+collapsed rail it is the sparkles icon; on a phone, open the sidebar). Until
+you have opened it once it carries a small pulsing dot. Patrols themselves live
+in Chat — each one is a chat that wakes on its schedule — so **Patrols** is
+their index and their front door: with no patrols yet it opens the **Patrol
+Launchpad**; once you have some, it lists them (name, its chat, cadence, and
+**Paused** when paused) — click one to open its chat — with **New patrol** at
+the bottom to open the Launchpad. The Launchpad is a guided wizard that takes
+you from nothing set up to a running patrol.
+It starts with **Why patrol?**, a short "expanding mind" ladder — small brain
+to galaxy brain — from chatting, to scheduled reports, to patrols that analyze
+and decide, to letting the assistant act on your behalf, with a note on
+Dr. Ethan Mollick's "capability overhang" and the suggested path:
 start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
 you trust its calls. **Show me the plan** then lists the five steps before you
 take them:
@@ -289,7 +296,11 @@ the middle holds the work, and the composer at the bottom is where you ask.
 
 ### The rail
 
-**New chat** starts a fresh conversation. The search field, also reachable with
+At the top of the rail, **Chat**, **Tasks** (the Operations Center) and
+**Patrols** (your patrol chats, and the
+[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) switch
+between the ways of working. **New chat** starts a fresh
+conversation. The search field, also reachable with
 `⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
 too. Below that, conversations are grouped:
 
@@ -309,7 +320,8 @@ folds it. Hovering a project shows its menu: **Open project**, **New chat**, and
 for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
-and **System** appearance and opens **Settings**. Its **Sign out** asks you to
+and **System** appearance and opens **Settings** and **Guides** (these user
+guides). Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
 
@@ -374,9 +386,6 @@ that support button across Chat, the Operations Center, Settings, and Guides
 mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
-The top bar on all four surfaces also carries the **Launchpad** button
-(sparkles; icon-only on mobile), which opens the
-[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps).
 Every conversation also shows who can see it — **Only
 you**, **Shared with your team**, **Multiplayer**, or **Public link** — in the header, and **Share this chat** in **More options** (`•••`) in the composer (plus an active sharing indicator on the composer toolbar whenever the chat is shared).
 Both open the share dialog.

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // TestPatrolDraft_ReturnsDraft drives the Launchpad's "Draft it with AI"
@@ -95,5 +97,54 @@ func TestPatrolDraft_BodyCap(t *testing.T) {
 	s.handlePatrolDraft(rec, httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(big)))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestPatrols_ListsTheCallersPatrols backs the Patrols hub in the rail: the
+// caller's live patrols, each with its chat's title, and nobody else's.
+func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me = "hub@x.com"
+	conv := seedConv(t, s, me)
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: conv.ID, UserEmail: me, Title: "Deal sweep", Prompt: "check", CronExpr: "0 8 * * 1-5", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	theirs := seedConv(t, s, "someone@x.com")
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: theirs.ID, UserEmail: "someone@x.com", Title: "Not mine", Prompt: "check", CronExpr: "0 8 * * *", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Patrols []struct {
+			ConversationID    string `json:"conversation_id"`
+			Title             string `json:"title"`
+			ConversationTitle string `json:"conversation_title"`
+			Status            string `json:"status"`
+		} `json:"patrols"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(body.Patrols) != 1 || body.Patrols[0].Title != "Deal sweep" || body.Patrols[0].ConversationID != conv.ID ||
+		body.Patrols[0].ConversationTitle != conv.Title || body.Patrols[0].Status != "active" {
+		t.Fatalf("patrols = %+v", body.Patrols)
+	}
+
+	post := httptest.NewRecorder()
+	s.handlePatrols(post, httptest.NewRequest(http.MethodPost, "/patrols", nil))
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST status = %d, want 405", post.Code)
 	}
 }

@@ -3,9 +3,20 @@
 The Patrol Launchpad is a guided wizard that takes a person from nothing set
 up to an assistant on patrol over their tools: connected tools, saved
 non-negotiables, a chosen watch list and rhythm, and a first check already
-running. It opens from the **Launchpad** button (sparkles) in the shared top bar
-(`PageTopBar`) on Chat, the Operations Center, Settings and the Guides, or from
-`?launchpad=1` on any of those pages.
+running. It opens from **Patrols** (sparkles) in the navigation rail (`NavRail`), under
+**Chat** and **Tasks** (the Operations Center's rail label) — a patrol is the
+third way of working with Fleet, still a chat but one that runs on its own — or
+from `?launchpad=1` on any page. The user guides moved from the rail into the
+account menu, beside Settings, so the rail holds just the three ways of working.
+
+**Patrols live in Chat; the rail item is their index.** A click reads
+`GET /api/patrols` (the caller's active and paused recurring patrols across
+their own non-deleted chats, each with its chat title; `store.ListUserPatrols`,
+capped at 100). With none, it opens the wizard; with some, a menu lists them —
+name, chat, cadence, *Paused* — each opening its chat, with **New patrol** at
+the bottom. The wizard says where a patrol lives (in Chat, under its name, with
+the Patrol bar on top) on its Plan and Launch steps and on the success screen. The wizard is portalled to `document.body` (the phone drawer is a
+transformed element) and opens on the rail's dialog layer.
 
 User-facing description: the Chat guide's "Patrol Launchpad" section
 (`internal/clientconfig/builtin_skills/fleet-guide/chat.md`).
@@ -16,7 +27,7 @@ User-facing description: the Chat guide's "Patrol Launchpad" section
 
 | Step | What it does | API |
 |---|---|---|
-| Why | The preamble: an "expanding mind" ladder (chat → scheduled reports → patrols that analyze and decide → acting on your behalf), Ethan Mollick's term *capability overhang* (*Co-Existence*, 2026, linked to the publisher page), and the trust path: start at Suggest & ask, turn on ⚡ Auto-approve in the Patrol bar later. The Watch step and the success screen repeat that nudge. | — |
+| Why | The preamble: an "expanding mind" ladder (chat → scheduled reports → patrols that analyze and decide → acting on your behalf). Each rung has its own scene drawn from Flag icons (a chat bubble; a calendar and report; a pinging radar; a spinning galaxy around a filled brain), a one-line quote of what you would say to the assistant, and a brain badge that grows a size per rung. Then Dr. Ethan Mollick (linked to his *One Useful Thing* newsletter) and his term *capability overhang* (*Co-Existence*, 2026, linked to the publisher page), and the trust path: start at Suggest & ask, turn on ⚡ Auto-approve in the Patrol bar later. The Watch step and the success screen repeat that nudge. | — |
 | Plan | Lists the five steps ahead; shows how many tools are ready and memories saved. | `GET /api/mcp-servers`, `GET /api/memories` |
 | Tools | Lists usable connectors (pre-ticked = on by default for a new chat; always-on rows shown locked), connectors that need setup with a **Set up** link, and **Connect another tool**. Both links open Settings → Connections in a new tab; the list refetches on window focus. | `GET /api/mcp-servers` |
 | Ground rules | **Who's on watch**: workspace personas and the person's own (`GET /api/personas`). **Non-negotiables**: each is saved immediately as a memory of kind `constraint`, then pinned. | `POST /api/memories`, `PATCH /api/memories/{id}` |

@@ -411,6 +411,7 @@ type chatStore interface {
 	CreateChatSchedule(ctx context.Context, in store.ChatScheduleInput) (*store.ChatSchedule, error)
 	GetChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
+	ListUserPatrols(ctx context.Context, userEmail string) ([]store.UserPatrol, error)
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
 	TriggerChatScheduleNow(ctx context.Context, userEmail, convID, scheduleID string, maxPending int) (*store.ClaimedChatSchedule, error)

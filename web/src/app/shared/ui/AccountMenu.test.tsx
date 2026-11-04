@@ -24,6 +24,18 @@ describe("AccountMenu", () => {
     expect(screen.getByRole("menuitem", { name: "Sign out" })).toBeInTheDocument();
   });
 
+  // The user guides moved out of the rail into this menu, beside Settings.
+  it("offers the guides beside Settings, tinted on the guides surface", () => {
+    render(<AccountMenu email="sam@elcanotek.com" appName="Fleet" onSignOut={() => {}} guidesCurrent />);
+    const button = screen.getByRole("button", { name: /account menu/i });
+    expect(button.className).toContain("account-current");
+    fireEvent.click(button);
+    const items = screen.getAllByRole("menuitem").map((i) => i.textContent ?? "");
+    const settings = items.findIndex((t) => t.startsWith("Settings"));
+    expect(items[settings + 1]).toMatch(/^Guides/);
+    expect(screen.getByTestId("nav-to-help")).toHaveClass("menu-item-current");
+  });
+
   // Sign out asks first: the item opens a centred confirm (portalled out of
   // the rail, whose transform would otherwise pin the overlay to it) and only
   // the confirm's Sign out button signs out.

@@ -384,6 +384,7 @@ export function MenuItem({
   ariaHasPopup,
   ariaExpanded,
   className,
+  testId,
 }: {
   icon?: ReactNode;
   children: ReactNode;
@@ -395,11 +396,13 @@ export function MenuItem({
   ariaHasPopup?: boolean;
   ariaExpanded?: boolean;
   className?: string;
+  testId?: string;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
+      data-testid={testId}
       disabled={disabled}
       aria-haspopup={ariaHasPopup}
       aria-expanded={ariaExpanded}

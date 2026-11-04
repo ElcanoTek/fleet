@@ -29,7 +29,8 @@
 // state without a second source of truth.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavToChat, NavToHelp, NavToOrchestrator } from "./CrossViewNav";
+import { LaunchpadButton } from "@/app/launchpad/LaunchpadButton";
+import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
@@ -37,7 +38,7 @@ import { AccountMenu } from "./AccountMenu";
 // "settings" renders the rail with neither surface active (the design's
 // settings view): Chat/Operations Center stay plain links and the account
 // button below takes the `current` tint instead. "help" is the guides surface
-// (/help), which marks its own nav item and leaves the account button alone.
+// (/help), reached from the account menu, so it tints the account button too.
 export type RailView = "chat" | "orchestrator" | "settings" | "help";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "rail-collapsed";
@@ -339,16 +340,18 @@ export function NavRail({
             dataTip={
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
-                  ? `Operations Center · ${opsCount} running`
-                  : "Operations Center"
+                  ? `Tasks · ${opsCount} running`
+                  : "Tasks"
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
+            {/* "Tasks" in the rail (Chat · Tasks · Patrols, the ways of working);
+                the surface itself keeps its title, Operations Center. */}
             <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
-              Operations Center
+              Tasks
             </span>
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
@@ -361,22 +364,18 @@ export function NavRail({
               </span>
             ) : null}
           </NavToOrchestrator>
-          {/* The user guides. A third rail item rather than a link buried in a
-              menu: "what does DEAD_LETTERED mean" is a question people have
-              while looking at the board, and the answer should be one visible
-              click away on every surface. */}
-          <NavToHelp
-            className={navItemClass(activeView === "help", collapsed)}
-            ariaCurrent={activeView === "help" ? "page" : undefined}
-            dataTip={collapsed ? "Guides" : undefined}
-          >
-            <span className={navTileClass(activeView === "help")} aria-hidden="true">
-              <Icon name="book" className="size-[1rem]" />
-            </span>
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
-              Guides
-            </span>
-          </NavToHelp>
+          {/* Patrols (docs/PATROL-LAUNCHPAD.md): the third way of working —
+              a chat that runs on its own. Patrols live in Chat; this item is
+              their index (a menu of your patrol chats) and, with none yet, the
+              Patrol Launchpad wizard that sets one up. */}
+          <LaunchpadButton
+            className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
+            tileClassName={navTileClass(false)}
+            labelClassName={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}
+            dataTip={collapsed ? "Patrols" : undefined}
+            collapsed={collapsed}
+            onOpen={() => setSidebarOpen(false)}
+          />
         </nav>
 
         <div className="my-1 h-px shrink-0 bg-[var(--color-border)]" />
@@ -393,6 +392,7 @@ export function NavRail({
           onSignOut={account.onSignOut}
           railCollapsed={collapsed}
           current={activeView === "settings"}
+          guidesCurrent={activeView === "help"}
         />
       </aside>
     </>

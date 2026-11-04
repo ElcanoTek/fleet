@@ -38,7 +38,7 @@ for (const scheme of ["light", "dark"] as const) {
       await loginViaCookie(context);
       await mockChatBoot(page);
       await page.goto("/chat");
-      await expect(page.getByTestId("nav-to-help")).toBeVisible({ timeout: 15_000 });
+      await expect(page.getByTestId("launchpad-button")).toBeVisible({ timeout: 15_000 });
       await expectNoViolations(page);
     });
 

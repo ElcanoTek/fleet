@@ -390,6 +390,67 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 	return out, rows.Err()
 }
 
+// UserPatrol is one of a user's recurring patrols with the title of the chat
+// it lives in — a row in the Patrols hub (docs/PATROL-LAUNCHPAD.md).
+type UserPatrol struct {
+	ChatSchedule
+	ConversationTitle string `json:"conversation_title"`
+}
+
+// maxUserPatrols bounds the hub list; a person with more than this many live
+// patrols still finds the rest in Chat.
+const maxUserPatrols = 100
+
+// ListUserPatrols returns userEmail's active and paused recurring patrols
+// (not one-shot timers) across all of their own, non-deleted conversations,
+// active ones first and each group soonest-next-run first.
+func (s *Store) ListUserPatrols(ctx context.Context, userEmail string) ([]UserPatrol, error) {
+	if s == nil || s.db == nil {
+		return []UserPatrol{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT cs.id, cs.conversation_id, cs.user_email, cs.title, cs.prompt, cs.cron_expr, cs.timezone,
+		        cs.duration_seconds, cs.status, cs.next_run_at, cs.last_run_at, cs.run_count, cs.max_runs,
+		        cs.created_at, cs.updated_at, c.title
+		   FROM chat_schedules cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.user_email = $1
+		    AND c.user_email = $1
+		    AND c.deleted_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')
+		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
+		  LIMIT $2`,
+		userEmail, maxUserPatrols,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UserPatrol{}
+	for rows.Next() {
+		var title string
+		item, err := scanChatSchedule(scanWithExtra{rows, &title})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, UserPatrol{ChatSchedule: item, ConversationTitle: title})
+	}
+	return out, rows.Err()
+}
+
+// scanWithExtra lets scanChatSchedule read a row that carries one more
+// trailing column than the schedule itself.
+type scanWithExtra struct {
+	row   interface{ Scan(dest ...any) error }
+	extra any
+}
+
+func (r scanWithExtra) Scan(dest ...any) error {
+	return r.row.Scan(append(dest, r.extra)...)
+}
+
 // UpdateChatSchedule applies a partial update (pause, resume, or cadence/prompt
 // edit) to an existing schedule owned by userEmail in convID.
 func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch ChatSchedulePatch) (*ChatSchedule, error) {
