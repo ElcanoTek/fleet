@@ -16,6 +16,7 @@ import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem 
 type Call = { url: string; method: string; body?: unknown };
 
 type Opts = {
+  userPersonasNull?: boolean;
   memoriesRefreshHang?: boolean;
   alwaysOnLater?: boolean;
   memoriesFail?: boolean;
@@ -69,7 +70,9 @@ function mockApi(opts: Opts = {}) {
     }
     if (url === "/api/memories" && method === "POST") return json({ id: "m1", content: "x" });
     if (url === "/api/me") return json({ email: "e2e@example.com", role: opts.role ?? "member" });
-    if (url === "/api/personas") return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: [] });
+    if (url === "/api/personas") {
+      return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: opts.userPersonasNull ? null : [] });
+    }
     if (url === "/api/patrol-draft" && opts.hangDraft) return new Promise(() => {});
     if (url === "/api/patrol-draft") {
       if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
@@ -476,5 +479,27 @@ describe("PatrolLaunchpad", () => {
     // Back from the other tab: the catalog refreshes on focus.
     fireEvent.focus(window);
     await waitFor(() => expect(screen.getByTestId("launchpad-summary").textContent).toContain("Workspace files"));
+  });
+
+  it("keeps a saved personal persona when the personal roster could not be read", async () => {
+    window.sessionStorage.setItem(progressItem(), JSON.stringify({ step: "rules", persona: "user:my-twin" }));
+    mockApi({ userPersonasNull: true });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    await screen.findByTestId("launchpad-step-rules");
+    // Wait until the roster has loaded; the saved ref must survive "unknown".
+    await screen.findByRole("option", { name: "Trader" });
+    const saved = JSON.parse(window.sessionStorage.getItem(progressItem()) ?? "{}") as { persona?: string };
+    expect(saved.persona).toBe("user:my-twin");
+  });
+
+  it("rolls back a half-finished launch when the dialog is closed on the error", async () => {
+    const onClose = vi.fn();
+    const calls = mockApi({ tools: "fail" });
+    await walkToLaunch(calls, onClose);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("tools down");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
   });
 });

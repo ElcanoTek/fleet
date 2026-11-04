@@ -30,6 +30,7 @@ export type PatrolSummary = {
   title: string;
   conversation_title: string;
   cron?: string;
+  timezone?: string;
   status: "active" | "paused" | string;
 };
 
@@ -44,6 +45,18 @@ function readSeen(): boolean {
 function readDeepLink(): boolean {
   if (typeof window === "undefined") return false;
   return new URLSearchParams(window.location.search).get(LAUNCHPAD_PARAM) === "1";
+}
+
+/**
+ * cadenceWithZone names a patrol's rhythm, with its time zone when the
+ * schedule fires at a clock time ("Weekdays 08:00 · America/New_York") —
+ * an interval ("Every 2h") reads the same in every zone.
+ */
+export function cadenceWithZone(cron: string, timezone: string): string {
+  const cadence = formatCompactCronCadence(cron);
+  const interval = /^(\*|0)\s+(\*|\*\/\d+)\s/.test(cron.trim()) || /^\*\/\d+\s/.test(cron.trim());
+  const tz = timezone.trim();
+  return tz && !interval ? `${cadence} · ${tz}` : cadence;
 }
 
 /**
@@ -212,7 +225,7 @@ export function LaunchpadButton({
             icon={<Icon name={p.status === "paused" ? "clock" : "activity"} className="size-4" />}
             description={[
               p.conversation_title && p.conversation_title !== p.title ? p.conversation_title : "",
-              formatCompactCronCadence(p.cron ?? ""),
+              cadenceWithZone(p.cron ?? "", p.timezone ?? ""),
               p.status === "paused" ? "Paused" : "",
             ]
               .filter(Boolean)

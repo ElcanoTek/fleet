@@ -94,4 +94,14 @@ func TestPatrolDraftUserMessage(t *testing.T) {
 	if !strings.Contains(withConn, "Autonomy mode: act") {
 		t.Errorf("act mode should survive normalization:\n%s", withConn)
 	}
+
+	// Memories: the same cap as a turn's injection (50), not fewer.
+	mems := make([]string, 0, 60)
+	for i := 0; i < 60; i++ {
+		mems = append(mems, "rule")
+	}
+	many := patrolDraftUserMessage(PatrolDraftInput{Goals: []string{"g"}, Memories: mems})
+	if n := strings.Count(many, "- rule\n"); n != 50 {
+		t.Errorf("memories should be capped at 50 (the injection cap), got %d", n)
+	}
 }

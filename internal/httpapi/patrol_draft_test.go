@@ -269,3 +269,39 @@ func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
 		t.Fatalf("patrols = %+v, want only Still mine", body.Patrols)
 	}
 }
+
+// failingMultiplayerStore makes the per-chat access check error out, to show
+// an error is not mistaken for "access revoked".
+type failingMultiplayerStore struct{ chatStore }
+
+func (failingMultiplayerStore) GetMultiplayerConversation(context.Context, string, string) (*store.Conversation, error) {
+	return nil, errors.New("db down")
+}
+
+// TestPatrols_AccessCheckErrorIs5xx: if re-checking access to a teammate's
+// chat fails, the index answers 5xx (the rail shows its load-failure state)
+// rather than a successful list that silently drops patrols — or a false
+// empty one that opens the first-time wizard.
+func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me, owner = "err@x.com", "errowner@x.com"
+	seedUser(t, s.concreteStore(t), me)
+	c := seedConv(t, s, owner)
+	if _, err := s.store.SetConversationMultiplayer(ctx, owner, c.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: c.ID, UserEmail: me, Title: "Shared", Prompt: "check", CronExpr: "0 9 * * *", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	s.store = failingMultiplayerStore{s.store}
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}

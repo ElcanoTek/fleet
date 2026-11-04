@@ -11,7 +11,7 @@ vi.mock("./PatrolLaunchpad", () => ({
   ),
 }));
 
-import { LAUNCHPAD_SEEN_ITEM, LaunchpadButton } from "./LaunchpadButton";
+import { cadenceWithZone, LAUNCHPAD_SEEN_ITEM, LaunchpadButton } from "./LaunchpadButton";
 
 // The rail's Patrols item: patrols live in Chat, so with none yet it opens the
 // Launchpad wizard; with some it lists them (each opens its chat) beside "New
@@ -115,5 +115,12 @@ describe("LaunchpadButton", () => {
     stubPatrols([]);
     render(<LaunchpadButton />);
     await waitFor(() => expect(screen.getByTestId("launchpad-button").getAttribute("aria-haspopup")).toBe("dialog"));
+  });
+
+  it("names the time zone for clock-time patrols, not for intervals", () => {
+    expect(cadenceWithZone("0 8 * * 1-5", "America/New_York")).toMatch(/· America\/New_York$/);
+    expect(cadenceWithZone("0 */2 * * *", "America/New_York")).not.toContain("America");
+    expect(cadenceWithZone("0 * * * *", "Europe/Paris")).not.toContain("Europe");
+    expect(cadenceWithZone("*/15 * * * *", "UTC")).not.toContain("UTC");
   });
 });

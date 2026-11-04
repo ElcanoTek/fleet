@@ -231,9 +231,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         const data = (await res.json()) as {
           personas?: string[];
           default?: string;
-          user_personas?: UserPersona[];
+          user_personas?: UserPersona[] | null;
         };
         const workspace = data.personas ?? [];
+        // null means the personal roster could not be read ("unknown"), not
+        // "none" — a saved user: persona is only judged against a real list.
+        const usersKnown = Array.isArray(data.user_personas);
         const users = data.user_personas ?? [];
         setWorkspacePersonas(workspace);
         setDefaultPersona(data.default ?? "");
@@ -241,7 +244,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         // A persona saved in earlier progress may have been deleted since:
         // fall back to the workspace default rather than launch a stale ref.
         setState((cur) =>
-          cur.persona && !workspace.includes(cur.persona) && !users.some((u) => u.ref === cur.persona)
+          cur.persona &&
+          !workspace.includes(cur.persona) &&
+          (cur.persona.startsWith("user:") ? usersKnown && !users.some((u) => u.ref === cur.persona) : true)
             ? { ...cur, persona: "" }
             : cur,
         );
@@ -421,7 +426,15 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // hide its outcome (and a draft holds the one-per-user draft slot).
   const inFlight = drafting || (launch !== null && launch.phase !== "done" && !launch.error);
   const close = () => {
-    if (!inFlight) onClose();
+    if (inFlight) return;
+    // Closing on a failed, half-created launch rolls it back first, exactly
+    // as Back to the plan does — dismissal must not leave a chat (or an
+    // armed patrol) behind.
+    if (launch?.error && created.current.conversationId) {
+      void backToPlan().finally(onClose);
+      return;
+    }
+    onClose();
   };
 
   const openPatrol = () => {
@@ -545,7 +558,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   connectors: (connectors ?? [])
                     .filter((c) => selected.includes(c.name) && usable(c))
                     .map((c) => ({ name: connectorLabel(c), description: c.description ?? "" })),
-                  memories: (memories ?? []).map((m) => m.content).slice(0, 30),
+                  // Up to 50, in the store's order (pinned first): exactly what
+                  // a patrol turn is given (httpapi memoryContents).
+                  memories: (memories ?? []).map((m) => m.content).slice(0, 50),
                   cadence: cadenceText,
                   mode: state.mode,
                   persona: state.persona,
@@ -881,8 +896,8 @@ function WelcomeStep({
     <div>
       <StepTitle kicker={launchedBefore ? "Another patrol" : "Here’s the plan"} title="Five steps, about two minutes">
         A <strong className="text-[var(--color-text-primary)]">patrol</strong> is a check the assistant runs on a schedule,
-        using your connected tools. Each run lands in its own chat with what it found, what it recommends, and — if you
-        let it — what it already fixed.
+        using your connected tools. Each patrol has its own chat, and every run reports back there with what it found,
+        what it recommends, and — if you let it — what it already fixed.
       </StepTitle>
       <ol className="grid gap-2">
         {flow.map((f, i) => (

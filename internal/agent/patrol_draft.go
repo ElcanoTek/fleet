@@ -75,9 +75,11 @@ const patrolDraftSchema = `{
 // Bounds on what the wizard can hand the synthesizer. The handler enforces
 // the counts; these keep any one entry from padding the prompt.
 const (
-	patrolDraftMaxGoals        = 12
-	patrolDraftMaxConnectors   = 40
-	patrolDraftMaxMemories     = 30
+	patrolDraftMaxGoals      = 12
+	patrolDraftMaxConnectors = 40
+	// The same cap as a turn's memory injection (httpapi memoryContents), so
+	// the draft sees every memory a patrol run will be given.
+	patrolDraftMaxMemories     = 50
 	patrolDraftMaxOutputTokens = 2000
 )
 

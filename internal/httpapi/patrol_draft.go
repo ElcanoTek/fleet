@@ -143,8 +143,14 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 			}
 			if !strings.EqualFold(p.ConversationOwner, user) {
 				conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
-				if err != nil || conv == nil {
-					continue
+				if err != nil {
+					// An error is not "no access": answer 5xx so the rail
+					// shows its load-failure state, never a false empty list.
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if conv == nil {
+					continue // access revoked
 				}
 			}
 			out = append(out, p)
