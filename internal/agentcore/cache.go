@@ -129,6 +129,7 @@ type cacheOption struct {
 	compactionSummary  bool
 	compactionPrefixFn func(fantasy.Message) bool
 	stablePrefixTokens int
+	stablePrefixOnly   bool
 }
 
 // CacheOption mutates the cache step configuration.
@@ -144,6 +145,18 @@ func WithCacheEnvPrefix(p EnvPrefix) CacheOption {
 // side of Gemini's comparison (tailOutgrowsMarkedPrefix).
 func WithStablePrefixTokens(n int) CacheOption {
 	return func(c *cacheOption) { c.stablePrefixTokens = n }
+}
+
+// WithStablePrefixOnly restricts explicit cache breakpoints to the reusable
+// stable prefix (the system prompt, plus the compaction summary when enabled)
+// and suppresses the rolling two-message tail breakpoints even on families
+// like Anthropic that otherwise use them. One-shot auxiliary calls
+// (summarizer, verifier, reviewer, memory extractors, title/prompt generators)
+// send a task-specific user prompt that has no follow-up step to read it back,
+// so marking the user message would pay Anthropic's 1.25x cache-write charge
+// on unique per-call input without ever reading it.
+func WithStablePrefixOnly() CacheOption {
+	return func(c *cacheOption) { c.stablePrefixOnly = true }
 }
 
 // WithCompactionSummaryBreakpoint enables cutlass's additive 4th breakpoint on
@@ -234,7 +247,7 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 		// wind-down notice, whose live spend figures change every step — a
 		// breakpoint there can never hit (see isBudgetWindDownNotice).
 		rolling := 2
-		if stablePrefixOnly(model) {
+		if cfg.stablePrefixOnly || stablePrefixOnly(model) {
 			rolling = 0
 		}
 		marked := 0
@@ -245,8 +258,30 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 			if i == summaryIdx || isBudgetWindDownNotice(msgs[i]) {
 				continue
 			}
+			msgs[i] = withAssistantTextCoalesced(msgs[i])
 			msgs[i].ProviderOptions = cc
 			marked++
+		}
+
+		// Spare 4th breakpoint when no compaction summary is present: anchor
+		// the most recent unmarked runtime_today message before the rolling
+		// tail. During a multi-step tool turn this keeps the turn-start prefix
+		// (system + prior history + current user message + runtime_today)
+		// refreshed across every tool round; on the NEXT user turn (after
+		// replayHistory strips extended-thinking blocks from the tool rounds)
+		// it gives Anthropic an explicit breakpoint directly on that turn-start
+		// boundary even when the turn made >10 tool calls (>20 content blocks,
+		// past Anthropic's 20-block lookback window).
+		if rolling > 0 && summaryIdx < 0 {
+			for i := len(msgs) - 1; i >= 0; i-- {
+				if msgs[i].ProviderOptions != nil {
+					continue
+				}
+				if isRuntimeDateMessage(msgs[i]) {
+					msgs[i].ProviderOptions = cc
+					break
+				}
+			}
 		}
 
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
@@ -347,4 +382,45 @@ func isCompactionSummaryMessage(m fantasy.Message) bool {
 		return strings.HasPrefix(tp.Text, compactionSummaryPrefix)
 	}
 	return false
+}
+
+const runtimeDateMessagePrefix = "## Runtime today (authoritative)\n\n- runtime_today: "
+
+// isRuntimeDateMessage reports whether m is a per-turn runtime_today note
+// produced by RuntimeDateTurnSuffix / RuntimeDateMessage.
+func isRuntimeDateMessage(m fantasy.Message) bool {
+	if m.Role != fantasy.MessageRoleUser || len(m.Content) != 1 {
+		return false
+	}
+	tp, ok := fantasy.AsMessagePart[fantasy.TextPart](m.Content[0])
+	return ok && strings.HasPrefix(tp.Text, runtimeDateMessagePrefix)
+}
+
+// withAssistantTextCoalesced collapses an assistant message whose Content
+// consists solely of multiple TextParts into a single TextPart joined by "\n"
+// (the exact concatenation fantasy's OpenRouter hook performs). In fantasy's
+// OpenRouter hook (language_model_hooks.go), an assistant message with
+// len(Content) > 1 and no tool calls attaches cache_control via
+// assistantMsg.Content.SetExtraFields, which openai-go drops when marshaling
+// the union wrapper; collapsing to len(Content) == 1 takes the single-part
+// branch that preserves cache_control on the message object.
+func withAssistantTextCoalesced(m fantasy.Message) fantasy.Message {
+	if m.Role != fantasy.MessageRoleAssistant || len(m.Content) <= 1 {
+		return m
+	}
+	var parts []string
+	for _, part := range m.Content {
+		tp, ok := fantasy.AsMessagePart[fantasy.TextPart](part)
+		if !ok {
+			return m
+		}
+		if tp.Text != "" {
+			parts = append(parts, tp.Text)
+		}
+	}
+	if len(parts) == 0 {
+		return m
+	}
+	m.Content = []fantasy.MessagePart{fantasy.TextPart{Text: strings.Join(parts, "\n")}}
+	return m
 }

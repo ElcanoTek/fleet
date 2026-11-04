@@ -308,9 +308,14 @@ switches the conversation to [dashboard view](#dashboard-view); **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
 this guide; **Memories** opens the memory manager; and **Show details** toggles
 the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
-or off across the whole conversation. When your operator configures a support
+or off across the whole conversation. On narrow mobile screens (`< 40rem`), the
+**Dashboard** and **Keyboard shortcuts** buttons are hidden from the header to keep
+the top bar compact (switch to dashboard view via **More options → Dashboard view**).
+When your operator configures a support
 contact in the deployment's bundle (`branding.support`), the top bar also shows
-that support button across Chat, the Operations Center, Settings, and Guides;
+that support button across Chat, the Operations Center, Settings, and Guides
+(collapsing to a compact **Help** label — or `branding.support.mobile_label` — on
+mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
 Every conversation also shows who can see it — **Only
@@ -363,7 +368,7 @@ Dashboard view turns a conversation into a live board: the assistant's charts,
 numbers and tables stay on screen as panels, and the chat narrows to a rail
 beside them. Use it for anything you want to keep an eye on while you keep
 talking: a pipeline, a campaign, a launch checklist, a comparison you are
-refining. Turn it on with **Dashboard** at the top of the chat, **Dashboard
+refining. Turn it on with **Dashboard** at the top of the chat (on desktop screens), **Dashboard
 view** in **More options**, or `D`; leave with **Exit**, or `Esc` when you are
 not typing in the message box.
 

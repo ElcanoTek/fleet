@@ -795,11 +795,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 				// output phase; copied so the loop's own slice stays the round
 				// input (completeRun appends the carry itself).
 				finalizeMessages := append(append([]fantasy.Message(nil), messages...), eng.roundCarry(finalResult)...)
-				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finalizeInputFor(
+				finInput := finalizeInputFor(
 					mode, finalText, finalizeMessages, sink.toolEventCount()-roundToolMark,
 					fantasyTools, deps.Observer, systemPrompt, sink, panicAttribution, usageOrch, activeModel, cfg.MaxIterations,
 					eng.outOfRoster,
-				), observerBoundary)
+				)
+				finInput.StablePrefixTokens = eng.modelContextPrefix.toolTokens
+				finalText, err = finalizeWithPanicBoundary(ctx, deps.Finalize, finInput, observerBoundary)
 				if err != nil {
 					return Result{}, err
 				}
@@ -1185,6 +1187,7 @@ func finalizeInputFor(mode Mode, finalText string, messages []fantasy.Message, r
 		Tools:           fantasyTools,
 		Observer:        observer,
 		SystemPrompt:    systemPrompt,
+		Model:           activeModel,
 		OnToolCall:      finalizeToolCallCallback(sink, panicAttribution),
 		OnToolResult:    finalizeToolResultCallback(sink, panicAttribution),
 		GuardStep: func(inner fantasy.PrepareStepFunction) fantasy.PrepareStepFunction {

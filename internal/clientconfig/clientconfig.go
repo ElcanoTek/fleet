@@ -805,11 +805,12 @@ type Branding struct {
 // SupportContact carries the optional bundle-configured support contact button
 // and dialog copy surfaced via the member-gated /client-config endpoint.
 type SupportContact struct {
-	Label   string `yaml:"label" json:"label"`
-	Email   string `yaml:"email" json:"email"`
-	Title   string `yaml:"title,omitempty" json:"title,omitempty"`
-	Message string `yaml:"message,omitempty" json:"message,omitempty"`
-	Subject string `yaml:"subject,omitempty" json:"subject,omitempty"`
+	Label       string `yaml:"label" json:"label"`
+	MobileLabel string `yaml:"mobile_label,omitempty" json:"mobile_label,omitempty"`
+	Email       string `yaml:"email" json:"email"`
+	Title       string `yaml:"title,omitempty" json:"title,omitempty"`
+	Message     string `yaml:"message,omitempty" json:"message,omitempty"`
+	Subject     string `yaml:"subject,omitempty" json:"subject,omitempty"`
 }
 
 // BrandColors holds per-mode palette overrides. Light and Dark are keyed by a
@@ -1804,11 +1805,12 @@ func (b *Bundle) resolveBrandSupport() error {
 	}
 	sc := b.Branding.Support
 	sc.Label = strings.TrimSpace(sc.Label)
+	sc.MobileLabel = strings.TrimSpace(sc.MobileLabel)
 	sc.Email = strings.TrimSpace(sc.Email)
 	sc.Title = strings.TrimSpace(sc.Title)
 	sc.Message = strings.TrimSpace(sc.Message)
 	sc.Subject = strings.TrimSpace(sc.Subject)
-	if sc.Label == "" && sc.Email == "" && sc.Title == "" && sc.Message == "" && sc.Subject == "" {
+	if sc.Label == "" && sc.MobileLabel == "" && sc.Email == "" && sc.Title == "" && sc.Message == "" && sc.Subject == "" {
 		b.Branding.Support = nil
 		return nil
 	}

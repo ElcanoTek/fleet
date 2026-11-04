@@ -133,7 +133,7 @@ export function PatrolSchedulePicker({
                       : "weekdays",
                   )
                 }
-                className="text-[0.68rem] font-normal text-[var(--color-accent)] hover:underline"
+                className="pill-btn h-5 px-2 text-[0.68rem]"
               >
                 Use simple schedule
               </button>
@@ -141,7 +141,7 @@ export function PatrolSchedulePicker({
               <button
                 type="button"
                 onClick={() => handleFrequencyChange("custom_cron")}
-                className="text-[0.68rem] font-normal text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:underline"
+                className="pill-btn h-5 px-2 text-[0.68rem]"
               >
                 Advanced cron
               </button>
@@ -240,7 +240,7 @@ export function PatrolSchedulePicker({
           <div
             role="group"
             aria-label="Days of the week"
-            className="flex flex-wrap gap-1"
+            className="flex flex-wrap gap-1.5"
           >
             {PATROL_WEEKDAYS.map((day) => {
               const active = state.days.includes(day.dow);
@@ -251,11 +251,7 @@ export function PatrolSchedulePicker({
                   aria-label={day.long}
                   aria-pressed={active}
                   onClick={() => toggleDay(day.dow)}
-                  className={`rounded-full border px-2.5 py-1 text-[0.72rem] font-medium transition ${
-                    active
-                      ? "border-[var(--color-accent)] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-text-primary)]"
-                      : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-secondary)] hover:border-[var(--color-border-strong)]"
-                  }`}
+                  className="pill-btn hit-area-touch h-7 px-2.5 text-[0.72rem]"
                 >
                   {day.short}
                 </button>
@@ -296,7 +292,7 @@ export function PatrolSchedulePicker({
                 }
                 setCustomTzMode((v) => !v);
               }}
-              className="text-[0.68rem] font-normal text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:underline"
+              className="pill-btn h-5 px-2 text-[0.68rem]"
             >
               {customTzMode ? "Pick from list" : "Custom zone"}
             </button>

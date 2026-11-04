@@ -168,3 +168,80 @@ func TestCompactionSummarizers_CarryTheModelsRoutingPolicy(t *testing.T) {
 		})
 	}
 }
+
+type streamOptionsCapturingModel struct {
+	itMockModel
+	slug string
+	omu  sync.Mutex
+	opts []fantasy.ProviderOptions
+}
+
+func (m *streamOptionsCapturingModel) Model() string { return m.slug }
+
+func (m *streamOptionsCapturingModel) Stream(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+	m.omu.Lock()
+	m.opts = append(m.opts, call.ProviderOptions)
+	m.omu.Unlock()
+	return func(yield func(fantasy.StreamPart) bool) {
+		if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "recovered summary"}) {
+			return
+		}
+		yield(fantasy.StreamPart{
+			Type:         fantasy.StreamPartTypeFinish,
+			FinishReason: fantasy.FinishReasonStop,
+			Usage:        fantasy.Usage{InputTokens: 10, OutputTokens: 5},
+		})
+	}, nil
+}
+
+func TestFinalizeRecoveryCalls_CarryActiveModelRoutingPolicy(t *testing.T) {
+	primary := &streamOptionsCapturingModel{slug: "anthropic/claude-haiku-5.5"}
+	fallback := &streamOptionsCapturingModel{slug: floorSlug}
+	tc := TurnConfig{Model: primary, MaxTokens: 512}
+	hook := buildInteractiveFinalize(tc)
+
+	// 1. Forced final summary (FinalText == "") uses in.Model (fallback) and sends its routing policy.
+	got, err := hook(context.Background(), agentcore.FinalizeInput{
+		FinalText:    "",
+		Messages:     []fantasy.Message{fantasy.NewUserMessage("summarize tool results")},
+		SystemPrompt: "sys",
+		Model:        fallback,
+	})
+	if err != nil {
+		t.Fatalf("forced summary finalize failed: %v", err)
+	}
+	if got != "recovered summary" {
+		t.Fatalf("forced summary text = %q, want %q", got, "recovered summary")
+	}
+	if len(primary.opts) != 0 {
+		t.Errorf("primary model received %d calls after fallback swap, want 0", len(primary.opts))
+	}
+	if len(fallback.opts) != 1 {
+		t.Fatalf("fallback model received %d calls, want 1", len(fallback.opts))
+	}
+	if or, ok := fallback.opts[0][openrouter.Name].(*openrouter.ProviderOptions); !ok || or.Provider == nil || len(or.Provider.Quantizations) == 0 {
+		t.Errorf("forced summary provider options = %#v, want precision floor routing policy", fallback.opts[0])
+	}
+
+	// 2. Leaked tool-call retry (FinalText has "call:..." and RoundToolEvents == 0) also uses in.Model and routing policy.
+	fallback.opts = nil
+	gotRetry, err := hook(context.Background(), agentcore.FinalizeInput{
+		FinalText:       "call:default_api:bash{command:\"ls\"}",
+		RoundToolEvents: 0,
+		Messages:        []fantasy.Message{fantasy.NewUserMessage("run ls")},
+		SystemPrompt:    "sys",
+		Model:           fallback,
+	})
+	if err != nil {
+		t.Fatalf("leaked call retry finalize failed: %v", err)
+	}
+	if gotRetry != "recovered summary" {
+		t.Fatalf("leaked call retry text = %q, want %q", gotRetry, "recovered summary")
+	}
+	if len(fallback.opts) != 1 {
+		t.Fatalf("fallback model received %d retry calls, want 1", len(fallback.opts))
+	}
+	if or, ok := fallback.opts[0][openrouter.Name].(*openrouter.ProviderOptions); !ok || or.Provider == nil || len(or.Provider.Quantizations) == 0 {
+		t.Errorf("leaked call retry provider options = %#v, want precision floor routing policy", fallback.opts[0])
+	}
+}

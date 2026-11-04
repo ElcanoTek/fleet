@@ -142,10 +142,31 @@ request):
 1. The **last system message** — anchors the stable system-prompt + tool prefix.
 2. The **compaction summary** (`WithCompactionSummaryBreakpoint`, enabled in the
    shared loop) — a stable boundary between the cached head and the evolving
-   tail after a compaction pass.
+   tail after a compaction pass. When no compaction summary is present yet,
+   Anthropic's spare 4th breakpoint is placed on the **most recent unmarked
+   `runtime_today` message** before the rolling tail: during a multi-step tool
+   turn this keeps the turn-start prefix refreshed across every tool step, and
+   on the next user turn (after `replayHistory` drops extended-thinking blocks
+   from the prior turn's tool calls) it gives Anthropic an explicit breakpoint
+   directly on that turn-start boundary even when the prior turn made >10 tool
+   calls (>20 content blocks, past Anthropic's 20-block lookback window).
 3. The **last two non-system messages** — a rolling recency window. **Not for
    Gemini** (`stablePrefixOnly`, below), which also drops 1 and 2 once the
    rest of the prompt outgrows them.
+
+**OpenRouter wire normalization (`openRouterCacheControlTransport`).**
+`fantasy`'s OpenRouter hook serializes single-text-part `user` and `assistant`
+messages as plain string `"content": "..."` with top-level `"cache_control"` on
+the message object. OpenRouter's OpenAI-to-Anthropic/Gemini translator honors
+top-level `"cache_control"` on `system` and `tool` messages, but ignores it on
+`user` and `assistant` messages unless `"content"` is a content-part array whose
+text block carries `"cache_control"`. `openRouterCacheControlTransport`
+(`internal/agentcore/provider.go`) normalizes non-empty string `"content"` on
+`user` and `assistant` messages for explicit-breakpoint families into a
+one-element `[{"type": "text", "text": "..."}]` array and moves any top-level
+`"cache_control"` onto the last content block (when `tool_calls` is empty), so
+Step 0 and every rolling `user`/`assistant` breakpoint write and read the full
+conversation history cache.
 
 **Gemini gets the stable prefix only.** OpenRouter turns the *last* breakpoint
 of a Gemini request into an explicit context cache — a billed write with a
@@ -198,10 +219,10 @@ estimated no larger than those up to it, and gets no breakpoint at all once
 they are (`tailOutgrowsMarkedPrefix`). With the rule the live check's short
 conversation keeps its marker; it cost $0.0052.
 
-- **The tool definitions** are sent and cached with the prefix, so the shared
-  loop adds them to its side (`WithStablePrefixTokens`). The interactive
-  driver's leaked-call retry counts messages only, so for it the switch comes
-  up to a tool roster early; its forced final summary sends no tools.
+- **The tool definitions** are sent and cached with the prefix, so both the
+  shared loop and the interactive driver's leaked-call finalize retry add them
+  to their side (`WithStablePrefixTokens(EstimateToolDefsTokens(tools))`); the
+  forced final summary sends no tools.
 - **An image or other file** counts at 1,000 tokens (`mediaCacheTokens`),
   about what Gemini bills for an image, not at the base64 length the overflow
   estimator counts, which would drop the marker for any chat with a
@@ -216,17 +237,34 @@ breakpoint is what makes the prefix cacheable, so the system prompt must be the
 leading, stable content. For Gemini past the switch there is no breakpoint, and
 the append-only history above is what its implicit cache reads.
 
-## Live check (`TestPromptCacheLive`)
+## Live check (`TestPromptCacheLive` & `TestPromptCacheLive_LongToolChainCrossTurn`)
 
 `internal/agentcore/prompt_cache_live_test.go` drives the real `Run` loop —
-fleet's breakpoints, upstream pins, tool roster and request-local tail
-messages — against OpenRouter, and reports per request the served provider,
-prompt / cached / cache-write tokens and cost. Three turns, one tool call, a
-~7K-token system prompt with a fresh nonce (so turn 1 is cold). It costs real
-money, so it is opt-in:
+fleet's breakpoints, `openRouterCacheControlTransport` wire normalization,
+upstream pins, realistic 6-tool roster (`tool_search`, `query_metrics`,
+`inspect_box`, `read_runbook`, `run_python`, `render_artifact`), and persisted
+`runtime_today` notes — against OpenRouter, and reports per request the served
+provider, prompt / cached / cache-write tokens, hit rate, and cost.
+
+Two tests run in the `prompt-cache-live` CI gate (`.github/workflows/ci.yml`,
+required by `CI gate`) and the nightly canary (`.github/workflows/e2e-canary.yml`):
+
+1. `TestPromptCacheLive`: runs a 3-turn multi-tool conversation (Turn 1 makes 3
+   sequential tool calls returning ~1,200–1,400 tokens each; Turn 2 replays
+   Turn 1 via `liveReplayEntries`, sends a ~1,300-token user message, and calls
+   `read_runbook`; Turn 3 synthesizes across both turns) across
+   `anthropic/claude-opus-5.5`, `anthropic/claude-haiku-5.5`,
+   `google/gemini-3.8-flash`, `google/gemini-4-argon`, and
+   `openai/gpt-6-luna-pro`.
+2. `TestPromptCacheLive_LongToolChainCrossTurn`: runs a 10-step sequential
+   pagination tool chain in Turn 1 (>20 content blocks, exceeding Anthropic's
+   20-block lookback window) followed by Turn 2 after history replay, asserting
+   step-by-step cache growth, all 4 breakpoints (`system` + `runtime_today` + 2
+   rolling tail messages), and cross-turn cache preservation on Turn 2 Step 0.
 
 ```sh
-FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemini-4-argon,anthropic/claude-opus-5.5   go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
+FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… \
+  go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
 ```
 
 It fails when a request after the first reads nothing from cache (one miss is

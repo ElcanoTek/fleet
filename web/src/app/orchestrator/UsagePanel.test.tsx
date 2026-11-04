@@ -235,6 +235,72 @@ describe("UsagePanel (#601)", () => {
     fireEvent.click(screen.getByTestId("budget-delete"));
     await waitFor(() => expect(deleteBudget).toHaveBeenCalledWith("budget-1"));
   });
+
+  it("computes token-weighted cache hit % for the Other (N) bar when >11 buckets exist", async () => {
+    const top11 = Array.from({ length: 11 }, (_, i) =>
+      bucket({
+        key: `user${i + 1}@example.com`,
+        cost_usd: 1,
+        prompt_tokens: 10_000,
+        cached_tokens: 9_500,
+        chat_turns: 2,
+      }),
+    );
+    // Tail buckets have lower cache hit % than the top 11 (95%):
+    // - Tail bucket 1: 100 chat tokens, 80 cached (80.0% hit rate, tiny volume)
+    // - Tail bucket 2: 9,900 chat tokens, 0 cached (0.0% hit rate, huge volume)
+    // - Tail bucket 3: task-only bucket (50,000 task prompt tokens, 0 chat turns,
+    //   chat_prompt_tokens: 0) — must NOT inflate the chat cache-hit denominator.
+    // Token-weighted hit rate = 80 / 10,000 = 0.8% (NOT unweighted mean 26.7%
+    // and NOT task-diluted 80 / 60,000 = 0.1%).
+    const tailBuckets = [
+      bucket({
+        key: "tail-small@example.com",
+        cost_usd: 0.1,
+        prompt_tokens: 100,
+        chat_prompt_tokens: 100,
+        cached_tokens: 80,
+        chat_turns: 1,
+      }),
+      bucket({
+        key: "tail-large@example.com",
+        cost_usd: 0.9,
+        prompt_tokens: 9_900,
+        chat_prompt_tokens: 9_900,
+        cached_tokens: 0,
+        chat_turns: 5,
+      }),
+      bucket({
+        key: "tail-tasks-only@example.com",
+        cost_usd: 2.0,
+        prompt_tokens: 50_000,
+        chat_prompt_tokens: 0,
+        cached_tokens: 0,
+        chat_turns: 0,
+        task_iterations: 4,
+      }),
+    ];
+    mockReport(
+      report({
+        group_by: "user",
+        buckets: [...top11, ...tailBuckets],
+        totals: bucket({
+          cost_usd: 14,
+          prompt_tokens: 170_000,
+          chat_prompt_tokens: 120_000,
+          cached_tokens: 104_580,
+          chat_turns: 28,
+          task_iterations: 4,
+        }),
+      }),
+    );
+    render(<UsagePanel />);
+    await screen.findByTestId("usage-bars");
+    fireEvent.change(screen.getByLabelText("Chart measure"), {
+      target: { value: "cache" },
+    });
+    expect(screen.getByRole("img", { name: "Other (3): 0.8%" })).toBeTruthy();
+  });
 });
 
 describe("UsagePanel CSV download", () => {

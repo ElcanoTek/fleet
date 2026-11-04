@@ -7,11 +7,13 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -20,7 +22,18 @@ import (
 // adminStats is the JSON shape the /admin page renders. Intentionally
 // flat so it's easy to template on the frontend.
 type adminStats struct {
-	Users []userStat `json:"users"`
+	Users      []userStat       `json:"users"`
+	DailyCache []dailyCacheStat `json:"daily_cache,omitempty"`
+}
+
+type dailyCacheStat struct {
+	Day                  string  `json:"day"`
+	Turns                int64   `json:"turns"`
+	CostUSD              float64 `json:"cost_usd"`
+	PromptTokens         int64   `json:"prompt_tokens"`
+	CachedTokens         int64   `json:"cached_tokens"`
+	UncachedPromptTokens int64   `json:"uncached_prompt_tokens"`
+	CacheHitRatePct      float64 `json:"cache_hit_rate_pct"`
 }
 
 type userStat struct {
@@ -30,8 +43,12 @@ type userStat struct {
 	LastActivity             int64   `json:"last_activity"` // unix seconds
 	TotalCostUSD             float64 `json:"total_cost_usd"`
 	TotalTurns               int     `json:"total_turns"`
+	TotalPromptTokens        int64   `json:"total_prompt_tokens"`
 	TotalCachedTokens        int64   `json:"total_cached_tokens"`
 	TotalCacheCreationTokens int64   `json:"total_cache_creation_tokens"`
+	// UncachedPromptTokens is max(0, total_prompt_tokens - total_cached_tokens) —
+	// input tokens that missed the prompt cache.
+	UncachedPromptTokens int64 `json:"uncached_prompt_tokens"`
 	// CacheHitRatePct is cached_tokens / prompt_tokens * 100 — the share of
 	// input tokens served from the prompt cache. 0 when no prompt tokens.
 	CacheHitRatePct float64 `json:"cache_hit_rate_pct"`
@@ -99,6 +116,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		if row.TotalPromptTokens > 0 {
 			hitRate = float64(row.TotalCachedTokens) / float64(row.TotalPromptTokens) * 100.0
 		}
+		uncached := max(int64(0), row.TotalPromptTokens-row.TotalCachedTokens)
 		users = append(users, userStat{
 			Email:                    row.Email,
 			ConversationCount:        row.ConversationCount,
@@ -106,15 +124,41 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 			LastActivity:             row.LastActivity,
 			TotalCostUSD:             row.TotalCostUSD,
 			TotalTurns:               row.TotalTurns,
+			TotalPromptTokens:        row.TotalPromptTokens,
 			TotalCachedTokens:        row.TotalCachedTokens,
 			TotalCacheCreationTokens: row.TotalCacheCreationTokens,
+			UncachedPromptTokens:     uncached,
 			CacheHitRatePct:          hitRate,
 			FrustratedMessages:       row.FrustratedMessages,
 			StruggleSignals:          row.StruggleSignals,
 			AdvancedSwitches:         row.AdvancedSwitches,
 		})
 	}
-	writeJSON(w, adminStats{Users: users})
+	var dailyCache []dailyCacheStat
+	if us, ok := s.store.(interface {
+		UsageSummary(ctx context.Context, from, to time.Time, groupBy string) ([]store.UsageRow, error)
+	}); ok {
+		now := time.Now().UTC()
+		if dayRows, err := us.UsageSummary(r.Context(), now.Add(-14*24*time.Hour), now, "day"); err == nil {
+			dailyCache = make([]dailyCacheStat, 0, len(dayRows))
+			for _, d := range dayRows {
+				var hitRate float64
+				if d.PromptTokens > 0 {
+					hitRate = float64(d.CachedTokens) / float64(d.PromptTokens) * 100.0
+				}
+				dailyCache = append(dailyCache, dailyCacheStat{
+					Day:                  d.Key,
+					Turns:                d.Turns,
+					CostUSD:              d.CostUSD,
+					PromptTokens:         d.PromptTokens,
+					CachedTokens:         d.CachedTokens,
+					UncachedPromptTokens: max(int64(0), d.PromptTokens-d.CachedTokens),
+					CacheHitRatePct:      hitRate,
+				})
+			}
+		}
+	}
+	writeJSON(w, adminStats{Users: users, DailyCache: dailyCache})
 }
 
 // listDecisionModels is the OpenRouter decision-model listing, a seam for tests.

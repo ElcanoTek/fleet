@@ -25,6 +25,8 @@ describe("PageTopBar support contact", () => {
     );
 
     const btn = screen.getByTestId("support-contact-button");
+    expect(btn).toHaveAttribute("aria-label", "Help — Direct Support");
+    expect(btn.textContent).toContain("Help");
     expect(btn.textContent).toContain("Direct Support");
 
     fireEvent.click(btn);

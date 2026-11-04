@@ -248,4 +248,50 @@ describe("AdminOverviewPage usage", () => {
       expect(countCalls("/api/admin/stats")).toBe(statsBefore + 1);
     });
   });
+
+  it("renders prompt cache efficiency by date and by user when cache telemetry is present", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).startsWith("/api/admin/health-summary")) {
+          return { ok: true, status: 200, json: async () => SUMMARY };
+        }
+        if (String(url).startsWith("/api/admin/stats")) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              users: [
+                {
+                  ...STATS.users[0],
+                  total_prompt_tokens: 40000,
+                  total_cached_tokens: 30000,
+                  uncached_prompt_tokens: 10000,
+                  cache_hit_rate_pct: 75.0,
+                },
+              ],
+              daily_cache: [
+                {
+                  day: "2026-11-03",
+                  turns: 3,
+                  cost_usd: 4.96,
+                  prompt_tokens: 40000,
+                  cached_tokens: 30000,
+                  uncached_prompt_tokens: 10000,
+                  cache_hit_rate_pct: 75.0,
+                },
+              ],
+            }),
+          };
+        }
+        throw new Error(`unexpected ${url}`);
+      }),
+    );
+    render(<AdminOverviewPage />);
+    const cachePanel = await screen.findByTestId("cache-efficiency-panel");
+    expect(cachePanel).toHaveTextContent("Prompt cache efficiency");
+    expect(cachePanel).toHaveTextContent("2026-11-03");
+    expect(cachePanel).toHaveTextContent("sam@x.com");
+    expect(cachePanel).toHaveTextContent("75.0%");
+  });
 });

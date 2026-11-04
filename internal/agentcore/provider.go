@@ -1,6 +1,9 @@
 package agentcore
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -58,13 +61,24 @@ func openRouterBaseURLOverride() string {
 }
 
 // newOpenRouterProvider builds the fantasy OpenRouter provider with the given
-// API key and headers. When OPENROUTER_BASE_URL is set (E2E only), it installs
-// a URL-rewriting HTTP client so the real openai-go SDK still builds genuine
-// OpenRouter chat-completions requests but dispatches them to the override
-// origin — the provider boundary is the one and only thing stubbed.
+// API key and headers. Every request runs through openRouterCacheControlTransport
+// so explicit per-message cache_control markers on user and assistant messages
+// reach OpenRouter inside content-part arrays (where OpenRouter's Anthropic and
+// Gemini translators read them) rather than top-level message fields on string
+// content (which OpenRouter silently ignores). When OPENROUTER_BASE_URL is set
+// (E2E only), it also installs a URL-rewriting transport so the real openai-go
+// SDK still builds genuine OpenRouter chat-completions requests but dispatches
+// them to the override origin — the provider boundary is the one and only thing
+// stubbed.
 func newOpenRouterProvider(apiKey string, headers ProviderHeaders) (fantasy.Provider, error) {
 	if headers.XTitle == "" {
 		headers = DefaultProviderHeaders
+	}
+	next := http.DefaultTransport
+	if override := openRouterBaseURLOverride(); override != "" {
+		if rt, err := newBaseURLRewriteTransport(override); err == nil {
+			next = rt
+		}
 	}
 	opts := []openrouter.Option{
 		openrouter.WithAPIKey(apiKey),
@@ -72,13 +86,157 @@ func newOpenRouterProvider(apiKey string, headers ProviderHeaders) (fantasy.Prov
 			"X-Title":      headers.XTitle,
 			"HTTP-Referer": headers.HTTPReferer,
 		}),
-	}
-	if override := openRouterBaseURLOverride(); override != "" {
-		if rt, err := newBaseURLRewriteTransport(override); err == nil {
-			opts = append(opts, openrouter.WithHTTPClient(&http.Client{Transport: rt}))
-		}
+		openrouter.WithHTTPClient(&http.Client{
+			Transport: &openRouterCacheControlTransport{next: next},
+		}),
 	}
 	return openrouter.New(opts...)
+}
+
+// openRouterCacheControlTransport normalizes outbound OpenRouter
+// /chat/completions request bodies for explicit-breakpoint model families
+// (supportsExplicitBreakpoints: Anthropic and Google).
+//
+// Why this is needed: fantasy's OpenRouter hook (language_model_hooks.go)
+// serializes single-text-part user and assistant messages as plain string
+// `"content": "..."` with `"cache_control": {"type": "ephemeral"}` at the top
+// level of the message object. OpenRouter's OpenAI-to-Anthropic/Gemini
+// translator honors top-level `cache_control` on `system` and `tool` messages,
+// but ignores top-level `cache_control` on `user` and `assistant` messages
+// unless `"content"` is a content-part array whose text block carries the
+// `"cache_control"` field:
+//
+//	{"role": "user", "content": [{"type": "text", "text": "...", "cache_control": {"type": "ephemeral"}}]}
+//
+// Moreover, OpenRouter merges consecutive user messages (`user` + `runtime_today`)
+// differently when `"content"` is a plain string vs a content-part array, so
+// converting only marked messages would change the token prefix once the
+// rolling breakpoint advances to the next turn. Normalizing every non-empty
+// string `"content"` on `user` and `assistant` messages to a one-element text
+// block array — and moving any top-level `"cache_control"` onto the last
+// content block when `tool_calls` is empty — makes every user/assistant
+// breakpoint take effect on Step 0 and keeps the prefix byte-identical as the
+// rolling window moves forward.
+type openRouterCacheControlTransport struct {
+	next http.RoundTripper
+}
+
+func (t *openRouterCacheControlTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	next := t.next
+	if next == nil {
+		next = http.DefaultTransport
+	}
+	if req.Method != http.MethodPost || !strings.HasSuffix(req.URL.Path, "/chat/completions") || req.Body == nil {
+		return next.RoundTrip(req)
+	}
+	raw, err := io.ReadAll(req.Body)
+	_ = req.Body.Close()
+	if err != nil {
+		return nil, err
+	}
+	rewritten := normalizeOpenRouterCacheControl(raw)
+	clone := req.Clone(req.Context())
+	clone.Body = io.NopCloser(bytes.NewReader(rewritten))
+	clone.ContentLength = int64(len(rewritten))
+	clone.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(rewritten)), nil
+	}
+	return next.RoundTrip(clone)
+}
+
+func normalizeOpenRouterCacheControl(raw []byte) []byte {
+	var probe struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil || !supportsExplicitBreakpoints(probe.Model) {
+		return raw
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return raw
+	}
+	rawMsgs, ok := top["messages"]
+	if !ok {
+		return raw
+	}
+	var msgs []map[string]json.RawMessage
+	if err := json.Unmarshal(rawMsgs, &msgs); err != nil {
+		return raw
+	}
+	changed := false
+	for _, m := range msgs {
+		var role string
+		if err := json.Unmarshal(m["role"], &role); err != nil {
+			continue
+		}
+		if role != "user" && role != "assistant" {
+			continue
+		}
+		rawContent, hasContent := m["content"]
+		if !hasContent {
+			continue
+		}
+		hasToolCalls := hasNonEmptyJSONArray(m["tool_calls"])
+		var text string
+		if err := json.Unmarshal(rawContent, &text); err == nil {
+			// Leave empty string content untouched: tool-call-only assistant
+			// messages carry content:"" with cache_control on tool_calls[last],
+			// and Anthropic rejects empty {"type":"text","text":""} blocks.
+			if text == "" {
+				continue
+			}
+			block := map[string]any{
+				"type": "text",
+				"text": text,
+			}
+			if cc, hasCC := m["cache_control"]; hasCC && !hasToolCalls {
+				block["cache_control"] = cc
+				delete(m, "cache_control")
+			}
+			encoded, err := json.Marshal([]any{block})
+			if err != nil {
+				continue
+			}
+			m["content"] = encoded
+			changed = true
+			continue
+		}
+		// Multi-part content array (e.g. user message with image/file parts):
+		// fantasy attaches cache_control at the top level of the message
+		// object; move it onto the last content part so OpenRouter forwards it.
+		if cc, hasCC := m["cache_control"]; hasCC && !hasToolCalls {
+			var parts []map[string]json.RawMessage
+			if err := json.Unmarshal(rawContent, &parts); err == nil && len(parts) > 0 {
+				parts[len(parts)-1]["cache_control"] = cc
+				delete(m, "cache_control")
+				if encoded, err := json.Marshal(parts); err == nil {
+					m["content"] = encoded
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return raw
+	}
+	encodedMsgs, err := json.Marshal(msgs)
+	if err != nil {
+		return raw
+	}
+	top["messages"] = encodedMsgs
+	out, err := json.Marshal(top)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func hasNonEmptyJSONArray(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var arr []json.RawMessage
+	return json.Unmarshal(raw, &arr) == nil && len(arr) > 0
 }
 
 // baseURLRewriteTransport swaps the scheme+host of every outbound request to a

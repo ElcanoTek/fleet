@@ -2458,6 +2458,9 @@ type UsageBucket struct {
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
 	CachedTokens     int64   `json:"cached_tokens"`
+	ChatPromptTokens int64   `json:"chat_prompt_tokens,omitempty"`
+	UncachedTokens   int64   `json:"uncached_tokens"`
+	CacheHitRatePct  float64 `json:"cache_hit_rate_pct"`
 	TaskCostUSD      float64 `json:"task_cost_usd"`
 	ChatCostUSD      float64 `json:"chat_cost_usd"`
 	TaskIterations   int64   `json:"task_iterations"`

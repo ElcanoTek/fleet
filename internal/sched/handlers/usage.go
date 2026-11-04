@@ -171,7 +171,7 @@ func writeUsageCSV(w http.ResponseWriter, out *models.UsageReport) {
 	cw := csv.NewWriter(w)
 	_ = cw.Write([]string{
 		out.GroupBy, "label", "cost_usd", "task_cost_usd", "chat_cost_usd",
-		"prompt_tokens", "completion_tokens", "cached_tokens", "task_iterations", "chat_turns",
+		"prompt_tokens", "completion_tokens", "cached_tokens", "uncached_tokens", "cache_hit_rate_pct", "task_iterations", "chat_turns",
 	})
 	row := func(b models.UsageBucket) []string {
 		return []string{
@@ -182,6 +182,8 @@ func writeUsageCSV(w http.ResponseWriter, out *models.UsageReport) {
 			strconv.FormatInt(b.PromptTokens, 10),
 			strconv.FormatInt(b.CompletionTokens, 10),
 			strconv.FormatInt(b.CachedTokens, 10),
+			strconv.FormatInt(b.UncachedTokens, 10),
+			strconv.FormatFloat(b.CacheHitRatePct, 'f', 1, 64),
 			strconv.FormatInt(b.TaskIterations, 10),
 			strconv.FormatInt(b.ChatTurns, 10),
 		}
@@ -227,6 +229,7 @@ func mergeUsage(taskRows, chatRows []models.UsageBucket) []models.UsageBucket {
 		b.ChatTurns += r.ChatTurns
 		b.CostUSD += r.ChatCostUSD
 		b.PromptTokens += r.PromptTokens
+		b.ChatPromptTokens += r.PromptTokens
 		b.CompletionTokens += r.CompletionTokens
 		b.CachedTokens += r.CachedTokens
 		if b.Label == "" {
@@ -235,9 +238,22 @@ func mergeUsage(taskRows, chatRows []models.UsageBucket) []models.UsageBucket {
 	}
 	out := make([]models.UsageBucket, 0, len(order))
 	for _, key := range order {
-		out = append(out, *byKey[key])
+		b := byKey[key]
+		finalizeUsageCacheFields(b)
+		out = append(out, *b)
 	}
 	return out
+}
+
+func finalizeUsageCacheFields(b *models.UsageBucket) {
+	denom := b.ChatPromptTokens
+	if denom == 0 && b.CachedTokens > 0 {
+		denom = b.PromptTokens
+	}
+	if denom > 0 {
+		b.UncachedTokens = max(int64(0), denom-b.CachedTokens)
+		b.CacheHitRatePct = float64(b.CachedTokens) / float64(denom) * 100.0
+	}
 }
 
 // sortUsageBuckets orders time buckets chronologically (their key is the
@@ -268,6 +284,7 @@ func usageTotals(buckets []models.UsageBucket) models.UsageBucket {
 	for _, b := range buckets {
 		t.CostUSD += b.CostUSD
 		t.PromptTokens += b.PromptTokens
+		t.ChatPromptTokens += b.ChatPromptTokens
 		t.CompletionTokens += b.CompletionTokens
 		t.CachedTokens += b.CachedTokens
 		t.TaskCostUSD += b.TaskCostUSD
@@ -275,5 +292,6 @@ func usageTotals(buckets []models.UsageBucket) models.UsageBucket {
 		t.TaskIterations += b.TaskIterations
 		t.ChatTurns += b.ChatTurns
 	}
+	finalizeUsageCacheFields(&t)
 	return t
 }

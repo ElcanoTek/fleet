@@ -123,6 +123,10 @@ func (e *engine) generateTerminalStructuredOutput(
 	lastDetail := "no structured output was returned"
 	native := supportsNativeStrictStructuredOutput(model)
 	downgraded := false
+	var envPrefix EnvPrefix
+	if e != nil {
+		envPrefix = e.envPrefix
+	}
 	for attempt := 0; attempt <= StructuredOutputCorrectionAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
@@ -133,8 +137,22 @@ func (e *engine) generateTerminalStructuredOutput(
 			}
 		}
 
+		terminalToolTokens := 0
+		if !native {
+			terminalToolTokens = estimatedTokensForBytes(len(schemaRaw))
+		}
+		cacheStep := promptCachingStep(
+			model.Model(),
+			WithCacheEnvPrefix(envPrefix),
+			WithCompactionSummaryBreakpoint(nil),
+			WithStablePrefixTokens(terminalToolTokens),
+		)
+		callPrompt := prompt
+		if _, stepped, stepErr := cacheStep(ctx, fantasy.PrepareStepFunctionOptions{Messages: prompt}); stepErr == nil && len(stepped.Messages) > 0 {
+			callPrompt = fantasy.Prompt(stepped.Messages)
+		}
 		call := fantasy.Call{
-			Prompt:          prompt,
+			Prompt:          callPrompt,
 			MaxOutputTokens: &maxTokens,
 			ProviderOptions: e.providerOptions(model.Model()),
 		}

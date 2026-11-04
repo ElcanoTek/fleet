@@ -156,6 +156,23 @@ jobs:
           FLEET_SANDBOX_IMAGE: ${{ steps.sandbox.outputs.image }}
         run: npx playwright test --project=canary --reporter=list,html
 
+      - name: Run live multi-provider prompt-cache canary
+        env:
+          FLEET_CACHE_LIVE: '1'
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          FLEET_CACHE_LIVE_MODELS: ${{ inputs.model }}
+        run: |
+          set -uo pipefail
+          rc=0
+          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
+          {
+            echo "### Live Prompt-Cache Canary (exit $rc)"
+            echo '```'
+            grep -E '(SUMMARY|long-chain|--- PASS|--- FAIL)' prompt-cache-canary.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$rc"
+
       - name: Upload canary report on failure
         # Playwright report ONLY — deliberately not `.e2e-run/logs/`.
         #

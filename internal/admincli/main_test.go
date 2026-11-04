@@ -29,7 +29,7 @@ func usageLineFlags(text, prefix string) []string {
 func TestUsageNamesEveryDispatchedVerb(t *testing.T) {
 	text := UsageText()
 	for _, verb := range []string{
-		"bootstrap", "update", "cleanup", "status", "doctor", "diagnose", "start", "restart", "stop",
+		"bootstrap", "update", "cleanup", "status", "cache-stats", "usage", "doctor", "diagnose", "start", "restart", "stop",
 		"logs", "timers", "motd", "chat", "sched", "admin", "config", "env", "task", "mcp", "notes",
 		"worktree", "migrate", "backup", "restore", "import", "version",
 	} {

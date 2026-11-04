@@ -11,6 +11,11 @@ export type UserStat = {
   last_activity: number;
   total_cost_usd: number;
   total_turns: number;
+  total_prompt_tokens?: number;
+  total_cached_tokens?: number;
+  total_cache_creation_tokens?: number;
+  uncached_prompt_tokens?: number;
+  cache_hit_rate_pct?: number;
   // Struggle counts (docs/CHAT-ESCALATION.md). Optional so a payload from an
   // older server still parses; the table shows "—" when absent.
   frustrated_messages?: number;
@@ -18,9 +23,30 @@ export type UserStat = {
   advanced_switches?: number;
 };
 
-type StatsResponse = {
-  users: UserStat[];
+export type DailyCacheStat = {
+  day: string;
+  turns: number;
+  cost_usd: number;
+  prompt_tokens: number;
+  cached_tokens: number;
+  uncached_prompt_tokens: number;
+  cache_hit_rate_pct: number;
 };
+
+export type StatsResponse = {
+  users: UserStat[];
+  daily_cache?: DailyCacheStat[];
+};
+
+const compactFmt = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+export function formatCompactTokens(v: number | undefined): string {
+  if (!v) return "0";
+  return compactFmt.format(v);
+}
 
 export function formatAgo(unixSeconds: number): string {
   if (!unixSeconds) return "—";
@@ -41,7 +67,7 @@ export function formatUSD(v: number): string {
 // the rows on success, or null when the request triggered a redirect
 // (401 → /login) and there's nothing left to render. Throws on any other
 // non-OK response so callers can surface it.
-export async function fetchStats(): Promise<UserStat[] | null> {
+export async function fetchAdminStatsPayload(): Promise<StatsResponse | null> {
   const response = await fetch("/api/admin/stats", { cache: "no-store" });
   if (response.status === 401) {
     window.location.href = "/login";
@@ -54,5 +80,13 @@ export async function fetchStats(): Promise<UserStat[] | null> {
     throw new Error(`Stats request failed: ${response.status}`);
   }
   const data = (await response.json()) as StatsResponse;
-  return data.users ?? [];
+  return {
+    users: data.users ?? [],
+    daily_cache: data.daily_cache ?? [],
+  };
+}
+
+export async function fetchStats(): Promise<UserStat[] | null> {
+  const data = await fetchAdminStatsPayload();
+  return data ? data.users : null;
 }

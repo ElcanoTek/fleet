@@ -144,9 +144,14 @@ func (a *Agent) runPhoneAFriendReview(ctx context.Context, reviewer fantasy.Lang
 	reviewCtx, cancel := context.WithTimeout(ctx, reviewerTimeout)
 	defer cancel()
 
-	reviewAgent := fantasy.NewAgent(reviewer, fantasy.WithSystemPrompt(systemPrompt))
+	reviewAgent := fantasy.NewAgent(
+		reviewer,
+		fantasy.WithSystemPrompt(systemPrompt),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(reviewer.Model(), agentcore.WithStablePrefixOnly())),
+	)
 	out, err := reviewAgent.Generate(reviewCtx, fantasy.AgentCall{
-		Messages: []fantasy.Message{fantasy.NewUserMessage(userPrompt)},
+		Messages:        []fantasy.Message{fantasy.NewUserMessage(userPrompt)},
+		ProviderOptions: agentcore.RoutingProviderOptions(reviewer.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("reviewer call failed: %w", err)

@@ -1166,6 +1166,9 @@ export default function AdminUsersPage() {
                           </span>
                           <span className="mt-[0.18rem] block text-[0.7rem] text-[var(--color-text-muted)]">
                             last active {formatAgo(stat?.last_activity ?? 0)}
+                            {stat?.total_prompt_tokens && stat.total_prompt_tokens > 0
+                              ? ` · cache hit ${(stat.cache_hit_rate_pct ?? (stat.total_cached_tokens ?? 0) / stat.total_prompt_tokens * 100).toFixed(1)}%`
+                              : ""}
                             {account?.team_id.trim()
                               ? ` · team: ${account.team_id.trim()}`
                               : ""}
