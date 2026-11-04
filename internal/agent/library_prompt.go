@@ -127,7 +127,7 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(libraryPromptMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()

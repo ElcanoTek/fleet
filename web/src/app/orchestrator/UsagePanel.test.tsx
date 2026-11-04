@@ -235,6 +235,56 @@ describe("UsagePanel (#601)", () => {
     fireEvent.click(screen.getByTestId("budget-delete"));
     await waitFor(() => expect(deleteBudget).toHaveBeenCalledWith("budget-1"));
   });
+
+  it("computes token-weighted cache hit % for the Other (N) bar when >11 buckets exist", async () => {
+    const top11 = Array.from({ length: 11 }, (_, i) =>
+      bucket({
+        key: `user${i + 1}@example.com`,
+        cost_usd: 1,
+        prompt_tokens: 10_000,
+        cached_tokens: 9_500,
+        chat_turns: 2,
+      }),
+    );
+    // Both tail buckets have lower cache hit % than the top 11 (95%):
+    // - Tail bucket 1: 100 tokens, 80 cached (80.0% hit rate, tiny volume)
+    // - Tail bucket 2: 9,900 tokens, 0 cached (0.0% hit rate, huge volume)
+    // Token-weighted hit rate = 80 / 10,000 = 0.8% (NOT unweighted mean 40.0%).
+    const tailBuckets = [
+      bucket({
+        key: "tail-small@example.com",
+        cost_usd: 0.1,
+        prompt_tokens: 100,
+        cached_tokens: 80,
+        chat_turns: 1,
+      }),
+      bucket({
+        key: "tail-large@example.com",
+        cost_usd: 0.9,
+        prompt_tokens: 9_900,
+        cached_tokens: 0,
+        chat_turns: 5,
+      }),
+    ];
+    mockReport(
+      report({
+        group_by: "user",
+        buckets: [...top11, ...tailBuckets],
+        totals: bucket({
+          cost_usd: 12,
+          prompt_tokens: 120_000,
+          cached_tokens: 104_580,
+          chat_turns: 28,
+        }),
+      }),
+    );
+    render(<UsagePanel />);
+    await screen.findByTestId("usage-bars");
+    fireEvent.change(screen.getByLabelText("Chart measure"), {
+      target: { value: "cache" },
+    });
+    expect(screen.getByRole("img", { name: "Other (2): 0.8%" })).toBeTruthy();
+  });
 });
 
 describe("UsagePanel CSV download", () => {

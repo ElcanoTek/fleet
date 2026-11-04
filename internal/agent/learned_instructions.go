@@ -56,7 +56,7 @@ func (m *Manager) DistillLearnedInstruction(ctx context.Context, taskPrompt stri
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(300),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	tctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()

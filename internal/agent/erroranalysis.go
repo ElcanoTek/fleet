@@ -87,7 +87,7 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.1),
 		fantasy.WithMaxOutputTokens(errorAnalysisMaxTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 
 	prompt := fmt.Sprintf("Task instructions:\n%s\n\nTerminal error:\n%s\n\nSession log tail:\n%s",

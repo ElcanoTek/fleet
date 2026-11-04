@@ -829,6 +829,89 @@ jobs:
             ~/go/pkg/mod
           key: go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
 
+  prompt-cache-live:
+    # Blocking live prompt-cache regression gate against OpenRouter.
+    # Exercises Fleet's real multi-turn, multi-step tool-calling loop
+    # (TestPromptCacheLive + TestPromptCacheLive_LongToolChainCrossTurn) across
+    # Anthropic (claude-opus-5.5, claude-haiku-5.5), Google (gemini-3.8-flash,
+    # gemini-4-argon), and OpenAI (gpt-6-luna-pro) plus a 10-step sequential
+    # tool chain exceeding Anthropic's 20-block lookback window. Any PR that
+    # breaks wire cache_control placement, prefix stability, or cross-turn
+    # history replay fails this gate and cannot merge.
+    name: Live prompt-cache gate (OpenRouter)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Restore the Go build cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
+            go-build-cover-${{ runner.os }}-
+
+      - name: Prefetch Go modules (retried — the proxy is not always up)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
+            sleep "$(( attempt * 10 ))"
+          done
+          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
+          exit 1
+
+      - name: Run live multi-provider prompt-cache regression suite
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTOR: ${{ github.actor }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if [ -z "${OPENROUTER_API_KEY}" ]; then
+            if [ "${EVENT_NAME}" = "pull_request" ] && { [ "${HEAD_REPO}" != "${BASE_REPO}" ] || [ "${ACTOR}" = "dependabot[bot]" ]; }; then
+              echo "::notice::OPENROUTER_API_KEY is not exposed to fork/Dependabot PRs; offline wire contract tests in the go job still enforce cache invariants."
+              exit 0
+            fi
+            echo "::error::OPENROUTER_API_KEY secret is unset; refusing to pass the live prompt-cache gate vacuously."
+            exit 1
+          fi
+          rc=0
+          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
+          {
+            echo "## Live OpenRouter Prompt-Cache Gate (exit $rc)"
+            echo '```'
+            grep -E '(SUMMARY|long-chain|--- PASS|--- FAIL|--- SKIP)' prompt-cache-live.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Live prompt-cache regression test failed (exit $rc)."
+            exit "$rc"
+          fi
+          if grep -q -- '--- SKIP' prompt-cache-live.log; then
+            echo "::error::A live prompt-cache test SKIPPED; refusing to pass vacuously."
+            exit 1
+          fi
+
   python:
     name: Python lint (ruff)
     runs-on: ubuntu-latest
@@ -1422,7 +1505,7 @@ jobs:
     # (cancelled upstream jobs, none failed) concludes neutral (#1302).
     name: CI gate
     if: ${{ always() }}
-    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
+    needs: [changes, gitleaks, stack-check, actions, migrations, helm, go, go-race, prompt-cache-live, python, codeql, semgrep, web, playwright, e2e-live, grype-scan]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

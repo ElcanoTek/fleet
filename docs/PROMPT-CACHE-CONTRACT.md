@@ -237,17 +237,34 @@ breakpoint is what makes the prefix cacheable, so the system prompt must be the
 leading, stable content. For Gemini past the switch there is no breakpoint, and
 the append-only history above is what its implicit cache reads.
 
-## Live check (`TestPromptCacheLive`)
+## Live check (`TestPromptCacheLive` & `TestPromptCacheLive_LongToolChainCrossTurn`)
 
 `internal/agentcore/prompt_cache_live_test.go` drives the real `Run` loop —
-fleet's breakpoints, upstream pins, tool roster and request-local tail
-messages — against OpenRouter, and reports per request the served provider,
-prompt / cached / cache-write tokens and cost. Three turns, one tool call, a
-~7K-token system prompt with a fresh nonce (so turn 1 is cold). It costs real
-money, so it is opt-in:
+fleet's breakpoints, `openRouterCacheControlTransport` wire normalization,
+upstream pins, realistic 6-tool roster (`tool_search`, `query_metrics`,
+`inspect_box`, `read_runbook`, `run_python`, `render_artifact`), and persisted
+`runtime_today` notes — against OpenRouter, and reports per request the served
+provider, prompt / cached / cache-write tokens, hit rate, and cost.
+
+Two tests run in the `prompt-cache-live` CI gate (`.github/workflows/ci.yml`,
+required by `CI gate`) and the nightly canary (`.github/workflows/e2e-canary.yml`):
+
+1. `TestPromptCacheLive`: runs a 3-turn multi-tool conversation (Turn 1 makes 3
+   sequential tool calls returning ~1,200–1,400 tokens each; Turn 2 replays
+   Turn 1 via `liveReplayEntries`, sends a ~1,300-token user message, and calls
+   `read_runbook`; Turn 3 synthesizes across both turns) across
+   `anthropic/claude-opus-5.5`, `anthropic/claude-haiku-5.5`,
+   `google/gemini-3.8-flash`, `google/gemini-4-argon`, and
+   `openai/gpt-6-luna-pro`.
+2. `TestPromptCacheLive_LongToolChainCrossTurn`: runs a 10-step sequential
+   pagination tool chain in Turn 1 (>20 content blocks, exceeding Anthropic's
+   20-block lookback window) followed by Turn 2 after history replay, asserting
+   step-by-step cache growth, all 4 breakpoints (`system` + `runtime_today` + 2
+   rolling tail messages), and cross-turn cache preservation on Turn 2 Step 0.
 
 ```sh
-FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=…   FLEET_CACHE_LIVE_MODELS=google/gemini-4-argon,anthropic/claude-opus-5.5   go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
+FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… \
+  go test -tags fleet_host_executor -run TestPromptCacheLive -v ./internal/agentcore/
 ```
 
 It fails when a request after the first reads nothing from cache (one miss is

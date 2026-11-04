@@ -37,7 +37,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(titleMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 
 	prompt := fmt.Sprintf("User: %s\n\nAssistant: %s", truncate(userMessage, 600), truncate(assistantReply, 600))

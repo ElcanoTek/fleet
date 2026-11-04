@@ -118,7 +118,7 @@ func (m *Manager) ExtractMemoryGraph(ctx context.Context, content string) (*Extr
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0),
 		fantasy.WithMaxOutputTokens(memoryGraphMaxTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 
 	ctx, cancel := context.WithTimeout(ctx, memoryGraphTimeout)

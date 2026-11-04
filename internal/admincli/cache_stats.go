@@ -22,7 +22,7 @@ func printJSONTo(w io.Writer, v any) int {
 }
 
 // CacheStatsRow is one aggregated bucket of prompt-cache telemetry from
-// turn_metrics (grouped by day, user, or model).
+// turn_metrics (grouped by day or user).
 type CacheStatsRow struct {
 	Key                 string  `json:"key"`
 	Turns               int64   `json:"turns"`
@@ -37,8 +37,8 @@ type CacheStatsRow struct {
 
 // CacheStatsReport is the JSON/table payload emitted by `fleet cache-stats`
 // (and `fleet usage`). Designed so an operator or an agent can inspect prompt
-// cache health by date, user, or model in a single read-only command without
-// needing a running server or writing raw SQL.
+// cache health by date or user in a single read-only command without needing a
+// running server or writing raw SQL.
 type CacheStatsReport struct {
 	Status     string          `json:"status"`
 	Summary    string          `json:"summary"`
@@ -49,7 +49,6 @@ type CacheStatsReport struct {
 	Totals     CacheStatsRow   `json:"totals"`
 	ByDay      []CacheStatsRow `json:"by_day,omitempty"`
 	ByUser     []CacheStatsRow `json:"by_user,omitempty"`
-	ByModel    []CacheStatsRow `json:"by_model,omitempty"`
 }
 
 // evaluateCacheRowStatus classifies a bucket or total row so broken caching
@@ -87,7 +86,7 @@ func promptCacheDisabledEnvVar() string {
 
 // cmdCacheStats implements `fleet cache-stats` (alias `fleet usage`): a fast,
 // read-only report of prompt cache hit rate, cached tokens, and cache misses by
-// UTC date, user, and model over the trailing N days.
+// UTC date and user over the trailing N days.
 func cmdCacheStats(argv []string) int {
 	return runCacheStats(argv, os.Stdout)
 }
@@ -96,7 +95,7 @@ func runCacheStats(argv []string, out io.Writer) int {
 	fs := flag.NewFlagSet("cache-stats", flag.ContinueOnError)
 	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
 	days := fs.Int("days", 14, "trailing window in UTC days (1..366)")
-	by := fs.String("by", "all", "dimension: all|day|user|model")
+	by := fs.String("by", "all", "dimension: all|day|user")
 	asJSON := fs.Bool("json", false, "machine-readable JSON output")
 	if err := fs.Parse(argv); err != nil {
 		return 1
@@ -109,9 +108,9 @@ func runCacheStats(argv []string, out io.Writer) int {
 	}
 	dim := strings.ToLower(strings.TrimSpace(*by))
 	switch dim {
-	case "all", "day", "user", "model":
+	case "all", "day", "user":
 	default:
-		return errf(1, "--by must be one of: all, day, user, model (got %q)", *by)
+		return errf(1, "--by must be one of: all, day, user (got %q)", *by)
 	}
 
 	dsn, err := chatDSN(*chatURL)
@@ -182,13 +181,6 @@ func buildCacheStatsReport(ctx context.Context, db *sql.DB, days int, dim, disab
 		}
 		rep.ByUser = rows
 	}
-	if dim == "all" || dim == "model" {
-		rows, err := queryCacheDimension(ctx, db, from.Unix(), now.Unix(), "model")
-		if err != nil {
-			return nil, err
-		}
-		rep.ByModel = rows
-	}
 
 	rep.Status = tot.Status
 	if disabledBy != "" {
@@ -234,19 +226,6 @@ const (
 		WHERE m.completed_at >= $1 AND m.completed_at < $2
 		GROUP BY 1
 		ORDER BY prompt_tokens DESC, 1 ASC`
-	cacheQueryByModel = `
-		SELECT
-			COALESCE(NULLIF(c.model, ''), '(default)') AS bucket_key,
-			COUNT(*) AS turns,
-			COALESCE(SUM(m.cost_usd), 0) AS cost_usd,
-			COALESCE(SUM(m.prompt_tokens), 0) AS prompt_tokens,
-			COALESCE(SUM(m.cached_tokens), 0) AS cached_tokens,
-			COALESCE(SUM(m.cache_creation_tokens), 0) AS cache_creation_tokens
-		FROM turn_metrics m
-		LEFT JOIN conversations c ON c.id = m.conversation_id
-		WHERE m.completed_at >= $1 AND m.completed_at < $2
-		GROUP BY 1
-		ORDER BY prompt_tokens DESC, 1 ASC`
 )
 
 func queryCacheDimension(ctx context.Context, db *sql.DB, fromUnix, toUnix int64, dim string) ([]CacheStatsRow, error) {
@@ -256,8 +235,6 @@ func queryCacheDimension(ctx context.Context, db *sql.DB, fromUnix, toUnix int64
 		q = cacheQueryByDay
 	case "user":
 		q = cacheQueryByUser
-	case "model":
-		q = cacheQueryByModel
 	default:
 		return nil, fmt.Errorf("unknown dimension %q", dim)
 	}
@@ -321,11 +298,6 @@ func renderCacheStatsReport(w io.Writer, rep *CacheStatsReport, dim string) erro
 	}
 	if dim == "all" || dim == "user" {
 		if err := writeSection("By User", "USER", rep.ByUser); err != nil {
-			return err
-		}
-	}
-	if dim == "all" || dim == "model" {
-		if err := writeSection("By Model", "MODEL", rep.ByModel); err != nil {
 			return err
 		}
 	}

@@ -89,7 +89,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(recurringTaskMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()

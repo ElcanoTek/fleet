@@ -65,7 +65,7 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 		fantasy.WithMaxOutputTokens(maxTokens),
 		fantasy.WithPrepareStep(chainPrepareSteps(
 			agentcore.ModelContextBudgetStep(summarizeSystemPrompt, nil, int(maxTokens)),
-			agentcore.PromptCachingStep(modelSlug),
+			agentcore.PromptCachingStep(modelSlug, agentcore.WithStablePrefixOnly()),
 		)),
 	)
 

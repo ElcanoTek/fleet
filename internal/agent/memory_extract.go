@@ -116,7 +116,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.1),
 		fantasy.WithMaxOutputTokens(768),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()

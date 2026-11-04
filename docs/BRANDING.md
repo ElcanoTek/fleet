@@ -99,6 +99,7 @@ action.
 | Field | Required | Description |
 |---|---|---|
 | `label` | Yes | Button label shown in the top bar (and fallback dialog title when `title` is omitted). |
+| `mobile_label` | No | Compact button label shown in the top bar on narrow viewports (`< 40rem`); defaults to `"Help"` when omitted. |
 | `email` | Yes | Plain email address (`local@domain`); validated at bundle load (`fleet validate-config`) and rejected if it contains a display name or URL/query characters. |
 | `title` | No | Heading shown at the top of the support dialog (defaults to `label`). |
 | `message` | No | Body copy shown inside the dialog; blank lines split paragraphs. |

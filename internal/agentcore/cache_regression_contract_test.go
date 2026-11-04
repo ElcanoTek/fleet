@@ -276,11 +276,12 @@ const (
 )
 
 type wireContractModelSpec struct {
-	slug           string
-	family         wireContractTestFamily
-	allowFallbacks bool
-	expectedOrder  []string
-	expectedOnly   []string
+	slug                string
+	family              wireContractTestFamily
+	expectNoProviderPin bool
+	allowFallbacks      bool
+	expectedOrder       []string
+	expectedOnly        []string
 }
 
 func TestWireCacheContract_EndToEndMultiTurnAndMultiStep(t *testing.T) {
@@ -293,11 +294,25 @@ func TestWireCacheContract_EndToEndMultiTurnAndMultiStep(t *testing.T) {
 			expectedOnly:   []string{"Anthropic", "Claude Platform on AWS", "Amazon Bedrock", "Azure", "Google"},
 		},
 		{
+			slug:           "anthropic/claude-sonnet-5.5",
+			family:         familyAnthropic,
+			allowFallbacks: true,
+			expectedOrder:  []string{"Anthropic"},
+			expectedOnly:   nil,
+		},
+		{
 			slug:           "anthropic/claude-haiku-5.5",
 			family:         familyAnthropic,
 			allowFallbacks: true,
 			expectedOrder:  []string{"Anthropic"},
 			expectedOnly:   []string{"Anthropic", "Claude Platform on AWS", "Amazon Bedrock", "Azure", "Google"},
+		},
+		{
+			slug:           "~anthropic/claude-sonnet-latest",
+			family:         familyAnthropic,
+			allowFallbacks: true,
+			expectedOrder:  []string{"Anthropic"},
+			expectedOnly:   nil,
 		},
 		{
 			slug:           "google/gemini-4-argon",
@@ -307,11 +322,63 @@ func TestWireCacheContract_EndToEndMultiTurnAndMultiStep(t *testing.T) {
 			expectedOnly:   []string{"Google"},
 		},
 		{
+			slug:           "google/gemini-3.8-flash",
+			family:         familyGoogle,
+			allowFallbacks: false,
+			expectedOrder:  nil,
+			expectedOnly:   []string{"Google"},
+		},
+		{
+			slug:           "openai/gpt-6-luna-pro",
+			family:         familyImplicit,
+			allowFallbacks: true,
+			expectedOrder:  []string{"OpenAI"},
+			expectedOnly:   []string{"OpenAI", "Azure", "Amazon Bedrock"},
+		},
+		{
 			slug:           "openai/gpt-5.4",
 			family:         familyImplicit,
 			allowFallbacks: true,
 			expectedOrder:  []string{"OpenAI"},
 			expectedOnly:   nil,
+		},
+		{
+			slug:           "deepseek/deepseek-v4.1-flash",
+			family:         familyImplicit,
+			allowFallbacks: true,
+			expectedOrder:  []string{"DeepSeek"},
+			expectedOnly:   nil,
+		},
+		{
+			slug:           "moonshotai/kimi-k3",
+			family:         familyImplicit,
+			allowFallbacks: true,
+			expectedOrder:  []string{"Moonshot AI"},
+			expectedOnly:   nil,
+		},
+		{
+			slug:           "z-ai/glm-5.3",
+			family:         familyImplicit,
+			allowFallbacks: true,
+			expectedOrder:  []string{"Z.AI"},
+			expectedOnly:   nil,
+		},
+		{
+			slug:                "x-ai/grok-4.7",
+			family:              familyImplicit,
+			expectNoProviderPin: true,
+		},
+		{
+			slug:           "qwen/qwen3.8-27b",
+			family:         familyImplicit,
+			allowFallbacks: true,
+			expectedOrder:  nil,
+			expectedOnly:   nil,
+		},
+		{
+			slug:                "mistralai/mistral-large-4-0",
+			family:              familyImplicit,
+			expectNoProviderPin: true,
 		},
 	}
 
@@ -472,6 +539,17 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 func assertWireProviderRouting(t *testing.T, tc wireContractModelSpec, captured []capturedWireRequest) {
 	t.Helper()
 	for reqIdx, req := range captured {
+		if tc.expectNoProviderPin {
+			if req.Provider != nil {
+				// Terminal structured output sets provider.require_parameters=true even
+				// when no upstream family pin is present.
+				if len(req.Provider) == 1 && req.Provider["require_parameters"] == true {
+					continue
+				}
+				t.Fatalf("request[%d] unexpectedly has provider pin %v for unpinned slug %s", reqIdx, req.Provider, tc.slug)
+			}
+			continue
+		}
 		if req.Provider == nil {
 			t.Fatalf("request[%d] missing top-level provider routing object", reqIdx)
 		}
@@ -599,8 +677,9 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 	// model.Generate must appear in this allowlist AND reference the caching +
 	// routing helpers in the same file.
 	allowedCallSiteFiles := map[string]struct {
-		requireCacheSymbol   string
-		requireRoutingSymbol string
+		requireCacheSymbol      string
+		requireRoutingSymbol    string
+		requireStablePrefixOnly bool
 	}{
 		"internal/agentcore/engine.go": {
 			requireCacheSymbol:   "promptCachingStep",
@@ -619,48 +698,59 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 			requireRoutingSymbol: "RoutingProviderOptions",
 		},
 		"internal/agent/reviewer.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/verifier.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/summarize.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/erroranalysis.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/learned_instructions.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/library_prompt.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/memory_extract.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/memory_graph.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/recurring_task.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/agent/title.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 		"internal/scheduledrun/loop.go": {
-			requireCacheSymbol:   "PromptCachingStep",
-			requireRoutingSymbol: "RoutingProviderOptions",
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
 		},
 	}
 
@@ -742,6 +832,9 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 				if !strings.Contains(text, rule.requireRoutingSymbol) {
 					t.Errorf("%s has LLM call site(s) %v but does not reference %q", relKey, llmCalls, rule.requireRoutingSymbol)
 				}
+				if rule.requireStablePrefixOnly && !strings.Contains(text, "WithStablePrefixOnly") {
+					t.Errorf("%s has one-shot LLM call site(s) %v but does not pass WithStablePrefixOnly() to avoid paying 1.25x cache-write charges on unique per-call user prompts", relKey, llmCalls)
+				}
 			}
 		}
 	}
@@ -751,4 +844,248 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 			t.Errorf("expected LLM call site file %s was not found or no longer has LLM calls; update TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard", expectedFile)
 		}
 	}
+}
+
+// TestPromptCachingStep_WithStablePrefixOnly_AuxiliaryCalls verifies that one-shot
+// auxiliary calls (title generation,verifier, reviewer, memory extraction, etc.)
+// mark ONLY the reusable system prompt prefix and never attach a cache_control
+// breakpoint to the unique per-request user message.
+func TestPromptCachingStep_WithStablePrefixOnly_AuxiliaryCalls(t *testing.T) {
+	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
+	msgs := []fantasy.Message{
+		fantasy.NewSystemMessage("Static verifier system instructions shared across runs."),
+		fantasy.NewUserMessage("Unique transcript for conversation 98123 that will never be sent again."),
+	}
+	for _, slug := range []string{
+		"anthropic/claude-opus-5.5",
+		"anthropic/claude-haiku-5.5",
+		"claude-sonnet-4.6",
+		"us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+	} {
+		step := PromptCachingStep(slug, WithStablePrefixOnly())
+		_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+		if err != nil {
+			t.Fatalf("%s step: %v", slug, err)
+		}
+		if !hasCacheMarker(out.Messages[0]) {
+			t.Errorf("%s: system message must carry cache_control marker", slug)
+		}
+		if hasCacheMarker(out.Messages[1]) {
+			t.Errorf("%s: unique one-shot user message must NOT carry cache_control marker when WithStablePrefixOnly is set", slug)
+		}
+	}
+}
+
+// TestNativeProviderCacheContract_AcrossProviderTypes verifies that non-OpenRouter
+// native providers built via buildProvider (Anthropic, Bedrock, OpenAI, Azure,
+// OpenAICompat) preserve prompt caching semantics on the wire:
+//   - Native Anthropic (/v1/messages) and Bedrock (/model/.../invoke) emit
+//     explicit `cache_control: {"type": "ephemeral"}` on the system prompt and
+//     rolling conversation messages.
+//   - Native OpenAI, Azure, and OpenAICompat emit byte-identical tool and
+//     message prefixes across turns with no stray cache_control fields.
+func TestNativeProviderCacheContract_AcrossProviderTypes(t *testing.T) {
+	t.Setenv("FLEET_DISABLE_PROMPT_CACHE", "")
+
+	t.Run("native_anthropic_and_bedrock_emit_explicit_cache_control", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			provType ProviderType
+			slug     string
+			region   string
+		}{
+			{
+				name:     "Anthropic_native",
+				provType: ProviderTypeAnthropic,
+				slug:     "claude-sonnet-4.6",
+			},
+			{
+				name:     "Bedrock_native_inference_profile",
+				provType: ProviderTypeBedrock,
+				slug:     "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+				region:   "us-east-1",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var capturedBodies [][]byte
+				var mu sync.Mutex
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, _ := io.ReadAll(r.Body)
+					mu.Lock()
+					capturedBodies = append(capturedBodies, body)
+					mu.Unlock()
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{
+						"id": "msg_01",
+						"type": "message",
+						"role": "assistant",
+						"model": "`+tc.slug+`",
+						"content": [{"type": "text", "text": "Ack"}],
+						"stop_reason": "end_turn",
+						"usage": {
+							"input_tokens": 120,
+							"output_tokens": 10,
+							"cache_creation_input_tokens": 50,
+							"cache_read_input_tokens": 1800
+						}
+					}`)
+				}))
+				defer srv.Close()
+
+				prov, err := buildProvider(ProviderConfig{
+					Name:    tc.name,
+					Type:    tc.provType,
+					APIKey:  "test-native-key",
+					BaseURL: srv.URL,
+					Region:  tc.region,
+				}, DefaultProviderHeaders)
+				if err != nil {
+					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
+				}
+				model, err := prov.LanguageModel(context.Background(), tc.slug)
+				if err != nil {
+					t.Fatalf("LanguageModel(%s): %v", tc.slug, err)
+				}
+				ag := fantasy.NewAgent(model, fantasy.WithSystemPrompt("Native provider system prompt."))
+				_, err = ag.Generate(context.Background(), fantasy.AgentCall{
+					Messages: []fantasy.Message{
+						fantasy.NewUserMessage("Turn 1 question"),
+						newAssistantMessage("Turn 1 answer"),
+					},
+					Prompt:      "Turn 2 follow-up",
+					PrepareStep: PromptCachingStep(tc.slug),
+				})
+				if err != nil {
+					t.Fatalf("Generate(%s): %v", tc.name, err)
+				}
+				mu.Lock()
+				defer mu.Unlock()
+				if len(capturedBodies) != 1 {
+					t.Fatalf("captured %d requests, want 1", len(capturedBodies))
+				}
+				var wire map[string]any
+				if err := json.Unmarshal(capturedBodies[0], &wire); err != nil {
+					t.Fatalf("unmarshal native wire body: %v", err)
+				}
+				// Verify system block has cache_control: {"type": "ephemeral"}
+				sysBlocks, _ := wire["system"].([]any)
+				if len(sysBlocks) == 0 {
+					t.Fatalf("native %s request missing system blocks: %s", tc.name, string(capturedBodies[0]))
+				}
+				lastSys, _ := sysBlocks[len(sysBlocks)-1].(map[string]any)
+				if cc, _ := lastSys["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+					t.Errorf("native %s system block missing ephemeral cache_control: %v", tc.name, lastSys)
+				}
+				// Verify last two messages carry ephemeral cache_control on their content blocks
+				msgs, _ := wire["messages"].([]any)
+				if len(msgs) != 3 {
+					t.Fatalf("native %s messages len = %d, want 3", tc.name, len(msgs))
+				}
+				for _, idx := range []int{1, 2} {
+					m, _ := msgs[idx].(map[string]any)
+					content, _ := m["content"].([]any)
+					if len(content) == 0 {
+						t.Fatalf("native %s message[%d] has empty content", tc.name, idx)
+					}
+					lastBlock, _ := content[len(content)-1].(map[string]any)
+					if cc, _ := lastBlock["cache_control"].(map[string]any); cc["type"] != "ephemeral" {
+						t.Errorf("native %s message[%d] missing ephemeral cache_control: %v", tc.name, idx, lastBlock)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("native_openai_azure_openaicompat_preserve_prefix_invariance", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			provType ProviderType
+			slug     string
+		}{
+			{name: "OpenAI_native", provType: ProviderTypeOpenAI, slug: "gpt-5.4"},
+			{name: "Azure_native", provType: ProviderTypeAzure, slug: "gpt-5-prod"},
+			{name: "OpenAICompat_native", provType: ProviderTypeOpenAICompat, slug: "qwen3.8-27b"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				var captured []capturedWireRequest
+				var mu sync.Mutex
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, _ := io.ReadAll(r.Body)
+					req := parseCapturedWireRequest(t, body)
+					mu.Lock()
+					captured = append(captured, req)
+					mu.Unlock()
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, `{
+						"id": "chatcmpl-native",
+						"object": "chat.completion",
+						"created": 1700000000,
+						"model": "`+tc.slug+`",
+						"choices": [{"index": 0, "message": {"role": "assistant", "content": "Ack"}, "finish_reason": "stop"}],
+						"usage": {
+							"prompt_tokens": 1024,
+							"completion_tokens": 12,
+							"total_tokens": 1036,
+							"prompt_tokens_details": {"cached_tokens": 896}
+						}
+					}`)
+				}))
+				defer srv.Close()
+
+				prov, err := buildProvider(ProviderConfig{
+					Name:    tc.name,
+					Type:    tc.provType,
+					APIKey:  "test-native-key",
+					BaseURL: srv.URL,
+				}, DefaultProviderHeaders)
+				if err != nil {
+					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
+				}
+				model, err := prov.LanguageModel(context.Background(), tc.slug)
+				if err != nil {
+					t.Fatalf("LanguageModel(%s): %v", tc.slug, err)
+				}
+				ag := fantasy.NewAgent(model, fantasy.WithSystemPrompt("Native implicit-cache system prompt."))
+				res1, err := ag.Generate(context.Background(), fantasy.AgentCall{
+					Prompt:      "Turn 1 question",
+					PrepareStep: PromptCachingStep(tc.slug),
+				})
+				if err != nil {
+					t.Fatalf("Turn 1 Generate(%s): %v", tc.name, err)
+				}
+				if res1.TotalUsage.CacheReadTokens != 896 {
+					t.Errorf("native %s CacheReadTokens = %d, want 896", tc.name, res1.TotalUsage.CacheReadTokens)
+				}
+				_, err = ag.Generate(context.Background(), fantasy.AgentCall{
+					Messages: []fantasy.Message{
+						fantasy.NewUserMessage("Turn 1 question"),
+						newAssistantMessage("Ack"),
+					},
+					Prompt:      "Turn 2 follow-up",
+					PrepareStep: PromptCachingStep(tc.slug),
+				})
+				if err != nil {
+					t.Fatalf("Turn 2 Generate(%s): %v", tc.name, err)
+				}
+
+				mu.Lock()
+				defer mu.Unlock()
+				if len(captured) != 2 {
+					t.Fatalf("captured %d requests, want 2", len(captured))
+				}
+				for reqIdx, req := range captured {
+					if strings.Contains(string(req.RawBody), "cache_control") {
+						t.Errorf("native %s request[%d] unexpectedly contains cache_control", tc.name, reqIdx)
+					}
+				}
+				for mIdx := 0; mIdx < len(captured[0].Messages); mIdx++ {
+					want := canonicalizeWireMessageWithoutCacheControl(t, captured[0].Messages[mIdx])
+					got := canonicalizeWireMessageWithoutCacheControl(t, captured[1].Messages[mIdx])
+					if got != want {
+						t.Errorf("native %s Turn 2 message[%d] drifted from Turn 1:\ngot:  %s\nwant: %s", tc.name, mIdx, got, want)
+					}
+				}
+			})
+		}
+	})
 }

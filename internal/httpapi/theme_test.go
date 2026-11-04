@@ -267,15 +267,16 @@ func TestClientConfig_CarriesSupportContact(t *testing.T) {
 	}
 
 	s.clientConfig.Branding.Support = &clientconfig.SupportContact{
-		Label:   "Direct Support",
-		Email:   "support@example.com",
-		Title:   "Direct Support Line",
-		Message: "Reach out directly with questions or feedback.",
-		Subject: "Workspace support",
+		Label:       "Direct Support",
+		MobileLabel: "Help",
+		Email:       "support@example.com",
+		Title:       "Direct Support Line",
+		Message:     "Reach out directly with questions or feedback.",
+		Subject:     "Workspace support",
 	}
 	w = httptest.NewRecorder()
 	s.clientConfigHandler(w, req)
-	want := `"support":{"label":"Direct Support","email":"support@example.com","title":"Direct Support Line","message":"Reach out directly with questions or feedback.","subject":"Workspace support"}`
+	want := `"support":{"label":"Direct Support","mobile_label":"Help","email":"support@example.com","title":"Direct Support Line","message":"Reach out directly with questions or feedback.","subject":"Workspace support"}`
 	if !strings.Contains(w.Body.String(), want) {
 		t.Errorf("body %s must carry %s", w.Body.String(), want)
 	}

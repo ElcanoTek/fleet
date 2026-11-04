@@ -221,7 +221,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		fantasy.WithSystemPrompt(
 			"You are a strict verifier judging whether a worker agent satisfied a requirement. "+
 				"Reply with a single word: YES if it is satisfied, otherwise NO."),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(verifier.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(verifier.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	out, err := verifyAgent.Generate(vctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(user)},

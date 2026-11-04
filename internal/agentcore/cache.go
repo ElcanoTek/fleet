@@ -129,6 +129,7 @@ type cacheOption struct {
 	compactionSummary  bool
 	compactionPrefixFn func(fantasy.Message) bool
 	stablePrefixTokens int
+	stablePrefixOnly   bool
 }
 
 // CacheOption mutates the cache step configuration.
@@ -144,6 +145,18 @@ func WithCacheEnvPrefix(p EnvPrefix) CacheOption {
 // side of Gemini's comparison (tailOutgrowsMarkedPrefix).
 func WithStablePrefixTokens(n int) CacheOption {
 	return func(c *cacheOption) { c.stablePrefixTokens = n }
+}
+
+// WithStablePrefixOnly restricts explicit cache breakpoints to the reusable
+// stable prefix (the system prompt, plus the compaction summary when enabled)
+// and suppresses the rolling two-message tail breakpoints even on families
+// like Anthropic that otherwise use them. One-shot auxiliary calls
+// (summarizer, verifier, reviewer, memory extractors, title/prompt generators)
+// send a task-specific user prompt that has no follow-up step to read it back,
+// so marking the user message would pay Anthropic's 1.25x cache-write charge
+// on unique per-call input without ever reading it.
+func WithStablePrefixOnly() CacheOption {
+	return func(c *cacheOption) { c.stablePrefixOnly = true }
 }
 
 // WithCompactionSummaryBreakpoint enables cutlass's additive 4th breakpoint on
@@ -234,7 +247,7 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 		// wind-down notice, whose live spend figures change every step — a
 		// breakpoint there can never hit (see isBudgetWindDownNotice).
 		rolling := 2
-		if stablePrefixOnly(model) {
+		if cfg.stablePrefixOnly || stablePrefixOnly(model) {
 			rolling = 0
 		}
 		marked := 0

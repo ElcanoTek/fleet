@@ -596,12 +596,17 @@ function UsageBars({ report, measure }: { report: UsageReport; measure: UsageMea
     value: measureOf(b, measure),
   }));
   if (tail.length > 0) {
+    let otherValue = 0;
+    if (measure === "cache") {
+      const tailCached = tail.reduce((sum, b) => sum + b.cached_tokens, 0);
+      const tailPrompt = tail.reduce((sum, b) => sum + bucketChatPromptTokens(b), 0);
+      otherValue = tailPrompt > 0 ? Math.min(100, (tailCached / tailPrompt) * 100) : 0;
+    } else {
+      otherValue = tail.reduce((sum, b) => sum + measureOf(b, measure), 0);
+    }
     rows.push({
       name: `Other (${tail.length})`,
-      value:
-        measure === "cache"
-          ? tail.reduce((sum, b) => sum + measureOf(b, measure), 0) / tail.length
-          : tail.reduce((sum, b) => sum + measureOf(b, measure), 0),
+      value: otherValue,
     });
   }
   const max = measure === "cache" ? 100 : Math.max(...rows.map((r) => r.value), 0) || 1;

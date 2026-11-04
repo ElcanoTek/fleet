@@ -346,7 +346,7 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	verifyAgent := fantasy.NewAgent(
 		model,
 		fantasy.WithSystemPrompt(systemPrompt),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
 	)
 	out, err := verifyAgent.Generate(verifyCtx, fantasy.AgentCall{
 		Messages: []fantasy.Message{fantasy.NewUserMessage(userPrompt)},
