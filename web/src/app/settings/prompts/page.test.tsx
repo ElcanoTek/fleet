@@ -70,7 +70,8 @@ describe("Settings → Prompts page", () => {
     expect(await screen.findByText("Daily Pacing Check")).toBeInTheDocument();
     expect(await screen.findByText("Weekly Revenue Audit")).toBeInTheDocument();
 
-    // Cloning a workspace/deployment prompt defaults to private visibility
+    // Cloning a workspace/deployment prompt from the Deployment filter reveals the editor and defaults to private visibility
+    fireEvent.click(screen.getByRole("button", { name: "Deployment" }));
     fireEvent.click(screen.getByRole("button", { name: "Clone & customize" }));
     const shareCheckbox = screen.getByRole("checkbox", {
       name: /Share with this workspace/,
@@ -102,5 +103,46 @@ describe("Settings → Prompts page", () => {
     await waitFor(() =>
       expect(screen.queryByText("Daily Pacing Check")).toBeNull(),
     );
+  });
+
+  it("hides prompt creation and mutation controls for read-only viewer accounts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/me/team") {
+          return new Response(JSON.stringify({ role: "viewer" }), { status: 200 });
+        }
+        if (url === "/api/orchestrator/me") {
+          return new Response(JSON.stringify({ error: "not_a_member" }), { status: 403 });
+        }
+        if (url === "/api/orchestrator/prompts") {
+          return new Response(
+            JSON.stringify([
+              {
+                id: "git-1",
+                name: "Weekly Revenue Audit",
+                description: "Bundled deployment audit prompt",
+                content: "Run the weekly revenue audit.",
+                source: "git",
+                visibility: "workspace",
+                read_only: true,
+                owned_by_caller: false,
+              },
+            ]),
+            { status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    render(<PromptsPage />);
+    expect(await screen.findByText("Weekly Revenue Audit")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByTestId("new-prompt-toggle")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Clone & customize" })).toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "Open in chat" })).toBeInTheDocument();
   });
 });

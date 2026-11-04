@@ -854,16 +854,7 @@ func run() error {
 	h.SetPromptCatalogProvider(bundle.Prompts)
 	// Signed-in Chat users whose independent Operations Center role (ops_role) is
 	// "none" still use the shared Prompt Library in Chat and Settings → Prompts.
-	h.SetChatMemberRoleProvider(func(ctx context.Context, email string) (string, error) {
-		u, err := chatStore.GetUser(ctx, email)
-		if errors.Is(err, store.ErrUserNotFound) || u == nil {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return u.Role, nil
-	})
+	h.SetChatMemberRoleProvider(chatMemberRoleProvider(chatStore))
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
 	// Wire the chat side of the adoption report (the exec Adoption view):
@@ -3455,6 +3446,22 @@ func chatUserDayUsageProvider(chatStore *store.Store) handlers.ChatUserDayUsageP
 			})
 		}
 		return out, nil
+	}
+}
+
+// chatMemberRoleProvider resolves a chat-plane user's RBAC role ("admin",
+// "member", or "viewer") by email for /prompts authorization when the caller's
+// independent Operations Center role (ops_role) is "none".
+func chatMemberRoleProvider(chatStore *store.Store) handlers.ChatMemberRoleProvider {
+	return func(ctx context.Context, email string) (string, error) {
+		u, err := chatStore.GetUser(ctx, email)
+		if errors.Is(err, store.ErrUserNotFound) || u == nil {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return u.Role, nil
 	}
 }
 

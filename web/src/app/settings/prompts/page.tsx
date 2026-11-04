@@ -54,6 +54,7 @@ const EMPTY_DRAFT: DraftState = {
 
 export default function PromptsPage() {
   const [items, setItems] = useState<PromptLibraryItem[] | null>(null);
+  const [readOnlyViewer, setReadOnlyViewer] = useState(false);
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<"all" | "yours" | "workspace" | "deployment">("all");
   const [openId, setOpenId] = useState<string | null>(null);
@@ -80,21 +81,54 @@ export default function PromptsPage() {
     queueMicrotask(() => {
       if (!cancelled) void loadPrompts();
     });
+    void (async () => {
+      let chatViewer = false;
+      try {
+        const res = await fetch("/api/me/team", { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as { role?: string };
+          if (data.role && data.role !== "viewer") {
+            return;
+          }
+          chatViewer = data.role === "viewer";
+        }
+      } catch {
+        // Optional viewer-role check.
+      }
+      try {
+        const me = await orchestratorApi.me();
+        if (cancelled) return;
+        if (me?.role === "admin" || me?.role === "client") {
+          setReadOnlyViewer(false);
+          return;
+        }
+        if (chatViewer || me?.role === "readonly") {
+          setReadOnlyViewer(true);
+        }
+      } catch {
+        if (!cancelled && chatViewer) {
+          setReadOnlyViewer(true);
+        }
+      }
+    })();
     return () => {
       cancelled = true;
     };
   }, [loadPrompts]);
 
   const startNew = () => {
+    if (readOnlyViewer) return;
     setError(null);
     setNotice(null);
+    if (scope === "deployment") setScope("all");
     setDraft(EMPTY_DRAFT);
   };
 
   const startEdit = (item: PromptLibraryItem) => {
-    if (item.read_only || !item.owned_by_caller) return;
+    if (readOnlyViewer || item.read_only || !item.owned_by_caller) return;
     setError(null);
     setNotice(null);
+    if (scope === "deployment") setScope("all");
     setDraft({
       id: item.id,
       name: item.name,
@@ -108,8 +142,10 @@ export default function PromptsPage() {
   };
 
   const startClone = (item: PromptLibraryItem) => {
+    if (readOnlyViewer) return;
     setError(null);
     setNotice(null);
+    if (scope === "deployment") setScope("all");
     setDraft({
       id: "",
       name:
@@ -228,16 +264,18 @@ export default function PromptsPage() {
         placeholder="Search prompts by name, description, or content…"
       />
 
-      {scope !== "deployment" ? (
+      {scope !== "deployment" || draft !== null ? (
         <ConnPanel>
           <div ref={editorRef}>
             <ConnPanelHead title="Your & workspace prompts">
-              <RevealButton
-                open={draft !== null}
-                closedLabel="New prompt"
-                onClick={() => (draft ? setDraft(null) : startNew())}
-                testId="new-prompt-toggle"
-              />
+              {!readOnlyViewer ? (
+                <RevealButton
+                  open={draft !== null}
+                  closedLabel="New prompt"
+                  onClick={() => (draft ? setDraft(null) : startNew())}
+                  testId="new-prompt-toggle"
+                />
+              ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
               Private prompts are visible only to you; workspace prompts are shared with everyone on this deployment.
@@ -386,36 +424,38 @@ export default function PromptsPage() {
                           >
                             {isOpen ? "Hide" : "View"}
                           </button>
-                          {p.owned_by_caller ? (
-                            <>
-                              <button
-                                type="button"
-                                className={btnClass({ sm: true })}
-                                onClick={() => startEdit(p)}
-                              >
-                                Edit
-                              </button>
+                          {!readOnlyViewer ? (
+                            p.owned_by_caller ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className={btnClass({ sm: true })}
+                                  onClick={() => startEdit(p)}
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  className={btnClass({ sm: true })}
+                                  onClick={() => startClone(p)}
+                                >
+                                  Duplicate
+                                </button>
+                                <InlineConfirmButton
+                                  label="Delete"
+                                  onConfirm={() => void handleDelete(p)}
+                                />
+                              </>
+                            ) : (
                               <button
                                 type="button"
                                 className={btnClass({ sm: true })}
                                 onClick={() => startClone(p)}
                               >
-                                Duplicate
+                                Clone & customize
                               </button>
-                              <InlineConfirmButton
-                                label="Delete"
-                                onConfirm={() => void handleDelete(p)}
-                              />
-                            </>
-                          ) : (
-                            <button
-                              type="button"
-                              className={btnClass({ sm: true })}
-                              onClick={() => startClone(p)}
-                            >
-                              Clone & customize
-                            </button>
-                          )}
+                            )
+                          ) : null}
                         </div>
                       </div>
                       {p.description ? (
@@ -509,13 +549,15 @@ export default function PromptsPage() {
                         >
                           {isOpen ? "Hide" : "View"}
                         </button>
-                        <button
-                          type="button"
-                          className={btnClass({ sm: true })}
-                          onClick={() => startClone(p)}
-                        >
-                          Clone & customize
-                        </button>
+                        {!readOnlyViewer ? (
+                          <button
+                            type="button"
+                            className={btnClass({ sm: true })}
+                            onClick={() => startClone(p)}
+                          >
+                            Clone & customize
+                          </button>
+                        ) : null}
                       </div>
                     </div>
                     {p.description ? (

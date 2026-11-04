@@ -64,6 +64,7 @@ async function failText(res: Response, fallback: string): Promise<string> {
 export default function MemoriesPage() {
   const [memories, setMemories] = useState<UserMemory[] | null>(null);
   const [teamProjects, setTeamProjects] = useState<ProjectSummary[]>([]);
+  const [readOnlyViewer, setReadOnlyViewer] = useState(false);
   const [view, setView] = useState<"list" | "graph">("list");
   const [filter, setFilter] = useState<"active" | "all" | "retired">("active");
   const [search, setSearch] = useState("");
@@ -96,6 +97,18 @@ export default function MemoriesPage() {
     queueMicrotask(() => {
       if (!cancelled) void loadMemories();
     });
+    void (async () => {
+      try {
+        const res = await fetch("/api/me/team", { cache: "no-store" });
+        if (!res.ok || cancelled) return;
+        const data = (await res.json()) as { role?: string };
+        if (!cancelled && data.role === "viewer") {
+          setReadOnlyViewer(true);
+        }
+      } catch {
+        // Optional viewer-role check.
+      }
+    })();
     void (async () => {
       try {
         const res = await fetch("/api/projects", { cache: "no-store" });
@@ -278,75 +291,77 @@ export default function MemoriesPage() {
         </ConnPanel>
       ) : (
         <>
-          <ConnPanel>
-            <ConnPanelHead
-              title={editingId ? "Edit memory" : "Add a memory"}
-            />
-            <ConnPanelSub>
-              Good memories are standing rules and preferences (for example, “Deal names may contain intentional typos; never correct them”), not temporary numbers.
-            </ConnPanelSub>
-            <div className="grid gap-3">
-              <ConnField label="Memory">
-                <textarea
-                  aria-label="Memory text"
-                  rows={3}
-                  placeholder="Remember that deal names may contain intentional typos; never correct them."
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  className={SETTINGS_INPUT}
-                />
-              </ConnField>
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <label
-                    htmlFor="settings-memory-kind"
-                    className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
-                  >
-                    Kind
-                  </label>
-                  <select
-                    id="settings-memory-kind"
-                    value={kindDraft}
-                    onChange={(e) => setKindDraft(e.target.value)}
-                    className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
-                  >
-                    {MEMORY_KINDS.map((k) => (
-                      <option key={k} value={k}>
-                        {k}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="flex items-center gap-2">
-                  {editingId ? (
+          {!readOnlyViewer ? (
+            <ConnPanel>
+              <ConnPanelHead
+                title={editingId ? "Edit memory" : "Add a memory"}
+              />
+              <ConnPanelSub>
+                Good memories are standing rules and preferences (for example, “Deal names may contain intentional typos; never correct them”), not temporary numbers.
+              </ConnPanelSub>
+              <div className="grid gap-3">
+                <ConnField label="Memory">
+                  <textarea
+                    aria-label="Memory text"
+                    rows={3}
+                    placeholder="Remember that deal names may contain intentional typos; never correct them."
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    className={SETTINGS_INPUT}
+                  />
+                </ConnField>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="settings-memory-kind"
+                      className="text-[0.75rem] font-medium text-[var(--color-text-secondary)]"
+                    >
+                      Kind
+                    </label>
+                    <select
+                      id="settings-memory-kind"
+                      value={kindDraft}
+                      onChange={(e) => setKindDraft(e.target.value)}
+                      className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2.5 py-1.5 text-[0.8rem] text-[var(--color-text-primary)] outline-none focus-visible:border-[var(--color-border-strong)] focus-visible:shadow-[var(--focus-ring)]"
+                    >
+                      {MEMORY_KINDS.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {editingId ? (
+                      <button
+                        type="button"
+                        className={btnClass({ sm: true, reveal: true })}
+                        onClick={() => {
+                          setEditingId(null);
+                          setDraft("");
+                          setKindDraft("fact");
+                        }}
+                      >
+                        Cancel edit
+                      </button>
+                    ) : null}
                     <button
                       type="button"
-                      className={btnClass({ sm: true, reveal: true })}
-                      onClick={() => {
-                        setEditingId(null);
-                        setDraft("");
-                        setKindDraft("fact");
-                      }}
+                      disabled={!draft.trim() || busy}
+                      onClick={() => void handleSave()}
+                      className={btnClass({ variant: "primary", sm: true })}
                     >
-                      Cancel edit
+                      {busy
+                        ? "Saving…"
+                        : editingId
+                          ? "Save changes"
+                          : "Add memory"}
                     </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    disabled={!draft.trim() || busy}
-                    onClick={() => void handleSave()}
-                    className={btnClass({ variant: "primary", sm: true })}
-                  >
-                    {busy
-                      ? "Saving…"
-                      : editingId
-                        ? "Save changes"
-                        : "Add memory"}
-                  </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          </ConnPanel>
+            </ConnPanel>
+          ) : null}
 
           <ConnPanel>
             <ConnPanelHead title="Saved memories">
@@ -417,81 +432,83 @@ export default function MemoriesPage() {
                             {learned ? ` · learned ${learned}` : ""}
                           </span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {retired ? (
-                            <button
-                              type="button"
-                              className={btnClass({ sm: true, reveal: true })}
-                              onClick={() =>
-                                void handlePatch(memory.id, { retired: false })
-                              }
-                            >
-                              Restore
-                            </button>
-                          ) : (
-                            <>
+                        {!readOnlyViewer ? (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {retired ? (
                               <button
                                 type="button"
-                                className={btnClass({ sm: true })}
+                                className={btnClass({ sm: true, reveal: true })}
                                 onClick={() =>
-                                  void handlePatch(memory.id, {
-                                    pinned: !memory.pinned,
-                                  })
+                                  void handlePatch(memory.id, { retired: false })
                                 }
                               >
-                                {memory.pinned ? "Unpin" : "Pin"}
+                                Restore
                               </button>
-                              <button
-                                type="button"
-                                className={btnClass({ sm: true })}
-                                onClick={() => {
-                                  setEditingId(memory.id);
-                                  setDraft(memory.content);
-                                  setKindDraft(memory.kind ?? "fact");
-                                }}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                className={btnClass({ sm: true })}
-                                title="Keep for the record, stop giving to the assistant"
-                                onClick={() =>
-                                  void handlePatch(memory.id, { retired: true })
-                                }
-                              >
-                                Retire
-                              </button>
-                              {memory.source !== "proposed" &&
-                              teamProjects.length > 0 ? (
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  className={btnClass({ sm: true })}
+                                  onClick={() =>
+                                    void handlePatch(memory.id, {
+                                      pinned: !memory.pinned,
+                                    })
+                                  }
+                                >
+                                  {memory.pinned ? "Unpin" : "Pin"}
+                                </button>
                                 <button
                                   type="button"
                                   className={btnClass({ sm: true })}
                                   onClick={() => {
-                                    if (teamProjects.length === 1) {
-                                      void handlePromote(
-                                        memory.id,
-                                        teamProjects[0].id,
-                                      );
-                                    } else {
-                                      setPromoteId(
-                                        promoteId === memory.id
-                                          ? null
-                                          : memory.id,
-                                      );
-                                    }
+                                    setEditingId(memory.id);
+                                    setDraft(memory.content);
+                                    setKindDraft(memory.kind ?? "fact");
                                   }}
                                 >
-                                  Move to team learnings
+                                  Edit
                                 </button>
-                              ) : null}
-                            </>
-                          )}
-                          <InlineConfirmButton
-                            label="Delete"
-                            onConfirm={() => void handleDelete(memory.id)}
-                          />
-                        </div>
+                                <button
+                                  type="button"
+                                  className={btnClass({ sm: true })}
+                                  title="Keep for the record, stop giving to the assistant"
+                                  onClick={() =>
+                                    void handlePatch(memory.id, { retired: true })
+                                  }
+                                >
+                                  Retire
+                                </button>
+                                {memory.source !== "proposed" &&
+                                teamProjects.length > 0 ? (
+                                  <button
+                                    type="button"
+                                    className={btnClass({ sm: true })}
+                                    onClick={() => {
+                                      if (teamProjects.length === 1) {
+                                        void handlePromote(
+                                          memory.id,
+                                          teamProjects[0].id,
+                                        );
+                                      } else {
+                                        setPromoteId(
+                                          promoteId === memory.id
+                                            ? null
+                                            : memory.id,
+                                        );
+                                      }
+                                    }}
+                                  >
+                                    Move to team learnings
+                                  </button>
+                                ) : null}
+                              </>
+                            )}
+                            <InlineConfirmButton
+                              label="Delete"
+                              onConfirm={() => void handleDelete(memory.id)}
+                            />
+                          </div>
+                        ) : null}
                       </div>
                       {promoteId === memory.id && teamProjects.length > 1 ? (
                         <div className="mt-1 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem]">

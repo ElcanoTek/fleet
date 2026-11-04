@@ -116,4 +116,52 @@ describe("Settings → Memories page", () => {
       ).toBeNull(),
     );
   });
+
+  it("renders a read-only view for viewer accounts", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/me/team") {
+          return new Response(JSON.stringify({ role: "viewer" }), { status: 200 });
+        }
+        if (url === "/api/projects") {
+          return new Response(
+            JSON.stringify({
+              projects: [{ id: "proj-1", name: "Shared Q4 Plan", team_id: "Growth" }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url === "/api/memories") {
+          return new Response(
+            JSON.stringify({
+              memories: [
+                {
+                  id: "m-1",
+                  content: "Read-only memory item.",
+                  source: "manual",
+                  kind: "fact",
+                  pinned: false,
+                  created_at: 1700000000,
+                  updated_at: 1700000000,
+                },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    render(<MemoriesPage />);
+    expect(await screen.findByText("Read-only memory item.")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Memory text")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Pin" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Move to team learnings" })).toBeNull();
+    });
+  });
 });
