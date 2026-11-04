@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log"
@@ -20,6 +21,49 @@ import (
 // the shared library. nil is a valid empty Git catalog.
 func (h *Handlers) SetPromptCatalogProvider(p func() ([]clientconfig.Prompt, []string)) {
 	h.promptCatalog = p
+}
+
+// ChatMemberRoleProvider resolves a chat-plane member's role ("admin",
+// "member", or "viewer") by email, returning ("", nil) when the email is not a
+// provisioned chat user. Because the Prompt Library is shared between Chat
+// (composer picker, "Save as workflow…", and Settings → Prompts) and the
+// Operations Center, header-trust requests to /prompts fall back to this seam
+// when the caller's independent Operations Center role (ops_role) is "none".
+type ChatMemberRoleProvider func(ctx context.Context, email string) (string, error)
+
+// SetChatMemberRoleProvider wires the chat-plane role lookup used to authorize
+// signed-in Chat users on /prompts when they have no sched.users row.
+func (h *Handlers) SetChatMemberRoleProvider(fn ChatMemberRoleProvider) {
+	h.chatMemberRole = fn
+}
+
+func isPromptLibraryPath(path string) bool {
+	return path == "/prompts" || strings.HasPrefix(path, "/prompts/")
+}
+
+func (h *Handlers) lookupChatMemberForPrompts(ctx context.Context, email string) (*models.User, error) {
+	if h.chatMemberRole == nil {
+		return nil, nil
+	}
+	role, err := h.chatMemberRole(ctx, email)
+	if err != nil {
+		return nil, err
+	}
+	var mapped string
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "admin":
+		mapped = "admin"
+	case "member":
+		mapped = "client"
+	case "viewer":
+		mapped = "readonly"
+	default:
+		return nil, nil
+	}
+	return &models.User{
+		Username: strings.ToLower(strings.TrimSpace(email)),
+		Role:     mapped,
+	}, nil
 }
 
 type PromptLibraryItem struct {

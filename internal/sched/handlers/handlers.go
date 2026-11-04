@@ -282,6 +282,7 @@ type Handlers struct {
 	// not checked. See session_epoch.go.
 	chatSessionEpoch     ChatSessionEpochProvider
 	externalSessionEpoch ExternalSessionEpochProvider
+	chatMemberRole       ChatMemberRoleProvider
 
 	// budgetGate enforces per-principal rolling budgets at task-create (#601
 	// part 2) — injected by cmd/fleet via SetBudgetGate (*budget.Enforcer). nil

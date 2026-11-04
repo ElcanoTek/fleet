@@ -31,7 +31,15 @@ describe("Settings → Memories page", () => {
         calls.push({ method, url, body });
 
         if (url === "/api/projects") {
-          return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+          return new Response(
+            JSON.stringify({
+              projects: [
+                { id: "proj-1", name: "Shared Q4 Plan", team_id: "Growth" },
+                { id: "proj-2", name: "Private Scratchpad" },
+              ],
+            }),
+            { status: 200 },
+          );
         }
         if (url === "/api/memories" && method === "GET") {
           return new Response(JSON.stringify({ memories }), { status: 200 });
@@ -78,6 +86,12 @@ describe("Settings → Memories page", () => {
     expect(
       await screen.findByText("Always show dates in ISO format."),
     ).toBeInTheDocument();
+
+    // Team-shared project ("Shared Q4 Plan", team_id: "Growth") offers "Move to team learnings"
+    const moveButtons = await screen.findAllByRole("button", {
+      name: "Move to team learnings",
+    });
+    expect(moveButtons.length).toBeGreaterThan(0);
 
     // Pin m-1
     const pinButtons = screen.getAllByRole("button", { name: "Pin" });

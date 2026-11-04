@@ -566,6 +566,7 @@ describe("Composer — share button and overflow options menu", () => {
     const shareBtn = screen.getByTestId("composer-share-button");
     expect(shareBtn).toHaveAccessibleName("Share this chat");
     fireEvent.click(shareBtn);
+    expect(screen.getByTestId("composer-more-button")).toHaveFocus();
     expect(onOpenShare).toHaveBeenCalledTimes(1);
 
     rerender(

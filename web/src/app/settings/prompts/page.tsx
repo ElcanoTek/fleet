@@ -7,7 +7,10 @@ import {
   type PromptLibraryItem,
   type PromptLibraryWrite,
 } from "@/app/shared/lib/orchestratorApi";
-import { isFormPrompt } from "@/app/shared/ui/PromptLibraryForm";
+import {
+  isFormPrompt,
+  PromptLibraryForm,
+} from "@/app/shared/ui/PromptLibraryForm";
 import {
   btnClass,
   ClampText,
@@ -100,7 +103,7 @@ export default function PromptsPage() {
       visibility: item.visibility,
     });
     queueMicrotask(() =>
-      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+      editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" }),
     );
   };
 
@@ -115,10 +118,10 @@ export default function PromptsPage() {
           : `${item.name} (Copy)`,
       description: item.description ?? "",
       content: item.content,
-      visibility: item.visibility === "workspace" ? "workspace" : "private",
+      visibility: "private",
     });
     queueMicrotask(() =>
-      editorRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }),
+      editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" }),
     );
   };
 
@@ -362,11 +365,15 @@ export default function PromptsPage() {
                               variant: "primary",
                               sm: true,
                             })}
-                            onClick={() =>
+                            onClick={() => {
+                              if (isFormPrompt(p)) {
+                                setOpenId(p.id);
+                                return;
+                              }
                               navigate(
                                 `/chat?draft=${encodeURIComponent(p.content)}`,
-                              )
-                            }
+                              );
+                            }}
                           >
                             Open in chat
                           </button>
@@ -414,7 +421,28 @@ export default function PromptsPage() {
                       {p.description ? (
                         <ClampText text={p.description} className={DESC} />
                       ) : null}
-                      {isOpen ? <pre className={MD}>{p.content}</pre> : null}
+                      {isOpen ? (
+                        isFormPrompt(p) ? (
+                          <div className="mt-[0.15rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3">
+                            <PromptLibraryForm
+                              key={p.id}
+                              prompt={p}
+                              note={
+                                p.path
+                                  ? `Tracked in ${p.path}`
+                                  : "Fill out the form fields to open in chat"
+                              }
+                              onUse={(text) =>
+                                navigate(
+                                  `/chat?draft=${encodeURIComponent(text)}`,
+                                )
+                              }
+                            />
+                          </div>
+                        ) : (
+                          <pre className={MD}>{p.content}</pre>
+                        )
+                      ) : null}
                     </div>
                   );
                 })}
@@ -462,11 +490,15 @@ export default function PromptsPage() {
                         <button
                           type="button"
                           className={btnClass({ variant: "primary", sm: true })}
-                          onClick={() =>
+                          onClick={() => {
+                            if (isFormPrompt(p)) {
+                              setOpenId(p.id);
+                              return;
+                            }
                             navigate(
                               `/chat?draft=${encodeURIComponent(p.content)}`,
-                            )
-                          }
+                            );
+                          }}
                         >
                           Open in chat
                         </button>
@@ -489,7 +521,28 @@ export default function PromptsPage() {
                     {p.description ? (
                       <ClampText text={p.description} className={DESC} />
                     ) : null}
-                    {isOpen ? <pre className={MD}>{p.content}</pre> : null}
+                    {isOpen ? (
+                      isFormPrompt(p) ? (
+                        <div className="mt-[0.15rem] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3">
+                          <PromptLibraryForm
+                            key={p.id}
+                            prompt={p}
+                            note={
+                              p.path
+                                ? `Tracked in ${p.path}`
+                                : "Fill out the form fields to open in chat"
+                            }
+                            onUse={(text) =>
+                              navigate(
+                                `/chat?draft=${encodeURIComponent(text)}`,
+                              )
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <pre className={MD}>{p.content}</pre>
+                      )
+                    ) : null}
                   </div>
                 );
               })}

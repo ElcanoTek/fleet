@@ -1357,7 +1357,10 @@ export function Composer({
                   isPendingKey(activeConversationId)) &&
                   messages.length > 0);
               const triggerShare = () => {
-                setMoreMenuOpen(false);
+                if (moreMenuOpen) {
+                  setMoreMenuOpen(false);
+                  moreButtonRef.current?.focus();
+                }
                 setMcpPickerOpen(false);
                 setToolsLibrary(null);
                 setPersonaPickerOpen(false);

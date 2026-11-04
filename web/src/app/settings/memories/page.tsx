@@ -39,7 +39,7 @@ type UserMemory = {
 type ProjectSummary = {
   id: string;
   name: string;
-  team_shared?: boolean;
+  team_id?: string;
 };
 
 const MEMORY_KINDS = [
@@ -102,7 +102,7 @@ export default function MemoriesPage() {
         if (!res.ok || cancelled) return;
         const data = (await res.json()) as { projects?: ProjectSummary[] };
         if (!cancelled) {
-          setTeamProjects((data.projects ?? []).filter((p) => Boolean(p.team_shared)));
+          setTeamProjects((data.projects ?? []).filter((p) => Boolean(p.team_id)));
         }
       } catch {
         // Optional team project list for promoting memories.

@@ -23,10 +23,14 @@ describe("Settings → Prompts page", () => {
         id: "git-1",
         name: "Weekly Revenue Audit",
         description: "Bundled deployment audit prompt",
-        content: "Run the weekly revenue audit.",
+        content: "name: Weekly Revenue Audit\nfields:\n  - {key: partner, label: Partner, type: text, required: true}\npromptTemplate: |-\n  Audit revenue for {partner}.",
+        source: "git",
         visibility: "workspace",
         read_only: true,
         owned_by_caller: false,
+        path: "prompts/audit.yaml",
+        fields: [{ key: "partner", label: "Partner", type: "text", required: true }],
+        prompt_template: "Audit revenue for {partner}.",
       },
     ];
 
@@ -65,6 +69,19 @@ describe("Settings → Prompts page", () => {
 
     expect(await screen.findByText("Daily Pacing Check")).toBeInTheDocument();
     expect(await screen.findByText("Weekly Revenue Audit")).toBeInTheDocument();
+
+    // Cloning a workspace/deployment prompt defaults to private visibility
+    fireEvent.click(screen.getByRole("button", { name: "Clone & customize" }));
+    const shareCheckbox = screen.getByRole("checkbox", {
+      name: /Share with this workspace/,
+    }) as HTMLInputElement;
+    expect(shareCheckbox.checked).toBe(false);
+    fireEvent.click(screen.getByTestId("new-prompt-toggle"));
+
+    // Clicking "Open in chat" on a form prompt opens the form instead of navigating with raw YAML
+    const openButtons = screen.getAllByRole("button", { name: "Open in chat" });
+    fireEvent.click(openButtons[1]);
+    expect(await screen.findByLabelText(/^Partner/)).toBeInTheDocument();
 
     // Open New prompt form and create one
     fireEvent.click(screen.getByTestId("new-prompt-toggle"));

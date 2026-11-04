@@ -852,6 +852,18 @@ func run() error {
 	// The hybrid prompt library reads bundle prompts/ live (Git-backed,
 	// read-only) and merges it with sched-DB private/workspace entries.
 	h.SetPromptCatalogProvider(bundle.Prompts)
+	// Signed-in Chat users whose independent Operations Center role (ops_role) is
+	// "none" still use the shared Prompt Library in Chat and Settings → Prompts.
+	h.SetChatMemberRoleProvider(func(ctx context.Context, email string) (string, error) {
+		u, err := chatStore.GetUser(ctx, email)
+		if errors.Is(err, store.ErrUserNotFound) || u == nil {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return u.Role, nil
+	})
 	// Wire the chat side of the usage report (#601 part 1) — see wireChatUsage.
 	h.SetChatUsageProvider(chatUsage)
 	// Wire the chat side of the adoption report (the exec Adoption view):
