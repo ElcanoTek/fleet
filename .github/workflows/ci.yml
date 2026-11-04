@@ -446,16 +446,6 @@ jobs:
           # The build cache is per lane — see the restore step below.
           cache: false
 
-      - name: Reclaim runner disk space for Go build cache
-        # ubuntu-latest ships ~14 GB of preinstalled Android SDK/NDK, .NET, and
-        # GHC toolchains that Fleet never uses. Removing them before restoring
-        # the Go build + module cache prevents root-disk exhaustion ("No space
-        # left on device") while actions/cache extracts the archive.
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
-
       - name: Restore the Go build cache (cover lane)
         # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
         # shared by every Go job and written once by whichever job finishes
@@ -474,23 +464,6 @@ jobs:
           restore-keys: |
             go-build-cover-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-build-cover-${{ runner.os }}-
-
-      - name: Age restored Go build cache entries so unused objects can be pruned
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        # Go's DiskCache.markUsed (cmd/go/internal/cache/cache.go) updates a
-        # cache file's mtime on read only when its mtime is >= 1 hour old
-        # (mtimeInterval = 1h), and DiskCache.Trim only evicts entries older
-        # than 5 days. Because main saves a new cache snapshot on every push
-        # after restoring the previous main snapshot, unreferenced object files
-        # from earlier commits would otherwise accumulate for 5 days until the
-        # archive exceeds runner disk capacity ("No space left on device").
-        # Backdating restored entries by 3 hours ensures every entry touched by
-        # this run gets a fresh mtime from Go, so the pre-save step can evict
-        # everything this commit did not use.
-        run: |
-          if [ -d ~/.cache/go-build ]; then
-            find ~/.cache/go-build \( -name '*-a' -o -name '*-d' \) -exec touch -m -d '3 hours ago' {} +
-          fi
 
       - name: Prefetch Go modules (retried — the proxy is not always up)
         # A dependency bump misses the exact-key module cache, and a cold cache
@@ -706,15 +679,6 @@ jobs:
         # on a schedule instead of ambushing the next unrelated PR.
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
-      - name: Prune unused Go build cache entries before saving (main only)
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          if [ -d ~/.cache/go-build ]; then
-            echo "GOCACHE before prune: $(du -sh ~/.cache/go-build | cut -f1)"
-            find ~/.cache/go-build \( -name '*-a' -o -name '*-d' \) -mmin +120 -exec rm -rf {} +
-            echo "GOCACHE after prune: $(du -sh ~/.cache/go-build | cut -f1)"
-          fi
-
       - name: Save the Go build cache (cover lane, main only)
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -772,12 +736,6 @@ jobs:
           check-latest: true
           cache: false
 
-      - name: Reclaim runner disk space for Go build cache
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
-
       - name: Restore the Go build cache (race lane)
         # setup-go's own cache (disabled above) is ONE entry keyed on go.sum,
         # shared by every Go job and written once by whichever job finishes
@@ -796,13 +754,6 @@ jobs:
           restore-keys: |
             go-build-race-${{ runner.os }}-${{ hashFiles('go.mod', 'go.sum') }}-
             go-build-race-${{ runner.os }}-
-
-      - name: Age restored Go build cache entries so unused objects can be pruned
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          if [ -d ~/.cache/go-build ]; then
-            find ~/.cache/go-build \( -name '*-a' -o -name '*-d' \) -exec touch -m -d '3 hours ago' {} +
-          fi
 
       - name: Prefetch Go modules (retried — the proxy is not always up)
         run: |
@@ -869,15 +820,6 @@ jobs:
       - name: go test -race
         run: scripts/go-test.sh --race --count=1
 
-      - name: Prune unused Go build cache entries before saving (main only)
-        if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: |
-          if [ -d ~/.cache/go-build ]; then
-            echo "GOCACHE before prune: $(du -sh ~/.cache/go-build | cut -f1)"
-            find ~/.cache/go-build \( -name '*-a' -o -name '*-d' \) -mmin +120 -exec rm -rf {} +
-            echo "GOCACHE after prune: $(du -sh ~/.cache/go-build | cut -f1)"
-          fi
-
       - name: Save the Go build cache (race lane, main only)
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -911,12 +853,6 @@ jobs:
           go-version-file: go.mod
           check-latest: true
           cache: false
-
-      - name: Reclaim runner disk space for Go build cache
-        run: |
-          df -h /
-          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
-          df -h /
 
       - name: Restore the Go build cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

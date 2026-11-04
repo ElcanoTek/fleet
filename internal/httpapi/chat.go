@@ -555,7 +555,7 @@ func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, 
 	}
 }
 
-func (s *Server) validateInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool, fail func(int, error)) bool {
+func (s *Server) applyInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool, fail func(int, error)) bool {
 	if historyLen != 0 || !userWords {
 		return true
 	}
@@ -575,29 +575,28 @@ func (s *Server) validateInitialTurnPersona(ctx context.Context, user string, co
 		fail(status, err)
 		return false
 	}
-	return true
-}
-
-func (s *Server) applyInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool, fail func(int, error)) bool {
-	if !s.validateInitialTurnPersona(ctx, user, conv, historyLen, reqPersona, userWords, fail) {
-		return false
-	}
-	if historyLen != 0 || !userWords {
-		return true
-	}
-	ownerEmail := convOwnerEmail(conv, user)
-	if !strings.EqualFold(ownerEmail, user) {
-		return true
-	}
-	persona := strings.TrimSpace(reqPersona)
-	if persona == "" || persona == conv.Persona {
-		return true
-	}
 	if err := s.store.SetPersona(ctx, ownerEmail, conv.ID, persona); err != nil {
 		fail(http.StatusInternalServerError, fmt.Errorf("update conversation persona: %w", err))
 		return false
 	}
 	conv.Persona = persona
+	return true
+}
+
+func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *store.Conversation, historyLen int, req chatRequest, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
+	abort := func(status int, err error) {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		s.maybeDrainQueue(conv.ID)
+		fail(status, err)
+	}
+	if !s.applyInitialTurnPersona(ctx, user, conv, historyLen, req.Persona, req.inputKind == "", abort) {
+		return false
+	}
+	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
+		abort(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+		return false
+	}
 	return true
 }
 
@@ -1074,9 +1073,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 	history = redactHistoryForSender(history, user, conv.UserEmail)
-	if !s.validateInitialTurnPersona(reqCtx, user, conv, len(history), req.Persona, req.inputKind == "", fail) {
-		return true
-	}
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
@@ -1183,20 +1179,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 
-	if !s.applyInitialTurnPersona(reqCtx, user, conv, len(history), req.Persona, req.inputKind == "", func(status int, err error) {
-		turnCancel()
-		s.finishTurn(conv.ID, turnToken)
-		s.maybeDrainQueue(conv.ID)
-		fail(status, err)
-	}) {
-		return true
-	}
-
-	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
-		turnCancel()
-		s.finishTurn(conv.ID, turnToken)
-		s.maybeDrainQueue(conv.ID)
-		fail(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+	if !s.prepareRegisteredTurn(reqCtx, user, conv, len(history), req, turnToken, turnCancel, fail) {
 		return true
 	}
 
