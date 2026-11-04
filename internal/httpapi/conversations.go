@@ -232,12 +232,11 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		persona := strings.TrimSpace(req.Persona)
-		if persona == "" {
-			persona = s.cfg.PersonaDefault
-		}
-		if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
-			s.userPersonaError(w, err)
-			return
+		if persona != "" {
+			if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
+				s.userPersonaError(w, err)
+				return
+			}
 		}
 		title := strings.TrimSpace(req.Title)
 		if title == "" {
