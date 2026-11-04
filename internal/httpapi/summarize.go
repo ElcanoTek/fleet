@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // summarizeRequest is the body of POST /conversations/{id}/summarize.
@@ -179,7 +180,11 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		if errors.Is(sumErr, r.Context().Err()) {
 			return
 		}
-		emit("summary.error", map[string]any{"message": sumErr.Error()})
+		msg := sumErr.Error()
+		if agentcore.IsCreditsExhaustedError(sumErr) {
+			msg = agent.CreditsExhaustedMessage
+		}
+		emit("summary.error", map[string]any{"message": msg})
 		return
 	}
 

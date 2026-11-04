@@ -351,6 +351,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		if isExpiredPromptCacheRejection(providerErr) {
 			return streamErrorStreamBlip, providerErr
 		}
+		if isCreditsExhausted(providerErr) {
+			return streamErrorFatal, providerErr
+		}
 		if providerErr.IsRetryable() {
 			return streamErrorRetryExhausted, providerErr
 		}
@@ -368,6 +371,9 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		}
 		if flagged, ok := contextLengthRejection(sse); ok {
 			return streamErrorContextTooLarge, flagged
+		}
+		if isCreditsExhausted(sse) {
+			return streamErrorFatal, sse
 		}
 		if sse.IsRetryable() {
 			return streamErrorStreamBlip, sse
@@ -395,7 +401,7 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 // "Provider returned error", so the same request may well succeed on the
 // configured fallback model; a key- or credit-level failure would not.
 func isProviderRejection(providerErr *fantasy.ProviderError) bool {
-	if providerErr == nil || providerErr.AuthError {
+	if providerErr == nil || providerErr.AuthError || isCreditsExhausted(providerErr) {
 		return false
 	}
 	switch providerErr.StatusCode {

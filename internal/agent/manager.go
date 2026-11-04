@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -2297,6 +2298,11 @@ func mapRunEntriesWithSender(entries []agentcore.RunEntry, senderEmail string) [
 	return out
 }
 
+// CreditsExhaustedMessage is the friendly user-facing notice shown when the
+// configured provider API key or account runs out of included credits or hits
+// its spend limit.
+const CreditsExhaustedMessage = "You've used all of your included credits! Please reach out to Elcano at licensing@elcanotek.com to add more credits and keep going."
+
 // emitModelSelectionRequired tells the frontend to reopen its model picker
 // because the current model can't complete the turn. Mirrors chat's helper of
 // the same name; the HTTP layer detects ErrModelSelectionRequired and suppresses
@@ -2310,6 +2316,9 @@ func emitModelSelectionRequired(sink EventSink, reason agentcore.StreamErrorReas
 		raw = streamErr.Error()
 	}
 	failure := turnFailureFor(reason, failedModel, status, streamErr)
+	if failure.Reason == string(agentcore.ReasonCreditsExhausted) {
+		raw = ""
+	}
 	sink.Emit("turn.model_required", map[string]any{
 		"reason":       failure.Reason,
 		"failed_model": failure.FailedModel,
@@ -2335,6 +2344,9 @@ func turnFailureFor(reason agentcore.StreamErrorReason, failedModel string, stat
 			status = providerStatus
 		}
 	}
+	if reason == agentcore.ReasonCreditsExhausted || status == http.StatusPaymentRequired || agentcore.IsCreditsExhaustedError(streamErr) {
+		reason = agentcore.ReasonCreditsExhausted
+	}
 	return TurnFailure{
 		Reason:      string(reason),
 		FailedModel: failedModel,
@@ -2354,6 +2366,8 @@ func turnFailureFor(reason agentcore.StreamErrorReason, failedModel string, stat
 // or an expiry followed by a reset, must not be reported as two timeouts.
 func humanMessageForReason(reason agentcore.StreamErrorReason, status int, streamErr error) string {
 	switch reason {
+	case agentcore.ReasonCreditsExhausted:
+		return CreditsExhaustedMessage
 	case agentcore.ReasonContextTooLarge:
 		return "This conversation exceeds the selected model's context window. Pick a model with a larger window or start a new chat."
 	case agentcore.ReasonRetryExhausted:
@@ -2361,10 +2375,16 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int, strea
 		// failure, not a silent model: the inner retry backoff simply outlasted
 		// the deadline. Report what the provider actually said (#1585).
 		if providerStatus, afterProviderErr := agentcore.FirstChunkTimeoutAfterProviderError(streamErr); afterProviderErr {
+			if providerStatus == http.StatusPaymentRequired || status == http.StatusPaymentRequired {
+				return CreditsExhaustedMessage
+			}
 			if providerStatus == 429 || status == 429 {
 				return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
 			}
 			return "The selected model's provider is failing repeatedly. Pick a different model to continue."
+		}
+		if status == http.StatusPaymentRequired || agentcore.IsCreditsExhaustedError(streamErr) {
+			return CreditsExhaustedMessage
 		}
 		if status == 429 {
 			return "The selected model is rate-limiting this request. Retrying did not help — pick a different model to continue."
@@ -2374,6 +2394,9 @@ func humanMessageForReason(reason agentcore.StreamErrorReason, status int, strea
 		}
 		return "The selected model's provider is failing repeatedly. Pick a different model to continue."
 	default:
+		if status == http.StatusPaymentRequired || agentcore.IsCreditsExhaustedError(streamErr) {
+			return CreditsExhaustedMessage
+		}
 		if status > 0 {
 			return fmt.Sprintf("The selected model returned an error (HTTP %d). Pick a different model to continue.", status)
 		}

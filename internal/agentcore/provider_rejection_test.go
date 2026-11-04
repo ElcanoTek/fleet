@@ -414,3 +414,78 @@ func TestExpiredPromptCacheIsAStreamBlipNotARejection(t *testing.T) {
 		}
 	})
 }
+
+const openRouterKeyLimit403Body = "HTTP/2.0 403 Forbidden\r\nContent-Type: application/json\r\n\r\n" +
+	`{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.","code":403,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove this API key's usage limit at https://openrouter.ai/settings/keys, or use a key without a limit.","scope":"key_limit","limit_usd":1,"spend_usd":1.652338,"resets_at":null}},"user_id":"org_test"}`
+
+const openRouterMaxTokens402Body = "HTTP/2.0 402 Payment Required\r\nContent-Type: application/json\r\n\r\n" +
+	`{"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 50000 tokens, but can only afford 40000. To increase, visit https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... and adjust the key's total limit","code":402,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove this API key's usage limit at https://openrouter.ai/settings/keys, or use a key without a limit.","provider_name":null}},"user_id":"org_test"}`
+
+func TestCreditsExhaustedClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{
+			name: "OpenRouter 402 payment required",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusPaymentRequired,
+				Title:        "payment required",
+				Message:      "This request requires more credits, or fewer max_tokens.",
+				ResponseBody: []byte(openRouterMaxTokens402Body),
+			},
+			wantStatus: http.StatusPaymentRequired,
+		},
+		{
+			name: "OpenRouter 403 key limit exceeded",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Title:        "forbidden",
+				Message:      "Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.",
+				ResponseBody: []byte(openRouterKeyLimit403Body),
+			},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "OpenAI 429 insufficient_quota",
+			err: &fantasy.ProviderError{
+				StatusCode:    http.StatusTooManyRequests,
+				Title:         "insufficient_quota",
+				Message:       "You exceeded your current quota, please check your plan and billing details.",
+				ErrorType:     "insufficient_quota",
+				TransientError: true,
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name: "Anthropic 400 credit balance too low",
+			err: &fantasy.ProviderError{
+				StatusCode: http.StatusBadRequest,
+				Title:      "invalid_request_error",
+				Message:    "Your credit balance is too low to access the Anthropic API.",
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !IsCreditsExhaustedError(tc.err) {
+				t.Fatalf("IsCreditsExhaustedError(%v) = false, want true", tc.err)
+			}
+			class, _ := classifyStreamError(tc.err)
+			if class != streamErrorFatal {
+				t.Fatalf("classifyStreamError = %s, want fatal (must not retry or swap to fallback on exhausted key)", class)
+			}
+			reason, status, cancelled := ClassifyStreamErrorReason(tc.err)
+			if cancelled {
+				t.Fatal("cancelled = true, want false")
+			}
+			if reason != ReasonCreditsExhausted {
+				t.Fatalf("reason = %q, want %q", reason, ReasonCreditsExhausted)
+			}
+			if status != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", status, tc.wantStatus)
+			}
+		})
+	}
+}

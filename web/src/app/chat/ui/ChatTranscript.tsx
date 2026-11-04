@@ -1089,12 +1089,17 @@ export function ChatTranscript({
                                 // picker is a fallback.
                                 const reason = message.modelRequired.reason;
                                 const mustSwap = reason === "context_too_large";
+                                const creditsExhausted = reason === "credits_exhausted";
                                 return (
                                 <div className="flex flex-col gap-1.5 rounded-[0.75rem] border border-[var(--color-border-strong)] bg-[var(--color-overlay-soft)] p-3 text-[0.75rem] text-[var(--color-text-secondary)]">
                                   <div className="flex items-center gap-2">
                                     <span className="inline-block size-1.5 rounded-full bg-[var(--color-danger)]" />
                                     <span className="font-medium text-[var(--color-text-primary)]">
-                                      {mustSwap ? "Pick a different model" : "Turn failed"}
+                                      {creditsExhausted
+                                        ? "Out of included credits"
+                                        : mustSwap
+                                          ? "Pick a different model"
+                                          : "Turn failed"}
                                     </span>
                                     {message.modelRequired.failedModel ? (
                                       <span className="truncate text-[var(--color-text-muted)]">
@@ -1105,7 +1110,23 @@ export function ChatTranscript({
                                   <p>{message.modelRequired.message}</p>
                                   {isConversationOwner ? (
                                   <div className="flex flex-wrap items-center gap-3 pt-0.5">
-                                    {mustSwap ? (
+                                    {creditsExhausted ? (
+                                      <>
+                                        <a
+                                          href="mailto:licensing@elcanotek.com?subject=Fleet%20Credits"
+                                          className="font-medium text-[var(--color-text-primary)] underline hover:text-[var(--color-accent)]"
+                                        >
+                                          Contact licensing@elcanotek.com
+                                        </a>
+                                        <button
+                                          type="button"
+                                          className="underline hover:text-[var(--color-text-primary)]"
+                                          onClick={() => void retryLastUserMessage()}
+                                        >
+                                          Retry with {shortModelName(selectedModel)}
+                                        </button>
+                                      </>
+                                    ) : mustSwap ? (
                                       <>
                                         <button
                                           type="button"

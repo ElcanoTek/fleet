@@ -74,6 +74,10 @@ func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, con
 
 	proposal, err := s.agent.SuggestRecurringTask(ctx, transcript, nil)
 	if err != nil || proposal == nil {
+		if agentcore.IsCreditsExhaustedError(err) {
+			http.Error(w, agent.CreditsExhaustedMessage, http.StatusPaymentRequired)
+			return
+		}
 		http.Error(w, "could not synthesize a recurring task from this conversation; try again", http.StatusBadGateway)
 		return
 	}

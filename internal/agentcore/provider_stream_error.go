@@ -96,6 +96,8 @@ type upstreamErrorDetail struct {
 	ErrorType    string
 	ProviderCode string
 	Raw          string
+	LimitSource  string
+	Scope        string
 	// Code and Message are the gateway's own top-level error.code and
 	// error.message, read only to classify the failure (never logged).
 	Code    string
@@ -143,6 +145,8 @@ func parseUpstreamErrorDetail(body []byte) upstreamErrorDetail {
 	out.ErrorType = rawMessageText(envelope.Error.Metadata["error_type"])
 	out.ProviderCode = rawMessageText(envelope.Error.Metadata["provider_code"])
 	out.Raw = rawMessageText(envelope.Error.Metadata["raw"])
+	out.LimitSource = rawMessageText(envelope.Error.Metadata["limit_source"])
+	out.Scope = rawMessageText(envelope.Error.Metadata["scope"])
 	out.Code = rawMessageText(envelope.Error.Code)
 	out.Message = strings.TrimSpace(envelope.Error.Message)
 	return out
@@ -303,4 +307,71 @@ func isExpiredPromptCacheRejection(providerErr *fantasy.ProviderError) bool {
 	}
 	detail := parseUpstreamErrorDetail(providerErr.ResponseBody)
 	return expiredPromptCachePattern.MatchString(detail.Raw)
+}
+
+// creditsExhaustedPattern matches credit/budget/spend-limit error messages from
+// OpenRouter and upstream providers:
+//   - OpenRouter HTTP 403 when a key's spend limit is exhausted:
+//     "Key limit exceeded (total limit). Manage it using https://openrouter.ai/... $1.65 of $1.00 used; does not reset."
+//   - OpenRouter HTTP 402 when max_tokens or account balance exceeds remaining credits:
+//     "This request requires more credits, or fewer max_tokens..." / "Insufficient credits..."
+//   - Anthropic / OpenAI quota & credit exhaustion:
+//     "Your credit balance is too low..." / "You exceeded your current quota..."
+var creditsExhaustedPattern = regexp.MustCompile(`(?i)\b(?:key limit exceeded|insufficient credits|requires more credits|credit balance is too low|exceeded your current quota)\b`)
+
+// isCreditsExhausted reports whether a provider error indicates that the
+// configured API key or account is out of credits or has hit its spend limit.
+// OpenRouter returns HTTP 402 when a request's max_tokens cost exceeds remaining
+// credits, and HTTP 403 ("Key limit exceeded", metadata.limit_source="openrouter_key_limit",
+// metadata.scope="key_limit") once a key's dollar limit is completely spent.
+// Neither case is a model-specific rejection or a transient blip: retrying or
+// swapping to a fallback model on the same key will fail identically.
+func isCreditsExhausted(providerErr *fantasy.ProviderError) bool {
+	if providerErr == nil || providerErr.AuthError {
+		return false
+	}
+	if providerErr.StatusCode == http.StatusPaymentRequired {
+		return true
+	}
+	if providerErr.StatusCode >= http.StatusInternalServerError {
+		return false
+	}
+	detail := parseUpstreamErrorDetail(providerErr.ResponseBody)
+	if detail.Code == "402" {
+		return true
+	}
+	if detail.LimitSource != "" || strings.EqualFold(detail.Scope, "key_limit") || strings.EqualFold(detail.Scope, "budget") {
+		return true
+	}
+	for _, code := range []string{detail.Code, detail.ProviderCode, detail.ErrorType, providerErr.ErrorType, providerErr.Title} {
+		if strings.EqualFold(code, "insufficient_quota") || strings.EqualFold(code, "insufficient_credits") {
+			return true
+		}
+	}
+	for _, text := range []string{providerErr.Message, detail.Message, detail.Raw} {
+		if text != "" && creditsExhaustedPattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+// IsCreditsExhaustedError reports whether err is a provider billing, credit, or
+// API-key spend-limit failure (e.g. OpenRouter HTTP 402 Insufficient credits or
+// HTTP 403 Key limit exceeded).
+func IsCreditsExhaustedError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if status, ok := FirstChunkTimeoutAfterProviderError(err); ok && status == http.StatusPaymentRequired {
+		return true
+	}
+	var providerErr *fantasy.ProviderError
+	if errors.As(err, &providerErr) && isCreditsExhausted(normalizeStreamProviderError(providerErr)) {
+		return true
+	}
+	if sse := parseSSEStreamError(err); isCreditsExhausted(sse) {
+		return true
+	}
+	return false
 }

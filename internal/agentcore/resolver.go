@@ -298,6 +298,8 @@ const (
 	ReasonContextTooLarge StreamErrorReason = "context_too_large"
 	// ReasonRetryExhausted: the provider failed repeatedly (rate limits, 5xx).
 	ReasonRetryExhausted StreamErrorReason = "retry_exhausted"
+	// ReasonCreditsExhausted: the provider API key or account is out of credits/budget.
+	ReasonCreditsExhausted StreamErrorReason = "credits_exhausted"
 	// ReasonFatal: a non-retryable provider failure.
 	ReasonFatal StreamErrorReason = "fatal"
 )
@@ -307,9 +309,13 @@ const (
 // reported separately via the cancelled bool so the caller can skip the picker.
 func ClassifyStreamErrorReason(err error) (reason StreamErrorReason, status int, cancelled bool) {
 	class, providerErr := classifyStreamError(err)
-	switch class {
-	case streamErrorCancelled:
+	if class == streamErrorCancelled {
 		return ReasonFatal, providerErrStatus(providerErr), true
+	}
+	if isCreditsExhausted(providerErr) || IsCreditsExhaustedError(err) {
+		return ReasonCreditsExhausted, providerErrStatus(providerErr), false
+	}
+	switch class {
 	case streamErrorContextTooLarge:
 		return ReasonContextTooLarge, providerErrStatus(providerErr), false
 	case streamErrorRetryExhausted, streamErrorStreamBlip:
