@@ -79,6 +79,18 @@ type Memory = {
 // management view and also lists retired memories and unaccepted proposals
 // (source "proposed"), neither of which is injected into a chat — so neither
 // is shown as a ground rule or handed to the patrol drafter.
+// newRequestId makes a launch's idempotency key: random and unguessable where
+// the browser offers crypto.randomUUID (every secure context), with a
+// time-and-random fallback that is still unique per launch.
+function newRequestId(): string {
+  try {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return `launchpad-${crypto.randomUUID()}`;
+  } catch {
+    // fall through
+  }
+  return `launchpad-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function activeMemories(all: Memory[]): Memory[] {
   return all.filter((m) => !m.retired_at && m.source !== "proposed");
 }
@@ -303,43 +315,43 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   const [launch, setLaunch] = useState<LaunchState | null>(null);
   const [drafting, setDrafting] = useState(false);
   // What a launch has created so far, so a failure can be rolled back.
-  // What a launch has created so far. `pendingCreate` is set when the chat
-  // create's outcome is unknown (the request or its reply was lost): the
-  // chat may exist without its ID ever reaching us. `before` is the set of
-  // chat IDs that existed just before the create, so a new chat with the patrol's title can be told apart from older ones.
+  // What a launch has created so far. `pendingCreate` holds the create
+  // request while its outcome is unknown (the request or its reply was lost):
+  // the chat may exist without its ID ever reaching us. The request carries a
+  // per-launch idempotency key (client_request_id), so sending it again is
+  // safe and answers with the chat it made, if it made one.
   type Created = {
     conversationId: string;
     scheduleId: string;
-    pendingCreate?: { before: Set<string>; title: string };
+    pendingCreate?: { body: Record<string, string> };
   };
   const created = useRef<Created>({ conversationId: "", scheduleId: "" });
-  // Lists the IDs of the caller's chats, or null if the read fails.
-  const listChatIds = async (): Promise<Set<string> | null> => {
-    try {
-      const res = await fetch("/api/conversations", { cache: "no-store" });
-      if (!res.ok) return null;
-      const data = (await res.json()) as { conversations?: { id: string; title?: string }[] };
-      return new Set((data.conversations ?? []).map((c) => c.id));
-    } catch {
-      return null;
-    }
+  // Sends a keyed create and returns the chat's ID, or "" when the outcome is
+  // unknown (no reply, or one that could not be read). A clean HTTP error
+  // throws: the server refused, so nothing was made.
+  const sendCreate = async (body: Record<string, string>): Promise<string> => {
+    const res = await fetch("/api/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => null);
+    if (!res) return "";
+    if (!res.ok) throw new Error(await failText(res, "Could not create the patrol chat"));
+    return res
+      .json()
+      .then((d: { id?: string }) => (typeof d?.id === "string" ? d.id : ""))
+      .catch(() => "");
   };
-  // Settles an unknown create: finds the chat it made, if any, by a fresh
-  // read compared with the snapshot. True when settled (found, or certainly
-  // not created); false when it still cannot be told.
+  // Settles an unknown create by sending it again with the same key: the
+  // server answers with the chat the first attempt made (or makes it now, to
+  // be rolled back like any other). True when settled.
   const resolvePendingCreate = async (): Promise<boolean> => {
     const pending = created.current.pendingCreate;
     if (!pending) return true;
-    try {
-      const res = await fetch("/api/conversations", { cache: "no-store" });
-      if (!res.ok) return false;
-      const data = (await res.json()) as { conversations?: { id: string; title?: string }[] };
-      const made = (data.conversations ?? []).find((c) => !pending.before.has(c.id) && c.title === pending.title);
-      created.current = { ...created.current, conversationId: made?.id ?? created.current.conversationId, pendingCreate: undefined };
-      return true;
-    } catch {
-      return false;
-    }
+    const id = await sendCreate(pending.body).catch(() => "");
+    if (!id) return false;
+    created.current = { ...created.current, conversationId: id, pendingCreate: undefined };
+    return true;
   };
   useEffect(() => {
     if (launch) return;
@@ -427,33 +439,18 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         : [];
       const body: Record<string, string> = { title: title.trim() || "My patrol", model: currentDefaultModel() };
       if (state.persona) body.persona = state.persona;
-      // A lost reply must not leave a chat nobody can roll back: snapshot the
-      // chat list first, so an unknown outcome can be settled afterwards.
-      const before = await listChatIds();
-      // Without a snapshot an unknown outcome could never be settled, so
-      // nothing is created: a plain retry is safe.
-      if (!before) throw new Error("Couldn’t reach the server to create the patrol chat. Check your connection and try again.");
-      const unknownCreate = async (): Promise<never> => {
-        created.current.pendingCreate = { before, title: body.title };
-        await resolvePendingCreate();
+      // A fresh idempotency key per launch: a create whose reply is lost is
+      // sent again with it (now, and on Back or close), and the server
+      // answers with the chat it already made instead of a second one.
+      body.client_request_id = newRequestId();
+      let conversationId = await sendCreate(body);
+      if (!conversationId) conversationId = await sendCreate(body); // one immediate retry
+      if (!conversationId) {
+        created.current.pendingCreate = { body };
         throw new Error(
-          created.current.pendingCreate
-            ? `Couldn’t confirm whether the patrol chat “${body.title}” was created. Check Chat before trying again.`
-            : "Lost the connection while creating the patrol chat.",
+          `Couldn’t confirm whether the patrol chat “${body.title}” was created. Check your connection and try again.`,
         );
-      };
-      const convRes = await fetch("/api/conversations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      }).catch(() => null);
-      if (!convRes) return await unknownCreate();
-      if (!convRes.ok) throw new Error(await failText(convRes, "Could not create the patrol chat"));
-      const conversationId = await convRes
-        .json()
-        .then((d: { id?: string }) => (typeof d?.id === "string" && d.id ? d.id : ""))
-        .catch(() => "");
-      if (!conversationId) return await unknownCreate();
+      }
       created.current.conversationId = conversationId;
       const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
 
@@ -526,7 +523,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     if (!(await resolvePendingCreate())) {
       setLaunch((cur) => ({
         ...(cur ?? { phase: "conversation" }),
-        error: `Couldn’t confirm whether the patrol chat “${created.current.pendingCreate?.title ?? ""}” was created. Check your connection and try again, or look for it in Chat.`,
+        error: `Couldn’t confirm whether the patrol chat “${created.current.pendingCreate?.body.title ?? ""}” was created. Check your connection and try again.`,
       }));
       return false;
     }

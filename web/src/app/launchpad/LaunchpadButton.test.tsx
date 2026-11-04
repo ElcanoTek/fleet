@@ -116,7 +116,9 @@ describe("LaunchpadButton", () => {
     fireEvent.click(screen.getByTestId("launchpad-button"));
     fireEvent.click(await screen.findByTestId("patrols-menu-new"));
     await screen.findByTestId("patrol-launchpad");
-    expect(document.activeElement).toBe(screen.getByTestId("launchpad-button"));
+    // The menu's close runs in React effects; wait for the focus to settle
+    // (it must END on the item — a focus left on the page body still fails).
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId("launchpad-button")));
   });
 
   it("caps the patrols menu to the viewport and lets it scroll", async () => {
@@ -181,5 +183,9 @@ describe("LaunchpadButton", () => {
     expect(cadenceWithZone("0 */2 * * *", "America/New_York")).not.toContain("America");
     expect(cadenceWithZone("0 * * * *", "Europe/Paris")).not.toContain("Europe");
     expect(cadenceWithZone("*/15 * * * *", "UTC")).not.toContain("UTC");
+    // A step limited to some hours or days is read in the patrol's zone.
+    expect(cadenceWithZone("*/15 9-17 * * *", "America/New_York")).toMatch(/· America\/New_York$/);
+    expect(cadenceWithZone("0 */2 * * 1-5", "America/New_York")).toMatch(/· America\/New_York$/);
+    expect(cadenceWithZone("*/30 * * * 1-5", "Europe/Paris")).toMatch(/· Europe\/Paris$/);
   });
 });

@@ -24,9 +24,13 @@ import (
 // ── /conversations ─────────────────────────────────────────────────────────
 
 type createConversationRequest struct {
-	Title   string `json:"title"`
-	Persona string `json:"persona"`
-	Model   string `json:"model"`
+	// ClientRequestID is an optional idempotency key: a create retried with
+	// the same key (its reply was lost) returns the conversation the first
+	// one made instead of making another. See conversationCreateKey.
+	ClientRequestID string `json:"client_request_id,omitempty"`
+	Title           string `json:"title"`
+	Persona         string `json:"persona"`
+	Model           string `json:"model"`
 	// Lockdown, when true, marks this conversation as locked-down: the
 	// agent loop forces a per-turn container sandbox and the model slug
 	// is restricted to CHAT_LOCKDOWN_ALLOWED_MODELS. Frontend exposes
@@ -227,68 +231,110 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			writeJSON(w, map[string]any{"deleted": n})
 		}
 	case http.MethodPost:
-		var req createConversationRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-			return
-		}
-		persona := strings.TrimSpace(req.Persona)
-		if persona != "" {
-			if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
-				s.userPersonaError(w, err)
-				return
-			}
-		}
-		title := strings.TrimSpace(req.Title)
-		if title == "" {
-			title = "New conversation"
-		}
-		lockdown := req.Lockdown || s.cfg.LockdownOnly
-		if lockdown && !s.cfg.LockdownAvailable() {
-			http.Error(w, "lockdown is unavailable on this server (no sandbox image configured)", http.StatusBadRequest)
-			return
-		}
-		model := strings.TrimSpace(req.Model)
-		if lockdown && model != "" && !s.cfg.LockdownAllows(model) {
-			http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
-			return
-		}
-		if len(req.MCPAccounts) > 0 {
-			if _, err := s.cleanMCPAccounts(r.Context(), user, req.MCPAccounts); err != nil {
-				http.Error(w, err.Error(), http.StatusBadRequest)
-				return
-			}
-		}
-		conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
-		if !ok {
-			return
-		}
-		if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
-			s.rollbackCreatedConversation(user, conv.ID)
-			return
-		}
-		// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
-		// without running a turn, so the next real turn sees it as history.
-		// Best-effort ordering is NOT acceptable here — a discussion opened
-		// on a missing seed is an empty chat with a misleading title — so a
-		// failed append fails the request and rolls back the created row.
-		if seed := strings.TrimSpace(req.Seed); seed != "" {
-			content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
-			if err == nil {
-				_, err = s.store.AppendHistory(r.Context(), conv.ID,
-					[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
-			}
-			if err != nil {
-				s.rollbackCreatedConversation(user, conv.ID)
-				http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
-				return
-			}
-		}
-		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
-		writeJSON(w, conv)
+		s.createConversation(w, r, user)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// createConversation handles POST /conversations: a new chat, optionally in a
+// project, with its connector seed and an optional first message; with a
+// client_request_id it is idempotent (see conversationForCreateKey).
+func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user string) {
+	var req createConversationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	key := strings.TrimSpace(req.ClientRequestID)
+	if key != "" {
+		if len(key) > 128 {
+			http.Error(w, "client_request_id must be at most 128 characters", http.StatusBadRequest)
+			return
+		}
+		// Already made with this key: answer with that conversation.
+		if existing, done := s.conversationForCreateKey(w, r, user, key); done {
+			if existing != nil {
+				writeJSON(w, existing)
+			}
+			return
+		}
+	}
+	persona := strings.TrimSpace(req.Persona)
+	if persona != "" {
+		if err := s.checkConversationPersona(r.Context(), user, persona); err != nil {
+			s.userPersonaError(w, err)
+			return
+		}
+	}
+	title := strings.TrimSpace(req.Title)
+	if title == "" {
+		title = "New conversation"
+	}
+	lockdown := req.Lockdown || s.cfg.LockdownOnly
+	if lockdown && !s.cfg.LockdownAvailable() {
+		http.Error(w, "lockdown is unavailable on this server (no sandbox image configured)", http.StatusBadRequest)
+		return
+	}
+	model := strings.TrimSpace(req.Model)
+	if lockdown && model != "" && !s.cfg.LockdownAllows(model) {
+		http.Error(w, "model not allowed in lockdown mode", http.StatusBadRequest)
+		return
+	}
+	if len(req.MCPAccounts) > 0 {
+		if _, err := s.cleanMCPAccounts(r.Context(), user, req.MCPAccounts); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	conv, ok := s.createConversationForRequest(w, r, user, req.ProjectID, title, persona, model, lockdown)
+	if !ok {
+		return
+	}
+	if !s.seedConversationMCP(w, r, user, conv, req.EnabledOptional, req.MCPAccounts, req.AutoApprove) {
+		s.rollbackCreatedConversation(user, conv.ID)
+		return
+	}
+	// Optional seed (docs/DISCUSS-RUN.md): persist one user text message
+	// without running a turn, so the next real turn sees it as history.
+	// Best-effort ordering is NOT acceptable here — a discussion opened
+	// on a missing seed is an empty chat with a misleading title — so a
+	// failed append fails the request and rolls back the created row.
+	if seed := strings.TrimSpace(req.Seed); seed != "" {
+		content, err := json.Marshal(map[string]any{"text": clampSeed(seed)})
+		if err == nil {
+			_, err = s.store.AppendHistory(r.Context(), conv.ID,
+				[]agent.HistoryEntry{{Role: "user", Type: "text", Content: content}})
+		}
+		if err != nil {
+			s.rollbackCreatedConversation(user, conv.ID)
+			http.Error(w, "failed to seed conversation: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Bind the key only now that the whole create succeeded. A concurrent
+	// create with the same key that bound first wins: this one is rolled
+	// back and the winner returned, so one key never makes two chats.
+	if key != "" {
+		bound, err := s.store.RecordCreateKey(r.Context(), user, key, conv.ID)
+		if err != nil {
+			s.rollbackCreatedConversation(user, conv.ID)
+			http.Error(w, "failed to record the create: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if bound != conv.ID {
+			s.rollbackCreatedConversation(user, conv.ID)
+			winner, err := s.store.Get(r.Context(), user, bound)
+			if err != nil || winner == nil {
+				http.Error(w, "conversation create raced; retry", http.StatusConflict)
+				return
+			}
+			writeJSON(w, winner)
+			return
+		}
+	}
+	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
+	writeJSON(w, conv)
 }
 
 // bulkPatchConversations handles PATCH /conversations/bulk (#279): applies the
@@ -335,6 +381,35 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"updated": n})
+}
+
+// conversationForCreateKey looks up a create's idempotency key. done is true
+// when the request has been answered: with the conversation the key already
+// made (existing != nil, the caller writes it), or with an error. A key whose
+// conversation is gone (deleted, or rolled back) is forgotten, so the create
+// goes ahead and makes a new one.
+func (s *Server) conversationForCreateKey(w http.ResponseWriter, r *http.Request, user, key string) (existing *store.Conversation, done bool) {
+	id, err := s.store.ConversationForCreateKey(r.Context(), user, key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, true
+	}
+	if id == "" {
+		return nil, false
+	}
+	conv, err := s.store.Get(r.Context(), user, id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, true
+	}
+	if conv != nil {
+		return conv, true
+	}
+	if err := s.store.ForgetCreateKey(r.Context(), user, key); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, true
+	}
+	return nil, false
 }
 
 // conversationOrder handles GET and PUT /conversations/order: the orders the
