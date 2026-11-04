@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 
@@ -119,5 +119,21 @@ describe("persona new-chat link", () => {
     });
     // Draft stays intact in the composer after promoting onto the materialized conversation.
     expect(screen.getByDisplayValue("Draft before sharing")).toBeInTheDocument();
+
+    // Close the share dialog and verify that on the empty materialized chat
+    // ("Draft before sharing"), because no messages have been sent yet, the
+    // user can still switch the persona.
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    const personaItem = screen.getByRole("menuitem", { name: "Persona — My Twin" });
+    expect(personaItem).not.toBeDisabled();
+    fireEvent.click(personaItem);
+    const listbox = screen.getByRole("listbox", { name: "Persona" });
+    fireEvent.click(within(listbox).getByRole("option", { name: "Assistant" }));
+
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    expect(
+      screen.getByRole("menuitem", { name: "Persona — Assistant" }),
+    ).not.toBeDisabled();
   });
 });

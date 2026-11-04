@@ -555,6 +555,26 @@ func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, 
 	}
 }
 
+func (s *Server) maybeSetInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool) {
+	if historyLen != 0 || !userWords {
+		return
+	}
+	ownerEmail := convOwnerEmail(conv, user)
+	if !strings.EqualFold(ownerEmail, user) {
+		return
+	}
+	persona := strings.TrimSpace(reqPersona)
+	if persona == "" || persona == conv.Persona {
+		return
+	}
+	if err := s.checkConversationPersona(ctx, user, persona); err != nil {
+		return
+	}
+	if err := s.store.SetPersona(ctx, ownerEmail, conv.ID, persona); err == nil {
+		conv.Persona = persona
+	}
+}
+
 // replayAcceptedInput answers a resend of an input_id that was already
 // ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
 // so it never runs a duplicate turn — even when the retry lands after the
@@ -1242,6 +1262,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// heuristic title from the admitted opening message right before emitting
 	// the `conversation` event so a rejected turn never mutates the title.
 	s.maybeSetPlaceholderTurnTitle(turnCtx, user, conv, len(history), req.Message, userWords)
+	s.maybeSetInitialTurnPersona(turnCtx, user, conv, len(history), req.Persona, userWords)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

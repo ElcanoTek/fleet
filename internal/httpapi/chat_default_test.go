@@ -516,6 +516,15 @@ func (s *fakeChatStore) UpdateTitle(_ context.Context, _, convID, title string) 
 	return nil
 }
 
+func (s *fakeChatStore) SetPersona(_ context.Context, _, convID, persona string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.convs[convID]; c != nil {
+		c.Persona = persona
+	}
+	return nil
+}
+
 func (s *fakeChatStore) SetConversationTeamVisibleWithOptions(_ context.Context, _, convID string, visible, _ bool) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2914,5 +2923,30 @@ func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestMaybeSetInitialTurnPersona(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newDefaultChatServer(t, &fakeEngine{}, st)
+	conv, err := st.CreateConversation(context.Background(), "u@x.com", "New conversation", "generic", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+
+	// On an empty materialized conversation (0 history entries), the owner's
+	// first-turn persona choice updates conv.Persona and persists to the store.
+	srv.maybeSetInitialTurnPersona(context.Background(), "u@x.com", conv, 0, "trader", true)
+	if conv.Persona != "trader" {
+		t.Fatalf("conv.Persona = %q, want trader", conv.Persona)
+	}
+	if stored := st.convs[conv.ID]; stored == nil || stored.Persona != "trader" {
+		t.Fatalf("stored persona = %v, want trader", stored)
+	}
+
+	// Once history entries exist (historyLen > 0), persona changes are ignored.
+	srv.maybeSetInitialTurnPersona(context.Background(), "u@x.com", conv, 2, "analyst", true)
+	if conv.Persona != "trader" {
+		t.Fatalf("conv.Persona changed after first turn: got %q, want trader", conv.Persona)
 	}
 }

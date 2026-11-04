@@ -733,6 +733,31 @@ export function ChatExperience({
   const [selectedPersona, setSelectedPersona] = useState<string>(
     () => restoredSession?.selectedPersona ?? "",
   );
+  // Per-conversation persona choice made while a materialized conversation still
+  // has 0 messages (e.g. after Project "New chat" or opening Share on an empty
+  // draft), so navigating away and returning before the first turn preserves the
+  // user's choice.
+  const pendingPersonaByConvRef = useRef<Map<string, string>>(new Map());
+  const selectPersonaExplicitly = useCallback<Dispatch<SetStateAction<string>>>(
+    (value) => {
+      setSelectedPersona((prev) => {
+        const next = typeof value === "function" ? value(prev) : value;
+        const convId = activeConversationIdRef.current;
+        if (
+          convId &&
+          !isPendingKey(convId) &&
+          (messagesByConvRef.current.get(convId)?.length ?? 0) === 0
+        ) {
+          pendingPersonaByConvRef.current.set(convId, next);
+          setConversations((curr) =>
+            curr.map((c) => (c.id === convId ? { ...c, persona: next } : c)),
+          );
+        }
+        return next;
+      });
+    },
+    [],
+  );
   // The user's own personas for the composer picker (Settings → Personas).
   // Refetched on every mount with the bundle roster, so not snapshotted.
   const [userPersonas, setUserPersonas] = useState<UserPersonaOption[]>([]);
@@ -2672,7 +2697,11 @@ export function ChatExperience({
         archivedConversations.find((c) => c.id === conversationId) ??
         teamSharedConversations.find((c) => c.id === conversationId);
       if (conv) {
-        setSelectedPersona(conv.persona);
+        setSelectedPersona(
+          pendingPersonaByConvRef.current.get(conversationId) ||
+            conv.persona ||
+            defaultPersona,
+        );
         setSelectedModel(conv.model || currentDefaultModel());
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
@@ -2688,6 +2717,7 @@ export function ChatExperience({
     // missing and lets go (#1584).
     const recoveryTokenAtStart = recoveryTokenRef.current(conversationId);
     const deleteAllSeqAtStart = deleteAllUnpinnedSeqRef.current;
+    const draftGenAtStart = newChatDraftGenRef.current;
     // background: a warm-return revalidation already has the cached transcript
     // on screen, so it must NOT flash the blocking spinner — it swaps in the
     // fresh server copy underneath the rendered messages.
@@ -2773,68 +2803,83 @@ export function ChatExperience({
       // connector state under them. The transcript below still applies:
       // adopting an answer for a background conversation is the point of the
       // reload (#1584).
+      const hasHistoryEntries = (data.history ?? []).length > 0;
+      if (hasHistoryEntries) {
+        pendingPersonaByConvRef.current.delete(data.conversation.id);
+      }
+      const effectiveConvPersona =
+        (!hasHistoryEntries &&
+          pendingPersonaByConvRef.current.get(data.conversation.id)) ||
+        data.conversation.persona ||
+        defaultPersona;
+      const hydratedConversation: ConversationSummary & {
+        branch_origin?: BranchOrigin | null;
+      } = effectiveConvPersona
+        ? { ...data.conversation, persona: effectiveConvPersona }
+        : data.conversation;
       const movesTheUser =
-        !options.background ||
-        activeConversationIdRef.current === conversationId;
+        newChatDraftGenRef.current === draftGenAtStart &&
+        (!options.background ||
+          activeConversationIdRef.current === conversationId);
       const canInsertMissingRow =
         movesTheUser &&
         deleteAllUnpinnedSeqRef.current === deleteAllSeqAtStart;
       if (
-        data.conversation.user_email &&
+        hydratedConversation.user_email &&
         userEmail.trim() &&
-        data.conversation.user_email.toLowerCase() !==
+        hydratedConversation.user_email.toLowerCase() !==
           userEmail.trim().toLowerCase()
       ) {
         setTeamSharedConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          const idx = prev.findIndex((c) => c.id === hydratedConversation.id);
           if (idx >= 0) {
             const next = [...prev];
-            next[idx] = { ...prev[idx], ...data.conversation };
+            next[idx] = { ...prev[idx], ...hydratedConversation };
             return next;
           }
-          return [data.conversation, ...prev];
+          return [hydratedConversation, ...prev];
         });
-      } else if (data.conversation.archived_at != null) {
+      } else if (hydratedConversation.archived_at != null) {
         setConversations((prev) =>
-          prev.some((c) => c.id === data.conversation.id)
-            ? prev.filter((c) => c.id !== data.conversation.id)
+          prev.some((c) => c.id === hydratedConversation.id)
+            ? prev.filter((c) => c.id !== hydratedConversation.id)
             : prev,
         );
         setArchivedConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          const idx = prev.findIndex((c) => c.id === hydratedConversation.id);
           if (idx >= 0) {
             const next = [...prev];
-            next[idx] = { ...prev[idx], ...data.conversation };
+            next[idx] = { ...prev[idx], ...hydratedConversation };
             return next;
           }
           if (!canInsertMissingRow) return prev;
-          return [data.conversation, ...prev];
+          return [hydratedConversation, ...prev];
         });
       } else {
         setArchivedConversations((prev) =>
-          prev.some((c) => c.id === data.conversation.id)
-            ? prev.filter((c) => c.id !== data.conversation.id)
+          prev.some((c) => c.id === hydratedConversation.id)
+            ? prev.filter((c) => c.id !== hydratedConversation.id)
             : prev,
         );
         setConversations((prev) => {
-          const idx = prev.findIndex((c) => c.id === data.conversation.id);
+          const idx = prev.findIndex((c) => c.id === hydratedConversation.id);
           if (idx >= 0) {
             const next = [...prev];
-            next[idx] = { ...prev[idx], ...data.conversation };
+            next[idx] = { ...prev[idx], ...hydratedConversation };
             return next;
           }
           if (!canInsertMissingRow) return prev;
-          return [data.conversation, ...prev];
+          return [hydratedConversation, ...prev];
         });
       }
       if (movesTheUser) {
-        setActiveConversationId(data.conversation.id);
+        setActiveConversationId(hydratedConversation.id);
         // Opening a conversation clears the keyboard focus cursor (#306): the
         // cursor is a transient nav aid, and letting it linger would keep the
         // Enter-to-open shortcut armed after the user has already landed somewhere.
         setFocusedConversationId(null);
-        setSelectedPersona(data.conversation.persona);
-        setSelectedModel(data.conversation.model || currentDefaultModel());
+        setSelectedPersona(effectiveConvPersona);
+        setSelectedModel(hydratedConversation.model || currentDefaultModel());
         // Reset compaction UI state so the freshly-loaded conversation
         // starts with pre-summary turns collapsed (when present) and
         // any prior error from another chat does not leak into this one.
@@ -5210,6 +5255,10 @@ export function ChatExperience({
     // allowed slug, and for normal chat it's the workspace default.
     setSelectedModel(currentDefaultModel());
     modelTouchedRef.current = false;
+    setPersonaPickerOpen(false);
+    if (defaultPersona) {
+      setSelectedPersona(defaultPersona);
+    }
     promptRef.current?.focus();
   };
 
@@ -6395,7 +6444,13 @@ export function ChatExperience({
     // flip the guard so a late personas resolution doesn't clobber it with the
     // default (mirrors the cold-start critical-path guard set in
     // loadInitialState).
-    if (warm && restored?.activeConversationId) willLoadConversation = true;
+    if (
+      warm &&
+      (restored?.activeConversationId ||
+        (Boolean(restored?.selectedPersona) && !newChatLink))
+    ) {
+      willLoadConversation = true;
+    }
 
     void loadPersonas();
     void loadSkills();
@@ -7894,7 +7949,7 @@ export function ChatExperience({
                 defaultPersona={defaultPersona}
                 userPersonas={userPersonas}
                 selectedPersona={selectedPersona}
-                setSelectedPersona={setSelectedPersona}
+                setSelectedPersona={selectPersonaExplicitly}
                 personaPickerOpen={personaPickerOpen}
                 setPersonaPickerOpen={setPersonaPickerOpen}
                 personaPickerRef={personaPickerRef}

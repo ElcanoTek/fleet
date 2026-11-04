@@ -85,6 +85,7 @@ type chatStore interface {
 	GetConversationByShareToken(ctx context.Context, token string, now int64) (*store.SharedConversation, error)
 	UpdateTitle(ctx context.Context, userEmail, convID, title string) error
 	RenameTitle(ctx context.Context, userEmail, convID, title string) error
+	SetPersona(ctx context.Context, userEmail, convID, persona string) error
 
 	// Full-text search (#308): ranked title + message-content matches, scoped to
 	// the user and paginated; returns (results, total, error).

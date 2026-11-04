@@ -1296,9 +1296,11 @@ export function Composer({
               />
             ) : null}
             {(() => {
+              const hasStartedChatting = messages.length > 0;
               const personaLocked =
                 isStreaming ||
-                (activeConversationId !== null && !isPendingKey(activeConversationId));
+                hasStartedChatting ||
+                isConversationOwner === false;
               const workspaceOptions =
                 personas.length > 0
                   ? personas
@@ -1485,34 +1487,47 @@ export function Composer({
                           <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
                         </button>
 
-                        {!personaLocked ? (
-                          <button
-                            type="button"
-                            role="menuitem"
-                            aria-label={`Persona — ${currentPersonaLabel}`}
-                            className={POP_ROW}
-                            onClick={() => {
-                              setMoreMenuOpen(false);
-                              setPersonaPickerOpen(true);
-                            }}
-                          >
-                            <span className="flex min-w-0 items-center gap-2.5">
-                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
-                                <Icon name="persona" className="size-3.5" />
-                              </span>
-                              <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Persona</span>
-                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  Voice and instructions for this chat
-                                </span>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          disabled={personaLocked}
+                          title={
+                            personaLocked
+                              ? "Personas can only be changed in a new chat"
+                              : undefined
+                          }
+                          aria-label={
+                            personaLocked
+                              ? `Persona — ${currentPersonaLabel} (personas can only be changed in a new chat)`
+                              : `Persona — ${currentPersonaLabel}`
+                          }
+                          className={`${POP_ROW} disabled:cursor-not-allowed disabled:opacity-45`}
+                          onClick={() => {
+                            if (personaLocked) return;
+                            setMoreMenuOpen(false);
+                            setPersonaPickerOpen(true);
+                          }}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="persona" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>Persona</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                {personaLocked
+                                  ? "Personas can only be changed in a new chat"
+                                  : "Voice and instructions for this chat"}
                               </span>
                             </span>
-                            <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
-                              <span className="max-w-[6.5rem] truncate">{currentPersonaLabel}</span>
+                          </span>
+                          <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
+                            <span className="max-w-[6.5rem] truncate">{currentPersonaLabel}</span>
+                            {!personaLocked ? (
                               <Icon name="chevron-right" className="size-3" />
-                            </span>
-                          </button>
-                        ) : null}
+                            ) : null}
+                          </span>
+                        </button>
 
                         {onOpenMemories ? (
                           <button
