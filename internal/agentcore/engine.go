@@ -1229,7 +1229,8 @@ func (r *roundState) canResume(class streamErrorClass, attempt sinkMark) bool {
 	// abnormal crash boundary. Ordinary tool error responses in already-completed
 	// steps are recorded in recoveryMessages and are not re-executed on resume.
 	return class == streamErrorRetryExhausted || class == streamErrorStreamBlip ||
-		class == streamErrorContextTooLarge || class == streamErrorProviderRejected
+		class == streamErrorContextTooLarge || class == streamErrorProviderRejected ||
+		class == streamErrorFatal
 }
 
 func newRoundState(e *engine, orch *orchestrationState, maxTokens int64) *roundState {

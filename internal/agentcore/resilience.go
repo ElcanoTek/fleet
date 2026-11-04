@@ -896,7 +896,7 @@ func (e *engine) streamRoundWithResilience(
 			swappedToFallback = true
 			rollbackAttempt()
 		}
-		e.recordProviderHealthFailure(activeModel, class, providerErr)
+		e.recordProviderHealthFailure(activeModel, class, providerErr, err)
 		switch class {
 		case streamErrorNone:
 			return streamRoundOutcome{}, fmt.Errorf("unexpected stream state (class=none): %w", err)
@@ -1023,10 +1023,12 @@ func committedSideEffectsBlockRecovery(sink *streamSink, attemptMark sinkMark, c
 
 // recordProviderHealthFailure feeds genuine provider failures into the circuit
 // breaker (#267) so error frequency accumulates across runs. Cancellation, the
-// cost ceiling, and prompt-too-large are not provider-health signals, so they
-// don't count.
-func (e *engine) recordProviderHealthFailure(activeModel fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError) {
-	if e == nil {
+// cost ceiling, prompt-too-large, and account/key credit exhaustion are not
+// per-model health signals, so they don't count (opening a model circuit on an
+// exhausted key would fast-route subsequent turns to a same-provider fallback
+// sharing the same exhausted key).
+func (e *engine) recordProviderHealthFailure(activeModel fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError, cause error) {
+	if e == nil || isCreditsExhausted(providerErr) || IsCreditsExhaustedError(cause) {
 		return
 	}
 	switch class {
