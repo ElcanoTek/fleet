@@ -1296,7 +1296,11 @@ export function Composer({
               />
             ) : null}
             {(() => {
-              const hasStartedChatting = messages.length > 0;
+              const hasStartedChatting =
+                messages.some(
+                  (m) => (m.role === "user" && !m.notSent) || m.dbId !== undefined,
+                ) ||
+                (messages.length > 0 && !messages.some((m) => m.role === "user"));
               const personaLocked =
                 isStreaming ||
                 hasStartedChatting ||

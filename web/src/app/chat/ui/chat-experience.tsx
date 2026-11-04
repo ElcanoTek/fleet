@@ -172,6 +172,15 @@ import type { UserPersonaOption } from "./userPersonas";
 // monotonic-ish local message ids, never as render-affecting derived state.
 const nowMs = (): number => Date.now();
 
+const hasAcceptedMessages = (msgs: readonly Message[] | undefined): boolean =>
+  Boolean(
+    msgs &&
+      (msgs.some(
+        (m) => (m.role === "user" && !m.notSent) || m.dbId !== undefined,
+      ) ||
+        (msgs.length > 0 && !msgs.some((m) => m.role === "user"))),
+  );
+
 // ── types ────────────────────────────────────────────────────────────────
 //
 // Core message types live in ./history.ts so they can be unit-tested under
@@ -748,7 +757,7 @@ export function ChatExperience({
         if (
           convId &&
           !isPendingKey(convId) &&
-          (messagesByConvRef.current.get(convId)?.length ?? 0) === 0
+          !hasAcceptedMessages(messagesByConvRef.current.get(convId))
         ) {
           pendingPersonaByConvRef.current.set(convId, next);
           setConversations((curr) =>
@@ -6265,12 +6274,17 @@ export function ChatExperience({
         if (pr.ok) {
           const pd = (await pr.json()) as PersonasResponse;
           if (!cancelled) {
+            const userRosterLoaded = Array.isArray(pd.user_personas);
             const validPersonas = new Set<string>([
               ...pd.personas,
               ...(pd.user_personas ?? []).map((up) => up.ref || `user:${up.name}`),
             ]);
+            const isValidPersonaRef = (ref: string): boolean =>
+              Boolean(ref) &&
+              (validPersonas.has(ref) ||
+                (!userRosterLoaded && ref.startsWith("user:")));
             for (const [convId, pending] of pendingPersonaByConvRef.current.entries()) {
-              if (pending && !validPersonas.has(pending)) {
+              if (pending && !isValidPersonaRef(pending)) {
                 pendingPersonaByConvRef.current.delete(convId);
               }
             }
@@ -6280,16 +6294,16 @@ export function ChatExperience({
             if (!willLoadConversation) {
               setSelectedPersona((prev) =>
                 newChatLink?.persona ??
-                (prev && validPersonas.has(prev) ? prev : pd.default),
+                (isValidPersonaRef(prev) ? prev : pd.default),
               );
             } else {
               const activeId = activeConversationIdRef.current;
               if (
                 activeId &&
-                (messagesByConvRef.current.get(activeId)?.length ?? 0) === 0
+                !hasAcceptedMessages(messagesByConvRef.current.get(activeId))
               ) {
                 setSelectedPersona((prev) =>
-                  prev && !validPersonas.has(prev) ? pd.default : prev,
+                  prev && !isValidPersonaRef(prev) ? pd.default : prev,
                 );
               }
             }
