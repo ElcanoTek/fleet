@@ -6,8 +6,11 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
+
+	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
@@ -89,6 +92,50 @@ func TestEmitModelSelectionRequired_CarriesTheRecoveredProviderStatus(t *testing
 	msg, _ := payload["message"].(string)
 	if !strings.Contains(msg, "rate-limiting") {
 		t.Errorf("message = %q, want the rate-limit wording", msg)
+	}
+}
+
+func TestEmitModelSelectionRequired_CreditsExhaustedUsesLicensingMessageAndOmitsRaw(t *testing.T) {
+	openRouterKeyLimitErr := &fantasy.ProviderError{
+		StatusCode:   http.StatusForbidden,
+		Title:        "forbidden",
+		Message:      "Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.",
+		ResponseBody: []byte(`{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.","code":403,"metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit","limit_usd":1,"spend_usd":1.652338}}}`),
+	}
+	reason, status, cancelled := agentcore.ClassifyStreamErrorReason(openRouterKeyLimitErr)
+	if cancelled {
+		t.Fatal("cancelled = true, want false")
+	}
+	if reason != agentcore.ReasonCreditsExhausted {
+		t.Fatalf("reason = %q, want %q", reason, agentcore.ReasonCreditsExhausted)
+	}
+	if status != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", status)
+	}
+
+	sink := &capturingSink{}
+	emitModelSelectionRequired(sink, reason, "anthropic/claude-sonnet-4.6", status, openRouterKeyLimitErr)
+	if len(sink.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(sink.events))
+	}
+	payload, ok := sink.events[0].payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T", sink.events[0].payload)
+	}
+	if got := payload["reason"]; got != string(agentcore.ReasonCreditsExhausted) {
+		t.Errorf("reason = %v, want %q", got, agentcore.ReasonCreditsExhausted)
+	}
+	if got := payload["status_code"]; got != http.StatusForbidden {
+		t.Errorf("status_code = %v, want 403", got)
+	}
+	if got := payload["message"]; got != CreditsExhaustedMessage {
+		t.Errorf("message = %q, want %q", got, CreditsExhaustedMessage)
+	}
+	if !strings.Contains(CreditsExhaustedMessage, "licensing@elcanotek.com") {
+		t.Errorf("CreditsExhaustedMessage %q must include licensing@elcanotek.com", CreditsExhaustedMessage)
+	}
+	if got := payload["raw"]; got != "" {
+		t.Errorf("raw = %q, want empty (must not leak OpenRouter workspace key URLs to browser)", got)
 	}
 }
 

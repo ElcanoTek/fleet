@@ -21,12 +21,20 @@ dead-letter reason said which provider rejected it or why.
 
 A non-retryable provider error with an explicit 4xx status is a
 *provider rejection* unless it is a credential failure (401, or the adapter's
-`AuthError` flag) or a billing failure (402), which bind every model behind
-the same key. A rejection promotes the configured fallback model exactly once,
-and only from a safe point: no tool event may have occurred since the attempt
-mark, which ADR-0065 advances to the last completed-step checkpoint. The
-fallback therefore re-drives with the completed tool results in its input and
-never replays an executed call. When no fallback exists, the fallback equals
+`AuthError` flag) or a billing / credit / spend-limit failure (402, or an
+explicit credit-exhaustion response on 400/403/429 matched by
+`isCreditsExhausted`: OpenRouter HTTP 403 `Key limit exceeded` with
+`error.metadata.limit_source="openrouter_key_limit"` / `scope="key_limit"`,
+OpenAI `insufficient_quota`, or Anthropic `credit balance is too low`), which
+bind every model behind the same key. Credit-exhausted errors suppress
+same-provider fallback promotion (`streamErrorFatal` / `ReasonCreditsExhausted`),
+while still allowing failover from a safe checkpoint to a fallback model on a
+different configured provider in `fallback_providers`. A rejection promotes the
+configured fallback model
+exactly once, and only from a safe point: no tool event may have occurred since
+the attempt mark, which ADR-0065 advances to the last completed-step checkpoint.
+The fallback therefore re-drives with the completed tool results in its input
+and never replays an executed call. When no fallback exists, the fallback equals
 the active model, or a tool ran without a checkpoint, the rejection remains
 terminal exactly as before; it is never reclassified as transient.
 

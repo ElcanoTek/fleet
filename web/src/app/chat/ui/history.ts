@@ -991,7 +991,11 @@ export type RetryNotice = {
  * `ModelSelectionReason` constants in
  * server/internal/agent/resilience.go.
  */
-export type ModelSelectionReason = "context_too_large" | "retry_exhausted" | "fatal";
+export type ModelSelectionReason =
+  | "context_too_large"
+  | "retry_exhausted"
+  | "credits_exhausted"
+  | "fatal";
 
 /**
  * ModelRequired is set on an assistant message when the server decided the
@@ -1179,6 +1183,7 @@ export type ModelRequiredEventPayload = {
 const modelSelectionReasons: readonly ModelSelectionReason[] = [
   "context_too_large",
   "retry_exhausted",
+  "credits_exhausted",
   "fatal",
 ];
 
@@ -1262,11 +1267,24 @@ export function applyContextCompacted(
  * Also clears the retrying notice: turn.model_required supersedes any
  * in-flight retry (we've given up on this model).
  */
+export const CREDITS_EXHAUSTED_MESSAGE =
+  "You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going.";
+
 export function applyModelRequired(message: Message, payload: ModelRequiredEventPayload): Message {
-  const humanMessage =
-    typeof payload.message === "string" && payload.message.length > 0
-      ? payload.message
+  const statusCode = typeof payload.status_code === "number" ? payload.status_code : 0;
+  let reason = normaliseReason(payload.reason);
+  const remappedLegacy402 = reason === "fatal" && statusCode === 402;
+  if (remappedLegacy402) {
+    reason = "credits_exhausted";
+  }
+  const defaultMessage =
+    reason === "credits_exhausted"
+      ? CREDITS_EXHAUSTED_MESSAGE
       : "Pick a different model to continue.";
+  const humanMessage =
+    !remappedLegacy402 && typeof payload.message === "string" && payload.message.length > 0
+      ? payload.message
+      : defaultMessage;
   const { retrying: _retrying, ...rest } = message;
   return {
     ...rest,
@@ -1277,9 +1295,9 @@ export function applyModelRequired(message: Message, payload: ModelRequiredEvent
     state: "done",
     failed: true,
     modelRequired: {
-      reason: normaliseReason(payload.reason),
+      reason,
       failedModel: typeof payload.failed_model === "string" ? payload.failed_model : "",
-      statusCode: typeof payload.status_code === "number" ? payload.status_code : 0,
+      statusCode,
       message: humanMessage,
     },
   };

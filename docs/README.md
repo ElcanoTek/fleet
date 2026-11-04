@@ -252,6 +252,7 @@ above fails otherwise.
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)
 - [`CONVERSATION-AUTO-APPROVE.md`](CONVERSATION-AUTO-APPROVE.md) — Per-conversation auto-approve and 24-hour default approval timeout
+- [`CREDITS-EXHAUSTED-NOTICE.md`](CREDITS-EXHAUSTED-NOTICE.md) — Out-of-credits notice (`credits_exhausted`): OpenRouter 402/403 key-limit and upstream quota detection, friendly top-up / licensing card
 - [`CRITICAL-TOOL-ALIASES.md`](CRITICAL-TOOL-ALIASES.md) — Critical tool aliases: one audited action under two tool names (ADR-0071)
 - [`CUTOVER.md`](CUTOVER.md) — v1 → fleet cutover runbook (a box already running the legacy chat + moc stack)
 - [`DASHBOARD-VIEW.md`](DASHBOARD-VIEW.md) — Dashboard view: the chat as a live board of show_ui panels beside a chat rail (`panel` key, `view: "dashboard"`)

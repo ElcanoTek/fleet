@@ -898,6 +898,30 @@ describe("applyModelRequired", () => {
     expect(out.modelRequired?.failedModel).toBe(""); // Default for wrong type
     expect(out.modelRequired?.statusCode).toBe(0); // Default for wrong type
   });
+
+  it("preserves credits_exhausted reason and falls back to the Elcano licensing message", () => {
+    const out = applyModelRequired(assistantMessage(), {
+      reason: "credits_exhausted",
+      failed_model: "anthropic/claude-sonnet-4.6",
+      status_code: 403,
+    });
+    expect(out.modelRequired?.reason).toBe("credits_exhausted");
+    expect(out.modelRequired?.statusCode).toBe(403);
+    expect(out.modelRequired?.message).toContain("licensing@elcanotek.com");
+    expect(out.content).toContain("licensing@elcanotek.com");
+  });
+
+  it("maps a fatal 402 payload to credits_exhausted and replaces legacy message", () => {
+    const out = applyModelRequired(assistantMessage(), {
+      reason: "fatal",
+      failed_model: "anthropic/claude-sonnet-4.6",
+      status_code: 402,
+      message: "The selected model returned an error (HTTP 402). Pick a different model to continue.",
+    });
+    expect(out.modelRequired?.reason).toBe("credits_exhausted");
+    expect(out.modelRequired?.message).toContain("licensing@elcanotek.com");
+    expect(out.content).toContain("licensing@elcanotek.com");
+  });
 });
 
 // A server-reported outcome (#1593) is what the client stamps on a slot whose

@@ -414,3 +414,229 @@ func TestExpiredPromptCacheIsAStreamBlipNotARejection(t *testing.T) {
 		}
 	})
 }
+
+const openRouterKeyLimit403Body = "HTTP/2.0 403 Forbidden\r\nContent-Type: application/json\r\n\r\n" +
+	`{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.","code":403,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove this API key's usage limit at https://openrouter.ai/settings/keys, or use a key without a limit.","scope":"key_limit","limit_usd":1,"spend_usd":1.652338,"resets_at":null}},"user_id":"org_test"}`
+
+const openRouterMaxTokens402Body = "HTTP/2.0 402 Payment Required\r\nContent-Type: application/json\r\n\r\n" +
+	`{"error":{"message":"This request requires more credits, or fewer max_tokens. You requested up to 50000 tokens, but can only afford 40000. To increase, visit https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... and adjust the key's total limit","code":402,"metadata":{"limit_source":"openrouter_key_limit","remedy_hint":"Raise or remove this API key's usage limit at https://openrouter.ai/settings/keys, or use a key without a limit.","provider_name":null}},"user_id":"org_test"}`
+
+func TestCreditsExhaustedClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		err        error
+		wantStatus int
+	}{
+		{
+			name: "OpenRouter 402 payment required",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusPaymentRequired,
+				Title:        "payment required",
+				Message:      "This request requires more credits, or fewer max_tokens.",
+				ResponseBody: []byte(openRouterMaxTokens402Body),
+			},
+			wantStatus: http.StatusPaymentRequired,
+		},
+		{
+			name: "OpenRouter 403 key limit exceeded",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Title:        "forbidden",
+				Message:      "Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.",
+				ResponseBody: []byte(openRouterKeyLimit403Body),
+			},
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "OpenAI 429 insufficient_quota",
+			err: &fantasy.ProviderError{
+				StatusCode:     http.StatusTooManyRequests,
+				Title:          "insufficient_quota",
+				Message:        "You exceeded your current quota, please check your plan and billing details.",
+				ErrorType:      "insufficient_quota",
+				TransientError: true,
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+		{
+			name: "Anthropic 400 credit balance too low",
+			err: &fantasy.ProviderError{
+				StatusCode: http.StatusBadRequest,
+				Title:      "invalid_request_error",
+				Message:    "Your credit balance is too low to access the Anthropic API.",
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "SSE 403 with metadata limit_source only",
+			err:        errors.New(`received error while streaming: {"code":403,"message":"Provider returned error","metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit"}}`),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "first-chunk watchdog expiry after 429 insufficient_quota",
+			err: &firstChunkTimeoutError{
+				promptTokens:     1200,
+				cause:            context.Canceled,
+				providerErr:      true,
+				providerStatus:   http.StatusTooManyRequests,
+				creditsExhausted: true,
+			},
+			wantStatus: http.StatusTooManyRequests,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if !IsCreditsExhaustedError(tc.err) {
+				t.Fatalf("IsCreditsExhaustedError(%v) = false, want true", tc.err)
+			}
+			class, _ := classifyStreamError(tc.err)
+			if class != streamErrorFatal {
+				t.Fatalf("classifyStreamError = %s, want fatal (must not retry or swap to fallback on exhausted key)", class)
+			}
+			reason, status, cancelled := ClassifyStreamErrorReason(tc.err)
+			if cancelled {
+				t.Fatal("cancelled = true, want false")
+			}
+			if reason != ReasonCreditsExhausted {
+				t.Fatalf("reason = %q, want %q", reason, ReasonCreditsExhausted)
+			}
+			if status != tc.wantStatus {
+				t.Fatalf("status = %d, want %d", status, tc.wantStatus)
+			}
+		})
+	}
+
+	// Non-billing 4xx errors with null or unrecognized limit_source must remain
+	// provider rejections rather than being misclassified as credits_exhausted.
+	for _, tc := range []struct {
+		name string
+		err  *fantasy.ProviderError
+	}{
+		{
+			name: "403 with null limit_source",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Message:      "Provider returned error",
+				ResponseBody: []byte(`{"error":{"code":403,"message":"Provider returned error","metadata":{"limit_source":null}}}`),
+			},
+		},
+		{
+			name: "403 with non-billing limit_source",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Message:      "Provider returned error",
+				ResponseBody: []byte(`{"error":{"code":403,"message":"Provider returned error","metadata":{"limit_source":"moderation"}}}`),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if IsCreditsExhaustedError(tc.err) {
+				t.Fatalf("IsCreditsExhaustedError(%v) = true, want false", tc.err)
+			}
+			class, _ := classifyStreamError(tc.err)
+			if class != streamErrorProviderRejected {
+				t.Fatalf("classifyStreamError = %s, want provider_rejected", class)
+			}
+		})
+	}
+
+	t.Run("skips same-provider fallback but promotes cross-provider fallback on credits exhausted", func(t *testing.T) {
+		primary := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+						return nil, &fantasy.ProviderError{
+							StatusCode:   http.StatusForbidden,
+							Message:      "Key limit exceeded (total limit).",
+							ResponseBody: []byte(openRouterKeyLimit403Body),
+						}
+					},
+				},
+				name: "anthropic/claude-sonnet-4.6",
+			},
+			providerName: "openrouter",
+		}
+		sameProviderCalls := int32(0)
+		sameProviderFallback := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+						atomic.AddInt32(&sameProviderCalls, 1)
+						return streamStop()(nil, call)
+					},
+				},
+				name: "openai/gpt-5.4",
+			},
+			providerName: "openrouter",
+		}
+		crossProviderCalls := int32(0)
+		crossProviderFallback := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+						atomic.AddInt32(&crossProviderCalls, 1)
+						return streamStop()(nil, call)
+					},
+				},
+				name: "anthropic/claude-sonnet-4.6",
+			},
+			providerName: "anthropic-direct",
+		}
+
+		e := newMockEngine(t, primary)
+		e.fallbackModels = []fantasy.LanguageModel{sameProviderFallback, crossProviderFallback}
+		e.fallbackModel = e.fallbackModels[0]
+		buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+			return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+		}
+
+		out, err := e.streamRoundWithResilience(
+			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
+		)
+		if err != nil {
+			t.Fatalf("expected cross-provider fallback to succeed, got %v", err)
+		}
+		if !out.swappedToFallback || fleetProviderName(out.activeModel) != "anthropic-direct" {
+			t.Fatalf("swapped=%v provider=%q, want anthropic-direct", out.swappedToFallback, fleetProviderName(out.activeModel))
+		}
+		if got := atomic.LoadInt32(&sameProviderCalls); got != 0 {
+			t.Fatalf("same-provider fallback called %d times, want 0", got)
+		}
+		if got := atomic.LoadInt32(&crossProviderCalls); got != 1 {
+			t.Fatalf("cross-provider fallback called %d times, want 1", got)
+		}
+	})
+
+	t.Run("aborts Fantasy inner retry loop immediately on 429 insufficient_quota", func(t *testing.T) {
+		primaryCalls := int32(0)
+		primary := &namedMockModel{
+			mockModel: mockModel{
+				streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+					atomic.AddInt32(&primaryCalls, 1)
+					return nil, &fantasy.ProviderError{
+						StatusCode:     http.StatusTooManyRequests,
+						Title:          "insufficient_quota",
+						Message:        "You exceeded your current quota, please check your plan and billing details.",
+						ErrorType:      "insufficient_quota",
+						TransientError: true,
+					}
+				},
+			},
+			name: "openai/gpt-5.4",
+		}
+		e := newMockEngine(t, primary)
+		buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+			return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+		}
+		_, err := e.streamRoundWithResilience(
+			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
+		)
+		if !IsCreditsExhaustedError(err) {
+			t.Fatalf("expected credits-exhausted error, got %v", err)
+		}
+		if got := atomic.LoadInt32(&primaryCalls); got != 1 {
+			t.Fatalf("primary called %d times, want 1 (inner retry loop must stop immediately)", got)
+		}
+	})
+}
