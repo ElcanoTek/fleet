@@ -157,6 +157,11 @@ export function LaunchpadButton({
   }, [wizardOpen, menuOpen]);
 
   const openWizard = useCallback(() => {
+    // Opened from the menu, the focused item unmounts in the same commit as
+    // the dialog mounts, so the dialog would record the page body as its
+    // opener and lose the focus on close. Put the focus on the rail item
+    // first: closing the wizard then hands it back there.
+    anchorRef.current?.focus();
     setMenuOpen(false);
     setWizardOpen(true);
     onOpen?.();

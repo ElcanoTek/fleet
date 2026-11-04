@@ -110,6 +110,15 @@ describe("LaunchpadButton", () => {
     expect(fn).toHaveBeenCalledTimes(3);
   });
 
+  it("opening the wizard from the menu leaves the focus on the Patrols item, for the dialog to return to", async () => {
+    stubPatrols([{ id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "x", cron: "0 * * * *", status: "active" }]);
+    render(<LaunchpadButton />);
+    fireEvent.click(screen.getByTestId("launchpad-button"));
+    fireEvent.click(await screen.findByTestId("patrols-menu-new"));
+    await screen.findByTestId("patrol-launchpad");
+    expect(document.activeElement).toBe(screen.getByTestId("launchpad-button"));
+  });
+
   it("has no dot for someone who has opened it before", () => {
     window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
     stubPatrols([]);

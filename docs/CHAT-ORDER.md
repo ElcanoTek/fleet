@@ -40,8 +40,9 @@ left out on purpose.
   existing drag of a chat into a project.
 - Only one scope is in reorder mode at a time.
 - **Who is offered it.** The mode is offered for 2 to 500 chats in a scope;
-  500 is the server's cap. It is not offered to a read-only `viewer` account,
-  whose writes are refused (the role comes from `GET /api/me`).
+  500 is the server's cap. It is offered only once `GET /api/me` has confirmed
+  a role other than `viewer`, whose writes are refused. While the role is
+  unknown (still loading, or unreadable) no mode is offered.
 
 ### Storage and API
 
@@ -83,9 +84,14 @@ left out on purpose.
 - **Saving.** Moves apply at once and their saves run one after another, so a
   quick run of moves reaches the server in the order it was made. Reads and
   moves share a generation counter, so a slow first read cannot overwrite a
-  move made while it was in flight. A refused save re-reads the server's
-  orders, so the rail never shows an order that was not kept. The first read
-  is best-effort: if it fails, every scope stays most recent first.
+  move made while it was in flight.
+- **Recovering from a failed save.** Each PUT carries a scope's whole list, so
+  once the queue drains the server holds what the last successful save sent.
+  The rail re-reads the server's orders only if the last save for some scope
+  failed, and only when the queue is empty. A recovery read can therefore
+  never land between a failed save and a later queued one and undo that move.
+- **First read.** It is best-effort: if it fails, every scope stays most recent
+  first.
 
 ## Deliberately not done
 
@@ -128,7 +134,9 @@ left out on purpose.
 - `web/e2e/mocked/chat-order.spec.ts`:
   - the saved order on screen, and arrow and real-drag moves with their PUTs;
   - a slow first read not undoing a move;
-  - no mode for a viewer;
+  - no mode for a viewer, or while the role is unreadable;
+  - a failed save followed by a queued move keeping the later move, with no
+    recovery read;
   - `Esc` leaving the mode without closing the narrow-screen rail overlay;
   - project reorder from its menu, with focus returned;
   - the Temporary sort, remembered across a reload;

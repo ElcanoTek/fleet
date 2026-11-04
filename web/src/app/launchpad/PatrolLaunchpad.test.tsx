@@ -27,7 +27,10 @@ type Opts = {
   // launch-time re-read); beyond the list, reads succeed.
   catalogLater?: ("ok" | "fail")[];
   pin?: "ok" | "fail";
-  runNow?: "ok" | "fail";
+  // "drop": the request never gets an answer (a lost connection).
+  runNow?: "ok" | "fail" | "drop";
+  // How many times DELETE of the half-created chat fails before it works.
+  deleteFailures?: number;
   tools?: "ok" | "fail";
   memories?: unknown[];
   hangConversation?: boolean;
@@ -96,6 +99,11 @@ function mockApi(opts: Opts = {}) {
     }
     if (url.endsWith("/mcp-servers") && method === "POST" && opts.tools === "fail") {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "tools down" };
+    }
+    if (url.endsWith("/run-now") && opts.runNow === "drop") throw new TypeError("Failed to fetch");
+    if (url === "/api/conversations/conv-9" && method === "DELETE" && (opts.deleteFailures ?? 0) > 0) {
+      opts.deleteFailures = (opts.deleteFailures ?? 0) - 1;
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
     }
     if (url.endsWith("/run-now") && opts.runNow === "fail") {
       return { ok: false, status: 429, json: async () => ({}), text: async () => "queue full" };
@@ -560,5 +568,31 @@ describe("PatrolLaunchpad", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
+  });
+
+  it("keeps the dialog open, and retries, when the rollback itself fails", async () => {
+    const onClose = vi.fn();
+    const calls = mockApi({ tools: "fail", deleteFailures: 1 });
+    await walkToLaunch(calls, onClose);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("tools down");
+    // First close: the DELETE fails, so the dialog stays and says what is left.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("Couldn’t remove the half-created patrol chat"));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Open the chat" })).toBeTruthy();
+    // Second close retries, succeeds, and closes.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(calls.filter((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toHaveLength(2);
+  });
+
+  it("does not suggest Run now when the first run's answer was lost", async () => {
+    const calls = mockApi({ runNow: "drop" });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    const note = await screen.findByTestId("launchpad-first-run-unknown");
+    expect(note.textContent).toContain("couldn’t confirm its first check started");
+    expect(screen.queryByTestId("launchpad-first-run-refused")).toBeNull();
   });
 });

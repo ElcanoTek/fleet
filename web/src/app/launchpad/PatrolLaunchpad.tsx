@@ -159,7 +159,9 @@ type LaunchState = {
   error?: string;
   conversationId?: string;
   // How the first check went once the patrol was armed.
-  firstRun?: "running" | "refused" | "skipped";
+  // "unknown": the run-now request got no answer at all, so it may or may
+  // not have started — the copy must not invite a second, duplicate run.
+  firstRun?: "running" | "refused" | "skipped" | "unknown";
 };
 const LAUNCH_PHASES: { id: LaunchPhase; label: string }[] = [
   { id: "conversation", label: "Opening the patrol chat" },
@@ -435,7 +437,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         const runRes = await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}/run-now`, {
           method: "POST",
         }).catch(() => null);
-        firstRun = runRes?.ok ? "running" : "refused";
+        firstRun = runRes === null ? "unknown" : runRes.ok ? "running" : "refused";
       }
       try {
         window.sessionStorage.removeItem(progressItem());
@@ -458,21 +460,44 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // a retry never leaves an orphaned chat — or an armed patrol — behind. The
   // schedule is cancelled first: on a deployment that soft-deletes
   // conversations, deleting the chat alone would not remove it.
-  const backToPlan = async () => {
+  // Each step counts as done when the server confirms it, or says the thing
+  // is already gone (404). Anything else keeps what is left in `created` and
+  // shows an error, so Back to the plan (or closing) tries again rather than
+  // forgetting a chat — or an armed patrol — it could not remove.
+  const backToPlan = async (): Promise<boolean> => {
     const { conversationId, scheduleId } = created.current;
+    const settled = (res: Response | null) => res !== null && (res.ok || res.status === 404);
     if (conversationId) {
       const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
       if (scheduleId) {
-        await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}`, {
+        const res = await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action: "cancel" }),
-        }).catch(() => undefined);
+        }).catch(() => null);
+        if (!settled(res)) {
+          setLaunch((cur) => ({
+            ...(cur ?? { phase: "schedule" }),
+            error: "Couldn’t stop the half-launched patrol. Try again, or open the chat and stop it from the Patrol bar.",
+            conversationId,
+          }));
+          return false;
+        }
+        created.current = { conversationId, scheduleId: "" };
       }
-      await fetch(base, { method: "DELETE" }).catch(() => undefined);
+      const res = await fetch(base, { method: "DELETE" }).catch(() => null);
+      if (!settled(res)) {
+        setLaunch((cur) => ({
+          ...(cur ?? { phase: "conversation" }),
+          error: "Couldn’t remove the half-created patrol chat. Try again, or open it and delete it from Chat.",
+          conversationId,
+        }));
+        return false;
+      }
     }
     created.current = { conversationId: "", scheduleId: "" };
     setLaunch(null);
+    return true;
   };
 
   // While requests are in flight the dialog cannot be dismissed: closing it
@@ -486,7 +511,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     // as Back to the plan does — dismissal must not leave a chat (or an
     // armed patrol) behind.
     if (launch?.error && created.current.conversationId) {
-      void backToPlan().finally(onClose);
+      // Close only once the rollback is confirmed; if it is not, the dialog
+      // stays open on the error, which says what is left and how to retry.
+      void backToPlan().then((ok) => {
+        if (ok) onClose();
+      });
       return;
     }
     onClose();
@@ -1780,6 +1809,11 @@ function LaunchProgress({
                 <>
                   <strong className="text-[var(--color-text-primary)]">{title}</strong> is running its first check right now.
                 </>
+              ) : launch.firstRun === "unknown" ? (
+                <span data-testid="launchpad-first-run-unknown">
+                  <strong className="text-[var(--color-text-primary)]">{title}</strong> is armed. We couldn’t confirm its
+                  first check started — open the chat to see whether it is running before you press <strong>Run now</strong>.
+                </span>
               ) : (
                 <span data-testid="launchpad-first-run-refused">
                   <strong className="text-[var(--color-text-primary)]">{title}</strong> is armed, but its first check could

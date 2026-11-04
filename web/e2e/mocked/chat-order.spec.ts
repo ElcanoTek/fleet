@@ -39,12 +39,19 @@ async function setup(
     holdFirstRead?: Promise<void>;
     waitForPinned?: boolean;
     projectOrder?: string[];
+    // /api/me answers 500, so the role stays unknown.
+    meFails?: boolean;
+    // The first PUT waits for this, then fails with a 500.
+    holdThenFailFirstPut?: Promise<void>;
   } = {},
 ) {
   const puts: Put[] = [];
+  const reads = { n: 0 };
   await mockChatBoot(page);
   await page.route("**/api/me", (r: Route) =>
-    r.fulfill({ json: { email: "e2e@example.com", role: opts.role ?? "member" } }),
+    opts.meFails
+      ? r.fulfill({ status: 500, body: "down" })
+      : r.fulfill({ json: { email: "e2e@example.com", role: opts.role ?? "member" } }),
   );
   await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [PROJECT] } }));
   await page.route("**/api/conversations", (r: Route) =>
@@ -65,6 +72,11 @@ async function setup(
     if (r.request().method() === "PUT") {
       const body = r.request().postDataJSON() as { scope: string; conversation_ids: string[] };
       puts.push({ scope: body.scope, ids: body.conversation_ids });
+      if (opts.holdThenFailFirstPut) {
+        const hold = opts.holdThenFailFirstPut;
+        opts.holdThenFailFirstPut = undefined;
+        return hold.then(() => r.fulfill({ status: 500, body: "down" }));
+      }
       return r.fulfill({ json: { scope: body.scope, conversation_ids: body.conversation_ids } });
     }
     if (opts.holdFirstRead) {
@@ -72,6 +84,7 @@ async function setup(
       opts.holdFirstRead = undefined;
       return hold.then(() => r.fulfill({ json: orders() }));
     }
+    reads.n++;
     return r.fulfill({ json: orders() });
   });
   await page.goto("/chat");
@@ -80,7 +93,7 @@ async function setup(
   } else {
     await page.getByTestId("pinned-section").waitFor({ timeout: 15_000 });
   }
-  return puts;
+  return Object.assign(puts, { reads });
 }
 
 test.beforeEach(async ({ context }) => {
@@ -133,6 +146,34 @@ test("a slow first read of the saved order does not undo a move made meanwhile",
   await page.waitForTimeout(300);
   const items = page.getByTestId("chat-reorder-list").locator("li");
   await expect(items).toHaveText([/Omnicom Pacing/, /Acme Renewal/, /Deal Desk Daily/]);
+});
+
+test("Reorder waits for the account role: an unreadable role offers no mode", async ({ page }) => {
+  await setup(page, [], { meFails: true });
+  await expect(page.getByTestId("pinned-section")).toContainText("Acme Renewal");
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId("pinned-reorder-toggle")).toHaveCount(0);
+});
+
+test("a failed save followed by a queued move keeps the later move (no stale recovery)", async ({ page }) => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  const puts = await setup(page, [], { holdThenFailFirstPut: held });
+  const readsBefore = puts.reads.n;
+  await page.getByTestId("pinned-reorder-toggle").click();
+  const list = page.getByTestId("chat-reorder-list");
+  // Newest first: Acme, Omnicom, Deal Desk. Move 1 (its PUT will fail):
+  await list.getByRole("button", { name: "Move Omnicom Pacing up" }).click();
+  // Move 2, queued behind move 1's save:
+  await list.getByRole("button", { name: "Move Deal Desk Daily up" }).click();
+  release(); // move 1's save fails now; move 2's save then succeeds
+  await expect.poll(() => puts.length).toBe(2);
+  await page.waitForTimeout(300);
+  // The rail keeps move 2's order — the one the server now holds — and no
+  // recovery read was made, since the last save succeeded.
+  await expect(list.locator("li")).toHaveText([/Omnicom Pacing/, /Deal Desk Daily/, /Acme Renewal/]);
+  expect(puts.at(-1)?.ids).toEqual(["c2", "c3", "c1"]);
+  expect(puts.reads.n).toBe(readsBefore);
 });
 
 test("a read-only viewer is not offered Reorder", async ({ page }) => {

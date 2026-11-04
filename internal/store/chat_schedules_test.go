@@ -214,3 +214,46 @@ func TestListUserPatrols(t *testing.T) {
 		t.Errorf("second row should be the paused patrol, got %+v", got[1])
 	}
 }
+
+// TestListUserPatrols_UsesItsIndex pins that the per-user patrols query can
+// be served by idx_chat_schedules_user_patrols (migration 096): its WHERE
+// clause must keep implying the partial index's predicate, or a later edit to
+// either would silently fall back to filtering every user's schedules.
+// Sequential scans are disabled for the check, since a tiny test table would
+// otherwise be scanned regardless.
+func TestListUserPatrols_UsesItsIndex(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.QueryContext(ctx,
+		`EXPLAIN SELECT cs.id FROM chat_schedules cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.user_email = $1
+		    AND c.deleted_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')
+		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
+		  LIMIT 100 OFFSET 0`, "someone@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line + "\n")
+	}
+	if !strings.Contains(plan.String(), "idx_chat_schedules_user_patrols") {
+		t.Errorf("the patrols query does not use its index:\n%s", plan.String())
+	}
+}

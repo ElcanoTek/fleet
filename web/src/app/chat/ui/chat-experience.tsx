@@ -3674,8 +3674,10 @@ export function ChatExperience({
     }
   }, []);
   // A read-only viewer cannot save an order (every write is refused for the
-  // role), so the rail does not offer the mode to one.
-  const [accountViewer, setAccountViewer] = useState(false);
+  // role), so the rail offers the mode only once the role is KNOWN not to be
+  // a viewer: undefined until /api/me answers, and an unreadable role stays
+  // unknown (no mode) rather than defaulting to writable.
+  const [accountRole, setAccountRole] = useState<string | undefined>(undefined);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
@@ -3686,29 +3688,45 @@ export function ChatExperience({
         const res = await fetch("/api/me", { cache: "no-store" });
         if (!res.ok) return;
         const me = (await res.json()) as { role?: string };
-        if (!cancelled) setAccountViewer(me.role === "viewer");
+        if (!cancelled && typeof me.role === "string") setAccountRole(me.role);
       } catch {
-        // Unknown role: the server still refuses a viewer's write.
+        // Unknown role: no reorder mode is offered.
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [loadChatOrders]);
+  // Saves run in a queue. Each PUT carries a scope's WHOLE list, so after the
+  // queue drains the server holds, per scope, whatever the last save that
+  // succeeded sent. The rail and the server can therefore only disagree if
+  // the LAST save for some scope failed, and only then is the server's order
+  // re-read — once the queue is empty, so a recovery read can never land
+  // between a failed save and a later queued one and overwrite that move.
   const chatOrderSaves = useRef<Promise<unknown>>(Promise.resolve());
+  const chatOrderQueued = useRef(0);
+  const chatOrderLastFailed = useRef(new Map<string, boolean>());
   const reorderChats = useCallback(
     (scope: string, ids: string[]) => {
       chatOrderGen.current++;
       setChatOrders((cur) => ({ ...cur, [scope]: ids }));
+      chatOrderQueued.current++;
       chatOrderSaves.current = chatOrderSaves.current.then(async () => {
+        let ok = false;
         try {
           const res = await fetch("/api/conversations/order", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope, conversation_ids: ids }),
           });
-          if (!res.ok) throw new Error(String(res.status));
+          ok = res.ok;
         } catch {
+          ok = false;
+        }
+        chatOrderLastFailed.current.set(scope, !ok);
+        chatOrderQueued.current--;
+        if (chatOrderQueued.current === 0 && [...chatOrderLastFailed.current.values()].some(Boolean)) {
+          chatOrderLastFailed.current.clear();
           await loadChatOrders();
         }
       });
@@ -6788,7 +6806,7 @@ export function ChatExperience({
           streamingConvs={streamingConvs}
           togglePin={togglePin}
           chatOrders={chatOrders}
-          onReorderChats={accountViewer ? undefined : reorderChats}
+          onReorderChats={accountRole !== undefined && accountRole !== "viewer" ? reorderChats : undefined}
           recentSort={recentSort}
           onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}

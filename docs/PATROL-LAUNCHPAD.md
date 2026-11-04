@@ -22,9 +22,11 @@ from the rail into the account menu, beside Settings.
 **Patrols live in Chat; the rail item is their index.** A click reads
 `GET /api/patrols` (the caller's active and paused recurring patrols across
 their own non-deleted chats, each with its chat title; `store.ListUserPatrols`,
-capped at 100). With none, it opens the wizard; with some, a menu lists them —
+capped at 100, served by the partial index `idx_chat_schedules_user_patrols`
+from migration 096, which `TestListUserPatrols_UsesItsIndex` pins). With none, it opens the wizard; with some, a menu lists them —
 name, chat, cadence, *Paused* — each opening its chat, with **New patrol** at
-the bottom. The wizard says where a patrol lives (in Chat, under its name, with
+the bottom. Opening the wizard from that menu leaves the focus on the Patrols
+item, so closing the wizard returns it there. The wizard says where a patrol lives (in Chat, under its name, with
 the Patrol bar on top) on its Plan and Launch steps and on the success screen. The wizard is portalled to `document.body` (the phone drawer is a
 transformed element) and opens on the rail's dialog layer.
 
@@ -72,12 +74,19 @@ draft in place and says so.
 
 **Launch is careful about partial outcomes.** The dialog cannot be dismissed
 while launch requests are in flight. If a step fails after the chat was
-created, **Back to the plan** cancels any schedule it armed and deletes that
-chat, so a retry never leaves an orphan (or an armed patrol) behind. If the
+created, **Back to the plan** (or closing the dialog) cancels any schedule it
+armed and deletes that chat, so a retry never leaves an orphan (or an armed
+patrol) behind. Each undo step counts only when the server confirms it (or
+says the thing is already gone). If one fails, the dialog stays open on an
+error saying what is left, keeps it, and tries again on the next Back or
+close; **Open the chat** stays available. If the
 connector catalog never loaded, launch leaves the connector set the server
 seeded at creation instead of replacing it with an empty one. A refused first
 run (a full queue, say) is reported on the success screen — the patrol is
-armed and runs at its next time — rather than claimed as running. A
+armed and runs at its next time — rather than claimed as running. A first-run
+request that got no answer at all is reported as unconfirmed, and the copy
+says to check the chat before pressing **Run now**, so a lost response never
+invites a duplicate run. A
 non-negotiable that saved but could not be pinned says so.
 
 **Read-only viewers** (`GET /api/me` role `viewer`, newly routed through the
