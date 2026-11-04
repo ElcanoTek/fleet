@@ -89,6 +89,16 @@ func (h *Handlers) headerTrustUser(w http.ResponseWriter, r *http.Request) (*mod
 		writeError(w, http.StatusInternalServerError, "Membership check failed")
 		return nil, true
 	}
+	if (user == nil || user.Role == "readonly") && isPromptLibraryPath(r.URL.Path) {
+		chatUser, chatErr := h.lookupChatMemberForPrompts(r.Context(), email)
+		if chatErr != nil {
+			writeError(w, http.StatusInternalServerError, "Membership check failed")
+			return nil, true
+		}
+		if user == nil || (chatUser != nil && chatUser.Role != "readonly") {
+			user = chatUser
+		}
+	}
 	if user == nil {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": "not_a_member"})
 		return nil, true

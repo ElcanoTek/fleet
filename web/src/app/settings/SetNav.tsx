@@ -23,6 +23,11 @@ const SECTIONS = [
   { href: "/settings/connections", label: "Connections" },
   { href: "/settings/skills", label: "Skills" },
   { href: "/settings/personas", label: "Personas" },
+  { href: "/settings/memories", label: "Memories" },
+  // Shared between Chat and the Operations Center: /api/orchestrator/prompts
+  // authorizes signed-in Chat members via ChatMemberRoleProvider even when
+  // their independent Operations role (ops_role) is "none".
+  { href: "/settings/prompts", label: "Prompts" },
   // Member-visible on purpose: the page itself adapts (read-only library for
   // members, manage controls for admins) — NOT an ADMIN_SUBS entry.
   { href: "/settings/shared-files", label: "Shared files" },

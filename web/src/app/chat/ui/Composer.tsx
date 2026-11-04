@@ -289,6 +289,11 @@ export type ComposerProps = {
   } | null;
   shareTeam?: string;
   shareBusy?: boolean;
+
+  // Memories & turn details (relocated from top header into More options).
+  onOpenMemories?: () => void;
+  showDetails?: boolean;
+  onToggleShowDetails?: () => void;
 };
 
 export function Composer({
@@ -368,8 +373,10 @@ export function Composer({
   activePatrolCount = 0,
   onOpenShare,
   shareConversation,
-  shareTeam,
   shareBusy = false,
+  onOpenMemories,
+  showDetails = false,
+  onToggleShowDetails,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
   // - `isComposerFocused` drives the keyboard-hint line under the composer:
@@ -1312,15 +1319,65 @@ export function Composer({
                 contextUsage?.fraction != null
                   ? Math.min(999, Math.round(contextUsage.fraction * 100))
                   : null;
+              const isMultiplayer = Boolean(shareConversation?.multiplayer);
+              const isTeamShared = Boolean(
+                shareConversation?.team_visible && !shareConversation?.multiplayer,
+              );
+              const isLinkShared = Boolean(
+                shareConversation?.share_token &&
+                  !shareConversation?.team_visible &&
+                  !shareConversation?.multiplayer,
+              );
+              const isSharedAny =
+                Boolean(onOpenShare) &&
+                (isMultiplayer || isTeamShared || isLinkShared);
+              // A public link can sit beside team or multiplayer sharing; it
+              // is never hidden behind them (anyone with the URL can read).
+              const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
+              const linkSuffix = alsoLink ? " and by public link" : "";
+              const shareAriaLabel = isMultiplayer
+                ? `Multiplayer${linkSuffix} — open sharing`
+                : isTeamShared
+                  ? `Shared with your team${linkSuffix} — open sharing`
+                  : isLinkShared
+                    ? "Public link — open sharing"
+                    : "Share this chat";
+              const shareTipText = isMultiplayer
+                ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
+                : isTeamShared
+                  ? `Shared with your team${linkSuffix} — click to manage sharing`
+                  : isLinkShared
+                    ? "Public link active — click to manage sharing"
+                    : "Share this chat or start multiplayer";
+              const shareDisabled =
+                shareBusy ||
+                isStreaming ||
+                isUploadingAttachments ||
+                ((activeConversationId === null ||
+                  isPendingKey(activeConversationId)) &&
+                  messages.length > 0);
+              const triggerShare = () => {
+                if (moreMenuOpen) {
+                  setMoreMenuOpen(false);
+                  moreButtonRef.current?.focus();
+                }
+                setMcpPickerOpen(false);
+                setToolsLibrary(null);
+                setPersonaPickerOpen(false);
+                setModelPickerOpen(false);
+                setPatrolPopoverOpen(false);
+                onOpenShare?.();
+              };
               const hasActiveSecondary =
                 isAutoApprove ||
                 activePatrolCount > 0 ||
-                (!personaLocked && isNonDefaultPersona);
+                (!personaLocked && isNonDefaultPersona) ||
+                isSharedAny;
               return (
                 <>
                   {/* Overflow menu ("More options"): consolidates Prompt library,
-                      Persona, Patrol schedule, Auto-approve tools, Compact, and
-                      Send on Enter into a clean labeled popover so the primary
+                      Persona, Patrol schedule, Share, Auto-approve tools, Compact,
+                      and Send on Enter into a clean labeled popover so the primary
                       composer bar stays calm on both mobile and desktop. */}
                   <div
                     ref={moreMenuRef}
@@ -1401,7 +1458,7 @@ export function Composer({
                         data-testid="composer-more-popover"
                         role="menu"
                         aria-label="More composer options"
-                        className={`${COMPOSER_POP_WIDE} sm:w-[20.5rem]`}
+                        className={`${COMPOSER_POP_WIDE} max-h-[min(75vh,30rem)] overflow-y-auto sm:w-[20.5rem]`}
                       >
                         <button
                           type="button"
@@ -1453,6 +1510,100 @@ export function Composer({
                             <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-2 py-0.5 text-[0.7rem] font-medium text-[var(--color-text-secondary)]">
                               <span className="max-w-[6.5rem] truncate">{currentPersonaLabel}</span>
                               <Icon name="chevron-right" className="size-3" />
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {onOpenMemories ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="composer-memories-button"
+                            aria-label="Manage memories"
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
+                              onOpenMemories();
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="brain" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Memories</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Saved facts and team learnings
+                                </span>
+                              </span>
+                            </span>
+                            <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+                          </button>
+                        ) : null}
+
+                        {onOpenShare || (onStartPatrol && !sealed) || toggleAutoApprove || canCompact ? (
+                          <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
+                        ) : null}
+
+                        {onOpenShare ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="composer-share-button"
+                            disabled={shareDisabled}
+                            aria-label={shareAriaLabel}
+                            className={`${POP_ROW} disabled:opacity-40`}
+                            onClick={triggerShare}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span
+                                className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${
+                                  isSharedAny
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                                    : "bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]"
+                                }`}
+                              >
+                                {isMultiplayer || isTeamShared ? (
+                                  <TeamGlyph className="size-3.5 shrink-0" />
+                                ) : isLinkShared ? (
+                                  <ShareGlyph className="size-3.5 shrink-0" />
+                                ) : (
+                                  <Icon name="external-link" className="size-3.5 shrink-0" />
+                                )}
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Share this chat</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  {isMultiplayer
+                                    ? `Multiplayer active${alsoLink ? " · public link on" : ""}`
+                                    : isTeamShared
+                                      ? `Shared with your team${alsoLink ? " · public link on" : ""}`
+                                      : isLinkShared
+                                        ? "Public link active — anyone with the link can read"
+                                        : "Share with your team, by link, or start multiplayer"}
+                                </span>
+                              </span>
+                            </span>
+                            <span
+                              className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                isSharedAny
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {isMultiplayer ? (
+                                "Multiplayer"
+                              ) : isTeamShared ? (
+                                "Shared"
+                              ) : isLinkShared ? (
+                                "Link on"
+                              ) : (
+                                <>
+                                  <span>Only you</span>
+                                  <Icon name="chevron-right" className="size-3" />
+                                </>
+                              )}
                             </span>
                           </button>
                         ) : null}
@@ -1570,41 +1721,50 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        <button
-                          type="button"
-                          role="menuitemcheckbox"
-                          aria-checked={sendOnEnter}
-                          aria-label={
-                            sendOnEnter
-                              ? "Send on Enter (click to switch to Ctrl+Enter)"
-                              : "Send on Ctrl+Enter (click to switch to Enter)"
-                          }
-                          className={POP_ROW}
-                          onClick={() => setSendOnEnter((v) => !v)}
-                        >
-                          <span className="flex min-w-0 items-center gap-2.5">
-                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
-                              <Icon name="return-key" className="size-3.5" />
-                            </span>
-                            <span className="grid min-w-0">
-                              <span className={POP_TITLE}>Send on Enter</span>
-                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                {sendOnEnter
-                                  ? "Enter sends · Shift+Enter adds a line"
-                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                        <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
+
+                        {onToggleShowDetails ? (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={showDetails}
+                            data-testid="composer-details-toggle"
+                            aria-label={
+                              showDetails
+                                ? "Hide details (thinking, stats, tool calls)"
+                                : "Show details (thinking, stats, tool calls)"
+                            }
+                            className={POP_ROW}
+                            onClick={() => onToggleShowDetails()}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span
+                                className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${
+                                  showDetails
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                                    : "bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]"
+                                }`}
+                              >
+                                <Icon name={showDetails ? "info" : "sparkles"} className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Show details</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Thinking, tool calls, and turn stats
+                                </span>
                               </span>
                             </span>
-                          </span>
-                          <span
-                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
-                              sendOnEnter
-                                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                                : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
-                            }`}
-                          >
-                            {sendOnEnter ? "On" : "Off"}
-                          </span>
-                        </button>
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                showDetails
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {showDetails ? "On" : "Off"}
+                            </span>
+                          </button>
+                        ) : null}
 
                         {onToggleDashboardView ? (
                           <button
@@ -1640,6 +1800,42 @@ export function Composer({
                             </span>
                           </button>
                         ) : null}
+
+                        <button
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={sendOnEnter}
+                          aria-label={
+                            sendOnEnter
+                              ? "Send on Enter (click to switch to Ctrl+Enter)"
+                              : "Send on Ctrl+Enter (click to switch to Enter)"
+                          }
+                          className={POP_ROW}
+                          onClick={() => setSendOnEnter((v) => !v)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="return-key" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>Send on Enter</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                {sendOnEnter
+                                  ? "Enter sends · Shift+Enter adds a line"
+                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                              </span>
+                            </span>
+                          </span>
+                          <span
+                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                              sendOnEnter
+                                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                            }`}
+                          >
+                            {sendOnEnter ? "On" : "Off"}
+                          </span>
+                        </button>
                       </div>
                     ) : null}
                   </div>
@@ -1870,7 +2066,7 @@ export function Composer({
                   {/* Active Auto-approve indicator: shown directly on the desktop toolbar when
                       Auto-approve is ON so the user always sees it at a glance and can
                       turn it off in a single tap (on phone viewports More options carries
-                      the active dot and toggle to avoid crowding Share/Send). */}
+                      the active dot and toggle to avoid crowding Send). */}
                   {toggleAutoApprove && isAutoApprove ? (
                     <button
                       type="button"
@@ -1885,101 +2081,54 @@ export function Composer({
                       <span className="sr-only">Auto-approve on</span>
                     </button>
                   ) : null}
+
+                  {/* Active Share indicator: shown directly on the desktop toolbar only when
+                      the chat is actively shared or in Multiplayer mode so the user sees who
+                      can read/participate at a glance (when private, Share stays inside More
+                      options so the primary bar isn't cluttered). */}
+                  {isSharedAny ? (
+                    <button
+                      type="button"
+                      data-testid={
+                        moreMenuOpen
+                          ? "composer-share-indicator"
+                          : "composer-share-button"
+                      }
+                      disabled={shareDisabled}
+                      aria-label={shareAriaLabel}
+                      data-tip-top={shareTipText}
+                      onClick={triggerShare}
+                      className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
+                    >
+                      {isMultiplayer || isTeamShared ? (
+                        <TeamGlyph className="size-4 shrink-0" />
+                      ) : (
+                        <ShareGlyph className="size-4 shrink-0" />
+                      )}
+                      {alsoLink ? (
+                        <span
+                          aria-hidden="true"
+                          data-testid="composer-share-link-badge"
+                          className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
+                        >
+                          <ShareGlyph className="size-[0.55rem]" />
+                        </span>
+                      ) : null}
+                      {isMultiplayer ? (
+                        <span
+                          aria-hidden="true"
+                          data-testid="composer-share-multiplayer-dot"
+                          className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
+                        />
+                      ) : null}
+                    </button>
+                  ) : null}
                 </>
               );
             })()}
           </div>
 
           <div className="flex shrink-0 items-center gap-[0.35rem]">
-            {onOpenShare ? (
-              (() => {
-                const isMultiplayer = Boolean(shareConversation?.multiplayer);
-                const isTeamShared = Boolean(
-                  shareConversation?.team_visible && !shareConversation?.multiplayer,
-                );
-                const isLinkShared = Boolean(
-                  shareConversation?.share_token &&
-                    !shareConversation?.team_visible &&
-                    !shareConversation?.multiplayer,
-                );
-                const isSharedAny = isMultiplayer || isTeamShared || isLinkShared;
-                // A public link can sit beside team or multiplayer sharing; it
-                // is never hidden behind them (anyone with the URL can read).
-                const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
-                const linkSuffix = alsoLink ? " and by public link" : "";
-                const ariaLabel = isMultiplayer
-                  ? `Multiplayer${linkSuffix} — open sharing`
-                  : isTeamShared
-                    ? shareTeam
-                      ? `Shared with ${shareTeam}${linkSuffix} — open sharing`
-                      : `Shared with team${linkSuffix} — open sharing`
-                    : isLinkShared
-                      ? "Public link — open sharing"
-                      : "Share this chat";
-                const tipText = isMultiplayer
-                  ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
-                  : isTeamShared
-                    ? `Shared with your team${linkSuffix} — click to manage sharing`
-                    : isLinkShared
-                      ? "Public link active — click to manage sharing"
-                      : "Share this chat or start multiplayer";
-                return (
-                  <button
-                    type="button"
-                    data-testid="composer-share-button"
-                    disabled={
-                      shareBusy ||
-                      isStreaming ||
-                      isUploadingAttachments ||
-                      ((activeConversationId === null ||
-                        isPendingKey(activeConversationId)) &&
-                        messages.length > 0)
-                    }
-                    aria-label={ariaLabel}
-                    data-tip-top={tipText}
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      setMcpPickerOpen(false);
-                      setToolsLibrary(null);
-                      setPersonaPickerOpen(false);
-                      setModelPickerOpen(false);
-                      setPatrolPopoverOpen(false);
-                      onOpenShare();
-                    }}
-                    // Icon-only, like the toolbar's other controls: the glyph
-                    // says who can see the chat (people = team / multiplayer,
-                    // chain = public link, arrow = private), the accent tint
-                    // says it is shared, and a dot marks multiplayer. The
-                    // label and tooltip carry the words.
-                    className={`${TOOL_BTN} ${isSharedAny ? TOOL_BTN_ACTIVE : ""}`}
-                  >
-                    {isMultiplayer || isTeamShared ? (
-                      <TeamGlyph className="size-4 shrink-0" />
-                    ) : isLinkShared ? (
-                      <ShareGlyph className="size-4 shrink-0" />
-                    ) : (
-                      <Icon name="external-link" className="size-[0.95rem] shrink-0" />
-                    )}
-                    {alsoLink ? (
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-share-link-badge"
-                        className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
-                      >
-                        <ShareGlyph className="size-[0.55rem]" />
-                      </span>
-                    ) : null}
-                    {isMultiplayer ? (
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-share-multiplayer-dot"
-                        className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
-                      />
-                    ) : null}
-                  </button>
-                );
-              })()
-            ) : null}
             {isStreaming ? (
               <button
                 aria-label="Stop generating"

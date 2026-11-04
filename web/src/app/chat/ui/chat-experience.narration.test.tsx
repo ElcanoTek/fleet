@@ -107,7 +107,12 @@ async function sendPrompt() {
 }
 
 const status = () => screen.getByTestId("assistant-working-status");
-const detailsToggle = () => screen.getByRole("button", { name: /show details|hide details/i });
+const detailsToggle = () => {
+  if (!screen.queryByTestId("composer-more-popover")) {
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+  }
+  return screen.getByTestId("composer-details-toggle");
+};
 
 beforeEach(() => {
   vi.stubGlobal(

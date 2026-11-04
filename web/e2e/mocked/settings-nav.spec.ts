@@ -104,6 +104,9 @@ test("settings render inside the unified shell with the section sub-nav", async 
   await expect(nav.getByRole("link", { name: "General" })).toHaveAttribute("aria-current", "page");
   await expect(nav.getByRole("link", { name: "Connections" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Skills" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Personas" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Memories" })).toBeVisible();
+  await expect(nav.getByRole("link", { name: "Prompts" })).toBeVisible();
 
   // General's preference rows.
   await expect(page.getByRole("group", { name: "Theme" })).toBeVisible();

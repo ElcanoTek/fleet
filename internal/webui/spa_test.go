@@ -155,7 +155,7 @@ func TestIndexRenderedPerRequest(t *testing.T) {
 
 func TestClientRoutesAndNotFound(t *testing.T) {
 	e := newTestEnv(t)
-	for _, p := range []string{"/chat", "/orchestrator", "/settings", "/settings/connections", "/settings/admin/users", "/help", "/help/chat", "/no-access"} {
+	for _, p := range []string{"/chat", "/orchestrator", "/settings", "/settings/connections", "/settings/personas", "/settings/memories", "/settings/prompts", "/settings/admin/users", "/help", "/help/chat", "/no-access"} {
 		res := e.do(signedIn(t, req("GET", p, "")))
 		body := readBody(t, res)
 		if res.StatusCode != 200 || !strings.Contains(body, `id="fleet-bootstrap"`) || bootstrapOf(t, body).NotFound {

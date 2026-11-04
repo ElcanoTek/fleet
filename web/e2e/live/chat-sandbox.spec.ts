@@ -43,7 +43,8 @@ test.describe("live chat → real sandbox tool loop", () => {
     const bashChip = page.getByRole("button", { name: /bash/i });
     const pyChip = page.getByRole("button", { name: /run_python/i });
     if ((await bashChip.count()) === 0) {
-      const toggle = page.getByRole("button", { name: /show details/i });
+      await page.getByTestId("composer-more-button").click();
+      const toggle = page.getByTestId("composer-details-toggle");
       if (await toggle.isVisible().catch(() => false)) await toggle.click();
     }
     await expect(bashChip.first()).toBeVisible({ timeout: 15_000 });

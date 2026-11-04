@@ -103,7 +103,9 @@ test("the composer toolbar keeps every control on one row", async ({ page }) => 
   expect(Math.max(...rows.centres) - Math.min(...rows.centres)).toBeLessThanOrEqual(2);
   expect(rows.overflowRight).toBeLessThanOrEqual(1);
 
-  // Share lives right in the composer from the start of the chat.
+  // Share lives inside More options (•••) when a chat is private.
+  await expect(page.getByTestId("composer-share-button")).toHaveCount(0);
+  await page.getByTestId("composer-more-button").click();
   await expect(page.getByTestId("composer-share-button")).toBeVisible();
 });
 
