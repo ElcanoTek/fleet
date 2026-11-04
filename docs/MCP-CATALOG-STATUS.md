@@ -226,7 +226,7 @@ package is listed.
 ## Appendix — the inventory: every built-in entry (#986 Phase 1)
 
 All 290 entries of `internal/clientconfig/builtin_remote_catalog.yaml` as of
-the Phase 4 changes on 2026-09-25 (Fireflies retyped 2026-10-29, Sigma added 2026-11-02), one row each, sorted by name. Columns follow the plan in
+the Phase 4 changes on 2026-09-25 (Fireflies retyped 2026-10-29, Sigma added 2026-11-02, Salesforce made a manual client 2026-11-04), one row each, sorted by name. Columns follow the plan in
 #986: **featured** (★) is the Featured-shelf flag; **can CI hit?** says what
 an automated smoke (Phase 2) could do with the entry without a human —
 `yes` the endpoint answers `initialize` with no credentials (open); `key-fixture`
@@ -248,8 +248,8 @@ while public DNS is fine). A row is not re-verified by later releases.
 Counts — can CI hit?: yes 12 · key-fixture 53 · oauth-manual 185 · tenant 40 ·
 dead-suspect 0. Auth: oauth 185 · tenant 39 · api_key 52 · open 14.
 Provenance: official 282 · third_party 5 · community 3. Featured: 20. Last
-verified: live 15 · probe 2026-09-14 182 · probe 2026-09-16 48 · probe
-2026-09-25 10 · probe 2026-11-02 1 · not probeable 34. These totals are derived from the table
+verified: live 15 · probe 2026-09-14 181 · probe 2026-09-16 48 · probe
+2026-09-25 10 · probe 2026-11-02 1 · probe 2026-11-04 1 · not probeable 34. These totals are derived from the table
 and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 
 | entry | auth | provenance | category | featured | can CI hit? | last verified | probe verdict | notes |
@@ -480,7 +480,7 @@ and pinned to it and to the catalog by `scripts/check_catalog_status_test.go`.
 | runway | oauth | official | ai-ml |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | sage-intacct | oauth | official | finance |  | oauth-manual | 2026-09-14 probe | discovery ✓ | manual client, secret |
 | saleor | api_key | official | commerce-payments |  | key-fixture | 2026-09-16 probe | endpoint ✓ — initialize 200 without a key, 200 with a bogus key | **add-time check passes a bogus key** (8 tools listed; the key is checked only at tools/call) (F14) |
-| salesforce | tenant | official | crm-sales |  | tenant | 2026-09-14 probe | discovery ✓ | self-registering, secret; AS lists no `none`; fleet asks `none`, retries confidential (#1488); advertises `offline_access`; refresh unverified |
+| salesforce | tenant | official | crm-sales |  | tenant | 2026-11-04 probe | discovery ✓ on a production path (`v1/platform/sobject-reads`, AS login.salesforce.com) and a sandbox path (`v1/sandbox/platform/sobject-reads`, AS test.salesforce.com) | manual client (the admin's External Client App), secret required: AS lists no `none`; one `{server_path}` placeholder replaces `{environment}/platform/{server}`, which could not express a production org; advertises `offline_access`; refresh unverified |
 | sanity | oauth | official | knowledge-docs |  | oauth-manual | 2026-09-14 probe | discovery ✓ | self-registering, public client ok |
 | scrapfly | open | official | web-search |  | key-fixture | 2026-09-14 probe | open — key in the URL; probe used a bogus key (answered 401) |  |
 | scrapingbee | tenant | official | web-search |  | tenant | — | tenant — not probeable without a real tenant value |  |
