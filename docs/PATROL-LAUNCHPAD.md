@@ -26,8 +26,14 @@ capped at 100, served by the partial index `idx_chat_schedules_user_patrols`
 from migration 096, which `TestListUserPatrols_UsesItsIndex` pins). With none, it opens the wizard; with some, a menu lists them —
 name, chat, cadence, *Paused* — each opening its chat, with **New patrol** at
 the bottom. On a collapsed rail the menu opens beside the icon strip
-(`right-start`, kept on-screen). Opening the wizard from that menu leaves the focus on the Patrols
-item, so closing the wizard returns it there. The wizard says where a patrol lives (in Chat, under its name, with
+(`right-start`, kept on-screen). The menu is capped to the viewport and
+scrolls, so with many patrols the last rows and **New patrol** stay reachable.
+Rows in the caller's own chats need no access check; a teammate's
+multiplayer chat is checked once per request, however many patrols it holds.
+Opening the wizard from that menu leaves the focus on the Patrols
+item, so closing the wizard returns it there. On a phone that item is in
+the drawer the wizard closed, so the focus goes to the visible **Open
+sidebar** button instead. The wizard says where a patrol lives (in Chat, under its name, with
 the Patrol bar on top) on its Plan and Launch steps and on the success screen. The wizard is portalled to `document.body` (the phone drawer is a
 transformed element) and opens on the rail's dialog layer.
 
@@ -80,7 +86,13 @@ armed and deletes that chat, so a retry never leaves an orphan (or an armed
 patrol) behind. Each undo step counts only when the server confirms it (or
 says the thing is already gone). If one fails, the dialog stays open on an
 error saying what is left, keeps it, and tries again on the next Back or
-close; **Open the chat** stays available. If the
+close; **Open the chat** stays available.
+A create whose reply is lost (the request failed in transit, or the reply
+could not be read) may still have made the chat. So the wizard snapshots the
+chat list before creating (and creates nothing if it cannot), then looks for
+a new chat with the patrol's title. A chat it finds is rolled back like any
+other; while the outcome cannot be told, the dialog stays open and says so,
+and Back or close tries again. If the
 connector catalog never loaded, launch leaves the connector set the server
 seeded at creation instead of replacing it with an empty one. A refused first
 run (a full queue, say) is reported on the success screen — the patrol is

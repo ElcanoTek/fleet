@@ -152,6 +152,15 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 	// a chat that would answer 404. The check runs per row, after the query,
 	// so the index pages until it has its fill of rows the caller can open:
 	// revoked rows never crowd out ones they still can.
+	//
+	// The check is the multiplayer one alone (the row already names the
+	// owner, so a teammate's chat cannot be the caller's own), and it runs
+	// once per distinct chat per request: patrols sharing a chat share the
+	// answer. Rows in the caller's own chats need no check at all. It stays
+	// per chat, not one batched query, because the participation rule
+	// (store.canParticipateInMultiplayer: participants, exclusions, team
+	// membership) lives in one place and must not be re-implemented in SQL.
+	canOpen := map[string]bool{}
 	out := make([]store.UserPatrol, 0, patrolsIndexMax)
 	for page := 0; page < patrolsIndexMaxPages && len(out) < patrolsIndexMax; page++ {
 		items, err := s.store.ListUserPatrols(r.Context(), user, patrolsIndexMax, page*patrolsIndexMax)
@@ -164,14 +173,19 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if !strings.EqualFold(p.ConversationOwner, user) {
-				conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
-				if err != nil {
-					// An error is not "no access": answer 5xx so the rail
-					// shows its load-failure state, never a false empty list.
-					http.Error(w, err.Error(), http.StatusInternalServerError)
-					return
+				ok, seen := canOpen[p.ConversationID]
+				if !seen {
+					conv, err := s.store.GetMultiplayerConversation(r.Context(), user, p.ConversationID)
+					if err != nil {
+						// An error is not "no access": answer 5xx so the rail
+						// shows its load-failure state, never a false empty list.
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					ok = conv != nil
+					canOpen[p.ConversationID] = ok
 				}
-				if conv == nil {
+				if !ok {
 					continue // access revoked
 				}
 			}

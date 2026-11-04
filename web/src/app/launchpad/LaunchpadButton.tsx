@@ -21,6 +21,13 @@ import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 const PatrolLaunchpad = lazy(() => import("./PatrolLaunchpad"));
 
 export const LAUNCHPAD_SEEN_ITEM = "fleet.launchpad.seen";
+
+// onScreen: laid out, and at least partly inside the viewport (an element in
+// a drawer translated off-canvas is neither).
+function onScreen(el: Element): boolean {
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < window.innerWidth && r.top < window.innerHeight;
+}
 export const LAUNCHPAD_PARAM = "launchpad";
 
 /** One live patrol, as GET /api/patrols lists it. */
@@ -222,7 +229,9 @@ export function LaunchpadButton({
         // the top it would run off the screen.)
         placement={collapsed ? "right-start" : "bottom-end"}
         label="Patrols"
-        className={collapsed ? "" : "min-w-[17rem]"}
+        // Up to 100 patrols can be listed: the menu is capped to the viewport
+        // and scrolls, so the last rows and "New patrol" stay reachable.
+        className={`max-h-[min(36rem,calc(100dvh-1rem))] overflow-y-auto ${collapsed ? "" : "min-w-[17rem]"}`}
       >
         {loadFailed ? (
           <>
@@ -281,6 +290,18 @@ export function LaunchpadButton({
               <PatrolLaunchpad
                 onClose={() => {
                   setWizardOpen(false);
+                  // The dialog hands the focus back to this item. On a phone
+                  // the drawer it sits in was closed when the wizard opened,
+                  // so the item is now off-screen: move the focus to the
+                  // visible control that reopens the drawer instead.
+                  requestAnimationFrame(() => {
+                    const anchor = anchorRef.current;
+                    if (!anchor || document.activeElement !== anchor || onScreen(anchor)) return;
+                    const opener = Array.from(
+                      document.querySelectorAll<HTMLButtonElement>('button[aria-label="Open sidebar"]'),
+                    ).find(onScreen);
+                    opener?.focus();
+                  });
                   // The wizard may just have launched the first patrol: re-read
                   // so the button now announces the menu, not the wizard.
                   void refreshIndex();

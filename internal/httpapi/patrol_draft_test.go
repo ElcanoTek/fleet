@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -376,5 +377,60 @@ func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
 	s.handlePatrols(rec, req)
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500 (body %s)", rec.Code, rec.Body.String())
+	}
+}
+
+// countingMultiplayerStore counts multiplayer access checks.
+type countingMultiplayerStore struct {
+	chatStore
+	calls *int
+}
+
+func (c countingMultiplayerStore) GetMultiplayerConversation(ctx context.Context, user, convID string) (*store.Conversation, error) {
+	*c.calls++
+	return c.chatStore.GetMultiplayerConversation(ctx, user, convID)
+}
+
+// TestPatrols_AccessChecksOncePerTeammateChat pins the index's cost: patrols
+// in the caller's own chats need no access check, and patrols sharing a
+// teammate's chat share one.
+func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
+	s := serverFixture(t)
+	ctx := context.Background()
+	const me, owner = "cost@x.com", "costowner@x.com"
+	seedUser(t, s.concreteStore(t), me)
+	mine := seedConv(t, s, me)
+	shared := seedConv(t, s, owner)
+	if _, err := s.store.SetConversationMultiplayer(ctx, owner, shared.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	for i, convID := range []string{mine.ID, mine.ID, shared.ID, shared.ID, shared.ID} {
+		if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+			ConversationID: convID, UserEmail: me, Title: fmt.Sprintf("P%d", i), Prompt: "check", CronExpr: "0 9 * * *", Timezone: "UTC",
+			AllowMultiple: true,
+		}); err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+	}
+	calls := 0
+	s.store = countingMultiplayerStore{chatStore: s.store, calls: &calls}
+	req := httptest.NewRequest(http.MethodGet, "/patrols", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, me))
+	rec := httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Patrols []struct{} `json:"patrols"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Patrols) != 5 {
+		t.Errorf("patrols = %d, want 5", len(body.Patrols))
+	}
+	if calls != 1 {
+		t.Errorf("multiplayer access checks = %d, want 1 (one teammate chat; own chats need none)", calls)
 	}
 }

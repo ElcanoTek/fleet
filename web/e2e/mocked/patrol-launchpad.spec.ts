@@ -182,3 +182,33 @@ test("with patrols already running, Patrols lists them and offers New patrol", a
   await page.getByTestId("patrols-menu-new").click();
   await expect(page.getByRole("dialog", { name: "Patrol Launchpad" })).toBeVisible();
 });
+
+test("a long Patrols menu stays inside the viewport and scrolls to New patrol", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 520 });
+  const many = Array.from({ length: 40 }, (_, i) => ({
+    id: `s${i}`, conversation_id: `c${i}`, title: `Patrol ${i}`, conversation_title: "x", cron: "0 8 * * *", status: "active",
+  }));
+  await mockShell(page, [], many);
+  await page.goto("/help");
+  await page.getByTestId("launchpad-button").click();
+  const menu = page.getByRole("menu", { name: "Patrols" });
+  await expect(menu).toBeVisible({ timeout: 15_000 });
+  const box = await menu.boundingBox();
+  expect(box && box.y >= 0 && box.y + box.height <= 520).toBe(true);
+  const newPatrol = page.getByTestId("patrols-menu-new");
+  await newPatrol.scrollIntoViewIfNeeded();
+  await expect(newPatrol).toBeInViewport();
+});
+
+test("on a phone, closing the wizard puts the focus on the visible Open sidebar button", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockShell(page, []);
+  await page.goto("/help");
+  await page.getByRole("button", { name: "Open sidebar", exact: true }).click();
+  await page.getByTestId("launchpad-button").click(); // no patrols: the wizard opens, the drawer closes
+  const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Open sidebar", exact: true })).toBeFocused();
+});

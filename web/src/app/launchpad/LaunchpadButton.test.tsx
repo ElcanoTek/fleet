@@ -119,6 +119,19 @@ describe("LaunchpadButton", () => {
     expect(document.activeElement).toBe(screen.getByTestId("launchpad-button"));
   });
 
+  it("caps the patrols menu to the viewport and lets it scroll", async () => {
+    const many = Array.from({ length: 60 }, (_, i) => ({
+      id: `s${i}`, conversation_id: `c${i}`, title: `Patrol ${i}`, conversation_title: "x", cron: "0 * * * *", status: "active",
+    }));
+    stubPatrols(many);
+    render(<LaunchpadButton />);
+    fireEvent.click(screen.getByTestId("launchpad-button"));
+    const menu = await screen.findByRole("menu", { name: "Patrols" });
+    expect(menu.className).toMatch(/max-h-\[min\(36rem,calc\(100dvh-1rem\)\)\]/);
+    expect(menu.className).toContain("overflow-y-auto");
+    expect(screen.getByTestId("patrols-menu-new")).toBeTruthy();
+  });
+
   it("has no dot for someone who has opened it before", () => {
     window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
     stubPatrols([]);

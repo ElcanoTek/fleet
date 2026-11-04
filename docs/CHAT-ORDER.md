@@ -38,7 +38,9 @@ left out on purpose.
     project's options button.
 - The drag uses its own MIME type, so a reorder drag is never taken for the
   existing drag of a chat into a project.
-- Only one scope is in reorder mode at a time. A project's mode returns the
+- Only one scope is in reorder mode at a time. The mode ends by itself if its
+  scope stops being orderable (another tab leaves fewer than two chats in it),
+  rather than lingering with no Done and reappearing later unasked. A project's mode returns the
   focus to that project's options button, found by project ID (two projects
   may share a name).
 - **Who is offered it.** The mode is offered for 2 to 500 chats in a scope;

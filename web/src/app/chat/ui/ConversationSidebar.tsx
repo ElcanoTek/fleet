@@ -1327,6 +1327,23 @@ export function ConversationSidebar({
     returnFocusOnExit.current = null;
     restore();
   }, [reorderScope]);
+  // If the scope being ordered stops being orderable while the mode is open
+  // (a chat unpinned or moved in another tab leaves fewer than two, or the
+  // project disappears), the mode ends: otherwise its rows would fall back
+  // to ordinary ones with no Done to clear it, and it would reappear,
+  // unasked, when the count recovered.
+  const reorderScopeCount =
+    reorderScope === null
+      ? 0
+      : reorderScope === PINNED_ORDER_SCOPE
+        ? pinned.length
+        : (projectGroups(conversations, projects).find((g) => projectOrderScope(g.project.id) === reorderScope)?.chats
+            .length ?? 0);
+  useEffect(() => {
+    if (reorderScope !== null && !reorderable(reorderScopeCount)) setReorderScope(null);
+    // reorderable reads only props; the count is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reorderScope, reorderScopeCount]);
   const endReorder = (restore: () => void) => {
     returnFocusOnExit.current = restore;
     setReorderScope(null);

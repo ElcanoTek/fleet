@@ -34,6 +34,10 @@ type Opts = {
   tools?: "ok" | "fail";
   memories?: unknown[];
   hangConversation?: boolean;
+  // The create commits on the server but its reply is lost.
+  createReplyLost?: boolean;
+  // GET /api/conversations fails.
+  listFails?: boolean;
   role?: string;
   // Holds the memory POST until this resolves.
   memoryPostGate?: Promise<void>;
@@ -43,6 +47,7 @@ function mockApi(opts: Opts = {}) {
   const calls: Call[] = [];
   let memoryGets = 0;
   let catalogGets = 0;
+  const serverChats: { id: string; title: string }[] = [{ id: "old-1", title: "Something else" }];
   const fn = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
@@ -93,8 +98,16 @@ function mockApi(opts: Opts = {}) {
       if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
       return json({ title: "Deal & inbox sweep", prompt: "**Mission**\nAI-written.", summary: "Every morning I check." });
     }
+    if (url === "/api/conversations" && method === "GET") {
+      if (opts.listFails) return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+      return json({ conversations: serverChats });
+    }
     if (url === "/api/conversations" && method === "POST") {
       if (opts.hangConversation) return new Promise(() => {});
+      if (opts.createReplyLost) {
+        serverChats.push({ id: "conv-9", title: (JSON.parse(String(init?.body)) as { title: string }).title });
+        throw new TypeError("Failed to fetch");
+      }
       return json({ id: "conv-9" });
     }
     if (url.endsWith("/mcp-servers") && method === "POST" && opts.tools === "fail") {
@@ -270,9 +283,15 @@ describe("PatrolLaunchpad", () => {
   it("reports a failed launch and offers the way back", async () => {
     const calls = mockApi();
     await walkToLaunch(calls);
+    // Every write is refused (the chat list still reads, for the snapshot
+    // taken before the create).
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false, status: 400, json: async () => ({}), text: async () => "cron too frequent" }),
+      vi.fn().mockImplementation(async (url: string, init?: RequestInit) =>
+        url === "/api/conversations" && (init?.method ?? "GET") === "GET"
+          ? { ok: true, status: 200, json: async () => ({ conversations: [] }), text: async () => "" }
+          : { ok: false, status: 400, json: async () => ({}), text: async () => "cron too frequent" },
+      ),
     );
     fireEvent.click(screen.getByTestId("launchpad-launch"));
     expect((await screen.findByRole("alert")).textContent).toContain("cron too frequent");
@@ -594,5 +613,28 @@ describe("PatrolLaunchpad", () => {
     const note = await screen.findByTestId("launchpad-first-run-unknown");
     expect(note.textContent).toContain("couldn’t confirm its first check started");
     expect(screen.queryByTestId("launchpad-first-run-refused")).toBeNull();
+  });
+
+  it("finds and rolls back the chat a create made when its reply was lost", async () => {
+    const onClose = vi.fn();
+    const calls = mockApi({ createReplyLost: true });
+    await walkToLaunch(calls, onClose);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("Lost the connection");
+    // The new chat was found (it was not there before the create), so it
+    // can be opened or rolled back.
+    expect(screen.getByRole("button", { name: "Open the chat" })).toBeTruthy();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
+    expect(calls.some((c) => c.url === "/api/conversations/old-1" && c.method === "DELETE")).toBe(false);
+  });
+
+  it("creates nothing when it cannot first read the chat list", async () => {
+    const calls = mockApi({ listFails: true });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn’t reach the server");
+    expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
   });
 });

@@ -101,7 +101,12 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
     onMoveToProject: noop,
     ...overrides,
   } as unknown as Parameters<typeof ConversationSidebar>[0];
-  return render(<ConversationSidebar {...props} />);
+  const utils = render(<ConversationSidebar {...props} />);
+  return {
+    ...utils,
+    rerenderWith: (next: Record<string, unknown>) =>
+      utils.rerender(<ConversationSidebar {...({ ...props, ...next } as typeof props)} />),
+  };
 }
 
 const pin = (id: string, title: string): ConversationSummary => ({ ...CONV, id, title, pinned: true });
@@ -169,6 +174,19 @@ describe("ConversationSidebar chat order", () => {
     expect(onReorderChats).toHaveBeenCalledWith("project:p-1", ["x", "y"]);
     fireEvent.click(screen.getByTestId("chat-reorder-done"));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Project options for Roadmap" }));
+  });
+
+  it("ends reorder mode when its scope stops being orderable, and does not come back unasked", () => {
+    const { rerenderWith } = renderSidebar({ conversations: chats, filteredConversations: chats, onReorderChats: noop });
+    fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
+    expect(screen.getByTestId("chat-reorder-list")).toBeTruthy();
+    // Another tab unpins two: one pinned chat left.
+    rerenderWith({ conversations: [chats[0]], filteredConversations: [chats[0]] });
+    expect(screen.queryByTestId("chat-reorder-list")).toBeNull();
+    // They come back: the ordinary rows return, with Reorder offered again.
+    rerenderWith({ conversations: chats, filteredConversations: chats });
+    expect(screen.queryByTestId("chat-reorder-list")).toBeNull();
+    expect(screen.getByTestId("pinned-reorder-toggle")).toBeTruthy();
   });
 
   it("returns the focus to the right project's menu when two projects share a name", () => {
