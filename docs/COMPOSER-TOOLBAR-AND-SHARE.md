@@ -7,7 +7,7 @@
    - **More options (`•••`) menu (`composer-more-popover`):** A clean, labeled popover menu organized into three logical groups with descriptions and status badges:
      - **Context, Prompts & Memory:**
        - **Prompt library** — opens the Prompt Library modal and restores focus to **More options** when closed.
-       - **Persona** — selects the workspace or personal persona on a new draft before the conversation is created (by sending the first message or materializing via **Share**).
+       - **Persona** — always visible in **More options** (`•••`) for discoverability. Active on any new or empty chat before the first message is sent (including after a conversation is materialized early via **Share** or **New chat in project**, persisting the updated persona across navigation and onto the first turn via `SetPersona`); once chatting has started, the row stays visible in a disabled state with the subtitle `"Personas can only be changed in a new chat"`.
        - **Memories** — opens the Memory Manager (`My memory`, `Team learnings`, and `Graph`).
      - **Sharing, Schedule & Automation:**
        - **Share this chat** — opens the Share dialog to share with your team, copy a public link, or toggle Multiplayer mode.
@@ -19,7 +19,7 @@
        - **Dashboard view** — switches between standard chat and the live Dashboard board (`D`).
        - **Send on Enter** — toggles `Enter` vs `Ctrl/Cmd+Enter` send behavior.
    - **Contextual status pills on the primary bar (desktop `sm:` and above; mobile accent dot):** Secondary settings stay out of the way when at their defaults. When any secondary setting is active, **More options** (`•••`) displays an accent dot on both mobile and desktop; on desktop viewports (`sm:` and wider), compact one-click status pills also surface directly on the toolbar:
-     - Non-default **Persona** pill (on a new draft before the conversation is created; hidden below `sm` while closed, rendered when opened from **More options**)
+     - Non-default **Persona** pill (on a new or empty chat before the first message is sent; hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Share / Multiplayer** status indicator (`composer-share-button`, `hidden sm:inline-flex`) when a conversation is shared with your team, shared by public link, or in Multiplayer mode
      - Active **Auto-approve** (`⚡`) toggle badge (`hidden sm:inline-flex`)

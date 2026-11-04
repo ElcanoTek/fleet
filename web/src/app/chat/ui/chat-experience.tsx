@@ -736,8 +736,10 @@ export function ChatExperience({
   // Per-conversation persona choice made while a materialized conversation still
   // has 0 messages (e.g. after Project "New chat" or opening Share on an empty
   // draft), so navigating away and returning before the first turn preserves the
-  // user's choice.
-  const pendingPersonaByConvRef = useRef<Map<string, string>>(new Map());
+  // user's choice across both sidebar switches and route unmounts (/settings).
+  const pendingPersonaByConvRef = useRef<Map<string, string>>(
+    new Map(restoredSession?.pendingPersonaByConv ?? []),
+  );
   const selectPersonaExplicitly = useCallback<Dispatch<SetStateAction<string>>>(
     (value) => {
       setSelectedPersona((prev) => {
@@ -1316,6 +1318,7 @@ export function ChatExperience({
       personas,
       defaultPersona,
       selectedPersona,
+      pendingPersonaByConv: new Map(pendingPersonaByConvRef.current),
       selectedModel,
       skills,
       serverConfig,
@@ -6253,18 +6256,42 @@ export function ChatExperience({
     }
 
     // Personas — nice-to-have; the server falls back to default. Sets the
-    // roster always, but the default persona only when no conversation loads.
+    // roster always, and reconciles any draft or empty-chat pending persona
+    // against the refreshed workspace/user roster so a deleted user persona
+    // falls back cleanly to the default instead of 400ing on first send.
     const loadPersonas = async () => {
       try {
         const pr = await fetch("/api/personas", { cache: "no-store" });
         if (pr.ok) {
           const pd = (await pr.json()) as PersonasResponse;
           if (!cancelled) {
+            const validPersonas = new Set<string>([
+              ...pd.personas,
+              ...(pd.user_personas ?? []).map((up) => up.ref || `user:${up.name}`),
+            ]);
+            for (const [convId, pending] of pendingPersonaByConvRef.current.entries()) {
+              if (pending && !validPersonas.has(pending)) {
+                pendingPersonaByConvRef.current.delete(convId);
+              }
+            }
             setPersonas(pd.personas);
             if (pd.default) setDefaultPersona(pd.default);
             setUserPersonas(pd.user_personas ?? []);
             if (!willLoadConversation) {
-              setSelectedPersona(newChatLink?.persona ?? pd.default);
+              setSelectedPersona((prev) =>
+                newChatLink?.persona ??
+                (prev && validPersonas.has(prev) ? prev : pd.default),
+              );
+            } else {
+              const activeId = activeConversationIdRef.current;
+              if (
+                activeId &&
+                (messagesByConvRef.current.get(activeId)?.length ?? 0) === 0
+              ) {
+                setSelectedPersona((prev) =>
+                  prev && !validPersonas.has(prev) ? pd.default : prev,
+                );
+              }
             }
           }
         }
@@ -6444,11 +6471,7 @@ export function ChatExperience({
     // flip the guard so a late personas resolution doesn't clobber it with the
     // default (mirrors the cold-start critical-path guard set in
     // loadInitialState).
-    if (
-      warm &&
-      (restored?.activeConversationId ||
-        (Boolean(restored?.selectedPersona) && !newChatLink))
-    ) {
+    if (warm && restored?.activeConversationId) {
       willLoadConversation = true;
     }
 

@@ -556,8 +556,8 @@ describe("Composer — persona picker with user personas", () => {
         overrides={{
           activeConversationId: "conv-existing",
           messages: [
-            { id: "m1", role: "user", content: "Hello", state: "done" },
-            { id: "m2", role: "assistant", content: "Hi there!", state: "done" },
+            { id: 1, role: "user", content: "Hello", state: "done" },
+            { id: 2, role: "assistant", content: "Hi there!", state: "done" },
           ],
           personas: ["assistant", "trader"],
           selectedPersona: "assistant",

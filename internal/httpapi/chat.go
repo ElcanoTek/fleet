@@ -555,24 +555,32 @@ func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, 
 	}
 }
 
-func (s *Server) maybeSetInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool) {
+func (s *Server) applyInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool, fail func(int, error)) bool {
 	if historyLen != 0 || !userWords {
-		return
+		return true
 	}
 	ownerEmail := convOwnerEmail(conv, user)
 	if !strings.EqualFold(ownerEmail, user) {
-		return
+		return true
 	}
 	persona := strings.TrimSpace(reqPersona)
 	if persona == "" || persona == conv.Persona {
-		return
+		return true
 	}
 	if err := s.checkConversationPersona(ctx, user, persona); err != nil {
-		return
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrUserPersonaInvalid) {
+			status = http.StatusBadRequest
+		}
+		fail(status, err)
+		return false
 	}
-	if err := s.store.SetPersona(ctx, ownerEmail, conv.ID, persona); err == nil {
-		conv.Persona = persona
+	if err := s.store.SetPersona(ctx, ownerEmail, conv.ID, persona); err != nil {
+		fail(http.StatusInternalServerError, fmt.Errorf("update conversation persona: %w", err))
+		return false
 	}
+	conv.Persona = persona
+	return true
 }
 
 // replayAcceptedInput answers a resend of an input_id that was already
@@ -1048,6 +1056,9 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 	history = redactHistoryForSender(history, user, conv.UserEmail)
+	if !s.applyInitialTurnPersona(reqCtx, user, conv, len(history), req.Persona, req.inputKind == "", fail) {
+		return true
+	}
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
@@ -1262,7 +1273,6 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// heuristic title from the admitted opening message right before emitting
 	// the `conversation` event so a rejected turn never mutates the title.
 	s.maybeSetPlaceholderTurnTitle(turnCtx, user, conv, len(history), req.Message, userWords)
-	s.maybeSetInitialTurnPersona(turnCtx, user, conv, len(history), req.Persona, userWords)
 
 	// Prime the buffer with the metadata events so a late reattach
 	// still sees conversation identity + turn id in its replay. The

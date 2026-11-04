@@ -231,6 +231,10 @@ func (s *fakeChatStore) ListUserPersonas(_ context.Context, _ string) ([]store.U
 	return nil, nil
 }
 
+func (s *fakeChatStore) GetUserPersonaByName(_ context.Context, _, _ string) (*store.UserPersona, error) {
+	return nil, store.ErrUserPersonaNotFound
+}
+
 // Shared file library (docs/SHARED-FILES.md): the fake has none — the turn
 // path lists it on every run for the prompt block, and an empty library
 // appends nothing.
@@ -2926,7 +2930,7 @@ func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 	}
 }
 
-func TestMaybeSetInitialTurnPersona(t *testing.T) {
+func TestApplyInitialTurnPersona(t *testing.T) {
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, err := st.CreateConversation(context.Background(), "u@x.com", "New conversation", "generic", "", false)
@@ -2934,9 +2938,18 @@ func TestMaybeSetInitialTurnPersona(t *testing.T) {
 		t.Fatalf("CreateConversation: %v", err)
 	}
 
+	var gotStatus int
+	var gotErr error
+	fail := func(status int, err error) {
+		gotStatus = status
+		gotErr = err
+	}
+
 	// On an empty materialized conversation (0 history entries), the owner's
 	// first-turn persona choice updates conv.Persona and persists to the store.
-	srv.maybeSetInitialTurnPersona(context.Background(), "u@x.com", conv, 0, "trader", true)
+	if ok := srv.applyInitialTurnPersona(context.Background(), "u@x.com", conv, 0, "trader", true, fail); !ok {
+		t.Fatalf("applyInitialTurnPersona returned false (status=%d err=%v)", gotStatus, gotErr)
+	}
 	if conv.Persona != "trader" {
 		t.Fatalf("conv.Persona = %q, want trader", conv.Persona)
 	}
@@ -2944,8 +2957,25 @@ func TestMaybeSetInitialTurnPersona(t *testing.T) {
 		t.Fatalf("stored persona = %v, want trader", stored)
 	}
 
+	// An invalid/deleted user persona on the first turn of an empty materialized
+	// conversation must reject the turn (400) rather than silently running under
+	// the stale persona.
+	if ok := srv.applyInitialTurnPersona(context.Background(), "u@x.com", conv, 0, "user:deleted-twin", true, fail); ok {
+		t.Fatalf("expected applyInitialTurnPersona to reject invalid user persona")
+	}
+	if gotStatus != http.StatusBadRequest {
+		t.Fatalf("gotStatus = %d, want %d (err=%v)", gotStatus, http.StatusBadRequest, gotErr)
+	}
+	if conv.Persona != "trader" {
+		t.Fatalf("conv.Persona mutated on rejected persona: got %q, want trader", conv.Persona)
+	}
+
 	// Once history entries exist (historyLen > 0), persona changes are ignored.
-	srv.maybeSetInitialTurnPersona(context.Background(), "u@x.com", conv, 2, "analyst", true)
+	gotStatus = 0
+	gotErr = nil
+	if ok := srv.applyInitialTurnPersona(context.Background(), "u@x.com", conv, 2, "analyst", true, fail); !ok {
+		t.Fatalf("applyInitialTurnPersona with historyLen > 0 returned false")
+	}
 	if conv.Persona != "trader" {
 		t.Fatalf("conv.Persona changed after first turn: got %q, want trader", conv.Persona)
 	}
