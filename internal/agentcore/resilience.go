@@ -327,10 +327,14 @@ func classifyStreamError(err error) (streamErrorClass, *fantasy.ProviderError) {
 		return streamErrorNone, nil
 	}
 	if errors.Is(err, ErrFirstChunkTimeout) {
+		providerErr := normalizeStreamProviderError(firstChunkTimeoutProviderError(err))
+		if IsCreditsExhaustedError(err) {
+			return streamErrorFatal, providerErr
+		}
 		// Still a stream blip — one same-model retry, then the fallback swap —
 		// but carry the provider error the expiry hid, so the retry, health and
 		// failover telemetry tell the same story as the card (#1590).
-		return streamErrorStreamBlip, firstChunkTimeoutProviderError(err)
+		return streamErrorStreamBlip, providerErr
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return streamErrorCancelled, nil
@@ -795,7 +799,7 @@ func (e *engine) streamRoundWithResilience(
 	// recent failures accumulated across runs), skip straight to the fallback
 	// instead of burning this round's attempts on a known-bad model. Half-open is
 	// deliberately NOT skipped — that state exists to send exactly one probe.
-	if e != nil && !swappedToFallback && e.healthRegistry.State(activeModel.Model()) == CircuitOpen && canSwapFallback(e, activeModel, swappedToFallback) {
+	if shouldFastFailoverOnOpenCircuit(e, activeModel, swappedToFallback) {
 		log.Printf("⚡ circuit open for %s; routing to fallback %s without a primary attempt", activeModel.Model(), e.fallbackModel.Model())
 		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
 		activeModel = e.takeFallback()
@@ -960,7 +964,7 @@ func (e *engine) streamRoundWithResilience(
 			promoteFallback()
 			continue
 		case streamErrorFatal:
-			if isCreditsExhausted(providerErr) && e.canPromoteCrossProviderOnCreditsExhausted(sink, attemptMark, activeModel) {
+			if e.canPromoteCrossProviderOnCreditsExhausted(err, providerErr, sink, attemptMark, activeModel) {
 				promoteFallback()
 				continue
 			}
@@ -968,6 +972,10 @@ func (e *engine) streamRoundWithResilience(
 		}
 	}
 	return streamRoundOutcome{}, fmt.Errorf("fantasy agent error after %d recovery attempts: %w", recoveryLimit, lastErr)
+}
+
+func shouldFastFailoverOnOpenCircuit(e *engine, activeModel fantasy.LanguageModel, swappedToFallback bool) bool {
+	return e != nil && !swappedToFallback && e.healthRegistry.State(activeModel.Model()) == CircuitOpen && canSwapFallback(e, activeModel, swappedToFallback)
 }
 
 // noteForcedCompaction follows an overflow (reactive) compaction that removed
@@ -1044,7 +1052,10 @@ func (e *engine) canPromoteOnRejection(sink *streamSink, attemptMark sinkMark, a
 // any same-provider candidates (which share the exhausted key) and reports
 // whether a fallback on a DIFFERENT configured provider (`fallback_providers`)
 // is available from a safe point (no tool event since attemptMark).
-func (e *engine) canPromoteCrossProviderOnCreditsExhausted(sink *streamSink, attemptMark sinkMark, activeModel fantasy.LanguageModel) bool {
+func (e *engine) canPromoteCrossProviderOnCreditsExhausted(err error, providerErr *fantasy.ProviderError, sink *streamSink, attemptMark sinkMark, activeModel fantasy.LanguageModel) bool {
+	if !isCreditsExhausted(providerErr) && !IsCreditsExhaustedError(err) {
+		return false
+	}
 	if e == nil || activeModel == nil || sink.toolEventCount() > attemptMark.toolEvents {
 		return false
 	}

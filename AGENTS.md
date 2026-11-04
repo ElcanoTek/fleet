@@ -308,7 +308,10 @@ same PR.
 - **Client content is external.** Branding, the MCP catalog, personas, protocols,
   skills, and the sandbox Containerfile live in an out-of-repo client-config
   bundle (`FLEET_CLIENT_CONFIG_DIR`). fleet ships only the generic `config/default`
-  bundle — do not add client-specific content to this repo.
+  bundle — do not add client-specific content to this repo. Upstream Fleet
+  maintainer and licensing contacts (`hello@elcanotek.com`,
+  `licensing@elcanotek.com`) belong to the core distribution and are not
+  client-specific bundle content.
 
 ## Conventions
 

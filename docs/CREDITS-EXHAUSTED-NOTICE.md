@@ -19,4 +19,4 @@
 
 ## Deviations and deferred scope
 
-- **Single dual-purpose message instead of per-bundle config**: To work cleanly for both self-hosted deployments (where operators top up their own API key) and Elcano-managed deployments without adding per-client onboarding configuration, the message instructs the user to either top up their API key or contact `licensing@elcanotek.com`.
+- **Single dual-purpose message in the core distribution instead of per-bundle config**: To work cleanly for both bring-your-own-key operators (who top up their own API key) and included-credit licensees without adding per-client onboarding configuration in `FLEET_CLIENT_CONFIG_DIR`, the core distribution ships a single dual-purpose message instructing the user to either top up their API key or contact Fleet's upstream licensing address (`licensing@elcanotek.com`, matching the maintainer contacts in `README.md` and `SECURITY.md`).

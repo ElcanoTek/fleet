@@ -450,10 +450,10 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 		{
 			name: "OpenAI 429 insufficient_quota",
 			err: &fantasy.ProviderError{
-				StatusCode:    http.StatusTooManyRequests,
-				Title:         "insufficient_quota",
-				Message:       "You exceeded your current quota, please check your plan and billing details.",
-				ErrorType:     "insufficient_quota",
+				StatusCode:     http.StatusTooManyRequests,
+				Title:          "insufficient_quota",
+				Message:        "You exceeded your current quota, please check your plan and billing details.",
+				ErrorType:      "insufficient_quota",
 				TransientError: true,
 			},
 			wantStatus: http.StatusTooManyRequests,
@@ -471,6 +471,17 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			name:       "SSE 403 with metadata limit_source only",
 			err:        errors.New(`received error while streaming: {"code":403,"message":"Provider returned error","metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit"}}`),
 			wantStatus: http.StatusForbidden,
+		},
+		{
+			name: "first-chunk watchdog expiry after 429 insufficient_quota",
+			err: &firstChunkTimeoutError{
+				promptTokens:     1200,
+				cause:            context.Canceled,
+				providerErr:      true,
+				providerStatus:   http.StatusTooManyRequests,
+				creditsExhausted: true,
+			},
+			wantStatus: http.StatusTooManyRequests,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

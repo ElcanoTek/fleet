@@ -97,9 +97,9 @@ func TestEmitModelSelectionRequired_CarriesTheRecoveredProviderStatus(t *testing
 
 func TestEmitModelSelectionRequired_CreditsExhaustedUsesLicensingMessageAndOmitsRaw(t *testing.T) {
 	openRouterKeyLimitErr := &fantasy.ProviderError{
-		StatusCode: http.StatusForbidden,
-		Title:      "forbidden",
-		Message:    "Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.",
+		StatusCode:   http.StatusForbidden,
+		Title:        "forbidden",
+		Message:      "Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.",
 		ResponseBody: []byte(`{"error":{"message":"Key limit exceeded (total limit). Manage it using https://openrouter.ai/workspaces/default/keys/sk-or-v1-abc... $1.65 of $1.00 used; does not reset.","code":403,"metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit","limit_usd":1,"spend_usd":1.652338}}}`),
 	}
 	reason, status, cancelled := agentcore.ClassifyStreamErrorReason(openRouterKeyLimitErr)
