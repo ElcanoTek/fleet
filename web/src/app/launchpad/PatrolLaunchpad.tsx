@@ -39,8 +39,8 @@ import {
   type PatrolMode,
 } from "./launchpadModel";
 
-export const LAUNCHPAD_STATE_KEY = "fleet.launchpad.v1";
-export const LAUNCHPAD_LAUNCHED_KEY = "fleet.launchpad.launched";
+export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
+export const LAUNCHPAD_LAUNCHED_ITEM = "fleet.launchpad.launched";
 
 // "why" is the preamble (the expanding-mind ladder: why a patrol is the big
 // step), "welcome" the run-through of what the wizard is about to do.
@@ -90,7 +90,7 @@ const FRESH: Saved = {
 
 function loadSaved(): Saved {
   try {
-    const raw = window.sessionStorage.getItem(LAUNCHPAD_STATE_KEY);
+    const raw = window.sessionStorage.getItem(LAUNCHPAD_PROGRESS_ITEM);
     if (!raw) return { ...FRESH, timezone: browserTimeZone() };
     const parsed = JSON.parse(raw) as Partial<Saved>;
     const step = STEPS.some((s) => s.id === parsed.step) ? (parsed.step as StepId) : "why";
@@ -189,7 +189,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (launch) return;
     try {
-      window.sessionStorage.setItem(LAUNCHPAD_STATE_KEY, JSON.stringify(state));
+      window.sessionStorage.setItem(LAUNCHPAD_PROGRESS_ITEM, JSON.stringify(state));
     } catch {
       // Private mode: progress just is not remembered.
     }
@@ -280,8 +280,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         );
       }
       try {
-        window.sessionStorage.removeItem(LAUNCHPAD_STATE_KEY);
-        window.localStorage.setItem(LAUNCHPAD_LAUNCHED_KEY, "1");
+        window.sessionStorage.removeItem(LAUNCHPAD_PROGRESS_ITEM);
+        window.localStorage.setItem(LAUNCHPAD_LAUNCHED_ITEM, "1");
       } catch {
         // Storage unavailable: nothing to clean up.
       }
@@ -449,7 +449,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 
 function launchedBefore(): boolean {
   try {
-    return window.localStorage.getItem(LAUNCHPAD_LAUNCHED_KEY) === "1";
+    return window.localStorage.getItem(LAUNCHPAD_LAUNCHED_ITEM) === "1";
   } catch {
     return false;
   }

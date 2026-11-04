@@ -11,7 +11,7 @@ vi.mock("./PatrolLaunchpad", () => ({
   ),
 }));
 
-import { LAUNCHPAD_SEEN_KEY, LaunchpadButton } from "./LaunchpadButton";
+import { LAUNCHPAD_SEEN_ITEM, LaunchpadButton } from "./LaunchpadButton";
 
 // The Launchpad's top-bar entry point: a "new" dot until it is first opened,
 // a click opens the wizard, and ?launchpad=1 opens it once and is consumed.
@@ -32,13 +32,13 @@ describe("LaunchpadButton", () => {
     fireEvent.click(screen.getByTestId("launchpad-button"));
     expect(await screen.findByTestId("patrol-launchpad")).toBeTruthy();
     expect(screen.queryByTestId("launchpad-new-dot")).toBeNull();
-    expect(window.localStorage.getItem(LAUNCHPAD_SEEN_KEY)).toBe("1");
+    expect(window.localStorage.getItem(LAUNCHPAD_SEEN_ITEM)).toBe("1");
     fireEvent.click(screen.getByText("close"));
     expect(screen.queryByTestId("patrol-launchpad")).toBeNull();
   });
 
   it("has no dot for someone who has opened it before", () => {
-    window.localStorage.setItem(LAUNCHPAD_SEEN_KEY, "1");
+    window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
     render(<LaunchpadButton />);
     expect(screen.queryByTestId("launchpad-new-dot")).toBeNull();
     expect(screen.getByRole("button", { name: /Patrol Launchpad/ })).toBeTruthy();

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
-import { LAUNCHPAD_LAUNCHED_KEY, LAUNCHPAD_STATE_KEY, PatrolLaunchpad } from "./PatrolLaunchpad";
+import { LAUNCHPAD_LAUNCHED_ITEM, LAUNCHPAD_PROGRESS_ITEM, PatrolLaunchpad } from "./PatrolLaunchpad";
 
 // The Patrol Launchpad end to end against a stubbed API
 // (docs/PATROL-LAUNCHPAD.md): it walks the six steps, saves a non-negotiable
@@ -136,8 +136,8 @@ describe("PatrolLaunchpad", () => {
     expect((writes[2].body as { prompt: string }).prompt).toContain("You may take routine, reversible actions");
 
     // Launch clears the saved progress and remembers that a patrol launched.
-    expect(window.sessionStorage.getItem(LAUNCHPAD_STATE_KEY)).toBeNull();
-    expect(window.localStorage.getItem(LAUNCHPAD_LAUNCHED_KEY)).toBe("1");
+    expect(window.sessionStorage.getItem(LAUNCHPAD_PROGRESS_ITEM)).toBeNull();
+    expect(window.localStorage.getItem(LAUNCHPAD_LAUNCHED_ITEM)).toBe("1");
 
     fireEvent.click(screen.getByTestId("launchpad-open"));
     expect(navigateMock).toHaveBeenCalledWith("/chat?c=conv-9");

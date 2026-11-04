@@ -13,12 +13,12 @@ import { Icon } from "@/app/shared/ui/Icon";
 
 const PatrolLaunchpad = lazy(() => import("./PatrolLaunchpad"));
 
-export const LAUNCHPAD_SEEN_KEY = "fleet.launchpad.seen";
+export const LAUNCHPAD_SEEN_ITEM = "fleet.launchpad.seen";
 export const LAUNCHPAD_PARAM = "launchpad";
 
 function readSeen(): boolean {
   try {
-    return window.localStorage.getItem(LAUNCHPAD_SEEN_KEY) === "1";
+    return window.localStorage.getItem(LAUNCHPAD_SEEN_ITEM) === "1";
   } catch {
     return true; // No storage: never nag.
   }
@@ -46,7 +46,7 @@ export function LaunchpadButton() {
   useEffect(() => {
     if (!open) return;
     try {
-      window.localStorage.setItem(LAUNCHPAD_SEEN_KEY, "1");
+      window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
     } catch {
       // Storage unavailable: the dot simply stays.
     }
