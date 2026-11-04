@@ -1172,8 +1172,9 @@ Every move is saved as you make it, to your account, so the order is the same
 on every device you sign in from. Press **Done** (or `Esc`) to go back to the
 ordinary rows.
 
-A chat you pin, or file in the project, later appears at the top of the list,
-above the ones you have ordered, until you move it. **Reorder** is offered for
+A chat you pin, or file in the project, for the first time appears at the top
+of the list, above the ones you have ordered, until you move it; one you unpin
+(or move out) and bring back returns to its old place. **Reorder** is offered for
 up to 500 chats at a time, and not to a read-only (viewer) account, which
 cannot save an order. In a project you order your own chats; each teammate
 orders theirs.

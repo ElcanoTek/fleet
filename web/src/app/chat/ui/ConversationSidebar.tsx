@@ -1729,7 +1729,7 @@ export function ConversationSidebar({
                         <ChatReorderList
                           chats={chats.map((c) => ({ id: c.id, title: c.title }))}
                           label={`Chats in ${project.name}, in order`}
-                          hint="Drag a chat, or use its arrows, to set the order. Chats you add later appear at the top."
+                          hint="Drag a chat, or use its arrows, to set the order. A chat added for the first time appears at the top."
                           onReorder={(ids) => onReorderChats(projectOrderScope(project.id), ids)}
                           onDone={() =>
                             // By project ID: two projects may share a name.
@@ -2079,7 +2079,7 @@ export function ConversationSidebar({
                     <ChatReorderList
                       chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
                       label="Pinned chats, in order"
-                      hint="Drag a chat, or use its arrows, to set the order. Chats you pin later appear at the top."
+                      hint="Drag a chat, or use its arrows, to set the order. A chat pinned for the first time appears at the top."
                       onReorder={(ids) => onReorderChats(PINNED_ORDER_SCOPE, ids)}
                       onDone={() => endReorder(() => reorderToggleRef.current?.focus())}
                     />

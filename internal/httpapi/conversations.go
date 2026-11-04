@@ -243,7 +243,9 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 // ID (store.ConversationIDForCreateKey), so a create retried after its reply
 // was lost answers with the chat the first attempt made — the chat and its
 // key are bound by the same INSERT, with nothing for a crash to separate. A
-// key whose chat has since been deleted is refused (409): retry with a new one.
+// key whose chat was soft-deleted is refused (409): retry with a new one.
+// Under hard delete the ID is free again, so a stale retry makes a new chat;
+// see docs/PATROL-LAUNCHPAD.md for that and the other known limit.
 func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user string) {
 	var req createConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

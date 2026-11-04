@@ -95,8 +95,19 @@ create with a fresh idempotency key (`client_request_id` on
 so a retry lands on the same primary key. The server answers a known key
 with the chat it made, and the chat and its key are bound by the one
 INSERT, so no crash can separate them. A concurrent duplicate gets the first
-one's chat. A key whose chat has since been deleted is refused (409), and a
-new launch always uses a new key. The wizard retries a lost create once at
+one's chat. Where deletes are soft, a key whose chat has since been deleted
+is refused (409); where they are hard (the default), the ID is free again
+and the key would make a new chat. A new launch always uses a new key.
+
+Known limits, both needing a lost request plus an unlucky overlap. A create
+request that arrives *after* the wizard has settled and rolled back its chat
+(on a hard-delete deployment) makes the chat again; nothing then rolls it
+back, and it shows in Chat to delete by hand. A retry that lands while the
+first create is still initializing the chat (its default connectors, say)
+returns the chat early, so a later default write can overwrite the tools the
+wizard then sets. Closing these needs a consumed-key tombstone and a
+create-completion state; they were left out as out of proportion to the
+risk. The wizard retries a lost create once at
 once with the same key. If that also gets no answer, the dialog stays open
 saying so, and Back or close sends it again to learn the chat's ID and roll
 it back. Nothing is matched by title.

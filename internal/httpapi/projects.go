@@ -1399,7 +1399,7 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		}
 		// A keyed create (client_request_id) whose ID is taken: a concurrent
 		// retry with the same key got there first (answer with its chat), or
-		// the chat this key made was deleted since (refuse: use a new key).
+		// the chat this key made was soft-deleted since (refuse: use a new key).
 		if errors.Is(err, store.ErrConversationIDTaken) {
 			if winner, gerr := s.store.Get(r.Context(), user, store.ConversationIDFromContext(r.Context())); gerr == nil && winner != nil {
 				writeJSON(w, winner)
