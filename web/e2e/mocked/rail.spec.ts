@@ -46,10 +46,13 @@ test("the rail marks the active surface and links to the other", async ({ page }
   await page.goto("/chat");
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
-  await expect(page.getByRole("link", { name: "Chat" })).toHaveAttribute("aria-current", "page");
-  // The rail names the ways of working: Chat · Tasks (the Operations Center) ·
-  // Patrols (an index of patrol chats, and the Launchpad wizard).
-  await expect(page.getByRole("link", { name: "Tasks" })).toBeVisible();
+  // By test id: each rail item's accessible name includes its subtitle, and
+  // "Run headless, without a chat" contains "chat" too.
+  await expect(page.getByTestId("nav-to-chat")).toHaveAttribute("aria-current", "page");
+  await expect(page.getByTestId("nav-to-chat")).toContainText("Talk it through");
+  // The rail names the ways of working: Chat · Patrols (an index of patrol
+  // chats, and the Launchpad wizard) · Background tasks (the Operations Center).
+  await expect(page.getByTestId("nav-to-orchestrator")).toContainText("Background tasks");
   await expect(page.getByTestId("launchpad-button")).toHaveText(/Patrols/);
 });
 

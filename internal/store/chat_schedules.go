@@ -390,32 +390,43 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 	return out, rows.Err()
 }
 
-// UserPatrol is one of a user's recurring patrols with the title of the chat
-// it lives in — a row in the Patrols hub (docs/PATROL-LAUNCHPAD.md).
+// UserPatrol is one of a user's recurring patrols, summarised for the
+// Patrols index in the rail (docs/PATROL-LAUNCHPAD.md): just what the menu
+// shows and links to. The prompt stays out — it has no length bound and the
+// index never reads it. ConversationOwner is not serialised: the HTTP layer
+// uses it to re-check access to chats the caller does not own.
 type UserPatrol struct {
-	ChatSchedule
+	ID                string `json:"id"`
+	ConversationID    string `json:"conversation_id"`
+	Title             string `json:"title"`
 	ConversationTitle string `json:"conversation_title"`
+	CronExpr          string `json:"cron"`
+	Timezone          string `json:"timezone"`
+	Status            string `json:"status"`
+	NextRunAt         int64  `json:"next_run_at"`
+	ConversationOwner string `json:"-"`
 }
 
-// maxUserPatrols bounds the hub list; a person with more than this many live
+// maxUserPatrols bounds the index; a person with more than this many live
 // patrols still finds the rest in Chat.
 const maxUserPatrols = 100
 
-// ListUserPatrols returns userEmail's active and paused recurring patrols
-// (not one-shot timers) across all of their own, non-deleted conversations,
-// active ones first and each group soonest-next-run first.
+// ListUserPatrols returns the active and paused recurring patrols (not
+// one-shot timers) that userEmail created, in any non-deleted conversation —
+// their own, or a teammate's multiplayer chat they took part in — active ones
+// first and each group soonest-next-run first. It does NOT check access to a
+// conversation the user does not own; the caller must (multiplayer access can
+// be revoked after the patrol was made).
 func (s *Store) ListUserPatrols(ctx context.Context, userEmail string) ([]UserPatrol, error) {
 	if s == nil || s.db == nil {
 		return []UserPatrol{}, nil
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT cs.id, cs.conversation_id, cs.user_email, cs.title, cs.prompt, cs.cron_expr, cs.timezone,
-		        cs.duration_seconds, cs.status, cs.next_run_at, cs.last_run_at, cs.run_count, cs.max_runs,
-		        cs.created_at, cs.updated_at, c.title
+		`SELECT cs.id, cs.conversation_id, cs.title, c.title, cs.cron_expr, cs.timezone,
+		        cs.status, cs.next_run_at, c.user_email
 		   FROM chat_schedules cs
 		   JOIN conversations c ON c.id = cs.conversation_id
 		  WHERE cs.user_email = $1
-		    AND c.user_email = $1
 		    AND c.deleted_at IS NULL
 		    AND cs.cron_expr <> ''
 		    AND cs.status IN ('active', 'paused')
@@ -430,25 +441,14 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string) ([]UserPa
 
 	out := []UserPatrol{}
 	for rows.Next() {
-		var title string
-		item, err := scanChatSchedule(scanWithExtra{rows, &title})
-		if err != nil {
+		var p UserPatrol
+		if err := rows.Scan(&p.ID, &p.ConversationID, &p.Title, &p.ConversationTitle, &p.CronExpr,
+			&p.Timezone, &p.Status, &p.NextRunAt, &p.ConversationOwner); err != nil {
 			return nil, err
 		}
-		out = append(out, UserPatrol{ChatSchedule: item, ConversationTitle: title})
+		out = append(out, p)
 	}
 	return out, rows.Err()
-}
-
-// scanWithExtra lets scanChatSchedule read a row that carries one more
-// trailing column than the schedule itself.
-type scanWithExtra struct {
-	row   interface{ Scan(dest ...any) error }
-	extra any
-}
-
-func (r scanWithExtra) Scan(dest ...any) error {
-	return r.row.Scan(append(dest, r.extra)...)
 }
 
 // UpdateChatSchedule applies a partial update (pause, resume, or cadence/prompt

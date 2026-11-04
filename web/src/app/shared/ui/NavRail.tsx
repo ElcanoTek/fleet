@@ -338,8 +338,8 @@ export function NavRail({
           {/* The three ways of working, each with a subtitle that says what
               makes it different — patrols and background tasks both run on a
               schedule, so the names alone would blur: a patrol is a chat you
-              can talk to; a background task runs headless and delivers its
-              result elsewhere. (The user guides live in the account menu.) */}
+              can talk to; a background task runs headless, with no chat (and
+              emails its result only when it has recipients). (The user guides live in the account menu.) */}
           <NavToChat
             className={navItemClass(activeView === "chat", collapsed)}
             ariaCurrent={activeView === "chat" ? "page" : undefined}
@@ -368,14 +368,14 @@ export function NavRail({
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
                   ? `Background tasks · ${opsCount} running`
-                  : "Background tasks — run headless, deliver by email"
+                  : "Background tasks — run headless, without a chat"
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
-            <RailLabel title="Background tasks" subtitle="Run headless, deliver by email" collapsed={collapsed} />
+            <RailLabel title="Background tasks" subtitle="Run headless, without a chat" collapsed={collapsed} />
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
                 className={[

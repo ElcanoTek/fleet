@@ -90,4 +90,18 @@ describe("LaunchpadButton", () => {
       expect(window.location.pathname + window.location.search + window.location.hash).toBe("/settings/memories?x=2#top"),
     );
   });
+
+  it("never mistakes a failed read for no patrols: it says so and offers Retry", async () => {
+    const fn = vi.fn().mockResolvedValue({ ok: false, json: async () => ({}) });
+    vi.stubGlobal("fetch", fn);
+    render(<LaunchpadButton />);
+    fireEvent.click(screen.getByTestId("launchpad-button"));
+    expect(await screen.findByTestId("patrols-menu-error")).toBeTruthy();
+    expect(screen.queryByTestId("patrol-launchpad")).toBeNull();
+    expect(screen.getByTestId("patrols-menu-new")).toBeTruthy();
+    fn.mockResolvedValue({ ok: true, json: async () => ({ patrols: [{ id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "x", cron: "0 * * * *", status: "active" }] }) });
+    fireEvent.click(screen.getByTestId("patrols-menu-retry"));
+    expect(await screen.findByTestId("patrols-menu-item-s1")).toBeTruthy();
+    expect(screen.queryByTestId("patrols-menu-error")).toBeNull();
+  });
 });

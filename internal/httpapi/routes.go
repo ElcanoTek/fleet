@@ -74,7 +74,9 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
 	// Patrol Launchpad (docs/PATROL-LAUNCHPAD.md): drafts a new patrol's
 	// instructions from the wizard's answers. Returns a draft; persists nothing.
-	mux.Handle("/patrol-draft", auth(member(mutate(http.HandlerFunc(s.handlePatrolDraft)))))
+	// It is a model call, so it shares /chat's per-user rate limit (and the
+	// handler allows one draft in flight per user).
+	mux.Handle("/patrol-draft", auth(member(mutate(s.rateLimitMiddleware(http.HandlerFunc(s.handlePatrolDraft))))))
 	// The Patrols hub's index: the caller's live patrols across their chats.
 	mux.Handle("/patrols", auth(member(http.HandlerFunc(s.handlePatrols))))
 	// Trust-labeled MCP directory (#538): bundled connectors vs curated

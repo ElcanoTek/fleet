@@ -164,15 +164,50 @@ func TestListUserPatrols(t *testing.T) {
 		t.Fatalf("Delete: %v", err)
 	}
 	mk(other, "Their chat", "Their patrol", "0 9 * * *")
+	// A patrol I made in a teammate's chat (multiplayer): listed, with the
+	// owner kept for the HTTP layer's access re-check.
+	theirConv, err := s.CreateConversation(ctx, other, "Team chat", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := s.CreateUser(ctx, me, "test-password-123"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := s.SetConversationMultiplayer(ctx, other, theirConv.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	mine, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: theirConv.ID, UserEmail: me, Title: "Team sweep", Prompt: "check", CronExpr: "0 10 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule (teammate's chat): %v", err)
+	}
 
 	got, err := s.ListUserPatrols(ctx, me)
 	if err != nil {
 		t.Fatalf("ListUserPatrols: %v", err)
 	}
-	if len(got) != 2 {
-		t.Fatalf("got %d patrols, want 2 (active + paused): %+v", len(got), got)
+	if len(got) != 3 {
+		t.Fatalf("got %d patrols, want 3 (two active + paused): %+v", len(got), got)
 	}
-	if got[0].ID != active.ID || got[0].ConversationTitle != "Deals chat" || got[0].Status != ChatScheduleStatusActive {
+	var team *UserPatrol
+	for i := range got {
+		if got[i].ID == mine.ID {
+			team = &got[i]
+		}
+	}
+	if team == nil || team.ConversationOwner != other || team.ConversationTitle != "Team chat" {
+		t.Fatalf("the patrol in a teammate's chat should be listed with its owner, got %+v", team)
+	}
+	// Active first, so drop it to check the rest of the order.
+	rest := make([]UserPatrol, 0, 2)
+	for _, p := range got {
+		if p.ID != mine.ID {
+			rest = append(rest, p)
+		}
+	}
+	got = rest
+	if got[0].ID != active.ID || got[0].ConversationTitle != "Deals chat" || got[0].Status != ChatScheduleStatusActive || got[0].ConversationOwner != me {
 		t.Errorf("first row should be the active patrol with its chat title, got %+v", got[0])
 	}
 	if got[1].ID != paused.ID || got[1].ConversationTitle != "Inbox chat" || got[1].Status != ChatScheduleStatusPaused {

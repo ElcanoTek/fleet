@@ -16,6 +16,7 @@ import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem 
 type Call = { url: string; method: string; body?: unknown };
 
 type Opts = {
+  hangDraft?: boolean;
   draft?: "ok" | "fail";
   catalog?: "ok" | "fail";
   pin?: "ok" | "fail";
@@ -49,6 +50,7 @@ function mockApi(opts: Opts = {}) {
     if (url === "/api/memories" && method === "POST") return json({ id: "m1", content: "x" });
     if (url === "/api/me") return json({ email: "e2e@example.com", role: opts.role ?? "member" });
     if (url === "/api/personas") return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: [] });
+    if (url === "/api/patrol-draft" && opts.hangDraft) return new Promise(() => {});
     if (url === "/api/patrol-draft") {
       if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
       return json({ title: "Deal & inbox sweep", prompt: "**Mission**\nAI-written.", summary: "Every morning I check." });
@@ -151,6 +153,10 @@ describe("PatrolLaunchpad", () => {
     expect(prompt).toMatch(/\(use Deal Desk\)/);
     expect(prompt).toMatch(/\(use Gmail\)/);
     expect(screen.getByTestId("launchpad-summary").textContent).toContain("Gmail, Deal Desk");
+    // Honest about what already exists: the non-negotiable saved earlier.
+    expect(screen.getByTestId("launchpad-step-launch").textContent).toContain(
+      "the non-negotiable you saved on Ground rules is already in your memories",
+    );
     // It says where the patrol will live: in Chat, under its name.
     expect(screen.getByTestId("launchpad-where").textContent).toMatch(/In Chat.*as Deals & inbox patrol/);
 
@@ -356,5 +362,33 @@ describe("PatrolLaunchpad", () => {
     fireEvent.click(screen.getByTestId("launchpad-readonly-close"));
     expect(onClose).toHaveBeenCalled();
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+
+  it("does not launch while the assistant is still drafting", async () => {
+    const calls = mockApi({ hangDraft: true });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
+    await waitFor(() => expect((screen.getByTestId("launchpad-launch") as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
+  });
+
+  it("Use a preset leaves a preset selected rather than the custom schedule", async () => {
+    mockApi();
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    for (let i = 0; i < 4; i++) next();
+    fireEvent.click(screen.getByTestId("launchpad-goal-inbox"));
+    next();
+    await screen.findByTestId("launchpad-step-schedule");
+    fireEvent.click(screen.getByTestId("launchpad-cadence-custom"));
+    // Make the schedule a custom one (weekdays 07:15 is no preset)…
+    fireEvent.change(screen.getByTestId("launchpad-schedule-time"), { target: { value: "07:15" } });
+    expect(screen.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(0);
+    // …then go back to presets: one must be selected, and it is what launches.
+    fireEvent.click(screen.getByTestId("launchpad-cadence-custom"));
+    expect(screen.getByTestId("launchpad-cadence-weekday-morning").getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByTestId("launchpad-cadence-custom").textContent).toContain("Custom schedule");
+    const checked = screen.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true");
+    expect(checked).toHaveLength(1);
   });
 });

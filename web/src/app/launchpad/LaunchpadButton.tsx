@@ -46,15 +46,19 @@ function readDeepLink(): boolean {
   return new URLSearchParams(window.location.search).get(LAUNCHPAD_PARAM) === "1";
 }
 
-/** fetchPatrols reads the index; any failure reads as "none yet". */
-async function fetchPatrols(): Promise<PatrolSummary[]> {
+/**
+ * fetchPatrols reads the index. A failure is null, never [] — "could not
+ * load" must not read as "you have no patrols", or a hiccup would hide every
+ * patrol behind the first-time wizard.
+ */
+async function fetchPatrols(): Promise<PatrolSummary[] | null> {
   try {
     const res = await fetch("/api/patrols", { cache: "no-store" });
-    if (!res.ok) return [];
+    if (!res.ok) return null;
     const data = (await res.json()) as { patrols?: PatrolSummary[] };
-    return data.patrols ?? [];
+    return Array.isArray(data.patrols) ? data.patrols : null;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -83,6 +87,7 @@ export function LaunchpadButton({
   const [wizardOpen, setWizardOpen] = useState(readDeepLink);
   const [menuOpen, setMenuOpen] = useState(false);
   const [patrols, setPatrols] = useState<PatrolSummary[] | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [seen, setSeen] = useState(() => readSeen() || readDeepLink());
   const anchorRef = useRef<HTMLButtonElement | null>(null);
 
@@ -113,11 +118,13 @@ export function LaunchpadButton({
 
   // A click asks the server what exists right now (a patrol launched or
   // stopped in another tab counts): none → the wizard, some → the menu.
+  // A failed read opens the menu with the error, Retry and New patrol.
   const onClick = async () => {
     setSeen(true);
     const list = await fetchPatrols();
-    setPatrols(list);
-    if (list.length === 0) openWizard();
+    setLoadFailed(list === null);
+    setPatrols(list ?? []);
+    if (list !== null && list.length === 0) openWizard();
     else setMenuOpen(true);
   };
 
@@ -133,7 +140,7 @@ export function LaunchpadButton({
         ref={anchorRef}
         type="button"
         data-testid="launchpad-button"
-        aria-haspopup={patrols && patrols.length > 0 ? "menu" : "dialog"}
+        aria-haspopup={(patrols && patrols.length > 0) || loadFailed ? "menu" : "dialog"}
         aria-expanded={menuOpen || undefined}
         data-tip={dataTip}
         title={dataTip ? undefined : "Your patrols, and the Launchpad to set up a new one"}
@@ -160,9 +167,27 @@ export function LaunchpadButton({
         label="Patrols"
         className={collapsed ? "" : "min-w-[17rem]"}
       >
-        <p className="px-2 pb-1 pt-1.5 text-[0.72rem] leading-snug text-[var(--color-text-secondary)]" data-testid="patrols-menu-hint">
-          Each patrol is a chat that wakes on its schedule. Pick one to open it in Chat.
-        </p>
+        {loadFailed ? (
+          <>
+            <p role="alert" className="px-2 pb-1 pt-1.5 text-[0.75rem] leading-snug text-[var(--color-danger)]" data-testid="patrols-menu-error">
+              Couldn’t load your patrols. They are safe in Chat.
+            </p>
+            <MenuItem
+              icon={<Icon name="refresh" className="size-4" />}
+              testId="patrols-menu-retry"
+              onClick={() => {
+                setMenuOpen(false);
+                void onClick();
+              }}
+            >
+              Try again
+            </MenuItem>
+          </>
+        ) : (
+          <p className="px-2 pb-1 pt-1.5 text-[0.72rem] leading-snug text-[var(--color-text-secondary)]" data-testid="patrols-menu-hint">
+            Each patrol is a chat that wakes on its schedule. Pick one to open it in Chat.
+          </p>
+        )}
         {(patrols ?? []).map((p) => (
           <MenuItem
             key={p.id}

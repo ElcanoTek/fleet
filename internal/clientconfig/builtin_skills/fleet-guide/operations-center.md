@@ -83,8 +83,9 @@ support message, **Copy email**, and **Send email** (`mailto:`). In the
 left rail this page is **Background tasks**, after **Chat** and **Patrols**.
 Patrols are the other way to put the assistant on a schedule, and the
 difference matters: a patrol is a chat that checks in on a schedule — you can
-read and reply in it — while a background task runs headless and delivers its
-result by email (see the Chat guide's "Patrol Launchpad" section). The guides
+read and reply in it — while a background task runs headless, with no chat to
+reply in, and emails its result to the recipients you give it (see the Chat
+guide's "Patrol Launchpad" section). The guides
 open from the account menu, beside **Settings**.
 
 ### The tabs

@@ -102,6 +102,9 @@ type Saved = {
   promptEdited: boolean;
   promptBasis: string;
   summary: string;
+  // Non-negotiables saved on Ground rules: they are memories the moment they
+  // are saved, which the launch step must not pretend otherwise about.
+  memoriesAdded: number;
 };
 
 const FRESH: Saved = {
@@ -119,6 +122,7 @@ const FRESH: Saved = {
   promptEdited: false,
   promptBasis: "",
   summary: "",
+  memoriesAdded: 0,
 };
 
 function loadSaved(): Saved {
@@ -242,6 +246,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 
   // Persist progress (not while launching or after launch: those clear it).
   const [launch, setLaunch] = useState<LaunchState | null>(null);
+  const [drafting, setDrafting] = useState(false);
   // What a launch has created so far, so a failure can be rolled back.
   const created = useRef<{ conversationId: string; scheduleId: string }>({ conversationId: "", scheduleId: "" });
   useEffect(() => {
@@ -292,6 +297,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const doLaunch = async () => {
+    // Never launch over a draft in flight: it would save the template and
+    // then show the assistant's text as if it had been launched.
+    if (drafting) return;
     let phase: LaunchPhase = "conversation";
     const setPhase = (next: LaunchPhase) => {
       phase = next;
@@ -458,6 +466,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 userPersonas={userPersonas}
                 memories={memories}
                 onMemoriesChanged={() => void loadMemories()}
+                onMemoryAdded={() => setState((cur) => ({ ...cur, memoriesAdded: cur.memoriesAdded + 1 }))}
               />
             ) : null}
             {state.step === "watch" ? (
@@ -498,6 +507,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   )
                 }
                 promptStale={promptStale}
+                memoriesAdded={state.memoriesAdded}
                 onReset={() =>
                   patch({ titleEdited: false, promptEdited: false, title: "", prompt: "", promptBasis: "", summary: "" })
                 }
@@ -512,6 +522,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   mode: state.mode,
                   persona: state.persona,
                 }}
+                drafting={drafting}
+                setDrafting={setDrafting}
                 onDrafted={(d) =>
                   patch({
                     title: d.title,
@@ -547,7 +559,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 type="button"
                 className={`${btnClass({ variant: "primary" })} px-5`}
                 onClick={() => void doLaunch()}
-                disabled={!prompt.trim() || !state.cron.trim()}
+                disabled={drafting || !prompt.trim() || !state.cron.trim()}
+                title={drafting ? "Waiting for the assistant's draft" : undefined}
                 data-testid="launchpad-launch"
               >
                 <Icon name="zap" className="size-4" />
@@ -1040,6 +1053,7 @@ function RulesStep({
   userPersonas,
   memories,
   onMemoriesChanged,
+  onMemoryAdded,
 }: {
   persona: string;
   onPersona: (p: string) => void;
@@ -1048,6 +1062,7 @@ function RulesStep({
   userPersonas: UserPersona[];
   memories: Memory[] | null;
   onMemoriesChanged: () => void;
+  onMemoryAdded: () => void;
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1073,6 +1088,7 @@ function RulesStep({
       setDraft("");
       if (mem.id) {
         setJustAdded((cur) => [...cur, mem.id as string]);
+        onMemoryAdded();
         const pinRes = await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
@@ -1371,7 +1387,12 @@ function ScheduleStep({
         <button
           type="button"
           aria-expanded={custom}
-          onClick={() => setCustom((c) => !c)}
+          onClick={() => {
+            // Leaving custom mode must leave a preset selected: otherwise no
+            // card is ticked yet the custom schedule would still launch.
+            if (custom && !CADENCE_PRESETS.some((p) => p.cron === cron.trim())) onCron(CADENCE_PRESETS[0].cron);
+            setCustom((c) => !c);
+          }}
           className={btnClass({ sm: true, reveal: true })}
           data-testid="launchpad-cadence-custom"
         >
@@ -1427,8 +1448,11 @@ function LaunchStep({
   onEdit,
   onReset,
   promptStale,
+  memoriesAdded,
   draftRequest,
   onDrafted,
+  drafting,
+  setDrafting,
 }: {
   title: string;
   prompt: string;
@@ -1442,10 +1466,13 @@ function LaunchStep({
   onEdit: (p: { title?: string; prompt?: string }) => void;
   onReset: () => void;
   promptStale: boolean;
+  memoriesAdded: number;
   draftRequest: DraftRequest;
   onDrafted: (d: { title: string; prompt: string; summary: string }) => void;
+  // Owned by the parent so Launch waits for a draft in flight.
+  drafting: boolean;
+  setDrafting: (v: boolean) => void;
 }) {
-  const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const watching = PATROL_GOALS.filter((g) => goals.includes(g.id)).map((g) => g.title);
   if (notes.trim()) watching.push("Your extra notes");
@@ -1483,8 +1510,11 @@ function LaunchStep({
   return (
     <div>
       <StepTitle kicker="Final check" title="Ready for launch">
-        Check the plan, polish the instructions if you like, then launch. Nothing is created until you press{" "}
-        <strong className="text-[var(--color-text-primary)]">Launch patrol</strong>.
+        Check the plan, polish the instructions if you like, then launch. The patrol and its chat are only
+        created when you press <strong className="text-[var(--color-text-primary)]">Launch patrol</strong>
+        {memoriesAdded > 0
+          ? ` — the ${memoriesAdded === 1 ? "non-negotiable" : `${memoriesAdded} non-negotiables`} you saved on Ground rules ${memoriesAdded === 1 ? "is" : "are"} already in your memories.`
+          : "."}
       </StepTitle>
       <WhereItLives title={title.trim() || "My patrol"} />
       <div className="h-3" aria-hidden="true" />

@@ -9,7 +9,7 @@ from `?launchpad=1` on any page.
 **The rail names the three ways of working**, each with a one-line subtitle,
 because patrols and background tasks both run on a schedule and the names
 alone would blur: **Chat** (*Talk it through*), **Patrols** (*Chats that check
-in on a schedule*) and **Background tasks** (*Run headless, deliver by email*).
+in on a schedule*) and **Background tasks** (*Run headless, without a chat*).
 "Background tasks" replaced "Operations Center" everywhere a user sees it — the
 rail, the page header, the guide title and text, approval-card and tool text the
 assistant relays, and the owner-digest email; the guide notes the old name

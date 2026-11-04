@@ -142,9 +142,82 @@ func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
 		t.Fatalf("patrols = %+v", body.Patrols)
 	}
 
+	// Patrols the caller made in teammates' chats: listed while the caller can
+	// still open that chat (multiplayer participant), dropped once they cannot.
+	seedUser(t, s.concreteStore(t), me)
+	shared := seedConv(t, s, "teammate@x.com")
+	if _, err := s.store.SetConversationMultiplayer(ctx, "teammate@x.com", shared.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: shared.ID, UserEmail: me, Title: "Shared sweep", Prompt: "check", CronExpr: "0 9 * * *", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule (shared): %v", err)
+	}
+	// Made while multiplayer, then the owner turned multiplayer off.
+	private := seedConv(t, s, "teammate@x.com")
+	if _, err := s.store.SetConversationMultiplayer(ctx, "teammate@x.com", private.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	if _, err := s.store.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: private.ID, UserEmail: me, Title: "No longer mine to see", Prompt: "check", CronExpr: "0 9 * * *", Timezone: "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule (private): %v", err)
+	}
+	if _, err := s.store.SetConversationMultiplayer(ctx, "teammate@x.com", private.ID, false, nil, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer off: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	s.handlePatrols(rec, req)
+	body.Patrols = nil
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	titles := map[string]bool{}
+	for _, p := range body.Patrols {
+		titles[p.Title] = true
+	}
+	if !titles["Deal sweep"] || !titles["Shared sweep"] || titles["No longer mine to see"] || len(body.Patrols) != 2 {
+		t.Fatalf("patrols = %+v, want Deal sweep + Shared sweep only", body.Patrols)
+	}
+	if strings.Contains(rec.Body.String(), `"prompt"`) {
+		t.Error("the index must not carry patrol prompts")
+	}
+
 	post := httptest.NewRecorder()
 	s.handlePatrols(post, httptest.NewRequest(http.MethodPost, "/patrols", nil))
 	if post.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("POST status = %d, want 405", post.Code)
+	}
+}
+
+// TestPatrolDraft_OneAtATime refuses a second draft while the caller's first
+// is still being written: each is a model call of up to 45 seconds.
+func TestPatrolDraft_OneAtATime(t *testing.T) {
+	const user = "busy@x.com"
+	patrolDraftInFlight.Store(user, struct{}{})
+	defer patrolDraftInFlight.Delete(user)
+	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p"}}
+	s := &Server{agent: fake}
+	req := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, user))
+	rec := httptest.NewRecorder()
+	s.handlePatrolDraft(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", rec.Code)
+	}
+	if fake.patrolInput.Goals != nil {
+		t.Error("a refused draft must not reach the model")
+	}
+	// Once the first finishes, the next is accepted.
+	patrolDraftInFlight.Delete(user)
+	rec = httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Scan my inbox"]}`))
+	s.handlePatrolDraft(rec, req2.WithContext(context.WithValue(req2.Context(), ctxKeyUser, user)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("after the first finished, status = %d, want 200", rec.Code)
+	}
+	if _, still := patrolDraftInFlight.Load(user); still {
+		t.Error("the in-flight mark must be released when the draft returns")
 	}
 }

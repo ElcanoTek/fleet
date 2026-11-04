@@ -15,9 +15,17 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/store"
 )
+
+// patrolDraftInFlight holds the users with a draft being synthesized. A
+// draft is a model call of up to 45 seconds; one at a time per user is all
+// the wizard needs, and anything more is spend nobody asked for. (The route's
+// rateLimitMiddleware bounds the rate; this bounds concurrency.)
+var patrolDraftInFlight sync.Map
 
 // patrolDraftMaxBody bounds the request: a dozen goals, a notes box, a few
 // dozen connector descriptions and memories fit comfortably.
@@ -80,6 +88,13 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 		in.Connectors = append(in.Connectors, agent.PatrolDraftConnector{Name: c.Name, Description: c.Description})
 	}
 
+	user := strings.ToLower(userFromCtx(r.Context()))
+	if _, busy := patrolDraftInFlight.LoadOrStore(user, struct{}{}); busy {
+		http.Error(w, "a draft is already being written; wait for it to finish", http.StatusTooManyRequests)
+		return
+	}
+	defer patrolDraftInFlight.Delete(user)
+
 	draft, err := s.agent.SuggestPatrolDraft(r.Context(), in)
 	if err != nil || draft == nil {
 		http.Error(w, "the assistant could not draft this patrol; try again or edit the draft yourself", http.StatusBadGateway)
@@ -100,10 +115,25 @@ func (s *Server) handlePatrols(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	items, err := s.store.ListUserPatrols(r.Context(), userFromCtx(r.Context()))
+	user := userFromCtx(r.Context())
+	items, err := s.store.ListUserPatrols(r.Context(), user)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"patrols": items})
+	// A patrol in a teammate's multiplayer chat is listed only while the
+	// caller can still open that chat — the same rule the schedule routes
+	// apply (getOwnedOrMultiplayerConversation), so the index never links to
+	// a chat that would answer 404.
+	out := make([]store.UserPatrol, 0, len(items))
+	for _, p := range items {
+		if !strings.EqualFold(p.ConversationOwner, user) {
+			conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, p.ConversationID)
+			if err != nil || conv == nil {
+				continue
+			}
+		}
+		out = append(out, p)
+	}
+	writeJSON(w, map[string]any{"patrols": out})
 }

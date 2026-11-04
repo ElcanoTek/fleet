@@ -300,7 +300,7 @@ At the top of the rail are the three ways of working, each with a one-line
 subtitle: **Chat** (*Talk it through*), **Patrols** (*Chats that check in on a
 schedule* — your patrol chats, and the
 [Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) and
-**Background tasks** (*Run headless, deliver by email* — formerly the
+**Background tasks** (*Run headless, without a chat* — formerly the
 Operations Center). **New chat** starts a fresh
 conversation. The search field, also reachable with
 `⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
