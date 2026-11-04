@@ -363,6 +363,7 @@ export function Composer({
   messages,
   contextUsage,
   isSummarizing,
+  compactToastVisible = false,
   setConfirmSummarize,
   activeConversationIdRef,
   abortControllersRef,
@@ -1457,6 +1458,15 @@ export function Composer({
                         />
                       ) : null}
                     </button>
+                    {canCompact && compactToastVisible && !isSummarizing && !moreMenuOpen ? (
+                      <div
+                        role="status"
+                        aria-live="polite"
+                        className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 whitespace-nowrap rounded-[var(--radius-md)] border border-[color:color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[var(--color-surface-3)] px-2.5 py-1 text-[0.75rem] font-medium text-[var(--color-danger)] shadow-[var(--shadow-lg)] motion-safe:animate-[message-in_var(--motion-fast)_ease_both]"
+                      >
+                        Token limit hit — you should compact
+                      </div>
+                    ) : null}
                     {moreMenuOpen && !shareBusy ? (
                       <div
                         data-testid="composer-more-popover"

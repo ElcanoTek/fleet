@@ -6256,7 +6256,6 @@ export function ChatExperience({
             setTeamLinkNotice(null);
             if (status?.multiplayer) {
               setTeamChatView(null);
-              void loadConversation(id);
             } else {
               setTeamChatView(id);
             }
@@ -6410,12 +6409,17 @@ export function ChatExperience({
 
         // A deep-linked conversation outranks "most recent" — that's the
         // conversation the user was just sent to open.
-        // A team link to the viewer's OWN chat opens it like ?c= does.
-        const ownerLink =
-          teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
+        // A team link to the viewer's OWN chat or an open Multiplayer chat
+        // opens it directly like ?c= does.
+        const resolvedTeamLink = teamLink ? await teamLink : null;
+        const directTeamLink =
+          resolvedTeamLink?.status === "owner" ||
+          (resolvedTeamLink?.status === "open" && resolvedTeamLink?.multiplayer)
+            ? teamLinkId
+            : null;
         if (cancelled) return;
         const target =
-          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          deepLinkConvId ?? directTeamLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();

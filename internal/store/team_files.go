@@ -680,7 +680,11 @@ func (s *Store) ResolveTeamLink(ctx context.Context, callerEmail, convID string)
 		}
 		return notShared, nil
 	}
-	if mp, merr := s.GetMultiplayerConversation(ctx, callerEmail, convID); merr == nil && mp != nil {
+	mp, merr := s.GetMultiplayerConversation(ctx, callerEmail, convID)
+	if merr != nil {
+		return TeamLink{}, merr
+	}
+	if mp != nil {
 		return TeamLink{Status: TeamLinkOpen, Multiplayer: true}, nil
 	}
 	team, err := s.callerTeam(ctx, callerEmail)

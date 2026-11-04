@@ -356,8 +356,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
-| Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**, which shows the same percentage) to compact. On a phone the ring appears only once the conversation is filling up (70% or more), or while it is compacting, so the toolbar stays uncluttered. See [Long conversations](#long-conversations). |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages, showing the current context usage percentage); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -1190,11 +1189,12 @@ reload or a switch to another chat.
 
 ### Long conversations
 
-The context ring in the composer fills as a conversation grows. With **Show
+As a conversation grows, **Compact conversation** in **More options** (`•••`)
+shows the percentage of the model's context window currently in use. With **Show
 details** on, a totals line above the composer gives the same figure as a
 percentage alongside the conversation's cumulative cost. When a conversation gets
 full, a banner says so and the assistant starts to slow down and cost more per
-turn. **Compact conversation**, from the ring or the banner, replaces the earlier
+turn. **Compact conversation**, in **More options** or on the banner, replaces the earlier
 turns with a short summary so the conversation fits comfortably again; the
 transcript keeps its history, only the assistant's working view is shortened.
 You do not have to watch for it: by default, once a request reaches about 90% of

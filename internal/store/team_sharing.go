@@ -350,26 +350,14 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 		return []Conversation{}, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT `+teamConversationColumns+`, COALESCE(c.team_shared_with, ''), c.team_shared_with_id
+		SELECT `+teamConversationColumns+`
 		FROM conversations c
 		WHERE c.deleted_at IS NULL
 		  AND c.archived_at IS NULL
+		  AND c.team_visible = TRUE
 		  AND c.project_id = $1
 		  AND c.user_email <> $2
-		  AND (
-		    (c.team_visible = TRUE
-		      AND c.team_shared_with = $3 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)
-		    )
-		    OR (c.multiplayer = TRUE
-		      AND c.lockdown = FALSE
-		      AND NOT (c.multiplayer_excluded::jsonb ? $2)
-		      AND (
-		        (c.multiplayer_participants::jsonb ? $2)
-		        OR COALESCE(c.team_shared_with, '') = ''
-		        OR (c.team_shared_with = $3 AND (c.team_shared_with_id IS NULL OR c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)))
-		      )
-		    )
-		  )
+		  AND c.team_shared_with = $3 AND c.team_shared_with_id = (SELECT t.id FROM teams t WHERE t.name = $3)
 		ORDER BY c.updated_at DESC, c.id DESC`,
 		projectID, callerEmail, team,
 	)
@@ -377,47 +365,16 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 		return nil, err
 	}
 	defer rows.Close()
-	callerCanParticipate := caller.Role != RoleViewer
-	list := []Conversation{}
-	for rows.Next() {
-		var c Conversation
-		var optionalRaw []byte
-		var approvalTimeout sql.NullInt64
-		var thinkingRaw []byte
-		var accountsRaw []byte
-		var mpParticipantsRaw, mpExcludedRaw string
-		var sharedTeam string
-		var sharedTeamID sql.NullInt64
-		if err := rows.Scan(
-			&c.ID, &c.UserEmail, &c.Title, &c.Persona, &c.Model, &c.Pinned, &c.Lockdown,
-			&c.CreatedAt, &c.UpdatedAt, &c.ArchivedAt, &c.TitleLocked, &optionalRaw,
-			textArray{&c.Labels}, &approvalTimeout, &c.ShareToken, &c.ParentConversationID,
-			&c.BranchPointMessageID, &thinkingRaw, &c.ProjectID, &accountsRaw,
-			&c.TeamVisible, &c.AutoApprove, &c.Multiplayer, &mpParticipantsRaw, &mpExcludedRaw,
-			&sharedTeam, &sharedTeamID,
-		); err != nil {
-			return nil, err
-		}
-		c.OptionalMCPServersEnabled = scanOptionalMCPServers(optionalRaw)
-		c.RawMCPAccounts = scanMCPAccounts(accountsRaw)
-		c.MCPAccounts = filterOwnerMCPAccounts(c.RawMCPAccounts)
-		c.ApprovalTimeoutSeconds = nullableSeconds(approvalTimeout)
-		c.ThinkingConfig = scanThinkingConfig(thinkingRaw)
-		c.MultiplayerExcluded = scanEmailJSONArray(mpExcludedRaw)
-		if c.Multiplayer && (!callerCanParticipate || c.Lockdown || containsEmail(c.MultiplayerExcluded, callerEmail)) {
-			if c.TeamVisible && strings.TrimSpace(sharedTeam) == team && sharedTeamID.Valid {
-				c.Multiplayer = false
-			} else {
-				continue
-			}
-		}
-		c.ShareToken = ""
-		c.MultiplayerParticipants = nil
-		c.MultiplayerExcluded = nil
-		list = append(list, c)
-	}
-	if err := rows.Err(); err != nil {
+	list, err := scanConversationRows(rows)
+	if err != nil {
 		return nil, err
+	}
+	callerCanParticipate := caller.Role != RoleViewer
+	for i := range list {
+		if list[i].Multiplayer && (!callerCanParticipate || list[i].Lockdown || containsEmail(list[i].MultiplayerExcluded, callerEmail)) {
+			list[i].Multiplayer = false
+		}
+		list[i].MultiplayerExcluded = nil
 	}
 	return list, nil
 }
