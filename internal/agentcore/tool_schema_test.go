@@ -876,6 +876,36 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 		t.Fatalf("CheckMCPToolSchemas with cancelled context succeeded, want context.Canceled")
 	}
 
+	// Repeated identical schemas that individually fit the per-tool budget must
+	// still charge the catalog budget on cache hits so 20 copies of a 7-level
+	// DAG (~127 expansions each) exceed maxCatalogRefExpansions (1024).
+	smallDAGSchema := map[string]any{
+		"$defs": defs,
+		"type":  "object",
+		"properties": map[string]any{
+			"root": map[string]any{"$ref": "#/$defs/D6"},
+		},
+	}
+	if singleIssue, singleOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "d6_single", InputSchema: smallDAGSchema}); singleOK {
+		t.Fatalf("single 6-level DAG should fit per-tool budget, got: %+v", singleIssue)
+	}
+	repeatedCatalog := make([]mcp.ServerTool, 20)
+	for i := range repeatedCatalog {
+		repeatedCatalog[i] = mcp.ServerTool{
+			ServerName: "srv",
+			Tool:       mcp.Tool{Name: "d6_copy_" + string(rune('a'+i)), InputSchema: smallDAGSchema},
+		}
+	}
+	repIssues, err := CheckMCPToolSchemas(context.Background(), repeatedCatalog)
+	if err != nil {
+		t.Fatalf("CheckMCPToolSchemas on repeated cached DAGs: %v", err)
+	}
+	if len(repIssues) == 0 {
+		t.Fatalf("repeated cached DAGs did not trip catalog budget on cache hits")
+	}
+}
+
+func TestNormalizeToolSchemaEdgeCases(t *testing.T) {
 	// Root self-reference ($ref: "#") in an object input schema remains valid
 	// after Info() rebuilds the root object and must be preserved.
 	rootSelfRef := jsonMap(t, `{
@@ -914,31 +944,58 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 		t.Fatalf("CheckMCPToolSchema on malformed sibling required [42] = (%+v, %v), want ToolSchemaInvalid", badReqIssue, badReqOK)
 	}
 
-	// Repeated identical schemas that individually fit the per-tool budget must
-	// still charge the catalog budget on cache hits so 20 copies of a 7-level
-	// DAG (~127 expansions each) exceed maxCatalogRefExpansions (1024).
-	smallDAGSchema := map[string]any{
-		"$defs": defs,
-		"type":  "object",
-		"properties": map[string]any{
-			"root": map[string]any{"$ref": "#/$defs/D6"},
-		},
+	// Deep JSON Pointer into $defs (#/$defs/Input/properties/query),
+	// complementary additionalProperties: false sibling alongside referenced
+	// properties, and malformed target allOf preserved for validation.
+	deepAndComplementary := jsonMap(t, `{
+	  "$defs": {
+	    "Input": {
+	      "type": "object",
+	      "properties": {
+	        "query": {"type": "string", "minLength": 2}
+	      },
+	      "required": ["query"]
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "q": {"$ref": "#/$defs/Input/properties/query"},
+	    "strict_input": {
+	      "$ref": "#/$defs/Input",
+	      "additionalProperties": false
+	    }
+	  }
+	}`)
+	normDeep := normalizeToolSchema(deepAndComplementary)
+	deepProps := normDeep["properties"].(map[string]any)
+	if qProp, _ := deepProps["q"].(map[string]any); qProp["type"] != "string" || qProp["minLength"] != float64(2) {
+		t.Fatalf("deep JSON Pointer #/$defs/Input/properties/query not inlined: %v", qProp)
 	}
-	if singleIssue, singleOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "d6_single", InputSchema: smallDAGSchema}); singleOK {
-		t.Fatalf("single 6-level DAG should fit per-tool budget, got: %+v", singleIssue)
+	strictInput := deepProps["strict_input"].(map[string]any)
+	if strictInput["additionalProperties"] != false {
+		t.Fatalf("complementary additionalProperties: false should stay on the merged schema object, got: %v", strictInput)
 	}
-	repeatedCatalog := make([]mcp.ServerTool, 20)
-	for i := range repeatedCatalog {
-		repeatedCatalog[i] = mcp.ServerTool{
-			ServerName: "srv",
-			Tool:       mcp.Tool{Name: "d6_copy_" + string(rune('a'+i)), InputSchema: smallDAGSchema},
-		}
+	if _, hasAllOf := strictInput["allOf"]; hasAllOf {
+		t.Fatalf("complementary additionalProperties: false should not be isolated into allOf: %v", strictInput)
 	}
-	repIssues, err := CheckMCPToolSchemas(context.Background(), repeatedCatalog)
-	if err != nil {
-		t.Fatalf("CheckMCPToolSchemas on repeated cached DAGs: %v", err)
-	}
-	if len(repIssues) == 0 {
-		t.Fatalf("repeated cached DAGs did not trip catalog budget on cache hits")
+
+	badTargetAllOf := jsonMap(t, `{
+	  "$defs": {
+	    "BadAllOf": {
+	      "type": "object",
+	      "allOf": "not-an-array"
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "item": {
+	      "$ref": "#/$defs/BadAllOf",
+	      "allOf": [{"type": "object"}]
+	    }
+	  }
+	}`)
+	badAllOfIssue, badAllOfOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "bad_target_allof", InputSchema: badTargetAllOf})
+	if !badAllOfOK || badAllOfIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on malformed target allOf = (%+v, %v), want ToolSchemaInvalid", badAllOfIssue, badAllOfOK)
 	}
 }

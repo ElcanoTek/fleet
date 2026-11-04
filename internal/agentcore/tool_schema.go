@@ -458,37 +458,6 @@ var schemaAnnotationKeywords = map[string]bool{
 	"$comment": true, "deprecated": true, "readOnly": true, "writeOnly": true,
 }
 
-var interactingKeywordFamilies = [][]string{
-	{"properties", "patternProperties", "additionalProperties"},
-	{"items", "prefixItems", "additionalItems", "contains", "minContains", "maxContains"},
-	{"if", "then", "else"},
-	{"dependencies", "dependentRequired", "dependentSchemas"},
-}
-
-func siblingInteractsWithTarget(key string, target map[string]any) bool {
-	if _, exists := target[key]; exists {
-		return true
-	}
-	for _, family := range interactingKeywordFamilies {
-		inFamily := false
-		for _, member := range family {
-			if member == key {
-				inFamily = true
-				break
-			}
-		}
-		if !inFamily {
-			continue
-		}
-		for _, member := range family {
-			if _, exists := target[member]; exists {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 type defScope struct {
 	root           map[string]any
 	defs           map[string]any
@@ -577,7 +546,7 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 			}
 			var resolved any
 			switch {
-			case active[canonKey]:
+			case isRefActive(active, canonKey):
 				resolved = recursiveRefStub(target, scope)
 			case len(active) > maxInlineRefDepth || !budget.addExpansion():
 				budget.exceeded = true
@@ -657,6 +626,18 @@ func inlineSchemaMapFields(obj map[string]any, scope defScope, active map[string
 			}
 		}
 	}
+}
+
+func isRefActive(active map[string]bool, canonKey string) bool {
+	if active[canonKey] {
+		return true
+	}
+	for k := range active {
+		if k != "#" && strings.HasPrefix(canonKey, k+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneActiveRefs(active map[string]bool, addKey string) map[string]bool {
@@ -809,8 +790,13 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 			out[k] = v
 		}
 		allOf := []any{resMap}
-		if sibAllOf, ok := siblings["allOf"].([]any); ok {
-			allOf = append(allOf, sibAllOf...)
+		if sibAllOf, has := siblings["allOf"]; has {
+			if sibSlice, ok := sibAllOf.([]any); ok {
+				allOf = append(allOf, sibSlice...)
+			} else {
+				out["allOf"] = sibAllOf
+				return out
+			}
 		}
 		out["allOf"] = allOf
 		return out
@@ -829,17 +815,25 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 				out["required"] = v
 			}
 		case k == "allOf":
-			if existing, ok := out["allOf"].([]any); ok {
-				if extra, ok := v.([]any); ok {
-					out["allOf"] = append(existing, extra...)
+			if existing, has := out["allOf"]; has {
+				existingArr, ok1 := existing.([]any)
+				extraArr, ok2 := v.([]any)
+				if !ok1 {
+					// Preserve malformed target allOf so metaschema validation rejects it.
 					continue
 				}
+				if !ok2 {
+					out["allOf"] = v
+					continue
+				}
+				out["allOf"] = append(existingArr, extraArr...)
+				continue
 			}
 			out["allOf"] = v
 		default:
-			if !siblingInteractsWithTarget(k, resMap) {
+			if existing, exists := resMap[k]; !exists {
 				out[k] = v
-			} else if existing, exists := resMap[k]; !exists || !reflect.DeepEqual(existing, v) {
+			} else if !reflect.DeepEqual(existing, v) {
 				if conflicts == nil {
 					conflicts = map[string]any{}
 				}
@@ -848,8 +842,13 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 		}
 	}
 	if len(conflicts) > 0 {
-		allOf, _ := out["allOf"].([]any)
-		out["allOf"] = append(allOf, conflicts)
+		if existing, has := out["allOf"]; has {
+			if allOf, ok := existing.([]any); ok {
+				out["allOf"] = append(allOf, conflicts)
+			}
+		} else {
+			out["allOf"] = []any{conflicts}
+		}
 	}
 	return out
 }
@@ -909,28 +908,70 @@ func lookupLocalDef(ref string, scope defScope) (any, string, bool) {
 	if err != nil {
 		return nil, "", false
 	}
-	if token, ok := strings.CutPrefix(pointer, "/$defs/"); ok {
-		if decoded, valid := decodePointerToken(token); valid {
-			if d, exists := scope.defs[decoded]; exists && isSchemaValue(d) {
-				return d, "$defs:" + decoded, true
-			}
+	if rest, ok := strings.CutPrefix(pointer, "/$defs/"); ok {
+		if target, canon, valid := resolveJSONPointerSteps(scope.defs, rest, "$defs"); valid {
+			return target, canon, true
 		}
 	}
-	if token, ok := strings.CutPrefix(pointer, "/definitions/"); ok {
-		if decoded, valid := decodePointerToken(token); valid {
-			if d, exists := scope.definitions[decoded]; exists && isSchemaValue(d) {
-				return d, "definitions:" + decoded, true
-			}
+	if rest, ok := strings.CutPrefix(pointer, "/definitions/"); ok {
+		if target, canon, valid := resolveJSONPointerSteps(scope.definitions, rest, "definitions"); valid {
+			return target, canon, true
 		}
 	}
 	return nil, "", false
 }
 
-func decodePointerToken(token string) (string, bool) {
-	if token == "" || strings.Contains(token, "/") {
-		return "", false
+func resolveJSONPointerSteps(root map[string]any, rest, prefix string) (any, string, bool) {
+	if len(root) == 0 || rest == "" {
+		return nil, "", false
 	}
-	return strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"), true
+	parts := strings.Split(rest, "/")
+	var cur any = root
+	var canon strings.Builder
+	canon.WriteString(prefix)
+	for _, rawPart := range parts {
+		token := strings.ReplaceAll(strings.ReplaceAll(rawPart, "~1", "/"), "~0", "~")
+		canon.WriteByte('/')
+		canon.WriteString(jsonPointerToken(token))
+		switch c := cur.(type) {
+		case map[string]any:
+			next, exists := c[token]
+			if !exists {
+				return nil, "", false
+			}
+			cur = next
+		case []any:
+			idx, ok := parseJSONPointerArrayIndex(token, len(c))
+			if !ok {
+				return nil, "", false
+			}
+			cur = c[idx]
+		default:
+			return nil, "", false
+		}
+	}
+	if !isSchemaValue(cur) {
+		return nil, "", false
+	}
+	return cur, canon.String(), true
+}
+
+func parseJSONPointerArrayIndex(token string, length int) (int, bool) {
+	if token == "" || (len(token) > 1 && token[0] == '0') {
+		return 0, false
+	}
+	n := 0
+	for i := 0; i < len(token); i++ {
+		ch := token[i]
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+		n = n*10 + int(ch-'0')
+		if n >= length {
+			return 0, false
+		}
+	}
+	return n, n < length
 }
 
 // foldExclusiveBound rewrites the draft-04 boolean exclusive bound and reports
