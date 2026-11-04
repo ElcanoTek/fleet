@@ -289,6 +289,11 @@ export type ComposerProps = {
   } | null;
   shareTeam?: string;
   shareBusy?: boolean;
+
+  // Memories & turn details (relocated from top header into More options).
+  onOpenMemories?: () => void;
+  showDetails?: boolean;
+  onToggleShowDetails?: () => void;
 };
 
 export function Composer({
@@ -369,6 +374,9 @@ export function Composer({
   onOpenShare,
   shareConversation,
   shareBusy = false,
+  onOpenMemories,
+  showDetails = false,
+  onToggleShowDetails,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
   // - `isComposerFocused` drives the keyboard-hint line under the composer:
@@ -1447,7 +1455,7 @@ export function Composer({
                         data-testid="composer-more-popover"
                         role="menu"
                         aria-label="More composer options"
-                        className={`${COMPOSER_POP_WIDE} sm:w-[20.5rem]`}
+                        className={`${COMPOSER_POP_WIDE} max-h-[min(75vh,30rem)] overflow-y-auto sm:w-[20.5rem]`}
                       >
                         <button
                           type="button"
@@ -1503,37 +1511,36 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        {onStartPatrol && !sealed ? (
+                        {onOpenMemories ? (
                           <button
                             type="button"
                             role="menuitem"
-                            data-testid="chat-patrol-button"
-                            aria-label="Patrol & recurring schedule"
+                            data-testid="composer-memories-button"
+                            aria-label="Manage memories"
                             className={POP_ROW}
                             onClick={() => {
                               setMoreMenuOpen(false);
                               moreButtonRef.current?.focus();
-                              setPatrolPopoverOpen(true);
+                              onOpenMemories();
                             }}
                           >
                             <span className="flex min-w-0 items-center gap-2.5">
                               <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
-                                <Icon name="clock" className="size-3.5" />
+                                <Icon name="brain" className="size-3.5" />
                               </span>
                               <span className="grid min-w-0">
-                                <span className={POP_TITLE}>Patrol & schedule</span>
+                                <span className={POP_TITLE}>Memories</span>
                                 <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                  {activePatrolCount > 0
-                                    ? `${activePatrolCount} recurring schedule active`
-                                    : "Run this chat on a recurring schedule"}
+                                  Saved facts and team learnings
                                 </span>
                               </span>
                             </span>
-                            <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
-                              {activePatrolCount > 0 ? `${activePatrolCount} active` : "Set up"}
-                              <Icon name="chevron-right" className="size-3.5" />
-                            </span>
+                            <Icon name="chevron-right" className="size-3.5 shrink-0 text-[var(--color-text-muted)]" />
                           </button>
+                        ) : null}
+
+                        {onOpenShare || (onStartPatrol && !sealed) || toggleAutoApprove || canCompact ? (
+                          <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
                         ) : null}
 
                         {onOpenShare ? (
@@ -1594,6 +1601,39 @@ export function Composer({
                                   <Icon name="chevron-right" className="size-3" />
                                 </>
                               )}
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {onStartPatrol && !sealed ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="chat-patrol-button"
+                            aria-label="Patrol & recurring schedule"
+                            className={POP_ROW}
+                            onClick={() => {
+                              setMoreMenuOpen(false);
+                              moreButtonRef.current?.focus();
+                              setPatrolPopoverOpen(true);
+                            }}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                                <Icon name="clock" className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Patrol & schedule</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  {activePatrolCount > 0
+                                    ? `${activePatrolCount} recurring schedule active`
+                                    : "Run this chat on a recurring schedule"}
+                                </span>
+                              </span>
+                            </span>
+                            <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
+                              {activePatrolCount > 0 ? `${activePatrolCount} active` : "Set up"}
+                              <Icon name="chevron-right" className="size-3.5" />
                             </span>
                           </button>
                         ) : null}
@@ -1678,41 +1718,50 @@ export function Composer({
                           </button>
                         ) : null}
 
-                        <button
-                          type="button"
-                          role="menuitemcheckbox"
-                          aria-checked={sendOnEnter}
-                          aria-label={
-                            sendOnEnter
-                              ? "Send on Enter (click to switch to Ctrl+Enter)"
-                              : "Send on Ctrl+Enter (click to switch to Enter)"
-                          }
-                          className={POP_ROW}
-                          onClick={() => setSendOnEnter((v) => !v)}
-                        >
-                          <span className="flex min-w-0 items-center gap-2.5">
-                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
-                              <Icon name="return-key" className="size-3.5" />
-                            </span>
-                            <span className="grid min-w-0">
-                              <span className={POP_TITLE}>Send on Enter</span>
-                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
-                                {sendOnEnter
-                                  ? "Enter sends · Shift+Enter adds a line"
-                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                        <div aria-hidden="true" className="my-0.5 h-px bg-[var(--color-border)]" />
+
+                        {onToggleShowDetails ? (
+                          <button
+                            type="button"
+                            role="menuitemcheckbox"
+                            aria-checked={showDetails}
+                            data-testid="composer-details-toggle"
+                            aria-label={
+                              showDetails
+                                ? "Hide details (thinking, stats, tool calls)"
+                                : "Show details (thinking, stats, tool calls)"
+                            }
+                            className={POP_ROW}
+                            onClick={() => onToggleShowDetails()}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span
+                                className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${
+                                  showDetails
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                                    : "bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]"
+                                }`}
+                              >
+                                <Icon name={showDetails ? "info" : "sparkles"} className="size-3.5" />
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Show details</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  Thinking, tool calls, and turn stats
+                                </span>
                               </span>
                             </span>
-                          </span>
-                          <span
-                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
-                              sendOnEnter
-                                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
-                                : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
-                            }`}
-                          >
-                            {sendOnEnter ? "On" : "Off"}
-                          </span>
-                        </button>
+                            <span
+                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                showDetails
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {showDetails ? "On" : "Off"}
+                            </span>
+                          </button>
+                        ) : null}
 
                         {onToggleDashboardView ? (
                           <button
@@ -1748,6 +1797,42 @@ export function Composer({
                             </span>
                           </button>
                         ) : null}
+
+                        <button
+                          type="button"
+                          role="menuitemcheckbox"
+                          aria-checked={sendOnEnter}
+                          aria-label={
+                            sendOnEnter
+                              ? "Send on Enter (click to switch to Ctrl+Enter)"
+                              : "Send on Ctrl+Enter (click to switch to Enter)"
+                          }
+                          className={POP_ROW}
+                          onClick={() => setSendOnEnter((v) => !v)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]">
+                              <Icon name="return-key" className="size-3.5" />
+                            </span>
+                            <span className="grid min-w-0">
+                              <span className={POP_TITLE}>Send on Enter</span>
+                              <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                {sendOnEnter
+                                  ? "Enter sends · Shift+Enter adds a line"
+                                  : "Ctrl/⌘+Enter sends · Enter adds a line"}
+                              </span>
+                            </span>
+                          </span>
+                          <span
+                            className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                              sendOnEnter
+                                ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                            }`}
+                          >
+                            {sendOnEnter ? "On" : "Off"}
+                          </span>
+                        </button>
                       </div>
                     ) : null}
                   </div>

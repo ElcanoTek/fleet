@@ -4,14 +4,20 @@
 
 1. **Calm, focused composer toolbar (mobile & desktop)**
    - **Left cluster (everyday actions):** **Model selector** (`Model`), **Attach files**, **Tools** (connectors with live count badge), and **More options** (`•••`).
-   - **More options (`•••`) menu (`composer-more-popover`):** A clean, labeled popover menu with descriptions and status badges for secondary and session-level controls:
-     - **Prompt library** — opens the Prompt Library modal and restores focus to **More options** when closed.
-     - **Persona** — selects the workspace or personal persona on a new draft before the conversation is created (by sending the first message or materializing via **Share**).
-     - **Patrol & schedule** — opens the recurring patrol / one-shot timer popover.
-     - **Share this chat** — opens the Share dialog to share with your team, copy a public link, or toggle Multiplayer mode.
-     - **Auto-approve tools** — toggles per-conversation auto-approve for session-approvable tools.
-     - **Compact conversation** — summarizes earlier turns to free context window space once a conversation has messages.
-     - **Send on Enter** — toggles `Enter` vs `Ctrl/Cmd+Enter` send behavior.
+   - **More options (`•••`) menu (`composer-more-popover`):** A clean, labeled popover menu organized into three logical groups with descriptions and status badges:
+     - **Context, Prompts & Memory:**
+       - **Prompt library** — opens the Prompt Library modal and restores focus to **More options** when closed.
+       - **Persona** — selects the workspace or personal persona on a new draft before the conversation is created (by sending the first message or materializing via **Share**).
+       - **Memories** — opens the Memory Manager (`My memory`, `Team learnings`, and `Graph`).
+     - **Sharing, Schedule & Automation:**
+       - **Share this chat** — opens the Share dialog to share with your team, copy a public link, or toggle Multiplayer mode.
+       - **Patrol & schedule** — opens the recurring patrol / one-shot timer popover.
+       - **Auto-approve tools** — toggles per-conversation auto-approve for session-approvable tools.
+       - **Compact conversation** — summarizes earlier turns to free context window space once a conversation has messages.
+     - **View & Input Preferences:**
+       - **Show details** — toggles the assistant's reasoning, working notes, tool calls, and per-turn cost/token stats on or off.
+       - **Dashboard view** — switches between standard chat and the live Dashboard board (`D`).
+       - **Send on Enter** — toggles `Enter` vs `Ctrl/Cmd+Enter` send behavior.
    - **Contextual status pills on the primary bar (desktop `sm:` and above; mobile accent dot):** Secondary settings stay out of the way when at their defaults. When any secondary setting is active, **More options** (`•••`) displays an accent dot on both mobile and desktop; on desktop viewports (`sm:` and wider), compact one-click status pills also surface directly on the toolbar:
      - Non-default **Persona** pill (on a new draft before the conversation is created; hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)

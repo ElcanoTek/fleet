@@ -7442,54 +7442,6 @@ export function ChatExperience({
                     className="size-5 transition motion-safe:group-hover/tbtn:scale-110"
                   />
                 </button>
-                <button
-                  aria-label="Manage memories"
-                  className="group/tbtn relative inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  data-tip-bottom="Memories"
-                  type="button"
-                  onClick={openMemoryManager}
-                >
-                  <Icon
-                    name="brain"
-                    className="size-5 transition motion-safe:group-hover/tbtn:scale-110"
-                  />
-                </button>
-                <button
-                  aria-label={
-                    showStats
-                      ? "Hide details (thinking, stats, tool calls)"
-                      : "Show details (thinking, stats, tool calls)"
-                  }
-                  aria-pressed={showStats}
-                  // Color stays muted in both states — the icon swap is
-                  // the affordance the user keys off, not an accent
-                  // highlight. Mirrors the sun/moon theme toggle next door.
-                  className="group/tbtn inline-flex size-11 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-accent)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:size-8"
-                  data-tip-bottom={showStats ? "Hide details" : "Show details"}
-                  type="button"
-                  onClick={toggleShowStats}
-                >
-                  <span className="relative size-4" aria-hidden="true">
-                    <Icon
-                      name="sparkles"
-                      className={[
-                        "absolute inset-0 size-4 transition duration-base",
-                        showStats
-                          ? "rotate-12 scale-[0.86] opacity-0"
-                          : "rotate-0 scale-100 opacity-100",
-                      ].join(" ")}
-                    />
-                    <Icon
-                      name="info"
-                      className={[
-                        "absolute inset-0 size-4 transition duration-base",
-                        showStats
-                          ? "rotate-0 scale-100 opacity-100"
-                          : "-rotate-12 scale-[0.86] opacity-0",
-                      ].join(" ")}
-                    />
-                  </span>
-                </button>
               </>
             }
           />
@@ -7997,6 +7949,9 @@ export function ChatExperience({
                 }
                 shareTeam={activeChatTeamAudience}
                 shareBusy={creatingShareForCurrentView}
+                onOpenMemories={openMemoryManager}
+                showDetails={showStats}
+                onToggleShowDetails={toggleShowStats}
               />
             </section>
           </div>

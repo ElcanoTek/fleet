@@ -303,14 +303,13 @@ nothing shared.
 
 ### The header
 
-Above the transcript sit four small controls, left to right: **Dashboard**
-switches the conversation to [dashboard view](#dashboard-view); **Keyboard
+Above the transcript sit two quick desktop controls on the right: **Dashboard**
+switches the conversation to [dashboard view](#dashboard-view), and **Keyboard
 shortcuts** shows the same list as the [last section](#13-keyboard-shortcuts) of
-this guide; **Memories** opens the memory manager; and **Show details** toggles
-the assistant's reasoning, working notes, tool calls, and per-turn cost figures on
-or off across the whole conversation. On narrow mobile screens (`< 40rem`), the
+this guide. On narrow mobile screens (`< 40rem`), the
 **Dashboard** and **Keyboard shortcuts** buttons are hidden from the header to keep
 the top bar compact (switch to dashboard view via **More options → Dashboard view**).
+**Memories** and **Show details** (which toggles the assistant's reasoning, working notes, tool calls, and per-turn cost figures on or off across the conversation) live inside **More options** (`•••`) in the composer so they carry clear labels and stay reachable in both standard chat and dashboard view.
 When your operator configures a support
 contact in the deployment's bundle (`branding.support`), the top bar also shows
 that support button across Chat, the Operations Center, Settings, and Guides
@@ -357,7 +356,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Share this chat**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), **Send on Enter**, and **Dashboard view**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**, which shows the same percentage) to compact. On a phone the ring appears only once the conversation is filling up (70% or more), or while it is compacting, so the toolbar stays uncluttered. See [Long conversations](#long-conversations). |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
@@ -960,7 +959,7 @@ footer of any reply to keep what the assistant just said, without composing a
 after a turn, marked **Proposed** in the manager until you accept them. Nothing
 enters memory without your say-so except what you typed yourself.
 
-Open **Memories** from the header. The manager has two tabs, **My memory** and
+Open **Memories** from **More options** (`•••`) in the composer or under **Settings → Memories**. In chat, the manager has two tabs, **My memory** and
 **Team learnings**, and a **Graph** view for how entries connect. Each memory
 shows where it came from (**Manual**, **Saved from chat**, or **Auto-extracted
 from chat**) and offers these actions:
@@ -1211,9 +1210,9 @@ than compacting an old one.
 The library is where a finished prompt lives. Chats are where prompts get built;
 tasks are where they run; the library is the one place both of them look.
 
-There is one library, visible from two places. **Prompt library** inside **More
-options** (`•••`) in the composer and the prompt field in the Operations Center
-task form open the same list, so a prompt saved from a conversation is, word for
+There is one library, visible from three places: **Prompt library** inside **More
+options** (`•••`) in the composer, **Settings → Prompts**, and the prompt field in the Operations Center
+task form all open the same list, so a prompt saved from a conversation is, word for
 word, the prompt a task can run. It holds two kinds of entry:
 
 | Kind | What it is |
