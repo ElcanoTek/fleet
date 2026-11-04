@@ -293,6 +293,7 @@ function ProjectPanel({
 // Delete project) stay below a separator: the rail is still the only place a
 // project is pinned or renamed inline.
 function ProjectKebab({
+  projectId,
   projectName,
   pinned,
   isOwner,
@@ -305,6 +306,7 @@ function ProjectKebab({
   onDelete,
   onReorder,
 }: {
+  projectId: string;
   projectName: string;
   pinned: boolean;
   isOwner: boolean;
@@ -334,6 +336,7 @@ function ProjectKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Project options for ${projectName}`}
+        data-project-options={projectId}
         onMouseEnter={(e) => {
           if (!open) tip.show(e);
         }}
@@ -1631,6 +1634,7 @@ export function ConversationSidebar({
                     ) : null}
                     <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
                       <ProjectKebab
+                        projectId={project.id}
                         projectName={project.name}
                         pinned={Boolean(project.pinned)}
                         isOwner={project.owner_email === userEmail}
@@ -1711,11 +1715,10 @@ export function ConversationSidebar({
                           hint="Drag a chat, or use its arrows, to set the order. Chats you add later appear at the top."
                           onReorder={(ids) => onReorderChats(projectOrderScope(project.id), ids)}
                           onDone={() =>
+                            // By project ID: two projects may share a name.
                             endReorder(() =>
-                              Array.from(
-                                document.querySelectorAll<HTMLButtonElement>('button[aria-haspopup="menu"]'),
-                              )
-                                .find((b) => b.getAttribute("aria-label") === `Project options for ${project.name}`)
+                              Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-project-options]"))
+                                .find((b) => b.dataset.projectOptions === project.id)
                                 ?.focus(),
                             )
                           }

@@ -43,6 +43,9 @@ async function setup(
     meFails?: boolean;
     // The first PUT waits for this, then fails with a 500.
     holdThenFailFirstPut?: Promise<void>;
+    // The server drops this ID from what it keeps (it left the scope
+    // meanwhile), and later reads reflect that.
+    putDrops?: string;
   } = {},
 ) {
   const puts: Put[] = [];
@@ -72,6 +75,11 @@ async function setup(
     if (r.request().method() === "PUT") {
       const body = r.request().postDataJSON() as { scope: string; conversation_ids: string[] };
       puts.push({ scope: body.scope, ids: body.conversation_ids });
+      if (opts.putDrops) {
+        const kept = body.conversation_ids.filter((id) => id !== opts.putDrops);
+        saved = kept;
+        return r.fulfill({ json: { scope: body.scope, conversation_ids: kept } });
+      }
       if (opts.holdThenFailFirstPut) {
         const hold = opts.holdThenFailFirstPut;
         opts.holdThenFailFirstPut = undefined;
@@ -174,6 +182,16 @@ test("a failed save followed by a queued move keeps the later move (no stale rec
   await expect(list.locator("li")).toHaveText([/Omnicom Pacing/, /Deal Desk Daily/, /Acme Renewal/]);
   expect(puts.at(-1)?.ids).toEqual(["c2", "c3", "c1"]);
   expect(puts.reads.n).toBe(readsBefore);
+});
+
+test("when the server keeps less than was sent, the rail re-reads what it kept", async ({ page }) => {
+  const puts = await setup(page, [], { putDrops: "c3" });
+  const readsBefore = puts.reads.n;
+  await page.getByTestId("pinned-reorder-toggle").click();
+  await page.getByTestId("chat-reorder-list").getByRole("button", { name: "Move Omnicom Pacing up" }).click();
+  await expect.poll(() => puts.length).toBe(1);
+  // One guarded re-read once the save settled.
+  await expect.poll(() => puts.reads.n).toBe(readsBefore + 1);
 });
 
 test("a read-only viewer is not offered Reorder", async ({ page }) => {

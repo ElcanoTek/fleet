@@ -3712,6 +3712,10 @@ export function ChatExperience({
       setChatOrders((cur) => ({ ...cur, [scope]: ids }));
       chatOrderQueued.current++;
       chatOrderSaves.current = chatOrderSaves.current.then(async () => {
+        // "ok" means the server stored exactly what was sent. It drops IDs
+        // that left the scope meanwhile (unpinned or moved in another tab),
+        // and then the rail is showing an order it did not keep: that also
+        // reconciles, by the same guarded re-read once the queue drains.
         let ok = false;
         try {
           const res = await fetch("/api/conversations/order", {
@@ -3719,7 +3723,10 @@ export function ChatExperience({
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ scope, conversation_ids: ids }),
           });
-          ok = res.ok;
+          if (res.ok) {
+            const kept = ((await res.json()) as { conversation_ids?: string[] }).conversation_ids;
+            ok = Array.isArray(kept) && kept.length === ids.length && kept.every((id, i) => id === ids[i]);
+          }
         } catch {
           ok = false;
         }

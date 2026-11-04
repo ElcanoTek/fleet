@@ -217,7 +217,10 @@ export function LaunchpadButton({
         open={menuOpen}
         onClose={() => setMenuOpen(false)}
         anchorRef={anchorRef}
-        placement={collapsed ? "top-start" : "bottom-end"}
+        // Collapsed, the rail is an icon strip: the menu opens beside it.
+        // (top-start is for the account button at the foot of the rail; near
+        // the top it would run off the screen.)
+        placement={collapsed ? "right-start" : "bottom-end"}
         label="Patrols"
         className={collapsed ? "" : "min-w-[17rem]"}
       >

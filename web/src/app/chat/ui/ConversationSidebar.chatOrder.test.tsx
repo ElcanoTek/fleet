@@ -171,6 +171,19 @@ describe("ConversationSidebar chat order", () => {
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Project options for Roadmap" }));
   });
 
+  it("returns the focus to the right project's menu when two projects share a name", () => {
+    const twin = { ...PROJECT, id: "p-2" };
+    const filed = (id: string, title: string): ConversationSummary => ({ ...CONV, id, title, project_id: "p-2" });
+    const inTwin = [filed("x", "Xray"), filed("y", "Yankee")];
+    renderSidebar({ conversations: inTwin, filteredConversations: inTwin, projects: [PROJECT, twin], onReorderChats: noop });
+    const triggers = screen.getAllByRole("button", { name: "Project options for Roadmap" });
+    const twinTrigger = triggers.find((b) => b.getAttribute("data-project-options") === "p-2")!;
+    fireEvent.click(twinTrigger);
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reorder chats" }));
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
+    expect(document.activeElement).toBe(twinTrigger);
+  });
+
   it("does not offer Reorder chats for a project with fewer than two of the viewer's chats", () => {
     const one = [{ ...CONV, id: "x", title: "Xray", project_id: "p-1" }];
     renderSidebar({ conversations: one, filteredConversations: one, onReorderChats: noop });

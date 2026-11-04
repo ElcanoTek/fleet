@@ -149,6 +149,7 @@ export function AccountMenu({
           icon={<Icon name="settings" className="size-4" />}
           description="Connections, skills & workspace settings"
           className={current ? "menu-item-current" : ""}
+          current={current}
           onClick={() => {
             close();
             window.location.assign("/settings");
@@ -164,6 +165,7 @@ export function AccountMenu({
           icon={<Icon name="book" className="size-4" />}
           description="How chat, patrols & background tasks work"
           className={guidesCurrent ? "menu-item-current" : ""}
+          current={guidesCurrent}
           testId="nav-to-help"
           onClick={() => {
             close();

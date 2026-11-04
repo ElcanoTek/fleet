@@ -25,7 +25,8 @@ their own non-deleted chats, each with its chat title; `store.ListUserPatrols`,
 capped at 100, served by the partial index `idx_chat_schedules_user_patrols`
 from migration 096, which `TestListUserPatrols_UsesItsIndex` pins). With none, it opens the wizard; with some, a menu lists them —
 name, chat, cadence, *Paused* — each opening its chat, with **New patrol** at
-the bottom. Opening the wizard from that menu leaves the focus on the Patrols
+the bottom. On a collapsed rail the menu opens beside the icon strip
+(`right-start`, kept on-screen). Opening the wizard from that menu leaves the focus on the Patrols
 item, so closing the wizard returns it there. The wizard says where a patrol lives (in Chat, under its name, with
 the Patrol bar on top) on its Plan and Launch steps and on the success screen. The wizard is portalled to `document.body` (the phone drawer is a
 transformed element) and opens on the rail's dialog layer.

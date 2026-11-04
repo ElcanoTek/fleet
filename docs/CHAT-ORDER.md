@@ -38,7 +38,9 @@ left out on purpose.
     project's options button.
 - The drag uses its own MIME type, so a reorder drag is never taken for the
   existing drag of a chat into a project.
-- Only one scope is in reorder mode at a time.
+- Only one scope is in reorder mode at a time. A project's mode returns the
+  focus to that project's options button, found by project ID (two projects
+  may share a name).
 - **Who is offered it.** The mode is offered for 2 to 500 chats in a scope;
   500 is the server's cap. It is offered only once `GET /api/me` has confirmed
   a role other than `viewer`, whose writes are refused. While the role is
@@ -88,7 +90,8 @@ left out on purpose.
 - **Recovering from a failed save.** Each PUT carries a scope's whole list, so
   once the queue drains the server holds what the last successful save sent.
   The rail re-reads the server's orders only if the last save for some scope
-  failed, and only when the queue is empty. A recovery read can therefore
+  failed, or the server kept less than was sent (it drops a chat that left
+  the scope in another tab meanwhile), and only when the queue is empty. A recovery read can therefore
   never land between a failed save and a later queued one and undo that move.
 - **First read.** It is best-effort: if it fails, every scope stays most recent
   first.
@@ -137,6 +140,7 @@ left out on purpose.
   - no mode for a viewer, or while the role is unreadable;
   - a failed save followed by a queued move keeping the later move, with no
     recovery read;
+  - a save the server kept only part of triggering one re-read;
   - `Esc` leaving the mode without closing the narrow-screen rail overlay;
   - project reorder from its menu, with focus returned;
   - the Temporary sort, remembered across a reload;

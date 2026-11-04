@@ -45,7 +45,39 @@ function InputHarness({ onClose }: { onClose?: () => void }) {
   );
 }
 
+function PlacedHarness({ placement }: { placement: "right-start" }) {
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  return (
+    <>
+      <button ref={anchorRef} type="button">
+        Anchor
+      </button>
+      <Menu open onClose={() => {}} anchorRef={anchorRef} label="Placed" placement={placement}>
+        <MenuItem onClick={() => {}}>Only</MenuItem>
+      </Menu>
+    </>
+  );
+}
+
 describe("Menu", () => {
+  it("right-start opens beside the anchor and stays on-screen near the top", () => {
+    // A collapsed-rail item near the top of the viewport.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+      left: 8, right: 56, top: 2, bottom: 50, width: 48, height: 48, x: 8, y: 2, toJSON: () => ({}),
+    } as DOMRect);
+    vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(300);
+    vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(240);
+    try {
+      render(<PlacedHarness placement="right-start" />);
+      const menu = screen.getByRole("menu", { name: "Placed" });
+      expect(menu.style.left).toBe("62px"); // anchor.right + 6
+      expect(parseInt(menu.style.top, 10)).toBeGreaterThanOrEqual(2); // never above the viewport
+      expect(menu.style.bottom).toBe("auto");
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("focuses the first item on open", () => {
     render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "Open" }));

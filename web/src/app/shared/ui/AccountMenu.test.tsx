@@ -34,6 +34,9 @@ describe("AccountMenu", () => {
     const settings = items.findIndex((t) => t.startsWith("Settings"));
     expect(items[settings + 1]).toMatch(/^Guides/);
     expect(screen.getByTestId("nav-to-help")).toHaveClass("menu-item-current");
+    // The current page is exposed to assistive tech too, not only styled.
+    expect(screen.getByTestId("nav-to-help")).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("menuitem", { name: /^Settings/ })).not.toHaveAttribute("aria-current");
   });
 
   // Sign out asks first: the item opens a centred confirm (portalled out of
