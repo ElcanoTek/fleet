@@ -93,6 +93,7 @@ DELETE /api/conversations
 GET /api/llm-provider-models
 GET /api/mcp-catalog
 GET /api/mcp-servers
+GET /api/me
 GET /api/me/team
 PUT /api/me/team
 POST /api/memories/{memoryId}/accept
@@ -160,6 +161,8 @@ POST /api/orchestrator/tasks
 GET /api/orchestrator/tasks/tags
 GET /api/orchestrator/tasks/upcoming
 POST /api/orchestrator/upload
+POST /api/patrol-draft
+GET /api/patrols
 GET /api/personas
 GET /api/projects/{projectId}/conversations
 GET /api/projects/{projectId}/export

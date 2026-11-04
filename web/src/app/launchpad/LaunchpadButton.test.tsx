@@ -73,6 +73,43 @@ describe("LaunchpadButton", () => {
     expect(await screen.findByTestId("patrol-launchpad")).toBeTruthy();
   });
 
+  it("lets only the latest read of the index land (a slow mount read cannot overwrite a click)", async () => {
+    let resolveMount: (v: unknown) => void = () => {};
+    const fresh = [{ id: "s1", conversation_id: "c1", title: "Deal sweep", conversation_title: "x", cron: "0 * * * *", status: "active" }];
+    const fn = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise((r) => (resolveMount = r)))
+      .mockResolvedValue({ ok: true, json: async () => ({ patrols: fresh }) });
+    vi.stubGlobal("fetch", fn);
+    render(<LaunchpadButton />);
+    await waitFor(() => expect(fn).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByTestId("launchpad-button"));
+    await screen.findByRole("menu", { name: "Patrols" });
+    // The mount read answers late, with the stale "none": it must not land.
+    resolveMount({ ok: true, json: async () => ({ patrols: [] }) });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.getByTestId("launchpad-button").getAttribute("aria-haspopup")).toBe("menu");
+    expect(screen.getByTestId("patrols-menu-item-s1")).toBeTruthy();
+  });
+
+  it("re-reads the index when the wizard closes, so a first launch flips it to the menu", async () => {
+    const fn = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ patrols: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ patrols: [] }) })
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ patrols: [{ id: "s1", conversation_id: "c1", title: "First", conversation_title: "x", cron: "0 * * * *", status: "active" }] }),
+      });
+    vi.stubGlobal("fetch", fn);
+    render(<LaunchpadButton />);
+    await waitFor(() => expect(screen.getByTestId("launchpad-button").getAttribute("aria-haspopup")).toBe("dialog"));
+    fireEvent.click(screen.getByTestId("launchpad-button"));
+    fireEvent.click(await screen.findByText("close"));
+    await waitFor(() => expect(screen.getByTestId("launchpad-button").getAttribute("aria-haspopup")).toBe("menu"));
+    expect(fn).toHaveBeenCalledTimes(3);
+  });
+
   it("has no dot for someone who has opened it before", () => {
     window.localStorage.setItem(LAUNCHPAD_SEEN_ITEM, "1");
     stubPatrols([]);

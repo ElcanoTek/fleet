@@ -103,15 +103,32 @@ export function LaunchpadButton({
   const [loadFailed, setLoadFailed] = useState(false);
   const [seen, setSeen] = useState(() => readSeen() || readDeepLink());
   const anchorRef = useRef<HTMLButtonElement | null>(null);
+  // Every read of the index takes a generation and only the latest one's
+  // answer lands, so a slow mount read cannot overwrite a click's fresher one.
+  const readGen = useRef(0);
+  const readPatrols = useCallback(async (): Promise<PatrolSummary[] | null | undefined> => {
+    const gen = ++readGen.current;
+    const list = await fetchPatrols();
+    return gen === readGen.current ? list : undefined; // undefined: superseded
+  }, []);
 
-  // Read the index once on mount, so the button can say what it opens before
-  // the first press (a menu when there are patrols, the wizard when there are
-  // none). Until that is known it declares no popup type rather than a wrong
-  // one. Clicks still re-read it, since patrols change in other tabs.
+  // Refresh the index without opening anything, so the button can say what it
+  // opens before the next press (a menu when there are patrols, the wizard
+  // when there are none). Until that is known it declares no popup type
+  // rather than a wrong one. Clicks still re-read it, since patrols change in
+  // other tabs.
+  const refreshIndex = useCallback(async () => {
+    const list = await readPatrols();
+    if (list === undefined) return;
+    setLoadFailed(list === null);
+    setPatrols(list);
+  }, [readPatrols]);
+
   useEffect(() => {
     let cancelled = false;
+    const gen = ++readGen.current;
     void fetchPatrols().then((list) => {
-      if (cancelled) return;
+      if (cancelled || gen !== readGen.current) return;
       setLoadFailed(list === null);
       setPatrols(list);
     });
@@ -150,7 +167,8 @@ export function LaunchpadButton({
   // A failed read opens the menu with the error, Retry and New patrol.
   const onClick = async () => {
     setSeen(true);
-    const list = await fetchPatrols();
+    const list = await readPatrols();
+    if (list === undefined) return; // a newer read (another click) wins
     setLoadFailed(list === null);
     setPatrols(list ?? []);
     if (list !== null && list.length === 0) openWizard();
@@ -252,7 +270,14 @@ export function LaunchpadButton({
       {wizardOpen && typeof document !== "undefined"
         ? createPortal(
             <Suspense fallback={null}>
-              <PatrolLaunchpad onClose={() => setWizardOpen(false)} />
+              <PatrolLaunchpad
+                onClose={() => {
+                  setWizardOpen(false);
+                  // The wizard may just have launched the first patrol: re-read
+                  // so the button now announces the menu, not the wizard.
+                  void refreshIndex();
+                }}
+              />
             </Suspense>,
             document.body,
           )

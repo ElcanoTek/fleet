@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
-import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem } from "./PatrolLaunchpad";
+import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem, withMemory } from "./PatrolLaunchpad";
 
 // The Patrol Launchpad end to end against a stubbed API
 // (docs/PATROL-LAUNCHPAD.md): it walks the six steps, saves a non-negotiable
@@ -261,6 +261,19 @@ describe("PatrolLaunchpad", () => {
   });
 
   // ── Codex review findings (PR #1917) ──
+
+  it("adds a new pinned memory at the front, so the drafter's 50-memory window keeps it", () => {
+    const roster = [
+      { id: "p1", content: "pinned", pinned: true },
+      ...Array.from({ length: 60 }, (_, i) => ({ id: `u${i}`, content: `unpinned ${i}` })),
+    ];
+    const pinned = withMemory(roster, { id: "new", content: "Never pause", pinned: true });
+    expect(pinned[0].id).toBe("new");
+    expect(pinned.slice(0, 50).some((m) => m.id === "new")).toBe(true);
+    const unpinned = withMemory(roster, { id: "n2", content: "loose" });
+    expect(unpinned[1].id).toBe("n2"); // after the pinned block
+    expect(withMemory(pinned, { id: "new", content: "dup", pinned: true })).toBe(pinned);
+  });
 
   it("sends only active, accepted memories to the drafter", async () => {
     expect(

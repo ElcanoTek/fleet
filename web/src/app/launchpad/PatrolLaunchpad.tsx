@@ -82,6 +82,17 @@ type Memory = {
 export function activeMemories(all: Memory[]): Memory[] {
   return all.filter((m) => !m.retired_at && m.source !== "proposed");
 }
+
+/**
+ * withMemory adds a just-saved memory to the roster in the store's order —
+ * pinned first — so the drafter's 50-memory window (taken from the front)
+ * keeps a new pinned rule instead of dropping it off the end.
+ */
+export function withMemory(list: Memory[], mem: Memory): Memory[] {
+  if (list.some((m) => m.id === mem.id)) return list;
+  const at = mem.pinned ? 0 : list.filter((m) => m.pinned).length;
+  return [...list.slice(0, at), mem, ...list.slice(at)];
+}
 type UserPersona = { ref: string; display_name: string; description?: string };
 
 type Saved = {
@@ -178,29 +189,45 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // flow stops there with an explanation instead of failing at Launch.
   const [readOnly, setReadOnly] = useState(false);
 
+  // Each read takes a generation; only the latest one's answer lands, so a
+  // slow earlier read (mount, then a focus refresh) cannot overwrite a newer.
+  const connectorsGen = useRef(0);
   const loadConnectors = useCallback(async () => {
+    const gen = ++connectorsGen.current;
     try {
       const res = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!res.ok) throw new Error(await failText(res, "Could not load your connectors"));
       const data = (await res.json()) as { servers?: LaunchpadConnector[] };
+      if (gen !== connectorsGen.current) return;
       setConnectors(data.servers ?? []);
       setCatalogLoaded(true);
       setLoadError(null);
     } catch (e) {
+      if (gen !== connectorsGen.current) return;
       setConnectors((cur) => cur ?? []);
+      // A failed refresh leaves the catalog unknown again: the list on screen
+      // may be stale (a tool connected or removed in the other tab), so launch
+      // must not replace the server's connector seed with it.
+      setCatalogLoaded(false);
       setLoadError(e instanceof Error ? e.message : "Could not load your connectors.");
     }
   }, []);
 
   const [memoriesFailed, setMemoriesFailed] = useState(false);
+  // A local add bumps the generation too: a read that left before the save
+  // must not land after it and drop the memory the person just added.
+  const memoriesGen = useRef(0);
   const loadMemories = useCallback(async () => {
+    const gen = ++memoriesGen.current;
     try {
       const res = await fetch("/api/memories", { cache: "no-store" });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { memories?: Memory[] };
+      if (gen !== memoriesGen.current) return;
       setMemories(activeMemories(data.memories ?? []));
       setMemoriesFailed(false);
     } catch {
+      if (gen !== memoriesGen.current) return;
       // Unknown is not "none": a failed read keeps the roster unknown, so the
       // Plan step does not claim zero memories and the AI draft — which must
       // not contradict memories every patrol turn still receives — waits.
@@ -504,7 +531,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   setState((cur) => ({ ...cur, memoriesAdded: cur.memoriesAdded + 1 }));
                   // Into the roster now, not after the refresh: the AI draft
                   // must see it even if that refresh is slow or fails.
-                  setMemories((cur) => (cur && !cur.some((m) => m.id === mem.id) ? [...cur, mem] : cur));
+                  memoriesGen.current++;
+                  setMemories((cur) => (cur ? withMemory(cur, mem) : cur));
                 }}
               />
             ) : null}

@@ -26,11 +26,11 @@ screenshot is its recording's final frame; tap it to watch ([how they're made](d
 
 ▶ [Watch the chat recording](docs/screenshots/web/chat-demo.gif)
 
-**Operations Center — the follow-through, automated** _(example tasks)_
+**Background tasks — the follow-through, automated** _(example tasks)_
 
-[![Fleet Operations Center — agent slots, task counts and upcoming scheduled runs](docs/screenshots/web/ops-demo.png)](docs/screenshots/web/ops-demo.gif)
+[![Fleet Background tasks — agent slots, task counts and upcoming scheduled runs](docs/screenshots/web/ops-demo.png)](docs/screenshots/web/ops-demo.gif)
 
-▶ [Watch the Operations Center recording](docs/screenshots/web/ops-demo.gif)
+▶ [Watch the Background tasks recording](docs/screenshots/web/ops-demo.gif)
 
 **Terminal chat (`fleet chat`) — the same fleet, from your shell**
 
@@ -122,7 +122,7 @@ yourself are already in the box, tested, and governed by the same core:
   (`fleet eval`) that replays golden prompts through the real loop and gates
   model/bundle changes ([`docs/EVALS.md`](docs/EVALS.md)); per-run error
   analysis; optional PII redaction.
-- **Three clients out of the box.** The web chat UI, the Operations Center,
+- **Three clients out of the box.** The web chat UI, Background tasks (the headless task view),
   and a full terminal client (`fleet chat`) — all thin views over the same
   governed API.
 
