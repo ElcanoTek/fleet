@@ -43,6 +43,10 @@ export type ChatSessionSnapshot = {
   personas: string[];
   defaultPersona?: string;
   selectedPersona: string;
+  // Per-conversation pending persona overrides for empty materialized
+  // conversations (0 messages) so route unmounts (/settings) preserve an
+  // unsent persona change when background revalidation reloads the chat.
+  pendingPersonaByConv?: ReadonlyMap<string, string>;
   selectedModel: string;
   skills: SkillInfo[];
   serverConfig: ServerConfig;

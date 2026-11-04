@@ -1466,6 +1466,25 @@ func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) e
 	return nil
 }
 
+// SetPersona updates the conversation's persona before any messages have been
+// recorded. Once a conversation has history entries, its persona is locked so
+// the system prompt and tool allowlist stay stable across turns.
+func (s *Store) SetPersona(ctx context.Context, userEmail, convID, persona string) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE conversations SET persona = $1, updated_at = $2
+		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL
+		   AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_id = $3)`,
+		persona, time.Now().Unix(), convID, userEmail,
+	)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrConversationNotFound
+	}
+	return nil
+}
+
 // UpdateTitle is called after the first assistant reply (when we have enough
 // context to auto-name the conversation).
 // UpdateTitle sets the title from the AUTO-titler (#302). It is guarded by

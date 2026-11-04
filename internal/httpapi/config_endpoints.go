@@ -12,7 +12,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
-	"github.com/ElcanoTek/fleet/internal/store"
 )
 
 // ── /personas ──────────────────────────────────────────────────────────────
@@ -206,16 +205,18 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// The caller's own personas are a nice-to-have on this roster: a failed
-	// read lists the bundle personas alone rather than failing the picker.
-	var mine []store.UserPersona
+	// read lists the bundle personas alone rather than failing the picker,
+	// leaving user_personas nil so the client knows the personal roster was
+	// unavailable rather than empty.
+	var userPersonas []userPersonaSummary
 	if list, err := s.store.ListUserPersonas(r.Context(), userFromCtx(r.Context())); err == nil {
-		mine = list
+		userPersonas = activeUserPersonaSummaries(list)
 	} else {
 		log.Printf("list user personas: %v", err)
 	}
 	writeJSON(w, personasResponse{
 		Personas:     names,
 		Default:      s.cfg.PersonaDefault,
-		UserPersonas: activeUserPersonaSummaries(mine),
+		UserPersonas: userPersonas,
 	})
 }

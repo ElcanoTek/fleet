@@ -548,6 +548,58 @@ describe("Composer — persona picker with user personas", () => {
     expect(screen.getByRole("option", { name: "Assistant" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("link", { name: /Create your own persona/ })).toBeInTheDocument();
   });
+
+  it("keeps Persona visible but disabled in More options once a conversation has messages, and keeps it enabled on an empty materialized chat", () => {
+    const setSelectedPersona = vi.fn();
+    const { rerender } = render(
+      <Host
+        overrides={{
+          activeConversationId: "conv-existing",
+          messages: [
+            { id: 1, role: "user", content: "Hello", state: "done" },
+            { id: 2, role: "assistant", content: "Hi there!", state: "done" },
+          ],
+          personas: ["assistant", "trader"],
+          selectedPersona: "assistant",
+          setSelectedPersona,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "More options" }));
+    const lockedPersonaItem = screen.getByRole("menuitem", {
+      name: "Persona — Assistant (personas can only be changed in a new chat)",
+    });
+    expect(lockedPersonaItem).toBeDisabled();
+    expect(
+      within(lockedPersonaItem).getByText("Personas can only be changed in a new chat"),
+    ).toBeInTheDocument();
+    fireEvent.click(lockedPersonaItem);
+    expect(screen.queryByRole("listbox", { name: "Persona" })).toBeNull();
+
+    // When a conversation row exists in the sidebar but has 0 messages yet
+    // (e.g., created via Project "New chat" or opening Share before sending),
+    // the persona selector remains enabled so the user can still switch.
+    rerender(
+      <Host
+        overrides={{
+          activeConversationId: "conv-empty",
+          messages: [],
+          personas: ["assistant", "trader"],
+          selectedPersona: "assistant",
+          setSelectedPersona,
+        }}
+      />,
+    );
+    const unlockedPersonaItem = screen.getByRole("menuitem", {
+      name: "Persona — Assistant",
+    });
+    expect(unlockedPersonaItem).not.toBeDisabled();
+    fireEvent.click(unlockedPersonaItem);
+    const listbox = screen.getByRole("listbox", { name: "Persona" });
+    fireEvent.click(within(listbox).getByRole("option", { name: "Trader" }));
+    expect(setSelectedPersona).toHaveBeenCalledWith("trader");
+  });
 });
 
 describe("Composer — share button and overflow options menu", () => {

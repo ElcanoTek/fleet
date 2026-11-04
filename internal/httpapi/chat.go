@@ -555,6 +555,51 @@ func (s *Server) maybeSetPlaceholderTurnTitle(ctx context.Context, user string, 
 	}
 }
 
+func (s *Server) applyInitialTurnPersona(ctx context.Context, user string, conv *store.Conversation, historyLen int, reqPersona string, userWords bool, fail func(int, error)) bool {
+	if historyLen != 0 || !userWords {
+		return true
+	}
+	ownerEmail := convOwnerEmail(conv, user)
+	if !strings.EqualFold(ownerEmail, user) {
+		return true
+	}
+	persona := strings.TrimSpace(reqPersona)
+	if persona == "" || persona == conv.Persona {
+		return true
+	}
+	if err := s.checkConversationPersona(ctx, user, persona); err != nil {
+		status := http.StatusInternalServerError
+		if errors.Is(err, store.ErrUserPersonaInvalid) {
+			status = http.StatusBadRequest
+		}
+		fail(status, err)
+		return false
+	}
+	if err := s.store.SetPersona(ctx, ownerEmail, conv.ID, persona); err != nil {
+		fail(http.StatusInternalServerError, fmt.Errorf("update conversation persona: %w", err))
+		return false
+	}
+	conv.Persona = persona
+	return true
+}
+
+func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *store.Conversation, historyLen int, req chatRequest, turnToken uint64, turnCancel context.CancelFunc, fail func(int, error)) bool {
+	abort := func(status int, err error) {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		s.maybeDrainQueue(conv.ID)
+		fail(status, err)
+	}
+	if !s.applyInitialTurnPersona(ctx, user, conv, historyLen, req.Persona, req.inputKind == "", abort) {
+		return false
+	}
+	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
+		abort(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+		return false
+	}
+	return true
+}
+
 // replayAcceptedInput answers a resend of an input_id that was already
 // ACCEPTED (queued, running, or terminal) with that input's acknowledgement,
 // so it never runs a duplicate turn — even when the retry lands after the
@@ -1134,11 +1179,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 
-	if err := s.activateTurnPrivateWorkspace(conv, user); err != nil {
-		turnCancel()
-		s.finishTurn(conv.ID, turnToken)
-		s.maybeDrainQueue(conv.ID)
-		fail(http.StatusInternalServerError, fmt.Errorf("isolate conversation workspace: %w", err))
+	if !s.prepareRegisteredTurn(reqCtx, user, conv, len(history), req, turnToken, turnCancel, fail) {
 		return true
 	}
 
