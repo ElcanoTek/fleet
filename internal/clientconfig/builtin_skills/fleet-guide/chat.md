@@ -519,7 +519,10 @@ on a teammate-shared skill in the Workspace pack to enable it for your own chats
 and tasks, or click **Clone & edit** on any Workspace pack skill to load its
 instructions into the editor and customize it (you can also ask the assistant in
 chat to propose a skill or edit an existing one, then click **Approve** or
-**Approve & share** in **Settings → Skills**).
+**Approve & share** in **Settings → Skills**). Your active personal skills appear
+alongside the workspace's skills in the composer's `/` autocomplete menu (and if
+you customize a workspace skill under the same name, your version overrides the
+default description and instructions for your runs).
 
 ### Your own personas and digital twin
 
