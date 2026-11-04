@@ -5,7 +5,7 @@
 // built on the shared Menu surface, so it is the same component family as the
 // conversation-row kebab. Contents per the design: account header (avatar +
 // email) · Settings with its subtext line ("Connections, skills & workspace
-// settings") · Theme (System/Light/Dark segmented) · Sign out. Connections,
+// settings") · Guides (the user guides at /help) · Theme (System/Light/Dark segmented) · Sign out. Connections,
 // Skills, and Admin are no longer separate menu items — they are sections of
 // the settings area's own sub-nav (Admin only for admins, resolved there).
 //
@@ -60,6 +60,7 @@ export function AccountMenu({
   onSignOut,
   railCollapsed = false,
   current = false,
+  guidesCurrent = false,
 }: {
   email: string;
   // The deployment's name (branding.app_name), as the rail's brand row shows
@@ -72,6 +73,8 @@ export function AccountMenu({
   railCollapsed?: boolean;
   // True on the settings surface — tints the anchor + Settings item.
   current?: boolean;
+  // True on the guides surface — tints the anchor + Guides item.
+  guidesCurrent?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -103,7 +106,7 @@ export function AccountMenu({
           "flex w-full items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-2 text-left transition",
           "text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)]",
           open ? "bg-[var(--rail-active)] text-[var(--color-text-primary)]" : "",
-          current && !open ? "account-current" : "",
+          (current || guidesCurrent) && !open ? "account-current" : "",
           railCollapsed ? "sm:mx-auto sm:size-10 sm:justify-center sm:gap-0 sm:p-0" : "",
         ].join(" ")}
       >
@@ -146,12 +149,30 @@ export function AccountMenu({
           icon={<Icon name="settings" className="size-4" />}
           description="Connections, skills & workspace settings"
           className={current ? "menu-item-current" : ""}
+          current={current}
           onClick={() => {
             close();
             window.location.assign("/settings");
           }}
         >
           Settings
+        </MenuItem>
+        {/* The user guides live here, beside Settings, rather than in the
+            rail: the rail is for the ways of working (chat, operations,
+            patrols), and Chat itself answers "how do I…" questions — the
+            guides are the reference behind it. */}
+        <MenuItem
+          icon={<Icon name="book" className="size-4" />}
+          description="How chat, patrols & background tasks work"
+          className={guidesCurrent ? "menu-item-current" : ""}
+          current={guidesCurrent}
+          testId="nav-to-help"
+          onClick={() => {
+            close();
+            window.location.assign("/help");
+          }}
+        >
+          Guides
         </MenuItem>
         <MenuSeparator />
         <div className="flex items-center gap-2 px-2 py-1.5 text-[0.82rem] text-[var(--color-text-secondary)]">

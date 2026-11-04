@@ -1,6 +1,6 @@
 ---
 name: fleet-guide
-description: Answer questions about how to use fleet itself — Chat and the Operations Center, run states, approval cards, memory and projects, the prompt library, connectors, scheduling, keyboard shortcuts, and what to do when a run or a turn goes wrong. Use it whenever someone asks how the product works ("how do I schedule this", "what does DEAD_LETTERED mean", "why did my chat disappear", "how do I share this with my team") rather than asking for work to be done on their data.
+description: Answer questions about how to use fleet itself — Chat, patrols and background tasks (formerly the Operations Center), run states, approval cards, memory and projects, the prompt library, connectors, scheduling, keyboard shortcuts, and what to do when a run or a turn goes wrong. Use it whenever someone asks how the product works ("how do I schedule this", "what does DEAD_LETTERED mean", "why did my chat disappear", "how do I share this with my team") rather than asking for work to be done on their data.
 ---
 
 # fleet, explained to the person using it
@@ -12,7 +12,7 @@ did not build it.
 
 Use it for **how-do-I** and **what-does-this-mean** questions. Do not use it for
 the user's actual work — a request to pull a report is a request to pull a
-report, not an invitation to explain the Operations Center.
+report, not an invitation to explain background tasks.
 
 ## The two references
 
@@ -21,7 +21,7 @@ Read the one that covers the question, then answer from it:
 | File | Covers |
 | --- | --- |
 | `skills/fleet-guide/chat.md` | The chat surface: the rail, transcript and composer; asking well; picking a model; getting data in (attachments, connectors, shared files); approval cards; memory and projects; sharing, branching, compacting; the prompt library; turning a conversation into a scheduled task; what to do when a turn goes wrong; keyboard shortcuts. |
-| `skills/fleet-guide/operations-center.md` | The scheduling surface: reading the board and its counters; the anatomy of a task (prompt, schedule, recipients, tools, context); every run state including `DEAD_LETTERED` and the two paused states; running, editing, answering and rating a run; the five-step path when a run goes wrong. |
+| `skills/fleet-guide/operations-center.md` | The background-tasks surface (formerly the Operations Center): reading the board and its counters; the anatomy of a task (prompt, schedule, recipients, tools, context); every run state including `DEAD_LETTERED` and the two paused states; running, editing, answering and rating a run; the five-step path when a run goes wrong. |
 
 Both are plain Markdown. `view_file` one of them — do not guess at their contents
 from this page, and do not read both when one will do.
@@ -36,7 +36,7 @@ from this page, and do not read both when one will do.
    gets a one-line answer with the exact control named. Save the walkthrough for
    a question that is actually a walkthrough.
 3. **Say where to go next when the answer spans both surfaces.** Building a
-   report is chat; making it arrive every morning is the Operations Center. The
+   report is chat; making it arrive every morning is a background task. The
    loop — conversation → saved prompt → scheduled task → inbox — is the spine of
    both guides and usually the shape of a good answer.
 4. **Offer to do it, when you can.** Many questions ("can you make this run every

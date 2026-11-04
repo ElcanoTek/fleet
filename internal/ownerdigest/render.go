@@ -97,7 +97,7 @@ func Render(d Digest, now time.Time) (subject, text, htmlBody string) {
 		h.WriteString("</ul>")
 	}
 	if d.Omitted > 0 {
-		more := fmt.Sprintf("…and %d more not listed here; see the Operations Center.", d.Omitted)
+		more := fmt.Sprintf("…and %d more not listed here; see the Background tasks page.", d.Omitted)
 		t.WriteString("\r\n" + more + "\r\n")
 		h.WriteString("<p>" + html.EscapeString(more) + "</p>")
 	}

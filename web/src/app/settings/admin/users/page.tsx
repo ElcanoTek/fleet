@@ -916,7 +916,7 @@ export default function AdminUsersPage() {
           are all-time interactive-chat activity per account; for windowed spend
           across chat + scheduled tasks and the per-user adoption audit, open
           the{" "}
-          <Link href="/orchestrator?tab=usage">Operations Center → Usage</Link>{" "}
+          <Link href="/orchestrator?tab=usage">Background tasks → Usage</Link>{" "}
           and <Link href="/orchestrator?tab=adoption">Adoption</Link> views.
         </>
       }
@@ -1070,7 +1070,7 @@ export default function AdminUsersPage() {
                   <th className={TH_NUM}>Turns</th>
                   <th
                     className={TH_NUM}
-                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Operations Center → Usage."
+                    title="All-time interactive chat spend for this account. Scheduled-task spend and windowed reporting live in Background tasks → Usage."
                   >
                     Chat spend
                   </th>
@@ -1140,7 +1140,7 @@ export default function AdminUsersPage() {
                               opsRoleOf(account) === "admin"
                             ) ? (
                               <RoleBadge
-                                title={`Operations Center ${
+                                title={`Background tasks ${
                                   {
                                     admin: "admin",
                                     client: "contributor (creates tasks)",

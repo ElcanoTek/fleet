@@ -122,3 +122,138 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 		t.Errorf("expected 0 active/paused schedules after completion+cancel, got %d", len(activeList))
 	}
 }
+
+// TestListUserPatrols is the Patrols hub's index: the user's own live
+// recurring patrols across chats, with each chat's title — not timers, not
+// cancelled patrols, not another user's, and not patrols in deleted chats.
+func TestListUserPatrols(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me, other = "me@elcanotek.com", "other@elcanotek.com"
+
+	mk := func(user, convTitle, title, cron string) (*Conversation, *ChatSchedule) {
+		t.Helper()
+		conv, err := s.CreateConversation(ctx, user, convTitle, "victoria", "", false)
+		if err != nil {
+			t.Fatalf("CreateConversation: %v", err)
+		}
+		in := ChatScheduleInput{ConversationID: conv.ID, UserEmail: user, Title: title, Prompt: "check", CronExpr: cron, Timezone: "UTC"}
+		if cron == "" {
+			in.DurationSeconds = 600
+		}
+		sched, err := s.CreateChatSchedule(ctx, in)
+		if err != nil {
+			t.Fatalf("CreateChatSchedule: %v", err)
+		}
+		return conv, sched
+	}
+
+	_, active := mk(me, "Deals chat", "Deal sweep", "0 8 * * 1-5")
+	pausedConv, paused := mk(me, "Inbox chat", "Inbox triage", "0 */2 * * *")
+	st := ChatScheduleStatusPaused
+	if _, err := s.UpdateChatSchedule(ctx, me, pausedConv.ID, paused.ID, ChatSchedulePatch{Status: &st}); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	mk(me, "Timer chat", "One-shot", "")
+	cancelConv, cancelled := mk(me, "Old chat", "Old patrol", "0 9 * * 1")
+	if _, err := s.CancelChatSchedule(ctx, me, cancelConv.ID, cancelled.ID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	gone, _ := mk(me, "Deleted chat", "Gone patrol", "0 9 * * *")
+	if err := s.Delete(ctx, me, gone.ID); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	mk(other, "Their chat", "Their patrol", "0 9 * * *")
+	// A patrol I made in a teammate's chat (multiplayer): listed, with the
+	// owner kept for the HTTP layer's access re-check.
+	theirConv, err := s.CreateConversation(ctx, other, "Team chat", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := s.CreateUser(ctx, me, "test-password-123"); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if _, err := s.SetConversationMultiplayer(ctx, other, theirConv.ID, true, []string{me}, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	mine, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: theirConv.ID, UserEmail: me, Title: "Team sweep", Prompt: "check", CronExpr: "0 10 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule (teammate's chat): %v", err)
+	}
+
+	got, err := s.ListUserPatrols(ctx, me, 100, 0)
+	if err != nil {
+		t.Fatalf("ListUserPatrols: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d patrols, want 3 (two active + paused): %+v", len(got), got)
+	}
+	var team *UserPatrol
+	for i := range got {
+		if got[i].ID == mine.ID {
+			team = &got[i]
+		}
+	}
+	if team == nil || team.ConversationOwner != other || team.ConversationTitle != "Team chat" {
+		t.Fatalf("the patrol in a teammate's chat should be listed with its owner, got %+v", team)
+	}
+	// Active first, so drop it to check the rest of the order.
+	rest := make([]UserPatrol, 0, 2)
+	for _, p := range got {
+		if p.ID != mine.ID {
+			rest = append(rest, p)
+		}
+	}
+	got = rest
+	if got[0].ID != active.ID || got[0].ConversationTitle != "Deals chat" || got[0].Status != ChatScheduleStatusActive || got[0].ConversationOwner != me {
+		t.Errorf("first row should be the active patrol with its chat title, got %+v", got[0])
+	}
+	if got[1].ID != paused.ID || got[1].ConversationTitle != "Inbox chat" || got[1].Status != ChatScheduleStatusPaused {
+		t.Errorf("second row should be the paused patrol, got %+v", got[1])
+	}
+}
+
+// TestListUserPatrols_UsesItsIndex pins that the per-user patrols query can
+// be served by idx_chat_schedules_user_patrols (migration 096): its WHERE
+// clause must keep implying the partial index's predicate, or a later edit to
+// either would silently fall back to filtering every user's schedules.
+// Sequential scans are disabled for the check, since a tiny test table would
+// otherwise be scanned regardless.
+func TestListUserPatrols_UsesItsIndex(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `SET LOCAL enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.QueryContext(ctx,
+		`EXPLAIN SELECT cs.id FROM chat_schedules cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.user_email = $1
+		    AND c.deleted_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')
+		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
+		  LIMIT 100 OFFSET 0`, "someone@x.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line + "\n")
+	}
+	if !strings.Contains(plan.String(), "idx_chat_schedules_user_patrols") {
+		t.Errorf("the patrols query does not use its index:\n%s", plan.String())
+	}
+}

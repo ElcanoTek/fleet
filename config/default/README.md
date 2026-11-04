@@ -43,7 +43,7 @@ errors out, and only **warns** on `FLEET_PERSONA`, because the scheduled agent
 just runs without the persona's expertise block.
 
 The optional `prompts/` directory feeds the hybrid prompt library shown in Chat
-and Operations Center. Bundle files are read-only and Git-trackable; users can
+and Background tasks. Bundle files are read-only and Git-trackable; users can
 also create private or workspace-shared prompts in the UI and export the visible
 library as JSON. A YAML prompt can also declare a form (`fields` plus a
 `promptTemplate`) that the picker shows instead of the raw text;

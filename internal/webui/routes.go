@@ -260,12 +260,15 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"PUT /api/user-personas/{id}", func(r *http.Request) string { return "/user-personas/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"DELETE /api/user-personas/{id}", func(r *http.Request) string { return "/user-personas/" + p(r, "id") }, noBody, textJSON},
 		{"POST /api/user-personas/{id}/approve", func(r *http.Request) string { return "/user-personas/" + p(r, "id") + "/approve" }, noBody, textJSON},
+		{"POST /api/patrol-draft", fixed("/patrol-draft"), jsonBodyAlways, textJSON},
+		{"GET /api/patrols", fixed("/patrols"), noBody, textJSON},
 		{"GET /api/connector-prefs", fixed("/connector-prefs"), noBody, textJSON},
 		{"PUT /api/connector-prefs", fixed("/connector-prefs"), jsonBodyAlways, textJSON},
 		{"DELETE /api/connector-prefs", func(r *http.Request) string {
 			q := r.URL.Query()
 			return "/connector-prefs?kind=" + encodeURIComponent(q.Get("kind")) + "&id=" + encodeURIComponent(q.Get("id"))
 		}, noBody, textJSON},
+		{"GET /api/me", fixed("/me"), noBody, textJSON},
 		{"GET /api/me/team", fixed("/me/team"), noBody, textJSON},
 		{"PUT /api/me/team", fixed("/me/team"), jsonBodyIfAny, textJSON},
 
@@ -285,6 +288,8 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"POST /api/conversations", fixed("/conversations"), jsonBodyIfAny, textJSON},
 		{"DELETE /api/conversations", fixed("/conversations"), jsonBodyIfAny, textJSON},
 		{"PATCH /api/conversations/bulk", fixed("/conversations/bulk"), jsonBodyIfAny, textJSON},
+		{"GET /api/conversations/order", fixed("/conversations/order"), noBody, textJSON},
+		{"PUT /api/conversations/order", fixed("/conversations/order"), jsonBodyIfAny, textJSON},
 		{"GET /api/conversations/{id}", conv, noBody, textJSON},
 		{"DELETE /api/conversations/{id}", conv, noBody, textOK},
 		{"POST /api/conversations/{id}/approval-groups/{groupId}", func(r *http.Request) string {

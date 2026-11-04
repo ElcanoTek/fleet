@@ -24,8 +24,15 @@ import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import { labelChipStyle } from "@/app/shared/lib/labelColors";
 import { Icon } from "./Icon";
 import {
+  MAX_CHAT_ORDER,
   MAX_LABELS,
   MAX_LABEL_LEN,
+  PINNED_ORDER_SCOPE,
+  RECENT_SORTS,
+  isRecentSort,
+  projectOrderScope,
+  sortRecent,
+  type RecentSort,
   addLabel as addLabelTo,
   canAddLabel,
   deriveLabels,
@@ -44,6 +51,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { renderPreview, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { ChatReorderList } from "./ChatReorderList";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -285,6 +293,7 @@ function ProjectPanel({
 // Delete project) stay below a separator: the rail is still the only place a
 // project is pinned or renamed inline.
 function ProjectKebab({
+  projectId,
   projectName,
   pinned,
   isOwner,
@@ -295,12 +304,16 @@ function ProjectKebab({
   onShare,
   onRename,
   onDelete,
+  onReorder,
 }: {
+  projectId: string;
   projectName: string;
   pinned: boolean;
   isOwner: boolean;
   onOpen: () => void;
   onNewChat: () => void;
+  // Offered when the project holds two or more of the viewer's chats.
+  onReorder?: () => void;
   onEdit: () => void;
   onPin: () => void;
   onShare: () => void;
@@ -323,6 +336,7 @@ function ProjectKebab({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Project options for ${projectName}`}
+        data-project-options={projectId}
         onMouseEnter={(e) => {
           if (!open) tip.show(e);
         }}
@@ -366,6 +380,14 @@ function ProjectKebab({
         >
           New chat
         </MenuItem>
+        {onReorder ? (
+          <MenuItem
+            icon={<Icon name="selector" className="size-4" />}
+            onClick={item(onReorder)}
+          >
+            Reorder chats
+          </MenuItem>
+        ) : null}
         {isOwner ? (
           <>
             {/* The TEAM glyph, not the chain link: the chain link means "by
@@ -1025,6 +1047,10 @@ export function ConversationSidebar({
   loadConversation,
   streamingConvs,
   togglePin,
+  chatOrders,
+  onReorderChats,
+  recentSort = "activity",
+  onRecentSortChange,
   toggleArchive,
   renameConversation,
   downloadConversation,
@@ -1095,6 +1121,15 @@ export function ConversationSidebar({
   // reverts itself via a refresh); the "Pin it and remove" confirm does not,
   // because there the pin is what keeps the copy's promise.
   togglePin: (conversation: ConversationSummary) => Promise<unknown>;
+  // The person's own chat orders by scope ("pinned", "project:<id>") and the
+  // save for a new one (docs/CHAT-ORDER.md). Optional: without them the
+  // rail keeps the server's order and offers no reorder mode.
+  chatOrders?: Readonly<Record<string, readonly string[]>>;
+  onReorderChats?: (scope: string, ids: string[]) => void;
+  // How Temporary chats are sorted, and the change for it. Without the
+  // handler the list stays most recently active first, with no sort control.
+  recentSort?: RecentSort;
+  onRecentSortChange?: (sort: RecentSort) => void;
   toggleArchive: (
     conversation: ConversationSummary,
     archived: boolean,
@@ -1275,8 +1310,45 @@ export function ConversationSidebar({
   // Temporary for a frame, so the set is withheld until there is one.
   const knownProjectIds =
     projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
-  const pinned = pinnedUnfiled(conversations, knownProjectIds);
-  const recent = recentUnfiled(conversations, knownProjectIds);
+  const pinned = pinnedUnfiled(conversations, knownProjectIds, chatOrders?.[PINNED_ORDER_SCOPE]);
+  // Reorder mode: the scope being ordered ("pinned" or "project:<id>"), whose
+  // rows become a drag-and-arrow list until Done (or Escape). One at a time.
+  const [reorderScope, setReorderScope] = useState<string | null>(null);
+  const reorderable = (count: number) => Boolean(onReorderChats) && count > 1 && count <= MAX_CHAT_ORDER;
+  const canReorderPinned = reorderable(pinned.length);
+  // Leaving the mode hands the focus back to what opened it: the Pinned
+  // section's Reorder button, or the project's options button (both are
+  // unmounted or closed while the mode is on).
+  const reorderToggleRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusOnExit = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (reorderScope !== null || !returnFocusOnExit.current) return;
+    const restore = returnFocusOnExit.current;
+    returnFocusOnExit.current = null;
+    restore();
+  }, [reorderScope]);
+  // If the scope being ordered stops being orderable while the mode is open
+  // (a chat unpinned or moved in another tab leaves fewer than two, or the
+  // project disappears), the mode ends: otherwise its rows would fall back
+  // to ordinary ones with no Done to clear it, and it would reappear,
+  // unasked, when the count recovered.
+  const reorderScopeCount =
+    reorderScope === null
+      ? 0
+      : reorderScope === PINNED_ORDER_SCOPE
+        ? pinned.length
+        : (projectGroups(conversations, projects).find((g) => projectOrderScope(g.project.id) === reorderScope)?.chats
+            .length ?? 0);
+  useEffect(() => {
+    if (reorderScope !== null && !reorderable(reorderScopeCount)) setReorderScope(null);
+    // reorderable reads only props; the count is the trigger.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reorderScope, reorderScopeCount]);
+  const endReorder = (restore: () => void) => {
+    returnFocusOnExit.current = restore;
+    setReorderScope(null);
+  };
+  const recent = sortRecent(recentUnfiled(conversations, knownProjectIds), recentSort);
   const filtering = computeIsFiltering({
     labels: filterLabels,
     query: sidebarQuery,
@@ -1298,9 +1370,9 @@ export function ConversationSidebar({
   const visibleProjectTree = useMemo(
     () =>
       searching
-        ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1))
-        : projectGroups(conversations, projects),
-    [searching, conversations, matchingProjects, projects],
+        ? projectGroups(conversations, matchingProjects, Math.max(matchingProjects.length, 1), chatOrders)
+        : projectGroups(conversations, projects, Number.POSITIVE_INFINITY, chatOrders),
+    [searching, conversations, matchingProjects, projects, chatOrders],
   );
   const shownIds = new Set(filteredConversations.map((c) => c.id));
   const messageHits = searching
@@ -1579,6 +1651,7 @@ export function ConversationSidebar({
                     ) : null}
                     <div className="absolute inset-y-0 right-1 flex items-center gap-0.5">
                       <ProjectKebab
+                        projectId={project.id}
                         projectName={project.name}
                         pinned={Boolean(project.pinned)}
                         isOwner={project.owner_email === userEmail}
@@ -1605,6 +1678,16 @@ export function ConversationSidebar({
                         onPin={() => onPinProject(project.id, !project.pinned)}
                         onRename={() => setRenamingProjectId(project.id)}
                         onDelete={() => onDeleteProject(project.id)}
+                        onReorder={
+                          reorderable(chats.length) && !selecting
+                            ? () => {
+                                setExpandedProjects((s) =>
+                                  s.has(project.id) ? s : new Set(s).add(project.id),
+                                );
+                                setReorderScope(projectOrderScope(project.id));
+                              }
+                            : undefined
+                        }
                       />
                     </div>
                   </div>
@@ -1642,7 +1725,24 @@ export function ConversationSidebar({
                     </p>
                   ) : (
                     <div className="ml-3 border-l border-[var(--color-border)] pl-1">
-                      {chats.map(renderRow)}
+                      {reorderScope === projectOrderScope(project.id) && onReorderChats && reorderable(chats.length) ? (
+                        <ChatReorderList
+                          chats={chats.map((c) => ({ id: c.id, title: c.title }))}
+                          label={`Chats in ${project.name}, in order`}
+                          hint="Drag a chat, or use its arrows, to set the order. A chat added for the first time appears at the top."
+                          onReorder={(ids) => onReorderChats(projectOrderScope(project.id), ids)}
+                          onDone={() =>
+                            // By project ID: two projects may share a name.
+                            endReorder(() =>
+                              Array.from(document.querySelectorAll<HTMLButtonElement>("button[data-project-options]"))
+                                .find((b) => b.dataset.projectOptions === project.id)
+                                ?.focus(),
+                            )
+                          }
+                        />
+                      ) : (
+                        chats.map(renderRow)
+                      )}
                     </div>
                   )
                 ) : null}
@@ -1953,15 +2053,39 @@ export function ConversationSidebar({
           ) : (
             <>
               {pinned.length > 0 ? (
-                <div className="mb-1">
+                <div className="mb-1" data-testid="pinned-section">
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                     <Icon
                       name="pin"
                       className="size-3 shrink-0 text-[var(--color-accent)]"
                     />
                     Pinned
+                    {canReorderPinned && reorderScope !== PINNED_ORDER_SCOPE && !selecting ? (
+                      <button
+                        type="button"
+                        ref={reorderToggleRef}
+                        data-testid="pinned-reorder-toggle"
+                        aria-label="Reorder pinned chats"
+                        title="Reorder pinned chats"
+                        onClick={() => setReorderScope(PINNED_ORDER_SCOPE)}
+                        className="ml-auto inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
+                      >
+                        <Icon name="selector" className="size-3.5" />
+                        Reorder
+                      </button>
+                    ) : null}
                   </div>
-                  {pinned.map(renderRow)}
+                  {reorderScope === PINNED_ORDER_SCOPE && canReorderPinned && onReorderChats ? (
+                    <ChatReorderList
+                      chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
+                      label="Pinned chats, in order"
+                      hint="Drag a chat, or use its arrows, to set the order. A chat pinned for the first time appears at the top."
+                      onReorder={(ids) => onReorderChats(PINNED_ORDER_SCOPE, ids)}
+                      onDone={() => endReorder(() => reorderToggleRef.current?.focus())}
+                    />
+                  ) : (
+                    pinned.map(renderRow)
+                  )}
                 </div>
               ) : null}
               {labelsSection}
@@ -1973,6 +2097,23 @@ export function ConversationSidebar({
                   />
                   Temporary
                   <RecentInfoButton />
+                  {onRecentSortChange && recent.length > 1 ? (
+                    <select
+                      aria-label="Sort temporary chats"
+                      data-testid="recent-sort"
+                      value={recentSort}
+                      onChange={(e) => {
+                        if (isRecentSort(e.target.value)) onRecentSortChange(e.target.value);
+                      }}
+                      className="ml-auto h-6 max-w-[8.5rem] cursor-pointer rounded-md border border-transparent bg-transparent px-1 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
+                    >
+                      {RECENT_SORTS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
                 </div>
                 {recent.length === 0 ? (
                   <p className="px-2 py-1.5 text-[0.82rem] text-[var(--color-text-muted)]">

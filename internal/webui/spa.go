@@ -175,7 +175,7 @@ func (s *spa) etag(name string, data []byte) string {
 // ── pages ──────────────────────────────────────────────────────────────────
 
 // helpGuides are the /help/{slug} pages (help/guideContent.ts).
-var helpGuides = map[string]string{"chat": "Chat", "operations-center": "Operations Center"}
+var helpGuides = map[string]string{"chat": "Chat", "operations-center": "Background tasks"}
 
 // pagePaths are the client routes the SPA renders. Anything else gets the
 // SPA's not-found page with a 404 status.

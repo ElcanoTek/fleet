@@ -485,7 +485,7 @@ func (s *Server) restoreTurnPrivateWorkspace(conv *store.Conversation, user stri
 			wsDir := tools.WorkspaceDirForConversation(conv.ID)
 			_ = restoreParticipantWorkspaceToOwner(wsDir, stashRoot, user)
 			if s.takeParticipantWorkspacePurged(conv.ID, user) {
-				_ = os.RemoveAll(filepath.Join(stashRoot, "participants", participantDigest(user))) //nolint:gosec // server-derived stash path
+				_ = os.RemoveAll(filepath.Join(stashRoot, "participants", participantDigest(user))) //nolint:gosec,nolintlint // server-derived stash path; gosec flags this on some analyses and not others (see PR #1917), so the unused-directive check is waived here
 			}
 		}
 	}

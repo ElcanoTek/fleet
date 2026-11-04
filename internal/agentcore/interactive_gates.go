@@ -217,7 +217,7 @@ func (o *orchestrationState) checkScheduleTaskSafety(toolName, toolCallID, rawIn
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.approvalSink == nil {
-		return true, "SCHEDULE_TASK_UNAVAILABLE: creating scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to create the task from the Operations Center instead."
+		return true, "SCHEDULE_TASK_UNAVAILABLE: creating scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to create the task from the Background tasks page instead."
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	var refused *StageRefusedError
@@ -246,7 +246,7 @@ func (o *orchestrationState) checkManageTasksSafety(toolName, toolCallID, rawInp
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.approvalSink == nil {
-		return true, "MANAGE_TASKS_UNAVAILABLE: changing scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to edit the task in the Operations Center instead."
+		return true, "MANAGE_TASKS_UNAVAILABLE: changing scheduled tasks from chat requires an approval-enabled interactive session. Do NOT retry — tell the user to edit the task on the Background tasks page instead."
 	}
 	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
 	var refused *StageRefusedError

@@ -279,7 +279,7 @@ export function SavePromptDialog({
                     className="mt-0.5"
                   />{" "}
                   Prompt Library workflow — Pick from the book icon in Chat &amp;
-                  Operations Center
+                  Background tasks
                 </label>
                 <label
                   aria-label="Agent Skill"

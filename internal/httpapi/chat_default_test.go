@@ -115,6 +115,9 @@ func (f *fakeEngine) SuggestRecurringTask(context.Context, string, []string) (*a
 func (f *fakeEngine) SuggestLibraryPrompt(context.Context, agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
+func (f *fakeEngine) SuggestPatrolDraft(context.Context, agent.PatrolDraftInput) (*agent.PatrolDraft, error) {
+	return nil, nil
+}
 func (f *fakeEngine) MCPBroker() agentcore.MCPBroker { return nil }
 func (f *fakeEngine) MCPCatalog() []mcp.ServerTool   { return nil }
 func (f *fakeEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {

@@ -41,7 +41,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-export type MenuPlacement = "bottom-end" | "top-stretch" | "top-start" | "top-end";
+export type MenuPlacement = "bottom-end" | "top-stretch" | "top-start" | "top-end" | "right-start";
 
 const VIEWPORT_MARGIN = 8;
 
@@ -136,6 +136,17 @@ function positionMenu(menu: HTMLElement, anchor: DOMRect, placement: MenuPlaceme
     const mw = menu.offsetWidth; // re-measure with the sizing mode applied
     menu.style.left = `${Math.round(clamp(anchor.left + 5, vw - mw - VIEWPORT_MARGIN))}px`;
     menu.style.bottom = `${Math.round(vh - anchor.top + 6)}px`;
+  } else if (placement === "right-start") {
+    // Beside a narrow anchor (a collapsed rail's icon strip): to its right,
+    // top edges aligned, flipping to the left if it would overflow, and
+    // clamped vertically so an anchor near the top or bottom of the
+    // viewport never pushes the menu off-screen.
+    let left = anchor.right + 6;
+    if (left + w > vw - VIEWPORT_MARGIN) left = anchor.left - 6 - w;
+    menu.style.right = "auto";
+    menu.style.bottom = "auto";
+    menu.style.left = `${Math.round(clamp(left, vw - w - VIEWPORT_MARGIN))}px`;
+    menu.style.top = `${Math.round(clamp(anchor.top, vh - h - VIEWPORT_MARGIN))}px`;
   } else if (placement === "top-end") {
     // Bulk-bar popovers: open ABOVE the bar,
     // right edges aligned to the anchor, clamped fully on-screen.
@@ -384,6 +395,8 @@ export function MenuItem({
   ariaHasPopup,
   ariaExpanded,
   className,
+  testId,
+  current,
 }: {
   icon?: ReactNode;
   children: ReactNode;
@@ -395,11 +408,17 @@ export function MenuItem({
   ariaHasPopup?: boolean;
   ariaExpanded?: boolean;
   className?: string;
+  testId?: string;
+  // The item leads to the page being shown: exposed as aria-current="page",
+  // so a screen reader announces it (a style alone would not).
+  current?: boolean;
 }) {
   return (
     <button
       type="button"
       role="menuitem"
+      data-testid={testId}
+      aria-current={current ? "page" : undefined}
       disabled={disabled}
       aria-haspopup={ariaHasPopup}
       aria-expanded={ariaExpanded}

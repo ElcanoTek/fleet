@@ -454,6 +454,18 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	}
 
 	explicit := supportsExplicitBreakpoints(slug)
+	// A model whose upstream has no explicit cache treats fleet's breakpoint as
+	// a no-op: every read is the provider's best-effort implicit cache (a
+	// request routed to a cold replica reads nothing), so it is held to the
+	// implicit rule — one miss allowed — not the explicit one. The assumption
+	// is checked, not trusted: such a model must report no cache writes, and
+	// if it ever does, it has gained explicit caching and this list is stale.
+	if liveImplicitOnly[slug] {
+		if wireWrite != 0 {
+			t.Errorf("%s: listed as implicit-cache only, but the wire reported %d cache-write tokens — it now has explicit caching; remove it from liveImplicitOnly", slug, wireWrite)
+		}
+		explicit = false
+	}
 	implicitMisses := 0
 	for i, r := range transport.records {
 		if i == 0 || r.CachedTokens > 0 {
@@ -474,6 +486,13 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	if explicit && !stablePrefixOnly(slug) {
 		assertLiveExplicitRollingCacheGrowth(t, slug, transport.records, warmHitPct)
 	}
+}
+
+// liveImplicitOnly lists models that take fleet's stable-prefix breakpoint but
+// have no explicit cache upstream (cache.go: "Gemini 4 Argon has no explicit
+// caching (implicit only)"); see their use in TestPromptCacheLive.
+var liveImplicitOnly = map[string]bool{
+	"google/gemini-4-argon": true,
 }
 
 func assertLiveExplicitRollingCacheGrowth(t *testing.T, slug string, records []liveCacheRecord, warmHitPct float64) {

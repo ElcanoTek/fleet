@@ -219,12 +219,35 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await expect(page.locator('[data-panel-key="p:revenue"]')).toContainText("v2");
   await expect(page.locator('[data-panel-key="c:call-rev-2"]')).toHaveCount(0);
 
+  // Pinning brings its panel into view and focuses it a moment later (a
+  // timer, after the pane paints). Wait for that to land before typing, so
+  // the test follows the app instead of racing it.
+  await expect(page.locator('[data-panel-key="p:revenue"]')).toBeFocused();
+
   // A message sent from dashboard view tells the server which view it is.
   const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
-  await page.locator("#promptInput").fill("add a churn panel");
-  await page.keyboard.press("Enter");
+  const prompt = page.locator("#promptInput");
+  await prompt.fill("add a churn panel");
+  await expect(prompt).toBeFocused();
+  await prompt.press("Enter");
   const body = JSON.parse((await chat).postData() ?? "{}") as { view?: string };
   expect(body.view).toBe("dashboard");
+});
+
+test("pinning a card never pulls the focus out of the composer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDashboardChat(page);
+  await page.getByTestId("dashboard-enter").click();
+  await expect(page.getByTestId("dashboard-panel")).toHaveCount(3);
+  // Pin, then move straight to the composer in the same task — before the
+  // pin's delayed panel focus runs. That focus must not take the caret.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-testid="dashboard-pin-card"]')?.click();
+    document.querySelector<HTMLTextAreaElement>("#promptInput")?.focus();
+  });
+  await expect(page.getByTestId("dashboard-panel")).toHaveCount(4);
+  await page.waitForTimeout(400); // well past the pin's 60 ms focus timer
+  await expect(page.locator("#promptInput")).toBeFocused();
 });
 
 test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async ({ page }) => {

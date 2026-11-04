@@ -269,9 +269,14 @@ FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… \
 
 It fails when a request after the first reads nothing from cache (one miss is
 allowed among the requests left to the implicit cache, the upstream's best
-effort: an implicit-cache family's, and a Gemini request sent with no
-breakpoint; every other request must read), or when fleet's recorded
-cached tokens disagree with the wire. The response stream is teed, not
+effort: an implicit-cache family's, a Gemini request sent with no
+breakpoint, and every request to a model listed in `liveImplicitOnly` —
+`google/gemini-4-argon`, which takes the stable-prefix breakpoint but has no
+explicit cache, so its reads are Google's implicit cache and a request routed
+to a cold replica reads nothing; every other request must read), or when
+fleet's recorded cached tokens disagree with the wire. A `liveImplicitOnly`
+model that reports any cache write fails the check: it has gained explicit
+caching, and the list must be updated. The response stream is teed, not
 buffered, so the first-chunk watchdog behaves as in production, and each turn
 replays the previous turn's text, tool calls and tool results the way
 `replayHistory` does. `FLEET_CACHE_LIVE_TURN_GAP`

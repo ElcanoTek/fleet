@@ -1665,8 +1665,8 @@ function ScheduleTaskCard({
           <span aria-hidden>⚠️ </span>
           <span className="font-medium">No connectors.</span> This task will run without any email,
           mailbox or data connectors, so it cannot send or fetch anything. Turn the connectors it
-          needs on in this chat&apos;s Tools menu and schedule again, or add them to the task in the
-          Operations Center after approving.
+          needs on in this chat&apos;s Tools menu and schedule again, or add them to the task on the
+          Background tasks page after approving.
         </div>
       ) : null}
 

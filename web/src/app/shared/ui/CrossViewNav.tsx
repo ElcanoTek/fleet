@@ -1,7 +1,8 @@
 import { Link } from "@/app/lib/Link";
 
 // CrossViewNav holds the links that move between the app's surfaces —
-// /chat, /orchestrator and the user guides at /help. The one Next middleware
+// /chat and /orchestrator. (The user guides at /help are reached from the
+// account menu, AccountMenu.tsx.) The one Next middleware
 // gates them off the same session cookie, so crossing between them never
 // re-prompts for login.
 //
@@ -14,11 +15,10 @@ import { Link } from "@/app/lib/Link";
 
 const NAV_TO_ORCHESTRATOR_TESTID = "nav-to-orchestrator";
 const NAV_TO_CHAT_TESTID = "nav-to-chat";
-const NAV_TO_HELP_TESTID = "nav-to-help";
 
 export function NavToOrchestrator({
   className,
-  children = "Operations Center →",
+  children = "Background tasks →",
   ariaCurrent,
   dataTip,
 }: {
@@ -57,30 +57,6 @@ export function NavToChat({
     <Link
       href="/chat"
       data-testid={NAV_TO_CHAT_TESTID}
-      className={className}
-      aria-current={ariaCurrent}
-      data-tip={dataTip}
-    >
-      {children}
-    </Link>
-  );
-}
-
-export function NavToHelp({
-  className,
-  children = "Guides",
-  ariaCurrent,
-  dataTip,
-}: {
-  className?: string;
-  children?: React.ReactNode;
-  ariaCurrent?: "page";
-  dataTip?: string;
-}) {
-  return (
-    <Link
-      href="/help"
-      data-testid={NAV_TO_HELP_TESTID}
       className={className}
       aria-current={ariaCurrent}
       data-tip={dataTip}

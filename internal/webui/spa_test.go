@@ -170,7 +170,7 @@ func TestClientRoutesAndNotFound(t *testing.T) {
 	}
 	// Help pages carry their own titles.
 	body := readBody(t, e.do(signedIn(t, req("GET", "/help/operations-center", ""))))
-	if !strings.Contains(body, "<title>Operations Center guide — Fleet</title>") {
+	if !strings.Contains(body, "<title>Background tasks guide — Fleet</title>") {
 		t.Fatal("guide title")
 	}
 	if !strings.Contains(readBody(t, e.do(signedIn(t, req("GET", "/help", "")))), "<title>Guides — Fleet</title>") {

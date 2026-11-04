@@ -13,13 +13,14 @@ Two guides, written for users rather than contributors:
 | Guide | Covers |
 | --- | --- |
 | **Chat** | The rail, transcript and composer; asking well; picking a model; getting data in (attachments, connectors, shared files); approval cards; memory and projects; sharing, branching and compacting; the prompt library; turning a conversation into a scheduled task; triage when a turn goes wrong; keyboard shortcuts. |
-| **Operations Center** | Reading the board and its counters; the anatomy of a task; every run state; running, editing, answering and rating a run; the five-step path when a run goes wrong; conventions for a shared board. |
+| **Background tasks** (formerly the Operations Center; file `operations-center.md`, URL `/help/operations-center`) | Reading the board and its counters; the anatomy of a task; every run state; running, editing, answering and rating a run; the five-step path when a run goes wrong; conventions for a shared board. |
 
 They reach users two ways, from one source:
 
 - **`/help`** — a surface of the app, in the same NavRail/PageTopBar chrome as
-  Chat, the Operations Center and Settings, with a **Guides** item in the rail on
-  every surface. The guides render as Markdown with a per-guide contents rail;
+  Chat, Background tasks and Settings, reached from **Guides** in the account
+  menu (beside **Settings**) on every surface; the rail itself holds only the
+  three ways of working (Chat · Patrols · Background tasks). The guides render as Markdown with a per-guide contents rail;
   both themes and any bundle's palette follow, because the styles
   (`.guide-prose` in `globals.css`) speak only in semantic tokens.
 - **The `fleet-guide` built-in skill** — the same two Markdown files, shipped in

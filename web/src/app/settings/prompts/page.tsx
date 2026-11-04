@@ -224,7 +224,7 @@ export default function PromptsPage() {
   return (
     <SetSection
       title="Prompts"
-      intro="Reusable prompts and form templates shared between Chat and the Operations Center. Create personal or workspace prompts, customize deployment templates, or open any prompt directly in a new chat."
+      intro="Reusable prompts and form templates shared between Chat and Background tasks. Create personal or workspace prompts, customize deployment templates, or open any prompt directly in a new chat."
     >
       {error ? (
         <p

@@ -32,6 +32,10 @@ type fakeTurnEngine struct {
 	libraryDraft    *agent.LibraryPromptDraft // returned by SuggestLibraryPrompt (suggest-prompt tests)
 	libraryDraftErr error
 	libraryInput    agent.LibraryPromptInput // captured: exactly what suggest-prompt fed the synthesizer
+
+	patrolDraft    *agent.PatrolDraft // returned by SuggestPatrolDraft (patrol-draft tests)
+	patrolDraftErr error
+	patrolInput    agent.PatrolDraftInput // captured: exactly what patrol-draft fed the synthesizer
 }
 
 func (f *fakeTurnEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.EventSink) (*TurnResult, error) {
@@ -79,6 +83,10 @@ func (f *fakeTurnEngine) ExtractMemories(context.Context, string, string, []stri
 }
 func (f *fakeTurnEngine) SuggestRecurringTask(context.Context, string, []string) (*agent.RecurringTaskProposal, error) {
 	return f.recurringProposal, f.recurringErr
+}
+func (f *fakeTurnEngine) SuggestPatrolDraft(_ context.Context, in agent.PatrolDraftInput) (*agent.PatrolDraft, error) {
+	f.patrolInput = in
+	return f.patrolDraft, f.patrolDraftErr
 }
 func (f *fakeTurnEngine) SuggestLibraryPrompt(_ context.Context, in agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error) {
 	f.libraryInput = in

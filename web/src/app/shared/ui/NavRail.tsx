@@ -29,7 +29,8 @@
 // state without a second source of truth.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavToChat, NavToHelp, NavToOrchestrator } from "./CrossViewNav";
+import { LaunchpadButton } from "@/app/launchpad/LaunchpadButton";
+import { NavToChat, NavToOrchestrator } from "./CrossViewNav";
 import { CloseButton } from "./CloseButton";
 import { Icon } from "./Icon";
 import { AccountMenu } from "./AccountMenu";
@@ -37,7 +38,7 @@ import { AccountMenu } from "./AccountMenu";
 // "settings" renders the rail with neither surface active (the design's
 // settings view): Chat/Operations Center stay plain links and the account
 // button below takes the `current` tint instead. "help" is the guides surface
-// (/help), which marks its own nav item and leaves the account button alone.
+// (/help), reached from the account menu, so it tints the account button too.
 export type RailView = "chat" | "orchestrator" | "settings" | "help";
 
 export const RAIL_COLLAPSED_STORAGE_KEY = "rail-collapsed";
@@ -127,6 +128,17 @@ function navTileClass(active: boolean): string {
     "motion-safe:group-hover/nav:scale-110 group-hover/nav:text-[var(--color-text-primary)]",
     tint,
   ].join(" ");
+}
+
+// RailLabel — a rail item's name with its one-line subtitle (hidden in the
+// collapsed strip, where the data-tip carries both).
+function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: string; collapsed: boolean }) {
+  return (
+    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:hidden" : ""].join(" ")}>
+      <span className="truncate">{title}</span>
+      <span className="truncate text-[0.7rem] font-normal text-[var(--color-text-muted)]">{subtitle}</span>
+    </span>
+  );
 }
 
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
@@ -323,33 +335,47 @@ export function NavRail({
           aria-label="Switch surface"
           className={["grid gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
         >
+          {/* The three ways of working, each with a subtitle that says what
+              makes it different — patrols and background tasks both run on a
+              schedule, so the names alone would blur: a patrol is a chat you
+              can talk to; a background task runs headless, with no chat (and
+              emails its result only when it has recipients). (The user guides live in the account menu.) */}
           <NavToChat
             className={navItemClass(activeView === "chat", collapsed)}
             ariaCurrent={activeView === "chat" ? "page" : undefined}
-            dataTip={collapsed ? "Chat" : undefined}
+            dataTip={collapsed ? "Chat — talk it through" : undefined}
           >
             <span className={navTileClass(activeView === "chat")} aria-hidden="true">
               <Icon name="message" className="size-[1rem]" />
             </span>
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>Chat</span>
+            <RailLabel title="Chat" subtitle="Talk it through" collapsed={collapsed} />
           </NavToChat>
+          {/* Patrols (docs/PATROL-LAUNCHPAD.md): patrols live in Chat; this item
+              is their index (a menu of your patrol chats) and, with none yet,
+              the Patrol Launchpad wizard that sets one up. */}
+          <LaunchpadButton
+            className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
+            tileClassName={navTileClass(false)}
+            label={<RailLabel title="Patrols" subtitle="Chats that check in on a schedule" collapsed={collapsed} />}
+            dataTip={collapsed ? "Patrols — chats that check in on a schedule" : undefined}
+            collapsed={collapsed}
+            onOpen={() => setSidebarOpen(false)}
+          />
           <NavToOrchestrator
             className={navItemClass(activeView === "orchestrator", collapsed)}
             ariaCurrent={activeView === "orchestrator" ? "page" : undefined}
             dataTip={
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
-                  ? `Operations Center · ${opsCount} running`
-                  : "Operations Center"
+                  ? `Background tasks · ${opsCount} running`
+                  : "Background tasks — run headless, without a chat"
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
-              Operations Center
-            </span>
+            <RailLabel title="Background tasks" subtitle="Run headless, without a chat" collapsed={collapsed} />
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
                 className={[
@@ -361,22 +387,6 @@ export function NavRail({
               </span>
             ) : null}
           </NavToOrchestrator>
-          {/* The user guides. A third rail item rather than a link buried in a
-              menu: "what does DEAD_LETTERED mean" is a question people have
-              while looking at the board, and the answer should be one visible
-              click away on every surface. */}
-          <NavToHelp
-            className={navItemClass(activeView === "help", collapsed)}
-            ariaCurrent={activeView === "help" ? "page" : undefined}
-            dataTip={collapsed ? "Guides" : undefined}
-          >
-            <span className={navTileClass(activeView === "help")} aria-hidden="true">
-              <Icon name="book" className="size-[1rem]" />
-            </span>
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
-              Guides
-            </span>
-          </NavToHelp>
         </nav>
 
         <div className="my-1 h-px shrink-0 bg-[var(--color-border)]" />
@@ -393,6 +403,7 @@ export function NavRail({
           onSignOut={account.onSignOut}
           railCollapsed={collapsed}
           current={activeView === "settings"}
+          guidesCurrent={activeView === "help"}
         />
       </aside>
     </>

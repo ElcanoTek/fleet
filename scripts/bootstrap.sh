@@ -76,7 +76,7 @@
 #                              on loopback) so the API backends read the client
 #                              IP Caddy forwards.
 #   --admin <email[,email...]> register these emails as full admins (web login +
-#                              chat-admin + Operations Center) at the end of an
+#                              chat-admin + Background tasks) at the end of an
 #                              --enable-service run; passwords are prompted per
 #                              email (hidden). Interactive runs are prompted for
 #                              the list too, so the flag is optional.
@@ -316,7 +316,7 @@ if [[ -t 0 ]]; then
     case "${_ans,,}" in n|no) info "dev mode — env goes to .env.local; start with: fleet serve" ;; *) ENABLE_SERVICE=1 ;; esac
   fi
   if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_WEB" != "1" ]]; then
-    printf 'Set up the web UI (chat + Operations Center)? [Y/n] '
+    printf 'Set up the web UI (chat + Background tasks)? [Y/n] '
     read -r _ans
     case "${_ans,,}" in n|no) ;; *) ENABLE_WEB=1 ;; esac
   fi
@@ -1660,7 +1660,7 @@ fi
 
 # ── register admin users (interactive; or --admin email[,email...]) ─────────
 # One `fleet admin add` per email provisions the FULL admin across both user
-# planes (web login + chat-admin + Operations Center; passwords prompted hidden
+# planes (web login + chat-admin + Background tasks; passwords prompted hidden
 # by the binary). Needs the service RUNNING first: the users tables exist only
 # after each service's self-migration, and Type=notify holds "active" until
 # READY=1 — which fires after migrations — so wait-for-active is the precise
@@ -1704,7 +1704,7 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
           # operator's shell has any fleet env.
           if FLEET_CHAT_DATABASE_URL="$CHAT_URL" FLEET_SCHED_DATABASE_URL="$SCHED_URL" \
              "$_fleet_bin" admin add "$_email"; then
-            ok "admin ${_email} registered (web login + Operations Center)"
+            ok "admin ${_email} registered (web login + Background tasks)"
           else
             warn "could not register ${_email} — retry with: fleet admin add ${_email}"
           fi

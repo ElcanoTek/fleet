@@ -141,6 +141,14 @@ const turnIDHeaderName = "X-Fleet-Turn-Id"
 // not a plain fact) and the user-declared validity window so the model can
 // weigh time-scoped facts.
 func memoryContents(memories []store.Memory) []string {
+	return memoryContentsCapped(memories, 0)
+}
+
+// memoryContentsCapped is memoryContents with each memory's CONTENT cut to
+// maxContentRunes (0 = no cut) before its annotation is appended, so a long
+// memory keeps its kind and validity window. The Patrol Launchpad's drafter
+// uses it to bound its prompt without making a dated fact look timeless.
+func memoryContentsCapped(memories []store.Memory, maxContentRunes int) []string {
 	out := make([]string, 0, len(memories))
 	for _, memory := range memories {
 		if memory.Source == "proposed" || memory.Retired() {
@@ -152,6 +160,11 @@ func memoryContents(memories []store.Memory) []string {
 		content := strings.TrimSpace(memory.Content)
 		if content == "" {
 			continue
+		}
+		if maxContentRunes > 0 {
+			if r := []rune(content); len(r) > maxContentRunes {
+				content = strings.TrimSpace(string(r[:maxContentRunes])) + "…"
+			}
 		}
 		if note := memoryAnnotation(&memory); note != "" {
 			content += " (" + note + ")"

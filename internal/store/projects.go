@@ -392,6 +392,11 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 		`DELETE FROM memories WHERE project_id = $1`, id); err != nil {
 		return err
 	}
+	// Every member's saved chat order for the project goes with it.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM conversation_order WHERE scope = $1`, ChatOrderProjectScope(id)); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -426,7 +431,7 @@ func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail stri
 // before calling; the store re-checks access under the project row's lock
 // (lockAccessibleProjectTx).
 func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*Conversation, error) {
-	id := uuid.NewString()
+	id := newConversationID(ctx)
 	now := time.Now().Unix()
 	if mcpServers == nil {
 		mcpServers = []string{}
@@ -448,6 +453,9 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $9)`,
 		id, userEmail, title, persona, model, lockdown, projectID, string(mcps), now,
 	)
+	if pgUniqueViolation(err) {
+		return nil, ErrConversationIDTaken
+	}
 	if err != nil {
 		return nil, err
 	}

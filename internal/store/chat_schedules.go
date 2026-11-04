@@ -390,6 +390,64 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 	return out, rows.Err()
 }
 
+// UserPatrol is one of a user's recurring patrols, summarised for the
+// Patrols index in the rail (docs/PATROL-LAUNCHPAD.md): just what the menu
+// shows and links to. The prompt stays out — it has no length bound and the
+// index never reads it. ConversationOwner is not serialised: the HTTP layer
+// uses it to re-check access to chats the caller does not own.
+type UserPatrol struct {
+	ID                string `json:"id"`
+	ConversationID    string `json:"conversation_id"`
+	Title             string `json:"title"`
+	ConversationTitle string `json:"conversation_title"`
+	CronExpr          string `json:"cron"`
+	Timezone          string `json:"timezone"`
+	Status            string `json:"status"`
+	NextRunAt         int64  `json:"next_run_at"`
+	ConversationOwner string `json:"-"`
+}
+
+// ListUserPatrols returns the active and paused recurring patrols (not
+// one-shot timers) that userEmail created, in any non-deleted conversation —
+// their own, or a teammate's multiplayer chat they took part in — active ones
+// first and each group soonest-next-run first. It does NOT check access to a
+// conversation the user does not own; the caller must (multiplayer access can
+// be revoked after the patrol was made), so it pages with limit/offset rather
+// than capping: rows the caller then drops must not crowd out ones it keeps.
+func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]UserPatrol, error) {
+	if s == nil || s.db == nil {
+		return []UserPatrol{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT cs.id, cs.conversation_id, cs.title, c.title, cs.cron_expr, cs.timezone,
+		        cs.status, cs.next_run_at, c.user_email
+		   FROM chat_schedules cs
+		   JOIN conversations c ON c.id = cs.conversation_id
+		  WHERE cs.user_email = $1
+		    AND c.deleted_at IS NULL
+		    AND cs.cron_expr <> ''
+		    AND cs.status IN ('active', 'paused')
+		  ORDER BY (cs.status = 'active') DESC, cs.next_run_at ASC, cs.id ASC
+		  LIMIT $2 OFFSET $3`,
+		userEmail, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UserPatrol{}
+	for rows.Next() {
+		var p UserPatrol
+		if err := rows.Scan(&p.ID, &p.ConversationID, &p.Title, &p.ConversationTitle, &p.CronExpr,
+			&p.Timezone, &p.Status, &p.NextRunAt, &p.ConversationOwner); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 // UpdateChatSchedule applies a partial update (pause, resume, or cadence/prompt
 // edit) to an existing schedule owned by userEmail in convID.
 func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch ChatSchedulePatch) (*ChatSchedule, error) {

@@ -240,6 +240,8 @@ above fails otherwise.
 - [`BUNDLE-STAGING.md`](BUNDLE-STAGING.md) — Staging the default bundle for a bare install on an SELinux host (#1655)
 - [`CHAT-EXPORT.md`](CHAT-EXPORT.md) — Downloading a chat
 - [`CHAT-PATROLS.md`](CHAT-PATROLS.md) — In-Chat Patrols & Timers (`chat_patrol`)
+- [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
+- [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
 - [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working

@@ -84,14 +84,14 @@ Recurring work usually follows one loop. A conversation produces something worth
 keeping. That conversation becomes a saved prompt in the prompt library. The
 prompt becomes a scheduled task. The task runs on its own and emails the result
 to whoever should see it. This guide covers the first two steps in depth; the
-**Operations Center Guide** covers the rest.
+**Background tasks guide** covers the rest.
 
 > conversation → saved prompt → scheduled task → your inbox
 > *(this guide covers the first two)*
 
 The two surfaces divide the work simply. Chat is **hands on**: you are in the
 conversation, asking, reading, and redirecting as it goes, and that is where a
-report gets shaped until it comes back right. The Operations Center is **hands
+report gets shaped until it comes back right. Background tasks are **hands
 off**: the same conversation, once it is right, runs there on a schedule and
 delivers itself, and you only look in when something needs you. The skills are
 the same in both places; only your role changes.
@@ -101,11 +101,76 @@ Text fields keep spaces as you type; larger text boxes accept several lines.
 The prompt preview preserves those line breaks so you can check what will be
 sent before pressing the card's run button.
 
+### Patrol Launchpad: your first patrol in five steps
+
+The quickest way to put the assistant on patrol is **Patrols** (sparkles) in
+the left rail, between **Chat** and **Background tasks**, on every surface (in the
+collapsed rail it is the sparkles icon; on a phone, open the sidebar). Until
+you have opened it once it carries a small pulsing dot. Patrols themselves live
+in Chat — each one is a chat that wakes on its schedule — so **Patrols** is
+their index and their front door: with no patrols yet it opens the **Patrol
+Launchpad**; once you have some, it lists them (name, its chat, cadence, and
+**Paused** when paused) — click one to open its chat — with **New patrol** at
+the bottom to open the Launchpad. The Launchpad is a guided wizard that takes
+you from nothing set up to a running patrol.
+It starts with **Why patrol?**, a short "expanding mind" ladder — small brain
+to galaxy brain — from chatting, to scheduled reports, to patrols that analyze
+and decide, to letting the assistant act on your behalf, with a note on
+Dr. Ethan Mollick's "capability overhang" and the suggested path:
+start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
+you trust its calls. **Show me the plan** then lists the five steps before you
+take them:
+
+1. **Hook up your tools.** Every connector you can use is listed; the ones on
+   by default for a new chat start ticked, and you tick or untick the rest for
+   this patrol. A connector that still needs credentials shows **Set up**, and
+   **Connect another tool** opens **Settings → Connections** — both in a new
+   tab, and the list refreshes when you come back.
+2. **Set your ground rules.** Pick **Who's on watch** (the workspace default
+   persona unless you choose another, including your own personas), and save
+   your **non-negotiables** — tap a suggestion or write your own and press
+   **Save**. Each one is saved straight away as a pinned memory, so the
+   assistant reads it in every chat, patrols included; edit or delete it later
+   in **Settings → Memories**.
+3. **Pick what to watch.** Choose any of **Catch misconfigured deals**,
+   **Alert when spend drops off**, **Make sure reports get delivered**,
+   **Triage my inbox**, **Suggest optimizations**, **Prep me for my day** and
+   **Watch my data for anomalies**, and add anything else in your own words.
+   Each card shows which of your ticked tools fit it (**Uses …**) or what kind
+   of connector it would need. Then choose how hands-on it is: **Just report**
+   (never changes anything), **Suggest & ask** (stages approval cards for you;
+   the default) or **Act for me** (turns the chat's **⚡ Auto-approve** on and
+   lists everything it did). A note under the choice suggests starting at
+   **Suggest & ask** and switching on **⚡ Auto-approve** later.
+4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
+   default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
+   morning** or **Monday kickoff**, or **Custom schedule** for the full
+   schedule builder and time zone (your browser's zone by default).
+5. **Launch.** Review the plan, the patrol's name and **What it does each
+   run** — the instructions the assistant receives every time the patrol
+   wakes, pre-written from your answers. **Draft it with AI** asks the
+   assistant to write them for you instead; if it cannot, your draft stays.
+   Edit anything, then press **Launch patrol**.
+
+Launching creates a new chat with your chosen persona and tools, attaches the
+patrol, and runs the first check straight away; **Watch it work** opens that
+chat; unless you chose **Act for me**, the success screen also suggests
+turning on **⚡ Auto-approve** once its calls keep being right. From then on it
+is an ordinary in-chat patrol (below): pause or stop it
+from the Patrol bar, or ask in the chat to change it. Nothing is created until
+you press **Launch patrol** — except the non-negotiables you saved, which are
+memories as soon as you press **Save**. Close the Launchpad with **Maybe later**
+or `Esc` at any point, except while **Draft it with AI** is writing (up to
+about 45 seconds) or during the few seconds of launching; your
+answers are kept for the rest of the browser session. A read-only account sees
+the **Why patrol?** page with a note that it cannot save memories or start a
+patrol, and a **Got it** button instead of the rest of the wizard.
+
 ### In-chat patrols and timers
 
 You can also run a recurring **patrol** or a one-shot **timer** directly inside
 a chat conversation, without leaving the thread or promoting it to a separate
-Operations Center job. Each time a patrol or timer fires, the assistant wakes up
+background task. Each time a patrol or timer fires, the assistant wakes up
 in the same conversation with its full message history, workspace files, and
 enabled connectors intact.
 
@@ -232,7 +297,13 @@ the middle holds the work, and the composer at the bottom is where you ask.
 
 ### The rail
 
-**New chat** starts a fresh conversation. The search field, also reachable with
+At the top of the rail are the three ways of working, each with a one-line
+subtitle: **Chat** (*Talk it through*), **Patrols** (*Chats that check in on a
+schedule* — your patrol chats, and the
+[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) and
+**Background tasks** (*Run headless, without a chat* — formerly the
+Operations Center). **New chat** starts a fresh
+conversation. The search field, also reachable with
 `⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
 too. Below that, conversations are grouped:
 
@@ -240,19 +311,21 @@ too. Below that, conversations are grouped:
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
-| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. |
+| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Temporary** | Everything else, newest first. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
+| **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
 
 A chat row can carry two small badges, each labeled with its audience when you
 hover: one means it is shared by link, the other that it is shared with your
 team. Click a project's name to open its home (and expand it); the chevron only
-folds it. Hovering a project shows its menu: **Open project**, **New chat**, and,
-for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
+folds it. Hovering a project shows its menu: **Open project**, **New chat**,
+**Reorder chats** (when it holds two or more of your chats), and, for the
+owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
-and **System** appearance and opens **Settings**. Its **Sign out** asks you to
+and **System** appearance and opens **Settings** and **Guides** (these user
+guides). Its **Sign out** asks you to
 confirm first, because it also signs you out of every app that shares your
 sign-in.
 
@@ -312,7 +385,7 @@ the top bar compact (switch to dashboard view via **More options → Dashboard v
 **Memories** and **Show details** (which toggles the assistant's reasoning, working notes, tool calls, and per-turn cost figures on or off across the conversation) live inside **More options** (`•••`) in the composer so they carry clear labels and stay reachable in both standard chat and dashboard view.
 When your operator configures a support
 contact in the deployment's bundle (`branding.support`), the top bar also shows
-that support button across Chat, the Operations Center, Settings, and Guides
+that support button across Chat, Background tasks, Settings, and Guides
 (collapsing to a compact **Help** label — or `branding.support.mobile_label` — on
 mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
@@ -622,7 +695,7 @@ Center.
 | --- | --- | --- |
 | Availability | **Settings → Connections** | Which connectors exist for you at all, whether each is on by default in new chats, and which account it uses when a connector has more than one. Set once, lasts. |
 | Selection | The **Tools** menu (the wrench) in the composer, its library, or an **Enable MCP connector?** card in chat | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; if a task needs a connected bundled optional MCP connector that is currently off in the conversation, the assistant can suggest turning it on for you to approve (or turn it on itself when **Auto-approve** is active). |
-| Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
+| Binding | The task form on the Background tasks page | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
 The Tools menu opens with its search field ready: type to filter by a
 connector's name, its description, its category, or the name of one of its
@@ -651,7 +724,7 @@ tools out of the Tools menu, its search, the library's **Show N tools** list
 and every tool count, and does not list a **Bundled** connector whose every
 tool is reserved. A third-party connector you signed into yourself is listed
 either way, because its tools are only known once a conversation opens it. The
-assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the Operations Center task form may show
+assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the task form on the Background tasks page may show
 tools and connectors that Chat does not. When a connector has more than one
 account, an **Account** menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
@@ -1084,6 +1157,34 @@ you hover over it. Here is everything in it.
 > oldest can go before the clock runs out. Pinning, archiving, filing into a
 > project, or sharing exempts a conversation from both.
 
+### Ordering your chats
+
+Pinned chats and the chats in a project start out newest first. To put them in
+your own order:
+
+- **Pinned chats:** press **Reorder** in the **Pinned** heading.
+- **A project's chats:** open the project's `⋮` menu and choose **Reorder
+  chats**.
+
+Each chat then shows a pair of arrows. Drag a chat to where you want it, or
+press its up and down arrows, which also work from the keyboard and on a phone.
+Every move is saved as you make it, to your account, so the order is the same
+on every device you sign in from. Press **Done** (or `Esc`) to go back to the
+ordinary rows.
+
+A chat you pin, or file in the project, for the first time appears at the top
+of the list, above the ones you have ordered, until you move it; one you unpin
+(or move out) and bring back returns to its old place. **Reorder** is offered for
+up to 500 chats at a time, and not to a read-only (viewer) account, which
+cannot save an order. In a project you order your own chats; each teammate
+orders theirs.
+
+**Temporary** chats have a sort instead, in the menu beside the heading:
+**Recent activity** (the default), **Newest first** (by when the chat was
+started) or **Title A–Z**. The choice is remembered on this device. Temporary
+chats expire when left alone, so they are sorted rather than hand-placed; to
+give one a place of its own, pin it or move it into a project.
+
 ### On the transcript
 
 **Edit message** on any of your own messages lets you change it and resend from
@@ -1214,8 +1315,8 @@ The library is where a finished prompt lives. Chats are where prompts get built;
 tasks are where they run; the library is the one place both of them look.
 
 There is one library, visible from three places: **Prompt library** inside **More
-options** (`•••`) in the composer, **Settings → Prompts**, and the prompt field in the Operations Center
-task form all open the same list, so a prompt saved from a conversation is, word for
+options** (`•••`) in the composer, **Settings → Prompts**, and the prompt field in the task form on the Background tasks page
+all open the same list, so a prompt saved from a conversation is, word for
 word, the prompt a task can run. It holds two kinds of entry:
 
 | Kind | What it is |
@@ -1226,8 +1327,8 @@ word, the prompt a task can run. It holds two kinds of entry:
 ### Using a prompt
 
 Open the library, search or scroll, and select an entry to read it in full. **Use
-prompt** inserts it into your draft; send it as it is, or add to it first. In the
-Operations Center the same action fills the task's instructions and seeds the
+prompt** inserts it into your draft; send it as it is, or add to it first. On the
+Background tasks page the same action fills the task's instructions and seeds the
 task's title from the prompt's name.
 
 Some deployment prompts are **forms**, marked **Form** in the list. Selecting one
@@ -1324,10 +1425,10 @@ and update the saved prompt.
 
 ### Getting the prompt into a task
 
-**From the library, in the Operations Center.** The recommended route. In the
-Operations Center, **New task** opens the task form; insert the prompt from the
+**From the library, on the Background tasks page.** The recommended route. On
+the Background tasks page, **New task** opens the task form; insert the prompt from the
 library, then set the schedule, the model, and the recipients. The prompt has one
-home and the task points at it. The Operations Center Guide covers the form field
+home and the task points at it. The Background tasks guide covers the form field
 by field.
 
 **Make recurring task… from the chat.** The direct route. From the conversation's
@@ -1343,7 +1444,7 @@ rather than taken from the library, so review it in **Edit** with the same
 checklist. Consider saving that reviewed prompt to the library as well, so a
 later fix has somewhere to live.
 
-Either way, the task appears on your own board in the Operations Center.
+Either way, the task appears on your own board on the Background tasks page.
 Teammates receive its emails, but unless they are admins they do not see its row,
 so the team's version of a report should be created by whoever will maintain it.
 
@@ -1352,7 +1453,7 @@ so the team's version of a report should be created by whoever will maintain it.
 > After any change to a library prompt, open the tasks that use it, re-insert the
 > prompt, and **Run now** once to confirm.
 
-From here, the **Operations Center Guide** takes over: run states, logs, what to
+From here, the **Background tasks guide** takes over: run states, logs, what to
 do when a run needs attention.
 
 ## 11. When a turn goes wrong

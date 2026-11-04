@@ -18,7 +18,12 @@ export const MAX_LABEL_LEN = 32;
 // ConversationSummary (chat-experience.tsx) is a superset; using a minimal shape
 // keeps this module importable from tests without pulling in React/Next.
 export type OrganizableConversation = {
+  // The conversation's id; only the hand-set order (applyChatOrder) reads it.
+  id?: string;
   title: string;
+  // Activity and creation times (unix seconds); only sortRecent reads them.
+  updated_at?: number;
+  created_at?: number;
   pinned: boolean;
   labels?: string[];
   // project_id binds the conversation to a project/space (#509). A project
@@ -122,8 +127,99 @@ function isUnfiled(projectID: string | undefined, known?: ReadonlySet<string>): 
 export function pinnedUnfiled<T extends OrganizableConversation>(
   conversations: readonly T[],
   knownProjectIds?: ReadonlySet<string>,
+  pinOrder?: readonly string[],
 ): T[] {
-  return conversations.filter((c) => c.pinned && isUnfiled(c.project_id, knownProjectIds));
+  const pinned = conversations.filter((c) => c.pinned && isUnfiled(c.project_id, knownProjectIds));
+  return pinOrder && pinOrder.length > 0 ? applyChatOrder(pinned, pinOrder) : pinned;
+}
+
+// ── Hand-set chat order (docs/CHAT-ORDER.md) ─────────────────────────────
+
+// The scopes a person can put in their own order: their pinned chats, and
+// their chats in each project. Mirrors the server (store.ChatOrderPinned,
+// store.ChatOrderProjectScope).
+export const PINNED_ORDER_SCOPE = "pinned";
+export const projectOrderScope = (projectId: string) => `project:${projectId}`;
+
+// MAX_CHAT_ORDER mirrors the server's cap on one saved order
+// (store.MaxChatOrder): the rail offers reordering only up to this many chats.
+export const MAX_CHAT_ORDER = 500;
+
+// applyChatOrder applies a saved order to a scope's chats. A chat the order
+// does not name — pinned or filed since the last reorder — goes ABOVE the
+// ordered ones, in the caller's (most recent first) order, so a new arrival
+// lands where the person just looked rather than at the bottom of a long
+// list. Names in the order that have left the scope are ignored. Stable and
+// pure: the same inputs give the same rows.
+export function applyChatOrder<T extends { id?: string }>(chats: readonly T[], order: readonly string[]): T[] {
+  if (order.length === 0) return [...chats];
+  const rank = new Map<string, number>();
+  order.forEach((id, i) => {
+    if (!rank.has(id)) rank.set(id, i);
+  });
+  const fresh: T[] = [];
+  const ranked: { c: T; r: number }[] = [];
+  for (const c of chats) {
+    const r = c.id === undefined ? undefined : rank.get(c.id);
+    if (r === undefined) fresh.push(c);
+    else ranked.push({ c, r });
+  }
+  ranked.sort((a, b) => a.r - b.r);
+  return [...fresh, ...ranked.map((x) => x.c)];
+}
+
+// ── Temporary chats: a sort, not an order ────────────────────────────────────
+
+// Temporary chats expire with inactivity, so they get a SORT the person
+// picks rather than a hand-set order that new activity would keep undoing.
+//   • "activity" — most recently active first (the default; the server's order)
+//   • "created"  — most recently started first
+//   • "title"    — A to Z by title
+export type RecentSort = "activity" | "created" | "title";
+export const RECENT_SORTS: readonly { value: RecentSort; label: string }[] = [
+  { value: "activity", label: "Recent activity" },
+  { value: "created", label: "Newest first" },
+  { value: "title", label: "Title A–Z" },
+];
+
+// Where the chosen sort is remembered (browser storage, per device).
+export const RECENT_SORT_ITEM = "fleet.rail.recentSort";
+
+export function isRecentSort(v: unknown): v is RecentSort {
+  return v === "activity" || v === "created" || v === "title";
+}
+
+type Sortable = { title: string; updated_at?: number; created_at?: number };
+
+// sortRecent orders the Temporary list. Ties (and a missing created_at, from
+// an older server) fall back to recent activity, then to the caller's order,
+// so the result is stable.
+export function sortRecent<T extends Sortable>(chats: readonly T[], sort: RecentSort = "activity"): T[] {
+  const indexed = chats.map((c, i) => ({ c, i }));
+  const byActivity = (a: { c: T; i: number }, b: { c: T; i: number }) =>
+    (b.c.updated_at ?? 0) - (a.c.updated_at ?? 0) || a.i - b.i;
+  const cmp =
+    sort === "created"
+      ? (a: { c: T; i: number }, b: { c: T; i: number }) =>
+          (b.c.created_at ?? b.c.updated_at ?? 0) - (a.c.created_at ?? a.c.updated_at ?? 0) || byActivity(a, b)
+      : sort === "title"
+        ? (a: { c: T; i: number }, b: { c: T; i: number }) =>
+            (a.c.title || "").localeCompare(b.c.title || "", undefined, { sensitivity: "base", numeric: true }) ||
+            byActivity(a, b)
+        : byActivity;
+  return indexed.sort(cmp).map((x) => x.c);
+}
+
+// movePinned returns the IDs with the one at `from` moved to `to`
+// (both indexes into `ids`, clamped), for the rail's reorder mode — a drag
+// drop and the Move up / Move down buttons both come through here.
+export function movePinned(ids: readonly string[], from: number, to: number): string[] {
+  const next = [...ids];
+  if (from < 0 || from >= next.length) return next;
+  const target = Math.max(0, Math.min(next.length - 1, to));
+  const [moved] = next.splice(from, 1);
+  next.splice(target, 0, moved);
+  return next;
 }
 
 export function recentUnfiled<T extends OrganizableConversation>(
@@ -160,6 +256,9 @@ export function projectGroups<T extends OrganizableConversation, P extends Proje
   conversations: readonly T[],
   projects: readonly P[],
   max: number = Number.POSITIVE_INFINITY,
+  // Saved chat orders by scope; a project's own ("project:<id>") orders its
+  // chats (applyChatOrder). Absent: the caller's list order.
+  orders?: Readonly<Record<string, readonly string[]>>,
 ): ProjectGroup<T, P>[] {
   // One pass over the conversations, not one per project: with every project
   // listed, a per-project filter is O(projects × conversations) on each render.
@@ -175,7 +274,7 @@ export function projectGroups<T extends OrganizableConversation, P extends Proje
     .slice(0, max)
     .map((project) => ({
       project,
-      chats: byProject.get(project.id) ?? [],
+      chats: applyChatOrder(byProject.get(project.id) ?? [], orders?.[projectOrderScope(project.id)] ?? []),
     }));
 }
 
@@ -194,13 +293,18 @@ export function visibleConversationOrder<T extends OrganizableConversation>(args
   // The projects the viewer can see — see pinnedUnfiled. Must match what the
   // sidebar passes, or j/k navigation drifts from the rendered rows.
   knownProjectIds?: ReadonlySet<string>;
+  // The person's own order for their pinned chats (applyChatOrder) and the
+  // Temporary sort (sortRecent). Must match what the sidebar passes, for the
+  // same reason.
+  pinOrder?: readonly string[];
+  recentSort?: RecentSort;
 }): T[] {
   if (args.filtering) {
     return [...args.filtered];
   }
   return [
-    ...pinnedUnfiled(args.all, args.knownProjectIds),
-    ...recentUnfiled(args.all, args.knownProjectIds),
+    ...pinnedUnfiled(args.all, args.knownProjectIds, args.pinOrder),
+    ...sortRecent(recentUnfiled(args.all, args.knownProjectIds), args.recentSort),
   ];
 }
 

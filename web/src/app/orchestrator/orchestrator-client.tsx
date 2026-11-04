@@ -50,7 +50,7 @@ function OrchestratorSlimHeader() {
                 white-labeled deployments (BRANDING.md — nothing here may
                 hardcode a brand). */}
             <p className="ds-app-header__eyebrow">Internal</p>
-            <h1 className="ds-app-header__title">Operations Center</h1>
+            <h1 className="ds-app-header__title">Background tasks</h1>
           </div>
         </div>
         <div className="ds-app-header__actions">
@@ -414,7 +414,7 @@ function OrchestratorInner({
           <div className="auth-fields stack-form">
             <h2>Can&apos;t reach the server</h2>
             <p className="caption" data-testid="orchestrator-unreachable">
-              The Operations Center backend didn&apos;t answer — it may be
+              The background-tasks server didn&apos;t answer — it may be
               restarting. Your sign-in state is untouched; try again in a
               moment.
             </p>
@@ -447,7 +447,7 @@ function OrchestratorInner({
               <h2>No access</h2>
               <p className="caption" data-testid="orchestrator-no-access">
                 You&apos;re signed in, but that identity isn&apos;t provisioned
-                for the Operations Center. Ask an administrator to provision
+                for background tasks. Ask an administrator to provision
                 your account.
               </p>
               <button
@@ -515,7 +515,7 @@ function OrchestratorInner({
 
       <main className="flex min-h-0 flex-col overflow-hidden">
         <PageTopBar
-          title="Operations Center"
+          title="Background tasks"
           onMenu={() => setSidebarOpen(true)}
           actions={
             /* Mobile-only New task: on phones the rail's button is inside the
@@ -550,7 +550,7 @@ function OrchestratorInner({
               <div
                 className="dashboard-tabs"
                 role="tablist"
-                aria-label="Operations Center view"
+                aria-label="Background tasks view"
                 ref={tabsRef}
               >
                 <button

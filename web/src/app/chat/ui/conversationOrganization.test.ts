@@ -6,8 +6,12 @@ import {
   deriveLabels,
   filterConversations,
   isFiltering,
+  applyChatOrder,
+  movePinned,
   normalizeLabel,
   pinnedUnfiled,
+  projectOrderScope,
+  sortRecent,
   projectGroups,
   railProjectEmptyState,
   recentUnfiled,
@@ -302,5 +306,68 @@ describe("railProjectEmptyState", () => {
     expect(railProjectEmptyState({ teamShared: true })).toEqual({
       kind: "team-count-unknown",
     });
+  });
+});
+
+describe("chat order (docs/CHAT-ORDER.md)", () => {
+  const p = (id: string, pinned = true) => conv({ id, title: id, pinned });
+
+  it("applies the saved order, with fresh pins above it and stale ids ignored", () => {
+    const list = [p("new1"), p("a"), p("b"), p("c"), p("new2")];
+    expect(applyChatOrder(list, ["c", "gone", "a", "b"]).map((c) => c.id)).toEqual(["new1", "new2", "c", "a", "b"]);
+  });
+
+  it("is the order pinnedUnfiled and visibleConversationOrder use", () => {
+    const all = [p("a"), p("b"), p("loose", false)];
+    expect(pinnedUnfiled(all, undefined, ["b", "a"]).map((c) => c.id)).toEqual(["b", "a"]);
+    expect(pinnedUnfiled(all).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(
+      visibleConversationOrder({ all, filtered: [], filtering: false, pinOrder: ["b", "a"] }).map((c) => c.id),
+    ).toEqual(["b", "a", "loose"]);
+  });
+
+  it("moves one id, clamped to the list", () => {
+    expect(movePinned(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+    expect(movePinned(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+    expect(movePinned(["a", "b", "c"], 1, 9)).toEqual(["a", "c", "b"]);
+    expect(movePinned(["a", "b", "c"], 0, -1)).toEqual(["a", "b", "c"]);
+    expect(movePinned(["a", "b", "c"], 5, 0)).toEqual(["a", "b", "c"]);
+  });
+
+  it("orders each project's chats by that project's own saved order", () => {
+    const chats = [
+      conv({ id: "x", title: "x", project_id: "p1" }),
+      conv({ id: "y", title: "y", project_id: "p1" }),
+      conv({ id: "z", title: "z", project_id: "p2" }),
+    ];
+    const projects = [
+      { id: "p1", name: "One", updated_at: 2 },
+      { id: "p2", name: "Two", updated_at: 1 },
+    ];
+    const groups = projectGroups(chats, projects, Number.POSITIVE_INFINITY, { [projectOrderScope("p1")]: ["y", "x"] });
+    expect(groups.map((g) => g.chats.map((c) => c.id))).toEqual([["y", "x"], ["z"]]);
+    expect(projectGroups(chats, projects)[0].chats.map((c) => c.id)).toEqual(["x", "y"]);
+  });
+});
+
+describe("sortRecent (Temporary)", () => {
+  const t = (id: string, title: string, updated_at: number, created_at?: number) =>
+    conv({ id, title, updated_at, created_at });
+  // created_at is never after updated_at; "d" comes from a server that sends no created_at.
+  const list = [t("a", "banana", 30, 5), t("b", "Apple", 20, 15), t("c", "cherry 10", 10, 8), t("d", "cherry 9", 10)];
+
+  it("defaults to most recent activity, stable on ties", () => {
+    expect(sortRecent(list).map((c) => c.id)).toEqual(["a", "b", "c", "d"]);
+  });
+  it("sorts newest-started first, using activity time when created_at is missing", () => {
+    expect(sortRecent(list, "created").map((c) => c.id)).toEqual(["b", "d", "c", "a"]);
+  });
+  it("sorts by title, ignoring case and reading numbers as numbers", () => {
+    expect(sortRecent(list, "title").map((c) => c.id)).toEqual(["b", "a", "d", "c"]);
+  });
+  it("is the order visibleConversationOrder walks", () => {
+    expect(
+      visibleConversationOrder({ all: list, filtered: [], filtering: false, recentSort: "title" }).map((c) => c.id),
+    ).toEqual(["b", "a", "d", "c"]);
   });
 });

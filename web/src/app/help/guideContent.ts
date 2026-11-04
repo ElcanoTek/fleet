@@ -28,7 +28,7 @@ export const GUIDES: readonly Guide[] = [
   },
   {
     slug: "operations-center",
-    title: "Operations Center",
+    title: "Background tasks",
     blurb:
       "Reading the board, what a task is made of, what every run state means, and what to do when a run needs you.",
     file: "operations-center.md",
