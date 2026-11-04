@@ -37,7 +37,7 @@ User-facing description: the Chat guide's "Patrol Launchpad" section
 
 | Step | What it does | API |
 |---|---|---|
-| Why | The preamble: an "expanding mind" ladder (chat → scheduled reports → patrols that analyze and decide → acting on your behalf). Each rung has its own scene drawn from Flag icons (a chat bubble; a calendar and report; a pinging radar; a spinning galaxy around a filled brain), a one-line quote of what you would say to the assistant, and a brain badge that grows a size per rung. Then Dr. Ethan Mollick (linked to his *One Useful Thing* newsletter) and his term *capability overhang* (*Co-Existence*, 2026, linked to the publisher page), and the trust path: start at Suggest & ask, turn on ⚡ Auto-approve in the Patrol bar later. The Watch step and the success screen repeat that nudge. | — |
+| Why | The preamble: an "expanding mind" ladder (chat → scheduled reports → patrols that analyze and decide → acting on your behalf). Each rung has its own hand-drawn inline SVG (`MindArt.tsx`, an illustration rather than a Flag icon): a head in profile with a side-view brain, clipped to the head, that grows, tints and glows rung by rung until it becomes a galaxy brain with stars and an orbiting planet (motion only under `motion-safe`). Each rung also has a one-line quote of what you would say to the assistant. Then Dr. Ethan Mollick (linked to his *One Useful Thing* newsletter) and his term *capability overhang* (*Co-Existence*, 2026, linked to the publisher page), and the trust path: start at Suggest & ask, turn on ⚡ Auto-approve in the Patrol bar later. The Watch step and the success screen repeat that nudge. | — |
 | Plan | Lists the five steps ahead; shows how many tools are ready and memories saved. | `GET /api/mcp-servers`, `GET /api/memories` |
 | Tools | Lists usable connectors (pre-ticked = on by default for a new chat; always-on rows shown locked), connectors that need setup with a **Set up** link, and **Connect another tool**. Both links open Settings → Connections in a new tab; the list refetches on window focus. | `GET /api/mcp-servers` |
 | Ground rules | **Who's on watch**: workspace personas and the person's own (`GET /api/personas`). **Non-negotiables**: each is saved immediately as a memory of kind `constraint`, then pinned. | `POST /api/memories`, `PATCH /api/memories/{id}` |
@@ -59,8 +59,13 @@ calls `agent.Manager.SuggestPatrolDraft` (`internal/agent/patrol_draft.go`): a
 short-lived, structured-output, host-side model call with a 45-second timeout
 on `RecurringTaskModel` (`FLEET_RECURRING_TASK_MODEL`; a patrol is a recurring
 task run in a chat), metered as the `patrol_draft` aux-usage log line. Input is
-the wizard's answers only (goals, notes, the ticked connectors' names and
-descriptions, the person's memories, cadence in words, mode, persona); the
+the wizard's answers (goals, notes, the ticked connectors' names and
+descriptions, cadence in words, mode, persona) plus the person's memories,
+which the server reads itself and renders as a patrol turn receives them
+(`memoryContents`: active only, pinned first, at most 50, each with its kind
+and validity window). Each memory's content is shortened to 400 characters
+before that annotation is added, so a long memory keeps it. If the memories
+cannot be read the request fails (503) rather than drafting without them. The
 body is capped at 64 KiB and each list is bounded. It returns
 `{title, prompt, summary}` and persists nothing. A 502 leaves the template
 draft in place and says so.
@@ -76,11 +81,12 @@ armed and runs at its next time — rather than claimed as running. A
 non-negotiable that saved but could not be pinned says so.
 
 **Read-only viewers** (`GET /api/me` role `viewer`, newly routed through the
-browser gateway) see only the preamble with a note that they cannot save
+browser gateway) are moved back to the preamble, even with progress saved on
+a later step, and see only it with a note that they cannot save
 memories or start a patrol; every write the wizard makes is refused for that
 role server-side anyway (`rejectViewerWrites`).
 
-**Memories shown and sent to the drafter** are the active, accepted ones only:
+**Memories shown in the wizard** are the active, accepted ones only:
 retired memories and unaccepted proposals (`source = "proposed"`) are listed by
 `GET /api/memories` but never injected into a turn, so they are filtered out.
 

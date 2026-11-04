@@ -246,7 +246,14 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         const res = await fetch("/api/me", { cache: "no-store" });
         if (!res.ok) return;
         const me = (await res.json()) as { role?: string };
-        setReadOnly(me.role === "viewer");
+        if (me.role === "viewer") {
+          setReadOnly(true);
+          // A viewer sees only the preamble, even with progress saved on a
+          // later step from before their role changed (or after a quick Next
+          // while this read was in flight). The server still refuses every
+          // write a viewer attempts; this keeps the screen honest.
+          setState((cur) => (cur.step === "why" ? cur : { ...cur, step: "why" }));
+        }
       } catch {
         // Unknown role: the server still refuses what a viewer cannot do.
       }
@@ -607,9 +614,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   connectors: (connectors ?? [])
                     .filter((c) => selected.includes(c.name) && usable(c))
                     .map((c) => ({ name: connectorLabel(c), description: c.description ?? "" })),
-                  // Up to 50, in the store's order (pinned first): exactly what
-                  // a patrol turn is given (httpapi memoryContents).
-                  memories: (memories ?? []).map((m) => m.content).slice(0, 50),
+                  // No memories: the server reads them itself, rendered as a
+                  // patrol turn receives them (httpapi memoryContents).
                   cadence: cadenceText,
                   mode: state.mode,
                   persona: state.persona,
@@ -1191,7 +1197,9 @@ function RulesStep({
       const mem = (await res.json()) as { id?: string };
       // Pinned: a non-negotiable is never retired by the automatic
       // memory upkeep (it can still be edited or deleted in Settings).
-      setDraft("");
+      // Clear the box only if it still holds what was saved: the person may
+      // already be typing (or have picked) their next rule.
+      setDraft((cur) => (cur.trim() === text ? "" : cur));
       if (mem.id) {
         setJustAdded((cur) => [...cur, mem.id as string]);
         const pinRes = await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
@@ -1537,7 +1545,6 @@ type DraftRequest = {
   goals: string[];
   notes: string;
   connectors: { name: string; description: string }[];
-  memories: string[];
   cadence: string;
   mode: PatrolMode;
   persona: string;

@@ -220,10 +220,22 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await expect(page.locator('[data-panel-key="c:call-rev-2"]')).toHaveCount(0);
 
   // A message sent from dashboard view tells the server which view it is.
-  const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
-  await page.locator("#promptInput").fill("add a churn panel");
-  await page.keyboard.press("Enter");
-  const body = JSON.parse((await chat).postData() ?? "{}") as { view?: string };
+  // fill() sets the whole value at once; on a loaded runner the Enter can
+  // reach the composer before React has taken that value in, and is then a
+  // no-op that leaves the text in the box. So wait for the value, and press
+  // again if no request follows (main showed ~3% failures under load).
+  const sends: string[] = [];
+  page.on("request", (req) => {
+    if (req.url().includes("/api/chat") && req.method() === "POST") sends.push(req.postData() ?? "{}");
+  });
+  const prompt = page.locator("#promptInput");
+  await prompt.fill("add a churn panel");
+  await expect(prompt).toHaveValue("add a churn panel");
+  await expect(async () => {
+    if (sends.length === 0 && (await prompt.inputValue()) !== "") await prompt.press("Enter");
+    expect(sends.length).toBeGreaterThan(0);
+  }).toPass({ intervals: [500, 1_000, 2_000], timeout: 30_000 });
+  const body = JSON.parse(sends[0]) as { view?: string };
   expect(body.view).toBe("dashboard");
 });
 

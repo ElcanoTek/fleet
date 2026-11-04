@@ -57,10 +57,11 @@ func TestPatrolDraft_ReturnsDraft(t *testing.T) {
 type memoriesStore struct {
 	chatStore
 	memories []store.Memory
+	err      error
 }
 
 func (m *memoriesStore) ListMemories(context.Context, string) ([]store.Memory, error) {
-	return m.memories, nil
+	return m.memories, m.err
 }
 
 // TestPatrolDraft_UsesTheTurnsMemories pins that the drafter sees memories
@@ -85,6 +86,43 @@ func TestPatrolDraft_UsesTheTurnsMemories(t *testing.T) {
 	want := "Q4 budget is $40k (until 2027-01-01)|Never email clients (constraint)"
 	if got != want {
 		t.Errorf("memories = %q, want %q", got, want)
+	}
+}
+
+// TestPatrolDraft_LongMemoryKeepsItsAnnotation pins that a long memory is
+// shortened before its kind/validity annotation is added, so the annotation
+// always reaches the drafter.
+func TestPatrolDraft_LongMemoryKeepsItsAnnotation(t *testing.T) {
+	until := int64(1798761600) // 2027-01-01
+	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
+	long := strings.Repeat("é", 3000)
+	s := &Server{agent: fake, store: &memoriesStore{memories: []store.Memory{
+		{ID: "a", Content: long, Kind: "fact", ValidTo: &until},
+	}}}
+	rec := httptest.NewRecorder()
+	s.handlePatrolDraft(rec, httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Watch spend"]}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	got := fake.patrolInput.Memories
+	if len(got) != 1 || !strings.HasSuffix(got[0], "… (until 2027-01-01)") || len([]rune(got[0])) > patrolDraftMemoryRunes+40 {
+		t.Errorf("memory = %q… (%d runes)", string([]rune(got[0])[:20]), len([]rune(got[0])))
+	}
+}
+
+// TestPatrolDraft_UnreadableMemoriesRefuse pins that no draft is written when
+// the memories cannot be read: a draft without them could contradict what
+// every patrol turn is told.
+func TestPatrolDraft_UnreadableMemoriesRefuse(t *testing.T) {
+	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
+	s := &Server{agent: fake, store: &memoriesStore{err: errors.New("db down")}}
+	rec := httptest.NewRecorder()
+	s.handlePatrolDraft(rec, httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(`{"goals":["Watch spend"],"memories":["raw"]}`)))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	if fake.patrolInput.Goals != nil {
+		t.Error("the drafter ran without the memories")
 	}
 }
 

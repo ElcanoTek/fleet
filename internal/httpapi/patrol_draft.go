@@ -31,6 +31,10 @@ var patrolDraftInFlight sync.Map
 // dozen connector descriptions and memories fit comfortably.
 const patrolDraftMaxBody = 64 << 10
 
+// patrolDraftMemoryRunes caps each memory's content in the draft prompt (its
+// kind/validity annotation is added after the cut, so it always survives).
+const patrolDraftMemoryRunes = 400
+
 // patrolDraftRequest is the wizard's answers. Connector descriptions come
 // from the caller's own /mcp-servers catalog and are context for the draft
 // only; they grant nothing — the patrol chat's connector set is persisted
@@ -90,15 +94,22 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 
 	user := strings.ToLower(userFromCtx(r.Context()))
 	// The memories the draft must respect are the ones a patrol turn will
-	// actually receive: read them here and render them exactly as the turn
-	// does (memoryContents — active only, pinned first, capped at 50, each
-	// with its kind and validity window), so a time-scoped fact is not baked
-	// into the standing instructions as timeless. The wizard's own list is
-	// only a fallback for when the store cannot be read.
+	// actually receive: read them here and render them as the turn does
+	// (memoryContents — active only, pinned first, capped at 50, each with its
+	// kind and validity window), so a time-scoped fact is not baked into the
+	// standing instructions as timeless. Each memory's content is shortened
+	// BEFORE its annotation is added, which keeps the prompt bounded without
+	// losing the annotation. If they cannot be read there is no draft: one
+	// written without them could contradict what every patrol turn is told.
+	// (The request's own memories are read only by a Server with no store,
+	// i.e. in unit tests; the wizard no longer sends them.)
 	if s.store != nil {
-		if mems, err := s.store.ListMemories(r.Context(), user); err == nil {
-			in.Memories = memoryContents(mems)
+		mems, err := s.store.ListMemories(r.Context(), user)
+		if err != nil {
+			http.Error(w, "could not read your memories to draft with; try again", http.StatusServiceUnavailable)
+			return
 		}
+		in.Memories = memoryContentsCapped(mems, patrolDraftMemoryRunes)
 	}
 	if _, busy := patrolDraftInFlight.LoadOrStore(user, struct{}{}); busy {
 		http.Error(w, "a draft is already being written; wait for it to finish", http.StatusTooManyRequests)

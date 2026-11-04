@@ -203,7 +203,11 @@ func patrolDraftUserMessage(in PatrolDraftInput) string {
 	if conns == 0 {
 		b.WriteString("- (none — the assistant can only use its built-in tools)\n")
 	}
-	if mems := capList(trimmedLong(in.Memories, 400), patrolDraftMaxMemories); len(mems) > 0 {
+	// The caller shortens each memory's content before appending its
+	// kind/validity annotation (httpapi.memoryContentsCapped, 400 runes); this
+	// looser bound only guards a caller that did not, and must not cut that
+	// annotation off a memory that was shortened.
+	if mems := capList(trimmedLong(in.Memories, 2000), patrolDraftMaxMemories); len(mems) > 0 {
 		b.WriteString("\nTheir non-negotiables (already saved as memories):\n")
 		for _, mem := range mems {
 			fmt.Fprintf(&b, "- %s\n", mem)

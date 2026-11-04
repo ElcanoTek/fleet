@@ -32,6 +32,8 @@ type Opts = {
   memories?: unknown[];
   hangConversation?: boolean;
   role?: string;
+  // Holds the memory POST until this resolves.
+  memoryPostGate?: Promise<void>;
 };
 
 function mockApi(opts: Opts = {}) {
@@ -75,7 +77,10 @@ function mockApi(opts: Opts = {}) {
     if (url === "/api/memories/m1" && method === "PATCH" && opts.pin === "fail") {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
     }
-    if (url === "/api/memories" && method === "POST") return json({ id: "m1", content: "x" });
+    if (url === "/api/memories" && method === "POST") {
+      if (opts.memoryPostGate) await opts.memoryPostGate;
+      return json({ id: "m1", content: "x" });
+    }
     if (url === "/api/me") return json({ email: "e2e@example.com", role: opts.role ?? "member" });
     if (url === "/api/personas") {
       return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: opts.userPersonasNull ? null : [] });
@@ -282,7 +287,7 @@ describe("PatrolLaunchpad", () => {
     expect(withMemory(pinned, { id: "new", content: "dup", pinned: true })).toBe(pinned);
   });
 
-  it("sends only active, accepted memories to the drafter", async () => {
+  it("leaves memories to the server: the draft request carries none", async () => {
     expect(
       activeMemories([
         { id: "a", content: "keep" },
@@ -290,18 +295,13 @@ describe("PatrolLaunchpad", () => {
         { id: "c", content: "proposal", source: "proposed" },
       ]).map((m) => m.id),
     ).toEqual(["a"]);
-    const calls = mockApi({
-      memories: [
-        { id: "a", content: "Report in USD" },
-        { id: "b", content: "Old rule", retired_at: 1 },
-        { id: "c", content: "Unaccepted", source: "proposed" },
-      ],
-    });
+    const calls = mockApi({ memories: [{ id: "a", content: "Report in USD" }] });
     await walkToLaunch(calls);
     fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
     await screen.findByTestId("launchpad-ai-summary");
-    const req = calls.find((c) => c.url === "/api/patrol-draft")?.body as { memories: string[] };
-    expect(req.memories).toEqual(["Report in USD"]);
+    const req = calls.find((c) => c.url === "/api/patrol-draft")?.body as Record<string, unknown>;
+    expect(req).not.toHaveProperty("memories");
+    expect(req.goals).toBeTruthy();
   });
 
   it("says when the first check could not start, instead of claiming it is running", async () => {
@@ -484,13 +484,29 @@ describe("PatrolLaunchpad", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 
-  it("sends a just-saved non-negotiable to the drafter even while the roster refresh is pending", async () => {
-    const calls = mockApi({ memoriesRefreshHang: true });
-    await walkToLaunch(calls);
-    fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
-    await screen.findByTestId("launchpad-ai-summary");
-    const req = calls.find((c) => c.url === "/api/patrol-draft")?.body as { memories: string[] };
-    expect(req.memories).toContain("Never pause a campaign without asking me");
+  it("keeps the next rule being typed while the previous one saves", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    mockApi({ memoryPostGate: gate });
+    window.sessionStorage.setItem(progressItem(), JSON.stringify({ step: "rules" }));
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    const input = (await screen.findByTestId("launchpad-memory-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Rule one" } });
+    fireEvent.click(screen.getByTestId("launchpad-memory-add"));
+    // While the save is in flight, the person starts the next rule.
+    fireEvent.change(input, { target: { value: "Rule two" } });
+    release();
+    await waitFor(() => expect(screen.getByTestId("launchpad-memory-add")).toBeTruthy());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(input.value).toBe("Rule two");
+  });
+
+  it("sends a viewer with saved progress back to the preamble", async () => {
+    window.sessionStorage.setItem(progressItem(), JSON.stringify({ step: "launch" }));
+    mockApi({ role: "viewer" });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    expect(await screen.findByTestId("launchpad-step-why")).toBeTruthy();
+    expect(await screen.findByTestId("launchpad-readonly")).toBeTruthy();
   });
 
   it("counts an always-on connector that appears after the person ticked boxes", async () => {
