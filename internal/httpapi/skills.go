@@ -48,8 +48,9 @@ type skillEntry struct {
 }
 
 type skillsResponse struct {
-	Skills []skillEntry `json:"skills"`
-	Shared []skillEntry `json:"shared_skills,omitempty"`
+	Skills     []skillEntry `json:"skills"`
+	Shared     []skillEntry `json:"shared_skills,omitempty"`
+	UserSkills []skillEntry `json:"user_skills,omitempty"`
 }
 
 // bundleSkills returns the client bundle's well-formed skills (nil-safe on a
@@ -113,7 +114,24 @@ func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 			SharedBy:    sk.SharedBy,
 		})
 	}
-	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries})
+	var userEntries []skillEntry
+	if s.store != nil {
+		if user := userFromCtx(r.Context()); user != "" {
+			if own, err := s.effectiveUserSkills(r.Context(), user); err == nil {
+				for _, sk := range own {
+					if sk.Status != store.UserSkillStatusActive {
+						continue
+					}
+					userEntries = append(userEntries, skillEntry{
+						Name:        sk.Name,
+						Description: sk.Description,
+						Source:      "user",
+					})
+				}
+			}
+		}
+	}
+	writeJSON(w, skillsResponse{Skills: entries, Shared: sharedEntries, UserSkills: userEntries})
 }
 
 // skillOrigin reports where a merged-roster skill came from — the bundle's

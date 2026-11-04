@@ -139,7 +139,7 @@ import {
 } from "./deleteAllUnpinnedScope";
 import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
-import type { SkillInfo } from "./skillSlash";
+import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
 import { ConnectorNamesContext, connectorNames } from "./approvalToolLabel";
 import { usePerConvComposerState } from "./usePerConvComposerState";
@@ -862,11 +862,24 @@ export function ChatExperience({
   // responses (empty until the first one answers; the picker falls back).
   const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
-  // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
-  // once at startup — the roster is bundle-owned and static for the session.
+  // Bundle + user skill roster for the composer "/" autocomplete (#513).
   const [skills, setSkills] = useState<SkillInfo[]>(
     () => restoredSession?.skills ?? [],
   );
+  const refreshSkills = useCallback(async () => {
+    try {
+      const sr = await fetch("/api/skills", { cache: "no-store" });
+      if (sr.ok) {
+        const sd = (await sr.json()) as {
+          skills?: SkillInfo[];
+          user_skills?: SkillInfo[];
+        };
+        setSkills(mergeComposerSkills(sd.skills ?? [], sd.user_skills));
+      }
+    } catch {
+      // Optional nicety — plain "/text" messages still send fine.
+    }
+  }, []);
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
@@ -6316,19 +6329,12 @@ export function ChatExperience({
       }
     };
 
-    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Bundle + user skill roster for the composer "/" autocomplete (#513).
     // Best-effort: an older server without /skills just leaves the
     // autocomplete empty.
     const loadSkills = async () => {
-      try {
-        const sr = await fetch("/api/skills", { cache: "no-store" });
-        if (sr.ok) {
-          const sd = (await sr.json()) as { skills?: SkillInfo[] };
-          if (!cancelled) setSkills(sd.skills ?? []);
-        }
-      } catch {
-        // Optional nicety — plain "/text" messages still send fine.
-      }
+      if (cancelled) return;
+      await refreshSkills();
     };
 
     // Capability fetch (lockdown availability, allow-list, upload cap) — the
@@ -6537,7 +6543,7 @@ export function ChatExperience({
     // above). initialUserEmail is a per-mount constant (the server component
     // resolves it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
-  }, [initialUserEmail, refreshServerConfig]);
+  }, [initialUserEmail, refreshServerConfig, refreshSkills]);
 
   const toggleShowStats = () => {
     setShowStats((prev) => {
@@ -7403,7 +7409,10 @@ export function ChatExperience({
             key={promptSaveTarget.id}
             conversationId={promptSaveTarget.id}
             conversationTitle={promptSaveTarget.title}
-            onClose={() => setPromptSaveTarget(null)}
+            onClose={() => {
+              setPromptSaveTarget(null);
+              void refreshSkills();
+            }}
           />
         ) : null}
         {downloadTarget ? (
