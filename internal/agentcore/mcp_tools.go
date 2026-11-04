@@ -422,6 +422,7 @@ func buildFantasyToolsWithRoster(
 	// instead of "no tool named": a tool both the persona and the hidden list
 	// remove is reported under the persona gate everywhere.
 	var personaDenied map[string]bool
+	catalogBudget := &catalogSchemaBudget{}
 	for _, st := range mcpServerTools {
 		if roster.servers == nil {
 			roster.servers = map[string]bool{}
@@ -499,7 +500,7 @@ func buildFantasyToolsWithRoster(
 		// so direct and deferred rosters agree. Every finding, rewritten or
 		// invalid, goes to the runtime record that `fleet mcp schema-issues`
 		// and `fleet doctor` read; each new finding is logged once.
-		issue, hasIssue := checkMCPToolSchema(mt)
+		issue, hasIssue := checkMCPToolSchemaWithBudget(mt, catalogBudget)
 		noteToolSchemaIssue(st.ServerName, st.Tool.Name, issue, hasIssue)
 		if hasIssue && issue.Status == ToolSchemaInvalid {
 			emitToolSchemaInvalid(cfg.observer, mt.Name(), issue.Detail)
@@ -745,13 +746,16 @@ func mcpToolName(st mcp.ServerTool) string {
 }
 
 func (m *mcpTool) Info() fantasy.ToolInfo {
-	parameters := make(map[string]any)
-	required := make([]string, 0)
-
 	// Normalize the WHOLE schema before taking properties/required apart: a
 	// draft-03 boolean `required` on a top-level property hoists into the
 	// top-level list (tool_schema.go).
-	schema := normalizeToolSchema(m.tool.InputSchema)
+	return m.infoFromSchema(normalizeToolSchema(m.tool.InputSchema))
+}
+
+func (m *mcpTool) infoFromSchema(schema map[string]any) fantasy.ToolInfo {
+	parameters := make(map[string]any)
+	required := make([]string, 0)
+
 	if input, ok := schema["properties"].(map[string]any); ok {
 		parameters = input
 	}

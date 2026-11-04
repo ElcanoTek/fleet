@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -94,83 +95,85 @@ func normalizeToolSchema(schema map[string]any) map[string]any {
 // references are provider/boundary compatibility steps, not outdated constructs,
 // and are not noted.
 func normalizeToolSchemaWithNotes(schema map[string]any) (map[string]any, []string) {
+	out, notes, _ := normalizeToolSchemaWithNotesAndBudget(schema, nil)
+	return out, notes
+}
+
+func normalizeToolSchemaWithNotesAndBudget(schema map[string]any, catBudget *catalogSchemaBudget) (map[string]any, []string, bool) {
+	budget := &inlineBudget{catalog: catBudget}
 	var notes []string
-	out, _ := normalizeSchemaNode(schema, "", &notes).(map[string]any)
+	out, _ := normalizeSchemaNode(schema, "", &notes, budget).(map[string]any)
 	if out == nil {
 		out = map[string]any{}
 	}
-	return inlineLocalRefs(out), notes
+	inlined := inlineLocalRefs(out, budget)
+	return inlined, notes, budget.trippedCatalog
 }
 
-func normalizeSchemaNode(node any, path string, notes *[]string) any {
+func normalizeSchemaNode(node any, path string, notes *[]string, budget *inlineBudget) any {
+	if budget.isExceeded() {
+		return budgetExceededStub()
+	}
 	obj, ok := node.(map[string]any)
 	if !ok {
 		// A boolean schema, or a malformed value the validator will judge.
-		return copyJSONValue(node)
+		if copied, ok := copyJSONValueBounded(node, budget); ok {
+			return copied
+		}
+		return budgetExceededStub()
+	}
+	if !budget.addNode() {
+		return budgetExceededStub()
 	}
 	out := make(map[string]any, len(obj))
 	var hoisted []string
-	for key, value := range obj {
+	for _, key := range sortedMapKeys(obj) {
+		if !budget.addBytes(len(key) + 4) {
+			return budgetExceededStub()
+		}
+		value := obj[key]
 		switch {
 		case key == "pattern":
 			if s, ok := value.(string); ok && strings.Contains(s, `\p{`) {
 				continue
 			}
-			out[key] = value
+			out[key], ok = copyJSONValueBounded(value, budget)
+			if !ok {
+				return budgetExceededStub()
+			}
 		case key == "required":
 			if _, isBool := value.(bool); isBool {
 				continue // draft-03 form; the parent hoists it
 			}
-			out[key] = copyJSONValue(value)
+			out[key], ok = copyJSONValueBounded(value, budget)
+			if !ok {
+				return budgetExceededStub()
+			}
 		case schemaValuedKeywords[key]:
 			if items, isArray := value.([]any); isArray && key == "items" {
-				out[key] = normalizeSchemaArray(items, path+"/items", notes) // rewritten below
+				out[key] = normalizeSchemaArray(items, path+"/items", notes, budget) // rewritten below
 				continue
 			}
-			out[key] = normalizeSchemaNode(value, path+"/"+key, notes)
+			out[key] = normalizeSchemaNode(value, path+"/"+key, notes, budget)
 		case schemaArrayKeywords[key]:
 			if items, isArray := value.([]any); isArray {
-				out[key] = normalizeSchemaArray(items, path+"/"+key, notes)
-			} else {
-				out[key] = copyJSONValue(value)
+				out[key] = normalizeSchemaArray(items, path+"/"+key, notes, budget)
+			} else if out[key], ok = copyJSONValueBounded(value, budget); !ok {
+				return budgetExceededStub()
 			}
 		case schemaMapKeywords[key]:
-			members, isMap := value.(map[string]any)
-			if !isMap {
-				out[key] = copyJSONValue(value)
-				continue
+			out[key], ok = normalizeSchemaMapKeyword(key, value, path, &hoisted, notes, budget)
+			if !ok {
+				return budgetExceededStub()
 			}
-			normalized := make(map[string]any, len(members))
-			for name, member := range members {
-				memberPath := path + "/" + key + "/" + jsonPointerToken(name)
-				if key == "properties" {
-					if child, ok := member.(map[string]any); ok && child["required"] == true {
-						hoisted = append(hoisted, name)
-						noteRewrite(notes, memberPath, "boolean required moved into the parent's required list")
-					}
-				}
-				normalized[name] = normalizeSchemaNode(member, memberPath, notes)
-			}
-			out[key] = normalized
 		default:
-			out[key] = copyJSONValue(value)
+			if out[key], ok = copyJSONValueBounded(value, budget); !ok {
+				return budgetExceededStub()
+			}
 		}
 	}
 
-	if tuple, isArray := out["items"].([]any); isArray {
-		out["prefixItems"] = tuple
-		delete(out, "items")
-		if rest, has := out["additionalItems"]; has {
-			out["items"] = rest
-			noteRewrite(notes, path, "positional items array rewritten to prefixItems (additionalItems moved to items)")
-		} else {
-			noteRewrite(notes, path, "positional items array rewritten to prefixItems")
-		}
-	} else if _, has := out["additionalItems"]; has {
-		noteRewrite(notes, path, "additionalItems beside a single items schema dropped (draft-07 ignored it)")
-	}
-	delete(out, "additionalItems")
-
+	rewritePositionalItems(out, path, notes)
 	if foldExclusiveBound(out, "exclusiveMinimum", "minimum") {
 		noteRewrite(notes, path, "boolean exclusiveMinimum rewritten to the numeric form")
 	}
@@ -184,10 +187,55 @@ func normalizeSchemaNode(node any, path string, notes *[]string) any {
 	return out
 }
 
-func normalizeSchemaArray(items []any, path string, notes *[]string) []any {
+func normalizeSchemaMapKeyword(key string, value any, path string, hoisted *[]string, notes *[]string, budget *inlineBudget) (any, bool) {
+	members, isMap := value.(map[string]any)
+	if !isMap {
+		return copyJSONValueBounded(value, budget)
+	}
+	if !budget.addNode() {
+		return nil, false
+	}
+	normalized := make(map[string]any, len(members))
+	for _, name := range sortedMapKeys(members) {
+		if !budget.addBytes(len(name) + 4) {
+			return nil, false
+		}
+		member := members[name]
+		memberPath := path + "/" + key + "/" + jsonPointerToken(name)
+		if key == "properties" {
+			if child, ok := member.(map[string]any); ok && child["required"] == true {
+				*hoisted = append(*hoisted, name)
+				noteRewrite(notes, memberPath, "boolean required moved into the parent's required list")
+			}
+		}
+		normalized[name] = normalizeSchemaNode(member, memberPath, notes, budget)
+	}
+	return normalized, true
+}
+
+func rewritePositionalItems(out map[string]any, path string, notes *[]string) {
+	if tuple, isArray := out["items"].([]any); isArray {
+		out["prefixItems"] = tuple
+		delete(out, "items")
+		if rest, has := out["additionalItems"]; has {
+			out["items"] = rest
+			noteRewrite(notes, path, "positional items array rewritten to prefixItems (additionalItems moved to items)")
+		} else {
+			noteRewrite(notes, path, "positional items array rewritten to prefixItems")
+		}
+	} else if _, has := out["additionalItems"]; has {
+		noteRewrite(notes, path, "additionalItems beside a single items schema dropped (draft-07 ignored it)")
+	}
+	delete(out, "additionalItems")
+}
+
+func normalizeSchemaArray(items []any, path string, notes *[]string, budget *inlineBudget) []any {
+	if !budget.addBytes(2 + len(items)) {
+		return []any{budgetExceededStub()}
+	}
 	out := make([]any, len(items))
 	for i, item := range items {
-		out[i] = normalizeSchemaNode(item, fmt.Sprintf("%s/%d", path, i), notes)
+		out[i] = normalizeSchemaNode(item, fmt.Sprintf("%s/%d", path, i), notes, budget)
 	}
 	return out
 }
@@ -207,57 +255,135 @@ func jsonPointerToken(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "~", "~0"), "/", "~1")
 }
 
-// decodeFragmentPointerToken decodes one RFC 6901 URI fragment reference token
-// (percent-decoding followed by `~1`/`~0` JSON Pointer unescaping).
-func decodeFragmentPointerToken(raw string) (string, bool) {
-	if strings.Contains(raw, "/") {
-		return "", false
-	}
-	unescaped, err := url.PathUnescape(raw)
-	if err != nil || strings.Contains(unescaped, "/") {
-		return "", false
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(unescaped, "~1", "/"), "~0", "~"), true
-}
-
 const (
 	maxRefExpansions             = 256
 	maxInlinedSchemaNodes        = 4096
 	maxInlineRefDepth            = 32
 	maxNormalizedToolSchemaBytes = 256 * 1024
 	maxStubAnnotationBytes       = 1024
+	maxCatalogToolsChecked       = 1024
+	maxCatalogRefExpansions      = 1024
+	maxCatalogInlinedSchemaNodes = 16384
+	maxCatalogInlinedSchemaBytes = 2 * 1024 * 1024
 	schemaBudgetExceededKey      = "$x_fleet_ref_budget_exceeded"
 )
 
-type inlineBudget struct {
+type catalogSchemaBudget struct {
+	ctx        context.Context
+	tools      int
 	expansions int
 	nodes      int
 	bytes      int
 	exceeded   bool
 }
 
+func (c *catalogSchemaBudget) isCancelled() bool {
+	return c != nil && c.ctx != nil && c.ctx.Err() != nil
+}
+
+func (c *catalogSchemaBudget) isExceeded() bool {
+	if c == nil {
+		return false
+	}
+	if c.isCancelled() {
+		c.exceeded = true
+	}
+	return c.exceeded
+}
+
+type inlineBudget struct {
+	catalog        *catalogSchemaBudget
+	expansions     int
+	nodes          int
+	bytes          int
+	exceeded       bool
+	trippedCatalog bool
+}
+
+func (b *inlineBudget) isExceeded() bool {
+	if b == nil {
+		return false
+	}
+	if b.catalog.isExceeded() {
+		b.exceeded = true
+		b.trippedCatalog = true
+	}
+	return b.exceeded
+}
+
+func (b *inlineBudget) addExpansion() bool {
+	if b == nil {
+		return true
+	}
+	if b.isExceeded() || b.expansions >= maxRefExpansions {
+		b.exceeded = true
+		return false
+	}
+	b.expansions++
+	if b.catalog != nil {
+		b.catalog.expansions++
+		if b.catalog.expansions > maxCatalogRefExpansions {
+			b.catalog.exceeded = true
+			b.exceeded = true
+			b.trippedCatalog = true
+			return false
+		}
+	}
+	return true
+}
+
+func (b *inlineBudget) addNode() bool {
+	if b == nil {
+		return true
+	}
+	if b.isExceeded() {
+		return false
+	}
+	b.nodes++
+	if b.nodes > maxInlinedSchemaNodes {
+		b.exceeded = true
+		return false
+	}
+	if b.catalog != nil {
+		b.catalog.nodes++
+		if b.catalog.nodes > maxCatalogInlinedSchemaNodes {
+			b.catalog.exceeded = true
+			b.exceeded = true
+			b.trippedCatalog = true
+			return false
+		}
+	}
+	return b.addBytes(2)
+}
+
 func (b *inlineBudget) addBytes(n int) bool {
 	if b == nil {
 		return true
 	}
-	if n < 0 || b.bytes > maxNormalizedToolSchemaBytes-n {
+	if b.isExceeded() || n < 0 || b.bytes > maxNormalizedToolSchemaBytes-n {
 		b.bytes = maxNormalizedToolSchemaBytes + 1
 		b.exceeded = true
 		return false
 	}
 	b.bytes += n
+	if b.catalog != nil {
+		if b.catalog.bytes > maxCatalogInlinedSchemaBytes-n {
+			b.catalog.bytes = maxCatalogInlinedSchemaBytes + 1
+			b.catalog.exceeded = true
+			b.exceeded = true
+			b.trippedCatalog = true
+			return false
+		}
+		b.catalog.bytes += n
+	}
 	return true
 }
 
 func copyJSONValueBounded(v any, budget *inlineBudget) (any, bool) {
 	switch t := v.(type) {
 	case map[string]any:
-		if budget != nil {
-			budget.nodes++
-			if budget.nodes > maxInlinedSchemaNodes || !budget.addBytes(2) {
-				budget.exceeded = true
-				return nil, false
-			}
+		if !budget.addNode() {
+			return nil, false
 		}
 		out := make(map[string]any, len(t))
 		for _, k := range sortedMapKeys(t) {
@@ -356,8 +482,13 @@ func newDefScope(resource map[string]any) defScope {
 }
 
 func hasNonFragmentID(obj map[string]any) bool {
-	id, ok := obj["$id"].(string)
-	return ok && id != "" && !strings.HasPrefix(id, "#")
+	if id, ok := obj["$id"].(string); ok && id != "" && !strings.HasPrefix(id, "#") {
+		return true
+	}
+	if id, ok := obj["id"].(string); ok && id != "" && !strings.HasPrefix(id, "#") {
+		return true
+	}
+	return false
 }
 
 // inlineLocalRefs resolves `#/$defs/<Name>` and `#/definitions/<Name>`
@@ -366,13 +497,24 @@ func hasNonFragmentID(obj map[string]any) bool {
 // budget are converted to shallow provider-safe stubs without `$ref` so
 // mcpTool.Info() never forwards a dangling reference or materializes a
 // combinatorial definition DAG.
-func inlineLocalRefs(root map[string]any) map[string]any {
+func inlineLocalRefs(root map[string]any, budget *inlineBudget) map[string]any {
 	if len(root) == 0 {
 		return root
 	}
+	if budget == nil {
+		budget = &inlineBudget{}
+	}
 	scope := newDefScope(root)
-	budget := &inlineBudget{}
 	resolved := inlineSchemaNodeRefs(root, scope, map[string]bool{"#": true}, true, false, budget)
+	if budget.isExceeded() {
+		return map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				schemaBudgetExceededKey: budgetExceededStub(),
+			},
+			schemaBudgetExceededKey: true,
+		}
+	}
 	switch r := resolved.(type) {
 	case map[string]any:
 		return r
@@ -387,6 +529,9 @@ func inlineLocalRefs(root map[string]any) map[string]any {
 }
 
 func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isResourceRoot, inlinedCopy bool, budget *inlineBudget) any {
+	if budget.isExceeded() {
+		return budgetExceededStub()
+	}
 	obj, ok := node.(map[string]any)
 	if !ok {
 		return node
@@ -401,11 +546,10 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 			switch {
 			case active[canonKey]:
 				resolved = recursiveRefStub(target, scope)
-			case len(active) > maxInlineRefDepth || budget.exceeded || budget.expansions >= maxRefExpansions:
+			case len(active) > maxInlineRefDepth || !budget.addExpansion():
 				budget.exceeded = true
 				resolved = budgetExceededStub()
 			default:
-				budget.expansions++
 				if targetCopy, ok := copyJSONValueBounded(target, budget); ok {
 					nextActive := cloneActiveRefs(active, canonKey)
 					resolved = inlineSchemaNodeRefs(targetCopy, scope, nextActive, false, true, budget)
@@ -581,6 +725,9 @@ func targetNeedsUnevaluatedIsolation(target, siblings map[string]any) bool {
 }
 
 func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope, active map[string]bool, inlinedCopy bool, budget *inlineBudget) any {
+	if budget.isExceeded() || hasSchemaBudgetExceeded(resolved) {
+		return budgetExceededStub()
+	}
 	siblings := make(map[string]any, len(obj))
 	for _, k := range sortedMapKeys(obj) {
 		if k != "$ref" {
@@ -588,11 +735,14 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 			if copied, ok := copyJSONValueBounded(v, budget); ok {
 				siblings[k] = copied
 			} else {
-				siblings[k] = budgetExceededStub()
+				return budgetExceededStub()
 			}
 		}
 	}
 	inlineSchemaMapFields(siblings, scope, active, inlinedCopy, budget)
+	if budget.isExceeded() || hasSchemaBudgetExceeded(siblings) {
+		return budgetExceededStub()
+	}
 
 	if b, isBool := resolved.(bool); isBool {
 		if !b {
@@ -696,24 +846,42 @@ func isSchemaValue(v any) bool {
 }
 
 func lookupLocalDef(ref string, scope defScope) (any, string, bool) {
-	if ref == "#" && scope.root != nil {
-		return scope.root, "#", true
+	frag, ok := strings.CutPrefix(ref, "#")
+	if !ok {
+		return nil, "", false
 	}
-	if name, ok := strings.CutPrefix(ref, "#/$defs/"); ok {
-		if decoded, valid := decodeFragmentPointerToken(name); valid {
+	if frag == "" {
+		if scope.root != nil {
+			return scope.root, "#", true
+		}
+		return nil, "", false
+	}
+	pointer, err := url.PathUnescape(frag)
+	if err != nil {
+		return nil, "", false
+	}
+	if token, ok := strings.CutPrefix(pointer, "/$defs/"); ok {
+		if decoded, valid := decodePointerToken(token); valid {
 			if d, exists := scope.defs[decoded]; exists && isSchemaValue(d) {
 				return d, "$defs:" + decoded, true
 			}
 		}
 	}
-	if name, ok := strings.CutPrefix(ref, "#/definitions/"); ok {
-		if decoded, valid := decodeFragmentPointerToken(name); valid {
+	if token, ok := strings.CutPrefix(pointer, "/definitions/"); ok {
+		if decoded, valid := decodePointerToken(token); valid {
 			if d, exists := scope.definitions[decoded]; exists && isSchemaValue(d) {
 				return d, "definitions:" + decoded, true
 			}
 		}
 	}
 	return nil, "", false
+}
+
+func decodePointerToken(token string) (string, bool) {
+	if token == "" || strings.Contains(token, "/") {
+		return "", false
+	}
+	return strings.ReplaceAll(strings.ReplaceAll(token, "~1", "/"), "~0", "~"), true
 }
 
 // foldExclusiveBound rewrites the draft-04 boolean exclusive bound and reports
@@ -897,7 +1065,54 @@ func CheckMCPToolSchema(server string, tool mcp.Tool) (issue ToolSchemaIssue, ok
 	return checkMCPToolSchema(&mcpTool{serverName: server, tool: tool})
 }
 
+// CheckMCPToolSchemas validates a full discovered catalog with a shared
+// catalog-wide expansion/node/byte budget and honors ctx cancellation between
+// and during tool evaluations so an untrusted tools/list response cannot pin
+// CPU/GC across thousands of schema definitions.
+func CheckMCPToolSchemas(ctx context.Context, tools []mcp.ServerTool) ([]ToolSchemaIssue, error) {
+	if len(tools) > mcp.MaxToolsPerServer {
+		return nil, fmt.Errorf("tools/list returned %d tools (max %d)", len(tools), mcp.MaxToolsPerServer)
+	}
+	catBudget := &catalogSchemaBudget{ctx: ctx}
+	var issues []ToolSchemaIssue
+	for _, st := range tools {
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		issue, ok := checkMCPToolSchemaWithBudget(&mcpTool{serverName: st.ServerName, tool: st.Tool}, catBudget)
+		if ctx != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
+		if ok {
+			issues = append(issues, issue)
+		}
+	}
+	return issues, nil
+}
+
 func checkMCPToolSchema(mt *mcpTool) (ToolSchemaIssue, bool) {
+	return checkMCPToolSchemaWithBudget(mt, nil)
+}
+
+func checkMCPToolSchemaWithBudget(mt *mcpTool, catBudget *catalogSchemaBudget) (ToolSchemaIssue, bool) {
+	if catBudget != nil {
+		catBudget.tools++
+		if catBudget.tools > maxCatalogToolsChecked {
+			catBudget.exceeded = true
+		}
+		if catBudget.isExceeded() {
+			return ToolSchemaIssue{
+				Server: mt.serverName,
+				Tool:   mt.tool.Name,
+				Status: ToolSchemaInvalid,
+				Detail: "at /: catalog $ref expansion budget exceeded",
+			}, true
+		}
+	}
 	key, cacheable := toolSchemaCacheKey(mt)
 	if cacheable {
 		toolSchemaVerdicts.Lock()
@@ -907,8 +1122,8 @@ func checkMCPToolSchema(mt *mcpTool) (ToolSchemaIssue, bool) {
 			return verdict.issueFor(mt), verdict.ok
 		}
 	}
-	verdict := evaluateToolSchema(mt)
-	if cacheable {
+	verdict, allowCache := evaluateToolSchemaWithBudget(mt, catBudget)
+	if cacheable && allowCache {
 		toolSchemaVerdicts.Lock()
 		if len(toolSchemaVerdicts.m) >= toolSchemaVerdictCap {
 			toolSchemaVerdicts.m = map[[sha256.Size]byte]toolSchemaVerdict{}
@@ -949,9 +1164,13 @@ var toolSchemaVerdicts = struct {
 }{m: map[[sha256.Size]byte]toolSchemaVerdict{}}
 
 // toolSchemaCacheKey hashes everything the verdict depends on. encoding/json
-// sorts map keys, so equal schemas hash equally. An unencodable schema is
-// simply not cached.
+// sorts map keys, so equal schemas hash equally. An unencodable or oversized
+// schema is not cached so hashing never walks an unbounded tree before the
+// schema budget runs.
 func toolSchemaCacheKey(mt *mcpTool) ([sha256.Size]byte, bool) {
+	if !schemaFitsCachePrecheck(mt.tool.InputSchema) {
+		return [sha256.Size]byte{}, false
+	}
 	raw, err := json.Marshal(struct {
 		Schema   map[string]any `json:"s"`
 		FileRefs bool           `json:"f"`
@@ -962,19 +1181,66 @@ func toolSchemaCacheKey(mt *mcpTool) ([sha256.Size]byte, bool) {
 	return sha256.Sum256(raw), true
 }
 
-func evaluateToolSchema(mt *mcpTool) toolSchemaVerdict {
-	_, notes := normalizeToolSchemaWithNotes(mt.tool.InputSchema)
-	if problem := toolInputSchemaProblem(mt.Info()); problem != nil {
+func schemaFitsCachePrecheck(schema map[string]any) bool {
+	b := &inlineBudget{}
+	return walkSchemaPrecheck(schema, b)
+}
+
+func walkSchemaPrecheck(v any, b *inlineBudget) bool {
+	switch t := v.(type) {
+	case map[string]any:
+		if !b.addNode() {
+			return false
+		}
+		for k, vv := range t {
+			if !b.addBytes(len(k) + 4) {
+				return false
+			}
+			if !walkSchemaPrecheck(vv, b) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		if !b.addBytes(2 + len(t)) {
+			return false
+		}
+		for _, vv := range t {
+			if !walkSchemaPrecheck(vv, b) {
+				return false
+			}
+		}
+		return true
+	case []string:
+		if !b.addBytes(2 + len(t)) {
+			return false
+		}
+		for _, s := range t {
+			if !b.addBytes(len(s) + 2) {
+				return false
+			}
+		}
+		return true
+	case string:
+		return b.addBytes(len(t) + 2)
+	default:
+		return b.addBytes(8)
+	}
+}
+
+func evaluateToolSchemaWithBudget(mt *mcpTool, catBudget *catalogSchemaBudget) (toolSchemaVerdict, bool) {
+	normalized, notes, trippedCatalog := normalizeToolSchemaWithNotesAndBudget(mt.tool.InputSchema, catBudget)
+	if problem := toolInputSchemaProblem(mt.infoFromSchema(normalized)); problem != nil {
 		detail := problem.Error()
 		if len(notes) > 0 {
 			detail += " (after rewriting: " + strings.Join(notes, "; ") + ")"
 		}
-		return toolSchemaVerdict{ok: true, status: ToolSchemaInvalid, detail: detail}
+		return toolSchemaVerdict{ok: true, status: ToolSchemaInvalid, detail: detail}, !trippedCatalog
 	}
 	if len(notes) > 0 {
-		return toolSchemaVerdict{ok: true, status: ToolSchemaRewritten, detail: strings.Join(notes, "; ")}
+		return toolSchemaVerdict{ok: true, status: ToolSchemaRewritten, detail: strings.Join(notes, "; ")}, !trippedCatalog
 	}
-	return toolSchemaVerdict{}
+	return toolSchemaVerdict{}, !trippedCatalog
 }
 
 // The runtime record of schema findings, keyed by server and tool. Every turn

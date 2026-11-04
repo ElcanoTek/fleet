@@ -1,6 +1,7 @@
 package agentcore
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"slices"
@@ -789,5 +790,89 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 	hugeIssue, hugeOK := CheckMCPToolSchema("srv", hugeTool.tool)
 	if !hugeOK || hugeIssue.Status != ToolSchemaInvalid || !strings.Contains(hugeIssue.Detail, "budget exceeded") {
 		t.Fatalf("CheckMCPToolSchema on 32x 1MiB description = (%+v, %v), want ToolSchemaInvalid budget exceeded", hugeIssue, hugeOK)
+	}
+
+	// Percent-encoded structural separators (#%2F$defs%2FPostal%20code) and
+	// legacy draft-04 "id" resource boundaries must resolve properly.
+	encodedAndLegacy := jsonMap(t, `{
+	  "$defs": {
+	    "Postal code": {"type": "string", "pattern": "^[0-9]{5}$"}
+	  },
+	  "definitions": {
+	    "Shared": {"type": "string"}
+	  },
+	  "type": "object",
+	  "properties": {
+	    "zip": {"$ref": "#%2F$defs%2FPostal%20code"},
+	    "legacy_resource": {
+	      "id": "https://example.com/legacy-embedded.json",
+	      "definitions": {
+	        "Shared": {"type": "integer"}
+	      },
+	      "type": "object",
+	      "properties": {
+	        "val": {"$ref": "#/definitions/Shared"}
+	      }
+	    }
+	  }
+	}`)
+	normEncoded := normalizeToolSchema(encodedAndLegacy)
+	normProps := normEncoded["properties"].(map[string]any)
+	if zip, _ := normProps["zip"].(map[string]any); zip["type"] != "string" {
+		t.Fatalf("percent-encoded separator ref not inlined: %v", zip)
+	}
+	legacyVal := normProps["legacy_resource"].(map[string]any)["properties"].(map[string]any)["val"].(map[string]any)
+	if legacyVal["type"] != "integer" {
+		t.Fatalf("legacy id resource boundary did not scope #/definitions/Shared to integer: %v", legacyVal)
+	}
+
+	// A $ref whose sibling required array exceeds the byte budget must preserve
+	// the budget-exceeded sentinel rather than swallowing it in mergeRequiredAny.
+	nearBudgetDesc := strings.Repeat("d", maxNormalizedToolSchemaBytes-1024)
+	sibReqSchema := map[string]any{
+		"$defs": map[string]any{
+			"BaseObj": map[string]any{
+				"type":        "object",
+				"description": nearBudgetDesc,
+				"required":    []any{"a"},
+				"properties":  map[string]any{"a": map[string]any{"type": "string"}},
+			},
+		},
+		"type": "object",
+		"properties": map[string]any{
+			"item": map[string]any{
+				"$ref":     "#/$defs/BaseObj",
+				"required": []any{strings.Repeat("r", 2048)},
+			},
+		},
+	}
+	sibIssue, sibOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "sib_req_budget", InputSchema: sibReqSchema})
+	if !sibOK || sibIssue.Status != ToolSchemaInvalid || !strings.Contains(sibIssue.Detail, "budget exceeded") {
+		t.Fatalf("CheckMCPToolSchema on budget-exceeding sibling required = (%+v, %v), want ToolSchemaInvalid budget exceeded", sibIssue, sibOK)
+	}
+
+	// Catalog-wide budget and cancellation in CheckMCPToolSchemas: a catalog of
+	// uniquely titled DAG tools stops expanding after the catalog ceiling, and a
+	// cancelled context aborts immediately.
+	dagCatalog := make([]mcp.ServerTool, 20)
+	for i := range dagCatalog {
+		toolCopy, _ := copyJSONValue(schema).(map[string]any)
+		toolCopy["title"] = "unique_" + string(rune('A'+i))
+		dagCatalog[i] = mcp.ServerTool{
+			ServerName: "srv",
+			Tool:       mcp.Tool{Name: "dag_" + string(rune('a'+i)), InputSchema: toolCopy},
+		}
+	}
+	catIssues, err := CheckMCPToolSchemas(context.Background(), dagCatalog)
+	if err != nil {
+		t.Fatalf("CheckMCPToolSchemas: %v", err)
+	}
+	if len(catIssues) != len(dagCatalog) {
+		t.Fatalf("CheckMCPToolSchemas flagged %d/%d DAG tools, want all withheld", len(catIssues), len(dagCatalog))
+	}
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := CheckMCPToolSchemas(cancelCtx, dagCatalog); err == nil {
+		t.Fatalf("CheckMCPToolSchemas with cancelled context succeeded, want context.Canceled")
 	}
 }

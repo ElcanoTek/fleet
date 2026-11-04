@@ -478,11 +478,11 @@ func (s *Service) probeServer(ctx context.Context, url, headerName, queryName, p
 	}
 	tools := client.GetAllTools()
 	report := ProbeReport{ToolCount: len(tools)}
-	for _, st := range tools {
-		if issue, ok := agentcore.CheckMCPToolSchema(st.ServerName, st.Tool); ok {
-			report.SchemaIssues = append(report.SchemaIssues, issue)
-		}
+	issues, err := agentcore.CheckMCPToolSchemas(hctx, tools)
+	if err != nil {
+		return ProbeReport{}, err
 	}
+	report.SchemaIssues = issues
 	if credential == "" {
 		return report, nil
 	}
