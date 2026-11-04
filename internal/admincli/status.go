@@ -49,10 +49,11 @@ func cmdStatus(argv []string) int {
 	// 2. required env vars.
 	checkEnv(r)
 
-	// 3. both databases reachable + active work summary.
+	// 3. both databases reachable + active work summary + prompt cache health.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
 	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
+	checkPromptCache(r, *chatURL)
 
 	// 4. sandbox image present + runnable.
 	if *skipSandbox {

@@ -9,6 +9,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -117,6 +118,7 @@ func (m *Manager) ExtractMemoryGraph(ctx context.Context, content string) (*Extr
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0),
 		fantasy.WithMaxOutputTokens(memoryGraphMaxTokens),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 
 	ctx, cancel := context.WithTimeout(ctx, memoryGraphTimeout)
@@ -126,6 +128,7 @@ func (m *Manager) ExtractMemoryGraph(ctx context.Context, content string) (*Extr
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage("FACT:\n" + truncate(content, memoryGraphMaxContentChars))},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memory-graph generate: %w", err)

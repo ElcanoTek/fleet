@@ -89,6 +89,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(recurringTaskMaxOutputTokens),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -97,6 +98,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("recurring-task synthesis: %w", err)

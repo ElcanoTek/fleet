@@ -74,7 +74,7 @@ func newOpenRouterProvider(apiKey string, headers ProviderHeaders) (fantasy.Prov
 	if headers.XTitle == "" {
 		headers = DefaultProviderHeaders
 	}
-	var next http.RoundTripper = http.DefaultTransport
+	next := http.DefaultTransport
 	if override := openRouterBaseURLOverride(); override != "" {
 		if rt, err := newBaseURLRewriteTransport(override); err == nil {
 			next = rt

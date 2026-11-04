@@ -9,6 +9,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -115,6 +116,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.1),
 		fantasy.WithMaxOutputTokens(768),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
@@ -123,6 +125,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		log.Printf("ExtractMemories: %v", err)

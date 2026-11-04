@@ -127,6 +127,7 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(libraryPromptMaxOutputTokens),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -135,6 +136,7 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("library-prompt synthesis: %w", err)

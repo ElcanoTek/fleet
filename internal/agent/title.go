@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // SuggestTitle generates a short, sidebar-friendly title for a freshly-created
@@ -35,6 +37,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.2),
 		fantasy.WithMaxOutputTokens(titleMaxOutputTokens),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 
 	prompt := fmt.Sprintf("User: %s\n\nAssistant: %s", truncate(userMessage, 600), truncate(assistantReply, 600))
@@ -46,6 +49,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(prompt)},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		log.Printf("SuggestTitle: %v", err)

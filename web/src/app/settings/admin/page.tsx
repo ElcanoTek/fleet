@@ -15,7 +15,14 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "@/app/lib/navigation";
 
-import { fetchStats, formatAgo, formatUSD, type UserStat } from "./lib";
+import {
+  fetchAdminStatsPayload,
+  formatAgo,
+  formatCompactTokens,
+  formatUSD,
+  type DailyCacheStat,
+  type UserStat,
+} from "./lib";
 import { ConnBadge } from "../ui/atoms";
 import { AdminStats, ConnGroup, ConnGroupHead, SetSection, type AdminStat } from "../ui/panels";
 import { useIsAdmin } from "../useIsAdmin";
@@ -126,6 +133,7 @@ export default function AdminOverviewPage() {
   const [health, setHealth] = useState<HealthSummary | null>(null);
   const [healthErr, setHealthErr] = useState<string | null>(null);
   const [stats, setStats] = useState<UserStat[] | null>(null);
+  const [dailyCache, setDailyCache] = useState<DailyCacheStat[]>([]);
   const [statsErr, setStatsErr] = useState<string | null>(null);
   // Manual refresh in flight (the header button's spinner). The 10s poll
   // refreshes silently — no spinner churn.
@@ -155,10 +163,11 @@ export default function AdminOverviewPage() {
       });
 
   const applyStats = (isStale: () => boolean) =>
-    fetchStats()
-      .then((rows) => {
-        if (isStale() || rows === null) return;
-        setStats(rows);
+    fetchAdminStatsPayload()
+      .then((payload) => {
+        if (isStale() || payload === null) return;
+        setStats(payload.users);
+        setDailyCache(payload.daily_cache ?? []);
         setStatsErr(null);
       })
       .catch((err: unknown) => {
@@ -192,6 +201,10 @@ export default function AdminOverviewPage() {
 
   const totalSpend = stats?.reduce((acc, u) => acc + u.total_cost_usd, 0) ?? 0;
   const totalTurns = stats?.reduce((acc, u) => acc + u.total_turns, 0) ?? 0;
+  const totalPromptTok = stats?.reduce((acc, u) => acc + (u.total_prompt_tokens ?? 0), 0) ?? 0;
+  const totalCachedTok = stats?.reduce((acc, u) => acc + (u.total_cached_tokens ?? 0), 0) ?? 0;
+  const totalUncachedTok = Math.max(0, totalPromptTok - totalCachedTok);
+  const overallHitPct = totalPromptTok > 0 ? (totalCachedTok / totalPromptTok) * 100 : 0;
   const usageItems: AdminStat[] = [
     { title: "Users", value: String(stats?.length ?? 0) },
     { title: "Turns total", value: String(totalTurns) },
@@ -200,10 +213,21 @@ export default function AdminOverviewPage() {
     // tab's windowed chat+task total.
     { title: "Chat spend (all-time)", value: formatUSD(totalSpend) },
     {
+      title: "Cache hit rate",
+      value: totalPromptTok > 0 ? `${overallHitPct.toFixed(1)}%` : "—",
+      sub:
+        totalPromptTok > 0
+          ? `${formatCompactTokens(totalCachedTok)} hit · ${formatCompactTokens(totalUncachedTok)} miss`
+          : "no prompt tokens yet",
+    },
+    {
       title: "Most recent",
       value: stats && stats.length > 0 ? formatAgo(stats[0].last_activity) : "—",
     },
   ];
+  const usersWithCache = (stats ?? []).filter(
+    (u) => (u.total_prompt_tokens ?? 0) > 0 || (u.total_cached_tokens ?? 0) > 0,
+  );
 
   // The design's .admin-health-head: title + DB badge + poll note, with the
   // refresh control hugging the right edge (it lives here, not the topbar).
@@ -300,6 +324,122 @@ export default function AdminOverviewPage() {
           <AdminStats items={usageItems} />
         )}
       </ConnGroup>
+
+      {!statsErr && (dailyCache.length > 0 || usersWithCache.length > 0) ? (
+        <ConnGroup>
+          <div data-testid="cache-efficiency-panel" className="grid gap-[0.85rem]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
+                Prompt cache efficiency
+              </h3>
+              <span className="font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
+                CLI: fleet cache-stats
+              </span>
+            </div>
+
+            {dailyCache.length > 0 ? (
+              <div className="overflow-x-auto">
+                <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  By date (last 14 days, UTC)
+                </div>
+                <table className="w-full border-collapse text-left text-[0.78rem]">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                      <th className="py-1.5 pr-3">Date</th>
+                      <th className="py-1.5 px-2 text-right">Turns</th>
+                      <th className="py-1.5 px-2 text-right">Prompt tok</th>
+                      <th className="py-1.5 px-2 text-right">Cached</th>
+                      <th className="py-1.5 px-2 text-right">Cache miss</th>
+                      <th className="py-1.5 pl-2 text-right">Hit %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[...dailyCache].reverse().map((d) => (
+                      <tr
+                        key={d.day}
+                        data-testid={`cache-day-${d.day}`}
+                        className="border-b border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
+                      >
+                        <td className="py-1.5 pr-3 font-[family-name:var(--font-code)] text-[var(--color-text-primary)]">
+                          {d.day}
+                        </td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">{d.turns}</td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {formatCompactTokens(d.prompt_tokens)}
+                        </td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {formatCompactTokens(d.cached_tokens)}
+                        </td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {formatCompactTokens(d.uncached_prompt_tokens)}
+                        </td>
+                        <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
+                          {d.cache_hit_rate_pct.toFixed(1)}%
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+
+            {usersWithCache.length > 0 ? (
+              <div className="overflow-x-auto">
+                <div className="mb-1.5 text-[0.68rem] font-bold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+                  By user (all-time average)
+                </div>
+                <table className="w-full border-collapse text-left text-[0.78rem]">
+                  <thead>
+                    <tr className="border-b border-[var(--color-border)] text-[0.68rem] uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                      <th className="py-1.5 pr-3">User</th>
+                      <th className="py-1.5 px-2 text-right">Turns</th>
+                      <th className="py-1.5 px-2 text-right">Prompt tok</th>
+                      <th className="py-1.5 px-2 text-right">Cached</th>
+                      <th className="py-1.5 px-2 text-right">Cache miss</th>
+                      <th className="py-1.5 pl-2 text-right">Hit %</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usersWithCache.map((u) => {
+                      const promptTok = u.total_prompt_tokens ?? 0;
+                      const cachedTok = u.total_cached_tokens ?? 0;
+                      const uncachedTok =
+                        u.uncached_prompt_tokens ?? Math.max(0, promptTok - cachedTok);
+                      const hitPct =
+                        u.cache_hit_rate_pct ??
+                        (promptTok > 0 ? (cachedTok / promptTok) * 100 : 0);
+                      return (
+                        <tr
+                          key={u.email}
+                          data-testid={`cache-user-${u.email}`}
+                          className="border-b border-[var(--color-border-subtle)] text-[var(--color-text-secondary)]"
+                        >
+                          <td className="py-1.5 pr-3 text-[var(--color-text-primary)]">
+                            {u.email}
+                          </td>
+                          <td className="py-1.5 px-2 text-right tabular-nums">{u.total_turns}</td>
+                          <td className="py-1.5 px-2 text-right tabular-nums">
+                            {formatCompactTokens(promptTok)}
+                          </td>
+                          <td className="py-1.5 px-2 text-right tabular-nums">
+                            {formatCompactTokens(cachedTok)}
+                          </td>
+                          <td className="py-1.5 px-2 text-right tabular-nums">
+                            {formatCompactTokens(uncachedTok)}
+                          </td>
+                          <td className="py-1.5 pl-2 text-right font-medium tabular-nums text-[var(--color-text-primary)]">
+                            {hitPct.toFixed(1)}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        </ConnGroup>
+      ) : null}
     </SetSection>
   );
 }

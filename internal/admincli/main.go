@@ -79,6 +79,8 @@ func Run(argv []string) int {
 		return cmdCleanup(argv[1:])
 	case "status":
 		return cmdStatus(argv[1:])
+	case "cache-stats", "usage":
+		return cmdCacheStats(argv[1:])
 	case "doctor":
 		// Formerly an alias for status; now the box-level diagnose-and-REPAIR
 		// pass (wraps scripts/doctor.sh — see cmdDoctor). `doctor --check`
@@ -192,6 +194,8 @@ Operator lifecycle (bootstrap → update → status/doctor):
                                                               --wait: wait for running tasks/turns to finish; --force: update even if busy)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)
   fleet status    [--service <name>] [--no-sandbox]    (quick read-only health report; non-zero exit if unhealthy)
+  fleet cache-stats [--days 14] [--by all|day|user|model] [--json]  (prompt cache hit/miss report by date, user & model; alias: fleet usage)
+  fleet usage     [--days 14] [--by all|day|user|model] [--json]    (alias for fleet cache-stats)
   fleet doctor    [--check] [--no-restart] [--node] [--dry-run]  (deep box pass: diagnose AND repair drift — packages, rootless
                                                              podman prereqs, unit drift, env files, services, sandbox smoke.
                                                              Needs root; --check only diagnoses; --dry-run prints the checklist;

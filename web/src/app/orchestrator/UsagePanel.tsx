@@ -92,7 +92,7 @@ export function UsagePanel() {
   // A failed CSV download is shown in place (the button used to navigate).
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [groupBy, setGroupBy] = useState<UsageGroupBy>("user");
-  const [measure, setMeasure] = useState<"cost" | "tokens">("cost");
+  const [measure, setMeasure] = useState<"cost" | "tokens" | "cache">("cost");
 
   const {
     data: report,
@@ -147,10 +147,11 @@ export function UsagePanel() {
             id="usageMeasure"
             aria-label="Chart measure"
             value={measure}
-            onChange={(e) => setMeasure(e.target.value as "cost" | "tokens")}
+            onChange={(e) => setMeasure(e.target.value as "cost" | "tokens" | "cache")}
           >
             <option value="cost">Cost (USD)</option>
             <option value="tokens">Tokens</option>
+            <option value="cache">Cache hit %</option>
           </select>
           <button
             type="button"
@@ -493,11 +494,37 @@ function budgetStateLabel(b: BudgetStatus): string {
   return b.soft_alerted ? "alerted" : "ok";
 }
 
+type UsageMeasure = "cost" | "tokens" | "cache";
+
+function bucketChatPromptTokens(b: UsageBucket): number {
+  if (typeof b.chat_prompt_tokens === "number" && b.chat_prompt_tokens > 0) {
+    return b.chat_prompt_tokens;
+  }
+  return b.prompt_tokens;
+}
+
+function bucketUncachedTokens(b: UsageBucket): number {
+  if (typeof b.uncached_tokens === "number") {
+    return b.uncached_tokens;
+  }
+  return Math.max(0, bucketChatPromptTokens(b) - b.cached_tokens);
+}
+
+function bucketCacheHitPct(b: UsageBucket): number {
+  if (typeof b.cache_hit_rate_pct === "number") {
+    return b.cache_hit_rate_pct;
+  }
+  const denom = bucketChatPromptTokens(b);
+  return denom > 0 ? (b.cached_tokens / denom) * 100 : 0;
+}
+
 // UsageTotals — the KPI row: combined spend (with the per-source split as the
 // sub-line) and the token totals that stay meaningful when pricing isn't
 // configured.
 function UsageTotals({ report }: { report: UsageReport }) {
   const t = report.totals;
+  const hitPct = bucketCacheHitPct(t);
+  const uncached = bucketUncachedTokens(t);
   return (
     <div className="usage-tiles" data-testid="usage-totals">
       <div className="usage-tile">
@@ -511,6 +538,13 @@ function UsageTotals({ report }: { report: UsageReport }) {
         <span className="usage-tile-label">Prompt tokens</span>
         <span className="usage-tile-value">{compact.format(t.prompt_tokens)}</span>
         <span className="usage-tile-sub">{compact.format(t.cached_tokens)} cached (chat)</span>
+      </div>
+      <div className="usage-tile" data-testid="usage-cache-tile">
+        <span className="usage-tile-label">Cache efficiency</span>
+        <span className="usage-tile-value">{hitPct.toFixed(1)}%</span>
+        <span className="usage-tile-sub">
+          {compact.format(t.cached_tokens)} hit · {compact.format(uncached)} miss
+        </span>
       </div>
       <div className="usage-tile">
         <span className="usage-tile-label">Completion tokens</span>
@@ -528,15 +562,19 @@ function UsageTotals({ report }: { report: UsageReport }) {
   );
 }
 
-function measureOf(b: UsageBucket, measure: "cost" | "tokens"): number {
-  return measure === "cost" ? b.cost_usd : b.prompt_tokens + b.completion_tokens;
+function measureOf(b: UsageBucket, measure: UsageMeasure): number {
+  if (measure === "cost") return b.cost_usd;
+  if (measure === "cache") return bucketCacheHitPct(b);
+  return b.prompt_tokens + b.completion_tokens;
 }
 
-function fmtMeasure(v: number, measure: "cost" | "tokens"): string {
-  return measure === "cost" ? fmtUSD(v) : compact.format(v);
+function fmtMeasure(v: number, measure: UsageMeasure): string {
+  if (measure === "cost") return fmtUSD(v);
+  if (measure === "cache") return `${v.toFixed(1)}%`;
+  return compact.format(v);
 }
 
-function UsageChart({ report, measure }: { report: UsageReport; measure: "cost" | "tokens" }) {
+function UsageChart({ report, measure }: { report: UsageReport; measure: UsageMeasure }) {
   const timeSeries = report.group_by === "day" || report.group_by === "week";
   return timeSeries ? (
     <UsageColumns report={report} measure={measure} />
@@ -549,7 +587,7 @@ function UsageChart({ report, measure }: { report: UsageReport; measure: "cost" 
 // model). One hue; the category label wears text tokens beside the mark, the
 // value is direct-labeled at the bar tip. Buckets past MAX_BARS fold into
 // "Other" (the table below still lists every bucket).
-function UsageBars({ report, measure }: { report: UsageReport; measure: "cost" | "tokens" }) {
+function UsageBars({ report, measure }: { report: UsageReport; measure: UsageMeasure }) {
   const sorted = [...report.buckets].sort((a, b) => measureOf(b, measure) - measureOf(a, measure));
   const shown = sorted.slice(0, MAX_BARS);
   const tail = sorted.slice(MAX_BARS);
@@ -560,10 +598,13 @@ function UsageBars({ report, measure }: { report: UsageReport; measure: "cost" |
   if (tail.length > 0) {
     rows.push({
       name: `Other (${tail.length})`,
-      value: tail.reduce((sum, b) => sum + measureOf(b, measure), 0),
+      value:
+        measure === "cache"
+          ? tail.reduce((sum, b) => sum + measureOf(b, measure), 0) / tail.length
+          : tail.reduce((sum, b) => sum + measureOf(b, measure), 0),
     });
   }
-  const max = Math.max(...rows.map((r) => r.value), 0) || 1;
+  const max = measure === "cache" ? 100 : Math.max(...rows.map((r) => r.value), 0) || 1;
   return (
     <div className="usage-bars" data-testid="usage-bars">
       {rows.map((r) => (
@@ -603,24 +644,25 @@ function UsageBars({ report, measure }: { report: UsageReport; measure: "cost" |
 // UsageColumns — the day/week time series as thin columns from a zero
 // baseline, with three clean-ish y gridlines and first/last date labels. Every
 // column carries a native tooltip; the table below carries every value.
-function UsageColumns({ report, measure }: { report: UsageReport; measure: "cost" | "tokens" }) {
+function UsageColumns({ report, measure }: { report: UsageReport; measure: UsageMeasure }) {
   const buckets = report.buckets; // already sorted chronologically server-side
   const W = 720;
   const H = 160;
   const padTop = 8;
   const padBottom = 20;
   const plotH = H - padTop - padBottom;
-  const max = Math.max(...buckets.map((b) => measureOf(b, measure)), 0) || 1;
+  const max = measure === "cache" ? 100 : Math.max(...buckets.map((b) => measureOf(b, measure)), 0) || 1;
   const band = W / buckets.length;
   const barW = Math.min(Math.max(band - 2, 1), 24); // 2px surface gap, ≤24px thick
   const y = (v: number) => padTop + plotH - (v / max) * plotH;
   const gridValues = [max, max / 2];
+  const measureLabel = measure === "cost" ? "Cost" : measure === "cache" ? "Cache hit %" : "Tokens";
   return (
     <div className="usage-columns-wrap">
       <svg
         className="usage-columns"
         role="img"
-        aria-label={`${measure === "cost" ? "Cost" : "Tokens"} per ${report.group_by}, ${buckets.length} buckets`}
+        aria-label={`${measureLabel} per ${report.group_by}, ${buckets.length} buckets`}
         viewBox={`0 0 ${W} ${H}`}
       >
         {gridValues.map((v) => (
@@ -678,6 +720,8 @@ function UsageTable({ report }: { report: UsageReport }) {
             <th scope="col">Prompt tokens</th>
             <th scope="col">Completion tokens</th>
             <th scope="col">Cached (chat)</th>
+            <th scope="col">Cache miss</th>
+            <th scope="col">Cache hit %</th>
             <th scope="col">Iterations</th>
             <th scope="col">Turns</th>
           </tr>
@@ -694,6 +738,8 @@ function UsageTable({ report }: { report: UsageReport }) {
               <td className="usage-num">{plain.format(b.prompt_tokens)}</td>
               <td className="usage-num">{plain.format(b.completion_tokens)}</td>
               <td className="usage-num">{plain.format(b.cached_tokens)}</td>
+              <td className="usage-num">{plain.format(bucketUncachedTokens(b))}</td>
+              <td className="usage-num">{bucketCacheHitPct(b).toFixed(1)}%</td>
               <td className="usage-num">{plain.format(b.task_iterations)}</td>
               <td className="usage-num">{plain.format(b.chat_turns)}</td>
             </tr>

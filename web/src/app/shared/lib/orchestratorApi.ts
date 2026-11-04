@@ -192,6 +192,9 @@ export type UsageBucket = {
   prompt_tokens: number;
   completion_tokens: number;
   cached_tokens: number;
+  chat_prompt_tokens?: number;
+  uncached_tokens?: number;
+  cache_hit_rate_pct?: number;
   task_cost_usd: number;
   chat_cost_usd: number;
   task_iterations: number;

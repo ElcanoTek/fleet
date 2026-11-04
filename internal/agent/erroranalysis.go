@@ -87,6 +87,7 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 		fantasy.WithSystemPrompt(sys),
 		fantasy.WithTemperature(0.1),
 		fantasy.WithMaxOutputTokens(errorAnalysisMaxTokens),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model())),
 	)
 
 	prompt := fmt.Sprintf("Task instructions:\n%s\n\nTerminal error:\n%s\n\nSession log tail:\n%s",
@@ -102,6 +103,7 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 	result, err := ag.Generate(ctx, fantasy.AgentCall{
 		Messages:        []fantasy.Message{fantasy.NewUserMessage(prompt)},
 		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error-analysis generate: %w", err)

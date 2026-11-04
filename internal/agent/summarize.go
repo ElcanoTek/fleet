@@ -63,7 +63,10 @@ func (m *Manager) Summarize(ctx context.Context, in SummarizeInput) (*SummarizeR
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(summarizeSystemPrompt),
 		fantasy.WithMaxOutputTokens(maxTokens),
-		fantasy.WithPrepareStep(agentcore.ModelContextBudgetStep(summarizeSystemPrompt, nil, int(maxTokens))),
+		fantasy.WithPrepareStep(chainPrepareSteps(
+			agentcore.ModelContextBudgetStep(summarizeSystemPrompt, nil, int(maxTokens)),
+			agentcore.PromptCachingStep(modelSlug),
+		)),
 	)
 
 	messages = append(messages, fantasy.NewUserMessage("Produce the summary as instructed above."))

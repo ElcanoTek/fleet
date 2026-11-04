@@ -44,6 +44,12 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
   const hasSupport = Boolean(
     activeSupport?.label?.trim() && activeSupport?.email?.trim(),
   );
+  const mobileSupportLabel = activeSupport?.mobile_label?.trim() || "Help";
+  const supportAriaLabel = activeSupport?.label
+    ? activeSupport.label.toLowerCase().includes(mobileSupportLabel.toLowerCase())
+      ? activeSupport.label
+      : `${mobileSupportLabel} — ${activeSupport.label}`
+    : undefined;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -110,7 +116,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
               <button
                 type="button"
                 data-testid="support-contact-button"
-                aria-label={activeSupport.label}
+                aria-label={supportAriaLabel}
                 title={activeSupport.label}
                 onClick={() => {
                   setCopied(false);
@@ -123,7 +129,7 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
                   className="size-3.5 shrink-0 text-[var(--color-primary)]"
                 />
                 <span className="sm:hidden">
-                  {activeSupport.mobile_label?.trim() || "Help"}
+                  {mobileSupportLabel}
                 </span>
                 <span className="hidden truncate sm:inline">
                   {activeSupport.label}
