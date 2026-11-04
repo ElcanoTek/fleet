@@ -23,7 +23,6 @@ import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import {
-  ContextRing,
   ModelValidationBadge,
   NewModelBadge,
   PendingAttachmentChip,
@@ -263,12 +262,12 @@ export type ComposerProps = {
     account: string,
   ) => void | Promise<void>;
 
-  // Context ring / compaction
+  // Context usage / compaction
   activeConversationId: string | null;
   messages: Message[];
   contextUsage: ContextUsage | null;
   isSummarizing: boolean;
-  compactToastVisible: boolean;
+  compactToastVisible?: boolean;
   setConfirmSummarize: Dispatch<SetStateAction<boolean>>;
 
   // Stop control
@@ -364,7 +363,6 @@ export function Composer({
   messages,
   contextUsage,
   isSummarizing,
-  compactToastVisible,
   setConfirmSummarize,
   activeConversationIdRef,
   abortControllersRef,
@@ -2042,43 +2040,6 @@ export function Composer({
                           }}
                         />
                       ) : null}
-                    </div>
-                  ) : null}
-
-                  {/* Context Ring: shown once context usage exists (or while
-                      compacting / when the token-limit toast fires), and also
-                      reachable inside More options. */}
-                  {canCompact && (contextUsage !== null || isSummarizing || compactToastVisible) ? (
-                    // On a phone the ring shows only when it needs attention
-                    // (filling up, compacting, or the token-limit toast);
-                    // otherwise Compact conversation in More options carries
-                    // the same percentage, and the bar stays calm.
-                    <div
-                      data-testid="composer-context-ring"
-                      className={`relative ${
-                        isSummarizing ||
-                        compactToastVisible ||
-                        contextUsage?.severity === "warn" ||
-                        contextUsage?.severity === "danger"
-                          ? "inline-flex"
-                          : "hidden sm:inline-flex"
-                      }`}
-                    >
-                      {compactToastVisible && !isSummarizing ? (
-                        <div
-                          role="status"
-                          aria-live="polite"
-                          className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-md border border-[var(--color-border-strong)] bg-[var(--color-surface-2)] px-2.5 py-1 text-[0.7rem] text-[var(--color-text-primary)] shadow-[var(--shadow-md)]"
-                        >
-                          Token limit hit — you should compact
-                        </div>
-                      ) : null}
-                      <ContextRing
-                        usage={contextUsage}
-                        isSummarizing={isSummarizing}
-                        disabled={isStreaming || isSummarizing}
-                        onClick={() => setConfirmSummarize(true)}
-                      />
                     </div>
                   ) : null}
 

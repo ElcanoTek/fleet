@@ -134,6 +134,35 @@ describe("ProjectHome — the Team section (C3)", () => {
     expect(props.onOpenChat).not.toHaveBeenCalled();
   });
 
+  it("opens multiplayer team chats in live multiplayer mode instead of the read-only viewer", async () => {
+    mockRoutes({
+      "/team-conversations": {
+        conversations: [
+          {
+            id: "mp1",
+            title: "Jeanne's live chat",
+            user_email: "jeanne@x.com",
+            updated_at: 1767225600,
+            multiplayer: true,
+          },
+        ],
+      },
+    });
+    const props = renderHome();
+
+    const shared = await screen.findByText("Jeanne's live chat");
+    expect(screen.getByText("jeanne@x.com")).toBeInTheDocument();
+    expect(screen.getByTestId("team-chat-multiplayer-pill")).toHaveTextContent(
+      "Live · Multiplayer",
+    );
+    expect(screen.queryByText("Read, branch")).toBeNull();
+
+    // Clicking a multiplayer chat opens the live chat directly.
+    fireEvent.click(shared);
+    expect(props.onOpenChat).toHaveBeenCalledWith("mp1");
+    expect(props.onOpenTeamChat).not.toHaveBeenCalled();
+  });
+
   it("says where teammates' chats will appear when the section is empty", async () => {
     mockRoutes({ "/team-conversations": { conversations: [] } });
     renderHome();

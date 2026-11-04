@@ -240,9 +240,9 @@ export function RecordLink({ link, linkLabel }: { link: string; linkLabel?: stri
 }
 
 // ChangeValue renders before → after with the new value emphasised.
-export function ChangeValue({ before, after }: { before?: string; after: string }) {
+export function ChangeValue({ before, after, align = "right" }: { before?: string; after: string; align?: "left" | "right" }) {
   return (
-    <span className="min-w-0 break-words text-right">
+    <span className={`min-w-0 break-words [overflow-wrap:anywhere] ${align === "right" ? "text-right" : "text-left"}`}>
       {before !== undefined ? (
         <>
           <span className="text-[var(--color-card-text-muted)]">{before || "(empty)"}</span>
@@ -274,13 +274,13 @@ export function CardRows({ changes, settings }: Pick<ApprovalCardItem, "changes"
           <li
             key={r.key}
             data-testid={r.kind === "change" ? "approval-card-change" : "approval-card-setting"}
-            className="flex min-w-0 items-baseline justify-between gap-3 border-t border-[var(--color-border-subtle)] py-1.5 text-[0.8rem]"
+            className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t border-[var(--color-border-subtle)] py-1.5 text-[0.8rem]"
           >
             <span className="shrink-0 text-[var(--color-text-secondary)]">{r.label}</span>
             {r.kind === "change" ? (
               <ChangeValue before={r.change.before} after={r.change.after} />
             ) : (
-              <span className="min-w-0 break-words text-right text-[var(--color-text-primary)]">{r.value}</span>
+              <span className="min-w-0 break-words [overflow-wrap:anywhere] text-right text-[var(--color-text-primary)]">{r.value}</span>
             )}
           </li>
         ))}
@@ -344,9 +344,13 @@ export function RecordBox({
 }
 
 // PlanRow is one record of a several-record card: name, id and link on the
-// left, its single change's before → after on the right, flags below.
+// left, its single change's before → after on the right (or stacked cleanly
+// below when the change text is long, so the deal name is never crushed into
+// a 1-character vertical column), flags below.
 function PlanRow({ item, selection }: { item: ApprovalCardItem; selection?: RowSelection }) {
   const single = item.changes && item.changes.length === 1 && !(item.settings && item.settings.length) ? item.changes[0] : null;
+  const singleLen = single ? (single.before ?? "").length + single.after.length : 0;
+  const stackSingleChange = single !== null && singleLen > 36;
   // A row of a narrowable card (docs/APPROVAL-NARROWING.md): a checkbox, and
   // once unticked the row greys out and reads "Left out".
   const selectable = selection !== undefined && item.key !== undefined && selection.selectable(item.key);
@@ -357,42 +361,53 @@ function PlanRow({ item, selection }: { item: ApprovalCardItem; selection?: RowS
       data-left-out={out || undefined}
       className="min-w-0 border-t border-[var(--color-border-subtle)] py-2 first:border-t-0"
     >
-      <div className="flex min-w-0 items-start justify-between gap-3">
-        {selectable && item.key !== undefined ? (
-          <input
-            type="checkbox"
-            data-testid="approval-card-row-check"
-            checked={!out}
-            disabled={selection.disabled}
-            onChange={() => selection.toggle(item.key as string)}
-            aria-label={`Include ${item.label}${item.id ? ` (${item.id})` : ""}`}
-            className="mt-1 size-3.5 shrink-0 accent-[var(--color-primary)]"
-          />
-        ) : null}
-        <div className="min-w-0 flex-1">
-          <div
-            className={`break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${out ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-primary)]"}`}
-          >
-            {item.label}
-          </div>
-          {item.id || item.link ? (
-            <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3">
-              {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-card-text-muted)]">{item.id}</span> : null}
-              {item.link ? <RecordLink link={item.link} linkLabel={item.linkLabel} /> : null}
-            </div>
+      <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-3 gap-y-1">
+        <div className="flex min-w-[min(100%,14rem)] flex-1 items-start gap-3">
+          {selectable && item.key !== undefined ? (
+            <input
+              type="checkbox"
+              data-testid="approval-card-row-check"
+              checked={!out}
+              disabled={selection.disabled}
+              onChange={() => selection.toggle(item.key as string)}
+              aria-label={`Include ${item.label}${item.id ? ` (${item.id})` : ""}`}
+              className="mt-1 size-3.5 shrink-0 accent-[var(--color-primary)]"
+            />
           ) : null}
+          <div className="min-w-0 flex-1">
+            <div
+              className={`break-words [overflow-wrap:anywhere] text-[0.82rem] font-medium ${out ? "text-[var(--color-text-secondary)]" : "text-[var(--color-text-primary)]"}`}
+            >
+              {item.label}
+            </div>
+            {item.id || item.link ? (
+              <div className="mt-0.5 flex min-w-0 flex-wrap items-baseline gap-x-3">
+                {item.id ? <span className="break-all font-mono text-[0.72rem] text-[var(--color-card-text-muted)]">{item.id}</span> : null}
+                {item.link ? <RecordLink link={item.link} linkLabel={item.linkLabel} /> : null}
+              </div>
+            ) : null}
+          </div>
         </div>
         {out ? (
           <LeftOutTag />
-        ) : single ? (
-          <span data-testid="approval-card-change" className="shrink-0 text-[0.8rem]">
+        ) : single && !stackSingleChange ? (
+          <span data-testid="approval-card-change" className="min-w-0 max-w-full text-[0.8rem]">
             <span className="sr-only">{single.label}: </span>
             <ChangeValue before={single.before} after={single.after} />
           </span>
         ) : null}
       </div>
+      {!out && single && stackSingleChange ? (
+        <div
+          data-testid="approval-card-change"
+          className={`mt-1 min-w-0 break-words [overflow-wrap:anywhere] text-[0.8rem] ${selectable ? "pl-[1.625rem]" : ""}`}
+        >
+          <span className="sr-only">{single.label}: </span>
+          <ChangeValue before={single.before} after={single.after} align="left" />
+        </div>
+      ) : null}
       {item.flags && item.flags.length > 0 ? (
-        <div className="mt-1 flex flex-wrap gap-1">
+        <div className={`mt-1 flex flex-wrap gap-1 ${selectable ? "pl-[1.625rem]" : ""}`}>
           {item.flags.map((f, i) => (
             <FlagBadge key={`${f.code}-${i}`} code={f.code} label={f.label} />
           ))}

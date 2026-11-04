@@ -154,6 +154,48 @@ describe("the readable approval card", () => {
     expect(screen.queryByTestId("approval-card-details")).toBeNull();
     expect(screen.getByText("deal_id:")).toBeTruthy();
   });
+
+  it("stacks long single-change values below the record label so deal names never wrap into a 1-char column", () => {
+    renderCard({
+      card: {
+        title: "Update domains on 2 Index Exchange deals",
+        items: [
+          {
+            key: "deal-1",
+            label: "TWC-IX-AlorAir-1446238_Index_Am",
+            id: "1446238",
+            changes: [
+              {
+                label: "Blocked domains",
+                before: "4,382 blocked domains",
+                after: "Add 5 domains to the block list: slickdeals.net, mail.yahoo.com, quizlet.com, espn.com, com.easybrain.arrow.puzzle.game",
+              },
+            ],
+          },
+          {
+            key: "deal-2",
+            label: "TWC-IX-AlorAir-1446239_Index_Am",
+            id: "1446239",
+            changes: [
+              {
+                label: "Blocked domains",
+                before: "4,382 blocked domains",
+                after: "Add 5 domains to the block list: slickdeals.net, mail.yahoo.com, quizlet.com, espn.com, com.easybrain.arrow.puzzle.game",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const items = screen.getAllByTestId("approval-card-item");
+    expect(items).toHaveLength(2);
+    const changeEl = within(items[0]).getByTestId("approval-card-change");
+    expect(changeEl).toHaveTextContent(
+      "Blocked domains: 4,382 blocked domains→Add 5 domains to the block list: slickdeals.net",
+    );
+    expect(changeEl.tagName).toBe("DIV");
+    expect(changeEl.className).not.toContain("shrink-0");
+  });
 });
 
 describe("parseApprovalCardData", () => {

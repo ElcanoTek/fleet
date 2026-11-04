@@ -68,6 +68,7 @@ export type BranchOrigin = {
 
 export type TeamLinkStatus = {
   status: "owner" | "open" | "not_on_team" | "not_shared";
+  multiplayer?: boolean;
   team_id?: string;
   viewer_email: string;
   project?: { id: string; name: string };

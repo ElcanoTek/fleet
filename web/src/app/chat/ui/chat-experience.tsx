@@ -3659,13 +3659,15 @@ export function ChatExperience({
           () => null,
         ),
       ]);
+      let sharedList: ConversationSummary[] = [];
       if (sharedRes && sharedRes.ok) {
         const sharedData = (await sharedRes.json()) as {
           conversations?: ConversationSummary[];
         };
+        sharedList = sharedData.conversations ?? [];
         const mine = userEmail.trim().toLowerCase();
         setTeamSharedConversations(
-          (sharedData.conversations ?? []).filter(
+          sharedList.filter(
             (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
           ),
         );
@@ -3676,14 +3678,19 @@ export function ChatExperience({
         return;
       }
       const data = (await teamRes.json()) as {
-        conversations?: { project_id?: string; user_email?: string }[];
+        conversations?: { id?: string; project_id?: string; user_email?: string }[];
       };
       const mine = userEmail.trim().toLowerCase();
       const counts: Record<string, number> = {};
-      for (const c of data.conversations ?? []) {
+      const seenConvIds = new Set<string>();
+      for (const c of [...(data.conversations ?? []), ...sharedList]) {
         if (!c.project_id) continue;
         if (mine && (c.user_email ?? "").trim().toLowerCase() === mine)
           continue;
+        if (c.id) {
+          if (seenConvIds.has(c.id)) continue;
+          seenConvIds.add(c.id);
+        }
         counts[c.project_id] = (counts[c.project_id] ?? 0) + 1;
       }
       setTeamSharedChatCounts(counts);
@@ -6247,7 +6254,12 @@ export function ChatExperience({
           setProjectHome(null);
           if (!status || status.status === "open") {
             setTeamLinkNotice(null);
-            setTeamChatView(id);
+            if (status?.multiplayer) {
+              setTeamChatView(null);
+              void loadConversation(id);
+            } else {
+              setTeamChatView(id);
+            }
             return;
           }
           setTeamChatView(null);
@@ -7637,7 +7649,15 @@ export function ChatExperience({
                 origin={activeBranchOrigin}
                 onOpenSource={(id) => {
                   setProjectHome(null);
-                  setTeamChatView(id);
+                  const isMp = teamSharedConversations.some(
+                    (c) => c.id === id && Boolean(c.multiplayer),
+                  );
+                  if (isMp) {
+                    setTeamChatView(null);
+                    void loadConversation(id);
+                  } else {
+                    setTeamChatView(id);
+                  }
                 }}
               />
             </div>
@@ -7664,11 +7684,21 @@ export function ChatExperience({
                 )
               }
               onBack={() => setProjectHome(null)}
-              onOpenTeamChat={(conversationId) =>
-                setTeamChatView(conversationId)
-              }
+              onOpenTeamChat={(conversationId) => {
+                const isMp = teamSharedConversations.some(
+                  (c) => c.id === conversationId && Boolean(c.multiplayer),
+                );
+                if (isMp) {
+                  setProjectHome(null);
+                  setTeamChatView(null);
+                  void loadConversation(conversationId);
+                } else {
+                  setTeamChatView(conversationId);
+                }
+              }}
               onOpenChat={(conversationId) => {
                 setProjectHome(null);
+                setTeamChatView(null);
                 void loadConversation(conversationId);
               }}
               onNewChat={(afterCreate) => {

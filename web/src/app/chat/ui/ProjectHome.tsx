@@ -187,7 +187,10 @@ export function ProjectHome({
   // file a chat into the project you are looking at and it simply did not
   // appear until you left and came back.
   const liveKey = chats
-    .map((c) => `${c.id}:${c.title}:${c.team_visible ? 1 : 0}:${c.share_token ? 1 : 0}`)
+    .map(
+      (c) =>
+        `${c.id}:${c.title}:${c.team_visible ? 1 : 0}:${c.share_token ? 1 : 0}:${c.multiplayer ? 1 : 0}`,
+    )
     .join("|");
   useEffect(() => {
     let cancelled = false;
@@ -753,6 +756,7 @@ export function ProjectHome({
                 error={teamChatsError}
                 query={query}
                 onOpenTeamChat={onOpenTeamChat}
+                onOpenMultiplayerChat={onOpenChat}
               />
             ) : null}
           </div>

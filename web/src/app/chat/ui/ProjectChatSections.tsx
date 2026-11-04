@@ -37,6 +37,7 @@ export type ProjectChatEntry = {
   preview?: string;
   share_token?: string;
   team_visible?: boolean;
+  multiplayer?: boolean;
 };
 
 export type TeamChatEntry = {
@@ -44,6 +45,7 @@ export type TeamChatEntry = {
   title: string;
   user_email: string;
   updated_at: number;
+  multiplayer?: boolean;
   viewer_branch?: ViewerBranch | null;
 };
 
@@ -214,7 +216,7 @@ function VisibilityPill({
         <MenuSeparator />
         <MenuItem
           icon={<ShareGlyph className="size-4" />}
-          description="Public link for people outside your team"
+          description="Multiplayer mode or public link"
           onClick={() => {
             close();
             onMoreOptions();
@@ -346,6 +348,15 @@ export function YourChatsSection({
                     <span className="truncate text-[0.9rem] text-[var(--color-text-primary)]">
                       {c.title || "Untitled"}
                     </span>
+                    {c.multiplayer ? (
+                      <span
+                        title="Multiplayer mode — teammates can join and chat live"
+                        aria-label="Multiplayer mode — teammates can join and chat live"
+                        className="shrink-0 rounded-full bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] px-1.5 py-px text-[0.62rem] font-medium text-[var(--color-accent)]"
+                      >
+                        Live
+                      </span>
+                    ) : null}
                     {c.share_token ? (
                       <span
                         title="Shared by link — anyone with the link"
@@ -427,12 +438,14 @@ export function TeamChatsSection({
   error,
   query,
   onOpenTeamChat,
+  onOpenMultiplayerChat,
 }: {
   teamChats: TeamChatEntry[] | null;
   visibleTeamChats: TeamChatEntry[];
   error: string | null;
   query: string;
   onOpenTeamChat: (id: string) => void;
+  onOpenMultiplayerChat?: (id: string) => void;
 }) {
   return (
     <section aria-label="Shared by your team" className={`${sectionClass} mt-4`}>
@@ -471,7 +484,13 @@ export function TeamChatsSection({
               type="button"
               data-testid="team-chat-row"
               className="flex w-full items-center gap-3 rounded-[var(--radius-md)] px-2 py-2 text-left transition hover:bg-[var(--color-overlay-soft)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-              onClick={() => onOpenTeamChat(c.id)}
+              onClick={() => {
+                if (c.multiplayer && onOpenMultiplayerChat) {
+                  onOpenMultiplayerChat(c.id);
+                } else {
+                  onOpenTeamChat(c.id);
+                }
+              }}
             >
               <span
                 aria-hidden="true"
@@ -487,11 +506,25 @@ export function TeamChatsSection({
                   {c.user_email}
                 </span>
               </span>
-              <span
-                className={`${pillBase} border-[var(--color-border)] text-[var(--color-text-secondary)]`}
-              >
-                {c.viewer_branch ? "You branched this" : "Read, branch"}
-              </span>
+              {c.multiplayer ? (
+                <span
+                  data-testid="team-chat-multiplayer-pill"
+                  className={`${pillBase} border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_14%,transparent)] text-[var(--color-accent)]`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 rounded-full bg-[var(--color-accent)]"
+                  />
+                  Live · Multiplayer
+                </span>
+              ) : null}
+              {!c.multiplayer || c.viewer_branch ? (
+                <span
+                  className={`${pillBase} border-[var(--color-border)] text-[var(--color-text-secondary)]`}
+                >
+                  {c.viewer_branch ? "You branched this" : "Read, branch"}
+                </span>
+              ) : null}
               <span className="shrink-0 font-[family-name:var(--font-code)] text-[0.7rem] text-[var(--color-text-muted)]">
                 {formatDay(c.updated_at)}
               </span>

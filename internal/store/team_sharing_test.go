@@ -255,6 +255,38 @@ func TestListProjectTeamConversations(t *testing.T) {
 	if l, err := f.s.ListProjectTeamConversations(f.ctx, "carol@x.com", f.project.ID); err != nil || len(l) != 0 {
 		t.Errorf("teamless: %d rows, err=%v", len(l), err)
 	}
+
+	// A multiplayer conversation in the project carries Multiplayer=true for
+	// teammates who can participate, and masks Multiplayer=false when the
+	// caller is excluded from multiplayer while still on the shared team.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", want.ID, true, nil, nil); err != nil {
+		t.Fatalf("SetConversationMultiplayer: %v", err)
+	}
+	list, err = f.s.ListProjectTeamConversations(f.ctx, "bob@x.com", f.project.ID)
+	if err != nil || len(list) != 1 || !list[0].Multiplayer {
+		t.Fatalf("expected multiplayer=true for bob, got %+v (err=%v)", list, err)
+	}
+	tl, err := f.s.ResolveTeamLink(f.ctx, "bob@x.com", want.ID)
+	if err != nil || tl.Status != TeamLinkOpen || !tl.Multiplayer {
+		t.Fatalf("ResolveTeamLink for multiplayer teammate = %+v (err=%v), want open+multiplayer", tl, err)
+	}
+
+	// Exclude bob from multiplayer while keeping team_visible=true: bob still
+	// sees the chat as read-only in the project, with Multiplayer masked to false.
+	if _, err := f.s.SetConversationMultiplayer(f.ctx, "alice@x.com", want.ID, true, nil, []string{"bob@x.com"}); err != nil {
+		t.Fatalf("SetConversationMultiplayer exclude bob: %v", err)
+	}
+	list, err = f.s.ListProjectTeamConversations(f.ctx, "bob@x.com", f.project.ID)
+	if err != nil || len(list) != 1 || list[0].Multiplayer {
+		t.Fatalf("expected multiplayer=false for excluded bob, got %+v (err=%v)", list, err)
+	}
+	if len(list[0].MultiplayerExcluded) != 0 {
+		t.Errorf("MultiplayerExcluded leaked to teammate: %+v", list[0].MultiplayerExcluded)
+	}
+	tl, err = f.s.ResolveTeamLink(f.ctx, "bob@x.com", want.ID)
+	if err != nil || tl.Status != TeamLinkOpen || tl.Multiplayer {
+		t.Fatalf("ResolveTeamLink for excluded bob = %+v (err=%v), want open with multiplayer=false", tl, err)
+	}
 }
 
 // A teammate can branch a chat shared with the team, and the fork lands in the
