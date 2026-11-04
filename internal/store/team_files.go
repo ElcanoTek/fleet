@@ -636,10 +636,9 @@ const (
 //   - not_shared names the chat's project only when the caller can see that
 //     project anyway, so "Open <project>" is never a disclosure.
 type TeamLink struct {
-	Status      string      `json:"status"`
-	TeamID      string      `json:"team_id,omitempty"`
-	Project     *ProjectRef `json:"project,omitempty"`
-	Multiplayer bool        `json:"multiplayer,omitempty"`
+	Status  string      `json:"status"`
+	TeamID  string      `json:"team_id,omitempty"`
+	Project *ProjectRef `json:"project,omitempty"`
 }
 
 // ResolveTeamLink classifies convID for callerEmail. An unknown id is
@@ -679,13 +678,6 @@ func (s *Store) ResolveTeamLink(ctx context.Context, callerEmail, convID string)
 			return TeamLink{Status: TeamLinkOwner}, nil
 		}
 		return notShared, nil
-	}
-	mp, merr := s.GetMultiplayerConversation(ctx, callerEmail, convID)
-	if merr != nil {
-		return TeamLink{}, merr
-	}
-	if mp != nil {
-		return TeamLink{Status: TeamLinkOpen, Multiplayer: true}, nil
 	}
 	team, err := s.callerTeam(ctx, callerEmail)
 	if err != nil {

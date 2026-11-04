@@ -266,10 +266,6 @@ func TestListProjectTeamConversations(t *testing.T) {
 	if err != nil || len(list) != 1 || !list[0].Multiplayer {
 		t.Fatalf("expected multiplayer=true for bob, got %+v (err=%v)", list, err)
 	}
-	tl, err := f.s.ResolveTeamLink(f.ctx, "bob@x.com", want.ID)
-	if err != nil || tl.Status != TeamLinkOpen || !tl.Multiplayer {
-		t.Fatalf("ResolveTeamLink for multiplayer teammate = %+v (err=%v), want open+multiplayer", tl, err)
-	}
 
 	// Exclude bob from multiplayer while keeping team_visible=true: bob still
 	// sees the chat as read-only in the project, with Multiplayer masked to false.
@@ -282,10 +278,6 @@ func TestListProjectTeamConversations(t *testing.T) {
 	}
 	if len(list[0].MultiplayerExcluded) != 0 {
 		t.Errorf("MultiplayerExcluded leaked to teammate: %+v", list[0].MultiplayerExcluded)
-	}
-	tl, err = f.s.ResolveTeamLink(f.ctx, "bob@x.com", want.ID)
-	if err != nil || tl.Status != TeamLinkOpen || tl.Multiplayer {
-		t.Fatalf("ResolveTeamLink for excluded bob = %+v (err=%v), want open with multiplayer=false", tl, err)
 	}
 }
 

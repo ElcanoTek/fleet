@@ -279,9 +279,6 @@ func (s *Server) handleTeamLink(w http.ResponseWriter, r *http.Request, user, co
 		return
 	}
 	out := map[string]any{"status": tl.Status, "viewer_email": user}
-	if tl.Multiplayer {
-		out["multiplayer"] = true
-	}
 	if tl.TeamID != "" {
 		out["team_id"] = tl.TeamID
 	}

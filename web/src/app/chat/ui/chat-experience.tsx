@@ -3678,19 +3678,14 @@ export function ChatExperience({
         return;
       }
       const data = (await teamRes.json()) as {
-        conversations?: { id?: string; project_id?: string; user_email?: string }[];
+        conversations?: { project_id?: string; user_email?: string }[];
       };
       const mine = userEmail.trim().toLowerCase();
       const counts: Record<string, number> = {};
-      const seenConvIds = new Set<string>();
-      for (const c of [...(data.conversations ?? []), ...sharedList]) {
+      for (const c of data.conversations ?? []) {
         if (!c.project_id) continue;
         if (mine && (c.user_email ?? "").trim().toLowerCase() === mine)
           continue;
-        if (c.id) {
-          if (seenConvIds.has(c.id)) continue;
-          seenConvIds.add(c.id);
-        }
         counts[c.project_id] = (counts[c.project_id] ?? 0) + 1;
       }
       setTeamSharedChatCounts(counts);
@@ -6254,11 +6249,7 @@ export function ChatExperience({
           setProjectHome(null);
           if (!status || status.status === "open") {
             setTeamLinkNotice(null);
-            if (status?.multiplayer) {
-              setTeamChatView(null);
-            } else {
-              setTeamChatView(id);
-            }
+            setTeamChatView(id);
             return;
           }
           setTeamChatView(null);
@@ -6409,17 +6400,12 @@ export function ChatExperience({
 
         // A deep-linked conversation outranks "most recent" — that's the
         // conversation the user was just sent to open.
-        // A team link to the viewer's OWN chat or an open Multiplayer chat
-        // opens it directly like ?c= does.
-        const resolvedTeamLink = teamLink ? await teamLink : null;
-        const directTeamLink =
-          resolvedTeamLink?.status === "owner" ||
-          (resolvedTeamLink?.status === "open" && resolvedTeamLink?.multiplayer)
-            ? teamLinkId
-            : null;
+        // A team link to the viewer's OWN chat opens it like ?c= does.
+        const ownerLink =
+          teamLink && (await teamLink)?.status === "owner" ? teamLinkId : null;
         if (cancelled) return;
         const target =
-          deepLinkConvId ?? directTeamLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
+          deepLinkConvId ?? ownerLink ?? (newChatLink ? null : (convs[0]?.id ?? null));
         if (!target) {
           setActiveConversationId(null);
           openNewChatLink();
@@ -7653,15 +7639,7 @@ export function ChatExperience({
                 origin={activeBranchOrigin}
                 onOpenSource={(id) => {
                   setProjectHome(null);
-                  const isMp = teamSharedConversations.some(
-                    (c) => c.id === id && Boolean(c.multiplayer),
-                  );
-                  if (isMp) {
-                    setTeamChatView(null);
-                    void loadConversation(id);
-                  } else {
-                    setTeamChatView(id);
-                  }
+                  setTeamChatView(id);
                 }}
               />
             </div>
