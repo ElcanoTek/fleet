@@ -136,7 +136,17 @@ for (const scheme of ["light", "dark"] as const) {
       const steps = ["why", "welcome", "tools", "rules", "watch", "schedule"];
       for (const step of steps) {
         await expect(dialog.getByTestId(`launchpad-step-${step}`)).toBeVisible();
-        if (step === "watch") await dialog.getByTestId("launchpad-goal-inbox").click();
+        if (step === "watch") {
+          await dialog.getByTestId("launchpad-goal-inbox").click();
+          // Picking a goal enables Next, whose opacity then transitions from
+          // the disabled 0.5 to 1. Axe measured mid-fade reads a contrast
+          // failure no one ever sees at rest, so wait for the settled state.
+          const nextButton = dialog.getByTestId("launchpad-next");
+          await expect(nextButton).toBeEnabled();
+          await expect
+            .poll(() => nextButton.evaluate((el) => getComputedStyle(el).opacity))
+            .toBe("1");
+        }
         const results = await new AxeBuilder({ page })
           .include('[data-testid="patrol-launchpad"]')
           .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
