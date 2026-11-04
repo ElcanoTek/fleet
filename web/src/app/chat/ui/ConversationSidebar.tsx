@@ -26,6 +26,7 @@ import { Icon } from "./Icon";
 import {
   MAX_LABELS,
   MAX_LABEL_LEN,
+  MAX_PIN_ORDER,
   addLabel as addLabelTo,
   canAddLabel,
   deriveLabels,
@@ -1287,7 +1288,16 @@ export function ConversationSidebar({
   // Reorder mode for the Pinned section: its rows become a drag-and-arrow
   // list until Done (or Escape). Offered only with two or more pinned chats.
   const [reordering, setReordering] = useState(false);
-  const canReorder = Boolean(onReorderPinned) && pinned.length > 1;
+  const canReorder = Boolean(onReorderPinned) && pinned.length > 1 && pinned.length <= MAX_PIN_ORDER;
+  // Leaving the mode hands the focus back to Reorder (its button unmounts
+  // while the mode is on, and the focused Done button unmounts on exit).
+  const reorderToggleRef = useRef<HTMLButtonElement | null>(null);
+  const returnFocusToReorder = useRef(false);
+  useEffect(() => {
+    if (reordering || !returnFocusToReorder.current) return;
+    returnFocusToReorder.current = false;
+    reorderToggleRef.current?.focus();
+  }, [reordering]);
   const recent = recentUnfiled(conversations, knownProjectIds);
   const filtering = computeIsFiltering({
     labels: filterLabels,
@@ -1975,6 +1985,7 @@ export function ConversationSidebar({
                     {canReorder && !reordering && !selecting ? (
                       <button
                         type="button"
+                        ref={reorderToggleRef}
                         data-testid="pinned-reorder-toggle"
                         aria-label="Reorder pinned chats"
                         title="Reorder pinned chats"
@@ -1990,7 +2001,10 @@ export function ConversationSidebar({
                     <PinnedReorderList
                       chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
                       onReorder={onReorderPinned}
-                      onDone={() => setReordering(false)}
+                      onDone={() => {
+                        returnFocusToReorder.current = true;
+                        setReordering(false);
+                      }}
                     />
                   ) : (
                     pinned.map(renderRow)

@@ -3629,21 +3629,39 @@ export function ChatExperience({
   // after another so a quick run of moves lands in the order it was made; a
   // refused save re-reads the server's order so the rail never shows an
   // order that was not kept.
+  // Every read and every local move takes a generation; a read applies only
+  // if nothing newer happened since it left, so a slow boot read cannot
+  // overwrite a move made while it was in flight.
+  const pinOrderGen = useRef(0);
   const loadPinOrder = useCallback(async () => {
+    const gen = ++pinOrderGen.current;
     try {
       const res = await fetch("/api/conversations/pin-order", { cache: "no-store" });
       if (!res.ok) return;
       const data = (await res.json()) as { conversation_ids?: string[] };
-      if (Array.isArray(data.conversation_ids)) setPinOrder(data.conversation_ids);
+      if (gen === pinOrderGen.current && Array.isArray(data.conversation_ids)) setPinOrder(data.conversation_ids);
     } catch {
       // Best-effort, like the rail's projects.
     }
   }, []);
+  // A read-only viewer cannot save an order (every write is refused for the
+  // role), so the rail does not offer the mode to one.
+  const [accountViewer, setAccountViewer] = useState(false);
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
       if (!cancelled) void loadPinOrder();
     });
+    void (async () => {
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const me = (await res.json()) as { role?: string };
+        if (!cancelled) setAccountViewer(me.role === "viewer");
+      } catch {
+        // Unknown role: the server still refuses a viewer's write.
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -3651,6 +3669,7 @@ export function ChatExperience({
   const pinOrderSaves = useRef<Promise<unknown>>(Promise.resolve());
   const reorderPinned = useCallback(
     (ids: string[]) => {
+      pinOrderGen.current++;
       setPinOrder(ids);
       pinOrderSaves.current = pinOrderSaves.current.then(async () => {
         try {
@@ -6733,7 +6752,7 @@ export function ChatExperience({
           streamingConvs={streamingConvs}
           togglePin={togglePin}
           pinOrder={pinOrder}
-          onReorderPinned={reorderPinned}
+          onReorderPinned={accountViewer ? undefined : reorderPinned}
           toggleArchive={requestArchive}
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}

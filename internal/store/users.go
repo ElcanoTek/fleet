@@ -964,6 +964,12 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM user_personas WHERE user_email = $1`, normalizeEmail(email)); err != nil {
 		return fmt.Errorf("delete user personas: %w", err)
 	}
+	// The rail's pinned-chat order (migration 095) names the account's
+	// conversation IDs; it goes with them.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM conversation_pin_order WHERE lower(user_email) = lower($1)`, email); err != nil {
+		return fmt.Errorf("delete pin order: %w", err)
+	}
 	// Per-project UI state (migration 070) goes with the users row below via
 	// its ON DELETE CASCADE — in other people's projects too.
 	//

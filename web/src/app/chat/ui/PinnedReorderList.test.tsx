@@ -61,6 +61,33 @@ describe("PinnedReorderList", () => {
     expect(over.defaultPrevented).toBe(false);
   });
 
+  it("takes Escape for itself, so the rail's own Escape does not also fire", () => {
+    const onDone = vi.fn();
+    const railEscape = vi.fn();
+    window.addEventListener("keydown", railEscape);
+    try {
+      render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={onDone} />);
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(onDone).toHaveBeenCalledTimes(1);
+      expect(railEscape).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", railEscape);
+    }
+  });
+
+  it("puts the focus on the list on entry, and keeps it on a live arrow after a move", async () => {
+    const { rerender } = render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={() => {}} />);
+    // Alpha's up arrow is disabled, so its down arrow is the first control.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Alpha down" }));
+    // Bravo up: it becomes first, its up arrow disabled, so focus goes to its down arrow.
+    fireEvent.click(screen.getByRole("button", { name: "Move Bravo up" }));
+    rerender(
+      <PinnedReorderList chats={[chats[1], chats[0], chats[2]]} onReorder={() => {}} onDone={() => {}} />,
+    );
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Bravo down" }));
+  });
+
   it("leaves the mode on Done and on Escape", () => {
     const onDone = vi.fn();
     render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={onDone} />);

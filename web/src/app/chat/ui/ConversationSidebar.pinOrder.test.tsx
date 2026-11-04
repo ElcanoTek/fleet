@@ -128,6 +128,19 @@ describe("ConversationSidebar pinned order", () => {
     expect(screen.getByTestId("pinned-reorder-toggle")).toBeTruthy();
   });
 
+  it("returns the focus to Reorder when the mode ends", () => {
+    renderSidebar({ conversations: chats, filteredConversations: chats, onReorderPinned: noop });
+    fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
+    fireEvent.click(screen.getByTestId("pinned-reorder-done"));
+    expect(document.activeElement).toBe(screen.getByTestId("pinned-reorder-toggle"));
+  });
+
+  it("offers no reorder above the server's 500-chat cap", () => {
+    const many = Array.from({ length: 501 }, (_, i) => pin(`p${i}`, `Chat ${i}`));
+    renderSidebar({ conversations: many, filteredConversations: many, onReorderPinned: noop });
+    expect(screen.queryByTestId("pinned-reorder-toggle")).toBeNull();
+  });
+
   it("offers no reorder with a single pinned chat or without a save handler", () => {
     renderSidebar({ conversations: [chats[0]], filteredConversations: [chats[0]], onReorderPinned: noop });
     expect(screen.queryByTestId("pinned-reorder-toggle")).toBeNull();

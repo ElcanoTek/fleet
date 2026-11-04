@@ -1166,7 +1166,8 @@ to your account, so the order is the same on every device you sign in from.
 Press **Done** (or `Esc`) to go back to the ordinary rows.
 
 A chat you pin later appears at the top of the list, above the ones you have
-ordered, until you move it. **Temporary** chats are always newest first; to
+ordered, until you move it. **Reorder** is offered for up to 500 pinned chats,
+and not to a read-only (viewer) account, which cannot save an order. **Temporary** chats are always newest first; to
 give one a place of its own, pin it. Chats inside a project keep the project's
 order.
 

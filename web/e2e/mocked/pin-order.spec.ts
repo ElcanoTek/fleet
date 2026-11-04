@@ -15,9 +15,12 @@ const CONVERSATIONS = [
   { id: "c4", title: "Loose Recent", persona: "default", model: "", pinned: false, updated_at: 10 },
 ];
 
-async function setup(page: Page, saved: string[]) {
+async function setup(page: Page, saved: string[], opts: { role?: string; holdFirstRead?: Promise<void>; waitForPinned?: boolean } = {}) {
   const puts: string[][] = [];
   await mockChatBoot(page);
+  await page.route("**/api/me", (r: Route) =>
+    r.fulfill({ json: { email: "e2e@example.com", role: opts.role ?? "member" } }),
+  );
   await page.route("**/api/conversations", (r: Route) =>
     r.fulfill({ json: r.request().method() === "GET" ? { conversations: CONVERSATIONS } : {} }),
   );
@@ -32,10 +35,19 @@ async function setup(page: Page, saved: string[]) {
       puts.push(ids);
       return r.fulfill({ json: { conversation_ids: ids } });
     }
+    if (opts.holdFirstRead) {
+      const hold = opts.holdFirstRead;
+      opts.holdFirstRead = undefined;
+      return hold.then(() => r.fulfill({ json: { conversation_ids: saved } }));
+    }
     return r.fulfill({ json: { conversation_ids: saved } });
   });
   await page.goto("/chat");
-  await page.getByTestId("pinned-section").waitFor({ timeout: 15_000 });
+  if (opts.waitForPinned === false) {
+    await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
+  } else {
+    await page.getByTestId("pinned-section").waitFor({ timeout: 15_000 });
+  }
   return puts;
 }
 
@@ -74,6 +86,44 @@ test("pinned chats follow the saved order and can be reordered with arrows and d
   await page.getByTestId("pinned-reorder-done").click();
   await expect(list).toBeHidden();
   await expect.poll(order).toEqual(["Acme Renewal", "Deal Desk Daily", "Omnicom Pacing"]);
+});
+
+test("a slow first read of the saved order does not undo a move made meanwhile", async ({ page }) => {
+  let release: () => void = () => {};
+  const held = new Promise<void>((r) => (release = r));
+  const puts = await setup(page, ["c3", "c2", "c1"], { holdFirstRead: held });
+  await page.getByTestId("pinned-reorder-toggle").click();
+  // Server order unknown yet: the rail shows newest first (c1, c2, c3).
+  await page.getByRole("button", { name: "Move Omnicom Pacing up" }).click();
+  await expect.poll(() => puts.at(-1)).toEqual(["c2", "c1", "c3"]);
+  release(); // the stale read now answers with the old saved order
+  await page.waitForTimeout(300);
+  const items = page.getByTestId("pinned-reorder-list").locator("li");
+  await expect(items).toHaveText([/Omnicom Pacing/, /Acme Renewal/, /Deal Desk Daily/]);
+});
+
+test("a read-only viewer is not offered Reorder", async ({ page }) => {
+  await setup(page, [], { role: "viewer" });
+  await expect(page.getByTestId("pinned-section")).toContainText("Acme Renewal");
+  await page.waitForTimeout(300);
+  await expect(page.getByTestId("pinned-reorder-toggle")).toHaveCount(0);
+});
+
+test("Escape leaves reorder mode without closing the rail on a narrow screen", async ({ page }) => {
+  await page.setViewportSize({ width: 840, height: 800 });
+  await setup(page, [], { waitForPinned: false });
+  // At ≤900px the rail starts as an icon strip; open it as an overlay.
+  const rail = page.locator("aside").first();
+  await page.getByRole("button", { name: "Expand sidebar" }).click();
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeGreaterThan(290);
+  await page.getByTestId("pinned-reorder-toggle").click();
+  await expect(page.getByTestId("pinned-reorder-list")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("pinned-reorder-list")).toHaveCount(0);
+  await expect(page.getByTestId("pinned-reorder-toggle")).toBeVisible();
+  await expect(page.getByTestId("pinned-reorder-toggle")).toBeFocused();
+  // The overlay is still open: Escape belonged to reorder mode alone.
+  await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeGreaterThan(290);
 });
 
 for (const scheme of ["light", "dark"] as const) {

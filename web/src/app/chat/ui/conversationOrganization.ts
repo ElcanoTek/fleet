@@ -152,6 +152,10 @@ export function orderPinned<T extends { id?: string }>(pinned: readonly T[], ord
   return [...fresh, ...ranked.map((x) => x.c)];
 }
 
+// MAX_PIN_ORDER mirrors the server's cap on a saved order (store.MaxPinOrder):
+// the rail offers reordering only up to this many pinned chats.
+export const MAX_PIN_ORDER = 500;
+
 // movePinned returns the pinned IDs with the one at `from` moved to `to`
 // (both indexes into `ids`, clamped), for the rail's reorder mode — a drag
 // drop and the Move up / Move down buttons both come through here.

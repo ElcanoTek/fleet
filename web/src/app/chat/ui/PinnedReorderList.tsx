@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { movePinned } from "./conversationOrganization";
 
@@ -32,14 +32,41 @@ export function PinnedReorderList({
   const [announcement, setAnnouncement] = useState("");
   const ids = chats.map((c) => c.id);
 
-  // Escape leaves the mode, as Done does.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Escape leaves the mode, as Done does — and only that: it is taken in the
+  // capture phase and stopped, so the rail's own Escape (collapse the
+  // overlay, close the sidebar) does not also fire.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onDone();
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      e.preventDefault();
+      onDone();
     };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [onDone]);
+
+  // Entering the mode puts the focus on the first control in the list, so a
+  // keyboard user lands where the work is rather than on the page body.
+  useEffect(() => {
+    rootRef.current?.querySelector<HTMLButtonElement>("ol button:not([disabled])")?.focus();
+  }, []);
+
+  // After an arrow move the moved chat's same arrow keeps the focus; at an end
+  // (that arrow now disabled) the focus moves to its other arrow.
+  const keepFocus = (id: string, dir: "up" | "down") => {
+    requestAnimationFrame(() => {
+      const root = rootRef.current;
+      if (!root) return;
+      const same = root.querySelector<HTMLButtonElement>(`[data-testid="pinned-reorder-${dir}-${id}"]`);
+      const other = root.querySelector<HTMLButtonElement>(
+        `[data-testid="pinned-reorder-${dir === "up" ? "down" : "up"}-${id}"]`,
+      );
+      (same && !same.disabled ? same : other)?.focus();
+    });
+  };
 
   const move = (from: number, to: number) => {
     if (from === to || to < 0 || to >= ids.length) return;
@@ -54,7 +81,7 @@ export function PinnedReorderList({
   };
 
   return (
-    <div data-testid="pinned-reorder">
+    <div data-testid="pinned-reorder" ref={rootRef}>
       <p className="px-2 pb-1 text-[0.72rem] leading-snug text-[var(--color-text-secondary)]">
         Drag a chat, or use its arrows, to set the order. Chats you pin later appear at the top.
       </p>
@@ -98,7 +125,10 @@ export function PinnedReorderList({
                   aria-label={`Move ${title} up`}
                   data-testid={`pinned-reorder-up-${chat.id}`}
                   disabled={index === 0}
-                  onClick={() => move(index, index - 1)}
+                  onClick={() => {
+                  move(index, index - 1);
+                  keepFocus(chat.id, "up");
+                }}
                   className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-35 disabled:hover:bg-transparent any-pointer-coarse:size-11"
                 >
                   <Icon name="arrow-up" className="size-3.5" />
@@ -108,7 +138,10 @@ export function PinnedReorderList({
                   aria-label={`Move ${title} down`}
                   data-testid={`pinned-reorder-down-${chat.id}`}
                   disabled={index === chats.length - 1}
-                  onClick={() => move(index, index + 1)}
+                  onClick={() => {
+                  move(index, index + 1);
+                  keepFocus(chat.id, "down");
+                }}
                   className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:opacity-35 disabled:hover:bg-transparent any-pointer-coarse:size-11"
                 >
                   <Icon name="arrow-up" className="size-3.5 rotate-180" />

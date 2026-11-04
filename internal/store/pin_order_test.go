@@ -79,3 +79,34 @@ func TestPinOrder(t *testing.T) {
 		t.Errorf("over-long order err = %v", err)
 	}
 }
+
+// TestPinOrder_GoesWithTheAccount pins that deleting an account purges its
+// saved order, so an address re-provisioned later never reads the old IDs.
+func TestPinOrder_GoesWithTheAccount(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const me = "leaver@elcanotek.com"
+	if _, err := s.CreateUser(ctx, me, "correct-horse-battery"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := s.CreateConversation(ctx, me, "A", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetPinned(ctx, me, c.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetPinOrder(ctx, me, []string{c.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DeleteUser(ctx, me); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM conversation_pin_order WHERE user_email = $1`, me).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("pin order rows after DeleteUser = %d, want 0", n)
+	}
+}
