@@ -737,6 +737,11 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 			requireRoutingSymbol:    "RoutingProviderOptions",
 			requireStablePrefixOnly: true,
 		},
+		"internal/agent/patrol_draft.go": {
+			requireCacheSymbol:      "PromptCachingStep",
+			requireRoutingSymbol:    "RoutingProviderOptions",
+			requireStablePrefixOnly: true,
+		},
 		"internal/agent/recurring_task.go": {
 			requireCacheSymbol:      "PromptCachingStep",
 			requireRoutingSymbol:    "RoutingProviderOptions",

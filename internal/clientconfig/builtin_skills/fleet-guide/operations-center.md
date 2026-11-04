@@ -78,7 +78,10 @@ it, or dismiss the notice with **×**; it never reloads the board by itself. A
 page that says **Something went wrong** offers **Reload** too. When your
 operator configures a support contact in the bundle (`branding.support`), the
 page header also includes that support button, which opens a dialog with the
-support message, **Copy email**, and **Send email** (`mailto:`).
+support message, **Copy email**, and **Send email** (`mailto:`). The header's
+**Launchpad** button (sparkles) opens the Patrol Launchpad, a guided wizard that
+sets up a recurring patrol in a chat — see the Chat guide's "Patrol Launchpad"
+section.
 
 ### The tabs
 

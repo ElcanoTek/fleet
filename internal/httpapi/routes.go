@@ -72,6 +72,9 @@ func (s *Server) Routes() http.Handler {
 	// before the response reaches the browser.
 	mux.Handle("/api/v1/models", auth(member(http.HandlerFunc(s.handleModels))))
 	mux.Handle("/mcp-servers", auth(member(http.HandlerFunc(s.listMCPServerCatalog))))
+	// Patrol Launchpad (docs/PATROL-LAUNCHPAD.md): drafts a new patrol's
+	// instructions from the wizard's answers. Returns a draft; persists nothing.
+	mux.Handle("/patrol-draft", auth(member(mutate(http.HandlerFunc(s.handlePatrolDraft)))))
 	// Trust-labeled MCP directory (#538): bundled connectors vs curated
 	// third-party hosted servers, for the settings catalog UI.
 	mux.Handle("/mcp-catalog", auth(member(http.HandlerFunc(s.mcpCatalog))))

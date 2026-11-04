@@ -260,6 +260,7 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"PUT /api/user-personas/{id}", func(r *http.Request) string { return "/user-personas/" + p(r, "id") }, jsonBodyAlways, textJSON},
 		{"DELETE /api/user-personas/{id}", func(r *http.Request) string { return "/user-personas/" + p(r, "id") }, noBody, textJSON},
 		{"POST /api/user-personas/{id}/approve", func(r *http.Request) string { return "/user-personas/" + p(r, "id") + "/approve" }, noBody, textJSON},
+		{"POST /api/patrol-draft", fixed("/patrol-draft"), jsonBodyAlways, textJSON},
 		{"GET /api/connector-prefs", fixed("/connector-prefs"), noBody, textJSON},
 		{"PUT /api/connector-prefs", fixed("/connector-prefs"), jsonBodyAlways, textJSON},
 		{"DELETE /api/connector-prefs", func(r *http.Request) string {

@@ -5,6 +5,7 @@ import {
   useClientConfig,
   type ClientSupportContact,
 } from "@/app/lib/useClientConfig";
+import { LaunchpadButton } from "@/app/launchpad/LaunchpadButton";
 import { DialogShell } from "./DialogShell";
 import { Icon } from "./Icon";
 
@@ -17,7 +18,8 @@ import { Icon } from "./Icon";
 // branding.support, a prominent support contact button is rendered in the
 // right-hand bar across every surface (Chat, Operations Center, Settings, and
 // Guides) and opens a dialog with the configured message, copyable email, and
-// mailto: action.
+// mailto: action. The Patrol Launchpad button (sparkles, "Launchpad") sits in
+// the same right-hand group on every surface.
 
 export type PageTopBarProps = {
   title: string;
@@ -27,6 +29,9 @@ export type PageTopBarProps = {
   actions?: ReactNode;
   // Optional override for tests; defaults to branding.support from useClientConfig.
   support?: ClientSupportContact;
+  // The Patrol Launchpad entry point (docs/PATROL-LAUNCHPAD.md). On by default
+  // on every surface; a view can opt out.
+  launchpad?: boolean;
 };
 
 function buildMailtoHref(contact: ClientSupportContact): string {
@@ -38,7 +43,7 @@ function buildMailtoHref(contact: ClientSupportContact): string {
   return `mailto:${email}?subject=${encodeURIComponent(subject)}`;
 }
 
-export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps) {
+export function PageTopBar({ title, onMenu, actions, support, launchpad = true }: PageTopBarProps) {
   const clientConfig = useClientConfig(false);
   const activeSupport = support ?? clientConfig?.branding?.support;
   const hasSupport = Boolean(
@@ -110,35 +115,34 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
             {title}
           </h1>
         </div>
-        {hasSupport || actions ? (
-          <div className="flex min-w-0 items-center gap-1.5">
-            {hasSupport && activeSupport ? (
-              <button
-                type="button"
-                data-testid="support-contact-button"
-                aria-label={supportAriaLabel}
-                title={activeSupport.label}
-                onClick={() => {
-                  setCopied(false);
-                  setDialogOpen(true);
-                }}
-                className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:max-w-[16rem] sm:px-3"
-              >
-                <Icon
-                  name="mail"
-                  className="size-3.5 shrink-0 text-[var(--color-primary)]"
-                />
-                <span className="sm:hidden">
-                  {mobileSupportLabel}
-                </span>
-                <span className="hidden truncate sm:inline">
-                  {activeSupport.label}
-                </span>
-              </button>
-            ) : null}
-            {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
-          </div>
-        ) : null}
+        <div className="flex min-w-0 items-center gap-1.5">
+          {hasSupport && activeSupport ? (
+            <button
+              type="button"
+              data-testid="support-contact-button"
+              aria-label={supportAriaLabel}
+              title={activeSupport.label}
+              onClick={() => {
+                setCopied(false);
+                setDialogOpen(true);
+              }}
+              className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_42%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-2.5 text-xs font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:max-w-[16rem] sm:px-3"
+            >
+              <Icon
+                name="mail"
+                className="size-3.5 shrink-0 text-[var(--color-primary)]"
+              />
+              <span className="sm:hidden">
+                {mobileSupportLabel}
+              </span>
+              <span className="hidden truncate sm:inline">
+                {activeSupport.label}
+              </span>
+            </button>
+          ) : null}
+          {launchpad ? <LaunchpadButton /> : null}
+          {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
+        </div>
       </header>
       {dialogOpen && hasSupport && activeSupport ? (
         <DialogShell

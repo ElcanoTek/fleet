@@ -112,6 +112,9 @@ func (f *gatedEngine) SuggestRecurringTask(context.Context, string, []string) (*
 func (f *gatedEngine) SuggestLibraryPrompt(context.Context, agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error) {
 	return nil, nil
 }
+func (f *gatedEngine) SuggestPatrolDraft(context.Context, agent.PatrolDraftInput) (*agent.PatrolDraft, error) {
+	return nil, nil
+}
 func (f *gatedEngine) MCPBroker() agentcore.MCPBroker { return nil }
 func (f *gatedEngine) MCPCatalog() []mcp.ServerTool   { return nil }
 func (f *gatedEngine) OpenApprovalRemoteMCPScope(context.Context, string, string, string) (*agent.RemoteMCPOverlay, error) {

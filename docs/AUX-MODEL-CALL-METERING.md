@@ -150,6 +150,10 @@ oversight:
   recurring-run context carry makes **no** model call, it is a deterministic
   clamp of the prior run's final answer. The model call in this file is the
   chat→task synthesizer.)
+- **Patrol draft** (`internal/agent/patrol_draft.go`, label `patrol_draft`):
+  the Patrol Launchpad's "Draft it with AI" writes a new patrol's instructions
+  from the wizard's answers before any conversation exists — no run session at
+  all, so the log line is the record (docs/PATROL-LAUNCHPAD.md).
 
 ## Deliberately out of scope
 

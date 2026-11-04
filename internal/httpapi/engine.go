@@ -54,6 +54,10 @@ type turnEngine interface {
 	// TEMPLATE draft (name + description + content) the user reviews before
 	// saving. Returns an error on failure (user-initiated action).
 	SuggestLibraryPrompt(ctx context.Context, in agent.LibraryPromptInput) (*agent.LibraryPromptDraft, error)
+	// SuggestPatrolDraft writes a new patrol's standing instructions from the
+	// Patrol Launchpad's answers (docs/PATROL-LAUNCHPAD.md). Returns an error
+	// on failure (user-initiated action; the wizard keeps its own draft).
+	SuggestPatrolDraft(ctx context.Context, in agent.PatrolDraftInput) (*agent.PatrolDraft, error)
 	// MCPBroker and MCPCatalog expose the call seam plus public discovery data
 	// for out-of-band approval execution without requiring a concrete,
 	// credentialed MCP client in the HTTP process.

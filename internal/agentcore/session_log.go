@@ -126,6 +126,11 @@ const (
 	// recurring-task one next door: a conversation-level user action with no
 	// run session, so the log line is the whole record.
 	AuxUsageLibraryPromptSynthesis = "library_prompt_synthesis"
+	// AuxUsagePatrolDraft is the Patrol Launchpad's "draft my patrol"
+	// synthesizer (internal/agent/patrol_draft.go): a user-initiated,
+	// pre-conversation action with no run session, so the log line is the
+	// whole record, like the two synthesizers above.
+	AuxUsagePatrolDraft = "patrol_draft"
 )
 
 // AuxUsageRecord is one host-side auxiliary model call's metered spend. Token

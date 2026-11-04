@@ -101,6 +101,53 @@ Text fields keep spaces as you type; larger text boxes accept several lines.
 The prompt preview preserves those line breaks so you can check what will be
 sent before pressing the card's run button.
 
+### Patrol Launchpad: your first patrol in five steps
+
+The quickest way to put the assistant on patrol is the **Launchpad** button
+(sparkles) in the top-right corner of Chat, the Operations Center, Settings and
+these Guides. Until you have opened it once it carries a small pulsing dot. It
+opens the **Patrol Launchpad**, a guided wizard that takes you from nothing set
+up to a running patrol:
+
+1. **Hook up your tools.** Every connector you can use is listed; the ones on
+   by default for a new chat start ticked, and you tick or untick the rest for
+   this patrol. A connector that still needs credentials shows **Set up**, and
+   **Connect another tool** opens **Settings → Connections** — both in a new
+   tab, and the list refreshes when you come back.
+2. **Set your ground rules.** Pick **Who's on watch** (the workspace default
+   persona unless you choose another, including your own personas), and save
+   your **non-negotiables** — tap a suggestion or write your own and press
+   **Save**. Each one is saved straight away as a pinned memory, so the
+   assistant reads it in every chat, patrols included; edit or delete it later
+   in **Settings → Memories**.
+3. **Pick what to watch.** Choose any of **Catch misconfigured deals**,
+   **Alert when spend drops off**, **Make sure reports get delivered**,
+   **Triage my inbox**, **Suggest optimizations**, **Prep me for my day** and
+   **Watch my data for anomalies**, and add anything else in your own words.
+   Each card shows which of your ticked tools fit it (**Uses …**) or what kind
+   of connector it would need. Then choose how hands-on it is: **Just report**
+   (never changes anything), **Suggest & ask** (stages approval cards for you;
+   the default) or **Act for me** (turns the chat's **⚡ Auto-approve** on and
+   lists everything it did).
+4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
+   default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
+   morning** or **Monday kickoff**, or **Custom schedule** for the full
+   schedule builder and time zone (your browser's zone by default).
+5. **Launch.** Review the plan, the patrol's name and **What it does each
+   run** — the instructions the assistant receives every time the patrol
+   wakes, pre-written from your answers. **Draft it with AI** asks the
+   assistant to write them for you instead; if it cannot, your draft stays.
+   Edit anything, then press **Launch patrol**.
+
+Launching creates a new chat with your chosen persona and tools, attaches the
+patrol, and runs the first check straight away; **Watch it work** opens that
+chat. From then on it is an ordinary in-chat patrol (below): pause or stop it
+from the Patrol bar, or ask in the chat to change it. Nothing is created until
+you press **Launch patrol** — except the non-negotiables you saved, which are
+memories as soon as you press **Save**. Close the Launchpad with **Maybe later**
+or `Esc` at any point; your answers are kept for the rest of the browser
+session.
+
 ### In-chat patrols and timers
 
 You can also run a recurring **patrol** or a one-shot **timer** directly inside
@@ -317,6 +364,9 @@ that support button across Chat, the Operations Center, Settings, and Guides
 mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
+The top bar on all four surfaces also carries the **Launchpad** button
+(sparkles; icon-only on mobile), which opens the
+[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps).
 Every conversation also shows who can see it — **Only
 you**, **Shared with your team**, **Multiplayer**, or **Public link** — in the header, and **Share this chat** in **More options** (`•••`) in the composer (plus an active sharing indicator on the composer toolbar whenever the chat is shared).
 Both open the share dialog.
