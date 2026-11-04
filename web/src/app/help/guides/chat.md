@@ -104,7 +104,7 @@ sent before pressing the card's run button.
 ### Patrol Launchpad: your first patrol in five steps
 
 The quickest way to put the assistant on patrol is **Patrols** (sparkles) in
-the left rail, right under **Chat** and **Tasks**, on every surface (in the
+the left rail, between **Chat** and **Background tasks**, on every surface (in the
 collapsed rail it is the sparkles icon; on a phone, open the sidebar). Until
 you have opened it once it carries a small pulsing dot. Patrols themselves live
 in Chat — each one is a chat that wakes on its schedule — so **Patrols** is

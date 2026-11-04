@@ -16,6 +16,7 @@ import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem 
 type Call = { url: string; method: string; body?: unknown };
 
 type Opts = {
+  memoriesFail?: boolean;
   hangDraft?: boolean;
   draft?: "ok" | "fail";
   catalog?: "ok" | "fail";
@@ -42,6 +43,9 @@ function mockApi(opts: Opts = {}) {
           { name: "trade", display_name: "Trade Desk", description: "DSP", status: "needs_setup" },
         ],
       });
+    }
+    if (url === "/api/memories" && method === "GET" && opts.memoriesFail) {
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
     }
     if (url === "/api/memories" && method === "GET") return json({ memories: opts.memories ?? [] });
     if (url === "/api/memories/m1" && method === "PATCH" && opts.pin === "fail") {
@@ -369,6 +373,8 @@ describe("PatrolLaunchpad", () => {
     await walkToLaunch(calls);
     fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
     await waitFor(() => expect((screen.getByTestId("launchpad-launch") as HTMLButtonElement).disabled).toBe(true));
+    // The plan cannot change under a draft in flight.
+    expect((screen.getByTestId("launchpad-back") as HTMLButtonElement).disabled).toBe(true);
     // The fields the draft will replace are read-only meanwhile.
     expect((screen.getByTestId("launchpad-title") as HTMLInputElement).readOnly).toBe(true);
     expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).readOnly).toBe(true);
@@ -393,5 +399,31 @@ describe("PatrolLaunchpad", () => {
     expect(screen.getByTestId("launchpad-cadence-custom").textContent).toContain("Custom schedule");
     const checked = screen.getAllByRole("radio").filter((r) => r.getAttribute("aria-checked") === "true");
     expect(checked).toHaveLength(1);
+  });
+
+  it("never reads a failed memories load as zero memories, and pauses the AI draft", async () => {
+    const calls = mockApi({ memoriesFail: true });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    next();
+    expect(await screen.findByText("Couldn’t check memories")).toBeTruthy();
+    expect(screen.queryByText("0 memories saved")).toBeNull();
+    for (let i = 0; i < 3; i++) next();
+    fireEvent.click(screen.getByTestId("launchpad-goal-inbox"));
+    next();
+    next();
+    await screen.findByTestId("launchpad-step-launch");
+    expect((screen.getByTestId("launchpad-draft-ai") as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByTestId("launchpad-memories-failed")).toBeTruthy();
+    expect(calls.some((c) => c.url === "/api/patrol-draft")).toBe(false);
+  });
+
+  it("Reset to template rewrites the instructions but keeps a name the person chose", async () => {
+    const calls = mockApi();
+    await walkToLaunch(calls);
+    fireEvent.change(screen.getByTestId("launchpad-title"), { target: { value: "My own name" } });
+    fireEvent.change(screen.getByTestId("launchpad-prompt"), { target: { value: "custom" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reset to template" }));
+    expect((screen.getByTestId("launchpad-title") as HTMLInputElement).value).toBe("My own name");
+    expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value).toContain("**Mission**");
   });
 });

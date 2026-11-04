@@ -192,14 +192,19 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     }
   }, []);
 
+  const [memoriesFailed, setMemoriesFailed] = useState(false);
   const loadMemories = useCallback(async () => {
     try {
       const res = await fetch("/api/memories", { cache: "no-store" });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { memories?: Memory[] };
       setMemories(activeMemories(data.memories ?? []));
+      setMemoriesFailed(false);
     } catch {
-      setMemories((cur) => cur ?? []);
+      // Unknown is not "none": a failed read keeps the roster unknown, so the
+      // Plan step does not claim zero memories and the AI draft — which must
+      // not contradict memories every patrol turn still receives — waits.
+      setMemoriesFailed(true);
     }
   }, []);
 
@@ -440,6 +445,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
               <WelcomeStep
                 connectors={connectors}
                 memories={memories}
+                memoriesFailed={memoriesFailed}
                 launchedBefore={launchedBefore()}
               />
             ) : null}
@@ -508,9 +514,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 }
                 promptStale={promptStale}
                 memoriesAdded={state.memoriesAdded}
-                onReset={() =>
-                  patch({ titleEdited: false, promptEdited: false, title: "", prompt: "", promptBasis: "", summary: "" })
-                }
+                // Resets the instructions only: a name the person chose stays.
+                onReset={() => patch({ promptEdited: false, prompt: "", promptBasis: "", summary: "" })}
+                memoriesUnknown={memories === null}
+                memoriesFailed={memoriesFailed}
+                onRetryMemories={() => void loadMemories()}
                 draftRequest={{
                   goals: PATROL_GOALS.filter((g) => state.goals.includes(g.id)).map((g) => `${g.title}: ${g.step}`),
                   notes: state.notes,
@@ -539,7 +547,15 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           </div>
           <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pb-3 [&_button]:any-pointer-coarse:min-h-11">
             {stepIndex > 0 ? (
-              <button type="button" className={btnClass({ reveal: true })} onClick={() => go(-1)} data-testid="launchpad-back">
+              <button
+                type="button"
+                className={btnClass({ reveal: true })}
+                onClick={() => go(-1)}
+                // A draft in flight was asked for this plan; changing the plan
+                // under it would let the stale reply land on the new one.
+                disabled={drafting}
+                data-testid="launchpad-back"
+              >
                 Back
               </button>
             ) : (
@@ -825,10 +841,12 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
 function WelcomeStep({
   connectors,
   memories,
+  memoriesFailed,
   launchedBefore,
 }: {
   connectors: LaunchpadConnector[] | null;
   memories: Memory[] | null;
+  memoriesFailed: boolean;
   launchedBefore: boolean;
 }) {
   const ready = connectors?.filter((c) => usable(c)).length ?? null;
@@ -866,8 +884,12 @@ function WelcomeStep({
         <ReadyChip ok={(ready ?? 0) > 0} loading={ready === null}>
           {ready === null ? "Checking tools…" : `${ready} tool${ready === 1 ? "" : "s"} ready`}
         </ReadyChip>
-        <ReadyChip ok={(memories?.length ?? 0) > 0} loading={memories === null}>
-          {memories === null ? "Checking memories…" : `${memories.length} memor${memories.length === 1 ? "y" : "ies"} saved`}
+        <ReadyChip ok={(memories?.length ?? 0) > 0} loading={memories === null && !memoriesFailed}>
+          {memories === null
+            ? memoriesFailed
+              ? "Couldn’t check memories"
+              : "Checking memories…"
+            : `${memories.length} memor${memories.length === 1 ? "y" : "ies"} saved`}
         </ReadyChip>
       </div>
       <WhereItLives />
@@ -1449,6 +1471,9 @@ function LaunchStep({
   onReset,
   promptStale,
   memoriesAdded,
+  memoriesUnknown,
+  memoriesFailed,
+  onRetryMemories,
   draftRequest,
   onDrafted,
   drafting,
@@ -1467,6 +1492,11 @@ function LaunchStep({
   onReset: () => void;
   promptStale: boolean;
   memoriesAdded: number;
+  // The memory roster is not loaded (yet, or it failed): the AI draft waits,
+  // because it is told the memories so it does not contradict them.
+  memoriesUnknown: boolean;
+  memoriesFailed: boolean;
+  onRetryMemories: () => void;
   draftRequest: DraftRequest;
   onDrafted: (d: { title: string; prompt: string; summary: string }) => void;
   // Owned by the parent so Launch waits for a draft in flight.
@@ -1557,7 +1587,8 @@ function LaunchStep({
           <button
             type="button"
             onClick={() => void draftWithAI()}
-            disabled={drafting}
+            disabled={drafting || memoriesUnknown}
+            title={memoriesUnknown ? "Waiting for your memories, so the draft cannot contradict them" : undefined}
             data-testid="launchpad-draft-ai"
             className="inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[color-mix(in_srgb,var(--color-primary)_55%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_12%,var(--color-surface-1))] px-3 py-[0.3rem] text-[0.78rem] font-medium text-[var(--color-text-primary)] transition hover:border-[var(--color-primary)] hover:bg-[color-mix(in_srgb,var(--color-primary)_20%,var(--color-surface-1))] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-wait disabled:opacity-70"
           >
@@ -1570,6 +1601,14 @@ function LaunchStep({
         <p className="mt-2 flex items-start gap-1.5 rounded-[var(--radius-md)] bg-[color-mix(in_srgb,var(--color-primary)_8%,transparent)] px-3 py-2 text-[0.8rem] text-[var(--color-text-primary)]" data-testid="launchpad-ai-summary">
           <Icon name="sparkles" className="mt-0.5 size-3.5 shrink-0 text-[var(--color-primary)]" />
           {summary}
+        </p>
+      ) : null}
+      {memoriesFailed && memoriesUnknown ? (
+        <p className="mt-2 text-[0.78rem] text-[var(--color-text-secondary)]" data-testid="launchpad-memories-failed">
+          Couldn’t load your memories, so <strong>Draft it with AI</strong> is paused (it must not contradict them).{" "}
+          <button type="button" className="text-[var(--color-link)] underline underline-offset-2" onClick={onRetryMemories}>
+            Try again
+          </button>
         </p>
       ) : null}
       {promptStale ? (
