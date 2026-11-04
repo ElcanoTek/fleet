@@ -233,9 +233,18 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           default?: string;
           user_personas?: UserPersona[];
         };
-        setWorkspacePersonas(data.personas ?? []);
+        const workspace = data.personas ?? [];
+        const users = data.user_personas ?? [];
+        setWorkspacePersonas(workspace);
         setDefaultPersona(data.default ?? "");
-        setUserPersonas(data.user_personas ?? []);
+        setUserPersonas(users);
+        // A persona saved in earlier progress may have been deleted since:
+        // fall back to the workspace default rather than launch a stale ref.
+        setState((cur) =>
+          cur.persona && !workspace.includes(cur.persona) && !users.some((u) => u.ref === cur.persona)
+            ? { ...cur, persona: "" }
+            : cur,
+        );
       } catch {
         // Personas are optional; the patrol runs on the workspace default.
       }
@@ -263,10 +272,14 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     }
   }, [state, launch]);
 
-  const selected = useMemo(
-    () => state.selected ?? (connectors ? initialSelection(connectors) : []),
-    [state.selected, connectors],
-  );
+  // The person's optional choices, plus every usable always-on connector the
+  // catalog has now — one set up in another tab after a box was ticked must
+  // still count, since the patrol will use it.
+  const selected = useMemo(() => {
+    const base = state.selected ?? (connectors ? initialSelection(connectors) : []);
+    const alwaysOn = (connectors ?? []).filter((c) => c.always_on && usable(c)).map((c) => c.name);
+    return [...new Set([...base, ...alwaysOn])];
+  }, [state.selected, connectors]);
   const cadenceText = useMemo(() => {
     const preset = CADENCE_PRESETS.find((p) => p.cron === state.cron.trim());
     const words = preset ? `${preset.label} (${preset.hint})` : describeCronExpression(state.cron) || state.cron;
@@ -404,7 +417,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
 
   // While requests are in flight the dialog cannot be dismissed: closing it
   // would not stop the launch, only hide its outcome.
-  const inFlight = launch !== null && launch.phase !== "done" && !launch.error;
+  // A launch or an AI draft in flight: closing would not stop either, only
+  // hide its outcome (and a draft holds the one-per-user draft slot).
+  const inFlight = drafting || (launch !== null && launch.phase !== "done" && !launch.error);
   const close = () => {
     if (!inFlight) onClose();
   };
@@ -472,7 +487,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 userPersonas={userPersonas}
                 memories={memories}
                 onMemoriesChanged={() => void loadMemories()}
-                onMemoryAdded={() => setState((cur) => ({ ...cur, memoriesAdded: cur.memoriesAdded + 1 }))}
+                onMemoryAdded={(mem) => {
+                  setState((cur) => ({ ...cur, memoriesAdded: cur.memoriesAdded + 1 }));
+                  // Into the roster now, not after the refresh: the AI draft
+                  // must see it even if that refresh is slow or fails.
+                  setMemories((cur) => (cur && !cur.some((m) => m.id === mem.id) ? [...cur, mem] : cur));
+                }}
               />
             ) : null}
             {state.step === "watch" ? (
@@ -1084,7 +1104,7 @@ function RulesStep({
   userPersonas: UserPersona[];
   memories: Memory[] | null;
   onMemoriesChanged: () => void;
-  onMemoryAdded: () => void;
+  onMemoryAdded: (mem: Memory) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1110,7 +1130,7 @@ function RulesStep({
       setDraft("");
       if (mem.id) {
         setJustAdded((cur) => [...cur, mem.id as string]);
-        onMemoryAdded();
+        onMemoryAdded({ id: mem.id, content: text, kind: "constraint", pinned: true });
         const pinRes = await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },

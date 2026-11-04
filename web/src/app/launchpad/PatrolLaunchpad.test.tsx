@@ -16,6 +16,8 @@ import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem 
 type Call = { url: string; method: string; body?: unknown };
 
 type Opts = {
+  memoriesRefreshHang?: boolean;
+  alwaysOnLater?: boolean;
   memoriesFail?: boolean;
   hangDraft?: boolean;
   draft?: "ok" | "fail";
@@ -30,11 +32,22 @@ type Opts = {
 
 function mockApi(opts: Opts = {}) {
   const calls: Call[] = [];
+  let memoryGets = 0;
+  let catalogGets = 0;
   const fn = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" });
     if (url === "/api/mcp-servers") {
+      if (opts.alwaysOnLater && catalogGets++ > 0) {
+        return json({
+          servers: [
+            { name: "gmail", display_name: "Gmail", description: "Read and search mail", enabled: true },
+            { name: "dealdesk", display_name: "Deal Desk", description: "PMP deal management", enabled: false },
+            { name: "files", display_name: "Workspace files", description: "Shared reports", always_on: true, enabled: true },
+          ],
+        });
+      }
       if (opts.catalog === "fail") return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
       return json({
         servers: [
@@ -43,6 +56,9 @@ function mockApi(opts: Opts = {}) {
           { name: "trade", display_name: "Trade Desk", description: "DSP", status: "needs_setup" },
         ],
       });
+    }
+    if (url === "/api/memories" && method === "GET" && opts.memoriesRefreshHang && memoryGets++ > 0) {
+      return new Promise(() => {});
     }
     if (url === "/api/memories" && method === "GET" && opts.memoriesFail) {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
@@ -425,5 +441,40 @@ describe("PatrolLaunchpad", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reset to template" }));
     expect((screen.getByTestId("launchpad-title") as HTMLInputElement).value).toBe("My own name");
     expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value).toContain("**Mission**");
+  });
+
+  it("forgets a saved persona that no longer exists, instead of launching a stale ref", async () => {
+    window.sessionStorage.setItem(progressItem(), JSON.stringify({ step: "rules", persona: "user:deleted" }));
+    mockApi();
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    await screen.findByTestId("launchpad-step-rules");
+    await waitFor(() => expect((screen.getByTestId("launchpad-persona") as HTMLSelectElement).value).toBe(""));
+  });
+
+  it("cannot be dismissed while an AI draft is in flight", async () => {
+    const onClose = vi.fn();
+    const calls = mockApi({ hangDraft: true });
+    await walkToLaunch(calls, onClose);
+    fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
+    await waitFor(() => expect((screen.getByTestId("launchpad-launch") as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("sends a just-saved non-negotiable to the drafter even while the roster refresh is pending", async () => {
+    const calls = mockApi({ memoriesRefreshHang: true });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
+    await screen.findByTestId("launchpad-ai-summary");
+    const req = calls.find((c) => c.url === "/api/patrol-draft")?.body as { memories: string[] };
+    expect(req.memories).toContain("Never pause a campaign without asking me");
+  });
+
+  it("counts an always-on connector that appears after the person ticked boxes", async () => {
+    const calls = mockApi({ alwaysOnLater: true });
+    await walkToLaunch(calls);
+    // Back from the other tab: the catalog refreshes on focus.
+    fireEvent.focus(window);
+    await waitFor(() => expect(screen.getByTestId("launchpad-summary").textContent).toContain("Workspace files"));
   });
 });
