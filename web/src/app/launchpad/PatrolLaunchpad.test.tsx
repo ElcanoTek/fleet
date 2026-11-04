@@ -687,4 +687,16 @@ describe("PatrolLaunchpad", () => {
     expect((create?.body as { client_request_id?: string } | undefined)?.client_request_id).toBe("launchpad-k");
     expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
   });
+
+  it("names an unnamed patrol 'My patrol' on the success screen, as it is saved", async () => {
+    const calls = mockApi();
+    await walkToLaunch(calls);
+    fireEvent.change(screen.getByTestId("launchpad-title"), { target: { value: "   " } });
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    const done = await screen.findByTestId("launchpad-done");
+    expect(done.parentElement?.textContent).toContain("My patrol");
+    const create = calls.find((c) => c.url === "/api/conversations" && c.method === "POST");
+    expect((create?.body as { title?: string } | undefined)?.title).toBe("My patrol");
+  });
 });
+

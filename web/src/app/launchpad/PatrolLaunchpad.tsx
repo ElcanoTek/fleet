@@ -435,6 +435,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // the review step shows the live template, so going back to change a goal
   // updates the draft instead of leaving a stale one.
   const title = state.titleEdited ? state.title : draftTitle(state.goals);
+  // The name the patrol is actually saved under: an emptied name field falls
+  // back to "My patrol" in both requests and on every screen that names it.
+  const savedTitle = title.trim() || "My patrol";
   const prompt = state.promptEdited ? state.prompt : template;
   const promptStale = state.promptEdited && state.promptBasis !== template;
 
@@ -480,7 +483,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
             ]),
           ]
         : [];
-      const body: Record<string, string> = { title: title.trim() || "My patrol", model: currentDefaultModel() };
+      const body: Record<string, string> = { title: savedTitle, model: currentDefaultModel() };
       if (state.persona) body.persona = state.persona;
       // A fresh idempotency key per launch: a create whose reply is lost is
       // sent again with it (now, and on Back or close), and the server
@@ -514,7 +517,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: title.trim() || "My patrol",
+          title: savedTitle,
           prompt: prompt.trim(),
           cron: state.cron.trim(),
           timezone: state.timezone || "UTC",
@@ -650,7 +653,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           launch={launch}
           mode={state.mode}
           cadence={cadenceText}
-          title={title}
+          title={savedTitle}
           onOpen={openPatrol}
           onBack={() => void backToPlan()}
         />
