@@ -47,6 +47,7 @@ async function mockShell(page: Page, calls: Call[]) {
     record(r);
     return r.fulfill({ json: { id: "m1" } });
   });
+  await page.route("**/api/me", (r) => r.fulfill({ json: { email: "e2e@example.com", role: "member" } }));
   await page.route("**/api/personas", (r) =>
     r.fulfill({ json: { personas: ["assistant", "trader"], default: "assistant", user_personas: [] } }),
   );

@@ -23,6 +23,7 @@ type Opts = {
   tools?: "ok" | "fail";
   memories?: unknown[];
   hangConversation?: boolean;
+  role?: string;
 };
 
 function mockApi(opts: Opts = {}) {
@@ -46,6 +47,7 @@ function mockApi(opts: Opts = {}) {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
     }
     if (url === "/api/memories" && method === "POST") return json({ id: "m1", content: "x" });
+    if (url === "/api/me") return json({ email: "e2e@example.com", role: opts.role ?? "member" });
     if (url === "/api/personas") return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: [] });
     if (url === "/api/patrol-draft") {
       if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
@@ -336,5 +338,16 @@ describe("PatrolLaunchpad", () => {
     render(<PatrolLaunchpad onClose={() => {}} />);
     expect(screen.getByTestId("launchpad-step-why")).toBeTruthy();
     expect(progressItem()).not.toBe("fleet.launchpad.v1:someone-else@example.com");
+  });
+
+  it("stops a read-only viewer at the preamble with an explanation", async () => {
+    const calls = mockApi({ role: "viewer" });
+    const onClose = vi.fn();
+    render(<PatrolLaunchpad onClose={onClose} />);
+    expect(await screen.findByTestId("launchpad-readonly")).toBeTruthy();
+    expect(screen.queryByTestId("launchpad-next")).toBeNull();
+    fireEvent.click(screen.getByTestId("launchpad-readonly-close"));
+    expect(onClose).toHaveBeenCalled();
+    expect(calls.some((c) => c.method !== "GET")).toBe(false);
   });
 });

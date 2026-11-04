@@ -54,6 +54,11 @@ run (a full queue, say) is reported on the success screen — the patrol is
 armed and runs at its next time — rather than claimed as running. A
 non-negotiable that saved but could not be pinned says so.
 
+**Read-only viewers** (`GET /api/me` role `viewer`, newly routed through the
+browser gateway) see only the preamble with a note that they cannot save
+memories or start a patrol; every write the wizard makes is refused for that
+role server-side anyway (`rejectViewerWrites`).
+
 **Memories shown and sent to the drafter** are the active, accepted ones only:
 retired memories and unaccepted proposals (`source = "proposed"`) are listed by
 `GET /api/memories` but never injected into a turn, so they are filtered out.

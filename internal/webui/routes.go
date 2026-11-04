@@ -267,6 +267,7 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			q := r.URL.Query()
 			return "/connector-prefs?kind=" + encodeURIComponent(q.Get("kind")) + "&id=" + encodeURIComponent(q.Get("id"))
 		}, noBody, textJSON},
+		{"GET /api/me", fixed("/me"), noBody, textJSON},
 		{"GET /api/me/team", fixed("/me/team"), noBody, textJSON},
 		{"PUT /api/me/team", fixed("/me/team"), jsonBodyIfAny, textJSON},
 

@@ -168,6 +168,10 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // unknown, and launch must leave the server's default connector seed alone
   // rather than replace it with an empty set.
   const [catalogLoaded, setCatalogLoaded] = useState(false);
+  // A read-only viewer can read the preamble but cannot save memories or
+  // create a patrol (every write is refused for the viewer role), so the
+  // flow stops there with an explanation instead of failing at Launch.
+  const [readOnly, setReadOnly] = useState(false);
 
   const loadConnectors = useCallback(async () => {
     try {
@@ -200,6 +204,16 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       void loadConnectors();
       void loadMemories();
     });
+    void (async () => {
+      try {
+        const res = await fetch("/api/me", { cache: "no-store" });
+        if (!res.ok) return;
+        const me = (await res.json()) as { role?: string };
+        setReadOnly(me.role === "viewer");
+      } catch {
+        // Unknown role: the server still refuses what a viewer cannot do.
+      }
+    })();
     void (async () => {
       try {
         const res = await fetch("/api/personas", { cache: "no-store" });
@@ -408,7 +422,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       ) : (
         <>
           <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-7" data-testid={`launchpad-step-${state.step}`}>
-            {state.step === "why" ? <WhyStep /> : null}
+            {state.step === "why" ? <WhyStep readOnly={readOnly} /> : null}
             {state.step === "welcome" ? (
               <WelcomeStep
                 connectors={connectors}
@@ -519,7 +533,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
             <span className="hidden text-xs text-[var(--color-text-muted)] sm:inline">
               Step {stepIndex + 1} of {STEPS.length}
             </span>
-            {state.step === "launch" ? (
+            {readOnly ? (
+              <button type="button" className={`${btnClass({ variant: "primary" })} px-5`} onClick={onClose} data-testid="launchpad-readonly-close">
+                Got it
+              </button>
+            ) : state.step === "launch" ? (
               <button
                 type="button"
                 className={`${btnClass({ variant: "primary" })} px-5`}
@@ -689,7 +707,7 @@ const MIND_RUNGS = [
   },
 ] as const;
 
-function WhyStep() {
+function WhyStep({ readOnly }: { readOnly: boolean }) {
   return (
     <div>
       <StepTitle kicker="Why patrol?" title="Where the real gains from AI come from">
@@ -763,6 +781,17 @@ function WhyStep() {
           Patrol bar — one switch, and you can flip it back any time.
         </p>
       </div>
+      {readOnly ? (
+        <p
+          role="status"
+          className="mt-3 flex items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] px-3 py-2 text-[0.82rem] text-[var(--color-text-primary)]"
+          data-testid="launchpad-readonly"
+        >
+          <Icon name="lock" className="mt-0.5 size-3.5 shrink-0 text-[var(--color-warning)]" />
+          Your account is read-only, so you can’t save memories or start a patrol here. Ask an admin for member access,
+          then come back to the Launchpad.
+        </p>
+      ) : null}
     </div>
   );
 }

@@ -153,8 +153,10 @@ is an ordinary in-chat patrol (below): pause or stop it
 from the Patrol bar, or ask in the chat to change it. Nothing is created until
 you press **Launch patrol** — except the non-negotiables you saved, which are
 memories as soon as you press **Save**. Close the Launchpad with **Maybe later**
-or `Esc` at any point; your answers are kept for the rest of the browser
-session.
+or `Esc` at any point (except during the few seconds of launching); your
+answers are kept for the rest of the browser session. A read-only account sees
+the **Why patrol?** page with a note that it cannot save memories or start a
+patrol, and a **Got it** button instead of the rest of the wizard.
 
 ### In-chat patrols and timers
 
