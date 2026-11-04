@@ -99,7 +99,7 @@ func normalizeToolSchemaWithNotes(schema map[string]any) (map[string]any, []stri
 	return out, notes
 }
 
-func normalizeToolSchemaWithNotesAndBudget(schema map[string]any, catBudget *catalogSchemaBudget) (map[string]any, []string, bool) {
+func normalizeToolSchemaWithNotesAndBudget(schema map[string]any, catBudget *catalogSchemaBudget) (map[string]any, []string, *inlineBudget) {
 	budget := &inlineBudget{catalog: catBudget}
 	var notes []string
 	out, _ := normalizeSchemaNode(schema, "", &notes, budget).(map[string]any)
@@ -107,7 +107,7 @@ func normalizeToolSchemaWithNotesAndBudget(schema map[string]any, catBudget *cat
 		out = map[string]any{}
 	}
 	inlined := inlineLocalRefs(out, budget)
-	return inlined, notes, budget.trippedCatalog
+	return inlined, notes, budget
 }
 
 func normalizeSchemaNode(node any, path string, notes *[]string, budget *inlineBudget) any {
@@ -291,6 +291,26 @@ func (c *catalogSchemaBudget) isExceeded() bool {
 	return c.exceeded
 }
 
+func (c *catalogSchemaBudget) charge(expansions, nodes, bytes int) bool {
+	if c == nil {
+		return true
+	}
+	if c.isExceeded() {
+		return false
+	}
+	if expansions < 0 || nodes < 0 || bytes < 0 ||
+		c.expansions > maxCatalogRefExpansions-expansions ||
+		c.nodes > maxCatalogInlinedSchemaNodes-nodes ||
+		c.bytes > maxCatalogInlinedSchemaBytes-bytes {
+		c.exceeded = true
+		return false
+	}
+	c.expansions += expansions
+	c.nodes += nodes
+	c.bytes += bytes
+	return true
+}
+
 type inlineBudget struct {
 	catalog        *catalogSchemaBudget
 	expansions     int
@@ -470,15 +490,16 @@ func siblingInteractsWithTarget(key string, target map[string]any) bool {
 }
 
 type defScope struct {
-	root        map[string]any
-	defs        map[string]any
-	definitions map[string]any
+	root           map[string]any
+	defs           map[string]any
+	definitions    map[string]any
+	isDocumentRoot bool
 }
 
-func newDefScope(resource map[string]any) defScope {
+func newDefScope(resource map[string]any, isDocumentRoot bool) defScope {
 	defs, _ := resource["$defs"].(map[string]any)
 	definitions, _ := resource["definitions"].(map[string]any)
-	return defScope{root: resource, defs: defs, definitions: definitions}
+	return defScope{root: resource, defs: defs, definitions: definitions, isDocumentRoot: isDocumentRoot}
 }
 
 func hasNonFragmentID(obj map[string]any) bool {
@@ -504,7 +525,7 @@ func inlineLocalRefs(root map[string]any, budget *inlineBudget) map[string]any {
 	if budget == nil {
 		budget = &inlineBudget{}
 	}
-	scope := newDefScope(root)
+	scope := newDefScope(root, true)
 	resolved := inlineSchemaNodeRefs(root, scope, map[string]bool{"#": true}, true, false, budget)
 	if budget.isExceeded() {
 		return map[string]any{
@@ -537,11 +558,23 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 		return node
 	}
 	if !isResourceRoot && hasNonFragmentID(obj) {
-		scope = newDefScope(obj)
+		scope = newDefScope(obj, false)
 		active = map[string]bool{"#": true}
 	}
 	if ref, hasRef := obj["$ref"].(string); hasRef {
 		if target, canonKey, found := lookupLocalDef(ref, scope); found {
+			// A nested self-reference to the top-level document root (`$ref: "#"`)
+			// remains valid after mcpTool.Info() rebuilds the provider's object
+			// root, so preserve `"$ref": "#"` rather than collapsing it to a
+			// lossy stub.
+			if canonKey == "#" && active["#"] && scope.isDocumentRoot && !isResourceRoot {
+				obj["$ref"] = "#"
+				inlineSchemaMapFields(obj, scope, active, inlinedCopy, budget)
+				if inlinedCopy {
+					stripInlinedResourceMetadata(obj)
+				}
+				return obj
+			}
 			var resolved any
 			switch {
 			case active[canonKey]:
@@ -552,7 +585,7 @@ func inlineSchemaNodeRefs(node any, scope defScope, active map[string]bool, isRe
 			default:
 				if targetCopy, ok := copyJSONValueBounded(target, budget); ok {
 					nextActive := cloneActiveRefs(active, canonKey)
-					resolved = inlineSchemaNodeRefs(targetCopy, scope, nextActive, false, true, budget)
+					resolved = inlineSchemaNodeRefs(targetCopy, scope, nextActive, isResourceRoot, !isResourceRoot, budget)
 				} else {
 					resolved = budgetExceededStub()
 				}
@@ -821,19 +854,35 @@ func mergeResolvedWithSiblings(resolved any, obj map[string]any, scope defScope,
 	return out
 }
 
-func mergeRequiredAny(a, b any) []any {
-	var extra []string
-	switch names := b.(type) {
-	case []any:
-		for _, v := range names {
-			if s, ok := v.(string); ok {
-				extra = append(extra, s)
-			}
-		}
-	case []string:
-		extra = append(extra, names...)
+func mergeRequiredAny(a, b any) any {
+	aNames, okA := validRequiredStrings(a)
+	if !okA {
+		return a
 	}
-	return mergeRequired(a, extra)
+	bNames, okB := validRequiredStrings(b)
+	if !okB {
+		return b
+	}
+	return mergeRequired(aNames, bNames)
+}
+
+func validRequiredStrings(v any) ([]string, bool) {
+	switch names := v.(type) {
+	case []string:
+		return names, true
+	case []any:
+		out := make([]string, 0, len(names))
+		for _, item := range names {
+			s, ok := item.(string)
+			if !ok {
+				return nil, false
+			}
+			out = append(out, s)
+		}
+		return out, true
+	default:
+		return nil, false
+	}
 }
 
 func isSchemaValue(v any) bool {
@@ -1119,6 +1168,14 @@ func checkMCPToolSchemaWithBudget(mt *mcpTool, catBudget *catalogSchemaBudget) (
 		verdict, hit := toolSchemaVerdicts.m[key]
 		toolSchemaVerdicts.Unlock()
 		if hit {
+			if catBudget != nil && !catBudget.charge(verdict.expansions, verdict.nodes, verdict.bytes) {
+				return ToolSchemaIssue{
+					Server: mt.serverName,
+					Tool:   mt.tool.Name,
+					Status: ToolSchemaInvalid,
+					Detail: "at /: catalog $ref expansion budget exceeded",
+				}, true
+			}
 			return verdict.issueFor(mt), verdict.ok
 		}
 	}
@@ -1141,9 +1198,12 @@ func checkMCPToolSchemaWithBudget(mt *mcpTool, catBudget *catalogSchemaBudget) (
 // for Pages' 45 tools), and the catalog is re-listed as fresh maps on every
 // turn; cached, it is the key's encode + hash (about 13 µs per tool).
 type toolSchemaVerdict struct {
-	ok     bool
-	status string
-	detail string
+	ok         bool
+	status     string
+	detail     string
+	expansions int
+	nodes      int
+	bytes      int
 }
 
 func (v toolSchemaVerdict) issueFor(mt *mcpTool) ToolSchemaIssue {
@@ -1229,18 +1289,29 @@ func walkSchemaPrecheck(v any, b *inlineBudget) bool {
 }
 
 func evaluateToolSchemaWithBudget(mt *mcpTool, catBudget *catalogSchemaBudget) (toolSchemaVerdict, bool) {
-	normalized, notes, trippedCatalog := normalizeToolSchemaWithNotesAndBudget(mt.tool.InputSchema, catBudget)
+	normalized, notes, budget := normalizeToolSchemaWithNotesAndBudget(mt.tool.InputSchema, catBudget)
+	verdict := toolSchemaVerdict{
+		expansions: budget.expansions,
+		nodes:      budget.nodes,
+		bytes:      budget.bytes,
+	}
 	if problem := toolInputSchemaProblem(mt.infoFromSchema(normalized)); problem != nil {
 		detail := problem.Error()
 		if len(notes) > 0 {
 			detail += " (after rewriting: " + strings.Join(notes, "; ") + ")"
 		}
-		return toolSchemaVerdict{ok: true, status: ToolSchemaInvalid, detail: detail}, !trippedCatalog
+		verdict.ok = true
+		verdict.status = ToolSchemaInvalid
+		verdict.detail = detail
+		return verdict, !budget.trippedCatalog
 	}
 	if len(notes) > 0 {
-		return toolSchemaVerdict{ok: true, status: ToolSchemaRewritten, detail: strings.Join(notes, "; ")}, !trippedCatalog
+		verdict.ok = true
+		verdict.status = ToolSchemaRewritten
+		verdict.detail = strings.Join(notes, "; ")
+		return verdict, !budget.trippedCatalog
 	}
-	return toolSchemaVerdict{}, !trippedCatalog
+	return verdict, !budget.trippedCatalog
 }
 
 // The runtime record of schema findings, keyed by server and tool. Every turn

@@ -875,4 +875,70 @@ func TestNormalizeToolSchemaBoundsCombinatorialDAG(t *testing.T) {
 	if _, err := CheckMCPToolSchemas(cancelCtx, dagCatalog); err == nil {
 		t.Fatalf("CheckMCPToolSchemas with cancelled context succeeded, want context.Canceled")
 	}
+
+	// Root self-reference ($ref: "#") in an object input schema remains valid
+	// after Info() rebuilds the root object and must be preserved.
+	rootSelfRef := jsonMap(t, `{
+	  "type": "object",
+	  "properties": {
+	    "name": {"type": "string"},
+	    "child": {"$ref": "#"}
+	  },
+	  "required": ["name"]
+	}`)
+	selfRefTool := &mcpTool{serverName: "srv", tool: mcp.Tool{Name: "tree_node", InputSchema: rootSelfRef}}
+	if childProp, _ := selfRefTool.Info().Parameters["child"].(map[string]any); childProp["$ref"] != "#" {
+		t.Fatalf("root self-reference $ref: '#' was not preserved: %v", childProp)
+	}
+
+	// Malformed sibling required array ([42]) beside a valid referenced required
+	// array must not be silently filtered to valid strings by mergeRequiredAny.
+	malformedSibReq := jsonMap(t, `{
+	  "$defs": {
+	    "ValidBase": {
+	      "type": "object",
+	      "properties": {"a": {"type": "string"}},
+	      "required": ["a"]
+	    }
+	  },
+	  "type": "object",
+	  "properties": {
+	    "bad": {
+	      "$ref": "#/$defs/ValidBase",
+	      "required": [42]
+	    }
+	  }
+	}`)
+	badReqIssue, badReqOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "bad_sib_req", InputSchema: malformedSibReq})
+	if !badReqOK || badReqIssue.Status != ToolSchemaInvalid {
+		t.Fatalf("CheckMCPToolSchema on malformed sibling required [42] = (%+v, %v), want ToolSchemaInvalid", badReqIssue, badReqOK)
+	}
+
+	// Repeated identical schemas that individually fit the per-tool budget must
+	// still charge the catalog budget on cache hits so 20 copies of a 7-level
+	// DAG (~127 expansions each) exceed maxCatalogRefExpansions (1024).
+	smallDAGSchema := map[string]any{
+		"$defs": defs,
+		"type":  "object",
+		"properties": map[string]any{
+			"root": map[string]any{"$ref": "#/$defs/D6"},
+		},
+	}
+	if singleIssue, singleOK := CheckMCPToolSchema("srv", mcp.Tool{Name: "d6_single", InputSchema: smallDAGSchema}); singleOK {
+		t.Fatalf("single 6-level DAG should fit per-tool budget, got: %+v", singleIssue)
+	}
+	repeatedCatalog := make([]mcp.ServerTool, 20)
+	for i := range repeatedCatalog {
+		repeatedCatalog[i] = mcp.ServerTool{
+			ServerName: "srv",
+			Tool:       mcp.Tool{Name: "d6_copy_" + string(rune('a'+i)), InputSchema: smallDAGSchema},
+		}
+	}
+	repIssues, err := CheckMCPToolSchemas(context.Background(), repeatedCatalog)
+	if err != nil {
+		t.Fatalf("CheckMCPToolSchemas on repeated cached DAGs: %v", err)
+	}
+	if len(repIssues) == 0 {
+		t.Fatalf("repeated cached DAGs did not trip catalog budget on cache hits")
+	}
 }
