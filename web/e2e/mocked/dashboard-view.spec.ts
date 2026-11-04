@@ -219,24 +219,35 @@ test("dashboard view puts panel cards on a board beside the chat rail", async ({
   await expect(page.locator('[data-panel-key="p:revenue"]')).toContainText("v2");
   await expect(page.locator('[data-panel-key="c:call-rev-2"]')).toHaveCount(0);
 
+  // Pinning brings its panel into view and focuses it a moment later (a
+  // timer, after the pane paints). Wait for that to land before typing, so
+  // the test follows the app instead of racing it.
+  await expect(page.locator('[data-panel-key="p:revenue"]')).toBeFocused();
+
   // A message sent from dashboard view tells the server which view it is.
-  // fill() sets the whole value at once; on a loaded runner the Enter can
-  // reach the composer before React has taken that value in, and is then a
-  // no-op that leaves the text in the box. So wait for the value, and press
-  // again if no request follows (main showed ~3% failures under load).
-  const sends: string[] = [];
-  page.on("request", (req) => {
-    if (req.url().includes("/api/chat") && req.method() === "POST") sends.push(req.postData() ?? "{}");
-  });
+  const chat = page.waitForRequest((req) => req.url().includes("/api/chat") && req.method() === "POST");
   const prompt = page.locator("#promptInput");
   await prompt.fill("add a churn panel");
-  await expect(prompt).toHaveValue("add a churn panel");
-  await expect(async () => {
-    if (sends.length === 0 && (await prompt.inputValue()) !== "") await prompt.press("Enter");
-    expect(sends.length).toBeGreaterThan(0);
-  }).toPass({ intervals: [500, 1_000, 2_000], timeout: 30_000 });
-  const body = JSON.parse(sends[0]) as { view?: string };
+  await expect(prompt).toBeFocused();
+  await prompt.press("Enter");
+  const body = JSON.parse((await chat).postData() ?? "{}") as { view?: string };
   expect(body.view).toBe("dashboard");
+});
+
+test("pinning a card never pulls the focus out of the composer", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDashboardChat(page);
+  await page.getByTestId("dashboard-enter").click();
+  await expect(page.getByTestId("dashboard-panel")).toHaveCount(3);
+  // Pin, then move straight to the composer in the same task — before the
+  // pin's delayed panel focus runs. That focus must not take the caret.
+  await page.evaluate(() => {
+    document.querySelector<HTMLElement>('[data-testid="dashboard-pin-card"]')?.click();
+    document.querySelector<HTMLTextAreaElement>("#promptInput")?.focus();
+  });
+  await expect(page.getByTestId("dashboard-panel")).toHaveCount(4);
+  await page.waitForTimeout(400); // well past the pin's 60 ms focus timer
+  await expect(page.locator("#promptInput")).toBeFocused();
 });
 
 test("dashboard view: focus a panel, keyboard reorder, and Esc to leave", async ({ page }) => {

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, createEvent, fireEvent, render, screen } from "@testing-library/react";
-import { PinnedReorderList } from "./PinnedReorderList";
+import { ChatReorderList } from "./ChatReorderList";
 
-// The rail's reorder mode for pinned chats (docs/CHAT-PIN-ORDER.md): arrows
+// The rail's reorder mode for pinned or project chats (docs/CHAT-ORDER.md): arrows
 // move a chat one place and announce it, the ends cannot move further, a drag
 // drops a chat where it lands, and Done or Escape leaves the mode.
 
@@ -14,10 +14,16 @@ const chats = [
   { id: "c", title: "Charlie" },
 ];
 
-describe("PinnedReorderList", () => {
+describe("ChatReorderList", () => {
+  it("names the list and says what the order is for", () => {
+    render(<ChatReorderList label="Chats in Roadmap, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={() => {}} />);
+    expect(screen.getByRole("list", { name: "Chats in Roadmap, in order" })).toBeTruthy();
+    expect(screen.getByText("Set the order.")).toBeTruthy();
+  });
+
   it("moves a chat with its arrows and announces the move", () => {
     const onReorder = vi.fn();
-    render(<PinnedReorderList chats={chats} onReorder={onReorder} onDone={() => {}} />);
+    render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={onReorder} onDone={() => {}} />);
     fireEvent.click(screen.getByRole("button", { name: "Move Charlie up" }));
     expect(onReorder).toHaveBeenLastCalledWith(["a", "c", "b"]);
     expect(screen.getByRole("status").textContent).toBe("Charlie moved to position 2 of 3.");
@@ -26,14 +32,14 @@ describe("PinnedReorderList", () => {
   });
 
   it("disables moving past either end", () => {
-    render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={() => {}} />);
+    render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={() => {}} />);
     expect((screen.getByRole("button", { name: "Move Alpha up" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "Move Charlie down" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("drops a dragged chat where it lands", () => {
     const onReorder = vi.fn();
-    render(<PinnedReorderList chats={chats} onReorder={onReorder} onDone={() => {}} />);
+    render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={onReorder} onDone={() => {}} />);
     const store: Record<string, string> = {};
     const dataTransfer = {
       setData: (k: string, v: string) => (store[k] = v),
@@ -44,7 +50,7 @@ describe("PinnedReorderList", () => {
       effectAllowed: "",
       dropEffect: "",
     };
-    const row = (id: string) => screen.getByTestId(`pinned-reorder-item-${id}`).firstElementChild as HTMLElement;
+    const row = (id: string) => screen.getByTestId(`chat-reorder-item-${id}`).firstElementChild as HTMLElement;
     fireEvent.dragStart(row("c"), { dataTransfer });
     const over = createEvent.dragOver(row("a"), { dataTransfer });
     fireEvent(row("a"), over);
@@ -54,8 +60,8 @@ describe("PinnedReorderList", () => {
   });
 
   it("ignores a drag that is not a reorder (a chat dragged toward a project)", () => {
-    render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={() => {}} />);
-    const row = screen.getByTestId("pinned-reorder-item-a").firstElementChild as HTMLElement;
+    render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={() => {}} />);
+    const row = screen.getByTestId("chat-reorder-item-a").firstElementChild as HTMLElement;
     const over = createEvent.dragOver(row, { dataTransfer: { types: ["application/x-fleet-conversation"] } });
     fireEvent(row, over);
     expect(over.defaultPrevented).toBe(false);
@@ -66,7 +72,7 @@ describe("PinnedReorderList", () => {
     const railEscape = vi.fn();
     window.addEventListener("keydown", railEscape);
     try {
-      render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={onDone} />);
+      render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={onDone} />);
       fireEvent.keyDown(document.body, { key: "Escape" });
       expect(onDone).toHaveBeenCalledTimes(1);
       expect(railEscape).not.toHaveBeenCalled();
@@ -76,13 +82,13 @@ describe("PinnedReorderList", () => {
   });
 
   it("puts the focus on the list on entry, and keeps it on a live arrow after a move", async () => {
-    const { rerender } = render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={() => {}} />);
+    const { rerender } = render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={() => {}} />);
     // Alpha's up arrow is disabled, so its down arrow is the first control.
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Alpha down" }));
     // Bravo up: it becomes first, its up arrow disabled, so focus goes to its down arrow.
     fireEvent.click(screen.getByRole("button", { name: "Move Bravo up" }));
     rerender(
-      <PinnedReorderList chats={[chats[1], chats[0], chats[2]]} onReorder={() => {}} onDone={() => {}} />,
+      <ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={[chats[1], chats[0], chats[2]]} onReorder={() => {}} onDone={() => {}} />,
     );
     await new Promise((r) => requestAnimationFrame(() => r(null)));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Move Bravo down" }));
@@ -90,8 +96,8 @@ describe("PinnedReorderList", () => {
 
   it("leaves the mode on Done and on Escape", () => {
     const onDone = vi.fn();
-    render(<PinnedReorderList chats={chats} onReorder={() => {}} onDone={onDone} />);
-    fireEvent.click(screen.getByTestId("pinned-reorder-done"));
+    render(<ChatReorderList label="Pinned chats, in order" hint="Set the order." chats={chats} onReorder={() => {}} onDone={onDone} />);
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onDone).toHaveBeenCalledTimes(2);
   });

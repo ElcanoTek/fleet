@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { movePinned } from "./conversationOrganization";
 
-// PinnedReorderList is the rail's reorder mode for pinned chats
-// (docs/CHAT-PIN-ORDER.md). The Pinned section swaps its ordinary rows for
-// this list while the mode is on: each chat can be dragged by its row
+// ChatReorderList is the rail's reorder mode (docs/CHAT-ORDER.md), for
+// the Pinned section and for a project's chats. The section swaps its
+// ordinary rows for this list while the mode is on: each chat can be dragged by its row
 // (mouse, pen) or moved with its Move up / Move down buttons (keyboard,
 // touch — HTML drag and drop does not fire for touch), and every move is
 // announced. Each move hands the whole new order to onReorder, which saves
@@ -14,16 +14,22 @@ import { movePinned } from "./conversationOrganization";
 
 // A private drag type, so a reorder drag is never mistaken for the
 // chat-into-project drag the ordinary rows start (CONV_DRAG_MIME).
-const PIN_ORDER_MIME = "application/x-fleet-pin-order";
+const CHAT_ORDER_MIME = "application/x-fleet-chat-order";
 
 export type ReorderableChat = { id: string; title: string };
 
-export function PinnedReorderList({
+export function ChatReorderList({
   chats,
+  label,
+  hint,
   onReorder,
   onDone,
 }: {
   chats: readonly ReorderableChat[];
+  // The list's accessible name ("Pinned chats, in order").
+  label: string;
+  // One line above the list saying what the order is for.
+  hint: string;
   onReorder: (ids: string[]) => void;
   onDone: () => void;
 }) {
@@ -60,9 +66,9 @@ export function PinnedReorderList({
     requestAnimationFrame(() => {
       const root = rootRef.current;
       if (!root) return;
-      const same = root.querySelector<HTMLButtonElement>(`[data-testid="pinned-reorder-${dir}-${id}"]`);
+      const same = root.querySelector<HTMLButtonElement>(`[data-testid="chat-reorder-${dir}-${id}"]`);
       const other = root.querySelector<HTMLButtonElement>(
-        `[data-testid="pinned-reorder-${dir === "up" ? "down" : "up"}-${id}"]`,
+        `[data-testid="chat-reorder-${dir === "up" ? "down" : "up"}-${id}"]`,
       );
       (same && !same.disabled ? same : other)?.focus();
     });
@@ -81,31 +87,31 @@ export function PinnedReorderList({
   };
 
   return (
-    <div data-testid="pinned-reorder" ref={rootRef}>
+    <div data-testid="chat-reorder" ref={rootRef}>
       <p className="px-2 pb-1 text-[0.72rem] leading-snug text-[var(--color-text-secondary)]">
-        Drag a chat, or use its arrows, to set the order. Chats you pin later appear at the top.
+        {hint}
       </p>
-      <ol aria-label="Pinned chats, in order" className="flex flex-col gap-0.5" data-testid="pinned-reorder-list">
+      <ol aria-label={label} className="flex flex-col gap-0.5" data-testid="chat-reorder-list">
         {chats.map((chat, index) => {
           const title = chat.title || "Untitled chat";
           const dropHere = dragId !== null && overIndex === index && dragId !== chat.id;
           return (
-            <li key={chat.id} data-testid={`pinned-reorder-item-${chat.id}`}>
+            <li key={chat.id} data-testid={`chat-reorder-item-${chat.id}`}>
               <div
                 draggable
                 onDragStart={(e) => {
-                  e.dataTransfer.setData(PIN_ORDER_MIME, chat.id);
+                  e.dataTransfer.setData(CHAT_ORDER_MIME, chat.id);
                   e.dataTransfer.effectAllowed = "move";
                   setDragId(chat.id);
                 }}
                 onDragOver={(e) => {
-                  if (!e.dataTransfer.types.includes(PIN_ORDER_MIME)) return;
+                  if (!e.dataTransfer.types.includes(CHAT_ORDER_MIME)) return;
                   e.preventDefault();
                   e.dataTransfer.dropEffect = "move";
                   if (overIndex !== index) setOverIndex(index);
                 }}
                 onDrop={(e) => {
-                  const id = e.dataTransfer.getData(PIN_ORDER_MIME);
+                  const id = e.dataTransfer.getData(CHAT_ORDER_MIME);
                   e.preventDefault();
                   endDrag();
                   const from = ids.indexOf(id);
@@ -123,7 +129,7 @@ export function PinnedReorderList({
                 <button
                   type="button"
                   aria-label={`Move ${title} up`}
-                  data-testid={`pinned-reorder-up-${chat.id}`}
+                  data-testid={`chat-reorder-up-${chat.id}`}
                   disabled={index === 0}
                   onClick={() => {
                   move(index, index - 1);
@@ -136,7 +142,7 @@ export function PinnedReorderList({
                 <button
                   type="button"
                   aria-label={`Move ${title} down`}
-                  data-testid={`pinned-reorder-down-${chat.id}`}
+                  data-testid={`chat-reorder-down-${chat.id}`}
                   disabled={index === chats.length - 1}
                   onClick={() => {
                   move(index, index + 1);
@@ -154,7 +160,7 @@ export function PinnedReorderList({
       <div className="px-2 pt-1.5">
         <button
           type="button"
-          data-testid="pinned-reorder-done"
+          data-testid="chat-reorder-done"
           onClick={onDone}
           className="inline-flex min-h-8 items-center gap-1.5 rounded-md bg-[var(--color-primary-fill)] px-3 text-[0.8rem] font-semibold text-[var(--color-on-primary-fill)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:min-h-11"
         >

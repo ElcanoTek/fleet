@@ -311,16 +311,17 @@ too. Below that, conversations are grouped:
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
-| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your pinned chats](#ordering-your-pinned-chats)). |
+| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Temporary** | Everything else, newest first. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
+| **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
 
 A chat row can carry two small badges, each labeled with its audience when you
 hover: one means it is shared by link, the other that it is shared with your
 team. Click a project's name to open its home (and expand it); the chevron only
-folds it. Hovering a project shows its menu: **Open project**, **New chat**, and,
-for the owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
+folds it. Hovering a project shows its menu: **Open project**, **New chat**,
+**Reorder chats** (when it holds two or more of your chats), and, for the
+owner, **Share…** and **Project settings…**. See [Keeping, shaping, and sharing conversations](#8-keeping-shaping-and-sharing-conversations).
 
 Your account menu at the foot of the rail switches between **Light**, **Dark**,
 and **System** appearance and opens **Settings** and **Guides** (these user
@@ -1156,20 +1157,32 @@ you hover over it. Here is everything in it.
 > oldest can go before the clock runs out. Pinning, archiving, filing into a
 > project, or sharing exempts a conversation from both.
 
-### Ordering your pinned chats
+### Ordering your chats
 
-Pinned chats start out newest first. To put them in your own order, press
-**Reorder** in the **Pinned** heading. Each chat then shows a pair of arrows:
-drag a chat to where you want it, or press its up and down arrows, which
-also work from the keyboard and on a phone. Every move is saved as you make it,
-to your account, so the order is the same on every device you sign in from.
-Press **Done** (or `Esc`) to go back to the ordinary rows.
+Pinned chats and the chats in a project start out newest first. To put them in
+your own order:
 
-A chat you pin later appears at the top of the list, above the ones you have
-ordered, until you move it. **Reorder** is offered for up to 500 pinned chats,
-and not to a read-only (viewer) account, which cannot save an order. **Temporary** chats are always newest first; to
-give one a place of its own, pin it. Chats inside a project keep the project's
-order.
+- **Pinned chats:** press **Reorder** in the **Pinned** heading.
+- **A project's chats:** open the project's `⋮` menu and choose **Reorder
+  chats**.
+
+Each chat then shows a pair of arrows. Drag a chat to where you want it, or
+press its up and down arrows, which also work from the keyboard and on a phone.
+Every move is saved as you make it, to your account, so the order is the same
+on every device you sign in from. Press **Done** (or `Esc`) to go back to the
+ordinary rows.
+
+A chat you pin, or file in the project, later appears at the top of the list,
+above the ones you have ordered, until you move it. **Reorder** is offered for
+up to 500 chats at a time, and not to a read-only (viewer) account, which
+cannot save an order. In a project you order your own chats; each teammate
+orders theirs.
+
+**Temporary** chats have a sort instead, in the menu beside the heading:
+**Recent activity** (the default), **Newest first** (by when the chat was
+started) or **Title A–Z**. The choice is remembered on this device. Temporary
+chats expire when left alone, so they are sorted rather than hand-placed; to
+give one a place of its own, pin it or move it into a project.
 
 ### On the transcript
 

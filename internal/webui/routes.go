@@ -288,8 +288,8 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"POST /api/conversations", fixed("/conversations"), jsonBodyIfAny, textJSON},
 		{"DELETE /api/conversations", fixed("/conversations"), jsonBodyIfAny, textJSON},
 		{"PATCH /api/conversations/bulk", fixed("/conversations/bulk"), jsonBodyIfAny, textJSON},
-		{"GET /api/conversations/pin-order", fixed("/conversations/pin-order"), noBody, textJSON},
-		{"PUT /api/conversations/pin-order", fixed("/conversations/pin-order"), jsonBodyIfAny, textJSON},
+		{"GET /api/conversations/order", fixed("/conversations/order"), noBody, textJSON},
+		{"PUT /api/conversations/order", fixed("/conversations/order"), jsonBodyIfAny, textJSON},
 		{"GET /api/conversations/{id}", conv, noBody, textJSON},
 		{"DELETE /api/conversations/{id}", conv, noBody, textOK},
 		{"POST /api/conversations/{id}/approval-groups/{groupId}", func(r *http.Request) string {

@@ -964,11 +964,11 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM user_personas WHERE user_email = $1`, normalizeEmail(email)); err != nil {
 		return fmt.Errorf("delete user personas: %w", err)
 	}
-	// The rail's pinned-chat order (migration 095) names the account's
+	// The rail's chat orders (migration 095) name the account's
 	// conversation IDs; it goes with them.
 	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM conversation_pin_order WHERE lower(user_email) = lower($1)`, email); err != nil {
-		return fmt.Errorf("delete pin order: %w", err)
+		`DELETE FROM conversation_order WHERE lower(user_email) = lower($1)`, email); err != nil {
+		return fmt.Errorf("delete chat orders: %w", err)
 	}
 	// Per-project UI state (migration 070) goes with the users row below via
 	// its ON DELETE CASCADE — in other people's projects too.
@@ -997,6 +997,11 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM memories
 		 WHERE project_id IN (SELECT id FROM projects WHERE owner_email = $1)`, email); err != nil {
 		return fmt.Errorf("delete project memories: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM conversation_order
+		 WHERE scope IN (SELECT 'project:' || id FROM projects WHERE owner_email = $1)`, email); err != nil {
+		return fmt.Errorf("delete project chat orders: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM projects WHERE owner_email = $1`, email); err != nil {

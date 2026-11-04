@@ -392,6 +392,11 @@ func (s *Store) DeleteProject(ctx context.Context, ownerEmail, id string) error 
 		`DELETE FROM memories WHERE project_id = $1`, id); err != nil {
 		return err
 	}
+	// Every member's saved chat order for the project goes with it.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM conversation_order WHERE scope = $1`, ChatOrderProjectScope(id)); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

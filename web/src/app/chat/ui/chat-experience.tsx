@@ -38,6 +38,10 @@ import { refreshClientConfig, useClientConfig } from "@/app/lib/useClientConfig"
 import {
   filterConversations,
   visibleConversationOrder,
+  PINNED_ORDER_SCOPE,
+  RECENT_SORT_ITEM,
+  isRecentSort,
+  type RecentSort,
 } from "./conversationOrganization";
 import {
   useKeyboardShortcuts,
@@ -193,6 +197,8 @@ export type ConversationSummary = {
   model: string;
   pinned: boolean;
   updated_at: number;
+  // When the chat was started (unix seconds); the rail's "Newest first" sort reads it.
+  created_at?: number;
   // Lockdown is set once at conversation creation. When true, the
   // backend forces a per-turn container sandbox and restricts model
   // slugs to the server's lockdown allow-list. Drives the lock-icon
@@ -1820,11 +1826,31 @@ export function ChatExperience({
   // visibleOrder, because that memo needs the set of projects the viewer can
   // see to decide which chats are "unfiled".
   const [projects, setProjects] = useState<Project[]>([]);
-  // The person's own order for their pinned chats (docs/CHAT-PIN-ORDER.md),
-  // set in the rail's reorder mode and saved per user on the server. Empty
-  // until read (or when never set): pinned chats then keep the server's
-  // most-recent-first order. Declared here because visibleOrder reads it.
-  const [pinOrder, setPinOrder] = useState<string[]>([]);
+  // The person's own chat orders by scope — "pinned", and "project:<id>" for
+  // their chats in a project (docs/CHAT-ORDER.md) — set in the rail's
+  // reorder mode and saved per user on the server. Empty until read (or for a
+  // scope never ordered): those chats keep the server's most-recent-first
+  // order. Declared here because visibleOrder reads the pinned one.
+  const [chatOrders, setChatOrders] = useState<Record<string, string[]>>({});
+  // How Temporary chats are sorted. A view preference, remembered on this
+  // device (browser storage), not an order: those chats expire with
+  // inactivity, so a hand-placed one would keep being displaced.
+  const [recentSort, setRecentSortState] = useState<RecentSort>(() => {
+    try {
+      const saved = window.localStorage.getItem(RECENT_SORT_ITEM);
+      return isRecentSort(saved) ? saved : "activity";
+    } catch {
+      return "activity";
+    }
+  });
+  const setRecentSort = useCallback((next: RecentSort) => {
+    setRecentSortState(next);
+    try {
+      window.localStorage.setItem(RECENT_SORT_ITEM, next);
+    } catch {
+      // Storage unavailable: the choice lasts for this page only.
+    }
+  }, []);
   const visibleOrder = useMemo(
     () =>
       visibleConversationOrder({
@@ -1835,7 +1861,8 @@ export function ChatExperience({
         // sidebar isn't rendering.
         knownProjectIds:
           projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined,
-        pinOrder,
+        pinOrder: chatOrders[PINNED_ORDER_SCOPE],
+        recentSort,
       }),
     [
       conversations,
@@ -1843,7 +1870,8 @@ export function ChatExperience({
       filterLabels,
       sidebarQuery,
       projects,
-      pinOrder,
+      chatOrders,
+      recentSort,
     ],
   );
 
@@ -3624,22 +3652,23 @@ export function ChatExperience({
       cancelled = true;
     };
   }, [loadProjects]);
-  // The pinned-chat order: read once on boot (best-effort — a failed read
-  // leaves pinned chats most recent first), saved on every move. Saves run one
-  // after another so a quick run of moves lands in the order it was made; a
-  // refused save re-reads the server's order so the rail never shows an
-  // order that was not kept.
-  // Every read and every local move takes a generation; a read applies only
-  // if nothing newer happened since it left, so a slow boot read cannot
-  // overwrite a move made while it was in flight.
-  const pinOrderGen = useRef(0);
-  const loadPinOrder = useCallback(async () => {
-    const gen = ++pinOrderGen.current;
+  // The chat orders: read once on boot (best-effort — a failed read leaves
+  // every scope most recent first), saved on every move. Saves run one after
+  // another so a quick run of moves lands in the order it was made; a refused
+  // save re-reads the server's orders so the rail never shows an order that
+  // was not kept. Every read and every local move takes a generation, and a
+  // read applies only if nothing newer happened since it left, so a slow boot
+  // read cannot overwrite a move made while it was in flight.
+  const chatOrderGen = useRef(0);
+  const loadChatOrders = useCallback(async () => {
+    const gen = ++chatOrderGen.current;
     try {
-      const res = await fetch("/api/conversations/pin-order", { cache: "no-store" });
+      const res = await fetch("/api/conversations/order", { cache: "no-store" });
       if (!res.ok) return;
-      const data = (await res.json()) as { conversation_ids?: string[] };
-      if (gen === pinOrderGen.current && Array.isArray(data.conversation_ids)) setPinOrder(data.conversation_ids);
+      const data = (await res.json()) as { orders?: Record<string, string[]> };
+      if (gen === chatOrderGen.current && data.orders && typeof data.orders === "object") {
+        setChatOrders(data.orders);
+      }
     } catch {
       // Best-effort, like the rail's projects.
     }
@@ -3650,7 +3679,7 @@ export function ChatExperience({
   useEffect(() => {
     let cancelled = false;
     queueMicrotask(() => {
-      if (!cancelled) void loadPinOrder();
+      if (!cancelled) void loadChatOrders();
     });
     void (async () => {
       try {
@@ -3665,26 +3694,26 @@ export function ChatExperience({
     return () => {
       cancelled = true;
     };
-  }, [loadPinOrder]);
-  const pinOrderSaves = useRef<Promise<unknown>>(Promise.resolve());
-  const reorderPinned = useCallback(
-    (ids: string[]) => {
-      pinOrderGen.current++;
-      setPinOrder(ids);
-      pinOrderSaves.current = pinOrderSaves.current.then(async () => {
+  }, [loadChatOrders]);
+  const chatOrderSaves = useRef<Promise<unknown>>(Promise.resolve());
+  const reorderChats = useCallback(
+    (scope: string, ids: string[]) => {
+      chatOrderGen.current++;
+      setChatOrders((cur) => ({ ...cur, [scope]: ids }));
+      chatOrderSaves.current = chatOrderSaves.current.then(async () => {
         try {
-          const res = await fetch("/api/conversations/pin-order", {
+          const res = await fetch("/api/conversations/order", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ conversation_ids: ids }),
+            body: JSON.stringify({ scope, conversation_ids: ids }),
           });
           if (!res.ok) throw new Error(String(res.status));
         } catch {
-          await loadPinOrder();
+          await loadChatOrders();
         }
       });
     },
-    [loadPinOrder],
+    [loadChatOrders],
   );
   // The caller's own team (#1157). Sharing a project requires one, so the
   // project-home settings dialog needs to know whether the toggle can work —
@@ -3915,11 +3944,18 @@ export function ChatExperience({
     setDashboardFocus("");
     setDashboardPane("board");
     // After the pane switch paints: bring the panel into view and flash it.
+    // The focus moves only if the person has not already put it somewhere
+    // else in the meantime (typing in the composer, say): a delayed focus
+    // must never pull the caret out from under them. A focus left on the
+    // page body (the pane switch unmounted the old target) still moves.
+    const focusedAtRequest = document.activeElement;
     window.setTimeout(() => {
       const el = document.getElementById(panelDomId(key));
       if (!el) return;
       el.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-      el.focus({ preventScroll: true });
+      const now = document.activeElement;
+      const movedOn = now !== null && now !== document.body && now !== focusedAtRequest;
+      if (!movedOn) el.focus({ preventScroll: true });
       el.classList.remove("dash-panel-flash");
       void el.offsetWidth; // restart the animation
       el.classList.add("dash-panel-flash");
@@ -6751,8 +6787,10 @@ export function ChatExperience({
           loadConversation={loadConversation}
           streamingConvs={streamingConvs}
           togglePin={togglePin}
-          pinOrder={pinOrder}
-          onReorderPinned={accountViewer ? undefined : reorderPinned}
+          chatOrders={chatOrders}
+          onReorderChats={accountViewer ? undefined : reorderChats}
+          recentSort={recentSort}
+          onRecentSortChange={setRecentSort}
           toggleArchive={requestArchive}
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}

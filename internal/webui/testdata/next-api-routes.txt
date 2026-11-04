@@ -87,8 +87,8 @@ POST /api/conversations/{conversationId}/truncate
 GET /api/conversations/{conversationId}/turns/{turnId}
 GET /api/conversations/{conversationId}/workspace/{path...}
 PATCH /api/conversations/bulk
-GET /api/conversations/pin-order
-PUT /api/conversations/pin-order
+GET /api/conversations/order
+PUT /api/conversations/order
 GET /api/conversations
 POST /api/conversations
 DELETE /api/conversations

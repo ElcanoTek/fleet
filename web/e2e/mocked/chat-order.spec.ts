@@ -3,24 +3,50 @@ import AxeBuilder from "@axe-core/playwright";
 import { loginViaCookie } from "./_session";
 import { mockChatBoot } from "./_mocks";
 
-// The rail's pinned-chat order (docs/CHAT-PIN-ORDER.md): the Pinned section
-// follows the order saved on the server, "Reorder" turns it into a list that
-// can be dragged or moved with arrows, each move is saved with PUT
-// /api/conversations/pin-order, and the list passes axe in both themes.
+// The rail's hand-set chat orders and the Temporary sort
+// (docs/CHAT-ORDER.md): the Pinned section and each project follow the
+// order saved on the server, "Reorder" turns them into a list that can be
+// dragged or moved with arrows, each move is saved with PUT
+// /api/conversations/order for its scope, Temporary chats follow the chosen
+// sort (remembered on the device), and the list passes axe in both themes.
 
 const CONVERSATIONS = [
   { id: "c1", title: "Acme Renewal", persona: "default", model: "", pinned: true, updated_at: 40 },
   { id: "c2", title: "Omnicom Pacing", persona: "default", model: "", pinned: true, updated_at: 30 },
   { id: "c3", title: "Deal Desk Daily", persona: "default", model: "", pinned: true, updated_at: 25 },
-  { id: "c4", title: "Loose Recent", persona: "default", model: "", pinned: false, updated_at: 10 },
+  { id: "c4", title: "Loose Recent", persona: "default", model: "", pinned: false, updated_at: 10, created_at: 1 },
+  { id: "c7", title: "Budget Notes", persona: "default", model: "", pinned: false, updated_at: 9, created_at: 8 },
+  { id: "c5", title: "Roadmap Kickoff", persona: "default", model: "", pinned: false, updated_at: 8, project_id: "p1" },
+  { id: "c6", title: "Roadmap Q3", persona: "default", model: "", pinned: false, updated_at: 7, project_id: "p1" },
 ];
 
-async function setup(page: Page, saved: string[], opts: { role?: string; holdFirstRead?: Promise<void>; waitForPinned?: boolean } = {}) {
-  const puts: string[][] = [];
+const PROJECT = {
+  id: "p1",
+  owner_email: "e2e@example.com",
+  name: "Roadmap",
+  mcp_servers: [],
+  created_at: 1,
+  updated_at: 1,
+};
+
+type Put = { scope: string; ids: string[] };
+
+async function setup(
+  page: Page,
+  saved: string[],
+  opts: {
+    role?: string;
+    holdFirstRead?: Promise<void>;
+    waitForPinned?: boolean;
+    projectOrder?: string[];
+  } = {},
+) {
+  const puts: Put[] = [];
   await mockChatBoot(page);
   await page.route("**/api/me", (r: Route) =>
     r.fulfill({ json: { email: "e2e@example.com", role: opts.role ?? "member" } }),
   );
+  await page.route("**/api/projects", (r: Route) => r.fulfill({ json: { projects: [PROJECT] } }));
   await page.route("**/api/conversations", (r: Route) =>
     r.fulfill({ json: r.request().method() === "GET" ? { conversations: CONVERSATIONS } : {} }),
   );
@@ -29,18 +55,24 @@ async function setup(page: Page, saved: string[], opts: { role?: string; holdFir
     const conv = CONVERSATIONS.find((c) => c.id === id) ?? CONVERSATIONS[0];
     return r.fulfill({ json: { conversation: conv, history: [] } });
   });
-  await page.route("**/api/conversations/pin-order", (r: Route) => {
+  const orders = () => ({
+    orders: {
+      ...(saved.length ? { pinned: saved } : {}),
+      ...(opts.projectOrder ? { "project:p1": opts.projectOrder } : {}),
+    },
+  });
+  await page.route("**/api/conversations/order", (r: Route) => {
     if (r.request().method() === "PUT") {
-      const ids = (r.request().postDataJSON() as { conversation_ids: string[] }).conversation_ids;
-      puts.push(ids);
-      return r.fulfill({ json: { conversation_ids: ids } });
+      const body = r.request().postDataJSON() as { scope: string; conversation_ids: string[] };
+      puts.push({ scope: body.scope, ids: body.conversation_ids });
+      return r.fulfill({ json: { scope: body.scope, conversation_ids: body.conversation_ids } });
     }
     if (opts.holdFirstRead) {
       const hold = opts.holdFirstRead;
       opts.holdFirstRead = undefined;
-      return hold.then(() => r.fulfill({ json: { conversation_ids: saved } }));
+      return hold.then(() => r.fulfill({ json: orders() }));
     }
-    return r.fulfill({ json: { conversation_ids: saved } });
+    return r.fulfill({ json: orders() });
   });
   await page.goto("/chat");
   if (opts.waitForPinned === false) {
@@ -66,24 +98,25 @@ test("pinned chats follow the saved order and can be reordered with arrows and d
   await expect.poll(order).toEqual(["Deal Desk Daily", "Acme Renewal", "Omnicom Pacing"]);
 
   await page.getByTestId("pinned-reorder-toggle").click();
-  const list = page.getByTestId("pinned-reorder-list");
+  const list = page.getByTestId("chat-reorder-list");
   await expect(list).toBeVisible();
 
   // Arrows: Omnicom Pacing up one place.
   await list.getByRole("button", { name: "Move Omnicom Pacing up" }).click();
-  await expect.poll(() => puts.at(-1)).toEqual(["c3", "c2", "c1"]);
+  await expect.poll(() => puts.at(-1)?.ids).toEqual(["c3", "c2", "c1"]);
+  expect(puts.at(-1)?.scope).toBe("pinned");
   await expect(page.getByRole("status").filter({ hasText: "moved to position" })).toHaveText(
     "Omnicom Pacing moved to position 2 of 3.",
   );
 
   // Drag: Acme Renewal to the top.
   await page
-    .getByTestId("pinned-reorder-item-c1")
+    .getByTestId("chat-reorder-item-c1")
     .locator("div[draggable]")
-    .dragTo(page.getByTestId("pinned-reorder-item-c3").locator("div[draggable]"));
-  await expect.poll(() => puts.at(-1)).toEqual(["c1", "c3", "c2"]);
+    .dragTo(page.getByTestId("chat-reorder-item-c3").locator("div[draggable]"));
+  await expect.poll(() => puts.at(-1)?.ids).toEqual(["c1", "c3", "c2"]);
 
-  await page.getByTestId("pinned-reorder-done").click();
+  await page.getByTestId("chat-reorder-done").click();
   await expect(list).toBeHidden();
   await expect.poll(order).toEqual(["Acme Renewal", "Deal Desk Daily", "Omnicom Pacing"]);
 });
@@ -95,10 +128,10 @@ test("a slow first read of the saved order does not undo a move made meanwhile",
   await page.getByTestId("pinned-reorder-toggle").click();
   // Server order unknown yet: the rail shows newest first (c1, c2, c3).
   await page.getByRole("button", { name: "Move Omnicom Pacing up" }).click();
-  await expect.poll(() => puts.at(-1)).toEqual(["c2", "c1", "c3"]);
+  await expect.poll(() => puts.at(-1)?.ids).toEqual(["c2", "c1", "c3"]);
   release(); // the stale read now answers with the old saved order
   await page.waitForTimeout(300);
-  const items = page.getByTestId("pinned-reorder-list").locator("li");
+  const items = page.getByTestId("chat-reorder-list").locator("li");
   await expect(items).toHaveText([/Omnicom Pacing/, /Acme Renewal/, /Deal Desk Daily/]);
 });
 
@@ -117,13 +150,44 @@ test("Escape leaves reorder mode without closing the rail on a narrow screen", a
   await page.getByRole("button", { name: "Expand sidebar" }).click();
   await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeGreaterThan(290);
   await page.getByTestId("pinned-reorder-toggle").click();
-  await expect(page.getByTestId("pinned-reorder-list")).toBeVisible();
+  await expect(page.getByTestId("chat-reorder-list")).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByTestId("pinned-reorder-list")).toHaveCount(0);
+  await expect(page.getByTestId("chat-reorder-list")).toHaveCount(0);
   await expect(page.getByTestId("pinned-reorder-toggle")).toBeVisible();
   await expect(page.getByTestId("pinned-reorder-toggle")).toBeFocused();
   // The overlay is still open: Escape belonged to reorder mode alone.
   await expect.poll(async () => (await rail.boundingBox())?.width ?? 0).toBeGreaterThan(290);
+});
+
+test("a project's chats follow its saved order and reorder from the project's menu", async ({ page }) => {
+  const puts = await setup(page, [], { projectOrder: ["c6", "c5"] });
+  const options = page.getByRole("button", { name: "Project options for Roadmap" });
+  await options.click();
+  await page.getByRole("menuitem", { name: "Reorder chats" }).click();
+  const list = page.getByRole("list", { name: "Chats in Roadmap, in order" });
+  // The saved order applies: Q3 above Kickoff.
+  await expect(list.locator("li")).toHaveText([/Roadmap Q3/, /Roadmap Kickoff/]);
+  await list.getByRole("button", { name: "Move Roadmap Kickoff up" }).click();
+  await expect.poll(() => puts.at(-1)).toEqual({ scope: "project:p1", ids: ["c5", "c6"] });
+  await expect(list.locator("li")).toHaveText([/Roadmap Kickoff/, /Roadmap Q3/]);
+  await page.getByTestId("chat-reorder-done").click();
+  await expect(list).toHaveCount(0);
+  await expect(options).toBeFocused();
+});
+
+test("Temporary chats follow the chosen sort, remembered on this device", async ({ page }) => {
+  await setup(page, []);
+  const y = async (id: string) => (await page.locator(`[data-conversation-id="${id}"]`).first().boundingBox())?.y ?? 0;
+  const loose = "c4"; // "Loose Recent": more recent activity, started earlier
+  const budget = "c7"; // "Budget Notes"
+  await expect.poll(async () => (await y(loose)) < (await y(budget))).toBe(true); // Recent activity (default)
+  const sort = page.getByRole("combobox", { name: "Sort temporary chats" });
+  await sort.selectOption("title");
+  await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Title A–Z
+  await sort.selectOption("created");
+  await expect.poll(async () => (await y(budget)) < (await y(loose))).toBe(true); // Newest first
+  await page.reload();
+  await expect(page.getByRole("combobox", { name: "Sort temporary chats" })).toHaveValue("created");
 });
 
 for (const scheme of ["light", "dark"] as const) {
@@ -131,7 +195,7 @@ for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await setup(page, []);
     await page.getByTestId("pinned-reorder-toggle").click();
-    await expect(page.getByTestId("pinned-reorder-list")).toBeVisible();
+    await expect(page.getByTestId("chat-reorder-list")).toBeVisible();
     const results = await new AxeBuilder({ page })
       .include('[data-testid="pinned-section"]')
       .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])

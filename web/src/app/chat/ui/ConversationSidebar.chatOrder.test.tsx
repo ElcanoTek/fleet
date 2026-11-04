@@ -5,8 +5,9 @@ import { DEFAULT_BRANDING } from "@/app/lib/useClientConfig";
 import type { ConversationSummary, ServerConfig } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
 
-// The Pinned section's own order and its reorder mode
-// (docs/CHAT-PIN-ORDER.md): rows follow the saved order, Reorder swaps them
+// The rail's hand-set chat orders (Pinned, and each project) and the
+// Temporary sort
+// (docs/CHAT-ORDER.md): rows follow the saved order, Reorder swaps them
 // for the drag-and-arrow list, a move hands the whole new order up, and Done
 // brings the ordinary rows back.
 
@@ -105,11 +106,11 @@ function renderSidebar(overrides: Record<string, unknown> = {}) {
 
 const pin = (id: string, title: string): ConversationSummary => ({ ...CONV, id, title, pinned: true });
 
-describe("ConversationSidebar pinned order", () => {
+describe("ConversationSidebar chat order", () => {
   const chats = [pin("a", "Alpha"), pin("b", "Bravo"), pin("c", "Charlie")];
 
   it("shows pinned chats in the saved order", () => {
-    renderSidebar({ conversations: chats, filteredConversations: chats, pinOrder: ["c", "a", "b"], onReorderPinned: noop });
+    renderSidebar({ conversations: chats, filteredConversations: chats, chatOrders: { pinned: ["c", "a", "b"] }, onReorderChats: noop });
     const section = screen.getByTestId("pinned-section");
     const titles = ["Alpha", "Bravo", "Charlie"].map((t) => section.textContent!.indexOf(t));
     expect(titles[2]).toBeLessThan(titles[0]);
@@ -117,35 +118,79 @@ describe("ConversationSidebar pinned order", () => {
   });
 
   it("reorders in reorder mode and returns to the rows on Done", () => {
-    const onReorderPinned = vi.fn();
-    renderSidebar({ conversations: chats, filteredConversations: chats, pinOrder: [], onReorderPinned });
+    const onReorderChats = vi.fn();
+    renderSidebar({ conversations: chats, filteredConversations: chats, chatOrders: {}, onReorderChats });
     fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
-    const list = screen.getByTestId("pinned-reorder-list");
+    const list = screen.getByTestId("chat-reorder-list");
     fireEvent.click(within(list).getByRole("button", { name: "Move Bravo up" }));
-    expect(onReorderPinned).toHaveBeenCalledWith(["b", "a", "c"]);
-    fireEvent.click(screen.getByTestId("pinned-reorder-done"));
-    expect(screen.queryByTestId("pinned-reorder-list")).toBeNull();
+    expect(onReorderChats).toHaveBeenCalledWith("pinned", ["b", "a", "c"]);
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
+    expect(screen.queryByTestId("chat-reorder-list")).toBeNull();
     expect(screen.getByTestId("pinned-reorder-toggle")).toBeTruthy();
   });
 
   it("returns the focus to Reorder when the mode ends", () => {
-    renderSidebar({ conversations: chats, filteredConversations: chats, onReorderPinned: noop });
+    renderSidebar({ conversations: chats, filteredConversations: chats, onReorderChats: noop });
     fireEvent.click(screen.getByTestId("pinned-reorder-toggle"));
-    fireEvent.click(screen.getByTestId("pinned-reorder-done"));
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
     expect(document.activeElement).toBe(screen.getByTestId("pinned-reorder-toggle"));
   });
 
   it("offers no reorder above the server's 500-chat cap", () => {
     const many = Array.from({ length: 501 }, (_, i) => pin(`p${i}`, `Chat ${i}`));
-    renderSidebar({ conversations: many, filteredConversations: many, onReorderPinned: noop });
+    renderSidebar({ conversations: many, filteredConversations: many, onReorderChats: noop });
     expect(screen.queryByTestId("pinned-reorder-toggle")).toBeNull();
   });
 
   it("offers no reorder with a single pinned chat or without a save handler", () => {
-    renderSidebar({ conversations: [chats[0]], filteredConversations: [chats[0]], onReorderPinned: noop });
+    renderSidebar({ conversations: [chats[0]], filteredConversations: [chats[0]], onReorderChats: noop });
     expect(screen.queryByTestId("pinned-reorder-toggle")).toBeNull();
     cleanup();
     renderSidebar({ conversations: chats, filteredConversations: chats });
     expect(screen.queryByTestId("pinned-reorder-toggle")).toBeNull();
+  });
+
+  it("reorders a project's chats from the project's menu, in that project's scope", () => {
+    const filed = (id: string, title: string): ConversationSummary => ({ ...CONV, id, title, project_id: "p-1" });
+    const inProject = [filed("x", "Xray"), filed("y", "Yankee")];
+    const onReorderChats = vi.fn();
+    renderSidebar({
+      conversations: inProject,
+      filteredConversations: inProject,
+      chatOrders: { "project:p-1": ["y", "x"] },
+      onReorderChats,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Roadmap" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Reorder chats" }));
+    const list = screen.getByRole("list", { name: "Chats in Roadmap, in order" });
+    // The saved order applies: Yankee first.
+    expect(within(list).getAllByRole("listitem")[0].textContent).toContain("Yankee");
+    fireEvent.click(within(list).getByRole("button", { name: "Move Xray up" }));
+    expect(onReorderChats).toHaveBeenCalledWith("project:p-1", ["x", "y"]);
+    fireEvent.click(screen.getByTestId("chat-reorder-done"));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Project options for Roadmap" }));
+  });
+
+  it("does not offer Reorder chats for a project with fewer than two of the viewer's chats", () => {
+    const one = [{ ...CONV, id: "x", title: "Xray", project_id: "p-1" }];
+    renderSidebar({ conversations: one, filteredConversations: one, onReorderChats: noop });
+    fireEvent.click(screen.getByRole("button", { name: "Project options for Roadmap" }));
+    expect(screen.queryByRole("menuitem", { name: "Reorder chats" })).toBeNull();
+  });
+
+  it("sorts Temporary chats by the chosen sort and reports a change", () => {
+    const temp = [
+      { ...CONV, id: "t1", title: "Zulu", updated_at: 30, created_at: 1 },
+      { ...CONV, id: "t2", title: "Alpha", updated_at: 20, created_at: 2 },
+    ];
+    const onRecentSortChange = vi.fn();
+    renderSidebar({ conversations: temp, filteredConversations: temp, recentSort: "title", onRecentSortChange });
+    const zulu = screen.getByText("Zulu");
+    const alpha = screen.getByText("Alpha");
+    expect(alpha.compareDocumentPosition(zulu) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const select = screen.getByRole("combobox", { name: "Sort temporary chats" }) as HTMLSelectElement;
+    expect(select.value).toBe("title");
+    fireEvent.change(select, { target: { value: "created" } });
+    expect(onRecentSortChange).toHaveBeenCalledWith("created");
   });
 });
