@@ -12,11 +12,12 @@ User-facing description: the Chat guide's "Patrol Launchpad" section
 
 ## What shipped
 
-**Six steps** (`web/src/app/launchpad/PatrolLaunchpad.tsx`):
+**Seven steps** (`web/src/app/launchpad/PatrolLaunchpad.tsx`):
 
 | Step | What it does | API |
 |---|---|---|
-| Welcome | Explains a patrol; shows how many tools are ready and memories saved. | `GET /api/mcp-servers`, `GET /api/memories` |
+| Why | The preamble: an "expanding mind" ladder (chat → scheduled reports → patrols that analyze and decide → acting on your behalf), Ethan Mollick's term *capability overhang* (*Co-Existence*, 2026, linked to the publisher page), and the trust path: start at Suggest & ask, turn on ⚡ Auto-approve in the Patrol bar later. The Watch step and the success screen repeat that nudge. | — |
+| Plan | Lists the five steps ahead; shows how many tools are ready and memories saved. | `GET /api/mcp-servers`, `GET /api/memories` |
 | Tools | Lists usable connectors (pre-ticked = on by default for a new chat; always-on rows shown locked), connectors that need setup with a **Set up** link, and **Connect another tool**. Both links open Settings → Connections in a new tab; the list refetches on window focus. | `GET /api/mcp-servers` |
 | Ground rules | **Who's on watch**: workspace personas and the person's own (`GET /api/personas`). **Non-negotiables**: each is saved immediately as a memory of kind `constraint`, then pinned. | `POST /api/memories`, `PATCH /api/memories/{id}` |
 | Watch list | Seven goal cards (`PATROL_GOALS` in `launchpadModel.ts`), free text, and the autonomy mode: report / suggest (default) / act. | — |

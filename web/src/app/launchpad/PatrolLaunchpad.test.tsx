@@ -61,6 +61,10 @@ afterEach(() => {
 
 async function walkToLaunch(calls: Call[]) {
   render(<PatrolLaunchpad onClose={() => {}} />);
+  // The preamble: the expanding-mind ladder and the trust path.
+  expect(screen.getByTestId("launchpad-mind").querySelectorAll("li")).toHaveLength(4);
+  expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Suggest & ask");
+  next();
   await screen.findByText("2 tools ready");
   next();
 
@@ -92,7 +96,9 @@ async function walkToLaunch(calls: Call[]) {
   expect((screen.getByTestId("launchpad-next") as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByTestId("launchpad-goal-deals"));
   fireEvent.click(screen.getByTestId("launchpad-goal-inbox"));
+  expect(screen.getByTestId("launchpad-mode-nudge").textContent).toContain("turn on ⚡ Auto-approve");
   fireEvent.click(screen.getByTestId("launchpad-mode-act"));
+  expect(screen.getByTestId("launchpad-mode-nudge").textContent).toContain("turn ⚡ Auto-approve off");
   next();
 
   // Schedule: pick a preset.
@@ -114,6 +120,8 @@ describe("PatrolLaunchpad", () => {
 
     fireEvent.click(screen.getByTestId("launchpad-launch"));
     await screen.findByTestId("launchpad-done");
+    // Already acting on its own: no "next rung" nudge toward auto-approve.
+    expect(screen.queryByText(/Next rung of the ladder/)).toBeNull();
 
     const writes = calls.filter((c) => c.method === "POST" && !c.url.startsWith("/api/memories"));
     expect(writes.map((c) => c.url)).toEqual([
@@ -163,6 +171,8 @@ describe("PatrolLaunchpad", () => {
   it("remembers progress across a close and reopen", async () => {
     mockApi();
     render(<PatrolLaunchpad onClose={() => {}} />);
+    next();
+    await screen.findByTestId("launchpad-step-welcome");
     next();
     await screen.findByTestId("launchpad-step-tools");
     next();

@@ -107,7 +107,12 @@ The quickest way to put the assistant on patrol is the **Launchpad** button
 (sparkles) in the top-right corner of Chat, the Operations Center, Settings and
 these Guides. Until you have opened it once it carries a small pulsing dot. It
 opens the **Patrol Launchpad**, a guided wizard that takes you from nothing set
-up to a running patrol:
+up to a running patrol. It starts with **Why patrol?**, a short "expanding
+mind" ladder from chatting, to scheduled reports, to patrols that analyze and
+decide, to letting the assistant act on your behalf, with the suggested path:
+start at **Suggest & ask** and turn on **⚡ Auto-approve** in the Patrol bar once
+you trust its calls. **Show me the plan** then lists the five steps before you
+take them:
 
 1. **Hook up your tools.** Every connector you can use is listed; the ones on
    by default for a new chat start ticked, and you tick or untick the rest for
@@ -128,7 +133,8 @@ up to a running patrol:
    of connector it would need. Then choose how hands-on it is: **Just report**
    (never changes anything), **Suggest & ask** (stages approval cards for you;
    the default) or **Act for me** (turns the chat's **⚡ Auto-approve** on and
-   lists everything it did).
+   lists everything it did). A note under the choice suggests starting at
+   **Suggest & ask** and switching on **⚡ Auto-approve** later.
 4. **Choose a rhythm.** **Weekday mornings** (8:00, Monday–Friday; the
    default), **Twice a workday**, **Every 2 hours**, **Every hour**, **Every
    morning** or **Monday kickoff**, or **Custom schedule** for the full
@@ -141,7 +147,9 @@ up to a running patrol:
 
 Launching creates a new chat with your chosen persona and tools, attaches the
 patrol, and runs the first check straight away; **Watch it work** opens that
-chat. From then on it is an ordinary in-chat patrol (below): pause or stop it
+chat; unless you chose **Act for me**, the success screen also suggests
+turning on **⚡ Auto-approve** once its calls keep being right. From then on it
+is an ordinary in-chat patrol (below): pause or stop it
 from the Patrol bar, or ask in the chat to change it. Nothing is created until
 you press **Launch patrol** — except the non-negotiables you saved, which are
 memories as soon as you press **Save**. Close the Launchpad with **Maybe later**

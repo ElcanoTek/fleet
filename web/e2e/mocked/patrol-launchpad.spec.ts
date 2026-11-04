@@ -78,6 +78,8 @@ test("the Launchpad walks from nothing to a launched patrol", async ({ page }) =
 
   const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId("launchpad-mind")).toBeVisible();
+  await dialog.getByTestId("launchpad-next").click();
   await expect(dialog.getByText("2 tools ready")).toBeVisible();
   await dialog.getByTestId("launchpad-next").click();
 
@@ -100,6 +102,7 @@ test("the Launchpad walks from nothing to a launched patrol", async ({ page }) =
   await expect(dialog.getByTestId("launchpad-title")).toHaveValue("Deals & spend patrol");
   await dialog.getByTestId("launchpad-launch").click();
   await expect(dialog.getByTestId("launchpad-done")).toBeVisible();
+  await expect(dialog.getByText(/Next rung of the ladder/)).toBeVisible();
 
   const writes = calls.filter((c) => c.method === "POST" && !c.url.startsWith("/api/memories")).map((c) => c.url);
   expect(writes).toEqual([
@@ -127,8 +130,8 @@ for (const scheme of ["light", "dark"] as const) {
       await mockShell(page, []);
       await page.goto("/help?launchpad=1");
       const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
-      await expect(dialog.getByText("2 tools ready")).toBeVisible({ timeout: 15_000 });
-      const steps = ["welcome", "tools", "rules", "watch", "schedule"];
+      await expect(dialog.getByTestId("launchpad-mind")).toBeVisible({ timeout: 15_000 });
+      const steps = ["why", "welcome", "tools", "rules", "watch", "schedule"];
       for (const step of steps) {
         await expect(dialog.getByTestId(`launchpad-step-${step}`)).toBeVisible();
         if (step === "watch") await dialog.getByTestId("launchpad-goal-inbox").click();

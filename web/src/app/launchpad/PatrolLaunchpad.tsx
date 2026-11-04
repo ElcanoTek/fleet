@@ -42,12 +42,15 @@ import {
 export const LAUNCHPAD_STATE_KEY = "fleet.launchpad.v1";
 export const LAUNCHPAD_LAUNCHED_KEY = "fleet.launchpad.launched";
 
+// "why" is the preamble (the expanding-mind ladder: why a patrol is the big
+// step), "welcome" the run-through of what the wizard is about to do.
 const STEPS = [
-  { id: "welcome", label: "Welcome", icon: "sparkles" },
+  { id: "why", label: "Why", icon: "sparkles" },
+  { id: "welcome", label: "Plan", icon: "map-pin" },
   { id: "tools", label: "Tools", icon: "plug" },
-  { id: "rules", label: "Ground rules", icon: "brain" },
-  { id: "watch", label: "Watch list", icon: "target" },
-  { id: "schedule", label: "Schedule", icon: "clock" },
+  { id: "rules", label: "Rules", icon: "brain" },
+  { id: "watch", label: "Watch", icon: "target" },
+  { id: "schedule", label: "Rhythm", icon: "clock" },
   { id: "launch", label: "Launch", icon: "zap" },
 ] as const;
 type StepId = (typeof STEPS)[number]["id"];
@@ -71,7 +74,7 @@ type Saved = {
 };
 
 const FRESH: Saved = {
-  step: "welcome",
+  step: "why",
   selected: null,
   persona: "",
   goals: [],
@@ -90,7 +93,7 @@ function loadSaved(): Saved {
     const raw = window.sessionStorage.getItem(LAUNCHPAD_STATE_KEY);
     if (!raw) return { ...FRESH, timezone: browserTimeZone() };
     const parsed = JSON.parse(raw) as Partial<Saved>;
-    const step = STEPS.some((s) => s.id === parsed.step) ? (parsed.step as StepId) : "welcome";
+    const step = STEPS.some((s) => s.id === parsed.step) ? (parsed.step as StepId) : "why";
     return { ...FRESH, timezone: browserTimeZone(), ...parsed, step };
   } catch {
     return { ...FRESH, timezone: browserTimeZone() };
@@ -310,6 +313,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       {launch ? (
         <LaunchProgress
           launch={launch}
+          mode={state.mode}
           cadence={cadenceText}
           title={title}
           onOpen={openPatrol}
@@ -318,6 +322,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       ) : (
         <>
           <div ref={bodyRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-7" data-testid={`launchpad-step-${state.step}`}>
+            {state.step === "why" ? <WhyStep /> : null}
             {state.step === "welcome" ? (
               <WelcomeStep
                 connectors={connectors}
@@ -431,7 +436,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 disabled={!canNext}
                 data-testid="launchpad-next"
               >
-                {state.step === "welcome" ? "Let’s go" : "Next"}
+                {state.step === "why" ? "Show me the plan" : state.step === "welcome" ? "Let’s go" : "Next"}
                 <Icon name="arrow-right" className="size-4" />
               </button>
             )}
@@ -496,7 +501,7 @@ function LaunchpadHeader({
           <Icon name="close" className="size-4" />
         </button>
       </div>
-      <ol className="relative mt-4 grid grid-cols-6 gap-1.5" aria-label="Launchpad steps">
+      <ol className="relative mt-4 grid grid-cols-7 gap-1.5" aria-label="Launchpad steps">
         {STEPS.map((s, i) => {
           const done = launching || i < stepIndex;
           const current = !launching && i === stepIndex;
@@ -542,6 +547,120 @@ function StepTitle({ kicker, title, children }: { kicker: string; title: string;
 const CARD =
   "rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-2)]";
 
+/* ── 0 · Why (the expanding mind) ───────────────────────────────────────── */
+
+// The rungs of the expanding-mind meme: each one hands the assistant a
+// little more of the work. The brain grows and glows as you climb; the top
+// rung is where a patrol with auto-approve lives.
+const MIND_RUNGS = [
+  {
+    title: "Chat with Fleet",
+    text: "You ask, it answers. Useful — and it only works while you do.",
+    meme: "Small brain",
+    size: "size-4",
+    glow: "0%",
+  },
+  {
+    title: "Schedule reports",
+    text: "The numbers arrive every Monday. You still read them and decide.",
+    meme: "Bigger brain",
+    size: "size-5",
+    glow: "28%",
+  },
+  {
+    title: "Patrols that analyze and decide",
+    text: "It watches your tools, spots what matters and tells you what to do about it.",
+    meme: "Glowing brain",
+    size: "size-7",
+    glow: "55%",
+  },
+  {
+    title: "Let it act on your behalf",
+    text: "Routine fixes happen while you sleep — every action listed for you to check.",
+    meme: "Galaxy brain",
+    size: "size-10",
+    glow: "95%",
+  },
+] as const;
+
+function WhyStep() {
+  return (
+    <div>
+      <StepTitle kicker="Why patrol?" title="Where the real gains from AI come from">
+        Most teams stop at the first rung. The step change comes when the assistant does the checking — and then the
+        doing — on its own schedule.
+      </StepTitle>
+      <ol className="grid gap-2" aria-label="The expanding mind of AI adoption" data-testid="launchpad-mind">
+        {MIND_RUNGS.map((r, i) => {
+          const top = i === MIND_RUNGS.length - 1;
+          return (
+            <li
+              key={r.title}
+              className={`grid grid-cols-[3.25rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
+                top
+                  ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_22%,transparent),transparent_70%)]"
+                  : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
+              }`}
+            >
+              <span
+                aria-hidden="true"
+                className={`relative inline-flex size-12 items-center justify-center rounded-full text-[var(--color-primary)] ${
+                  top ? "motion-safe:animate-pulse" : ""
+                }`}
+                style={{
+                  background: `radial-gradient(circle, color-mix(in srgb, var(--color-primary) ${r.glow}, transparent) 0%, transparent 70%)`,
+                }}
+              >
+                <Icon name="brain" className={r.size} />
+                {top ? <Icon name="sparkles" className="absolute -right-1 -top-1 size-4" /> : null}
+              </span>
+              <span className="min-w-0">
+                <span className="flex flex-wrap items-baseline justify-between gap-x-2">
+                  <span className="text-[0.9rem] font-semibold text-[var(--color-text-primary)]">{r.title}</span>
+                  <span className="text-[0.68rem] font-medium uppercase tracking-[0.06em] text-[var(--color-text-muted)]">
+                    {r.meme}
+                  </span>
+                </span>
+                <span className="block text-[0.8rem] text-[var(--color-text-secondary)]">{r.text}</span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <div className={`${CARD} mt-4 px-4 py-3 text-[0.82rem] leading-relaxed text-[var(--color-text-secondary)]`}>
+        <p>
+          Ethan Mollick calls the gap between what AI can already do and what we actually use it for a{" "}
+          <strong className="text-[var(--color-text-primary)]">capability overhang</strong> (
+          <a
+            className="text-[var(--color-link)] underline underline-offset-2"
+            href="https://www.penguinrandomhouse.com/books/813026/co-existence-by-ethan-mollick/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <cite>Co-Existence</cite>
+          </a>
+          , 2026). Patrols are how you close it: you delegate the watching, check its work,
+          and hand over more as it earns your trust.
+        </p>
+        <p className="mt-2 flex flex-wrap items-center gap-1.5 text-[0.78rem]" data-testid="launchpad-trust-path">
+          <span className="font-medium text-[var(--color-text-primary)]">You climb at your pace:</span>
+          <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">Just report</span>
+          <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
+          <span className="rounded-full border border-[var(--color-primary)] px-2 py-0.5 text-[var(--color-text-primary)]">
+            Suggest &amp; ask
+          </span>
+          <Icon name="arrow-right" className="size-3 text-[var(--color-text-muted)]" />
+          <span className="rounded-full border border-[var(--color-border)] px-2 py-0.5">⚡ Act for me</span>
+        </p>
+        <p className="mt-2">
+          Start where it only suggests and asks before acting. When you trust its calls, flip on ⚡ Auto-approve in the
+          Patrol bar — one switch, and you can flip it back any time.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 /* ── 1 · Welcome ────────────────────────────────────────────────────────── */
 
 function WelcomeStep({
@@ -563,7 +682,7 @@ function WelcomeStep({
   ];
   return (
     <div>
-      <StepTitle kicker={launchedBefore ? "Another patrol" : "Welcome aboard"} title="Your assistant can keep watch for you">
+      <StepTitle kicker={launchedBefore ? "Another patrol" : "Here’s the plan"} title="Five steps, about two minutes">
         A <strong className="text-[var(--color-text-primary)]">patrol</strong> is a check the assistant runs on a schedule,
         using your connected tools. Each run lands in its own chat with what it found, what it recommends, and — if you
         let it — what it already fixed.
@@ -1006,6 +1125,12 @@ function WatchStep({
             </label>
           ))}
         </div>
+        <p className="mt-2 flex items-start gap-1.5 text-[0.78rem] leading-relaxed text-[var(--color-text-secondary)]" data-testid="launchpad-mode-nudge">
+          <Icon name="info" className="mt-0.5 size-3.5 shrink-0 text-[var(--color-text-muted)]" />
+          {mode === "act"
+            ? "Bold — and you can always step back: turn ⚡ Auto-approve off in the Patrol bar and it goes back to asking first."
+            : "Most people start here and graduate: once its recommendations keep being right, turn on ⚡ Auto-approve in the Patrol bar and let it act."}
+        </p>
       </fieldset>
     </div>
   );
@@ -1247,12 +1372,14 @@ function LaunchStep({
 
 function LaunchProgress({
   launch,
+  mode,
   cadence,
   title,
   onOpen,
   onBack,
 }: {
   launch: { phase: LaunchPhase | "done"; error?: string; conversationId?: string };
+  mode: PatrolMode;
   cadence: string;
   title: string;
   onOpen: () => void;
@@ -1282,6 +1409,12 @@ function LaunchProgress({
               <strong className="text-[var(--color-text-primary)]">{title}</strong> is running its first check right now.
               After that it reports back on schedule — {cadence}. Pause or stop it from the Patrol bar, or ask in the chat to change it.
             </p>
+            {mode !== "act" ? (
+              <p className="mx-auto mt-3 max-w-md rounded-[var(--radius-md)] border border-dashed border-[var(--color-border-strong)] px-3 py-2 text-[0.8rem] text-[var(--color-text-secondary)]">
+                <strong className="text-[var(--color-text-primary)]">Next rung of the ladder:</strong> when its calls keep
+                being right, switch on ⚡ Auto-approve in the Patrol bar and let it act for you.
+              </p>
+            ) : null}
           </div>
           <button ref={openRef} type="button" className={`${btnClass({ variant: "primary" })} px-5`} onClick={onOpen} data-testid="launchpad-open">
             Watch it work
