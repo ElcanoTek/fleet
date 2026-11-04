@@ -356,8 +356,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
-| Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**, which shows the same percentage) to compact. On a phone the ring appears only once the conversation is filling up (70% or more), or while it is compacting, so the toolbar stays uncluttered. See [Long conversations](#long-conversations). |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages, showing the current context usage percentage); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -520,7 +519,10 @@ on a teammate-shared skill in the Workspace pack to enable it for your own chats
 and tasks, or click **Clone & edit** on any Workspace pack skill to load its
 instructions into the editor and customize it (you can also ask the assistant in
 chat to propose a skill or edit an existing one, then click **Approve** or
-**Approve & share** in **Settings → Skills**).
+**Approve & share** in **Settings → Skills**). Your active personal skills appear
+alongside the workspace's skills in the composer's `/` autocomplete menu (and if
+you customize a workspace skill under the same name, your version overrides the
+default description and instructions for your runs).
 
 ### Your own personas and digital twin
 
@@ -1032,8 +1034,8 @@ good. Then, top to bottom:
 
 | Area | What it holds |
 | --- | --- |
-| **Your chats** | Your conversations in this project, with how many are shared with the team and a search box scoped to it. Each row has a pill, **Only you** or your team's name: switch it to share the chat (and its files) or to stop sharing it; **More sharing options…** opens the share dialog. In a shared project, **New chat** asks whether the new chat starts as **Only you** or shared with the team. |
-| **Shared by your team** | Conversations your teammates have shared into this project, with the owner and date. Open one to read it; see [Sharing with your team](#sharing-with-your-team). A row you have already branched says **You branched this**, and still opens the owner's live chat. |
+| **Your chats** | Your conversations in this project, with how many are shared with the team and a search box scoped to it. Each row has a pill, **Only you** or your team's name (plus a **Live** badge when **Multiplayer** mode is on): switch it to share the chat (and its files) or to stop sharing it; **More sharing options…** opens the share dialog. In a shared project, **New chat** asks whether the new chat starts as **Only you** or shared with the team. |
+| **Shared by your team** | Conversations your teammates have shared into this project, with the owner and date. Open a read-only shared chat to read or branch it, or open a chat marked **Live · Multiplayer** to join the live conversation directly; see [Sharing with your team](#sharing-with-your-team). A row you have already branched says **You branched this**, and still opens the owner's live chat. |
 | **Instructions** | The standing instructions. Editable by the owner. |
 | **Team learnings** | One row per learning, each with who wrote it and when. **New team learning** adds one. The row menu holds **Pin**, **Edit**, **Retire** or **Restore**, and **Delete**. The same list is the Team learnings tab of the memory manager, so you can tend it without leaving a conversation. |
 | **Sources** | Files, grouped by chat. In a shared project, **From your team** comes first — the files teammates shared, each downloadable — then **Your chats**. Each of your groups shows how many files it lists and, for a chat shared with the team, how many of them are shared; the toggle on a file shares or unshares it, and the arrow downloads it. Files you uploaded and your personal skills never appear here; neither do hidden or internal files (names starting with a dot) unless the assistant presented one to you in a reply. Copies that came with a branch are labeled **Your copy**. Each section lists the 50 most recently active chats with files; past that, the panel says it is showing the newest files only. |
@@ -1190,11 +1192,12 @@ reload or a switch to another chat.
 
 ### Long conversations
 
-The context ring in the composer fills as a conversation grows. With **Show
+As a conversation grows, **Compact conversation** in **More options** (`•••`)
+shows the percentage of the model's context window currently in use. With **Show
 details** on, a totals line above the composer gives the same figure as a
 percentage alongside the conversation's cumulative cost. When a conversation gets
 full, a banner says so and the assistant starts to slow down and cost more per
-turn. **Compact conversation**, from the ring or the banner, replaces the earlier
+turn. **Compact conversation**, in **More options** or on the banner, replaces the earlier
 turns with a short summary so the conversation fits comfortably again; the
 transcript keeps its history, only the assistant's working view is shortened.
 You do not have to watch for it: by default, once a request reaches about 90% of

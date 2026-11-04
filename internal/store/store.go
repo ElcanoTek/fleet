@@ -2057,7 +2057,7 @@ const conversationColumns = `id, user_email, title, persona, model, pinned, lock
 //   - optional_mcp_servers_enabled — the owner's per-chat connector loadout.
 //   - parent_conversation_id — reveals that a shared chat was branched from a
 //     private one, and hands over that private chat's id.
-const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, multiplayer, '[]' AS multiplayer_participants, '[]' AS multiplayer_excluded`
+const teamConversationColumns = `id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at, archived_at, title_locked, FALSE AS optional_mcp_servers_enabled, NULL::text[] AS labels, approval_timeout_seconds, '' AS share_token, '' AS parent_conversation_id, COALESCE(branch_point_message_id, 0), thinking_config, COALESCE(project_id, ''), NULL::jsonb AS mcp_accounts, team_visible, FALSE AS auto_approve, multiplayer, '[]' AS multiplayer_participants, COALESCE(multiplayer_excluded, '[]')`
 
 // pgTypeMap is the pgx type map used to decode Postgres array literals reaching
 // this package over database/sql. It is read-only after init and safe for
@@ -2177,10 +2177,16 @@ func (s *Store) ListTeamConversations(ctx context.Context, callerEmail string) (
 	if err != nil {
 		return nil, err
 	}
-	// Belt-and-suspenders: never serialize a teammate's share token even
-	// if the SELECT list drifts back to conversationColumns.
+	// Belt-and-suspenders: never serialize a teammate's share token or
+	// exclusion list, and mask Multiplayer = false if the caller cannot
+	// participate in multiplayer (excluded, viewer, or lockdown).
+	callerCanParticipate := caller.Role != RoleViewer
 	for i := range list {
 		list[i].ShareToken = ""
+		if list[i].Multiplayer && (normalizeEmail(list[i].UserEmail) != callerEmail && (!callerCanParticipate || list[i].Lockdown || containsEmail(list[i].MultiplayerExcluded, callerEmail))) {
+			list[i].Multiplayer = false
+		}
+		list[i].MultiplayerExcluded = nil
 	}
 	return list, nil
 }

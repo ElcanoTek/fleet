@@ -369,13 +369,12 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 	if err != nil {
 		return nil, err
 	}
-	// Belt-and-suspenders, as in ListTeamConversations: a teammate listing
-	// must never carry the owner's public share capability URL.
+	callerCanParticipate := caller.Role != RoleViewer
 	for i := range list {
-		list[i].ShareToken = ""
-	}
-	if list == nil {
-		list = []Conversation{}
+		if list[i].Multiplayer && (!callerCanParticipate || list[i].Lockdown || containsEmail(list[i].MultiplayerExcluded, callerEmail)) {
+			list[i].Multiplayer = false
+		}
+		list[i].MultiplayerExcluded = nil
 	}
 	return list, nil
 }

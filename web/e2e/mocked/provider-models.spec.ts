@@ -84,5 +84,6 @@ test("a shadowed OpenRouter catch-all stays browsable and sends an explicit rout
   expect(sent).toBe(`router/${DEFAULT_MODEL}`);
   await expect(page.getByTestId("composer-model-label-full")).toHaveText("router: Claude Opus 5.5");
   await expect(page.locator("button[aria-haspopup='listbox']").first().locator(".model-cost")).toHaveAttribute("data-cost-tier", "3");
-  await expect(page.getByRole("button", { name: "Context 10% full — click to compact" })).toBeVisible();
+  await page.getByTestId("composer-more-button").click();
+  await expect(page.getByRole("menuitem", { name: "Compact conversation (10% full)" })).toBeVisible();
 });

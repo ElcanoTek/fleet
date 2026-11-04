@@ -25,12 +25,16 @@ files the agent reads and runs with `bash`/`run_python`.
 The chat server exposes the roster (auth + member gated, like `/personas`):
 
 ```json
-{ "skills": [ { "name": "example-skill", "description": "…" } ] }
+{
+  "skills": [ { "name": "example-skill", "description": "…" } ],
+  "shared_skills": [ { "name": "team-skill", "description": "…", "source": "workspace", "shared_by": "u@x.com" } ],
+  "user_skills": [ { "name": "my-skill", "description": "…", "source": "user" } ]
+}
 ```
 
 Nil-safe: a server without a bundle (or a bundle without a `skills/` dir)
-returns `{"skills":[]}`. The web app proxies it at `/api/skills` and fetches it
-once at startup to drive the composer autocomplete. Like personas/protocols,
+returns `{"skills":[]}` (plus `shared_skills` and the caller's active `user_skills` when present). The web app proxies it at `/api/skills` and fetches it
+at startup (and refreshes it after saving a skill from Chat) to drive the composer `/` autocomplete over both the bundle roster and the caller's active personal skills. Like personas/protocols,
 the roster is re-read from disk per request, so an operator editing a skill in
 place is picked up without a restart.
 
@@ -67,7 +71,7 @@ SKILL.md (it reliably does, but it is a prompt-level contract, not an enforced
 one).
 
 In the web composer, typing `/` at the start of the message opens a small
-autocomplete popover over the bundle roster (prefix filter, ↑/↓ + Enter/Tab to
+autocomplete popover over the bundle roster and the caller's active personal skills (prefix filter, ↑/↓ + Enter/Tab to
 complete to `/name `, Esc to dismiss). The popover is a typing aid only — the
 server is the authority on what matches.
 
@@ -216,7 +220,11 @@ before a chat turn, the caller's own ACTIVE skills are written into the
 conversation workspace (`user-skills/<name>/SKILL.md`, regenerated from the DB
 fields and cleaned up when a skill is renamed/disabled/deleted, including when
 the effective roster becomes empty) and listed in a "Your user's skills" prompt
-roster section. `/name` invocation matches them after bundle/built-in names.
+roster section. Active personal skills also appear in `GET /skills` under
+`user_skills` so they show up in the composer's `/` autocomplete alongside
+bundle skills, and `/name` invocation matches active user skills (taking
+precedence when a user customizes a bundle skill of the same name) before
+falling back to bundle/built-in names.
 
 **Self-service Workspace sharing with recipient opt-in (`visibility = 'workspace'`)**:
 when a user marks an active skill as shared with the workspace (`Share with

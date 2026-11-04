@@ -696,4 +696,43 @@ describe("Composer — share button and overflow options menu", () => {
     expect(screen.queryByTestId("composer-more-popover")).toBeNull();
     expect(moreBtn).toHaveFocus();
   });
+
+  it("shows Compact conversation only inside More options and not as a standalone toolbar icon", () => {
+    const setConfirmSummarize = vi.fn();
+    render(
+      <Host
+        overrides={{
+          activeConversationId: "conv-compact",
+          messages: [
+            { id: 1, role: "user", content: "Hello", state: "done" },
+            { id: 2, role: "assistant", content: "Hi!", state: "done" },
+          ],
+          contextUsage: {
+            used: 42000,
+            capacity: 100000,
+            fraction: 0.42,
+            severity: "ok",
+          },
+          isSummarizing: false,
+          compactToastVisible: true,
+          setConfirmSummarize,
+        }}
+      />,
+    );
+
+    // No standalone compact icon or context ring renders on the toolbar outside More options.
+    expect(screen.queryByTestId("composer-context-ring")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /Context .* full — click to compact/ }),
+    ).toBeNull();
+
+    // Opening More options exposes the Compact conversation menuitem.
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    const compactItem = screen.getByRole("menuitem", {
+      name: "Compact conversation (42% full)",
+    });
+    expect(compactItem).toBeInTheDocument();
+    fireEvent.click(compactItem);
+    expect(setConfirmSummarize).toHaveBeenCalledWith(true);
+  });
 });
