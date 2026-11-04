@@ -839,7 +839,7 @@ export function ProjectHome({
       {shareFirstConfirm ? (
         <ConfirmDialog
           title={`Share ${project.name} with ${shareTeam || "your team"}?`}
-          confirmLabel={`Share with ${shareTeam || "your team"}`}
+          confirmLabel="Share with your team"
           confirmTone="accent"
           busy={busy.shareProject}
           testId="share-project-first-confirm"

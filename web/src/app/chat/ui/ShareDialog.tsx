@@ -101,21 +101,21 @@ export function teamShareState({
   return moveTargets.length > 0 ? "A1" : "A1b";
 }
 
-/** "In Knowertech · Shared with Elcano" — the subline under the title. */
+/** "In Knowertech · Shared with your team" — the subline under the title. */
 function visibilityLabel(
   conversation: Pick<
     ConversationSummary,
     "team_visible" | "share_token" | "multiplayer"
   >,
-  team: string,
+  _team?: string,
 ): string {
   if (conversation.multiplayer) {
     return conversation.share_token ? "Multiplayer and by link" : "Multiplayer";
   }
   if (conversation.team_visible) {
     return conversation.share_token
-      ? `Shared with ${team} and by link`
-      : `Shared with ${team}`;
+      ? "Shared with your team and by link"
+      : "Shared with your team";
   }
   return conversation.share_token ? "Public link" : "Only you";
 }
@@ -289,13 +289,6 @@ export function ShareDialog({
   const state: TeamShareState | null = conversation
     ? teamShareState({ conversation, project, myTeam, moveTargets })
     : null;
-  // The A1 target team is the caller's team (the picker only lists those).
-  const audience =
-    state === "A1" || state === "A1b" || state === "other-team"
-      ? myTeam || "your team"
-      : state === "A3a"
-        ? "your team"
-        : team;
 
   const conversationId = conversation?.id ?? "";
   // Multiplayer state & participant management.
@@ -464,17 +457,16 @@ export function ShareDialog({
       setChooseOpen(false);
       setUnchecked(null);
       setOutputsTick((t) => t + 1);
-      confirmShared(c, result, project?.id ?? "", team);
+      confirmShared(c, result, project?.id ?? "", "your team");
     });
 
   const moveAndShare = (c: ConversationSummary) =>
     run(async () => {
       if (!pickedId) return;
-      const target = moveTargets.find((p) => p.id === pickedId);
       const result = await onMoveAndShare(c, pickedId);
       if (!result) return;
       setOutputsTick((t) => t + 1);
-      confirmShared(c, result, pickedId, target?.team_id || audience);
+      confirmShared(c, result, pickedId, "your team");
     });
 
   const stopSharing = (c: ConversationSummary) =>
@@ -488,7 +480,7 @@ export function ShareDialog({
     const url = teamLinkUrl(c.id);
     const done = () =>
       toast.notify({
-        message: `Link copied. Only ${team} members can open it.`,
+        message: "Link copied. Only members of your team can open it.",
       });
     // A blocked (or missing) clipboard is not a copied link — but the
     // owner clicked, so say so and hand them the link to copy themselves
@@ -666,7 +658,7 @@ export function ShareDialog({
           >
             <h3 className="m-0 flex items-center gap-2 text-[0.9rem] font-semibold text-[var(--color-text-primary)]">
               <TeamGlyph className="size-4 shrink-0" />
-              {state === "A5" ? `Shared with ${team}` : `Share with ${audience}`}
+              {state === "A5" ? "Shared with your team" : "Share with your team"}
             </h3>
 
             {state === "A1" || state === "other-team" ? (
@@ -676,13 +668,13 @@ export function ShareDialog({
                     <>
                       <strong className={STRONG}>{project.name}</strong> is
                       shared with <strong className={STRONG}>{project.team_id}</strong>,
-                      and you’re not in that team. To share this chat with{" "}
-                      {audience}, move it to a project shared with {audience}.
+                      and you’re not in that team. To share this chat with your
+                      team, move it to a project shared with your team.
                     </>
                   ) : (
                     <>
-                      To share a chat with {audience}, it needs to be in a
-                      project shared with {audience}. Pick one and this chat
+                      To share a chat with your team, it needs to be in a
+                      project shared with your team. Pick one and this chat
                       will move into it.
                     </>
                   )}
@@ -694,7 +686,7 @@ export function ShareDialog({
                         htmlFor={pickerId}
                         className="text-[0.75rem] text-[var(--color-text-muted)]"
                       >
-                        Project shared with {audience}
+                        Project shared with your team
                       </label>
                       <select
                         id={pickerId}
@@ -740,8 +732,8 @@ export function ShareDialog({
             {state === "A1b" ? (
               <>
                 <p className={BODY}>
-                  To share a chat with {audience}, it needs to be in a project
-                  shared with {audience}. Create one to move this chat into.
+                  To share a chat with your team, it needs to be in a project
+                  shared with your team. Create one to move this chat into.
                 </p>
                 <div>
                   <button
@@ -761,7 +753,7 @@ export function ShareDialog({
               <>
                 <p className={BODY}>
                   <strong className={STRONG}>{project.name}</strong> isn’t
-                  shared with {audience}, so its chats are private to you.
+                  shared with your team, so its chats are private to you.
                   Share the project first, then this chat.
                 </p>
                 <div>
@@ -829,7 +821,7 @@ export function ShareDialog({
                     disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
-                    Share with {team}
+                    Share with your team
                   </button>
                 </div>
               </>
@@ -838,8 +830,8 @@ export function ShareDialog({
             {state === "A5" && !confirmStop ? (
               <>
                 <p className={BODY}>
-                  Teammates can read it and branch it, but can’t edit it. Only{" "}
-                  {team} members can open the link.
+                  Teammates can read it and branch it, but can’t edit it. Only
+                  members of your team can open the link.
                 </p>
                 {files ? (
                   <p
@@ -886,7 +878,7 @@ export function ShareDialog({
                     onClick={() => copyTeamLink(conversation)}
                   >
                     <TeamGlyph className="size-3.5" />
-                    Copy link for {team}
+                    Copy link for your team
                   </button>
                   <button
                     type="button"
@@ -907,7 +899,7 @@ export function ShareDialog({
                 className="flex flex-col gap-2.5 rounded-[var(--radius-md)] border border-[var(--color-danger-border)] bg-[color-mix(in_srgb,var(--color-danger)_8%,transparent)] p-3"
               >
                 <p className="m-0 text-[0.8125rem] leading-[1.5] text-[var(--color-text-primary)]">
-                  Stop sharing with {team}?{" "}
+                  Stop sharing with your team?{" "}
                   {outputsStatus === "loading"
                     ? "Counting shared files…"
                     : outputsStatus === "failed" || !files
@@ -960,7 +952,7 @@ export function ShareDialog({
                     disabled={working || outputsStatus === "loading"}
                     onClick={() => void shareNow(conversation)}
                   >
-                    Share with {team}
+                    Share with your team
                   </button>
                 </div>
               </>

@@ -124,9 +124,9 @@ test("the Share dialog holds both audiences and only offers the team inside a te
   let block = teamBlock(dialog);
   await expect(block).toHaveAttribute("data-state", "A1");
   await expect(block).toContainText(
-    "To share a chat with quant, it needs to be in a project shared with quant. Pick one and this chat will move into it.",
+    "To share a chat with your team, it needs to be in a project shared with your team. Pick one and this chat will move into it.",
   );
-  await expect(block.getByLabel("Project shared with quant").locator("option")).toHaveText(["Quant"]);
+  await expect(block.getByLabel("Project shared with your team").locator("option")).toHaveText(["Quant"]);
   await expect(block.getByRole("button", { name: "Move and share" })).toBeEnabled();
   // Opening the dialog must not mint a public link as a side effect.
   await expect(dialog.getByLabel("Share link URL")).toHaveCount(0);
@@ -138,9 +138,9 @@ test("the Share dialog holds both audiences and only offers the team inside a te
   dialog = await openShare("In Mine");
   block = teamBlock(dialog);
   await expect(block).toHaveAttribute("data-state", "A2");
-  await expect(block).toContainText("Mine isn’t shared with quant, so its chats are private to you.");
+  await expect(block).toContainText("Mine isn’t shared with your team, so its chats are private to you.");
   await expect(block.getByRole("button", { name: "Share project first" })).toBeVisible();
-  await expect(block.getByRole("button", { name: "Share with quant", exact: true })).toHaveCount(0);
+  await expect(block.getByRole("button", { name: "Share with your team", exact: true })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
   // A4 → A5 — a chat in a team-shared project: one button shares it (with
@@ -150,13 +150,13 @@ test("the Share dialog holds both audiences and only offers the team inside a te
   block = teamBlock(dialog);
   await expect(block).toHaveAttribute("data-state", "A4");
   await expect(block.getByTestId("share-file-line")).toContainText("Includes 2 files");
-  await block.getByRole("button", { name: "Share with quant", exact: true }).click();
+  await block.getByRole("button", { name: "Share with your team", exact: true }).click();
   // The checklist was never opened, so the owner's file choices are untouched.
   await expect.poll(() => teamWrites.map((w) => JSON.parse(w))).toEqual([
     { visible: true },
   ]);
-  await expect(page.getByText("“In Quant” is shared with quant, with 2 files.")).toBeVisible();
-  await expect(block.getByRole("button", { name: "Copy link for quant" })).toBeVisible();
+  await expect(page.getByText("“In Quant” is shared with your team, with 2 files.")).toBeVisible();
+  await expect(block.getByRole("button", { name: "Copy link for your team" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close share dialog" }).click();
 
   // The row now carries the TEAM badge, distinct from the link badge and

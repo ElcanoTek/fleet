@@ -294,7 +294,7 @@ describe("Share project first", () => {
     });
     const { props, rerender } = renderHome({ project: PERSONAL, shareFirst });
     const dialog = await screen.findByRole("dialog", { name: "Share Quant with quant?" });
-    fireEvent.click(within(dialog).getByRole("button", { name: "Share with quant" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Share with your team" }));
     await waitFor(() =>
       expect(props.onUpdateSettings).toHaveBeenCalledWith({ team_shared: true }),
     );

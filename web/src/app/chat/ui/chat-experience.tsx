@@ -4417,11 +4417,10 @@ export function ChatExperience({
       target?.team_id &&
       conv.project_id !== projectID
     ) {
-      const team = target.team_id;
       notify({
         message: `Moved to ${target.name}. Only you can see it.`,
         action: {
-          label: `Share with ${team}`,
+          label: "Share with your team",
           onClick: () => {
             void (async () => {
               const res = await setTeamShared(
@@ -4430,13 +4429,13 @@ export function ChatExperience({
               );
               if (res?.team_visible)
                 notify(
-                  sharedToast(conv.title, team, res.shared_files, () => {
+                  sharedToast(conv.title, "your team", res.shared_files, () => {
                     setTeamChatView(null);
                     setProjectHome({ id: projectID, sourcesFocus: conv.id });
                   }),
                 );
               else
-                showRailError(`Couldn't share “${conv.title}” with ${team}.`);
+                showRailError(`Couldn't share “${conv.title}” with your team.`);
             })();
           },
         },

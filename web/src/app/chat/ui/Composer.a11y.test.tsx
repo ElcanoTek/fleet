@@ -551,7 +551,7 @@ describe("Composer — persona picker with user personas", () => {
 });
 
 describe("Composer — share button and overflow options menu", () => {
-  it("renders the Share button from the start of a chat and reflects active Multiplayer/Shared state", () => {
+  it("groups Share this chat in More options when private and surfaces the active indicator on the bar when shared", () => {
     const onOpenShare = vi.fn();
     const { rerender } = render(
       <Host
@@ -561,6 +561,8 @@ describe("Composer — share button and overflow options menu", () => {
         }}
       />,
     );
+    expect(screen.queryByTestId("composer-share-button")).toBeNull();
+    fireEvent.click(screen.getByTestId("composer-more-button"));
     const shareBtn = screen.getByTestId("composer-share-button");
     expect(shareBtn).toHaveAccessibleName("Share this chat");
     fireEvent.click(shareBtn);
@@ -589,7 +591,7 @@ describe("Composer — share button and overflow options menu", () => {
       />,
     );
     expect(screen.getByTestId("composer-share-button")).toHaveAccessibleName(
-      "Shared with Growth and by public link — open sharing",
+      "Shared with your team and by public link — open sharing",
     );
     expect(screen.getByTestId("composer-share-link-badge")).toBeInTheDocument();
   });

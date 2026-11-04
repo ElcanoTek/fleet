@@ -319,7 +319,7 @@ mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
 and a **Send email** (`mailto:`) action (omitted by default when not configured).
 Every conversation also shows who can see it — **Only
-you**, **Shared with** your team, **Multiplayer**, or **Public link** — and a **Share** button in the composer.
+you**, **Shared with your team**, **Multiplayer**, or **Public link** — in the header, and **Share this chat** in **More options** (`•••`) in the composer (plus an active sharing indicator on the composer toolbar whenever the chat is shared).
 Both open the share dialog.
 
 ### The transcript
@@ -357,9 +357,8 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), **Send on Enter**, and **Dashboard view**. When a non-default persona, a patrol schedule, or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu containing **Prompt library**, **Persona** (on a new draft before the conversation is created by sending a message or opening **Share**), **Patrol & schedule**, **Share this chat**, **Auto-approve tools**, **Compact conversation** (once a conversation has messages), **Send on Enter**, and **Dashboard view**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Context ring | Appears once the conversation has content and fills as it grows. Click it (or choose **Compact conversation** in **More options**, which shows the same percentage) to compact. On a phone the ring appears only once the conversation is filling up (70% or more), or while it is compacting, so the toolbar stays uncluttered. See [Long conversations](#long-conversations). |
-| Share | An icon on the right from the very start of the chat (even before your first message is sent). Opens sharing to turn on **Multiplayer**, share read-only with your team, or copy a public link. The icon shows the current state: an arrow while the chat is only yours, two people (tinted) when it is shared with your team, a chain link (tinted) for a public link, and two people with a dot for **Multiplayer**. A public link alongside team sharing or **Multiplayer** adds a small chain to the people icon. Hover it, or use a screen reader, for the words. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -1103,7 +1102,7 @@ Sharing a conversation with your team is how a good piece of work travels. A cha
 is shared with a team only when it sits in a project shared with that team **and**
 its owner shares it; sharing the project alone never shares its chats.
 
-**The share dialog** (the **Share** button in the composer, the visibility badge in the header, or **Share…** in a
+**The share dialog** (**Share this chat** inside **More options** `•••` in the composer, the visibility badge in the header, or **Share…** in a
 chat's menu) always leads with your team and offers one button that does the
 whole job for the situation you are in:
 
@@ -1111,8 +1110,8 @@ whole job for the situation you are in:
 | --- | --- |
 | The chat is in no project | **Move and share** into a project already shared with your team, or **Create shared project** if there is none yet — the chat moves in and is shared. |
 | The chat is in a personal project | **Share project first**, which takes you to the project home with the confirmation open; afterwards the getting-started card offers to share the chat in one click. |
-| The chat is in a project shared with your team | **Share with** your team. **Includes N files · Choose…** lets you untick files before sharing. |
-| The chat is shared | **Copy link for** your team, plus **Stop sharing** (which asks first and, when it can count them, says how many files stop being shared). |
+| The chat is in a project shared with your team | **Share with your team**. **Includes N files · Choose…** lets you untick files before sharing. |
+| The chat is shared | **Copy link for your team**, plus **Stop sharing** (which asks first and, when it can count them, says how many files stop being shared). |
 | You are not on a team | Nothing to share with yet; the dialog says how to get onto one. |
 
 **What it shares.** Your messages, the assistant's replies, and the **files the

@@ -236,10 +236,10 @@ describe("moving only moves (B11)", () => {
       fetchMock.mock.calls.some(([u]) => String(u).endsWith("/share-with-team")),
     ).toBe(false);
 
-    fireEvent.click(screen.getByRole("button", { name: "Share with Elcano" }));
+    fireEvent.click(screen.getByRole("button", { name: "Share with your team" }));
     await waitFor(() =>
       expect(screen.getByTestId("chat-toast")).toHaveTextContent(
-        "“Alpha chat” is shared with Elcano, with 2 files.",
+        "“Alpha chat” is shared with your team, with 2 files.",
       ),
     );
     expect(
@@ -473,7 +473,8 @@ describe("Move and share is one action (A1)", () => {
       return base(input, init);
     });
     await mountChat();
-    fireEvent.click(screen.getByRole("button", { name: /^Share/ }));
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    fireEvent.click(screen.getByTestId("composer-share-button"));
     fireEvent.click(await screen.findByRole("button", { name: "Move and share" }));
 
     const dialog = await screen.findByRole("dialog");
@@ -504,7 +505,8 @@ describe("Move and share is one action (A1)", () => {
       return base(input, init);
     });
     await mountChat();
-    fireEvent.click(screen.getByRole("button", { name: /^Share/ }));
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    fireEvent.click(screen.getByTestId("composer-share-button"));
     fireEvent.click(await screen.findByRole("button", { name: "Move and share" }));
     const dialog = await screen.findByRole("dialog");
     await waitFor(() =>
@@ -541,8 +543,8 @@ describe("Create shared project from the share dialog (A1b)", () => {
     );
     await screen.findByRole("button", { name: "Open project Scratch" });
 
-    // `\b`: the "Shared chat" row (its project is not listed here) is not it.
-    fireEvent.click(screen.getByRole("button", { name: /^Share\b/ }));
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    fireEvent.click(screen.getByTestId("composer-share-button"));
     fireEvent.click(await screen.findByRole("button", { name: "Create shared project" }));
     const dialog = await screen.findByRole("dialog", { name: "New project" });
     fireEvent.change(screen.getByPlaceholderText("e.g. Knowertech: Q4 planning"), {
@@ -606,7 +608,8 @@ describe("a create that lands after its dialog was dismissed (Codex round 15)", 
 
     // The share dialog's "Create shared project" for this chat (move it in
     // and share it)…
-    fireEvent.click(screen.getByRole("button", { name: /^Share\b/ }));
+    fireEvent.click(screen.getByTestId("composer-more-button"));
+    fireEvent.click(screen.getByTestId("composer-share-button"));
     fireEvent.click(await screen.findByRole("button", { name: "Create shared project" }));
     const first = await screen.findByRole("dialog", { name: "New project" });
     fireEvent.change(within(first).getByPlaceholderText("e.g. Knowertech: Q4 planning"), {

@@ -368,7 +368,6 @@ export function Composer({
   activePatrolCount = 0,
   onOpenShare,
   shareConversation,
-  shareTeam,
   shareBusy = false,
 }: ComposerProps) {
   // Multi-line composer UX (issue #315):
@@ -1312,15 +1311,62 @@ export function Composer({
                 contextUsage?.fraction != null
                   ? Math.min(999, Math.round(contextUsage.fraction * 100))
                   : null;
+              const isMultiplayer = Boolean(shareConversation?.multiplayer);
+              const isTeamShared = Boolean(
+                shareConversation?.team_visible && !shareConversation?.multiplayer,
+              );
+              const isLinkShared = Boolean(
+                shareConversation?.share_token &&
+                  !shareConversation?.team_visible &&
+                  !shareConversation?.multiplayer,
+              );
+              const isSharedAny =
+                Boolean(onOpenShare) &&
+                (isMultiplayer || isTeamShared || isLinkShared);
+              // A public link can sit beside team or multiplayer sharing; it
+              // is never hidden behind them (anyone with the URL can read).
+              const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
+              const linkSuffix = alsoLink ? " and by public link" : "";
+              const shareAriaLabel = isMultiplayer
+                ? `Multiplayer${linkSuffix} — open sharing`
+                : isTeamShared
+                  ? `Shared with your team${linkSuffix} — open sharing`
+                  : isLinkShared
+                    ? "Public link — open sharing"
+                    : "Share this chat";
+              const shareTipText = isMultiplayer
+                ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
+                : isTeamShared
+                  ? `Shared with your team${linkSuffix} — click to manage sharing`
+                  : isLinkShared
+                    ? "Public link active — click to manage sharing"
+                    : "Share this chat or start multiplayer";
+              const shareDisabled =
+                shareBusy ||
+                isStreaming ||
+                isUploadingAttachments ||
+                ((activeConversationId === null ||
+                  isPendingKey(activeConversationId)) &&
+                  messages.length > 0);
+              const triggerShare = () => {
+                setMoreMenuOpen(false);
+                setMcpPickerOpen(false);
+                setToolsLibrary(null);
+                setPersonaPickerOpen(false);
+                setModelPickerOpen(false);
+                setPatrolPopoverOpen(false);
+                onOpenShare?.();
+              };
               const hasActiveSecondary =
                 isAutoApprove ||
                 activePatrolCount > 0 ||
-                (!personaLocked && isNonDefaultPersona);
+                (!personaLocked && isNonDefaultPersona) ||
+                isSharedAny;
               return (
                 <>
                   {/* Overflow menu ("More options"): consolidates Prompt library,
-                      Persona, Patrol schedule, Auto-approve tools, Compact, and
-                      Send on Enter into a clean labeled popover so the primary
+                      Persona, Patrol schedule, Share, Auto-approve tools, Compact,
+                      and Send on Enter into a clean labeled popover so the primary
                       composer bar stays calm on both mobile and desktop. */}
                   <div
                     ref={moreMenuRef}
@@ -1486,6 +1532,68 @@ export function Composer({
                             <span className="inline-flex shrink-0 items-center gap-1 text-[0.7rem] font-medium text-[var(--color-text-muted)]">
                               {activePatrolCount > 0 ? `${activePatrolCount} active` : "Set up"}
                               <Icon name="chevron-right" className="size-3.5" />
+                            </span>
+                          </button>
+                        ) : null}
+
+                        {onOpenShare ? (
+                          <button
+                            type="button"
+                            role="menuitem"
+                            data-testid="composer-share-button"
+                            disabled={shareDisabled}
+                            aria-label={shareAriaLabel}
+                            className={`${POP_ROW} disabled:opacity-40`}
+                            onClick={triggerShare}
+                          >
+                            <span className="flex min-w-0 items-center gap-2.5">
+                              <span
+                                className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${
+                                  isSharedAny
+                                    ? "bg-[color-mix(in_srgb,var(--color-accent)_18%,transparent)] text-[var(--color-accent)]"
+                                    : "bg-[var(--color-overlay-soft)] text-[var(--color-text-secondary)]"
+                                }`}
+                              >
+                                {isMultiplayer || isTeamShared ? (
+                                  <TeamGlyph className="size-3.5 shrink-0" />
+                                ) : isLinkShared ? (
+                                  <ShareGlyph className="size-3.5 shrink-0" />
+                                ) : (
+                                  <Icon name="external-link" className="size-3.5 shrink-0" />
+                                )}
+                              </span>
+                              <span className="grid min-w-0">
+                                <span className={POP_TITLE}>Share this chat</span>
+                                <span className="truncate text-[0.7rem] text-[var(--color-text-muted)]">
+                                  {isMultiplayer
+                                    ? `Multiplayer active${alsoLink ? " · public link on" : ""}`
+                                    : isTeamShared
+                                      ? `Shared with your team${alsoLink ? " · public link on" : ""}`
+                                      : isLinkShared
+                                        ? "Public link active — anyone with the link can read"
+                                        : "Share with your team, by link, or start multiplayer"}
+                                </span>
+                              </span>
+                            </span>
+                            <span
+                              className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[0.68rem] font-semibold ${
+                                isSharedAny
+                                  ? "border-[color-mix(in_srgb,var(--color-accent)_45%,var(--color-border-strong))] bg-[color-mix(in_srgb,var(--color-accent)_16%,transparent)] text-[var(--color-accent)]"
+                                  : "border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]"
+                              }`}
+                            >
+                              {isMultiplayer ? (
+                                "Multiplayer"
+                              ) : isTeamShared ? (
+                                "Shared"
+                              ) : isLinkShared ? (
+                                "Link on"
+                              ) : (
+                                <>
+                                  <span>Only you</span>
+                                  <Icon name="chevron-right" className="size-3" />
+                                </>
+                              )}
                             </span>
                           </button>
                         ) : null}
@@ -1870,7 +1978,7 @@ export function Composer({
                   {/* Active Auto-approve indicator: shown directly on the desktop toolbar when
                       Auto-approve is ON so the user always sees it at a glance and can
                       turn it off in a single tap (on phone viewports More options carries
-                      the active dot and toggle to avoid crowding Share/Send). */}
+                      the active dot and toggle to avoid crowding Send). */}
                   {toggleAutoApprove && isAutoApprove ? (
                     <button
                       type="button"
@@ -1885,101 +1993,54 @@ export function Composer({
                       <span className="sr-only">Auto-approve on</span>
                     </button>
                   ) : null}
+
+                  {/* Active Share indicator: shown directly on the desktop toolbar only when
+                      the chat is actively shared or in Multiplayer mode so the user sees who
+                      can read/participate at a glance (when private, Share stays inside More
+                      options so the primary bar isn't cluttered). */}
+                  {isSharedAny ? (
+                    <button
+                      type="button"
+                      data-testid={
+                        moreMenuOpen
+                          ? "composer-share-indicator"
+                          : "composer-share-button"
+                      }
+                      disabled={shareDisabled}
+                      aria-label={shareAriaLabel}
+                      data-tip-top={shareTipText}
+                      onClick={triggerShare}
+                      className={`hidden sm:inline-flex ${TOOL_BTN} ${TOOL_BTN_ACTIVE}`}
+                    >
+                      {isMultiplayer || isTeamShared ? (
+                        <TeamGlyph className="size-4 shrink-0" />
+                      ) : (
+                        <ShareGlyph className="size-4 shrink-0" />
+                      )}
+                      {alsoLink ? (
+                        <span
+                          aria-hidden="true"
+                          data-testid="composer-share-link-badge"
+                          className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
+                        >
+                          <ShareGlyph className="size-[0.55rem]" />
+                        </span>
+                      ) : null}
+                      {isMultiplayer ? (
+                        <span
+                          aria-hidden="true"
+                          data-testid="composer-share-multiplayer-dot"
+                          className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
+                        />
+                      ) : null}
+                    </button>
+                  ) : null}
                 </>
               );
             })()}
           </div>
 
           <div className="flex shrink-0 items-center gap-[0.35rem]">
-            {onOpenShare ? (
-              (() => {
-                const isMultiplayer = Boolean(shareConversation?.multiplayer);
-                const isTeamShared = Boolean(
-                  shareConversation?.team_visible && !shareConversation?.multiplayer,
-                );
-                const isLinkShared = Boolean(
-                  shareConversation?.share_token &&
-                    !shareConversation?.team_visible &&
-                    !shareConversation?.multiplayer,
-                );
-                const isSharedAny = isMultiplayer || isTeamShared || isLinkShared;
-                // A public link can sit beside team or multiplayer sharing; it
-                // is never hidden behind them (anyone with the URL can read).
-                const alsoLink = Boolean(shareConversation?.share_token) && !isLinkShared;
-                const linkSuffix = alsoLink ? " and by public link" : "";
-                const ariaLabel = isMultiplayer
-                  ? `Multiplayer${linkSuffix} — open sharing`
-                  : isTeamShared
-                    ? shareTeam
-                      ? `Shared with ${shareTeam}${linkSuffix} — open sharing`
-                      : `Shared with team${linkSuffix} — open sharing`
-                    : isLinkShared
-                      ? "Public link — open sharing"
-                      : "Share this chat";
-                const tipText = isMultiplayer
-                  ? `Multiplayer chat is on${alsoLink ? ", plus a public link" : ""} — click to manage participants or sharing`
-                  : isTeamShared
-                    ? `Shared with your team${linkSuffix} — click to manage sharing`
-                    : isLinkShared
-                      ? "Public link active — click to manage sharing"
-                      : "Share this chat or start multiplayer";
-                return (
-                  <button
-                    type="button"
-                    data-testid="composer-share-button"
-                    disabled={
-                      shareBusy ||
-                      isStreaming ||
-                      isUploadingAttachments ||
-                      ((activeConversationId === null ||
-                        isPendingKey(activeConversationId)) &&
-                        messages.length > 0)
-                    }
-                    aria-label={ariaLabel}
-                    data-tip-top={tipText}
-                    onClick={() => {
-                      setMoreMenuOpen(false);
-                      setMcpPickerOpen(false);
-                      setToolsLibrary(null);
-                      setPersonaPickerOpen(false);
-                      setModelPickerOpen(false);
-                      setPatrolPopoverOpen(false);
-                      onOpenShare();
-                    }}
-                    // Icon-only, like the toolbar's other controls: the glyph
-                    // says who can see the chat (people = team / multiplayer,
-                    // chain = public link, arrow = private), the accent tint
-                    // says it is shared, and a dot marks multiplayer. The
-                    // label and tooltip carry the words.
-                    className={`${TOOL_BTN} ${isSharedAny ? TOOL_BTN_ACTIVE : ""}`}
-                  >
-                    {isMultiplayer || isTeamShared ? (
-                      <TeamGlyph className="size-4 shrink-0" />
-                    ) : isLinkShared ? (
-                      <ShareGlyph className="size-4 shrink-0" />
-                    ) : (
-                      <Icon name="external-link" className="size-[0.95rem] shrink-0" />
-                    )}
-                    {alsoLink ? (
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-share-link-badge"
-                        className="absolute bottom-[0.15rem] right-[0.1rem] inline-flex size-[0.7rem] items-center justify-center rounded-full bg-[var(--color-surface-1)] text-[var(--color-accent)]"
-                      >
-                        <ShareGlyph className="size-[0.55rem]" />
-                      </span>
-                    ) : null}
-                    {isMultiplayer ? (
-                      <span
-                        aria-hidden="true"
-                        data-testid="composer-share-multiplayer-dot"
-                        className="absolute right-[0.2rem] top-[0.2rem] size-1.5 rounded-full bg-[var(--color-accent)] shadow-[0_0_0_2px_var(--color-surface-1)]"
-                      />
-                    ) : null}
-                  </button>
-                );
-              })()
-            ) : null}
             {isStreaming ? (
               <button
                 aria-label="Stop generating"
