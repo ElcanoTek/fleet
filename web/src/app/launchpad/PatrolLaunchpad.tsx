@@ -15,6 +15,7 @@
 // their answers) and come back to the same step.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getBootstrap } from "@/app/lib/bootstrap";
 import { navigate } from "@/app/lib/navigation";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
@@ -40,6 +41,15 @@ import {
 } from "./launchpadModel";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
+
+// progressItem scopes saved answers to the signed-in account, so on a shared
+// browser (sign out, sign in as someone else in the same tab — sessionStorage
+// survives that) the next person never sees or launches the last one's notes,
+// persona or drafted instructions.
+export function progressItem(): string {
+  const email = getBootstrap().session?.email?.trim().toLowerCase() ?? "";
+  return `${LAUNCHPAD_PROGRESS_ITEM}:${email}`;
+}
 export const LAUNCHPAD_LAUNCHED_ITEM = "fleet.launchpad.launched";
 
 // "why" is the preamble (the expanding-mind ladder: why a patrol is the big
@@ -55,7 +65,22 @@ const STEPS = [
 ] as const;
 type StepId = (typeof STEPS)[number]["id"];
 
-type Memory = { id: string; content: string; kind?: string; pinned?: boolean };
+type Memory = {
+  id: string;
+  content: string;
+  kind?: string;
+  pinned?: boolean;
+  source?: string;
+  retired_at?: number;
+};
+
+// activeMemories is what a turn actually reads: /api/memories is the
+// management view and also lists retired memories and unaccepted proposals
+// (source "proposed"), neither of which is injected into a chat — so neither
+// is shown as a ground rule or handed to the patrol drafter.
+export function activeMemories(all: Memory[]): Memory[] {
+  return all.filter((m) => !m.retired_at && m.source !== "proposed");
+}
 type UserPersona = { ref: string; display_name: string; description?: string };
 
 type Saved = {
@@ -69,7 +94,12 @@ type Saved = {
   timezone: string;
   title: string;
   prompt: string;
-  edited: boolean;
+  // Edits are tracked per field: renaming the patrol must not freeze its
+  // instructions. promptBasis is the template the custom instructions were
+  // written against, so a later change to the plan can be pointed out.
+  titleEdited: boolean;
+  promptEdited: boolean;
+  promptBasis: string;
   summary: string;
 };
 
@@ -84,13 +114,15 @@ const FRESH: Saved = {
   timezone: "",
   title: "",
   prompt: "",
-  edited: false,
+  titleEdited: false,
+  promptEdited: false,
+  promptBasis: "",
   summary: "",
 };
 
 function loadSaved(): Saved {
   try {
-    const raw = window.sessionStorage.getItem(LAUNCHPAD_PROGRESS_ITEM);
+    const raw = window.sessionStorage.getItem(progressItem());
     if (!raw) return { ...FRESH, timezone: browserTimeZone() };
     const parsed = JSON.parse(raw) as Partial<Saved>;
     const step = STEPS.some((s) => s.id === parsed.step) ? (parsed.step as StepId) : "why";
@@ -106,6 +138,13 @@ async function failText(res: Response, fallback: string): Promise<string> {
 }
 
 type LaunchPhase = "conversation" | "tools" | "schedule" | "first-run";
+type LaunchState = {
+  phase: LaunchPhase | "done";
+  error?: string;
+  conversationId?: string;
+  // How the first check went once the patrol was armed.
+  firstRun?: "running" | "refused" | "skipped";
+};
 const LAUNCH_PHASES: { id: LaunchPhase; label: string }[] = [
   { id: "conversation", label: "Opening the patrol chat" },
   { id: "tools", label: "Switching on your tools" },
@@ -125,6 +164,10 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   const [defaultPersona, setDefaultPersona] = useState("");
   const [userPersonas, setUserPersonas] = useState<UserPersona[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // Whether the catalog ever loaded. Until it has, the person's selection is
+  // unknown, and launch must leave the server's default connector seed alone
+  // rather than replace it with an empty set.
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
 
   const loadConnectors = useCallback(async () => {
     try {
@@ -132,6 +175,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       if (!res.ok) throw new Error(await failText(res, "Could not load your connectors"));
       const data = (await res.json()) as { servers?: LaunchpadConnector[] };
       setConnectors(data.servers ?? []);
+      setCatalogLoaded(true);
+      setLoadError(null);
     } catch (e) {
       setConnectors((cur) => cur ?? []);
       setLoadError(e instanceof Error ? e.message : "Could not load your connectors.");
@@ -143,7 +188,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       const res = await fetch("/api/memories", { cache: "no-store" });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { memories?: Memory[] };
-      setMemories(data.memories ?? []);
+      setMemories(activeMemories(data.memories ?? []));
     } catch {
       setMemories((cur) => cur ?? []);
     }
@@ -181,15 +226,13 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   }, [loadConnectors]);
 
   // Persist progress (not while launching or after launch: those clear it).
-  const [launch, setLaunch] = useState<{
-    phase: LaunchPhase | "done";
-    error?: string;
-    conversationId?: string;
-  } | null>(null);
+  const [launch, setLaunch] = useState<LaunchState | null>(null);
+  // What a launch has created so far, so a failure can be rolled back.
+  const created = useRef<{ conversationId: string; scheduleId: string }>({ conversationId: "", scheduleId: "" });
   useEffect(() => {
     if (launch) return;
     try {
-      window.sessionStorage.setItem(LAUNCHPAD_PROGRESS_ITEM, JSON.stringify(state));
+      window.sessionStorage.setItem(progressItem(), JSON.stringify(state));
     } catch {
       // Private mode: progress just is not remembered.
     }
@@ -220,8 +263,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   // Until the person edits the instructions (or the assistant drafts them),
   // the review step shows the live template, so going back to change a goal
   // updates the draft instead of leaving a stale one.
-  const title = state.edited ? state.title : draftTitle(state.goals);
-  const prompt = state.edited ? state.prompt : template;
+  const title = state.titleEdited ? state.title : draftTitle(state.goals);
+  const prompt = state.promptEdited ? state.prompt : template;
+  const promptStale = state.promptEdited && state.promptBasis !== template;
 
   const canNext =
     state.step !== "watch" || state.goals.length > 0 || state.notes.trim().length > 0;
@@ -233,8 +277,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
   const doLaunch = async () => {
-    const setPhase = (phase: LaunchPhase) => setLaunch({ phase });
-    let conversationId = "";
+    let phase: LaunchPhase = "conversation";
+    const setPhase = (next: LaunchPhase) => {
+      phase = next;
+      setLaunch({ phase: next });
+    };
+    created.current = { conversationId: "", scheduleId: "" };
     try {
       setPhase("conversation");
       const body: Record<string, string> = { title: title.trim() || "My patrol", model: currentDefaultModel() };
@@ -245,16 +293,21 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         body: JSON.stringify(body),
       });
       if (!convRes.ok) throw new Error(await failText(convRes, "Could not create the patrol chat"));
-      conversationId = ((await convRes.json()) as { id: string }).id;
+      const conversationId = ((await convRes.json()) as { id: string }).id;
+      created.current.conversationId = conversationId;
       const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
 
       setPhase("tools");
-      const toolsRes = await fetch(`${base}/mcp-servers`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled_optional: optionalSelection(connectors ?? [], selected), accounts: {} }),
-      });
-      if (!toolsRes.ok) throw new Error(await failText(toolsRes, "Could not switch on the patrol's tools"));
+      // Only replace the chat's connector set when the catalog loaded: an
+      // unknown selection keeps the defaults the server seeded at creation.
+      if (catalogLoaded) {
+        const toolsRes = await fetch(`${base}/mcp-servers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ enabled_optional: optionalSelection(connectors ?? [], selected), accounts: {} }),
+        });
+        if (!toolsRes.ok) throw new Error(await failText(toolsRes, "Could not switch on the patrol's tools"));
+      }
 
       setPhase("schedule");
       const schedRes = await fetch(`${base}/schedules`, {
@@ -270,29 +323,62 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       });
       if (!schedRes.ok) throw new Error(await failText(schedRes, "Could not arm the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
+      const scheduleId = sched.schedule?.id ?? "";
+      created.current.scheduleId = scheduleId;
 
       setPhase("first-run");
-      if (sched.schedule?.id) {
-        // A refusal here (a full queue, say) still leaves the patrol armed;
-        // it just waits for its first scheduled time.
-        await fetch(`${base}/schedules/${encodeURIComponent(sched.schedule.id)}/run-now`, { method: "POST" }).catch(
-          () => undefined,
-        );
+      // The patrol is armed from here on; a refused first run (a full queue,
+      // say) is reported, not treated as a failed launch.
+      let firstRun: LaunchState["firstRun"] = "skipped";
+      if (scheduleId) {
+        const runRes = await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}/run-now`, {
+          method: "POST",
+        }).catch(() => null);
+        firstRun = runRes?.ok ? "running" : "refused";
       }
       try {
-        window.sessionStorage.removeItem(LAUNCHPAD_PROGRESS_ITEM);
+        window.sessionStorage.removeItem(progressItem());
         window.localStorage.setItem(LAUNCHPAD_LAUNCHED_ITEM, "1");
       } catch {
         // Storage unavailable: nothing to clean up.
       }
-      setLaunch({ phase: "done", conversationId });
+      created.current = { conversationId: "", scheduleId: "" };
+      setLaunch({ phase: "done", conversationId, firstRun });
     } catch (e) {
       setLaunch({
-        phase: "conversation",
+        phase,
         error: e instanceof Error ? e.message : "Launch failed.",
-        conversationId: conversationId || undefined,
+        conversationId: created.current.conversationId || undefined,
       });
     }
+  };
+
+  // rollback undoes a half-finished launch before going back to the plan, so
+  // a retry never leaves an orphaned chat — or an armed patrol — behind. The
+  // schedule is cancelled first: on a deployment that soft-deletes
+  // conversations, deleting the chat alone would not remove it.
+  const backToPlan = async () => {
+    const { conversationId, scheduleId } = created.current;
+    if (conversationId) {
+      const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
+      if (scheduleId) {
+        await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "cancel" }),
+        }).catch(() => undefined);
+      }
+      await fetch(base, { method: "DELETE" }).catch(() => undefined);
+    }
+    created.current = { conversationId: "", scheduleId: "" };
+    setLaunch(null);
+  };
+
+  // While requests are in flight the dialog cannot be dismissed: closing it
+  // would not stop the launch, only hide its outcome.
+  const inFlight = launch !== null && launch.phase !== "done" && !launch.error;
+  const close = () => {
+    if (!inFlight) onClose();
   };
 
   const openPatrol = () => {
@@ -305,11 +391,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     <DialogShell
       label="Patrol Launchpad"
       scrimLabel="Close the Patrol Launchpad"
-      onDismiss={onClose}
+      onDismiss={close}
       testId="patrol-launchpad"
       className="flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-[46rem] flex-col overflow-hidden"
     >
-      <LaunchpadHeader stepIndex={stepIndex} launching={launch !== null} onClose={onClose} />
+      <LaunchpadHeader stepIndex={stepIndex} launching={launch !== null} closable={!inFlight} onClose={close} />
       {launch ? (
         <LaunchProgress
           launch={launch}
@@ -317,7 +403,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           cadence={cadenceText}
           title={title}
           onOpen={openPatrol}
-          onBack={() => setLaunch(null)}
+          onBack={() => void backToPlan()}
         />
       ) : (
         <>
@@ -386,9 +472,16 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                 mode={state.mode}
                 cadence={cadenceText}
                 onEdit={(p) =>
-                  patch({ title, prompt, ...p, edited: true })
+                  patch(
+                    p.title !== undefined
+                      ? { title: p.title, titleEdited: true }
+                      : { prompt: p.prompt ?? "", promptEdited: true, promptBasis: state.promptEdited ? state.promptBasis : template },
+                  )
                 }
-                onReset={() => patch({ edited: false, title: "", prompt: "", summary: "" })}
+                promptStale={promptStale}
+                onReset={() =>
+                  patch({ titleEdited: false, promptEdited: false, title: "", prompt: "", promptBasis: "", summary: "" })
+                }
                 draftRequest={{
                   goals: PATROL_GOALS.filter((g) => state.goals.includes(g.id)).map((g) => `${g.title}: ${g.step}`),
                   notes: state.notes,
@@ -400,7 +493,16 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
                   mode: state.mode,
                   persona: state.persona,
                 }}
-                onDrafted={(d) => patch({ title: d.title, prompt: d.prompt, summary: d.summary, edited: true })}
+                onDrafted={(d) =>
+                  patch({
+                    title: d.title,
+                    titleEdited: true,
+                    prompt: d.prompt,
+                    promptEdited: true,
+                    promptBasis: template,
+                    summary: d.summary,
+                  })
+                }
               />
             ) : null}
           </div>
@@ -468,10 +570,12 @@ function personaName(ref: string, fallback: string, users: UserPersona[]): strin
 function LaunchpadHeader({
   stepIndex,
   launching,
+  closable,
   onClose,
 }: {
   stepIndex: number;
   launching: boolean;
+  closable: boolean;
   onClose: () => void;
 }) {
   return (
@@ -496,7 +600,9 @@ function LaunchpadHeader({
           type="button"
           aria-label="Close the Patrol Launchpad"
           onClick={onClose}
-          className="inline-flex size-8 items-center justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          disabled={!closable}
+          title={closable ? undefined : "Launching — this takes a few seconds"}
+          className="inline-flex size-8 items-center disabled:cursor-wait disabled:opacity-40 justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           <Icon name="close" className="size-4" />
         </button>
@@ -889,15 +995,20 @@ function RulesStep({
       const mem = (await res.json()) as { id?: string };
       // Pinned: a non-negotiable is never retired by the automatic
       // memory upkeep (it can still be edited or deleted in Settings).
+      setDraft("");
       if (mem.id) {
-        await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
+        setJustAdded((cur) => [...cur, mem.id as string]);
+        const pinRes = await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pinned: true }),
-        }).catch(() => undefined);
-        setJustAdded((cur) => [...cur, mem.id as string]);
+        }).catch(() => null);
+        // Saved but not pinned: say so, since an unpinned memory can be
+        // retired by the automatic upkeep.
+        if (!pinRes?.ok) {
+          setError("Saved, but it could not be pinned — pin it in Settings → Memories so it is never retired.");
+        }
       }
-      setDraft("");
       onMemoriesChanged();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save that.");
@@ -1240,6 +1351,7 @@ function LaunchStep({
   cadence,
   onEdit,
   onReset,
+  promptStale,
   draftRequest,
   onDrafted,
 }: {
@@ -1254,6 +1366,7 @@ function LaunchStep({
   cadence: string;
   onEdit: (p: { title?: string; prompt?: string }) => void;
   onReset: () => void;
+  promptStale: boolean;
   draftRequest: DraftRequest;
   onDrafted: (d: { title: string; prompt: string; summary: string }) => void;
 }) {
@@ -1348,6 +1461,19 @@ function LaunchStep({
           {summary}
         </p>
       ) : null}
+      {promptStale ? (
+        <p
+          role="status"
+          className="mt-2 flex flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning-border)] px-3 py-2 text-[0.8rem] text-[var(--color-text-primary)]"
+          data-testid="launchpad-prompt-stale"
+        >
+          <Icon name="alert-triangle" className="size-3.5 shrink-0 text-[var(--color-warning)]" />
+          You changed the plan after these instructions were written — they may not match it any more.
+          <button type="button" className="text-[var(--color-link)] underline underline-offset-2" onClick={onReset}>
+            Rewrite from the plan
+          </button>
+        </p>
+      ) : null}
       {draftError ? (
         <p role="alert" className="mt-2 text-[0.8rem] text-[var(--color-danger)]">
           {draftError}
@@ -1378,7 +1504,7 @@ function LaunchProgress({
   onOpen,
   onBack,
 }: {
-  launch: { phase: LaunchPhase | "done"; error?: string; conversationId?: string };
+  launch: LaunchState;
   mode: PatrolMode;
   cadence: string;
   title: string;
@@ -1406,7 +1532,16 @@ function LaunchProgress({
               Your patrol is live
             </h3>
             <p className="mx-auto mt-1.5 max-w-md text-[0.88rem] leading-relaxed text-[var(--color-text-secondary)]">
-              <strong className="text-[var(--color-text-primary)]">{title}</strong> is running its first check right now.
+              {launch.firstRun === "running" ? (
+                <>
+                  <strong className="text-[var(--color-text-primary)]">{title}</strong> is running its first check right now.
+                </>
+              ) : (
+                <span data-testid="launchpad-first-run-refused">
+                  <strong className="text-[var(--color-text-primary)]">{title}</strong> is armed, but its first check could
+                  not start right now — press <strong>Run now</strong> in the Patrol bar, or it runs at its next scheduled time.
+                </span>
+              )}{" "}
               After that it reports back on schedule — {cadence}. Pause or stop it from the Patrol bar, or ask in the chat to change it.
             </p>
             {mode !== "act" ? (

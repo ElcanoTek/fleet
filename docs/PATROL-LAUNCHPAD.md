@@ -44,8 +44,29 @@ body is capped at 64 KiB and each list is bounded. It returns
 `{title, prompt, summary}` and persists nothing. A 502 leaves the template
 draft in place and says so.
 
-**State**: answers live in `sessionStorage` (`fleet.launchpad.v1`) until launch,
-so closing the dialog or reloading keeps progress for the browser session.
+**Launch is careful about partial outcomes.** The dialog cannot be dismissed
+while launch requests are in flight. If a step fails after the chat was
+created, **Back to the plan** cancels any schedule it armed and deletes that
+chat, so a retry never leaves an orphan (or an armed patrol) behind. If the
+connector catalog never loaded, launch leaves the connector set the server
+seeded at creation instead of replacing it with an empty one. A refused first
+run (a full queue, say) is reported on the success screen — the patrol is
+armed and runs at its next time — rather than claimed as running. A
+non-negotiable that saved but could not be pinned says so.
+
+**Memories shown and sent to the drafter** are the active, accepted ones only:
+retired memories and unaccepted proposals (`source = "proposed"`) are listed by
+`GET /api/memories` but never injected into a turn, so they are filtered out.
+
+**Edits**: the patrol name and the instructions are tracked separately, so
+renaming the patrol keeps the instructions following the plan. Custom (or
+AI-drafted) instructions stay as written; if the plan changes afterwards the
+review step says they may no longer match and offers **Rewrite from the plan**.
+
+**State**: answers live in `sessionStorage` until launch, under a key scoped to
+the signed-in account (`fleet.launchpad.v1:<email>`), so closing the dialog or
+reloading keeps progress for the browser session and a different account
+signing in on the same tab never sees or launches them.
 `localStorage` remembers that the Launchpad was opened (`fleet.launchpad.seen`,
 hides the pulsing dot) and that a patrol was launched
 (`fleet.launchpad.launched`, changes the welcome kicker).

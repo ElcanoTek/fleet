@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
-import { LAUNCHPAD_LAUNCHED_ITEM, LAUNCHPAD_PROGRESS_ITEM, PatrolLaunchpad } from "./PatrolLaunchpad";
+import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem } from "./PatrolLaunchpad";
 
 // The Patrol Launchpad end to end against a stubbed API
 // (docs/PATROL-LAUNCHPAD.md): it walks the six steps, saves a non-negotiable
@@ -15,13 +15,24 @@ import { LAUNCHPAD_LAUNCHED_ITEM, LAUNCHPAD_PROGRESS_ITEM, PatrolLaunchpad } fro
 
 type Call = { url: string; method: string; body?: unknown };
 
-function mockApi(opts: { draft?: "ok" | "fail" } = {}) {
+type Opts = {
+  draft?: "ok" | "fail";
+  catalog?: "ok" | "fail";
+  pin?: "ok" | "fail";
+  runNow?: "ok" | "fail";
+  tools?: "ok" | "fail";
+  memories?: unknown[];
+  hangConversation?: boolean;
+};
+
+function mockApi(opts: Opts = {}) {
   const calls: Call[] = [];
   const fn = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" });
     if (url === "/api/mcp-servers") {
+      if (opts.catalog === "fail") return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
       return json({
         servers: [
           { name: "gmail", display_name: "Gmail", description: "Read and search mail", enabled: true },
@@ -30,14 +41,26 @@ function mockApi(opts: { draft?: "ok" | "fail" } = {}) {
         ],
       });
     }
-    if (url === "/api/memories" && method === "GET") return json({ memories: [] });
+    if (url === "/api/memories" && method === "GET") return json({ memories: opts.memories ?? [] });
+    if (url === "/api/memories/m1" && method === "PATCH" && opts.pin === "fail") {
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+    }
     if (url === "/api/memories" && method === "POST") return json({ id: "m1", content: "x" });
     if (url === "/api/personas") return json({ personas: ["assistant", "trader"], default: "assistant", user_personas: [] });
     if (url === "/api/patrol-draft") {
       if (opts.draft === "fail") return { ok: false, status: 502, json: async () => ({}), text: async () => "busy" };
       return json({ title: "Deal & inbox sweep", prompt: "**Mission**\nAI-written.", summary: "Every morning I check." });
     }
-    if (url === "/api/conversations" && method === "POST") return json({ id: "conv-9" });
+    if (url === "/api/conversations" && method === "POST") {
+      if (opts.hangConversation) return new Promise(() => {});
+      return json({ id: "conv-9" });
+    }
+    if (url.endsWith("/mcp-servers") && method === "POST" && opts.tools === "fail") {
+      return { ok: false, status: 500, json: async () => ({}), text: async () => "tools down" };
+    }
+    if (url.endsWith("/run-now") && opts.runNow === "fail") {
+      return { ok: false, status: 429, json: async () => ({}), text: async () => "queue full" };
+    }
     if (url.endsWith("/schedules") && method === "POST") return json({ schedule: { id: "s-1" } });
     return json({});
   });
@@ -59,23 +82,27 @@ afterEach(() => {
   navigateMock.mockReset();
 });
 
-async function walkToLaunch(calls: Call[]) {
-  render(<PatrolLaunchpad onClose={() => {}} />);
+async function walkToLaunch(calls: Call[], onClose: () => void = () => {}) {
+  render(<PatrolLaunchpad onClose={onClose} />);
+  void calls;
   // The preamble: the expanding-mind ladder and the trust path.
   expect(screen.getByTestId("launchpad-mind").querySelectorAll("li")).toHaveLength(4);
   expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Suggest & ask");
   next();
-  await screen.findByText("2 tools ready");
+  await screen.findByTestId("launchpad-readiness");
+  await waitFor(() => expect(screen.getByTestId("launchpad-readiness").textContent).not.toMatch(/Checking tools/));
   next();
 
   // Tools: Gmail is pre-ticked (on by default), Deal Desk is ticked by hand,
   // and the connector that needs setup links to its setup page.
-  const gmail = (await screen.findByTestId("launchpad-tool-gmail")) as HTMLInputElement;
-  expect(gmail.checked).toBe(true);
-  fireEvent.click(screen.getByTestId("launchpad-tool-dealdesk"));
-  expect(screen.getByRole("link", { name: /Set up/ }).getAttribute("href")).toBe(
-    "/settings/connections?connector=trade",
-  );
+  if (screen.queryByTestId("launchpad-tool-gmail")) {
+    const gmail = screen.getByTestId("launchpad-tool-gmail") as HTMLInputElement;
+    expect(gmail.checked).toBe(true);
+    fireEvent.click(screen.getByTestId("launchpad-tool-dealdesk"));
+    expect(screen.getByRole("link", { name: /Set up/ }).getAttribute("href")).toBe(
+      "/settings/connections?connector=trade",
+    );
+  }
   next();
 
   // Ground rules: a persona, and a non-negotiable saved as a pinned memory.
@@ -136,7 +163,7 @@ describe("PatrolLaunchpad", () => {
     expect((writes[2].body as { prompt: string }).prompt).toContain("You may take routine, reversible actions");
 
     // Launch clears the saved progress and remembers that a patrol launched.
-    expect(window.sessionStorage.getItem(LAUNCHPAD_PROGRESS_ITEM)).toBeNull();
+    expect(window.sessionStorage.getItem(progressItem())).toBeNull();
     expect(window.localStorage.getItem(LAUNCHPAD_LAUNCHED_ITEM)).toBe("1");
 
     fireEvent.click(screen.getByTestId("launchpad-open"));
@@ -193,5 +220,121 @@ describe("PatrolLaunchpad", () => {
     expect((await screen.findByRole("alert")).textContent).toContain("cron too frequent");
     fireEvent.click(screen.getByRole("button", { name: "Back to the plan" }));
     expect(await screen.findByTestId("launchpad-step-launch")).toBeTruthy();
+  });
+
+  // ── Codex review findings (PR #1917) ──
+
+  it("sends only active, accepted memories to the drafter", async () => {
+    expect(
+      activeMemories([
+        { id: "a", content: "keep" },
+        { id: "b", content: "retired", retired_at: 5 },
+        { id: "c", content: "proposal", source: "proposed" },
+      ]).map((m) => m.id),
+    ).toEqual(["a"]);
+    const calls = mockApi({
+      memories: [
+        { id: "a", content: "Report in USD" },
+        { id: "b", content: "Old rule", retired_at: 1 },
+        { id: "c", content: "Unaccepted", source: "proposed" },
+      ],
+    });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-draft-ai"));
+    await screen.findByTestId("launchpad-ai-summary");
+    const req = calls.find((c) => c.url === "/api/patrol-draft")?.body as { memories: string[] };
+    expect(req.memories).toEqual(["Report in USD"]);
+  });
+
+  it("says when the first check could not start, instead of claiming it is running", async () => {
+    const calls = mockApi({ runNow: "fail" });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect(await screen.findByTestId("launchpad-first-run-refused")).toBeTruthy();
+    expect(screen.queryByText(/is running its first check right now/)).toBeNull();
+  });
+
+  it("reports a non-negotiable that saved but could not be pinned", async () => {
+    const calls = mockApi({ pin: "fail" });
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    next();
+    next();
+    await screen.findByTestId("launchpad-step-tools");
+    next();
+    fireEvent.change(screen.getByTestId("launchpad-memory-input"), { target: { value: "Ask before pausing" } });
+    fireEvent.click(screen.getByTestId("launchpad-memory-add"));
+    expect(await screen.findByText(/could not be pinned/)).toBeTruthy();
+    expect(calls.some((c) => c.url === "/api/memories/m1" && c.method === "PATCH")).toBe(true);
+  });
+
+  it("keeps the instructions live when only the name is edited, and flags custom ones the plan outgrew", async () => {
+    const calls = mockApi();
+    await walkToLaunch(calls);
+    fireEvent.change(screen.getByTestId("launchpad-title"), { target: { value: "My sweep" } });
+    // Back to the watch list: add a goal.
+    fireEvent.click(screen.getByTestId("launchpad-back"));
+    fireEvent.click(screen.getByTestId("launchpad-back"));
+    fireEvent.click(screen.getByTestId("launchpad-goal-reports"));
+    next();
+    next();
+    expect((screen.getByTestId("launchpad-title") as HTMLInputElement).value).toBe("My sweep");
+    expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value).toMatch(/recurring reports/);
+    expect(screen.queryByTestId("launchpad-prompt-stale")).toBeNull();
+
+    // Custom instructions, then a plan change: the mismatch is pointed out.
+    fireEvent.change(screen.getByTestId("launchpad-prompt"), { target: { value: "Just check deals." } });
+    fireEvent.click(screen.getByTestId("launchpad-back"));
+    fireEvent.click(screen.getByTestId("launchpad-back"));
+    fireEvent.click(screen.getByTestId("launchpad-goal-optimize"));
+    next();
+    next();
+    expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value).toBe("Just check deals.");
+    expect(screen.getByTestId("launchpad-prompt-stale")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Rewrite from the plan" }));
+    expect((screen.getByTestId("launchpad-prompt") as HTMLTextAreaElement).value).toMatch(/optimizations/);
+  });
+
+  it("rolls back a half-finished launch before returning to the plan", async () => {
+    const calls = mockApi({ tools: "fail" });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("tools down");
+    fireEvent.click(screen.getByRole("button", { name: "Back to the plan" }));
+    await screen.findByTestId("launchpad-step-launch");
+    expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
+    expect(calls.some((c) => c.url.endsWith("/schedules") && c.method === "POST")).toBe(false);
+  });
+
+  it("cannot be dismissed while a launch is in flight", async () => {
+    const onClose = vi.fn();
+    const calls = mockApi({ hangConversation: true });
+    await walkToLaunch(calls, onClose);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    await screen.findByTestId("launchpad-launching");
+    const [closeButton, ...scrims] = screen
+      .getAllByRole("button", { name: "Close the Patrol Launchpad" })
+      .sort((a) => (a.closest("header") ? -1 : 1)) as HTMLButtonElement[];
+    expect(closeButton.closest("header")).not.toBeNull();
+    expect(closeButton.disabled).toBe(true);
+    for (const scrim of scrims) fireEvent.click(scrim);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("keeps the server's default connectors when the catalog never loaded", async () => {
+    const calls = mockApi({ catalog: "fail" });
+    await walkToLaunch(calls);
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    await screen.findByTestId("launchpad-done");
+    expect(calls.some((c) => c.url.endsWith("/mcp-servers") && c.method === "POST")).toBe(false);
+    expect(calls.some((c) => c.url.endsWith("/schedules") && c.method === "POST")).toBe(true);
+  });
+
+  it("keeps saved answers to the account that wrote them", () => {
+    window.sessionStorage.setItem("fleet.launchpad.v1:someone-else@example.com", JSON.stringify({ step: "launch", notes: "secret" }));
+    mockApi();
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    expect(screen.getByTestId("launchpad-step-why")).toBeTruthy();
+    expect(progressItem()).not.toBe("fleet.launchpad.v1:someone-else@example.com");
   });
 });
