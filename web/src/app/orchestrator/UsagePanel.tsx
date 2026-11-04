@@ -497,8 +497,11 @@ function budgetStateLabel(b: BudgetStatus): string {
 type UsageMeasure = "cost" | "tokens" | "cache";
 
 function bucketChatPromptTokens(b: UsageBucket): number {
-  if (typeof b.chat_prompt_tokens === "number" && b.chat_prompt_tokens > 0) {
+  if (typeof b.chat_prompt_tokens === "number") {
     return b.chat_prompt_tokens;
+  }
+  if (b.chat_turns === 0 && b.task_iterations > 0) {
+    return 0;
   }
   return b.prompt_tokens;
 }

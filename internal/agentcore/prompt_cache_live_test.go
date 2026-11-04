@@ -30,27 +30,27 @@ import (
 //     google/gemini-3.8-flash, google/gemini-4-argon, openai/gpt-6-luna-pro;
 //     overridable via FLEET_CACHE_LIVE_MODELS). For each model, it executes a
 //     realistic 3-turn production conversation with a 6-tool Fleet roster:
-//       - Turn 1: a 3-step sequential tool chain (tool_search -> query_metrics
-//         -> inspect_box -> final synthesis = 4 LLM requests in Turn 1), where
-//         each tool returns ~1,200-1,400 tokens of structured operational data
-//         so the conversation history grows by ~4,000 tokens across the turn.
-//       - Turn 2: replays Turn 1 via liveReplayEntries (coalescing assistant
-//         text + tool calls and stripping thinking blocks, matching
-//         agent.replayHistory), sends a ~1,300-token follow-up user prompt,
-//         and executes read_runbook (2 LLM requests in Turn 2).
-//       - Turn 3: replays Turn 2 and runs a final cross-turn synthesis request.
+//     - Turn 1: a 3-step sequential tool chain (tool_search -> query_metrics
+//     -> inspect_box -> final synthesis = 4 LLM requests in Turn 1), where
+//     each tool returns ~1,200-1,400 tokens of structured operational data
+//     so the conversation history grows by ~4,000 tokens across the turn.
+//     - Turn 2: replays Turn 1 via liveReplayEntries (coalescing assistant
+//     text + tool calls and stripping thinking blocks, matching
+//     agent.replayHistory), sends a ~1,300-token follow-up user prompt,
+//     and executes read_runbook (2 LLM requests in Turn 2).
+//     - Turn 3: replays Turn 2 and runs a final cross-turn synthesis request.
 //
 //  2. TestPromptCacheLive_LongToolChainCrossTurn — runs a 10-step sequential
 //     pagination tool chain in Turn 1 (>20 content blocks across assistant
 //     tool_calls and tool results, exceeding Anthropic's 20-block lookback
 //     window) followed by Turn 2 after history replay, verifying that:
-//       - Rolling breakpoints cache the growing tool chain step-by-step.
-//       - The 4th breakpoint on runtime_today is emitted on long turns.
-//       - Turn 2 Step 0 still hits the cached prefix even after >20 content
-//         blocks and stripped thinking blocks in Turn 1.
+//     - Rolling breakpoints cache the growing tool chain step-by-step.
+//     - The 4th breakpoint on runtime_today is emitted on long turns.
+//     - Turn 2 Step 0 still hits the cached prefix even after >20 content
+//     blocks and stripped thinking blocks in Turn 1.
 //
-//	FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… go test -tags fleet_host_executor \
-//	  -run TestPromptCacheLive -v ./internal/agentcore/
+//     FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… go test -tags fleet_host_executor \
+//     -run TestPromptCacheLive -v ./internal/agentcore/
 var defaultLiveCacheModels = []string{
 	DefaultCoreModel,             // anthropic/claude-opus-5.5 (Anthropic flagship, explicit rolling 4-breakpoint cache)
 	"anthropic/claude-haiku-5.5", // Anthropic fast tier (explicit rolling 4-breakpoint cache)
@@ -182,7 +182,7 @@ func buildLiveCacheToolRoster() []fantasy.AgentTool {
 	runPython := fantasy.NewAgentTool(
 		"run_python",
 		"Execute a short Python expression in the governed sandbox.",
-		func(_ context.Context, in struct {
+		func(_ context.Context, _ struct {
 			Code string `json:"code" description:"Python snippet"`
 		}, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.NewTextResponse("stdout: ok\n"), nil
@@ -470,65 +470,62 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 	}
 
 	// For explicit rolling-window families (Anthropic), verify both intra-turn
-	// tool-step cache growth AND cross-turn history cache preservation:
-	//  1. Every request after Req 1 must read >= 7,000 cached tokens (the system
-	//     prompt + tool schemas).
-	//  2. Across the multi-step tool chain and subsequent turns, cached_tokens
-	//     must grow monotonically as tool results and user turns accumulate.
-	//  3. Turn 2's first request must read Turn 1's replayed multi-tool history
-	//     (strictly more than Req 2's system-only cache read).
-	//  4. Turn 3's request must read Turn 1 + Turn 2's accumulated history,
-	//     achieving >= 75% warm cache hit rate across all post-cold requests.
+	// tool-step cache growth AND cross-turn history cache preservation.
 	if explicit && !stablePrefixOnly(slug) {
-		req2Cached := transport.records[1].CachedTokens
-		if req2Cached < 6500 {
-			t.Errorf("%s: request 2 cached_tokens=%d, want >= 6500 (system prompt + 6-tool roster must hit cache on first tool step)", slug, req2Cached)
-		}
-		lastCached := transport.records[len(transport.records)-1].CachedTokens
-		if lastCached < req2Cached+3000 {
-			t.Errorf("%s: final request cached_tokens=%d did not grow by >= 3000 tokens over request 2 cached_tokens=%d (multi-step tool outputs and user turns were not cached across turns)",
-				slug, lastCached, req2Cached)
-		}
-		// Find the first request of Turn 2 and Turn 3 and verify cross-turn growth.
-		var turn2FirstIdx, turn2SecondIdx, turn3FirstIdx = -1, -1, -1
-		for idx, r := range transport.records {
-			if r.Turn == 2 {
-				if turn2FirstIdx == -1 {
-					turn2FirstIdx = idx
-				} else if turn2SecondIdx == -1 {
-					turn2SecondIdx = idx
-				}
-			}
-			if r.Turn == 3 && turn3FirstIdx == -1 {
-				turn3FirstIdx = idx
-			}
-		}
-		if turn2FirstIdx > 1 {
-			t2FirstCached := transport.records[turn2FirstIdx].CachedTokens
-			if t2FirstCached <= req2Cached+1000 {
-				t.Errorf("%s: Turn 2 first request (req %d) cached_tokens=%d did not include Turn 1's replayed tool history (req 2 cached_tokens=%d)",
-					slug, turn2FirstIdx+1, t2FirstCached, req2Cached)
+		assertLiveExplicitRollingCacheGrowth(t, slug, transport.records, warmHitPct)
+	}
+}
+
+func assertLiveExplicitRollingCacheGrowth(t *testing.T, slug string, records []liveCacheRecord, warmHitPct float64) {
+	t.Helper()
+	req2Cached := records[1].CachedTokens
+	if req2Cached < 6500 {
+		t.Errorf("%s: request 2 cached_tokens=%d, want >= 6500 (system prompt + 6-tool roster must hit cache on first tool step)", slug, req2Cached)
+	}
+	lastCached := records[len(records)-1].CachedTokens
+	if lastCached < req2Cached+3000 {
+		t.Errorf("%s: final request cached_tokens=%d did not grow by >= 3000 tokens over request 2 cached_tokens=%d (multi-step tool outputs and user turns were not cached across turns)",
+			slug, lastCached, req2Cached)
+	}
+	// Find the first request of Turn 2 and Turn 3 and verify cross-turn growth.
+	var turn2FirstIdx, turn2SecondIdx, turn3FirstIdx = -1, -1, -1
+	for idx, r := range records {
+		if r.Turn == 2 {
+			if turn2FirstIdx == -1 {
+				turn2FirstIdx = idx
+			} else if turn2SecondIdx == -1 {
+				turn2SecondIdx = idx
 			}
 		}
-		if turn2FirstIdx != -1 && turn2SecondIdx != -1 {
-			t2FirstCached := transport.records[turn2FirstIdx].CachedTokens
-			t2SecondCached := transport.records[turn2SecondIdx].CachedTokens
-			if t2SecondCached <= t2FirstCached+800 {
-				t.Errorf("%s: Turn 2 second request (req %d) cached_tokens=%d did not read Turn 2 Step 0's user message from cache (Turn 2 Step 0 cached_tokens=%d) — check openRouterCacheControlTransport user content-block normalization!",
-					slug, turn2SecondIdx+1, t2SecondCached, t2FirstCached)
-			}
+		if r.Turn == 3 && turn3FirstIdx == -1 {
+			turn3FirstIdx = idx
 		}
-		if turn3FirstIdx != -1 && turn2FirstIdx != -1 {
-			t3Cached := transport.records[turn3FirstIdx].CachedTokens
-			t2FirstCached := transport.records[turn2FirstIdx].CachedTokens
-			if t3Cached <= t2FirstCached+1000 {
-				t.Errorf("%s: Turn 3 request (req %d) cached_tokens=%d did not grow past Turn 2 start cached_tokens=%d",
-					slug, turn3FirstIdx+1, t3Cached, t2FirstCached)
-			}
+	}
+	if turn2FirstIdx > 1 {
+		t2FirstCached := records[turn2FirstIdx].CachedTokens
+		if t2FirstCached <= req2Cached+1000 {
+			t.Errorf("%s: Turn 2 first request (req %d) cached_tokens=%d did not include Turn 1's replayed tool history (req 2 cached_tokens=%d)",
+				slug, turn2FirstIdx+1, t2FirstCached, req2Cached)
 		}
-		if warmHitPct < 75.0 {
-			t.Errorf("%s: warm cache hit rate across post-cold requests = %.1f%%, want >= 75.0%%", slug, warmHitPct)
+	}
+	if turn2FirstIdx != -1 && turn2SecondIdx != -1 {
+		t2FirstCached := records[turn2FirstIdx].CachedTokens
+		t2SecondCached := records[turn2SecondIdx].CachedTokens
+		if t2SecondCached <= t2FirstCached+800 {
+			t.Errorf("%s: Turn 2 second request (req %d) cached_tokens=%d did not read Turn 2 Step 0's user message from cache (Turn 2 Step 0 cached_tokens=%d) — check openRouterCacheControlTransport user content-block normalization!",
+				slug, turn2SecondIdx+1, t2SecondCached, t2FirstCached)
 		}
+	}
+	if turn3FirstIdx != -1 && turn2FirstIdx != -1 {
+		t3Cached := records[turn3FirstIdx].CachedTokens
+		t2FirstCached := records[turn2FirstIdx].CachedTokens
+		if t3Cached <= t2FirstCached+1000 {
+			t.Errorf("%s: Turn 3 request (req %d) cached_tokens=%d did not grow past Turn 2 start cached_tokens=%d",
+				slug, turn3FirstIdx+1, t3Cached, t2FirstCached)
+		}
+	}
+	if warmHitPct < 75.0 {
+		t.Errorf("%s: warm cache hit rate across post-cold requests = %.1f%%, want >= 75.0%%", slug, warmHitPct)
 	}
 }
 

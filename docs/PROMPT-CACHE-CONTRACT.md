@@ -219,10 +219,10 @@ estimated no larger than those up to it, and gets no breakpoint at all once
 they are (`tailOutgrowsMarkedPrefix`). With the rule the live check's short
 conversation keeps its marker; it cost $0.0052.
 
-- **The tool definitions** are sent and cached with the prefix, so the shared
-  loop adds them to its side (`WithStablePrefixTokens`). The interactive
-  driver's leaked-call retry counts messages only, so for it the switch comes
-  up to a tool roster early; its forced final summary sends no tools.
+- **The tool definitions** are sent and cached with the prefix, so both the
+  shared loop and the interactive driver's leaked-call finalize retry add them
+  to their side (`WithStablePrefixTokens(EstimateToolDefsTokens(tools))`); the
+  forced final summary sends no tools.
 - **An image or other file** counts at 1,000 tokens (`mediaCacheTokens`),
   about what Gemini bills for an image, not at the base64 length the overflow
   estimator counts, which would drop the marker for any chat with a
