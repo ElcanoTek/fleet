@@ -44,6 +44,7 @@ import type {
 import type { Project } from "./ProjectsModal";
 import { renderPreview, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
+import { PinnedReorderList } from "./PinnedReorderList";
 
 // ── Sealed-chat button + explainer tooltip ───────────────────────────────────
 // The icon-only "new sealed chat" lock lives in the Temporary section's
@@ -1025,6 +1026,8 @@ export function ConversationSidebar({
   loadConversation,
   streamingConvs,
   togglePin,
+  pinOrder,
+  onReorderPinned,
   toggleArchive,
   renameConversation,
   downloadConversation,
@@ -1095,6 +1098,11 @@ export function ConversationSidebar({
   // reverts itself via a refresh); the "Pin it and remove" confirm does not,
   // because there the pin is what keeps the copy's promise.
   togglePin: (conversation: ConversationSummary) => Promise<unknown>;
+  // The person's own order for their pinned chats, and the save for a new
+  // one (docs/CHAT-PIN-ORDER.md). Optional: without them the Pinned section
+  // keeps the server's order and offers no reorder mode.
+  pinOrder?: readonly string[];
+  onReorderPinned?: (ids: string[]) => void;
   toggleArchive: (
     conversation: ConversationSummary,
     archived: boolean,
@@ -1275,7 +1283,11 @@ export function ConversationSidebar({
   // Temporary for a frame, so the set is withheld until there is one.
   const knownProjectIds =
     projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined;
-  const pinned = pinnedUnfiled(conversations, knownProjectIds);
+  const pinned = pinnedUnfiled(conversations, knownProjectIds, pinOrder);
+  // Reorder mode for the Pinned section: its rows become a drag-and-arrow
+  // list until Done (or Escape). Offered only with two or more pinned chats.
+  const [reordering, setReordering] = useState(false);
+  const canReorder = Boolean(onReorderPinned) && pinned.length > 1;
   const recent = recentUnfiled(conversations, knownProjectIds);
   const filtering = computeIsFiltering({
     labels: filterLabels,
@@ -1953,15 +1965,36 @@ export function ConversationSidebar({
           ) : (
             <>
               {pinned.length > 0 ? (
-                <div className="mb-1">
+                <div className="mb-1" data-testid="pinned-section">
                   <div className="flex items-center gap-1.5 px-2 pb-1 pt-2 text-[0.68rem] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
                     <Icon
                       name="pin"
                       className="size-3 shrink-0 text-[var(--color-accent)]"
                     />
                     Pinned
+                    {canReorder && !reordering && !selecting ? (
+                      <button
+                        type="button"
+                        data-testid="pinned-reorder-toggle"
+                        aria-label="Reorder pinned chats"
+                        title="Reorder pinned chats"
+                        onClick={() => setReordering(true)}
+                        className="ml-auto inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[0.68rem] font-semibold normal-case tracking-normal text-[var(--color-text-secondary)] hover:bg-[var(--rail-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] any-pointer-coarse:h-9"
+                      >
+                        <Icon name="selector" className="size-3.5" />
+                        Reorder
+                      </button>
+                    ) : null}
                   </div>
-                  {pinned.map(renderRow)}
+                  {reordering && canReorder && onReorderPinned ? (
+                    <PinnedReorderList
+                      chats={pinned.map((c) => ({ id: c.id, title: c.title }))}
+                      onReorder={onReorderPinned}
+                      onDone={() => setReordering(false)}
+                    />
+                  ) : (
+                    pinned.map(renderRow)
+                  )}
                 </div>
               ) : null}
               {labelsSection}

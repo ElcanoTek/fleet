@@ -311,7 +311,7 @@ too. Below that, conversations are grouped:
 | --- | --- |
 | **Projects** | Workspaces with standing instructions, shared learnings, and their own conversations. A project shared with your team carries a team glyph. See [Memory and projects](#7-memory-and-projects). |
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
-| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. |
+| **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your pinned chats](#ordering-your-pinned-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
 | **Temporary** | Everything else, newest first. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
@@ -1155,6 +1155,20 @@ you hover over it. Here is everything in it.
 > on how many unpinned conversations are kept at all, so on a busy account the
 > oldest can go before the clock runs out. Pinning, archiving, filing into a
 > project, or sharing exempts a conversation from both.
+
+### Ordering your pinned chats
+
+Pinned chats start out newest first. To put them in your own order, press
+**Reorder** in the **Pinned** heading. Each chat then shows a pair of arrows:
+drag a chat to where you want it, or press its up and down arrows, which
+also work from the keyboard and on a phone. Every move is saved as you make it,
+to your account, so the order is the same on every device you sign in from.
+Press **Done** (or `Esc`) to go back to the ordinary rows.
+
+A chat you pin later appears at the top of the list, above the ones you have
+ordered, until you move it. **Temporary** chats are always newest first; to
+give one a place of its own, pin it. Chats inside a project keep the project's
+order.
 
 ### On the transcript
 

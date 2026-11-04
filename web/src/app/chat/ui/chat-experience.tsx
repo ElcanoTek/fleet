@@ -1820,6 +1820,11 @@ export function ChatExperience({
   // visibleOrder, because that memo needs the set of projects the viewer can
   // see to decide which chats are "unfiled".
   const [projects, setProjects] = useState<Project[]>([]);
+  // The person's own order for their pinned chats (docs/CHAT-PIN-ORDER.md),
+  // set in the rail's reorder mode and saved per user on the server. Empty
+  // until read (or when never set): pinned chats then keep the server's
+  // most-recent-first order. Declared here because visibleOrder reads it.
+  const [pinOrder, setPinOrder] = useState<string[]>([]);
   const visibleOrder = useMemo(
     () =>
       visibleConversationOrder({
@@ -1830,6 +1835,7 @@ export function ChatExperience({
         // sidebar isn't rendering.
         knownProjectIds:
           projects.length > 0 ? new Set(projects.map((p) => p.id)) : undefined,
+        pinOrder,
       }),
     [
       conversations,
@@ -1837,6 +1843,7 @@ export function ChatExperience({
       filterLabels,
       sidebarQuery,
       projects,
+      pinOrder,
     ],
   );
 
@@ -3617,6 +3624,49 @@ export function ChatExperience({
       cancelled = true;
     };
   }, [loadProjects]);
+  // The pinned-chat order: read once on boot (best-effort — a failed read
+  // leaves pinned chats most recent first), saved on every move. Saves run one
+  // after another so a quick run of moves lands in the order it was made; a
+  // refused save re-reads the server's order so the rail never shows an
+  // order that was not kept.
+  const loadPinOrder = useCallback(async () => {
+    try {
+      const res = await fetch("/api/conversations/pin-order", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { conversation_ids?: string[] };
+      if (Array.isArray(data.conversation_ids)) setPinOrder(data.conversation_ids);
+    } catch {
+      // Best-effort, like the rail's projects.
+    }
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) void loadPinOrder();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPinOrder]);
+  const pinOrderSaves = useRef<Promise<unknown>>(Promise.resolve());
+  const reorderPinned = useCallback(
+    (ids: string[]) => {
+      setPinOrder(ids);
+      pinOrderSaves.current = pinOrderSaves.current.then(async () => {
+        try {
+          const res = await fetch("/api/conversations/pin-order", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ conversation_ids: ids }),
+          });
+          if (!res.ok) throw new Error(String(res.status));
+        } catch {
+          await loadPinOrder();
+        }
+      });
+    },
+    [loadPinOrder],
+  );
   // The caller's own team (#1157). Sharing a project requires one, so the
   // project-home settings dialog needs to know whether the toggle can work —
   // and, when it can, which team it shares with. undefined = not read yet
@@ -6682,6 +6732,8 @@ export function ChatExperience({
           loadConversation={loadConversation}
           streamingConvs={streamingConvs}
           togglePin={togglePin}
+          pinOrder={pinOrder}
+          onReorderPinned={reorderPinned}
           toggleArchive={requestArchive}
           renameConversation={renameConversation}
           downloadConversation={downloadConversation}

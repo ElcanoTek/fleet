@@ -6,7 +6,9 @@ import {
   deriveLabels,
   filterConversations,
   isFiltering,
+  movePinned,
   normalizeLabel,
+  orderPinned,
   pinnedUnfiled,
   projectGroups,
   railProjectEmptyState,
@@ -302,5 +304,31 @@ describe("railProjectEmptyState", () => {
     expect(railProjectEmptyState({ teamShared: true })).toEqual({
       kind: "team-count-unknown",
     });
+  });
+});
+
+describe("pinned order (docs/CHAT-PIN-ORDER.md)", () => {
+  const p = (id: string, pinned = true) => conv({ id, title: id, pinned });
+
+  it("applies the saved order, with fresh pins above it and stale ids ignored", () => {
+    const list = [p("new1"), p("a"), p("b"), p("c"), p("new2")];
+    expect(orderPinned(list, ["c", "gone", "a", "b"]).map((c) => c.id)).toEqual(["new1", "new2", "c", "a", "b"]);
+  });
+
+  it("is the order pinnedUnfiled and visibleConversationOrder use", () => {
+    const all = [p("a"), p("b"), p("loose", false)];
+    expect(pinnedUnfiled(all, undefined, ["b", "a"]).map((c) => c.id)).toEqual(["b", "a"]);
+    expect(pinnedUnfiled(all).map((c) => c.id)).toEqual(["a", "b"]);
+    expect(
+      visibleConversationOrder({ all, filtered: [], filtering: false, pinOrder: ["b", "a"] }).map((c) => c.id),
+    ).toEqual(["b", "a", "loose"]);
+  });
+
+  it("moves one id, clamped to the list", () => {
+    expect(movePinned(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+    expect(movePinned(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+    expect(movePinned(["a", "b", "c"], 1, 9)).toEqual(["a", "c", "b"]);
+    expect(movePinned(["a", "b", "c"], 0, -1)).toEqual(["a", "b", "c"]);
+    expect(movePinned(["a", "b", "c"], 5, 0)).toEqual(["a", "b", "c"]);
   });
 });

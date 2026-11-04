@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -336,6 +337,45 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]any{"updated": n})
 }
 
+// conversationPinOrder handles GET and PUT /conversations/pin-order: the order
+// the caller has given their pinned chats in the rail, first to last. PUT
+// replaces it and answers with what was kept (only the caller's own live
+// pinned chats; see store.SetPinOrder).
+func (s *Server) conversationPinOrder(w http.ResponseWriter, r *http.Request) {
+	user := userFromCtx(r.Context())
+	switch r.Method {
+	case http.MethodGet:
+		ids, err := s.store.PinOrder(r.Context(), user)
+		if err != nil {
+			http.Error(w, "could not read the pinned-chat order", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"conversation_ids": ids})
+	case http.MethodPut:
+		r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+		var req struct {
+			ConversationIDs []string `json:"conversation_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if len(req.ConversationIDs) > store.MaxPinOrder {
+			http.Error(w, fmt.Sprintf("conversation_ids must be at most %d items", store.MaxPinOrder), http.StatusBadRequest)
+			return
+		}
+		kept, err := s.store.SetPinOrder(r.Context(), user, req.ConversationIDs)
+		if err != nil {
+			http.Error(w, "could not save the pinned-chat order", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, map[string]any{"conversation_ids": kept})
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // /conversations/{id}
 // /conversations/{id}/pin
 // /conversations/{id}/messages//
@@ -364,6 +404,13 @@ func (s *Server) conversationByID(w http.ResponseWriter, r *http.Request) {
 	// it can't collide with a real conversation.
 	if rest == "bulk" && r.Method == http.MethodPatch {
 		s.bulkPatchConversations(w, r)
+		return
+	}
+
+	// The rail's pinned-chat order (docs/CHAT-PIN-ORDER.md): GET/PUT
+	// /conversations/pin-order. Another reserved pseudo-id, like "bulk".
+	if rest == "pin-order" {
+		s.conversationPinOrder(w, r)
 		return
 	}
 

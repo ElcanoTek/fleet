@@ -18,6 +18,8 @@ export const MAX_LABEL_LEN = 32;
 // ConversationSummary (chat-experience.tsx) is a superset; using a minimal shape
 // keeps this module importable from tests without pulling in React/Next.
 export type OrganizableConversation = {
+  // The conversation's id; only the pinned order (orderPinned) reads it.
+  id?: string;
   title: string;
   pinned: boolean;
   labels?: string[];
@@ -122,8 +124,44 @@ function isUnfiled(projectID: string | undefined, known?: ReadonlySet<string>): 
 export function pinnedUnfiled<T extends OrganizableConversation>(
   conversations: readonly T[],
   knownProjectIds?: ReadonlySet<string>,
+  pinOrder?: readonly string[],
 ): T[] {
-  return conversations.filter((c) => c.pinned && isUnfiled(c.project_id, knownProjectIds));
+  const pinned = conversations.filter((c) => c.pinned && isUnfiled(c.project_id, knownProjectIds));
+  return pinOrder && pinOrder.length > 0 ? orderPinned(pinned, pinOrder) : pinned;
+}
+
+// orderPinned applies the person's own order to their pinned chats
+// (docs/CHAT-PIN-ORDER.md). A chat the order does not name — pinned since the
+// last reorder — goes ABOVE the ordered ones, in the caller's (most recent
+// first) order, so a fresh pin lands where the person just looked rather than
+// at the bottom of a long list. Names in the order that are no longer pinned
+// are ignored. Stable and pure: the same inputs give the same rows.
+export function orderPinned<T extends { id?: string }>(pinned: readonly T[], order: readonly string[]): T[] {
+  const rank = new Map<string, number>();
+  order.forEach((id, i) => {
+    if (!rank.has(id)) rank.set(id, i);
+  });
+  const fresh: T[] = [];
+  const ranked: { c: T; r: number }[] = [];
+  for (const c of pinned) {
+    const r = c.id === undefined ? undefined : rank.get(c.id);
+    if (r === undefined) fresh.push(c);
+    else ranked.push({ c, r });
+  }
+  ranked.sort((a, b) => a.r - b.r);
+  return [...fresh, ...ranked.map((x) => x.c)];
+}
+
+// movePinned returns the pinned IDs with the one at `from` moved to `to`
+// (both indexes into `ids`, clamped), for the rail's reorder mode — a drag
+// drop and the Move up / Move down buttons both come through here.
+export function movePinned(ids: readonly string[], from: number, to: number): string[] {
+  const next = [...ids];
+  if (from < 0 || from >= next.length) return next;
+  const target = Math.max(0, Math.min(next.length - 1, to));
+  const [moved] = next.splice(from, 1);
+  next.splice(target, 0, moved);
+  return next;
 }
 
 export function recentUnfiled<T extends OrganizableConversation>(
@@ -194,12 +232,15 @@ export function visibleConversationOrder<T extends OrganizableConversation>(args
   // The projects the viewer can see — see pinnedUnfiled. Must match what the
   // sidebar passes, or j/k navigation drifts from the rendered rows.
   knownProjectIds?: ReadonlySet<string>;
+  // The person's own order for their pinned chats — see orderPinned. Must
+  // match what the sidebar passes, for the same reason.
+  pinOrder?: readonly string[];
 }): T[] {
   if (args.filtering) {
     return [...args.filtered];
   }
   return [
-    ...pinnedUnfiled(args.all, args.knownProjectIds),
+    ...pinnedUnfiled(args.all, args.knownProjectIds, args.pinOrder),
     ...recentUnfiled(args.all, args.knownProjectIds),
   ];
 }
