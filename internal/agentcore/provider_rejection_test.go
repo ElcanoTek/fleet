@@ -606,4 +606,37 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			t.Fatalf("cross-provider fallback called %d times, want 1", got)
 		}
 	})
+
+	t.Run("aborts Fantasy inner retry loop immediately on 429 insufficient_quota", func(t *testing.T) {
+		primaryCalls := int32(0)
+		primary := &namedMockModel{
+			mockModel: mockModel{
+				streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+					atomic.AddInt32(&primaryCalls, 1)
+					return nil, &fantasy.ProviderError{
+						StatusCode:     http.StatusTooManyRequests,
+						Title:          "insufficient_quota",
+						Message:        "You exceeded your current quota, please check your plan and billing details.",
+						ErrorType:      "insufficient_quota",
+						TransientError: true,
+					}
+				},
+			},
+			name: "openai/gpt-5.4",
+		}
+		e := newMockEngine(t, primary)
+		buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+			return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+		}
+		_, err := e.streamRoundWithResilience(
+			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
+		)
+		if !IsCreditsExhaustedError(err) {
+			t.Fatalf("expected credits-exhausted error, got %v", err)
+		}
+		if got := atomic.LoadInt32(&primaryCalls); got != 1 {
+			t.Fatalf("primary called %d times, want 1 (inner retry loop must stop immediately)", got)
+		}
+	})
 }

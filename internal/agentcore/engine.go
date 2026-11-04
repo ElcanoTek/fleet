@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -1766,6 +1767,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	watchdog := newFirstChunkWatchdog(firstChunkTimeout, cancelStream)
 	defer watchdog.stop()
 	markFirst := watchdog.markFirst
+	var creditsExhaustedRetry atomic.Pointer[fantasy.ProviderError]
 	stepLimit := r.engine.maxIterations
 	if stepLimit > 0 {
 		// The cap spans the resilience attempts of this round AND the
@@ -1798,6 +1800,16 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		// recovery resets accumulated text on it) and the engine's session-log
 		// mirror (newRetryLogger).
 		OnRetry: func(providerErr *fantasy.ProviderError, delay time.Duration) {
+			if isCreditsExhausted(providerErr) {
+				// Credit/quota exhaustion on a retryable status (e.g. HTTP 429
+				// insufficient_quota) will not recover during Fantasy's inner
+				// backoff: cancel the stream immediately so the round surfaces
+				// the exhausted error (or promotes a cross-provider fallback)
+				// without sending doomed retries or waiting out the watchdog.
+				creditsExhaustedRetry.Store(providerErr)
+				cancelStream()
+				return
+			}
 			// The provider ANSWERED — with an error. That is a different
 			// story from a model that never starts, and the inner retry
 			// backoff (5+10+20+40 s) can outlast the watchdog deadline, so
@@ -1926,6 +1938,9 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			),
 		)),
 	})
+	if exhaustedErr := creditsExhaustedRetry.Load(); exhaustedErr != nil && ctx.Err() == nil {
+		return nil, exhaustedErr
+	}
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
 		providerErrAtExpiry, providerStatusAtExpiry, creditsExhaustedAtExpiry := watchdog.providerErrorStateAtExpiry()
 		return nil, &firstChunkTimeoutError{
