@@ -23,7 +23,7 @@
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Share / Multiplayer** status indicator (`composer-share-button`, `hidden sm:inline-flex`) when a conversation is shared with your team, shared by public link, or in Multiplayer mode
      - Active **Auto-approve** (`⚡`) toggle badge (`hidden sm:inline-flex`)
-     - **Context ring** (and the `"Token limit hit — you should compact"` status toast) once context usage exists. Below `sm` the ring shows only when it needs attention (severity `warn`/`danger`, compacting, or the toast); otherwise **Compact conversation** in **More options** carries the percentage (dashboard-view follow-up, docs/DASHBOARD-VIEW.md).
+     - **Compact conversation** lives exclusively inside **More options** (`•••`) (showing the context usage percentage when available) rather than rendering a standalone icon button on the composer toolbar.
 
 2. **Share in More options (`•••`) from the start of a chat, with an active status indicator when shared**
    - **More options (`•••`) menu & active indicator:** **Share this chat** (`composer-share-button`) lives inside **More options** (`•••`) from the moment a new chat opens — before or after the first message is sent — keeping the high-traffic area next to **Send / Stop** uncluttered when a chat is in its default private (`Only you`) state.

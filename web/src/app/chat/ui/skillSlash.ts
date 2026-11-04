@@ -42,3 +42,33 @@ export function filterSkills(skills: SkillInfo[], query: string): SkillInfo[] {
 export function completeSkill(name: string): string {
   return `/${name} `;
 }
+
+/**
+ * Merges the bundle skill roster with the caller's active user skills for the
+ * composer "/" autocomplete. An active user skill with the same name as a
+ * bundle skill overrides its description (matching server-side
+ * applySkillInvocation precedence), and new user skills are appended in name
+ * order.
+ */
+export function mergeComposerSkills(
+  bundleSkills: SkillInfo[],
+  userSkills?: SkillInfo[],
+): SkillInfo[] {
+  if (!userSkills || userSkills.length === 0) return bundleSkills;
+  const userByName = new Map<string, SkillInfo>();
+  for (const sk of userSkills) {
+    if (sk?.name) userByName.set(sk.name, { name: sk.name, description: sk.description });
+  }
+  const seen = new Set<string>();
+  const merged: SkillInfo[] = bundleSkills.map((sk) => {
+    seen.add(sk.name);
+    const override = userByName.get(sk.name);
+    return override ?? sk;
+  });
+  for (const sk of userByName.values()) {
+    if (!seen.has(sk.name)) {
+      merged.push(sk);
+    }
+  }
+  return merged;
+}

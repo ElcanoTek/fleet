@@ -93,6 +93,8 @@ export function ProjectHome({
   onBack,
   onOpenChat,
   onOpenTeamChat,
+  onOpenMultiplayerChat,
+  liveTeamChats,
   onNewChat,
   onSaveInstructions,
   onUpdateSettings,
@@ -114,6 +116,13 @@ export function ProjectHome({
   onOpenChat: (conversationId: string) => void;
   // Open a TEAMMATE's shared chat in the read-only viewer.
   onOpenTeamChat: (conversationId: string) => void;
+  // Open a TEAMMATE's live multiplayer chat, with fallback to the read-only
+  // viewer if multiplayer was turned off or this viewer was excluded since
+  // the project list loaded. Defaults to onOpenChat when omitted.
+  onOpenMultiplayerChat?: (conversationId: string) => void;
+  // Live team-shared conversations from the parent shell, used to refresh and
+  // reconcile multiplayer state without waiting for a remount.
+  liveTeamChats?: ConversationSummary[];
   // Start a chat in this project. `afterCreate` runs once the conversation
   // exists and before it opens — how "New chat · Shared with <team>" shares
   // it (a chat with no messages yet can still be shared).
@@ -187,7 +196,10 @@ export function ProjectHome({
   // file a chat into the project you are looking at and it simply did not
   // appear until you left and came back.
   const liveKey = chats
-    .map((c) => `${c.id}:${c.title}:${c.team_visible ? 1 : 0}:${c.share_token ? 1 : 0}`)
+    .map(
+      (c) =>
+        `${c.id}:${c.title}:${c.team_visible ? 1 : 0}:${c.share_token ? 1 : 0}:${c.multiplayer ? 1 : 0}`,
+    )
     .join("|");
   useEffect(() => {
     let cancelled = false;
@@ -224,6 +236,10 @@ export function ProjectHome({
   // stays quiet rather than accusing.
   const strandedFromTeam =
     isOwner && teamShared && myTeam !== undefined && myTeam !== project.team_id;
+  const teamLiveKey = (liveTeamChats ?? [])
+    .filter((c) => !c.project_id || c.project_id === project.id)
+    .map((c) => `${c.id}:${c.title}:${c.multiplayer ? 1 : 0}`)
+    .join("|");
   useEffect(() => {
     if (!teamShared) return;
     let cancelled = false;
@@ -257,7 +273,7 @@ export function ProjectHome({
     return () => {
       cancelled = true;
     };
-  }, [project.id, teamShared]);
+  }, [project.id, teamShared, teamLiveKey]);
 
   // ── Sharing on the project home (Fleet Projects sharing) ──────────────────
   //
@@ -540,18 +556,27 @@ export function ProjectHome({
         : chatList,
     [chatList, q],
   );
+  const reconciledTeamChats = useMemo(() => {
+    if (!teamChats) return null;
+    if (!liveTeamChats) return teamChats;
+    const liveById = new Map(liveTeamChats.map((c) => [c.id, c]));
+    return teamChats.map((c) => {
+      const live = liveById.get(c.id);
+      return live ? { ...c, multiplayer: Boolean(live.multiplayer) } : c;
+    });
+  }, [teamChats, liveTeamChats]);
   const visibleTeamChats = useMemo(
     () =>
       q
-        ? (teamChats ?? []).filter(
+        ? (reconciledTeamChats ?? []).filter(
             (c) =>
               (c.title ?? "").toLowerCase().includes(q) ||
               c.user_email.toLowerCase().includes(q),
           )
-        : (teamChats ?? []),
-    [teamChats, q],
+        : (reconciledTeamChats ?? []),
+    [reconciledTeamChats, q],
   );
-  const searchable = chatList.length + (teamChats?.length ?? 0) > 0;
+  const searchable = chatList.length + (reconciledTeamChats?.length ?? 0) > 0;
 
   // ── Getting-started card (B6 / B8 / B12 / B25) ────────────────────────────
   // Per person, per project, until they have shared a chat here. A chat of
@@ -748,11 +773,12 @@ export function ProjectHome({
 
             {teamShared ? (
               <TeamChatsSection
-                teamChats={teamChats}
+                teamChats={reconciledTeamChats}
                 visibleTeamChats={visibleTeamChats}
                 error={teamChatsError}
                 query={query}
                 onOpenTeamChat={onOpenTeamChat}
+                onOpenMultiplayerChat={onOpenMultiplayerChat ?? onOpenChat}
               />
             ) : null}
           </div>

@@ -1828,7 +1828,7 @@ export function ConversationSidebar({
         {railCollapsed ? (
           <button
             type="button"
-            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:flex sm:size-10 sm:justify-center sm:p-0"
+            className="hidden w-full items-center rounded-[var(--radius-md)] text-[var(--color-text-muted)] transition hover:bg-[var(--color-status-success-bg)] hover:text-[var(--color-status-success-fg)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] sm:mx-auto sm:flex sm:size-10 sm:justify-center sm:p-0"
             title="New chat"
             aria-label="New chat"
             data-tip="New chat"

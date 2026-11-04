@@ -192,10 +192,23 @@ func TestUserSkillsEndpoints(t *testing.T) {
 		t.Fatalf("list: %d %s", w.Code, w.Body.String())
 	}
 
+	// GET /skills returns the caller's active user skills under user_skills so
+	// the composer "/" autocomplete includes newly created personal skills.
+	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"user_skills":[{"name":"deal-check"`) {
+		t.Fatalf("GET /skills missing active user_skills: %d %s", w.Code, w.Body.String())
+	}
+
 	w = userSkillsReq(t, s, s.userSkillByID, http.MethodPut, "/user-skills/"+created.ID,
 		`{"name":"deal-check","description":"verify a deal sheet","body":"1. Check.","status":"disabled"}`)
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "disabled") {
 		t.Fatalf("update: %d %s", w.Code, w.Body.String())
+	}
+
+	// Disabled user skills are excluded from GET /skills user_skills.
+	w = userSkillsReq(t, s, s.listSkills, http.MethodGet, "/skills", "")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"user_skills"`) {
+		t.Fatalf("GET /skills should omit disabled user_skills: %d %s", w.Code, w.Body.String())
 	}
 
 	if w := userSkillsReq(t, s, s.userSkillByID, http.MethodDelete, "/user-skills/ghost", ""); w.Code != http.StatusNotFound {

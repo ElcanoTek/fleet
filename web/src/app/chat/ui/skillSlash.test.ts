@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { completeSkill, filterSkills, skillSlashQuery, type SkillInfo } from "./skillSlash";
+import {
+  completeSkill,
+  filterSkills,
+  mergeComposerSkills,
+  skillSlashQuery,
+  type SkillInfo,
+} from "./skillSlash";
 
 const ROSTER: SkillInfo[] = [
   { name: "deploy", description: "roll a release out" },
@@ -59,5 +65,21 @@ describe("filterSkills", () => {
 describe("completeSkill", () => {
   it("completes to '/name ' so the user can keep typing arguments", () => {
     expect(completeSkill("deploy")).toBe("/deploy ");
+  });
+});
+
+describe("mergeComposerSkills", () => {
+  it("appends user-created skills and overrides bundle descriptions on name collision", () => {
+    const merged = mergeComposerSkills(ROSTER, [
+      { name: "deploy", description: "custom deploy workflow" },
+      { name: "weekly-pacing", description: "check weekly pacing" },
+    ]);
+    expect(merged).toEqual([
+      { name: "deploy", description: "custom deploy workflow" },
+      { name: "deep-dive", description: "long-form investigation" },
+      { name: "research-report", description: "write a cited research report" },
+      { name: "weekly-pacing", description: "check weekly pacing" },
+    ]);
+    expect(filterSkills(merged, "weekly").map((s) => s.name)).toEqual(["weekly-pacing"]);
   });
 });

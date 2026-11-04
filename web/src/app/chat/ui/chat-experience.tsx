@@ -139,7 +139,7 @@ import {
 } from "./deleteAllUnpinnedScope";
 import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
-import type { SkillInfo } from "./skillSlash";
+import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
 import { ConnectorNamesContext, connectorNames } from "./approvalToolLabel";
 import { usePerConvComposerState } from "./usePerConvComposerState";
@@ -862,11 +862,24 @@ export function ChatExperience({
   // responses (empty until the first one answers; the picker falls back).
   const [mcpCategories, setMcpCategories] = useState<PickerCategory[]>([]);
   const [mcpPickerOpen, setMcpPickerOpen] = useState(false);
-  // Bundle skill roster for the composer "/" autocomplete (#513). Fetched
-  // once at startup — the roster is bundle-owned and static for the session.
+  // Bundle + user skill roster for the composer "/" autocomplete (#513).
   const [skills, setSkills] = useState<SkillInfo[]>(
     () => restoredSession?.skills ?? [],
   );
+  const refreshSkills = useCallback(async () => {
+    try {
+      const sr = await fetch("/api/skills", { cache: "no-store" });
+      if (sr.ok) {
+        const sd = (await sr.json()) as {
+          skills?: SkillInfo[];
+          user_skills?: SkillInfo[];
+        };
+        setSkills(mergeComposerSkills(sd.skills ?? [], sd.user_skills));
+      }
+    } catch {
+      // Optional nicety — plain "/text" messages still send fine.
+    }
+  }, []);
   // Server-exposed capability flags. Fetched once on mount from
   // /api/server-config. Drives the lockdown affordance: when
   // lockdownAvailable is false the +button stays a plain "+"
@@ -2664,6 +2677,10 @@ export function ChatExperience({
       // browser's per-origin pool is full and no probe or stream could get
       // out at all (#1584).
       signal?: AbortSignal;
+      // When opening a team-shared chat that was marked multiplayer, fall back
+      // to the read-only TeamChatViewer if the owner has since turned off
+      // multiplayer or excluded this viewer (HTTP 403/404 on the live chat).
+      fallbackToTeamChatView?: boolean;
     } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
@@ -2672,6 +2689,7 @@ export function ChatExperience({
     // (SSE reattach) and restore (boot's auto-load of the latest chat,
     // tab-return staleness refetch) — otherwise the boot load resolving a
     // beat after the user opens a project home would silently close it.
+    const prevProjectHome = projectHome;
     if (!options.background && !options.restore) {
       setProjectHome(null);
       // The team-chat viewer is a full-page overlay too, and it hid the chat
@@ -2741,7 +2759,17 @@ export function ChatExperience({
         cache: "no-store",
         signal: options.signal,
       });
-      if (!response.ok) throw new Error("Unable to load conversation.");
+      if (!response.ok) {
+        if (
+          options.fallbackToTeamChatView &&
+          (response.status === 404 || response.status === 403)
+        ) {
+          if (prevProjectHome) setProjectHome(prevProjectHome);
+          setTeamChatView(conversationId);
+          return;
+        }
+        throw new Error("Unable to load conversation.");
+      }
       const data = (await response.json()) as {
         conversation: ConversationSummary & {
           branch_origin?: BranchOrigin | null;
@@ -3659,13 +3687,15 @@ export function ChatExperience({
           () => null,
         ),
       ]);
+      let sharedList: ConversationSummary[] = [];
       if (sharedRes && sharedRes.ok) {
         const sharedData = (await sharedRes.json()) as {
           conversations?: ConversationSummary[];
         };
+        sharedList = sharedData.conversations ?? [];
         const mine = userEmail.trim().toLowerCase();
         setTeamSharedConversations(
-          (sharedData.conversations ?? []).filter(
+          sharedList.filter(
             (c) => !mine || (c.user_email ?? "").trim().toLowerCase() !== mine,
           ),
         );
@@ -6314,19 +6344,12 @@ export function ChatExperience({
       }
     };
 
-    // Bundle skill roster for the composer "/" autocomplete (#513).
+    // Bundle + user skill roster for the composer "/" autocomplete (#513).
     // Best-effort: an older server without /skills just leaves the
     // autocomplete empty.
     const loadSkills = async () => {
-      try {
-        const sr = await fetch("/api/skills", { cache: "no-store" });
-        if (sr.ok) {
-          const sd = (await sr.json()) as { skills?: SkillInfo[] };
-          if (!cancelled) setSkills(sd.skills ?? []);
-        }
-      } catch {
-        // Optional nicety — plain "/text" messages still send fine.
-      }
+      if (cancelled) return;
+      await refreshSkills();
     };
 
     // Capability fetch (lockdown availability, allow-list, upload cap) — the
@@ -6535,7 +6558,7 @@ export function ChatExperience({
     // above). initialUserEmail is a per-mount constant (the server component
     // resolves it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
-  }, [initialUserEmail, refreshServerConfig]);
+  }, [initialUserEmail, refreshServerConfig, refreshSkills]);
 
   const toggleShowStats = () => {
     setShowStats((prev) => {
@@ -6713,7 +6736,7 @@ export function ChatExperience({
             setProjectHome(null);
             if (c.multiplayer) {
               setTeamChatView(null);
-              void loadConversation(c.id);
+              void loadConversation(c.id, { fallbackToTeamChatView: true });
             } else {
               setTeamChatView(c.id);
             }
@@ -7401,7 +7424,10 @@ export function ChatExperience({
             key={promptSaveTarget.id}
             conversationId={promptSaveTarget.id}
             conversationTitle={promptSaveTarget.title}
-            onClose={() => setPromptSaveTarget(null)}
+            onClose={() => {
+              setPromptSaveTarget(null);
+              void refreshSkills();
+            }}
           />
         ) : null}
         {downloadTarget ? (
@@ -7664,11 +7690,34 @@ export function ChatExperience({
                 )
               }
               onBack={() => setProjectHome(null)}
-              onOpenTeamChat={(conversationId) =>
-                setTeamChatView(conversationId)
-              }
+              liveTeamChats={teamSharedConversations}
+              onOpenTeamChat={(conversationId) => {
+                const isMp = teamSharedConversations.some(
+                  (c) => c.id === conversationId && Boolean(c.multiplayer),
+                );
+                if (isMp) {
+                  void loadConversation(conversationId, {
+                    fallbackToTeamChatView: true,
+                  });
+                } else {
+                  setTeamChatView(conversationId);
+                }
+              }}
+              onOpenMultiplayerChat={(conversationId) => {
+                const live = teamSharedConversations.find(
+                  (c) => c.id === conversationId,
+                );
+                if (live && !live.multiplayer) {
+                  setTeamChatView(conversationId);
+                  return;
+                }
+                void loadConversation(conversationId, {
+                  fallbackToTeamChatView: true,
+                });
+              }}
               onOpenChat={(conversationId) => {
                 setProjectHome(null);
+                setTeamChatView(null);
                 void loadConversation(conversationId);
               }}
               onNewChat={(afterCreate) => {
