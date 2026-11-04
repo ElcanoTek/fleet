@@ -1273,7 +1273,8 @@ export const CREDITS_EXHAUSTED_MESSAGE =
 export function applyModelRequired(message: Message, payload: ModelRequiredEventPayload): Message {
   const statusCode = typeof payload.status_code === "number" ? payload.status_code : 0;
   let reason = normaliseReason(payload.reason);
-  if (reason === "fatal" && statusCode === 402) {
+  const remappedLegacy402 = reason === "fatal" && statusCode === 402;
+  if (remappedLegacy402) {
     reason = "credits_exhausted";
   }
   const defaultMessage =
@@ -1281,7 +1282,7 @@ export function applyModelRequired(message: Message, payload: ModelRequiredEvent
       ? CREDITS_EXHAUSTED_MESSAGE
       : "Pick a different model to continue.";
   const humanMessage =
-    typeof payload.message === "string" && payload.message.length > 0
+    !remappedLegacy402 && typeof payload.message === "string" && payload.message.length > 0
       ? payload.message
       : defaultMessage;
   const { retrying: _retrying, ...rest } = message;

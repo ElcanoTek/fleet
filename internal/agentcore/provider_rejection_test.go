@@ -527,4 +527,72 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("skips same-provider fallback but promotes cross-provider fallback on credits exhausted", func(t *testing.T) {
+		primary := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
+						return nil, &fantasy.ProviderError{
+							StatusCode:   http.StatusForbidden,
+							Message:      "Key limit exceeded (total limit).",
+							ResponseBody: []byte(openRouterKeyLimit403Body),
+						}
+					},
+				},
+				name: "anthropic/claude-sonnet-4.6",
+			},
+			providerName: "openrouter",
+		}
+		sameProviderCalls := int32(0)
+		sameProviderFallback := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+						atomic.AddInt32(&sameProviderCalls, 1)
+						return streamStop()(nil, call)
+					},
+				},
+				name: "openai/gpt-5.4",
+			},
+			providerName: "openrouter",
+		}
+		crossProviderCalls := int32(0)
+		crossProviderFallback := &providerNamedModel{
+			LanguageModel: &namedMockModel{
+				mockModel: mockModel{
+					streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {
+						atomic.AddInt32(&crossProviderCalls, 1)
+						return streamStop()(nil, call)
+					},
+				},
+				name: "anthropic/claude-sonnet-4.6",
+			},
+			providerName: "anthropic-direct",
+		}
+
+		e := newMockEngine(t, primary)
+		e.fallbackModels = []fantasy.LanguageModel{sameProviderFallback, crossProviderFallback}
+		e.fallbackModel = e.fallbackModels[0]
+		buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
+			return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
+		}
+
+		out, err := e.streamRoundWithResilience(
+			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
+		)
+		if err != nil {
+			t.Fatalf("expected cross-provider fallback to succeed, got %v", err)
+		}
+		if !out.swappedToFallback || fleetProviderName(out.activeModel) != "anthropic-direct" {
+			t.Fatalf("swapped=%v provider=%q, want anthropic-direct", out.swappedToFallback, fleetProviderName(out.activeModel))
+		}
+		if got := atomic.LoadInt32(&sameProviderCalls); got != 0 {
+			t.Fatalf("same-provider fallback called %d times, want 0", got)
+		}
+		if got := atomic.LoadInt32(&crossProviderCalls); got != 1 {
+			t.Fatalf("cross-provider fallback called %d times, want 1", got)
+		}
+	})
 }

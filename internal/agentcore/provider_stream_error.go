@@ -381,7 +381,8 @@ func IsCreditsExhaustedError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if status, ok := FirstChunkTimeoutAfterProviderError(err); ok && status == http.StatusPaymentRequired {
+	var fc *firstChunkTimeoutError
+	if errors.As(err, &fc) && fc.providerErr && (fc.providerStatus == http.StatusPaymentRequired || fc.creditsExhausted) {
 		return true
 	}
 	var providerErr *fantasy.ProviderError

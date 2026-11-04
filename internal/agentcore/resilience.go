@@ -157,8 +157,9 @@ type firstChunkTimeoutError struct {
 	// providerErr records that the provider answered with an error before the
 	// deadline (its retry backoff outlasted the watchdog). The silence was
 	// not a model thinking, and the run must not report it as one (#1585).
-	providerErr    bool
-	providerStatus int
+	providerErr      bool
+	providerStatus   int
+	creditsExhausted bool
 }
 
 func (e *firstChunkTimeoutError) Error() string {
@@ -223,7 +224,7 @@ func firstChunkTimeoutProviderError(err error) *fantasy.ProviderError {
 		return nil
 	}
 	timeout, _, _ := firstChunkTimeoutDetail(err)
-	return &fantasy.ProviderError{
+	pe := &fantasy.ProviderError{
 		Title:      fantasy.ErrorTitleForStatusCode(status),
 		Message:    fmt.Sprintf("provider returned HTTP %d; its retry backoff outlasted the %s first-chunk deadline", status, timeout),
 		StatusCode: status,
@@ -233,6 +234,11 @@ func firstChunkTimeoutProviderError(err error) *fantasy.ProviderError {
 		// relayed by a gateway is not) must not re-decide that here.
 		TransientError: true,
 	}
+	var fc *firstChunkTimeoutError
+	if errors.As(err, &fc) && fc.creditsExhausted {
+		pe.ErrorType = "insufficient_quota"
+	}
+	return pe
 }
 
 // streamBlipRetryDelay is the wait before retrying the same model after a
@@ -954,6 +960,10 @@ func (e *engine) streamRoundWithResilience(
 			promoteFallback()
 			continue
 		case streamErrorFatal:
+			if isCreditsExhausted(providerErr) && e.canPromoteCrossProviderOnCreditsExhausted(sink, attemptMark, activeModel) {
+				promoteFallback()
+				continue
+			}
 			return streamRoundOutcome{}, fatalProviderError(err, providerErr)
 		}
 	}
@@ -1028,6 +1038,21 @@ func (e *engine) canPromoteOnRejection(sink *streamSink, attemptMark sinkMark, a
 		return false
 	}
 	return canSwapFallback(e, activeModel, swappedToFallback)
+}
+
+// canPromoteCrossProviderOnCreditsExhausted advances the fallback queue past
+// any same-provider candidates (which share the exhausted key) and reports
+// whether a fallback on a DIFFERENT configured provider (`fallback_providers`)
+// is available from a safe point (no tool event since attemptMark).
+func (e *engine) canPromoteCrossProviderOnCreditsExhausted(sink *streamSink, attemptMark sinkMark, activeModel fantasy.LanguageModel) bool {
+	if e == nil || activeModel == nil || sink.toolEventCount() > attemptMark.toolEvents {
+		return false
+	}
+	failedProvider := fleetProviderName(activeModel)
+	for e.fallbackModel != nil && fleetProviderName(e.fallbackModel) == failedProvider {
+		_ = e.takeFallback()
+	}
+	return e.fallbackModel != nil
 }
 
 func (e *engine) logProviderFailure(model fantasy.LanguageModel, class streamErrorClass, providerErr *fantasy.ProviderError) {

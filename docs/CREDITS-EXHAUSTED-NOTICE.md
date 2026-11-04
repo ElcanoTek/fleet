@@ -7,7 +7,7 @@
     - **HTTP `402 Payment Required`** (`status == 402` or `error.code == "402"`), returned when a request's `max_tokens` cost exceeds remaining key/account credits (`"This request requires more credits, or fewer max_tokens..."`, ` "Insufficient credits..."`).
     - **HTTP `403 Forbidden`** with `error.metadata.limit_source` (`"openrouter_key_limit"` / `"openrouter_credit_limit"` / `"key_limit"` / `"credit_limit"` / `"account_credit_limit"`), `error.metadata.scope` (`"key_limit"` / `"budget"`), or `"Key limit exceeded"`, returned when an OpenRouter API key's dollar spend limit is completely exhausted.
     - **Upstream quota/credit errors** (`insufficient_quota`, `insufficient_credits`, `"credit balance is too low"`, `"exceeded your current quota"`), including when delivered via mid-stream SSE error payloads (`parseSSEStreamError`).
-  - Classifies these failures as `streamErrorFatal` (`ReasonCreditsExhausted = "credits_exhausted"`) so the resilience loop does not retry in place or promote a fallback model on the same exhausted key ([ADR-0067](adr/0067-fallback-on-provider-rejection.md)).
+  - Classifies these failures as `streamErrorFatal` (`ReasonCreditsExhausted = "credits_exhausted"`) so the resilience loop does not retry in place or promote a same-provider fallback model on the same exhausted key, while preserving cross-provider failover when `fallback_providers` has a candidate on a different configured provider ([ADR-0067](adr/0067-fallback-on-provider-rejection.md)).
 - **User-facing message and SSE hygiene (`internal/agent/manager.go`, `internal/httpapi/summarize.go`)**:
   - Emits `CreditsExhaustedMessage`:
     `"You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going."`

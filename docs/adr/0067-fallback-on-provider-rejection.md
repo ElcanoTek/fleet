@@ -26,9 +26,11 @@ explicit credit-exhaustion response on 400/403/429 matched by
 `isCreditsExhausted`: OpenRouter HTTP 403 `Key limit exceeded` with
 `error.metadata.limit_source="openrouter_key_limit"` / `scope="key_limit"`,
 OpenAI `insufficient_quota`, or Anthropic `credit balance is too low`), which
-bind every model behind the same key. Credit-exhausted errors are classified as
-terminal (`streamErrorFatal` / `ReasonCreditsExhausted`) rather than retried or
-promoted to a fallback model. A rejection promotes the configured fallback model
+bind every model behind the same key. Credit-exhausted errors suppress
+same-provider fallback promotion (`streamErrorFatal` / `ReasonCreditsExhausted`),
+while still allowing failover from a safe checkpoint to a fallback model on a
+different configured provider in `fallback_providers`. A rejection promotes the
+configured fallback model
 exactly once, and only from a safe point: no tool event may have occurred since
 the attempt mark, which ADR-0065 advances to the last completed-step checkpoint.
 The fallback therefore re-drives with the completed tool results in its input

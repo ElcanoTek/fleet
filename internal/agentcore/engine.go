@@ -1927,13 +1927,14 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 		)),
 	})
 	if err != nil && watchdog.timedOut() && ctx.Err() == nil {
-		providerErrAtExpiry, providerStatusAtExpiry := watchdog.providerErrorAtExpiry()
+		providerErrAtExpiry, providerStatusAtExpiry, creditsExhaustedAtExpiry := watchdog.providerErrorStateAtExpiry()
 		return nil, &firstChunkTimeoutError{
-			timeout:        firstChunkTimeout,
-			promptTokens:   promptTokens,
-			cause:          err,
-			providerErr:    providerErrAtExpiry,
-			providerStatus: providerStatusAtExpiry,
+			timeout:          firstChunkTimeout,
+			promptTokens:     promptTokens,
+			cause:            err,
+			providerErr:      providerErrAtExpiry,
+			providerStatus:   providerStatusAtExpiry,
+			creditsExhausted: creditsExhaustedAtExpiry,
 		}
 	}
 	return result, err
@@ -1958,9 +1959,10 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 // deadline it postdates. A model that was silent for the whole allowed
 // interval would then be reported as rate-limited.
 type providerErrRecord struct {
-	from   int64 // unix nanos: when the provider error was seen
-	until  int64 // unix nanos: when the backoff it bought ends
-	status int
+	from             int64 // unix nanos: when the provider error was seen
+	until            int64 // unix nanos: when the backoff it bought ends
+	status           int
+	creditsExhausted bool
 }
 
 type firstChunkWatchdog struct {
@@ -2082,33 +2084,22 @@ func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderErro
 	}
 	now := w.now()
 	w.publishProviderErr(&providerErrRecord{
-		from:   now.UnixNano(),
-		until:  now.Add(delay + providerErrorGrace).UnixNano(),
-		status: reportableProviderStatus(providerErr),
+		from:             now.UnixNano(),
+		until:            now.Add(delay + providerErrorGrace).UnixNano(),
+		status:           reportableProviderStatus(providerErr),
+		creditsExhausted: isCreditsExhausted(providerErr),
 	})
 }
 
-// noteProviderErrorSeen opens an OPEN-ENDED window the moment the provider
-// error is seen, before the retry observers run. They are synchronous and can
-// block for longer than the backoff they announce — a 5 s delay behind a 6 s
-// observer — and a record that expired on the announced delay would leave the
-// watchdog finding nothing at all: the 429 lost, and a silent-model card with
-// status_code 0 in its place. The window stays open for as long as we are
-// still inside the retry handling, and closeProviderErrorWindow replaces it
-// with the real deadline on the way out.
 func (w *firstChunkWatchdog) noteProviderErrorSeen(providerErr *fantasy.ProviderError) {
 	w.publishProviderErr(&providerErrRecord{
-		from:   w.now().UnixNano(),
-		until:  math.MaxInt64,
-		status: reportableProviderStatus(providerErr),
+		from:             w.now().UnixNano(),
+		until:            math.MaxInt64,
+		status:           reportableProviderStatus(providerErr),
+		creditsExhausted: isCreditsExhausted(providerErr),
 	})
 }
 
-// closeProviderErrorWindow bounds the open window at the real backoff
-// deadline, measured from HERE because fantasy begins its sleep only once the
-// observers return. It keeps the instant the error was SEEN, so a timer that
-// fired while those observers ran still finds the record applicable to its
-// own deadline.
 func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 	if delay < 0 {
 		delay = 0
@@ -2120,9 +2111,10 @@ func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 		return
 	}
 	w.providerErr = &providerErrRecord{
-		from:   w.providerErr.from,
-		until:  until,
-		status: w.providerErr.status,
+		from:             w.providerErr.from,
+		until:            until,
+		status:           w.providerErr.status,
+		creditsExhausted: w.providerErr.creditsExhausted,
 	}
 }
 
@@ -2142,12 +2134,17 @@ func (w *firstChunkWatchdog) providerErrorLive() bool {
 // providerErrorAtExpiry reports the provider-error state as it stood when the
 // watchdog fired, and the status that went with it. One read, one instant.
 func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
+	seen, status, _ = w.providerErrorStateAtExpiry()
+	return seen, status
+}
+
+func (w *firstChunkWatchdog) providerErrorStateAtExpiry() (seen bool, status int, creditsExhausted bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.expiredProviderErr == nil {
-		return false, 0
+		return false, 0, false
 	}
-	return true, w.expiredProviderErr.status
+	return true, w.expiredProviderErr.status, w.expiredProviderErr.creditsExhausted
 }
 
 // timedOut reports whether the timer won the decision.
