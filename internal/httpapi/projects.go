@@ -1362,8 +1362,11 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 		if p == nil {
 			return nil, false
 		}
-		if persona == "" {
+		if persona == "" && p.DefaultPersona != "" && s.checkConversationPersona(r.Context(), user, p.DefaultPersona) == nil {
 			persona = p.DefaultPersona
+		}
+		if persona == "" {
+			persona = s.cfg.PersonaDefault
 		}
 		if model == "" {
 			model = p.DefaultModel
@@ -1372,8 +1375,18 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 			http.Error(w, "project default model not allowed in lockdown mode", http.StatusBadRequest)
 			return nil, false
 		}
-		conv, err = s.store.CreateProjectConversation(r.Context(), user, title, persona, model, lockdown, p.ID, p.MCPServers)
+		if model == "" && !lockdown {
+			model = agentcore.CurrentDefaultModel()
+		}
+		mcpServers := p.MCPServers
+		if len(mcpServers) == 0 {
+			mcpServers = s.defaultEnabledOptionalMCPServers(r.Context(), user)
+		}
+		conv, err = s.store.CreateProjectConversation(r.Context(), user, title, persona, model, lockdown, p.ID, mcpServers)
 	} else {
+		if persona == "" {
+			persona = s.cfg.PersonaDefault
+		}
 		if model == "" && !lockdown {
 			model = agentcore.CurrentDefaultModel()
 		}
