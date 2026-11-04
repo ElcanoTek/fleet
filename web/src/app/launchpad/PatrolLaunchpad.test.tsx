@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
-import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem, withMemory } from "./PatrolLaunchpad";
+import { activeMemories, LAUNCHPAD_LAUNCHED_ITEM, PatrolLaunchpad, progressItem, recoveryItem, withMemory } from "./PatrolLaunchpad";
 
 // The Patrol Launchpad end to end against a stubbed API
 // (docs/PATROL-LAUNCHPAD.md): it walks the six steps, saves a non-negotiable
@@ -36,6 +36,8 @@ type Opts = {
   hangConversation?: boolean;
   // How many creates commit on the server but lose their reply.
   createRepliesLost?: number;
+  // The memory save commits but its reply is lost.
+  memoryReplyLost?: boolean;
   role?: string;
   // Holds the memory POST until this resolves.
   memoryPostGate?: Promise<void>;
@@ -46,6 +48,7 @@ function mockApi(opts: Opts = {}) {
   let memoryGets = 0;
   let catalogGets = 0;
   const keyed = new Map<string, string>();
+  const savedMemories: { id: string; content: string }[] = [];
   const fn = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
@@ -79,9 +82,14 @@ function mockApi(opts: Opts = {}) {
     if (url === "/api/memories" && method === "GET" && opts.memoriesFail) {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
     }
-    if (url === "/api/memories" && method === "GET") return json({ memories: opts.memories ?? [] });
+    if (url === "/api/memories" && method === "GET") return json({ memories: [...(opts.memories ?? []), ...savedMemories] });
     if (url === "/api/memories/m1" && method === "PATCH" && opts.pin === "fail") {
       return { ok: false, status: 500, json: async () => ({}), text: async () => "" };
+    }
+    if (url === "/api/memories" && method === "POST" && opts.memoryReplyLost) {
+      opts.memoryReplyLost = false;
+      savedMemories.push({ id: "m1", content: (JSON.parse(String(init?.body)) as { content: string }).content });
+      throw new TypeError("Failed to fetch");
     }
     if (url === "/api/memories" && method === "POST") {
       if (opts.memoryPostGate) await opts.memoryPostGate;
@@ -632,6 +640,51 @@ describe("PatrolLaunchpad", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     const creates = calls.filter((c) => c.url === "/api/conversations" && c.method === "POST");
     expect(new Set(creates.map((c) => (c.body as { client_request_id?: string }).client_request_id)).size).toBe(1);
+    expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
+  });
+
+  it("treats a memory save whose reply was lost as saved once it shows up, and never saves the same rule twice", async () => {
+    const calls = mockApi({ memoryReplyLost: true });
+    window.sessionStorage.setItem(progressItem(), JSON.stringify({ step: "rules" }));
+    render(<PatrolLaunchpad onClose={() => {}} />);
+    const input = (await screen.findByTestId("launchpad-memory-input")) as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "Never pause without asking" } });
+    fireEvent.click(screen.getByTestId("launchpad-memory-add"));
+    // The save committed although its reply was lost: it is found and pinned.
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/memories/m1" && c.method === "PATCH")).toBe(true));
+    // The same rule again is refused locally, with no second save.
+    fireEvent.change(input, { target: { value: "never pause without asking " } });
+    fireEvent.click(screen.getByTestId("launchpad-memory-add"));
+    expect(await screen.findByText("That one is already saved.")).toBeTruthy();
+    expect(calls.filter((c) => c.url === "/api/memories" && c.method === "POST")).toHaveLength(1);
+  });
+
+  it("after a reload, an unfinished launch comes back on its error screen and is cleaned up on close", async () => {
+    window.sessionStorage.setItem(recoveryItem(), JSON.stringify({ conversationId: "conv-9", scheduleId: "s-1" }));
+    const onClose = vi.fn();
+    const calls = mockApi();
+    render(<PatrolLaunchpad onClose={onClose} />);
+    expect((await screen.findByRole("alert")).textContent).toContain("Your last launch didn’t finish");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(calls.some((c) => c.url.endsWith("/schedules/s-1") && c.method === "PATCH")).toBe(true);
+    expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
+    expect(window.sessionStorage.getItem(recoveryItem())).toBeNull();
+  });
+
+  it("after a reload, an unconfirmed create is settled with its own key and rolled back", async () => {
+    window.sessionStorage.setItem(
+      recoveryItem(),
+      JSON.stringify({ conversationId: "", scheduleId: "", pendingCreate: { body: { title: "P", client_request_id: "launchpad-k" } } }),
+    );
+    const onClose = vi.fn();
+    const calls = mockApi();
+    render(<PatrolLaunchpad onClose={onClose} />);
+    await screen.findByRole("alert");
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const create = calls.find((c) => c.url === "/api/conversations" && c.method === "POST");
+    expect((create?.body as { client_request_id?: string } | undefined)?.client_request_id).toBe("launchpad-k");
     expect(calls.some((c) => c.url === "/api/conversations/conv-9" && c.method === "DELETE")).toBe(true);
   });
 });

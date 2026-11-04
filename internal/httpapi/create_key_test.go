@@ -12,8 +12,8 @@ import (
 // TestCreateConversation_IdempotencyKey pins POST /conversations with
 // client_request_id: a retry with the same key (its reply was lost) returns
 // the conversation the first create made instead of a second one; another key,
-// or none, makes a new one; and a key whose conversation was deleted (rolled
-// back) makes a fresh one rather than pointing at a missing chat.
+// or none, makes a new one; a key never answers with a deleted chat; and keys
+// are per user.
 func TestCreateConversation_IdempotencyKey(t *testing.T) {
 	s := serverFixture(t)
 	const me = "idem@x.com"
@@ -56,12 +56,37 @@ func TestCreateConversation_IdempotencyKey(t *testing.T) {
 		t.Fatal("no key returned the keyed conversation")
 	}
 
-	// The keyed chat is rolled back: the same key now makes a fresh one.
+	// The keyed chat is deleted (rolled back): the key never answers with the
+	// deleted chat. Where deletes are soft the row keeps its ID and the key is
+	// refused (409, "use a new key"); where they are hard the ID is free again
+	// and the key makes a live chat.
 	if err := s.store.Delete(context.Background(), me, first); err != nil {
 		t.Fatal(err)
 	}
-	if _, fresh := create(`{"title":"Patrol","client_request_id":"k-1"}`); fresh == "" || fresh == first {
-		t.Fatalf("after the keyed chat was deleted, the key returned %q (want a new chat)", fresh)
+	switch code, id := create(`{"title":"Patrol","client_request_id":"k-1"}`); code {
+	case http.StatusConflict:
+	case http.StatusOK:
+		if conv, err := s.store.Get(context.Background(), me, id); err != nil || conv == nil {
+			t.Fatalf("after the keyed chat was deleted, the key answered with %q, which is not a live chat", id)
+		}
+	default:
+		t.Fatalf("after the keyed chat was deleted, the key answered %d", code)
+	}
+
+	// Another user's identical key is theirs alone.
+	req := httptest.NewRequest(http.MethodPost, "/conversations", strings.NewReader(`{"title":"P","client_request_id":"k-2"}`))
+	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "other@x.com"))
+	rec := httptest.NewRecorder()
+	s.listOrCreateConversations(rec, req)
+	var theirs struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &theirs)
+	if rec.Code != http.StatusOK || theirs.ID == "" {
+		t.Fatalf("other user's create = %d %s", rec.Code, rec.Body.String())
+	}
+	if _, mine := create(`{"title":"Patrol","client_request_id":"k-2"}`); mine == theirs.ID {
+		t.Fatal("the same key from two users gave the same chat")
 	}
 
 	if code, _ := create(`{"title":"x","client_request_id":"` + strings.Repeat("a", 129) + `"}`); code != http.StatusBadRequest {

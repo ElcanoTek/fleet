@@ -413,9 +413,6 @@ type chatStore interface {
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
 	ChatOrders(ctx context.Context, userEmail string) (map[string][]string, error)
-	ConversationForCreateKey(ctx context.Context, userEmail, key string) (string, error)
-	RecordCreateKey(ctx context.Context, userEmail, key, convID string) (string, error)
-	ForgetCreateKey(ctx context.Context, userEmail, key string) error
 	SetChatOrder(ctx context.Context, userEmail, scope string, ids []string) ([]string, error)
 	UpdateChatSchedule(ctx context.Context, userEmail, convID, scheduleID string, patch store.ChatSchedulePatch) (*store.ChatSchedule, error)
 	CancelChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)

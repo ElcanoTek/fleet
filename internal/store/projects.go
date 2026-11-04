@@ -431,7 +431,7 @@ func lockAccessibleProjectTx(ctx context.Context, tx *sql.Tx, id, userEmail stri
 // before calling; the store re-checks access under the project row's lock
 // (lockAccessibleProjectTx).
 func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool, projectID string, mcpServers []string) (*Conversation, error) {
-	id := uuid.NewString()
+	id := newConversationID(ctx)
 	now := time.Now().Unix()
 	if mcpServers == nil {
 		mcpServers = []string{}
@@ -453,6 +453,9 @@ func (s *Store) CreateProjectConversation(ctx context.Context, userEmail, title,
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8, $9, $9)`,
 		id, userEmail, title, persona, model, lockdown, projectID, string(mcps), now,
 	)
+	if pgUniqueViolation(err) {
+		return nil, ErrConversationIDTaken
+	}
 	if err != nil {
 		return nil, err
 	}

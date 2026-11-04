@@ -47,6 +47,11 @@ export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 // browser (sign out, sign in as someone else in the same tab — sessionStorage
 // survives that) the next person never sees or launches the last one's notes,
 // persona or drafted instructions.
+// recoveryItem is where an unsettled launch is kept (see setCreated).
+export function recoveryItem(): string {
+  return `${progressItem()}:recovery`;
+}
+
 export function progressItem(): string {
   const email = getBootstrap().session?.email?.trim().toLowerCase() ?? "";
   return `${LAUNCHPAD_PROGRESS_ITEM}:${email}`;
@@ -326,6 +331,44 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     pendingCreate?: { body: Record<string, string> };
   };
   const created = useRef<Created>({ conversationId: "", scheduleId: "" });
+  // What a launch has created is also kept in session storage while it is
+  // unsettled (a chat made, or a create whose outcome is unknown), so a
+  // reload at the error screen can still settle it and roll it back instead
+  // of forgetting it. Every change goes through setCreated.
+  const setCreated = useCallback((next: Created) => {
+    created.current = next;
+    try {
+      if (next.conversationId || next.pendingCreate) {
+        window.sessionStorage.setItem(recoveryItem(), JSON.stringify(next));
+      } else {
+        window.sessionStorage.removeItem(recoveryItem());
+      }
+    } catch {
+      // Storage unavailable: recovery lasts for this page only.
+    }
+  }, []);
+  // A launch left unsettled by a reload comes back on its error screen, where
+  // Back to the plan (or closing) settles and rolls it back.
+  useEffect(() => {
+    let saved: Created | null = null;
+    try {
+      const raw = window.sessionStorage.getItem(recoveryItem());
+      saved = raw ? (JSON.parse(raw) as Created) : null;
+    } catch {
+      saved = null;
+    }
+    if (!saved || !(saved.conversationId || saved.pendingCreate)) return;
+    const recovered = saved;
+    created.current = recovered;
+    queueMicrotask(() => {
+      setState((cur) => ({ ...cur, step: "launch" }));
+      setLaunch({
+        phase: recovered.pendingCreate ? "conversation" : "tools",
+        error: "Your last launch didn’t finish. Go back to the plan to clean up what it left, then launch again.",
+        conversationId: recovered.conversationId || undefined,
+      });
+    });
+  }, []);
   // Sends a keyed create and returns the chat's ID, or "" when the outcome is
   // unknown (no reply, or one that could not be read). A clean HTTP error
   // throws: the server refused, so nothing was made.
@@ -350,7 +393,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     if (!pending) return true;
     const id = await sendCreate(pending.body).catch(() => "");
     if (!id) return false;
-    created.current = { ...created.current, conversationId: id, pendingCreate: undefined };
+    setCreated({ ...created.current, conversationId: id, pendingCreate: undefined });
     return true;
   };
   useEffect(() => {
@@ -413,7 +456,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       phase = next;
       setLaunch({ phase: next });
     };
-    created.current = { conversationId: "", scheduleId: "" };
+    setCreated({ conversationId: "", scheduleId: "" });
     try {
       setPhase("conversation");
       // The connector set to persist. With a known catalog it is what the
@@ -446,12 +489,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       let conversationId = await sendCreate(body);
       if (!conversationId) conversationId = await sendCreate(body); // one immediate retry
       if (!conversationId) {
-        created.current.pendingCreate = { body };
+        setCreated({ ...created.current, pendingCreate: { body } });
         throw new Error(
           `Couldn’t confirm whether the patrol chat “${body.title}” was created. Check your connection and try again.`,
         );
       }
-      created.current.conversationId = conversationId;
+      setCreated({ ...created.current, conversationId });
       const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
 
       setPhase("tools");
@@ -481,7 +524,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       if (!schedRes.ok) throw new Error(await failText(schedRes, "Could not arm the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
       const scheduleId = sched.schedule?.id ?? "";
-      created.current.scheduleId = scheduleId;
+      setCreated({ ...created.current, scheduleId });
 
       setPhase("first-run");
       // The patrol is armed from here on; a refused first run (a full queue,
@@ -499,7 +542,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       } catch {
         // Storage unavailable: nothing to clean up.
       }
-      created.current = { conversationId: "", scheduleId: "" };
+      setCreated({ conversationId: "", scheduleId: "" });
       setLaunch({ phase: "done", conversationId, firstRun });
     } catch (e) {
       setLaunch({
@@ -545,7 +588,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           }));
           return false;
         }
-        created.current = { conversationId, scheduleId: "" };
+        setCreated({ conversationId, scheduleId: "" });
       }
       const res = await fetch(base, { method: "DELETE" }).catch(() => null);
       if (!settled(res)) {
@@ -557,7 +600,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         return false;
       }
     }
-    created.current = { conversationId: "", scheduleId: "" };
+    setCreated({ conversationId: "", scheduleId: "" });
     setLaunch(null);
     return true;
   };
@@ -1276,6 +1319,14 @@ function RulesStep({
   const add = async (content: string) => {
     const text = content.trim();
     if (!text || busy) return;
+    // Identical text is the same rule: never save it twice. This also makes a
+    // retry after an unconfirmed save safe once the roster shows the first.
+    const same = (m: Memory) => m.content.trim().toLowerCase() === text.toLowerCase();
+    if ((memories ?? []).some(same)) {
+      setDraft((cur) => (cur.trim() === text ? "" : cur));
+      setError("That one is already saved.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -1283,9 +1334,19 @@ function RulesStep({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text, kind: "constraint" }),
-      });
-      if (!res.ok) throw new Error(await failText(res, "Could not save that"));
-      const mem = (await res.json()) as { id?: string };
+      }).catch(() => null);
+      if (res && !res.ok) throw new Error(await failText(res, "Could not save that"));
+      let savedId = res ? await res.json().then((d: { id?: string }) => d?.id ?? "").catch(() => "") : "";
+      // No reply (or an unreadable one): the save may still have committed.
+      // Look before inviting a retry, so it is never saved twice.
+      if (!savedId) {
+        savedId = await fetch("/api/memories", { cache: "no-store" })
+          .then((r) => (r.ok ? (r.json() as Promise<{ memories?: Memory[] }>) : { memories: [] }))
+          .then((d) => activeMemories(d.memories ?? []).find(same)?.id ?? "")
+          .catch(() => "");
+        if (!savedId) throw new Error("Couldn’t confirm that was saved. Check your connection and try again.");
+      }
+      const mem = { id: savedId };
       // Pinned: a non-negotiable is never retired by the automatic
       // memory upkeep (it can still be edited or deleted in Settings).
       // Clear the box only if it still holds what was saved: the person may

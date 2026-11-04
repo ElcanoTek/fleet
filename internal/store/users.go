@@ -970,10 +970,6 @@ func (s *Store) DeleteUser(ctx context.Context, email string) error {
 		`DELETE FROM conversation_order WHERE lower(user_email) = lower($1)`, email); err != nil {
 		return fmt.Errorf("delete chat orders: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`DELETE FROM conversation_create_keys WHERE lower(user_email) = lower($1)`, email); err != nil {
-		return fmt.Errorf("delete create keys: %w", err)
-	}
 	// Per-project UI state (migration 070) goes with the users row below via
 	// its ON DELETE CASCADE — in other people's projects too.
 	//

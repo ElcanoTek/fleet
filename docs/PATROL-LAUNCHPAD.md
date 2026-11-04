@@ -90,14 +90,25 @@ close; **Open the chat** stays available.
 A create whose reply is lost (the request failed in transit, or the reply
 could not be read) may still have made the chat, so every launch sends its
 create with a fresh idempotency key (`client_request_id` on
-`POST /api/conversations`, migration 097). The server binds the key to the
-chat once the whole create succeeds and answers a create with a known key
-with that chat instead of making another. A concurrent duplicate is rolled
-back in favour of the first. A key whose chat was deleted is forgotten, and
-keys expire after a day and go with the account. The wizard retries a lost
-create once at once with the same key. If that also gets no answer, the
-dialog stays open saying so, and Back or close sends it again (with the same
-key) to learn the chat's ID and roll it back. Nothing is matched by title. If the
+`POST /api/conversations`). The key decides the new conversation's ID
+(`store.ConversationIDForCreateKey`, a name-based UUID of the user and key),
+so a retry lands on the same primary key. The server answers a known key
+with the chat it made, and the chat and its key are bound by the one
+INSERT, so no crash can separate them. A concurrent duplicate gets the first
+one's chat. A key whose chat has since been deleted is refused (409), and a
+new launch always uses a new key. The wizard retries a lost create once at
+once with the same key. If that also gets no answer, the dialog stays open
+saying so, and Back or close sends it again to learn the chat's ID and roll
+it back. Nothing is matched by title.
+
+What a launch has created (a chat, a schedule, or a create whose outcome is
+unknown) is also kept in session storage until it is settled. A reload at
+the error screen therefore brings the wizard back to it ("Your last launch
+didn't finish"), and Back or close cleans up as before, using the same key.
+
+A non-negotiable is never saved twice: identical text (ignoring case) is
+refused before any request, and a save whose reply was lost is looked for in
+the memories before a retry is invited. If the
 connector catalog never loaded, launch leaves the connector set the server
 seeded at creation instead of replacing it with an empty one. A refused first
 run (a full queue, say) is reported on the success screen — the patrol is

@@ -238,8 +238,12 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 }
 
 // createConversation handles POST /conversations: a new chat, optionally in a
-// project, with its connector seed and an optional first message; with a
-// client_request_id it is idempotent (see conversationForCreateKey).
+// project, with its connector seed and an optional first message. With a
+// client_request_id it is idempotent: the key decides the new conversation's
+// ID (store.ConversationIDForCreateKey), so a create retried after its reply
+// was lost answers with the chat the first attempt made — the chat and its
+// key are bound by the same INSERT, with nothing for a crash to separate. A
+// key whose chat has since been deleted is refused (409): retry with a new one.
 func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user string) {
 	var req createConversationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -252,13 +256,17 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 			http.Error(w, "client_request_id must be at most 128 characters", http.StatusBadRequest)
 			return
 		}
-		// Already made with this key: answer with that conversation.
-		if existing, done := s.conversationForCreateKey(w, r, user, key); done {
-			if existing != nil {
-				writeJSON(w, existing)
-			}
+		// The key decides the conversation's ID, so a retry lands on the
+		// same row: already made means answer with it.
+		id := store.ConversationIDForCreateKey(user, key)
+		if existing, err := s.store.Get(r.Context(), user, id); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if existing != nil {
+			writeJSON(w, existing)
 			return
 		}
+		r = r.WithContext(store.WithNewConversationID(r.Context(), id))
 	}
 	persona := strings.TrimSpace(req.Persona)
 	if persona != "" {
@@ -312,27 +320,6 @@ func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user
 			return
 		}
 	}
-	// Bind the key only now that the whole create succeeded. A concurrent
-	// create with the same key that bound first wins: this one is rolled
-	// back and the winner returned, so one key never makes two chats.
-	if key != "" {
-		bound, err := s.store.RecordCreateKey(r.Context(), user, key, conv.ID)
-		if err != nil {
-			s.rollbackCreatedConversation(user, conv.ID)
-			http.Error(w, "failed to record the create: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if bound != conv.ID {
-			s.rollbackCreatedConversation(user, conv.ID)
-			winner, err := s.store.Get(r.Context(), user, bound)
-			if err != nil || winner == nil {
-				http.Error(w, "conversation create raced; retry", http.StatusConflict)
-				return
-			}
-			writeJSON(w, winner)
-			return
-		}
-	}
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	writeJSON(w, conv)
 }
@@ -381,35 +368,6 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, map[string]any{"updated": n})
-}
-
-// conversationForCreateKey looks up a create's idempotency key. done is true
-// when the request has been answered: with the conversation the key already
-// made (existing != nil, the caller writes it), or with an error. A key whose
-// conversation is gone (deleted, or rolled back) is forgotten, so the create
-// goes ahead and makes a new one.
-func (s *Server) conversationForCreateKey(w http.ResponseWriter, r *http.Request, user, key string) (existing *store.Conversation, done bool) {
-	id, err := s.store.ConversationForCreateKey(r.Context(), user, key)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return nil, true
-	}
-	if id == "" {
-		return nil, false
-	}
-	conv, err := s.store.Get(r.Context(), user, id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return nil, true
-	}
-	if conv != nil {
-		return conv, true
-	}
-	if err := s.store.ForgetCreateKey(r.Context(), user, key); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return nil, true
-	}
-	return nil, false
 }
 
 // conversationOrder handles GET and PUT /conversations/order: the orders the

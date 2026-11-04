@@ -1397,6 +1397,17 @@ func (s *Server) createConversationForRequest(w http.ResponseWriter, r *http.Req
 			http.Error(w, "project not found", http.StatusNotFound)
 			return nil, false
 		}
+		// A keyed create (client_request_id) whose ID is taken: a concurrent
+		// retry with the same key got there first (answer with its chat), or
+		// the chat this key made was deleted since (refuse: use a new key).
+		if errors.Is(err, store.ErrConversationIDTaken) {
+			if winner, gerr := s.store.Get(r.Context(), user, store.ConversationIDFromContext(r.Context())); gerr == nil && winner != nil {
+				writeJSON(w, winner)
+				return nil, false
+			}
+			http.Error(w, "the chat made with this client_request_id was deleted; retry with a new one", http.StatusConflict)
+			return nil, false
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return nil, false
 	}

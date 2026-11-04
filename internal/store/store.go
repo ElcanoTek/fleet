@@ -441,7 +441,7 @@ func (s *Store) truncateAllForTestOnce(ctx context.Context, queue bool) error {
 		}
 	}
 	if _, err := tx.ExecContext(ctx,
-		`TRUNCATE TABLE conversations, chat_schedules, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, external_team_renames, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, user_personas, shared_files, teams, conversation_order, conversation_create_keys RESTART IDENTITY CASCADE`); err != nil {
+		`TRUNCATE TABLE conversations, chat_schedules, memories, memory_entities, users, external_auth_epochs, external_logout_events, external_access_state, external_team_renames, account_events, panic_events, remote_mcp_servers, push_subscriptions, llm_providers, workspace_settings, notify_settings, owner_digest_days, turn_metrics, projects, user_connector_prefs, user_skills, user_personas, shared_files, teams, conversation_order RESTART IDENTITY CASCADE`); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -536,7 +536,7 @@ func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) er
 // mutated afterward — matches how persona is locked after the first
 // turn.
 func (s *Store) CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
-	id := uuid.NewString()
+	id := newConversationID(ctx)
 	now := time.Now().Unix()
 	// optional_mcp_servers_enabled gets the column default ('[]'::jsonb);
 	// we don't need to write it explicitly on insert.
@@ -545,6 +545,9 @@ func (s *Store) CreateConversation(ctx context.Context, userEmail, title, person
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8)`,
 		id, userEmail, title, persona, model, lockdown, now, now,
 	)
+	if pgUniqueViolation(err) {
+		return nil, ErrConversationIDTaken
+	}
 	if err != nil {
 		return nil, err
 	}
