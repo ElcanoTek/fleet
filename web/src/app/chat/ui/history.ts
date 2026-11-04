@@ -1268,7 +1268,7 @@ export function applyContextCompacted(
  * in-flight retry (we've given up on this model).
  */
 export const CREDITS_EXHAUSTED_MESSAGE =
-  "You've used all of your included credits! Please reach out to Elcano at licensing@elcanotek.com to add more credits and keep going.";
+  "You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going.";
 
 export function applyModelRequired(message: Message, payload: ModelRequiredEventPayload): Message {
   const statusCode = typeof payload.status_code === "number" ? payload.status_code : 0;

@@ -467,6 +467,11 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			},
 			wantStatus: http.StatusBadRequest,
 		},
+		{
+			name:       "SSE 403 with metadata limit_source only",
+			err:        errors.New(`received error while streaming: {"code":403,"message":"Provider returned error","metadata":{"limit_source":"openrouter_key_limit","scope":"key_limit"}}`),
+			wantStatus: http.StatusForbidden,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if !IsCreditsExhaustedError(tc.err) {
@@ -485,6 +490,40 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			}
 			if status != tc.wantStatus {
 				t.Fatalf("status = %d, want %d", status, tc.wantStatus)
+			}
+		})
+	}
+
+	// Non-billing 4xx errors with null or unrecognized limit_source must remain
+	// provider rejections rather than being misclassified as credits_exhausted.
+	for _, tc := range []struct {
+		name string
+		err  *fantasy.ProviderError
+	}{
+		{
+			name: "403 with null limit_source",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Message:      "Provider returned error",
+				ResponseBody: []byte(`{"error":{"code":403,"message":"Provider returned error","metadata":{"limit_source":null}}}`),
+			},
+		},
+		{
+			name: "403 with non-billing limit_source",
+			err: &fantasy.ProviderError{
+				StatusCode:   http.StatusForbidden,
+				Message:      "Provider returned error",
+				ResponseBody: []byte(`{"error":{"code":403,"message":"Provider returned error","metadata":{"limit_source":"moderation"}}}`),
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if IsCreditsExhaustedError(tc.err) {
+				t.Fatalf("IsCreditsExhaustedError(%v) = true, want false", tc.err)
+			}
+			class, _ := classifyStreamError(tc.err)
+			if class != streamErrorProviderRejected {
+				t.Fatalf("classifyStreamError = %s, want provider_rejected", class)
 			}
 		})
 	}

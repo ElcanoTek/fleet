@@ -455,9 +455,10 @@ func parseSSEStreamError(err error) *fantasy.ProviderError {
 		detail = msg
 	}
 	return &fantasy.ProviderError{
-		StatusCode: status,
-		Title:      title,
-		Message:    detail,
+		StatusCode:   status,
+		Title:        title,
+		Message:      detail,
+		ResponseBody: []byte(body),
 	}
 }
 

@@ -2301,7 +2301,7 @@ func mapRunEntriesWithSender(entries []agentcore.RunEntry, senderEmail string) [
 // CreditsExhaustedMessage is the friendly user-facing notice shown when the
 // configured provider API key or account runs out of included credits or hits
 // its spend limit.
-const CreditsExhaustedMessage = "You've used all of your included credits! Please reach out to Elcano at licensing@elcanotek.com to add more credits and keep going."
+const CreditsExhaustedMessage = "You're out of included credits. Top up your API key, or contact licensing@elcanotek.com to add more credits and keep going."
 
 // emitModelSelectionRequired tells the frontend to reopen its model picker
 // because the current model can't complete the turn. Mirrors chat's helper of

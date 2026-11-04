@@ -131,29 +131,34 @@ func parseUpstreamErrorDetail(body []byte) upstreamErrorDetail {
 	if text == "" {
 		return out
 	}
+	type errorFields struct {
+		Code     json.RawMessage            `json:"code"`
+		Message  string                     `json:"message"`
+		Metadata map[string]json.RawMessage `json:"metadata"`
+	}
 	var envelope struct {
-		Error struct {
-			Code     json.RawMessage            `json:"code"`
-			Message  string                     `json:"message"`
-			Metadata map[string]json.RawMessage `json:"metadata"`
-		} `json:"error"`
+		Error errorFields `json:"error"`
 	}
 	if err := json.Unmarshal([]byte(text), &envelope); err != nil {
 		return out
 	}
-	out.ProviderName = rawMessageText(envelope.Error.Metadata["provider_name"])
-	out.ErrorType = rawMessageText(envelope.Error.Metadata["error_type"])
-	out.ProviderCode = rawMessageText(envelope.Error.Metadata["provider_code"])
-	out.Raw = rawMessageText(envelope.Error.Metadata["raw"])
-	out.LimitSource = rawMessageText(envelope.Error.Metadata["limit_source"])
-	out.Scope = rawMessageText(envelope.Error.Metadata["scope"])
-	out.Code = rawMessageText(envelope.Error.Code)
-	out.Message = strings.TrimSpace(envelope.Error.Message)
+	ef := envelope.Error
+	if len(ef.Code) == 0 && ef.Message == "" && len(ef.Metadata) == 0 {
+		_ = json.Unmarshal([]byte(text), &ef)
+	}
+	out.ProviderName = rawMessageText(ef.Metadata["provider_name"])
+	out.ErrorType = rawMessageText(ef.Metadata["error_type"])
+	out.ProviderCode = rawMessageText(ef.Metadata["provider_code"])
+	out.Raw = rawMessageText(ef.Metadata["raw"])
+	out.LimitSource = rawMessageText(ef.Metadata["limit_source"])
+	out.Scope = rawMessageText(ef.Metadata["scope"])
+	out.Code = rawMessageText(ef.Code)
+	out.Message = strings.TrimSpace(ef.Message)
 	return out
 }
 
-// rawMessageText renders a metadata value: JSON strings are unquoted, any
-// other value (an object, a number) is kept as compact JSON.
+// rawMessageText renders a metadata value: JSON strings are unquoted, JSON null
+// is "", and any other value (an object, a number) is kept as compact JSON.
 func rawMessageText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -162,7 +167,11 @@ func rawMessageText(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return strings.TrimSpace(s)
 	}
-	return strings.TrimSpace(string(raw))
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "null" {
+		return ""
+	}
+	return trimmed
 }
 
 // providerErrorUpstreamDetail returns a single-line, redacted, bounded
@@ -319,6 +328,15 @@ func isExpiredPromptCacheRejection(providerErr *fantasy.ProviderError) bool {
 //     "Your credit balance is too low..." / "You exceeded your current quota..."
 var creditsExhaustedPattern = regexp.MustCompile(`(?i)\b(?:key limit exceeded|insufficient credits|requires more credits|credit balance is too low|exceeded your current quota)\b`)
 
+func isRecognizedBillingLimitSource(src string) bool {
+	switch strings.ToLower(strings.TrimSpace(src)) {
+	case "openrouter_key_limit", "openrouter_credit_limit", "key_limit", "credit_limit", "account_credit_limit":
+		return true
+	default:
+		return false
+	}
+}
+
 // isCreditsExhausted reports whether a provider error indicates that the
 // configured API key or account is out of credits or has hit its spend limit.
 // OpenRouter returns HTTP 402 when a request's max_tokens cost exceeds remaining
@@ -340,7 +358,7 @@ func isCreditsExhausted(providerErr *fantasy.ProviderError) bool {
 	if detail.Code == "402" {
 		return true
 	}
-	if detail.LimitSource != "" || strings.EqualFold(detail.Scope, "key_limit") || strings.EqualFold(detail.Scope, "budget") {
+	if isRecognizedBillingLimitSource(detail.LimitSource) || strings.EqualFold(detail.Scope, "key_limit") || strings.EqualFold(detail.Scope, "budget") {
 		return true
 	}
 	for _, code := range []string{detail.Code, detail.ProviderCode, detail.ErrorType, providerErr.ErrorType, providerErr.Title} {

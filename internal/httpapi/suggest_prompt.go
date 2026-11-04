@@ -20,7 +20,6 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // handleSuggestPrompt backs POST /conversations/{id}/suggest-prompt. It loads
@@ -59,10 +58,6 @@ func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, con
 		Connectors: s.effectiveOptionalMCPServersForCaller(ctx, user, conv),
 	})
 	if err != nil || draft == nil {
-		if agentcore.IsCreditsExhaustedError(err) {
-			http.Error(w, agent.CreditsExhaustedMessage, http.StatusPaymentRequired)
-			return
-		}
 		http.Error(w, "could not synthesize a prompt from this conversation; try again", http.StatusBadGateway)
 		return
 	}

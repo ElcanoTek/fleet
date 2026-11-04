@@ -1096,7 +1096,7 @@ export function ChatTranscript({
                                     <span className="inline-block size-1.5 rounded-full bg-[var(--color-danger)]" />
                                     <span className="font-medium text-[var(--color-text-primary)]">
                                       {creditsExhausted
-                                        ? "Out of included credits"
+                                        ? "Out of credits"
                                         : mustSwap
                                           ? "Pick a different model"
                                           : "Turn failed"}
