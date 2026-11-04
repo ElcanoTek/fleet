@@ -2677,6 +2677,10 @@ export function ChatExperience({
       // browser's per-origin pool is full and no probe or stream could get
       // out at all (#1584).
       signal?: AbortSignal;
+      // When opening a team-shared chat that was marked multiplayer, fall back
+      // to the read-only TeamChatViewer if the owner has since turned off
+      // multiplayer or excluded this viewer (HTTP 403/404 on the live chat).
+      fallbackToTeamChatView?: boolean;
     } = {},
   ) => {
     // Opening a conversation dismisses a project home overlaying the chat
@@ -2685,6 +2689,7 @@ export function ChatExperience({
     // (SSE reattach) and restore (boot's auto-load of the latest chat,
     // tab-return staleness refetch) — otherwise the boot load resolving a
     // beat after the user opens a project home would silently close it.
+    const prevProjectHome = projectHome;
     if (!options.background && !options.restore) {
       setProjectHome(null);
       // The team-chat viewer is a full-page overlay too, and it hid the chat
@@ -2754,7 +2759,17 @@ export function ChatExperience({
         cache: "no-store",
         signal: options.signal,
       });
-      if (!response.ok) throw new Error("Unable to load conversation.");
+      if (!response.ok) {
+        if (
+          options.fallbackToTeamChatView &&
+          (response.status === 404 || response.status === 403)
+        ) {
+          if (prevProjectHome) setProjectHome(prevProjectHome);
+          setTeamChatView(conversationId);
+          return;
+        }
+        throw new Error("Unable to load conversation.");
+      }
       const data = (await response.json()) as {
         conversation: ConversationSummary & {
           branch_origin?: BranchOrigin | null;
@@ -6721,7 +6736,7 @@ export function ChatExperience({
             setProjectHome(null);
             if (c.multiplayer) {
               setTeamChatView(null);
-              void loadConversation(c.id);
+              void loadConversation(c.id, { fallbackToTeamChatView: true });
             } else {
               setTeamChatView(c.id);
             }
@@ -7675,17 +7690,30 @@ export function ChatExperience({
                 )
               }
               onBack={() => setProjectHome(null)}
+              liveTeamChats={teamSharedConversations}
               onOpenTeamChat={(conversationId) => {
                 const isMp = teamSharedConversations.some(
                   (c) => c.id === conversationId && Boolean(c.multiplayer),
                 );
                 if (isMp) {
-                  setProjectHome(null);
-                  setTeamChatView(null);
-                  void loadConversation(conversationId);
+                  void loadConversation(conversationId, {
+                    fallbackToTeamChatView: true,
+                  });
                 } else {
                   setTeamChatView(conversationId);
                 }
+              }}
+              onOpenMultiplayerChat={(conversationId) => {
+                const live = teamSharedConversations.find(
+                  (c) => c.id === conversationId,
+                );
+                if (live && !live.multiplayer) {
+                  setTeamChatView(conversationId);
+                  return;
+                }
+                void loadConversation(conversationId, {
+                  fallbackToTeamChatView: true,
+                });
               }}
               onOpenChat={(conversationId) => {
                 setProjectHome(null);
