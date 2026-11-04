@@ -53,6 +53,41 @@ func TestPatrolDraft_ReturnsDraft(t *testing.T) {
 	}
 }
 
+// memoriesStore serves a fixed memory list to the drafter.
+type memoriesStore struct {
+	chatStore
+	memories []store.Memory
+}
+
+func (m *memoriesStore) ListMemories(context.Context, string) ([]store.Memory, error) {
+	return m.memories, nil
+}
+
+// TestPatrolDraft_UsesTheTurnsMemories pins that the drafter sees memories
+// exactly as a patrol turn does (memoryContents): annotated with kind and
+// validity window, without retired or proposed rows — not the raw text the
+// wizard sent.
+func TestPatrolDraft_UsesTheTurnsMemories(t *testing.T) {
+	until := int64(1798761600) // 2027-01-01
+	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
+	s := &Server{agent: fake, store: &memoriesStore{memories: []store.Memory{
+		{ID: "a", Content: "Q4 budget is $40k", Kind: "fact", ValidTo: &until},
+		{ID: "b", Content: "Never email clients", Kind: "constraint", Pinned: true},
+		{ID: "c", Content: "unaccepted", Source: "proposed"},
+	}}}
+	body := `{"goals":["Watch spend"],"memories":["Q4 budget is $40k"]}`
+	rec := httptest.NewRecorder()
+	s.handlePatrolDraft(rec, httptest.NewRequest(http.MethodPost, "/patrol-draft", strings.NewReader(body)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	got := strings.Join(fake.patrolInput.Memories, "|")
+	want := "Q4 budget is $40k (until 2027-01-01)|Never email clients (constraint)"
+	if got != want {
+		t.Errorf("memories = %q, want %q", got, want)
+	}
+}
+
 // TestPatrolDraft_Rejections pins the refusals: nothing to watch is a 400
 // before any model call, a failed synthesis is a 502 the wizard reports, and
 // the endpoint is POST-only.

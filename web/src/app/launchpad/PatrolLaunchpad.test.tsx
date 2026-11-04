@@ -23,6 +23,9 @@ type Opts = {
   hangDraft?: boolean;
   draft?: "ok" | "fail";
   catalog?: "ok" | "fail";
+  // Results of the catalog reads after the first one (focus refreshes, the
+  // launch-time re-read); beyond the list, reads succeed.
+  catalogLater?: ("ok" | "fail")[];
   pin?: "ok" | "fail";
   runNow?: "ok" | "fail";
   tools?: "ok" | "fail";
@@ -40,7 +43,7 @@ function mockApi(opts: Opts = {}) {
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body, text: async () => "" });
     if (url === "/api/mcp-servers") {
-      if (opts.alwaysOnLater && catalogGets++ > 0) {
+      if (opts.alwaysOnLater && catalogGets > 0) {
         return json({
           servers: [
             { name: "gmail", display_name: "Gmail", description: "Read and search mail", enabled: true },
@@ -48,6 +51,10 @@ function mockApi(opts: Opts = {}) {
             { name: "files", display_name: "Workspace files", description: "Shared reports", always_on: true, enabled: true },
           ],
         });
+      }
+      const n = catalogGets++;
+      if (n > 0 && opts.catalogLater?.[n - 1] === "fail") {
+        return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
       }
       if (opts.catalog === "fail") return { ok: false, status: 500, json: async () => ({}), text: async () => "down" };
       return json({
@@ -492,6 +499,29 @@ describe("PatrolLaunchpad", () => {
     // Back from the other tab: the catalog refreshes on focus.
     fireEvent.focus(window);
     await waitFor(() => expect(screen.getByTestId("launchpad-summary").textContent).toContain("Workspace files"));
+  });
+
+  it("re-reads the catalog at launch when a refresh failed, so a ticked tool is not dropped", async () => {
+    const calls = mockApi({ catalogLater: ["fail"] });
+    await walkToLaunch(calls);
+    fireEvent.focus(window); // the refresh fails: the catalog is unknown again
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/mcp-servers").length).toBe(2));
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    await screen.findByTestId("launchpad-done");
+    const tools = calls.find((c) => c.url.endsWith("/mcp-servers") && c.method === "POST")?.body as {
+      enabled_optional: string[];
+    };
+    expect(tools.enabled_optional).toContain("dealdesk");
+  });
+
+  it("stops the launch before creating anything when the tools still cannot be confirmed", async () => {
+    const calls = mockApi({ catalogLater: ["fail", "fail"] });
+    await walkToLaunch(calls);
+    fireEvent.focus(window);
+    await waitFor(() => expect(calls.filter((c) => c.url === "/api/mcp-servers").length).toBe(2));
+    fireEvent.click(screen.getByTestId("launchpad-launch"));
+    expect((await screen.findByRole("alert")).textContent).toContain("Couldn’t confirm the tools you picked");
+    expect(calls.some((c) => c.url === "/api/conversations" && c.method === "POST")).toBe(false);
   });
 
   it("keeps a saved personal persona when the personal roster could not be read", async () => {

@@ -358,6 +358,27 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     created.current = { conversationId: "", scheduleId: "" };
     try {
       setPhase("conversation");
+      // The connector set to persist. With a known catalog it is what the
+      // Tools step shows. When the catalog is unknown (a refresh failed) but
+      // the person made explicit choices, read it again now, before anything
+      // is created: skipping the replacement would silently drop a tool the
+      // plan promised, and a stale list could drop one set up meanwhile. If
+      // it still cannot be read the launch stops here, with nothing created.
+      // Never chose and never loaded: the server's defaults stand.
+      let toolsCatalog: LaunchpadConnector[] | null = catalogLoaded ? (connectors ?? []) : null;
+      if (!toolsCatalog && state.selected !== null) {
+        const res = await fetch("/api/mcp-servers", { cache: "no-store" }).catch(() => null);
+        if (!res?.ok) throw new Error("Couldn’t confirm the tools you picked. Check your connection and try again.");
+        toolsCatalog = ((await res.json()) as { servers?: LaunchpadConnector[] }).servers ?? [];
+      }
+      const toolsSelection = toolsCatalog
+        ? [
+            ...new Set([
+              ...(state.selected ?? initialSelection(toolsCatalog)),
+              ...toolsCatalog.filter((c) => c.always_on && usable(c)).map((c) => c.name),
+            ]),
+          ]
+        : [];
       const body: Record<string, string> = { title: title.trim() || "My patrol", model: currentDefaultModel() };
       if (state.persona) body.persona = state.persona;
       const convRes = await fetch("/api/conversations", {
@@ -371,13 +392,13 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
 
       setPhase("tools");
-      // Only replace the chat's connector set when the catalog loaded: an
+      // Only replace the chat's connector set when the catalog is known: an
       // unknown selection keeps the defaults the server seeded at creation.
-      if (catalogLoaded) {
+      if (toolsCatalog) {
         const toolsRes = await fetch(`${base}/mcp-servers`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled_optional: optionalSelection(connectors ?? [], selected), accounts: {} }),
+          body: JSON.stringify({ enabled_optional: optionalSelection(toolsCatalog, toolsSelection), accounts: {} }),
         });
         if (!toolsRes.ok) throw new Error(await failText(toolsRes, "Could not switch on the patrol's tools"));
       }
@@ -1173,12 +1194,14 @@ function RulesStep({
       setDraft("");
       if (mem.id) {
         setJustAdded((cur) => [...cur, mem.id as string]);
-        onMemoryAdded({ id: mem.id, content: text, kind: "constraint", pinned: true });
         const pinRes = await fetch(`/api/memories/${encodeURIComponent(mem.id)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ pinned: true }),
         }).catch(() => null);
+        // Into the roster as what the store now holds: pinned only once the
+        // pin is confirmed, so its place in the order matches a turn's.
+        onMemoryAdded({ id: mem.id, content: text, kind: "constraint", pinned: !!pinRes?.ok });
         // Saved but not pinned: say so, since an unpinned memory can be
         // retired by the automatic upkeep.
         if (!pinRes?.ok) {

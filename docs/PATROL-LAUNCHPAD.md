@@ -12,9 +12,11 @@ alone would blur: **Chat** (*Talk it through*), **Patrols** (*Chats that check
 in on a schedule*) and **Background tasks** (*Run headless, without a chat*).
 "Background tasks" replaced "Operations Center" everywhere a user sees it — the
 rail, the page header, the guide title and text, approval-card and tool text the
-assistant relays, and the owner-digest email; the guide notes the old name
-once. URLs (`/orchestrator`, `/help/operations-center`), code identifiers and
-the operator-only `fleet admin` CLI keep the old name. The user guides moved
+assistant relays, the owner-digest email, the README, the default bundle's
+README and the installer's prompts (`scripts/bootstrap.sh`); the guides note
+the old name once. URLs (`/orchestrator`, `/help/operations-center`), code
+identifiers and comments, and the operator-only `fleet admin` CLI keep the old
+name. The user guides moved
 from the rail into the account menu, beside Settings.
 
 **Patrols live in Chat; the rail item is their index.** A click reads

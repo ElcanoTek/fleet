@@ -89,6 +89,17 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user := strings.ToLower(userFromCtx(r.Context()))
+	// The memories the draft must respect are the ones a patrol turn will
+	// actually receive: read them here and render them exactly as the turn
+	// does (memoryContents — active only, pinned first, capped at 50, each
+	// with its kind and validity window), so a time-scoped fact is not baked
+	// into the standing instructions as timeless. The wizard's own list is
+	// only a fallback for when the store cannot be read.
+	if s.store != nil {
+		if mems, err := s.store.ListMemories(r.Context(), user); err == nil {
+			in.Memories = memoryContents(mems)
+		}
+	}
 	if _, busy := patrolDraftInFlight.LoadOrStore(user, struct{}{}); busy {
 		http.Error(w, "a draft is already being written; wait for it to finish", http.StatusTooManyRequests)
 		return
