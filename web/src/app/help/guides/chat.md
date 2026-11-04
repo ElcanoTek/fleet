@@ -84,14 +84,14 @@ Recurring work usually follows one loop. A conversation produces something worth
 keeping. That conversation becomes a saved prompt in the prompt library. The
 prompt becomes a scheduled task. The task runs on its own and emails the result
 to whoever should see it. This guide covers the first two steps in depth; the
-**Operations Center Guide** covers the rest.
+**Background tasks guide** covers the rest.
 
 > conversation → saved prompt → scheduled task → your inbox
 > *(this guide covers the first two)*
 
 The two surfaces divide the work simply. Chat is **hands on**: you are in the
 conversation, asking, reading, and redirecting as it goes, and that is where a
-report gets shaped until it comes back right. The Operations Center is **hands
+report gets shaped until it comes back right. Background tasks are **hands
 off**: the same conversation, once it is right, runs there on a schedule and
 delivers itself, and you only look in when something needs you. The skills are
 the same in both places; only your role changes.
@@ -169,7 +169,7 @@ patrol, and a **Got it** button instead of the rest of the wizard.
 
 You can also run a recurring **patrol** or a one-shot **timer** directly inside
 a chat conversation, without leaving the thread or promoting it to a separate
-Operations Center job. Each time a patrol or timer fires, the assistant wakes up
+background task. Each time a patrol or timer fires, the assistant wakes up
 in the same conversation with its full message history, workspace files, and
 enabled connectors intact.
 
@@ -296,10 +296,12 @@ the middle holds the work, and the composer at the bottom is where you ask.
 
 ### The rail
 
-At the top of the rail, **Chat**, **Tasks** (the Operations Center) and
-**Patrols** (your patrol chats, and the
-[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) switch
-between the ways of working. **New chat** starts a fresh
+At the top of the rail are the three ways of working, each with a one-line
+subtitle: **Chat** (*Talk it through*), **Patrols** (*Chats that check in on a
+schedule* — your patrol chats, and the
+[Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) and
+**Background tasks** (*Run headless, deliver by email* — formerly the
+Operations Center). **New chat** starts a fresh
 conversation. The search field, also reachable with
 `⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
 too. Below that, conversations are grouped:
@@ -381,7 +383,7 @@ the top bar compact (switch to dashboard view via **More options → Dashboard v
 **Memories** and **Show details** (which toggles the assistant's reasoning, working notes, tool calls, and per-turn cost figures on or off across the conversation) live inside **More options** (`•••`) in the composer so they carry clear labels and stay reachable in both standard chat and dashboard view.
 When your operator configures a support
 contact in the deployment's bundle (`branding.support`), the top bar also shows
-that support button across Chat, the Operations Center, Settings, and Guides
+that support button across Chat, Background tasks, Settings, and Guides
 (collapsing to a compact **Help** label — or `branding.support.mobile_label` — on
 mobile screens);
 pressing it opens a dialog with your operator's message, a **Copy email** button,
@@ -689,7 +691,7 @@ Center.
 | --- | --- | --- |
 | Availability | **Settings → Connections** | Which connectors exist for you at all, whether each is on by default in new chats, and which account it uses when a connector has more than one. Set once, lasts. |
 | Selection | The **Tools** menu (the wrench) in the composer, its library, or an **Enable MCP connector?** card in chat | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; if a task needs a connected bundled optional MCP connector that is currently off in the conversation, the assistant can suggest turning it on for you to approve (or turn it on itself when **Auto-approve** is active). |
-| Binding | The task form in the Operations Center | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
+| Binding | The task form on the Background tasks page | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
 The Tools menu opens with its search field ready: type to filter by a
 connector's name, its description, its category, or the name of one of its
@@ -718,7 +720,7 @@ tools out of the Tools menu, its search, the library's **Show N tools** list
 and every tool count, and does not list a **Bundled** connector whose every
 tool is reserved. A third-party connector you signed into yourself is listed
 either way, because its tools are only known once a conversation opens it. The
-assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the Operations Center task form may show
+assistant cannot call a reserved tool in a conversation, whatever you turn on; a scheduled task still can, so the task form on the Background tasks page may show
 tools and connectors that Chat does not. When a connector has more than one
 account, an **Account** menu on its row and in the library picks the one this
 conversation uses; the default reads as your deployment's name, or as the
@@ -1280,8 +1282,8 @@ The library is where a finished prompt lives. Chats are where prompts get built;
 tasks are where they run; the library is the one place both of them look.
 
 There is one library, visible from three places: **Prompt library** inside **More
-options** (`•••`) in the composer, **Settings → Prompts**, and the prompt field in the Operations Center
-task form all open the same list, so a prompt saved from a conversation is, word for
+options** (`•••`) in the composer, **Settings → Prompts**, and the prompt field in the task form on the Background tasks page
+all open the same list, so a prompt saved from a conversation is, word for
 word, the prompt a task can run. It holds two kinds of entry:
 
 | Kind | What it is |
@@ -1292,8 +1294,8 @@ word, the prompt a task can run. It holds two kinds of entry:
 ### Using a prompt
 
 Open the library, search or scroll, and select an entry to read it in full. **Use
-prompt** inserts it into your draft; send it as it is, or add to it first. In the
-Operations Center the same action fills the task's instructions and seeds the
+prompt** inserts it into your draft; send it as it is, or add to it first. On the
+Background tasks page the same action fills the task's instructions and seeds the
 task's title from the prompt's name.
 
 Some deployment prompts are **forms**, marked **Form** in the list. Selecting one
@@ -1390,10 +1392,10 @@ and update the saved prompt.
 
 ### Getting the prompt into a task
 
-**From the library, in the Operations Center.** The recommended route. In the
-Operations Center, **New task** opens the task form; insert the prompt from the
+**From the library, on the Background tasks page.** The recommended route. On
+the Background tasks page, **New task** opens the task form; insert the prompt from the
 library, then set the schedule, the model, and the recipients. The prompt has one
-home and the task points at it. The Operations Center Guide covers the form field
+home and the task points at it. The Background tasks guide covers the form field
 by field.
 
 **Make recurring task… from the chat.** The direct route. From the conversation's
@@ -1409,7 +1411,7 @@ rather than taken from the library, so review it in **Edit** with the same
 checklist. Consider saving that reviewed prompt to the library as well, so a
 later fix has somewhere to live.
 
-Either way, the task appears on your own board in the Operations Center.
+Either way, the task appears on your own board on the Background tasks page.
 Teammates receive its emails, but unless they are admins they do not see its row,
 so the team's version of a report should be created by whoever will maintain it.
 
@@ -1418,7 +1420,7 @@ so the team's version of a report should be created by whoever will maintain it.
 > After any change to a library prompt, open the tasks that use it, re-insert the
 > prompt, and **Run now** once to confirm.
 
-From here, the **Operations Center Guide** takes over: run states, logs, what to
+From here, the **Background tasks guide** takes over: run states, logs, what to
 do when a run needs attention.
 
 ## 11. When a turn goes wrong

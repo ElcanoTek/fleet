@@ -21,8 +21,8 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
       <div className="auth-fields stack-form">
         <h2>Sign in</h2>
         <p className="caption">
-          Sign in with the same account you use for Chat. Operations Center
-          access is provisioned by an administrator.
+          Sign in with the same account you use for Chat. Access to
+          background tasks is provisioned by an administrator.
         </p>
 
         {magicLinkLoginEnabled ? (

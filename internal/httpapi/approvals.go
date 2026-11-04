@@ -1333,7 +1333,7 @@ func formatTaskMutationReport(action string, res *TaskMutationResult, link strin
 		}
 	}
 	if link != "" {
-		fmt.Fprintf(&b, "Review them in the Operations Center: %s", link)
+		fmt.Fprintf(&b, "Review them on the Background tasks page: %s", link)
 	}
 	return b.String()
 }
@@ -3341,9 +3341,9 @@ func (s *Server) runStagedScheduleTask(ctx context.Context, approval *store.Appr
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "Task id: %s (status: %s)\n", res.ID, res.Status)
 	if link := s.orchestratorTaskLink(); link != "" {
-		fmt.Fprintf(&b, "View / manage it in the Operations Center: %s", link)
+		fmt.Fprintf(&b, "View / manage it on the Background tasks page: %s", link)
 	} else {
-		b.WriteString("View / manage it in the Operations Center.")
+		b.WriteString("View / manage it on the Background tasks page.")
 	}
 	return strings.TrimSpace(b.String()), nil
 }

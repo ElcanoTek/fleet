@@ -162,7 +162,7 @@ export function AccountMenu({
             guides are the reference behind it. */}
         <MenuItem
           icon={<Icon name="book" className="size-4" />}
-          description="How chat, patrols & the Operations Center work"
+          description="How chat, patrols & background tasks work"
           className={guidesCurrent ? "menu-item-current" : ""}
           testId="nav-to-help"
           onClick={() => {

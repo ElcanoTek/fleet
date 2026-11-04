@@ -24,6 +24,7 @@ import { PatrolSchedulePicker } from "@/app/shared/ui/PatrolSchedulePicker";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { browserTimeZone } from "@/app/shared/lib/timezones";
 import { btnClass, SETTINGS_INPUT } from "@/app/settings/ui/atoms";
+import { MindArt, type MindLevel } from "./MindArt";
 import {
   CADENCE_PRESETS,
   connectorLabel,
@@ -409,7 +410,9 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       // Above the rail's overlay drawer (640–900px), which it is opened from.
       layer="rail"
       testId="patrol-launchpad"
-      className="flex max-h-[calc(100dvh-1.5rem)] w-[calc(100vw-1.5rem)] max-w-[46rem] flex-col overflow-hidden"
+      // On a phone it is a full-height sheet, like the Tools library.
+      sheetOnPhone
+      className="flex h-[100dvh] flex-col overflow-hidden sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:max-w-[46rem]"
     >
       <LaunchpadHeader stepIndex={stepIndex} launching={launch !== null} closable={!inFlight} onClose={close} />
       {launch ? (
@@ -522,7 +525,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
               />
             ) : null}
           </div>
-          <footer className="flex items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 py-3 sm:px-7">
+          <footer className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-2)] px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-7 sm:pb-3 [&_button]:any-pointer-coarse:min-h-11">
             {stepIndex > 0 ? (
               <button type="button" className={btnClass({ reveal: true })} onClick={() => go(-1)} data-testid="launchpad-back">
                 Back
@@ -599,7 +602,7 @@ function LaunchpadHeader({
   onClose: () => void;
 }) {
   return (
-    <header className="relative overflow-hidden border-b border-[var(--color-border)] px-5 pb-4 pt-5 sm:px-7">
+    <header className="relative shrink-0 overflow-hidden border-b border-[var(--color-border)] px-5 pb-4 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-7 sm:pt-5">
       <div
         aria-hidden="true"
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_140%_at_0%_0%,color-mix(in_srgb,var(--color-primary)_22%,transparent),transparent_60%),radial-gradient(90%_120%_at_100%_0%,color-mix(in_srgb,var(--color-accent)_18%,transparent),transparent_55%)]"
@@ -611,7 +614,7 @@ function LaunchpadHeader({
           </span>
           <div>
             <h2 className="text-lg font-semibold leading-tight text-[var(--color-text-primary)]">Patrol Launchpad</h2>
-            <p className="text-[0.82rem] text-[var(--color-text-secondary)]">
+            <p className="hidden text-[0.82rem] text-[var(--color-text-secondary)] sm:block">
               Set up a new patrol in about two minutes. Once launched, it lives in Chat.
             </p>
           </div>
@@ -622,7 +625,7 @@ function LaunchpadHeader({
           onClick={onClose}
           disabled={!closable}
           title={closable ? undefined : "Launching — this takes a few seconds"}
-          className="inline-flex size-8 items-center disabled:cursor-wait disabled:opacity-40 justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
+          className="inline-flex size-8 any-pointer-coarse:size-11 shrink-0 items-center disabled:cursor-wait disabled:opacity-40 justify-center rounded-md text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
         >
           <Icon name="close" className="size-4" />
         </button>
@@ -675,17 +678,14 @@ const CARD =
 
 /* ── 0 · Why (the expanding mind) ───────────────────────────────────────── */
 
-// The rungs of the expanding-mind meme. Each rung has its own scene (what the
-// assistant is doing) and a one-line quote (what you would say to it); the
-// little brain badge in the corner is the meme's joke, growing and glowing a
-// size per rung until the top one is spinning in its own galaxy.
+// The rungs of the expanding-mind meme. Each rung has a hand-drawn head
+// (MindArt) whose brain grows, glows and finally outgrows it into a galaxy,
+// and a one-line quote of what you would say to the assistant at that rung.
 type MindRung = {
   title: string;
   quote: string;
   text: string;
   meme: string;
-  scene: "chat" | "report" | "radar" | "galaxy";
-  brain: string;
 };
 
 const MIND_RUNGS: MindRung[] = [
@@ -694,90 +694,26 @@ const MIND_RUNGS: MindRung[] = [
     quote: "“Hey Fleet, what did we spend yesterday?”",
     text: "You ask, it answers — then waits politely for you to ask again.",
     meme: "Small brain",
-    scene: "chat",
-    brain: "size-3.5",
   },
   {
     title: "Schedule reports",
     quote: "“Email me the pacing report every Monday.”",
     text: "The numbers show up on time. Reading them and deciding is still all you.",
     meme: "Bigger brain",
-    scene: "report",
-    brain: "size-4",
   },
   {
     title: "Patrols that analyze and decide",
     quote: "“Watch my deals. Tell me what’s broken and how to fix it.”",
     text: "It checks your tools on a schedule and brings you findings, not spreadsheets.",
     meme: "Glowing brain",
-    scene: "radar",
-    brain: "size-5",
   },
   {
     title: "Let it act on your behalf",
     quote: "“Fix the routine stuff while I sleep. Brief me over coffee.”",
     text: "Routine fixes just happen — every action listed for you to check.",
     meme: "Galaxy brain",
-    scene: "galaxy",
-    brain: "size-6",
   },
 ];
-
-/** MindScene draws a rung's picture from Flag icons; it is decoration only. */
-function MindScene({ rung }: { rung: MindRung }) {
-  const badge = (glow: string) => (
-    <span
-      className={`absolute -bottom-1 -right-1 inline-flex items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] p-0.5 text-[var(--color-primary)] ${glow}`}
-      data-testid="launchpad-mind-brain"
-    >
-      <Icon name="brain" className={rung.brain} />
-    </span>
-  );
-  if (rung.scene === "chat") {
-    return (
-      <span className="relative inline-flex size-12 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-1)] text-[var(--color-text-muted)]">
-        <Icon name="message" className="size-5" />
-        {badge("")}
-      </span>
-    );
-  }
-  if (rung.scene === "report") {
-    return (
-      <span className="relative inline-flex size-12 items-center justify-center rounded-2xl border border-[var(--color-border)] bg-[color-mix(in_srgb,var(--color-primary)_8%,var(--color-surface-1))] text-[var(--color-text-secondary)]">
-        <Icon name="calendar" className="size-5" />
-        <Icon name="file-text" className="absolute left-1 top-1 size-3 text-[var(--color-text-muted)]" />
-        {badge("shadow-[0_0_6px_color-mix(in_srgb,var(--color-primary)_30%,transparent)]")}
-      </span>
-    );
-  }
-  if (rung.scene === "radar") {
-    return (
-      <span className="relative inline-flex size-12 items-center justify-center rounded-full border border-[color-mix(in_srgb,var(--color-primary)_55%,var(--color-border))] bg-[color-mix(in_srgb,var(--color-primary)_14%,var(--color-surface-1))] text-[var(--color-primary)]">
-        <span className="absolute inset-1 rounded-full border border-[color-mix(in_srgb,var(--color-primary)_45%,transparent)] motion-safe:animate-ping" />
-        <Icon name="target" className="size-5" />
-        <Icon name="activity" className="absolute -left-1 top-0 size-3.5" />
-        {badge("shadow-[0_0_10px_color-mix(in_srgb,var(--color-primary)_55%,transparent)]")}
-      </span>
-    );
-  }
-  return (
-    <span className="relative inline-flex size-12 items-center justify-center">
-      {/* The galaxy: a slow-turning halo with sparkles in orbit. */}
-      <span className="absolute -inset-1.5 rounded-full bg-[conic-gradient(from_0deg,color-mix(in_srgb,var(--color-primary)_55%,transparent),color-mix(in_srgb,var(--color-accent)_55%,transparent),transparent,color-mix(in_srgb,var(--color-primary)_55%,transparent))] opacity-80 blur-[2px] motion-safe:animate-[spin_7s_linear_infinite]" />
-      <span className="absolute -inset-1.5 motion-safe:animate-[spin_4s_linear_infinite_reverse]">
-        <Icon name="sparkles" className="absolute left-0 top-0 size-3 text-[var(--color-accent)]" />
-        <Icon name="zap" className="absolute bottom-0 right-0 size-3.5 text-[var(--color-primary)]" />
-      </span>
-      {/* The top rung's brain is the whole picture: galaxy-sized, at the centre. */}
-      <span
-        className="relative inline-flex size-11 items-center justify-center rounded-full bg-[var(--color-primary-fill)] shadow-[0_0_14px_color-mix(in_srgb,var(--color-primary)_80%,transparent)]"
-        data-testid="launchpad-mind-brain"
-      >
-        <Icon name="brain" className={`${rung.brain} text-[var(--color-on-primary-fill)]`} />
-      </span>
-    </span>
-  );
-}
 
 function WhyStep({ readOnly }: { readOnly: boolean }) {
   return (
@@ -792,14 +728,14 @@ function WhyStep({ readOnly }: { readOnly: boolean }) {
           return (
             <li
               key={r.title}
-              className={`grid grid-cols-[3.75rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
+              className={`grid grid-cols-[4.75rem_1fr] items-center gap-3 overflow-hidden rounded-[var(--radius-lg)] border px-3 py-2.5 ${
                 top
                   ? "border-[var(--color-primary)] bg-[radial-gradient(120%_160%_at_0%_50%,color-mix(in_srgb,var(--color-primary)_18%,transparent),transparent_70%)]"
                   : "border-[var(--color-border)] bg-[var(--color-surface-2)]"
               }`}
             >
               <span aria-hidden="true" className="flex justify-center">
-                <MindScene rung={r} />
+                <MindArt level={(i + 1) as MindLevel} className="size-[4.5rem] overflow-visible" />
               </span>
               <span className="min-w-0">
                 <span className="flex flex-wrap items-baseline justify-between gap-x-2">

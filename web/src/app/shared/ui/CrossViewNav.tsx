@@ -18,7 +18,7 @@ const NAV_TO_CHAT_TESTID = "nav-to-chat";
 
 export function NavToOrchestrator({
   className,
-  children = "Operations Center →",
+  children = "Background tasks →",
   ariaCurrent,
   dataTip,
 }: {

@@ -3,11 +3,19 @@
 The Patrol Launchpad is a guided wizard that takes a person from nothing set
 up to an assistant on patrol over their tools: connected tools, saved
 non-negotiables, a chosen watch list and rhythm, and a first check already
-running. It opens from **Patrols** (sparkles) in the navigation rail (`NavRail`), under
-**Chat** and **Tasks** (the Operations Center's rail label) — a patrol is the
-third way of working with Fleet, still a chat but one that runs on its own — or
-from `?launchpad=1` on any page. The user guides moved from the rail into the
-account menu, beside Settings, so the rail holds just the three ways of working.
+running. It opens from **Patrols** (sparkles) in the navigation rail (`NavRail`), or
+from `?launchpad=1` on any page.
+
+**The rail names the three ways of working**, each with a one-line subtitle,
+because patrols and background tasks both run on a schedule and the names
+alone would blur: **Chat** (*Talk it through*), **Patrols** (*Chats that check
+in on a schedule*) and **Background tasks** (*Run headless, deliver by email*).
+"Background tasks" replaced "Operations Center" everywhere a user sees it — the
+rail, the page header, the guide title and text, approval-card and tool text the
+assistant relays, and the owner-digest email; the guide notes the old name
+once. URLs (`/orchestrator`, `/help/operations-center`), code identifiers and
+the operator-only `fleet admin` CLI keep the old name. The user guides moved
+from the rail into the account menu, beside Settings.
 
 **Patrols live in Chat; the rail item is their index.** A click reads
 `GET /api/patrols` (the caller's active and paused recurring patrols across

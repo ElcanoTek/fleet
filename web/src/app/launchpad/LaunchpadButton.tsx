@@ -1,14 +1,13 @@
 "use client";
 
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { formatCompactCronCadence } from "@/app/shared/lib/patrolSchedule";
 import { Icon } from "@/app/shared/ui/Icon";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 
-// LaunchpadButton — the rail's "Patrols" item (NavRail), under Chat and Tasks:
-// a patrol is the third way of working with Fleet — still a chat, but one
-// that runs on its own.
+// LaunchpadButton — the rail's "Patrols" item (NavRail), between Chat and
+// Background tasks: a patrol is a chat that checks in on a schedule.
 //
 // Patrols LIVE IN CHAT; this item is their index and their front door, never
 // a second home for them. With no patrols yet it opens the Patrol Launchpad
@@ -60,11 +59,12 @@ async function fetchPatrols(): Promise<PatrolSummary[]> {
 }
 
 export type LaunchpadButtonProps = {
-  // Rail styling, supplied by NavRail so the item matches Chat and Tasks
+  // Rail styling, supplied by NavRail so the item matches Chat and Background tasks
   // exactly (row, icon tile, label, collapsed tooltip).
   className?: string;
   tileClassName?: string;
-  labelClassName?: string;
+  // The item's label; NavRail passes the name with its subtitle.
+  label?: ReactNode;
   dataTip?: string;
   // Collapsed rail: the menu opens at a fixed width beside the icon strip.
   collapsed?: boolean;
@@ -75,7 +75,7 @@ export type LaunchpadButtonProps = {
 export function LaunchpadButton({
   className,
   tileClassName,
-  labelClassName,
+  label,
   dataTip,
   collapsed = false,
   onOpen,
@@ -149,7 +149,7 @@ export function LaunchpadButton({
             </span>
           ) : null}
         </span>
-        <span className={labelClassName}>Patrols</span>
+        {label ?? <span>Patrols</span>}
       </button>
 
       <Menu

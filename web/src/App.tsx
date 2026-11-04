@@ -55,7 +55,7 @@ const settingsPages: Record<string, () => ReactNode> = {
 
 const GUIDE_TITLES: Record<string, string> = {
   chat: "Chat guide",
-  "operations-center": "Operations Center guide",
+  "operations-center": "Background tasks guide",
 };
 
 /** route resolves a pathname to its page and (for /help) its title. */

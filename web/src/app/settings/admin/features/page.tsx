@@ -183,7 +183,7 @@ const META: Record<string, SettingMeta> = {
   task_model: {
     label: "Task model",
     description:
-      "What Operations Center tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the default frontier model. Set it only to give tasks a different primary model from chat\u2019s default tier. Applies live to new tasks; a task that already has a model keeps it.",
+      "What background tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the default frontier model. Set it only to give tasks a different primary model from chat\u2019s default tier. Applies live to new tasks; a task that already has a model keeps it.",
     emptyDefault: "Follows the default model",
   },
   escalation_signals_enabled: {

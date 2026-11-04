@@ -171,6 +171,6 @@ func describeTaskConnectors(connectors []TaskConnector, alwaysOn []string) strin
 	case len(alwaysOn) > 0:
 		return "Connectors: none selected; the task runs with the always-on connectors (" + strings.Join(alwaysOn, ", ") + ")"
 	default:
-		return "Connectors: none — this task will run without any email, mailbox or data connectors. Add them to the task in the Operations Center if it needs them."
+		return "Connectors: none — this task will run without any email, mailbox or data connectors. Add them to the task on the Background tasks page if it needs them."
 	}
 }

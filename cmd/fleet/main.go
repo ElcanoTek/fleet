@@ -2770,7 +2770,7 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 			}
 		}
 		if owner == nil {
-			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task in the Operations Center instead", req.RequestedBy)
+			return nil, fmt.Errorf("cannot identify %q as an orchestrator user; edit the task on the Background tasks page instead", req.RequestedBy)
 		}
 
 		candidates, err := resolveManagedTasks(schedStorage, req, owner)
@@ -2785,7 +2785,7 @@ func taskManagerProvider(schedStorage *storage.Storage) func(context.Context, ht
 			if t.CreatedBy == nil || *t.CreatedBy != *owner {
 				res.Skipped = append(res.Skipped, httpapi.TaskMutationEntry{
 					ID: t.ID.String(), Label: label,
-					Detail: "you did not create this task; an admin can change it in the Operations Center",
+					Detail: "you did not create this task; an admin can change it on the Background tasks page",
 				})
 				continue
 			}

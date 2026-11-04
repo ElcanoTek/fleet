@@ -78,6 +78,10 @@ export type DialogShellProps = {
   initialFocusRef?: RefObject<HTMLElement | null>;
   // data-testid on the PANEL (the thing tests assert about).
   testId?: string;
+  // Below sm, fill the viewport edge to edge as a full-height sheet — the
+  // Tools library's phone shape — instead of a floating card with a gutter.
+  // The consumer pads its own header/footer for the safe areas.
+  sheetOnPhone?: boolean;
   children: ReactNode;
 };
 
@@ -91,6 +95,7 @@ export function DialogShell({
   className,
   initialFocusRef,
   testId,
+  sheetOnPhone = false,
   children,
 }: DialogShellProps) {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -166,7 +171,8 @@ export function DialogShell({
   return (
     <div
       className={[
-        "fixed inset-0 flex justify-center px-4",
+        "fixed inset-0 flex justify-center",
+        sheetOnPhone ? "px-0 sm:px-4" : "px-4",
         layer === "rail" ? "z-[420]" : layer === "stacked" ? "z-[60]" : "z-50",
         align === "top" ? "items-start pt-[10vh]" : "items-center",
       ].join(" ")}
@@ -191,6 +197,7 @@ export function DialogShell({
           // is a solid value in both themes (#241b31 / #ffffff), so nothing
           // behind the panel can compete with what is inside it.
           "motion-safe:animate-pop-up-base relative z-10 w-full rounded-[1.25rem] border border-[var(--color-border-strong)] bg-[var(--color-surface-1)] shadow-[var(--shadow-md)] outline-none",
+          sheetOnPhone ? "max-sm:rounded-none max-sm:border-0" : "",
           className ?? "",
         ]
           .join(" ")

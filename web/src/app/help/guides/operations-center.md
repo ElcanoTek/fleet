@@ -1,12 +1,13 @@
-# The Operations Center
+# Background tasks
 
 Where your recurring work lives. This guide covers what you will see on the
 screen, what a task is made of, what every run state means, and what to do when a
 run needs your attention.
 
-## 1. What the Operations Center is
+## 1. What background tasks are
 
-The Operations Center is the home for work that runs on its own: the reports,
+**Background tasks** (called the Operations Center before) is the home for work
+that runs on its own, headless — with no chat to talk to: the reports,
 checks, and analyses your team has decided are worth repeating. This is where
 that work gets set up and checked on; its results arrive in your inbox.
 
@@ -79,10 +80,12 @@ page that says **Something went wrong** offers **Reload** too. When your
 operator configures a support contact in the bundle (`branding.support`), the
 page header also includes that support button, which opens a dialog with the
 support message, **Copy email**, and **Send email** (`mailto:`). In the
-left rail the Operations Center is **Tasks**, between **Chat** and **Patrols**
-(your patrol chats, and the Patrol Launchpad that sets up a recurring patrol in
-a chat — see the Chat guide's "Patrol Launchpad" section). The guides open
-from the account menu, beside **Settings**.
+left rail this page is **Background tasks**, after **Chat** and **Patrols**.
+Patrols are the other way to put the assistant on a schedule, and the
+difference matters: a patrol is a chat that checks in on a schedule — you can
+read and reply in it — while a background task runs headless and delivers its
+result by email (see the Chat guide's "Patrol Launchpad" section). The guides
+open from the account menu, beside **Settings**.
 
 ### The tabs
 

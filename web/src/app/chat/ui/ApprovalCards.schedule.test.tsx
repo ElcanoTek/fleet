@@ -31,7 +31,7 @@ describe("the schedule card's connectors", () => {
     renderSchedule({ connectors: [], always_on_connectors: [], no_connectors: true });
     const warning = screen.getByTestId("schedule-no-connectors");
     expect(warning.textContent).toContain("No connectors");
-    expect(warning.textContent).toContain("Operations Center");
+    expect(warning.textContent).toContain("Background tasks page");
     expect(screen.queryByTestId("schedule-connectors")).toBeNull();
   });
 

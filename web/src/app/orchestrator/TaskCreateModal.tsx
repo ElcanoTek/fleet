@@ -1657,7 +1657,7 @@ export function TaskCreateModal({
                   </div>
                 ) : null}
                 <p className="field-hint" id="title-help">
-                  How this job is listed in the Operations Center. Every run of it — including
+                  How this task is listed in Background tasks. Every run of it — including
                   future scheduled ones — carries the same title. Left empty, the list falls back
                   to the first line of the prompt.
                 </p>

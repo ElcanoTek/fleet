@@ -61,7 +61,7 @@ type ManageTasksParams struct {
 	RemoveTags    []string   `json:"remove_tags,omitempty" description:"Tags to remove (update only; lowercase alphanumeric, '-', and '.')."`
 }
 
-const manageTasksDescription = `Changes or stops EXISTING scheduled tasks in the Fleet orchestrator (the Operations Center), so a user can maintain their jobs from chat instead of opening each one by hand.
+const manageTasksDescription = `Changes or stops EXISTING scheduled tasks in the Fleet orchestrator (the Background tasks page, formerly the Operations Center), so a user can maintain their jobs from chat instead of opening each one by hand.
 
 action="update" — change the prompt, schedule, model, step cap, or tags on tasks you select by id OR by match (e.g. every task tagged "pages", every task still pinned to a retired model). This is the bulk path: "change all the dashboard update jobs to run at 7am" is one call.
 

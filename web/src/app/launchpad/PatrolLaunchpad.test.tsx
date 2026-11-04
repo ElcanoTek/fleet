@@ -90,11 +90,9 @@ async function walkToLaunch(calls: Call[], onClose: () => void = () => {}) {
   // The preamble: the expanding-mind ladder and the trust path.
   expect(screen.getByTestId("launchpad-mind").querySelectorAll("li")).toHaveLength(4);
   expect(screen.getByTestId("launchpad-trust-path").textContent).toContain("Suggest & ask");
-  // Each rung has its own picture; the meme's brain badge grows rung by rung.
-  const brains = screen
-    .getAllByTestId("launchpad-mind-brain")
-    .map((b) => b.querySelector("svg")?.getAttribute("class")?.split(" ")[0]);
-  expect(brains).toEqual(["size-3.5", "size-4", "size-5", "size-6"]);
+  // Each rung has its own hand-drawn picture: the meme's brain, one level per rung.
+  const levels = screen.getAllByTestId("launchpad-mind-art").map((svg) => svg.getAttribute("data-level"));
+  expect(levels).toEqual(["1", "2", "3", "4"]);
   const mollick = screen.getByRole("link", { name: "Dr. Ethan Mollick" });
   expect(mollick.getAttribute("href")).toBe("https://www.oneusefulthing.org/");
   next();

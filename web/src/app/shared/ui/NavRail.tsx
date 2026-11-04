@@ -130,6 +130,17 @@ function navTileClass(active: boolean): string {
   ].join(" ");
 }
 
+// RailLabel — a rail item's name with its one-line subtitle (hidden in the
+// collapsed strip, where the data-tip carries both).
+function RailLabel({ title, subtitle, collapsed }: { title: string; subtitle: string; collapsed: boolean }) {
+  return (
+    <span className={["flex min-w-0 flex-1 flex-col leading-tight", collapsed ? "sm:hidden" : ""].join(" ")}>
+      <span className="truncate">{title}</span>
+      <span className="truncate text-[0.7rem] font-normal text-[var(--color-text-muted)]">{subtitle}</span>
+    </span>
+  );
+}
+
 // Focusable elements inside the overlay drawer, for the Tab trap. Mirrors the
 // selector Menu.tsx uses.
 function overlayFocusables(container: HTMLElement): HTMLElement[] {
@@ -324,35 +335,47 @@ export function NavRail({
           aria-label="Switch surface"
           className={["grid gap-0.5", collapsed ? "sm:justify-items-center" : ""].join(" ")}
         >
+          {/* The three ways of working, each with a subtitle that says what
+              makes it different — patrols and background tasks both run on a
+              schedule, so the names alone would blur: a patrol is a chat you
+              can talk to; a background task runs headless and delivers its
+              result elsewhere. (The user guides live in the account menu.) */}
           <NavToChat
             className={navItemClass(activeView === "chat", collapsed)}
             ariaCurrent={activeView === "chat" ? "page" : undefined}
-            dataTip={collapsed ? "Chat" : undefined}
+            dataTip={collapsed ? "Chat — talk it through" : undefined}
           >
             <span className={navTileClass(activeView === "chat")} aria-hidden="true">
               <Icon name="message" className="size-[1rem]" />
             </span>
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>Chat</span>
+            <RailLabel title="Chat" subtitle="Talk it through" collapsed={collapsed} />
           </NavToChat>
+          {/* Patrols (docs/PATROL-LAUNCHPAD.md): patrols live in Chat; this item
+              is their index (a menu of your patrol chats) and, with none yet,
+              the Patrol Launchpad wizard that sets one up. */}
+          <LaunchpadButton
+            className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
+            tileClassName={navTileClass(false)}
+            label={<RailLabel title="Patrols" subtitle="Chats that check in on a schedule" collapsed={collapsed} />}
+            dataTip={collapsed ? "Patrols — chats that check in on a schedule" : undefined}
+            collapsed={collapsed}
+            onOpen={() => setSidebarOpen(false)}
+          />
           <NavToOrchestrator
             className={navItemClass(activeView === "orchestrator", collapsed)}
             ariaCurrent={activeView === "orchestrator" ? "page" : undefined}
             dataTip={
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
-                  ? `Tasks · ${opsCount} running`
-                  : "Tasks"
+                  ? `Background tasks · ${opsCount} running`
+                  : "Background tasks — run headless, deliver by email"
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
-            {/* "Tasks" in the rail (Chat · Tasks · Patrols, the ways of working);
-                the surface itself keeps its title, Operations Center. */}
-            <span className={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}>
-              Tasks
-            </span>
+            <RailLabel title="Background tasks" subtitle="Run headless, deliver by email" collapsed={collapsed} />
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
                 className={[
@@ -364,18 +387,6 @@ export function NavRail({
               </span>
             ) : null}
           </NavToOrchestrator>
-          {/* Patrols (docs/PATROL-LAUNCHPAD.md): the third way of working —
-              a chat that runs on its own. Patrols live in Chat; this item is
-              their index (a menu of your patrol chats) and, with none yet, the
-              Patrol Launchpad wizard that sets one up. */}
-          <LaunchpadButton
-            className={`${navItemClass(false, collapsed)} w-full cursor-pointer text-left`}
-            tileClassName={navTileClass(false)}
-            labelClassName={["min-w-0 flex-1 truncate", collapsed ? "sm:hidden" : ""].join(" ")}
-            dataTip={collapsed ? "Patrols" : undefined}
-            collapsed={collapsed}
-            onOpen={() => setSidebarOpen(false)}
-          />
         </nav>
 
         <div className="my-1 h-px shrink-0 bg-[var(--color-border)]" />

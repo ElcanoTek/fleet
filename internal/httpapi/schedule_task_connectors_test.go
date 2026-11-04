@@ -111,7 +111,7 @@ func TestDescribeTaskConnectors(t *testing.T) {
 	if got := describeTaskConnectors(nil, []string{"mailbox", "pages"}); !strings.Contains(got, "always-on connectors (mailbox, pages)") {
 		t.Errorf("always-on only: %q", got)
 	}
-	if got := describeTaskConnectors(nil, nil); !strings.Contains(got, "none") || !strings.Contains(got, "Operations Center") {
+	if got := describeTaskConnectors(nil, nil); !strings.Contains(got, "none") || !strings.Contains(got, "Background tasks page") {
 		t.Errorf("none: %q", got)
 	}
 	if got := connectorLabels([]TaskConnector{{Server: " "}, {Server: "x", Account: "a"}}); len(got) != 1 || got[0] != "x (a)" {

@@ -89,7 +89,7 @@ func chatPatrolHandlerFromContext(ctx context.Context) ChatPatrolHandler {
 
 const chatPatrolDescription = `Manage in-chat recurring patrols and one-shot timers for THIS conversation.
 
-Unlike schedule_task (which creates a standalone headless job in the Operations Center), chat_patrol schedules recurring cron turns or one-shot wakeups directly inside the current chat conversation. Each time a patrol or timer fires, you wake up in this same conversation with full access to prior chat history, workspace files, persistent Python state, and enabled MCP connectors.
+Unlike schedule_task (which creates a standalone headless job on the Background tasks page), chat_patrol schedules recurring cron turns or one-shot wakeups directly inside the current chat conversation. Each time a patrol or timer fires, you wake up in this same conversation with full access to prior chat history, workspace files, persistent Python state, and enabled MCP connectors.
 
 Use chat_patrol when a user asks you to:
 - Patrol deals, campaigns, pacing, margin, or pages every N hours in chat ("patrol this every 2 hours", "keep an eye on these deals every 4 hours and update the page")

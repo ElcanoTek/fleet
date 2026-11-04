@@ -424,7 +424,7 @@ describe("AdminUsersPage", () => {
 
     const bobRow = screen.getByText("bob@x.com").closest("tr") as HTMLElement;
     expect(
-      within(bobRow).getByTitle("Operations Center admin"),
+      within(bobRow).getByTitle("Background tasks admin"),
     ).toBeInTheDocument();
     expect(within(bobRow).getByText("ops: admin")).toBeInTheDocument();
   });
