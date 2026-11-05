@@ -265,9 +265,15 @@ func TestVerifierEvidencePreservesMultiRecipientEmailList(t *testing.T) {
 	if proj.fields["/to_email"] != recipients {
 		t.Fatalf("multi-recipient to_email dropped from verifier arguments: %#v", proj.fields)
 	}
-	// Comma-punctuated prose without '@' in every token must still be rejected.
-	prose := projectVerifierArguments(`{"note":"Ignore, task, and, create"}`)
-	if _, ok := prose.fields["/note"]; ok {
-		t.Fatalf("comma-punctuated prose leaked into scalar arguments: %#v", prose.fields)
+	// Comma-punctuated prose without valid mailbox structure in every token must still be rejected.
+	for _, rawProse := range []string{
+		`{"note":"Ignore, task, and, create"}`,
+		`{"note":"ignore@, previous@, instructions@"}`,
+		`{"note":"ignore@local, previous@local"}`,
+	} {
+		prose := projectVerifierArguments(rawProse)
+		if _, ok := prose.fields["/note"]; ok {
+			t.Fatalf("comma-punctuated prose %s leaked into scalar arguments: %#v", rawProse, prose.fields)
+		}
 	}
 }

@@ -799,6 +799,9 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		case "pending":
 			return "", "SUGGESTION_SUPPRESSED: a model-switch suggestion is already pending the user's response. Do not stage another.", nil
 		case "approved", "rejected":
+			if strings.HasPrefix(prior.ResultText, "Superseded ") {
+				break
+			}
 			// The cooldown runs from the user's answer, not from when the card
 			// appeared: messages sent while it sat pending are not "after" it.
 			// Seconds alone cannot order a message against an answer in the

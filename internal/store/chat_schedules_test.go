@@ -296,4 +296,11 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 	if !found {
 		t.Fatalf("pending suggest_advanced_model card must not block due chat schedule %s", sched.ID)
 	}
+	pending, err := s.ListPendingApprovals(ctx, user, conv.ID)
+	if err != nil {
+		t.Fatalf("ListPendingApprovals: %v", err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected pending suggest_advanced_model card to be superseded when patrol is claimed, got %+v", pending)
+	}
 }

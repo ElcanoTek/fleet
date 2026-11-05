@@ -44,8 +44,9 @@ var (
 	verifierFieldKey = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$`)
 	// '@' is admitted so a recipient address is evidence: without it the
 	// verifier could never confirm who an email went to (#1540).
-	verifierValue    = regexp.MustCompile(`^[a-zA-Z0-9_.@/:+-]{1,128}$`)
-	verifierPrivate  = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|authorization|cookie|ticket|private.?key|api.?key|access.?key)|^(headers?|env|environment)$`)
+	verifierValue     = regexp.MustCompile(`^[a-zA-Z0-9_.@/:+-]{1,128}$`)
+	verifierEmailAddr = regexp.MustCompile(`^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$`)
+	verifierPrivate   = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|authorization|cookie|ticket|private.?key|api.?key|access.?key)|^(headers?|env|environment)$`)
 	verifierURLToken = regexp.MustCompile(`\S+://\S+`)
 )
 
@@ -185,8 +186,9 @@ func verifierTextScalar(s string) bool {
 
 // verifierRecipientList reports whether s is a comma-separated list of
 // e-mail addresses (such as a multi-recipient to_email / cc_email argument).
-// Requiring '@' in every token keeps comma-punctuated prose ("Ignore, task")
-// out of scalar evidence while preserving multi-recipient lists verbatim.
+// Validating each token as a well-formed user@domain.tld address keeps
+// comma-punctuated prose ("Ignore, task" or "ignore@, previous@") out of
+// scalar evidence while preserving multi-recipient lists verbatim.
 func verifierRecipientList(s string) bool {
 	if !strings.Contains(s, ",") || len(s) > verifierScalarListMaxLen {
 		return false
@@ -197,7 +199,7 @@ func verifierRecipientList(s string) bool {
 	}
 	for _, raw := range parts {
 		part := strings.TrimSpace(raw)
-		if !strings.Contains(part, "@") || !verifierValue.MatchString(part) {
+		if len(part) > verifierScalarMaxLen || !verifierEmailAddr.MatchString(part) {
 			return false
 		}
 	}

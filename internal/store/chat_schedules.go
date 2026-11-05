@@ -916,6 +916,10 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		return nil, err
 	}
 
+	if err := supersedePendingModelSuggestionsTx(ctx, tx, convID, nowUnix); err != nil {
+		return nil, err
+	}
+
 	clientInputID := fmt.Sprintf("%s%s:%d", ChatPatrolInputKeyPrefix, sched.ID, newRunCount)
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),

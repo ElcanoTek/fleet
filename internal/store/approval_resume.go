@@ -303,6 +303,10 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 		return out, tx.Commit()
 	}
 
+	if err := supersedePendingModelSuggestionsTx(ctx, tx, req.ConversationID, now); err != nil {
+		return out, err
+	}
+
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID: uuid.NewString(), ConversationID: req.ConversationID, UserEmail: resumeUser,
 		ClientInputID: "approval-resume:" + ids[0],
