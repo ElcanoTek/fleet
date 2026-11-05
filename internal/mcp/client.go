@@ -129,6 +129,11 @@ type Tool struct {
 	// tool the server marks read-only for its one verification call. Nil
 	// when the server sent none.
 	Annotations *ToolAnnotations `json:"annotations,omitempty"`
+	// Critical marks a custom connector tool (such as a POST/PUT/PATCH/DELETE
+	// HTTP tool or a mutating Playwright tool) as requiring human approval in
+	// interactive chat and confirm_audit in scheduled runs, scoped to the
+	// specific server/run that mounted it.
+	Critical bool `json:"critical,omitempty"`
 }
 
 // ToolAnnotations mirrors the MCP tool annotation object. Every hint is a

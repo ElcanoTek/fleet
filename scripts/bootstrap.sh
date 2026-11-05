@@ -824,14 +824,14 @@ NODE_MAJOR="$(fleet_node_major_want "$REPO_ROOT" || true)"
 # nodejs${NODE_MAJOR}-npm, NOT bare `npm`: the unversioned npm package belongs
 # to the DEFAULT stream, so asking for it drags the older interpreter onto the
 # box and lets it own /usr/bin/npm — which is what would then build the app.
-FLEET_DEPS=(git curl jq rsync golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip gcc podman slirp4netns)
+FLEET_DEPS=(git curl jq rsync golang "nodejs${NODE_MAJOR}" "nodejs${NODE_MAJOR}-npm" python3 python3-pip chromium-headless gcc podman slirp4netns)
 if command -v dnf >/dev/null 2>&1; then
   if ! run dnf install -y "${FLEET_DEPS[@]}"; then
     # A distro without a versioned stream (or one that names it differently)
     # should still get a working box; the floor is then doctor.sh's to report.
     warn "installing nodejs${NODE_MAJOR} failed — falling back to the unversioned nodejs package."
     warn "  the web tier needs node >= ${NODE_MAJOR}; \`sudo fleet doctor\` will report the shortfall."
-    FLEET_DEPS=(git curl jq rsync golang nodejs npm gnupg2 python3 python3-pip gcc podman slirp4netns)  # unversioned fallback
+    FLEET_DEPS=(git curl jq rsync golang nodejs npm gnupg2 python3 python3-pip chromium-headless gcc podman slirp4netns)  # unversioned fallback
     run dnf install -y "${FLEET_DEPS[@]}" || warn "dependency install failed — install these by hand: ${FLEET_DEPS[*]}"
     # The usual reason for that miss is a node major newer than the distro's
     # streams (node 26 on Fedora 44). fleet tracks the latest major (ADR-0078),
@@ -1155,6 +1155,17 @@ if [[ "$ENABLE_SERVICE" == "1" && -f "${CLIENT_CONFIG_DIR}/mcp/requirements.txt"
     fi
   else
     warn "python3 not found — install ${CLIENT_CONFIG_DIR}/mcp/requirements.txt manually."
+  fi
+fi
+
+# ── host-side Playwright browser automation runtime ──
+if [[ "$ENABLE_SERVICE" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would ensure python3 playwright package is installed for built-in browser automation"
+  elif command -v python3 >/dev/null 2>&1; then
+    if ! python3 -c "import playwright" >/dev/null 2>&1; then
+      python3 -m pip install --break-system-packages playwright >/dev/null 2>&1 || warn "pip install playwright failed — install python3 playwright for built-in browser automation."
+    fi
   fi
 fi
 

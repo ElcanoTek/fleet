@@ -152,6 +152,11 @@ func ValidateStep(st Step) error {
 		if target == "" {
 			return errors.New("goto step requires value (the target URL)")
 		}
+		for _, ph := range []string{"{{USERNAME}}", "{{PASSWORD}}", "{{SECRET}}"} {
+			if strings.Contains(strings.ToUpper(target), ph) {
+				return errors.New("goto step URL must not contain secret placeholders")
+			}
+		}
 		probeTarget := strings.NewReplacer("{", "_", "}", "_").Replace(target)
 		if _, err := ValidateTargetURL(probeTarget, false); err != nil {
 			return fmt.Errorf("goto step: %w", err)
@@ -190,6 +195,11 @@ func ValidateStep(st Step) error {
 
 // ValidateTargetURL checks that rawURL is a valid http(s) URL before launching Chromium.
 func ValidateTargetURL(rawURL string, allowInsecureHTTP bool) (string, error) {
+	for _, ph := range []string{"{{USERNAME}}", "{{PASSWORD}}", "{{SECRET}}"} {
+		if strings.Contains(strings.ToUpper(rawURL), ph) {
+			return "", errors.New("URL must not contain secret placeholders; pass secrets via steps or headers")
+		}
+	}
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil || u.Hostname() == "" {
 		return "", errors.New("a valid http(s) URL is required")
@@ -205,6 +215,38 @@ func ValidateTargetURL(rawURL string, allowInsecureHTTP bool) (string, error) {
 		return "", errors.New("URL must not embed userinfo credentials; pass credentials via the secret fields")
 	}
 	return u.String(), nil
+}
+
+func hasCredentials(c Credentials) bool {
+	return c.Username != "" || c.Password != "" || c.Secret != "" || len(c.Headers) > 0 || len(c.StorageState) > 0
+}
+
+func sameOriginURL(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ua.Hostname() == "" || ub.Hostname() == "" {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
+func validateStepNavigationOrigin(baseURL string, creds Credentials, st Step) error {
+	if strings.ToLower(strings.TrimSpace(st.Action)) != "goto" {
+		return nil
+	}
+	target := strings.TrimSpace(st.Value)
+	if target == "" {
+		target = strings.TrimSpace(st.Selector)
+	}
+	for _, ph := range []string{"{{USERNAME}}", "{{PASSWORD}}", "{{SECRET}}"} {
+		if strings.Contains(strings.ToUpper(target), ph) {
+			return errors.New("goto step URL must not contain secret placeholders")
+		}
+	}
+	if hasCredentials(creds) && baseURL != "" && !sameOriginURL(baseURL, target) {
+		return fmt.Errorf("credentialed browser session cannot navigate goto step to a different origin (%q)", target)
+	}
+	return nil
 }
 
 // Run executes req inside a headless Chromium browser managed by Playwright,
@@ -224,6 +266,11 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if targetURL == "" {
 		return nil, errors.New("playwright runner: url is required")
 	}
+	for _, ph := range []string{"{{USERNAME}}", "{{PASSWORD}}", "{{SECRET}}"} {
+		if strings.Contains(strings.ToUpper(targetURL), ph) {
+			return nil, errors.New("playwright runner: url must not contain secret placeholders")
+		}
+	}
 	u, err := url.Parse(targetURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
 		return nil, fmt.Errorf("playwright runner: invalid http(s) URL %q", targetURL)
@@ -237,6 +284,9 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		}
 		st.Selector = substituteArgs(st.Selector, req.Args)
 		st.Value = substituteArgs(st.Value, req.Args)
+		if err := validateStepNavigationOrigin(targetURL, req.Credentials, st); err != nil {
+			return nil, err
+		}
 		steps = append(steps, st)
 	}
 
@@ -779,12 +829,14 @@ def main():
                     if isinstance(hk, str) and isinstance(hv, str) and hk.strip():
                         extra_headers[hk.strip()] = replace_secrets(hv, creds)
 
+            import urllib.parse
+            parsed_base = urllib.parse.urlsplit(replace_secrets(target_url, creds))
+            base_origin = f"{parsed_base.scheme.lower()}://{parsed_base.netloc.lower()}" if parsed_base.scheme and parsed_base.netloc else ""
+
             ctx_kwargs = {
                 "ignore_https_errors": False,
                 "user_agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             }
-            if extra_headers:
-                ctx_kwargs["extra_http_headers"] = extra_headers
             storage_state = creds.get("storage_state")
             if isinstance(storage_state, dict) and storage_state:
                 ctx_kwargs["storage_state"] = storage_state
@@ -798,6 +850,15 @@ def main():
                 if not (lower.startswith("https://") or lower.startswith("http://")):
                     route.abort("accessdenied")
                     return
+                if extra_headers and base_origin:
+                    rp = urllib.parse.urlsplit(req_url)
+                    req_origin = f"{rp.scheme.lower()}://{rp.netloc.lower()}"
+                    if req_origin == base_origin:
+                        merged = dict(route.request.headers)
+                        for hk, hv in extra_headers.items():
+                            merged[hk] = hv
+                        route.continue_(headers=merged)
+                        return
                 route.continue_()
 
             context.route("**/*", route_guard)
@@ -834,7 +895,7 @@ def main():
                         pass
                 page.on("response", on_response)
 
-            main_resp = page.goto(replace_secrets(target_url, creds), wait_until="domcontentloaded", timeout=step_default_ms)
+            main_resp = page.goto(target_url, wait_until="domcontentloaded", timeout=step_default_ms)
             status_code = main_resp.status if main_resp else 0
             try:
                 page.wait_for_load_state("networkidle", timeout=4000)
@@ -853,7 +914,7 @@ def main():
 
                 try:
                     if action == "goto":
-                        dest = val or sel
+                        dest = (st.get("value") or st.get("selector") or "").strip()
                         r = page.goto(dest, wait_until="domcontentloaded", timeout=st_timeout)
                         if r:
                             status_code = r.status
@@ -1088,13 +1149,15 @@ function loadPlaywright() {
       }
     }
 
+    let baseOrigin = "";
+    try {
+      baseOrigin = new URL(replaceSecrets(targetUrl, creds)).origin.toLowerCase();
+    } catch (_) {}
+
     const ctxOpts = {
       ignoreHTTPSErrors: false,
       userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     };
-    if (Object.keys(extraHeaders).length > 0) {
-      ctxOpts.extraHTTPHeaders = extraHeaders;
-    }
     if (creds.storage_state && typeof creds.storage_state === "object" && Object.keys(creds.storage_state).length > 0) {
       ctxOpts.storageState = creds.storage_state;
     }
@@ -1103,10 +1166,19 @@ function loadPlaywright() {
     context.setDefaultTimeout(stepDefaultMs);
 
     await context.route("**/*", async (route) => {
-      const reqUrl = (route.request().url() || "").toLowerCase();
+      const rawReqUrl = route.request().url() || "";
+      const reqUrl = rawReqUrl.toLowerCase();
       if (!reqUrl.startsWith("https://") && !reqUrl.startsWith("http://")) {
         await route.abort("accessdenied");
         return;
+      }
+      if (Object.keys(extraHeaders).length > 0 && baseOrigin) {
+        try {
+          if (new URL(rawReqUrl).origin.toLowerCase() === baseOrigin) {
+            await route.continue({ headers: { ...route.request().headers(), ...extraHeaders } });
+            return;
+          }
+        } catch (_) {}
       }
       await route.continue();
     });
@@ -1143,7 +1215,7 @@ function loadPlaywright() {
       });
     }
 
-    const mainResp = await page.goto(replaceSecrets(targetUrl, creds), { waitUntil: "domcontentloaded", timeout: stepDefaultMs });
+    const mainResp = await page.goto(targetUrl, { waitUntil: "domcontentloaded", timeout: stepDefaultMs });
     let statusCode = mainResp ? mainResp.status() : 0;
     try {
       await page.waitForLoadState("networkidle", { timeout: 4000 });
@@ -1160,7 +1232,7 @@ function loadPlaywright() {
 
       try {
         if (action === "goto") {
-          const dest = val || sel;
+          const dest = String(st.value || st.selector || "").trim();
           const r = await page.goto(dest, { waitUntil: "domcontentloaded", timeout: stTimeout });
           if (r) statusCode = r.status();
         } else if (action === "fill") {

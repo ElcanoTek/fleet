@@ -381,8 +381,8 @@ func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
 		t.Fatalf("CreateChatSchedule: %v", err)
 	}
 	a := stageResume(t, s, conv.ID, "mcp_ses_outbound_send_email", true)
-	if ok, err := s.ClaimExpiredApproval(ctx, resumeUser, a.ID, "Approval timed out — auto-denied.", ""); err != nil || !ok {
-		t.Fatalf("ClaimExpiredApproval = %t, %v", ok, err)
+	if ok, err := s.ClaimApproval(ctx, resumeUser, a.ID, "rejected", "Approval timed out — auto-denied."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %t, %v", ok, err)
 	}
 	res := claimResume(t, s, conv.ID)
 	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {

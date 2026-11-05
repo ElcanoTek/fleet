@@ -170,6 +170,15 @@ func TestValidateStepsAndScrubStructuredResult(t *testing.T) {
 	if err := ValidateStep(Step{Action: "goto", Value: "file:///etc/passwd"}); err == nil {
 		t.Fatalf("expected non-http(s) goto step URL to be rejected by ValidateStep")
 	}
+	if err := ValidateStep(Step{Action: "goto", Value: "https://portal.example.com/?leak={{PASSWORD}}"}); err == nil {
+		t.Fatalf("expected goto step with {{PASSWORD}} placeholder to be rejected by ValidateStep")
+	}
+	if err := validateStepNavigationOrigin("https://portal.example.com/login", Credentials{Password: "secret"}, Step{Action: "goto", Value: "https://attacker.example.com/collect"}); err == nil {
+		t.Fatalf("expected cross-origin goto step on credentialed session to be rejected")
+	}
+	if err := validateStepNavigationOrigin("https://portal.example.com/login", Credentials{Password: "secret"}, Step{Action: "goto", Value: "https://portal.example.com/dashboard"}); err != nil {
+		t.Fatalf("expected same-origin goto step on credentialed session to pass, got %v", err)
+	}
 	if err := ValidateStep(Step{Action: "fill", Selector: "#user", Value: "{{USERNAME}}"}); err != nil {
 		t.Fatalf("expected valid fill step to pass ValidateStep, got %v", err)
 	}

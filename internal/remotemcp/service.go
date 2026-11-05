@@ -622,7 +622,7 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 		if err := s.store.SetRemoteMCPAPIKey(ctx, email, serverID, keyToStore); err != nil {
 			return ProbeReport{}, err
 		}
-		return ProbeReport{ToolCount: len(server.CustomTools), KeyVerified: true}, nil
+		return ProbeReport{ToolCount: len(server.CustomTools), KeyVerified: false}, nil
 	}
 	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
@@ -678,6 +678,7 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 		return nil, errors.New("at least one custom tool definition is required")
 	}
 
+	in = s.inheritExistingCustomAuth(ctx, name, account, in)
 	authKind, header, query, prefix, err := s.resolveCustomConnectorAuth(in)
 	if err != nil {
 		return nil, err
@@ -687,9 +688,6 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 	customTools, err := s.validateCustomConnectorTools(regName, canonURL, transport, authKind, in.CustomTools)
 	if err != nil {
 		return nil, err
-	}
-	for _, ct := range customTools {
-		agentcore.RegisterCustomCriticalTool(regName, ct.Name, isCustomToolCritical(transport, ct))
 	}
 
 	input := store.RemoteMCPServerInput{
@@ -708,6 +706,35 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 	}
 
 	return s.upsertCustomConnector(ctx, in.Email, name, account, in.ShareScope, input)
+}
+
+func (s *Service) inheritExistingCustomAuth(ctx context.Context, name, account string, in AddCustomConnectorInput) AddCustomConnectorInput {
+	if strings.TrimSpace(in.AuthMode) != "" || strings.TrimSpace(in.APIKey) != "" {
+		return in
+	}
+	existingList, err := s.store.ListRemoteMCPServers(ctx, in.Email)
+	if err != nil {
+		return in
+	}
+	for _, ex := range existingList {
+		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
+			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) &&
+			ex.AuthKind == store.RemoteMCPAuthAPIKey {
+			if key, kerr := s.store.GetRemoteMCPAPIKey(ctx, &ex); kerr == nil && strings.TrimSpace(key) != "" {
+				in.AuthMode = store.RemoteMCPAuthAPIKey
+				in.APIKey = key
+				if strings.TrimSpace(in.APIKeyHeader) == "" && strings.TrimSpace(in.APIKeyQuery) == "" {
+					in.APIKeyHeader = ex.APIKeyHeader
+					in.APIKeyQuery = ex.APIKeyQuery
+					if strings.TrimSpace(in.APIKeyPrefix) == "" {
+						in.APIKeyPrefix = ex.APIKeyPrefix
+					}
+				}
+			}
+			break
+		}
+	}
+	return in
 }
 
 func (s *Service) mergePlaywrightRotatedKey(ctx context.Context, server *store.RemoteMCPServer, apiKey string) string {
@@ -879,13 +906,21 @@ func (s *Service) validateCustomPlaywrightSteps(steps []store.CustomConnectorSte
 		act := strings.ToLower(strings.TrimSpace(st.Action))
 		switch act {
 		case "goto":
-			if strings.TrimSpace(st.Value) == "" {
+			dest := strings.TrimSpace(st.Value)
+			if dest == "" {
+				dest = strings.TrimSpace(st.Selector)
+			}
+			if dest == "" {
 				return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: goto requires value (URL)", idx, tName, j)
 			}
-			if _, err := s.validateCustomToolURL(st.Value, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, idx, tName); err != nil {
+			if _, err := s.validateCustomToolURL(dest, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, idx, tName); err != nil {
 				return fmt.Errorf("steps[%d]: %w", j, err)
 			}
-		case "wait_for", "fill", "click", "press", "select", "extract", "evaluate":
+		case "fill", "click", "press", "select", "extract":
+			if strings.TrimSpace(st.Selector) == "" {
+				return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: %s requires selector", idx, tName, j, act)
+			}
+		case "wait_for", "sleep":
 		default:
 			return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: unsupported playwright step action %q", idx, tName, j, st.Action)
 		}

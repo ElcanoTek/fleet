@@ -45,6 +45,28 @@ export function SubmissionBubble({
     v !== null &&
     v !== undefined &&
     v !== "";
+  const safeRaw = (() => {
+    if (secrets.size === 0) return raw;
+    const redactVal = (val: unknown): unknown => {
+      if (Array.isArray(val)) return val.map(redactVal);
+      if (val && typeof val === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+          out[k] = isSecretEntry(k, v) ? "••••••••" : redactVal(v);
+        }
+        return out;
+      }
+      return val;
+    };
+    const nl = raw.indexOf("\n");
+    if (nl < 0) return raw;
+    try {
+      const parsed = JSON.parse(raw.slice(nl + 1));
+      return `${raw.slice(0, nl + 1)}${JSON.stringify(redactVal(parsed), null, 2)}`;
+    } catch {
+      return raw;
+    }
+  })();
   return (
     <div
       data-testid="genui-submission-bubble"
@@ -83,7 +105,7 @@ export function SubmissionBubble({
           className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem]"
           style={{ fontFamily: "var(--font-code)" }}
         >
-          {raw}
+          {safeRaw}
         </pre>
       ) : null}
     </div>

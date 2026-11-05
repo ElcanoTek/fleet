@@ -88,10 +88,8 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 func connFor(srv store.RemoteMCPServer, owner string) agent.RemoteMCPConn {
 	var customTools []agent.RemoteMCPCustomTool
 	if len(srv.CustomTools) > 0 {
-		regName := agentcore.RegisteredMCPName(srv.Name, srv.Account)
 		customTools = make([]agent.RemoteMCPCustomTool, 0, len(srv.CustomTools))
 		for _, ct := range srv.CustomTools {
-			agentcore.RegisterCustomCriticalTool(regName, ct.Name, isCustomToolCritical(srv.Transport, ct))
 			var steps []agent.RemoteMCPCustomStep
 			if len(ct.Steps) > 0 {
 				steps = make([]agent.RemoteMCPCustomStep, 0, len(ct.Steps))

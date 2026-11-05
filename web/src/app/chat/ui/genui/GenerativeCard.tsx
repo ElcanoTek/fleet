@@ -862,7 +862,7 @@ function CardBody({
               delete safe[c.id];
             } else if (c.id && c.type === "repeater" && Array.isArray(safe[c.id])) {
               const pwIds = new Set<string>();
-              walkInputs(c.fields ?? [], (fc) => {
+              walkInputs(children(c, "fields"), (fc) => {
                 if (fc.id && fc.type === "text_input" && fc.format === "password") {
                   pwIds.add(fc.id);
                 }

@@ -101,12 +101,18 @@ func criticalSuffixCovers(committedSuffix, executedSuffix string) bool {
 // when deciding whether a verifier outage may fail open (#1602).
 func IsCriticalTool(toolName string) bool { return isCriticalTool(toolName) }
 
+func (o *orchestrationState) isRunCriticalTool(toolName string) bool {
+	if o != nil && o.runCriticalTools != nil {
+		if _, ok := o.runCriticalTools[toolName]; ok {
+			return true
+		}
+	}
+	return isCriticalTool(toolName)
+}
+
 func isCriticalTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
-	if _, ok := customCriticalTools[toolName]; ok {
-		return true
-	}
 	for _, suffix := range activeCriticalSuffixes {
 		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
 			return true
@@ -143,19 +149,28 @@ func matchCriticalSuffix(declared string) string {
 	best := ""
 	policyMu.RLock()
 	defer policyMu.RUnlock()
-	for full, suffix := range customCriticalTools {
-		if strings.Contains(needle, strings.ToLower(full)) || strings.Contains(needle, strings.ToLower(suffix)) {
-			if len(suffix) > len(best) {
-				best = suffix
-			}
-		}
-	}
 	for _, suffix := range activeCriticalSuffixes {
 		if !strings.Contains(needle, suffix) {
 			continue
 		}
 		if len(suffix) > len(best) {
 			best = suffix
+		}
+	}
+	return best
+}
+
+func (o *orchestrationState) matchCriticalSuffix(declared string) string {
+	best := matchCriticalSuffix(declared)
+	if o == nil || o.runCriticalTools == nil {
+		return best
+	}
+	needle := strings.ToLower(declared)
+	for full, suffix := range o.runCriticalTools {
+		if strings.Contains(needle, strings.ToLower(full)) || strings.Contains(needle, strings.ToLower(suffix)) {
+			if len(suffix) > len(best) {
+				best = suffix
+			}
 		}
 	}
 	return best
@@ -182,7 +197,7 @@ func (o *orchestrationState) registerCommittedActions(declared []string) {
 	// approvals.
 	registered := 0
 	for _, decl := range declared {
-		if suffix := matchCriticalSuffix(decl); suffix != "" {
+		if suffix := o.matchCriticalSuffix(decl); suffix != "" {
 			if registered == 0 {
 				o.resetBatchApprovals()
 			}
@@ -237,7 +252,7 @@ func (o *orchestrationState) markCommittedExecuted(toolName, dealID, callDigest,
 	if o.markTypedExecuted(toolName, dealID, callDigest, identity) {
 		return
 	}
-	executedSuffix := criticalSuffixFor(toolName)
+	executedSuffix := o.criticalSuffixFor(toolName)
 	if executedSuffix == "" {
 		return
 	}
@@ -359,7 +374,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		return true, msg
 	}
 
-	if isCriticalTool(toolName) {
+	if o.isRunCriticalTool(toolName) {
 		key := retryBudgetKey(toolName, hashString(rawInput))
 		if attempts := o.criticalToolFailureAttempts[key]; attempts >= maxAttemptsPerCriticalAction {
 			log.Printf("Enforcement: Blocking %s — retry budget exhausted (%d/%d failed attempts with identical args)",
@@ -374,7 +389,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	// An aborted email-last run's single failure-summary email passes with no
 	// live audit (abortEmailAllowed): the abort cleared auditConfirmed, and
 	// without the allowance a failed batch reached its reader as silence.
-	if isCriticalTool(toolName) && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
+	if o.isRunCriticalTool(toolName) && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
 		log.Printf("Enforcement: Blocking %s — audit not confirmed", toolName)
 		argsHash := hashString(rawInput)
 		alreadyPending := false
@@ -397,7 +412,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			toolName, strings.ToUpper(instruction[:1])+instruction[1:], toolName)
 	}
 
-	if isCriticalTool(toolName) && o.auditConfirmed {
+	if o.isRunCriticalTool(toolName) && o.auditConfirmed {
 		// Email-last, enforced from the email side: the summary email waits
 		// until every email-last obligation is settled.
 		if blocked, msg := o.checkSummaryEmailOrder(toolName); blocked {
@@ -736,7 +751,7 @@ func buildConfirmAuditTool(orch *orchestrationState) fantasy.AgentTool {
 						// audit for completion, and let the EMPTY typed gate
 						// below make it authorize nothing (fail closed).
 						for _, a := range input.CriticalActions {
-							if matchCriticalSuffix(a.Tool) == "" {
+							if orch.matchCriticalSuffix(a.Tool) == "" {
 								continue
 							}
 							return fantasy.NewTextErrorResponse(

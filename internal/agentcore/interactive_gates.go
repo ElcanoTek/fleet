@@ -83,7 +83,7 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 // checkBashSafety: a transport with no approval UI cannot stage a card, and
 // hard-blocking would brick those tools without offering a decision path).
 func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, rawInput string) (bool, string) {
-	if !isCriticalTool(toolName) {
+	if !o.isRunCriticalTool(toolName) {
 		return false, ""
 	}
 	if isEmailSendTool(toolName) {

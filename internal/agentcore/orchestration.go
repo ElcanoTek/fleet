@@ -94,6 +94,12 @@ type orchestrationState struct {
 	// keeps the one-shot semantics.
 	typedAuditActive bool
 
+	// runCriticalTools maps a server-qualified MCP tool name
+	// ("mcp_<server>_<tool>") mounted in THIS run with Tool.Critical=true to its
+	// bare tool name ("<tool>"). Scoped per-run so two users with same-named
+	// custom connectors cannot overwrite each other's criticality classification.
+	runCriticalTools map[string]string
+
 	// ── email-last batch rules (audit_email_last.go) ──
 
 	// emailLastAttempted records that the run declared or attempted a tool in

@@ -25,11 +25,12 @@ import (
 const uiSecretTTL = 2 * time.Hour
 
 type uiSecretBucket struct {
-	convID       string
-	values       map[string]string
-	fieldIDs     map[string]bool
-	allowedHosts map[string]bool
-	updatedAt    time.Time
+	convID             string
+	values             map[string]string
+	fieldIDs           map[string]bool
+	allowedHosts       map[string]bool
+	allowEveryoneShare bool
+	updatedAt          time.Time
 }
 
 // uiSecretStash holds host-side vaulted secrets submitted through show_ui
@@ -147,6 +148,30 @@ func (st *uiSecretStash) allowOrigin(userEmail, convID, rawURLOrHost string) {
 	b := st.ensureBucketLocked(userEmail, convID, now)
 	b.allowedHosts[host] = true
 	b.updatedAt = now
+}
+
+func (st *uiSecretStash) setAllowEveryone(userEmail, convID string, allow bool) {
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b := st.ensureBucketLocked(userEmail, convID, now)
+	b.allowEveryoneShare = allow
+	b.updatedAt = now
+}
+
+func (st *uiSecretStash) isEveryoneShareAllowed(userEmail, convID string) bool {
+	now := time.Now()
+	key := uiSecretKey(userEmail, convID)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.buckets == nil {
+		return false
+	}
+	b, ok := st.buckets[key]
+	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
+		return false
+	}
+	return b.allowEveryoneShare
 }
 
 func (st *uiSecretStash) isHostAllowed(userEmail, convID, targetURLOrHost string) bool {
@@ -387,6 +412,46 @@ func isLikelyURLFieldID(fieldID string) bool {
 	return strings.HasSuffix(k, "_url") || strings.HasSuffix(k, "_endpoint") || strings.HasSuffix(k, "_host") || strings.HasSuffix(k, "_domain")
 }
 
+func isShareScopeFieldID(fieldID string) bool {
+	k := strings.ToLower(strings.TrimSpace(fieldID))
+	switch k {
+	case "share_scope", "scope", "sharing":
+		return true
+	}
+	return strings.HasSuffix(k, "_scope")
+}
+
+func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, convID string) bool {
+	if s.uiSecrets.isEveryoneShareAllowed(userEmail, convID) {
+		return true
+	}
+	if s.store == nil || strings.TrimSpace(convID) == "" {
+		return false
+	}
+	history, err := s.store.LoadHistory(ctx, convID)
+	if err != nil {
+		return false
+	}
+	for _, h := range history {
+		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
+			continue
+		}
+		var tc agent.TextContent
+		if err := json.Unmarshal(h.Content, &tc); err != nil {
+			continue
+		}
+		lower := strings.ToLower(tc.Text)
+		if strings.Contains(lower, "everyone") ||
+			strings.Contains(lower, "fleet-wide") ||
+			strings.Contains(lower, "fleet wide") ||
+			strings.Contains(lower, "all users") ||
+			strings.Contains(lower, "whole team") {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) bool {
 	mutated := false
 	for k, rawVal := range data {
@@ -409,6 +474,10 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 				data[k] = "$secret:" + stashKey
 				mutated = true
 				continue
+			}
+			if isShareScopeFieldID(k) {
+				vLower := strings.ToLower(strings.TrimSpace(val))
+				s.uiSecrets.setAllowEveryone(userEmail, convID, vLower == "everyone" || vLower == "fleet" || vLower == "workspace" || vLower == "*")
 			}
 			if isLikelyURLFieldID(k) || strings.HasPrefix(strings.TrimSpace(val), "https://") || strings.HasPrefix(strings.TrimSpace(val), "http://") {
 				s.uiSecrets.allowOrigin(userEmail, convID, val)
@@ -648,13 +717,16 @@ func (s *Server) safeProbeHTTPClient() *http.Client {
 }
 
 func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
-	targetURL, err := mcpoauth.ValidateServerURL(strings.TrimSpace(params.URL), false)
-	if err != nil {
-		return nil, fmt.Errorf("invalid url: %w", err)
-	}
 	method := strings.ToUpper(strings.TrimSpace(params.Method))
 	if method == "" {
 		method = http.MethodGet
+	}
+	if method != http.MethodGet && method != http.MethodHead {
+		return nil, fmt.Errorf("probe_http only supports read-only GET or HEAD requests (got %q); save mutating methods as custom connector tools so they route through the approval gate", method)
+	}
+	targetURL, err := mcpoauth.ValidateServerURL(strings.TrimSpace(params.URL), false)
+	if err != nil {
+		return nil, fmt.Errorf("invalid url: %w", err)
 	}
 
 	secret, err := s.resolveSecretForURL(ctx, user, convID, params.SecretRef, targetURL)
@@ -930,6 +1002,9 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	if conv != nil {
 		convID = conv.ID
 	}
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
+		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
+	}
 	apiKey, err := s.resolveSecretForURL(ctx, user, convID, params.SecretRef, params.URL)
 	if err != nil {
 		return nil, err
@@ -1012,6 +1087,9 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	convID := ""
 	if conv != nil {
 		convID = conv.ID
+	}
+	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
+		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
 	}
 
 	transport := strings.ToLower(strings.TrimSpace(params.Transport))
@@ -1100,12 +1178,8 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	}
 
 	authMode := strings.ToLower(strings.TrimSpace(params.AuthMode))
-	if authMode == "" {
-		if apiKeyPayload != "" {
-			authMode = store.RemoteMCPAuthAPIKey
-		} else {
-			authMode = store.RemoteMCPAuthOpen
-		}
+	if authMode == "" && apiKeyPayload != "" {
+		authMode = store.RemoteMCPAuthAPIKey
 	}
 
 	server, err := s.remoteMCP.AddCustomConnector(ctx, remotemcp.AddCustomConnectorInput{
@@ -1172,6 +1246,21 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	defer ov.Close()
 
 	regName := agentcore.RegisteredMCPName(wantName, wantAcct)
+	fullToolName := fmt.Sprintf("mcp_%s_%s", regName, wantTool)
+	if agentcore.IsCriticalTool(fullToolName) {
+		return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
+	}
+	if conns, cerr := s.remoteMCP.ConnectedServersForUser(ctx, user); cerr == nil {
+		for _, c := range conns {
+			if strings.EqualFold(c.Name, wantName) && (wantAcct == "" || c.Account == wantAcct) {
+				for _, ct := range c.CustomTools {
+					if ct.Name == wantTool && c.Transport == "http_tools" && ct.Method != "" && !strings.EqualFold(ct.Method, http.MethodGet) {
+						return nil, fmt.Errorf("test_custom_tool only executes read-only GET tools directly; %q uses HTTP %s — invoke %s directly so it routes through the approval gate", wantTool, ct.Method, fullToolName)
+					}
+				}
+			}
+		}
+	}
 	args := params.ToolArgs
 	if args == nil {
 		args = map[string]any{}

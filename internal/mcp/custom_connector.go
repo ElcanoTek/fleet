@@ -65,6 +65,7 @@ func (c *Client) AddHTTPToolsOnServer(serverName string, specs []HTTPToolSpec, h
 			Name:        name,
 			Description: spec.Description,
 			InputSchema: schema,
+			Critical:    spec.Method != "GET",
 		})
 	}
 	if len(server.tools) == 0 {
@@ -122,6 +123,7 @@ func (c *Client) AddPlaywrightToolsOnServer(serverName string, specs []Playwrigh
 			Name:        name,
 			Description: spec.Description,
 			InputSchema: schema,
+			Critical:    isPlaywrightToolSpecCritical(spec),
 		})
 	}
 	if len(server.tools) == 0 {
@@ -129,6 +131,16 @@ func (c *Client) AddPlaywrightToolsOnServer(serverName string, specs []Playwrigh
 	}
 	c.servers[serverName] = server
 	return nil
+}
+
+func isPlaywrightToolSpecCritical(spec PlaywrightToolSpec) bool {
+	lower := strings.ToLower(strings.TrimSpace(spec.Name))
+	for _, verb := range []string{"create", "update", "delete", "remove", "destroy", "submit", "write"} {
+		if lower == verb || strings.HasPrefix(lower, verb+"_") || strings.HasSuffix(lower, "_"+verb) {
+			return true
+		}
+	}
+	return false
 }
 
 type playwrightToolTransport struct {

@@ -97,6 +97,7 @@ type LiveSession struct {
 	id          string
 	viewToken   string
 	ownerEmail  string
+	baseURL     string
 	credentials Credentials
 	createdAt   time.Time
 
@@ -144,9 +145,17 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 	if targetURL == "" {
 		return nil, errors.New("url is required to start a browser session")
 	}
+	for _, ph := range []string{"{{USERNAME}}", "{{PASSWORD}}", "{{SECRET}}"} {
+		if strings.Contains(strings.ToUpper(targetURL), ph) {
+			return nil, errors.New("url must not contain secret placeholders")
+		}
+	}
 	for _, st := range req.Steps {
 		st.Action = strings.ToLower(strings.TrimSpace(st.Action))
 		if err := ValidateStep(st); err != nil {
+			return nil, err
+		}
+		if err := validateStepNavigationOrigin(targetURL, req.Credentials, st); err != nil {
 			return nil, err
 		}
 	}
@@ -210,6 +219,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 		id:          sessionID,
 		viewToken:   viewToken,
 		ownerEmail:  strings.ToLower(strings.TrimSpace(req.OwnerEmail)),
+		baseURL:     targetURL,
 		credentials: req.Credentials,
 		createdAt:   now,
 		lastActive:  now,
@@ -360,6 +370,9 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 	for i := range steps {
 		steps[i].Action = strings.ToLower(strings.TrimSpace(steps[i].Action))
 		if err := ValidateStep(steps[i]); err != nil {
+			return nil, err
+		}
+		if err := validateStepNavigationOrigin(s.baseURL, s.credentials, steps[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -761,7 +774,7 @@ async def run_steps(page, steps, creds, extracted):
         optional = bool(st.get("optional"))
         try:
             if action == "goto":
-                await page.goto(val or sel, wait_until="domcontentloaded", timeout=st_timeout)
+                await page.goto((st.get("value") or st.get("selector") or "").strip(), wait_until="domcontentloaded", timeout=st_timeout)
             elif action == "fill":
                 await page.locator(sel).first.fill(val, timeout=st_timeout)
             elif action == "click":
@@ -935,7 +948,7 @@ async def main():
             except Exception:
                 pass
 
-            await page.goto(replace_secrets(init_cmd.get("url") or "", creds), wait_until="domcontentloaded", timeout=20000)
+            await page.goto(init_cmd.get("url") or "", wait_until="domcontentloaded", timeout=20000)
             try:
                 await page.wait_for_load_state("networkidle", timeout=3000)
             except Exception:
@@ -1151,7 +1164,7 @@ async function runSteps(page, steps, creds, extracted) {
     const optional = Boolean(st.optional);
     try {
       if (action === "goto") {
-        await page.goto(val || sel, { waitUntil: "domcontentloaded", timeout: stTimeout });
+        await page.goto(String(st.value || st.selector || "").trim(), { waitUntil: "domcontentloaded", timeout: stTimeout });
       } else if (action === "fill") {
         await page.locator(sel).first().fill(val, { timeout: stTimeout });
       } else if (action === "click") {
@@ -1336,7 +1349,7 @@ async function pushSnapshotFrame(page) {
       });
     } catch (_) {}
 
-    await page.goto(replaceSecrets(initCmd.url || "", creds), { waitUntil: "domcontentloaded", timeout: 20000 });
+    await page.goto(initCmd.url || "", { waitUntil: "domcontentloaded", timeout: 20000 });
     try {
       await page.waitForLoadState("networkidle", { timeout: 3000 });
     } catch (_) {}

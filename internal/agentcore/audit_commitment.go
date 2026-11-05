@@ -175,6 +175,9 @@ func (c *typedCommitment) coversOutstanding(old *typedCommitment) bool {
 // suffix (or in aliased ones), and a base-server approval never matches a
 // client-variant call.
 func (c *typedCommitment) nameMatches(toolName string) bool {
+	if toolName == c.tool && c.suffix != "" {
+		return true
+	}
 	execSuffix := criticalSuffixFor(toolName)
 	if execSuffix == "" {
 		return false
@@ -279,9 +282,6 @@ func criticalSuffixFor(toolName string) string {
 	best := ""
 	policyMu.RLock()
 	defer policyMu.RUnlock()
-	if s, ok := customCriticalTools[toolName]; ok && len(s) > len(best) {
-		best = s
-	}
 	for _, suffix := range activeCriticalSuffixes {
 		if toolName != suffix && !strings.HasSuffix(toolName, "_"+suffix) {
 			continue
@@ -289,6 +289,17 @@ func criticalSuffixFor(toolName string) string {
 		if len(suffix) > len(best) {
 			best = suffix
 		}
+	}
+	return best
+}
+
+func (o *orchestrationState) criticalSuffixFor(toolName string) string {
+	best := criticalSuffixFor(toolName)
+	if o == nil || o.runCriticalTools == nil {
+		return best
+	}
+	if s, ok := o.runCriticalTools[toolName]; ok && len(s) > len(best) {
+		best = s
 	}
 	return best
 }
@@ -701,7 +712,7 @@ func (o *orchestrationState) unregisteredTypedActions(actions []criticalActionSt
 	var out []string
 	for _, a := range actions {
 		tool := strings.TrimSpace(a.Tool)
-		suffix := criticalSuffixFor(tool)
+		suffix := o.criticalSuffixFor(tool)
 		if suffix == "" || tool == suffix {
 			continue
 		}
@@ -928,7 +939,7 @@ func (o *orchestrationState) registerCommittedActionsTyped(actions []criticalAct
 		// exactly when tool carries an mcp_<server>[_<variant>]_ prefix ahead
 		// of the suffix. A bare suffix (tool == suffix) or an unrecognized
 		// name is dropped fail-closed.
-		suffix := criticalSuffixFor(tool)
+		suffix := o.criticalSuffixFor(tool)
 		if suffix == "" || tool == suffix {
 			log.Printf("WARNING: dropping typed critical_action %q — not a full server-qualified MCP tool name "+
 				"(a bare suffix would wildcard across every server sharing it). Copy the literal tool name "+
@@ -1417,7 +1428,7 @@ func (o *orchestrationState) commitmentAuthorizes(toolName, rawInput string) (bo
 		refusedBy = append(refusedBy, c)
 	}
 
-	if !isBatch && o.legacySuffixAuthorized(criticalSuffixFor(toolName)) {
+	if !isBatch && o.legacySuffixAuthorized(o.criticalSuffixFor(toolName)) {
 		return true, ""
 	}
 	if len(namedRefused) > 0 {

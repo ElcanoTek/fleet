@@ -992,7 +992,6 @@ func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteM
 		creds := parsePlaywrightCredentials(bearer, conn)
 		specs := make([]mcp.PlaywrightToolSpec, 0, len(conn.CustomTools))
 		for _, ct := range conn.CustomTools {
-			agentcore.RegisterCustomCriticalTool(regName, ct.Name, isCustomConnToolCritical(conn.Transport, ct))
 			tURL := strings.TrimSpace(ct.URL)
 			if tURL == "" {
 				tURL = conn.URL
@@ -1023,7 +1022,6 @@ func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteM
 
 	specs := make([]mcp.HTTPToolSpec, 0, len(conn.CustomTools))
 	for _, ct := range conn.CustomTools {
-		agentcore.RegisterCustomCriticalTool(regName, ct.Name, isCustomConnToolCritical(conn.Transport, ct))
 		tURL := strings.TrimSpace(ct.URL)
 		if tURL == "" {
 			tURL = conn.URL
@@ -1053,23 +1051,6 @@ func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteM
 		})
 	}
 	return client.AddHTTPToolsOnServer(regName, specs, httpClient)
-}
-
-func isCustomConnToolCritical(transport string, ct RemoteMCPCustomTool) bool {
-	method := strings.ToUpper(strings.TrimSpace(ct.Method))
-	if transport == "http_tools" {
-		return method != "" && method != http.MethodGet
-	}
-	if method != "" && method != http.MethodGet {
-		return true
-	}
-	name := strings.ToLower(strings.TrimSpace(ct.Name))
-	for _, verb := range []string{"create", "update", "delete", "remove", "destroy", "submit", "write"} {
-		if name == verb || strings.HasPrefix(name, verb+"_") || strings.HasSuffix(name, "_"+verb) {
-			return true
-		}
-	}
-	return false
 }
 
 func decodeCustomToolSchema(raw json.RawMessage) map[string]interface{} {

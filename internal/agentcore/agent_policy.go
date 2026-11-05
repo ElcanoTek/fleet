@@ -269,33 +269,7 @@ var (
 	// activeInteractiveHidden is the normalized interactive_hidden_tools
 	// list. Empty by default: chat sees what scheduled runs see.
 	activeInteractiveHidden []string
-	// customCriticalTools maps a server-qualified MCP tool name
-	// ("mcp_<server>_<tool>") of a mutating custom connector tool to its bare
-	// tool name ("<tool>"). Populated when custom connectors with non-GET HTTP
-	// methods or mutating Playwright steps are registered/mounted.
-	customCriticalTools = map[string]string{}
 )
-
-// RegisterCustomCriticalTool marks a server-qualified custom connector tool
-// ("mcp_<regName>_<bareToolName>") as critical (or clears it when critical is
-// false) so mutating custom HTTP (POST/PUT/PATCH/DELETE) and Playwright tools
-// route through interactive approval staging and scheduled confirm_audit gating
-// regardless of what the user or model named the tool.
-func RegisterCustomCriticalTool(regName, bareToolName string, critical bool) {
-	regName = strings.TrimSpace(regName)
-	bareToolName = strings.TrimSpace(bareToolName)
-	if regName == "" || bareToolName == "" {
-		return
-	}
-	full := fmt.Sprintf("mcp_%s_%s", regName, bareToolName)
-	policyMu.Lock()
-	defer policyMu.Unlock()
-	if critical {
-		customCriticalTools[full] = bareToolName
-	} else {
-		delete(customCriticalTools, full)
-	}
-}
 
 // nonReversibleSuffixes can never be declared `notify`, whatever a bundle says.
 // The whole case for executing without asking is "we can always roll it back",
