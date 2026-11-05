@@ -201,7 +201,7 @@ Read `fleet.log` first. The lines that matter:
 
 - `remote-mcp: skipping server "<name>" for <user> — token unavailable` —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
-  marked *Sign-in needed* (`needs_reauth`); have the owner click Sign in again. For
+  marked *Sign-in needed* (`needs_reauth`); have the owner click Sign in. For
   transient network errors or vendor 5xx, the same line is logged but the
   connection stays connected and the next call retries automatically.
 - `remote-mcp: skipping server "<name>" … — failed to connect: … HTTP 404` —
