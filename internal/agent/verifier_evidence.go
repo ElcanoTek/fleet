@@ -47,7 +47,7 @@ var (
 	verifierValue     = regexp.MustCompile(`^[a-zA-Z0-9_.@/:+-]{1,128}$`)
 	verifierEmailAddr = regexp.MustCompile(`^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+$`)
 	verifierPrivate   = regexp.MustCompile(`(?i)(token|secret|password|passwd|credential|authorization|cookie|ticket|private.?key|api.?key|access.?key)|^(headers?|env|environment)$`)
-	verifierURLToken = regexp.MustCompile(`\S+://\S+`)
+	verifierURLToken  = regexp.MustCompile(`\S+://\S+`)
 )
 
 type verifierProjection struct {

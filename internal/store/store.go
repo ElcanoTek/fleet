@@ -1123,6 +1123,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		if len(priorIDs) > 0 {
 			firstID = priorIDs[0]
 		}
+		if err := supersedePendingModelSuggestionsTx(ctx, tx, req.ConversationID, now); err != nil {
+			return out, err
+		}
 		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 			ID:             uuid.NewString(),
 			ConversationID: req.ConversationID,
