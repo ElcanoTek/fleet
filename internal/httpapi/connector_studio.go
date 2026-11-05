@@ -18,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
+	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -342,9 +343,12 @@ func (st *uiSecretStash) lookupSecret(userEmail, convID, refOrValue string) (str
 	return refOrValue, false
 }
 
-// isLikelySecretFieldID reports whether a show_ui form field ID represents a
-// credential by name, acting as a defense-in-depth safety net alongside
-// explicit `format: "password"` declarations in show_ui specs.
+// isLikelySecretFieldID reports whether a show_ui form field ID represents an
+// explicit credential by name, acting as a fallback only when the submitted
+// show_ui card specification could not be resolved in conversation history.
+// Never match bare "token" or generic "_token" suffixes (e.g. page_token,
+// continuation_token, deal_token) so non-secret pagination or identifier inputs
+// are never vaulted by heuristic.
 func isLikelySecretFieldID(fieldID string) bool {
 	k := strings.ToLower(strings.TrimSpace(fieldID))
 	if k == "" {
@@ -353,15 +357,63 @@ func isLikelySecretFieldID(fieldID string) bool {
 	switch k {
 	case "password", "passwd", "passphrase", "api_key", "apikey", "secret",
 		"client_secret", "secret_key", "access_token", "auth_token",
-		"bearer_token", "refresh_token", "private_key", "token":
+		"bearer_token", "refresh_token", "session_token", "api_token",
+		"secret_token", "private_key":
 		return true
 	}
-	for _, suffix := range []string{"_password", "_passwd", "_secret", "_api_key", "_apikey", "_token", "_private_key"} {
+	for _, suffix := range []string{
+		"_password", "_passwd", "_secret", "_api_key", "_apikey",
+		"_access_token", "_auth_token", "_bearer_token", "_refresh_token",
+		"_session_token", "_api_token", "_secret_token", "_private_key",
+	} {
 		if strings.HasSuffix(k, suffix) {
 			return true
 		}
 	}
 	return false
+}
+
+// isSafeProcessWideSecretLiteral guards the process-wide literal redactor
+// (agentcore.RegisterSecretLiterals) against over-redaction when a user submits
+// a short word, number, URL, path, or GenUI keyword in a password field. The
+// per-conversation uiSecretStash and local connector_studio / playwrightrunner
+// scrubbers still vault and mask the value for the conversation regardless.
+func isSafeProcessWideSecretLiteral(val string) bool {
+	v := strings.TrimSpace(val)
+	if len(v) < 12 {
+		return false
+	}
+	if strings.ContainsAny(v, " \t\r\n") {
+		return false
+	}
+	lower := strings.ToLower(v)
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "$secret:") {
+		return false
+	}
+	if redact.IsPathListValue(v) {
+		return false
+	}
+	hasAlpha := false
+	hasDigitOrSym := false
+	for i := 0; i < len(v); i++ {
+		c := v[i]
+		switch {
+		case (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'):
+			hasAlpha = true
+		case c == '_':
+			// Underscore alone with letters (e.g. "include_exclude") can collide with GenUI/JSON identifiers.
+		default:
+			hasDigitOrSym = true
+		}
+	}
+	return hasAlpha && hasDigitOrSym
+}
+
+func registerUISecretLiteral(scope, val string) {
+	if !isSafeProcessWideSecretLiteral(val) {
+		return
+	}
+	agentcore.RegisterSecretLiterals(scope, true, val)
 }
 
 // passwordFieldIDsFromHistory extracts all field IDs declared with
@@ -372,6 +424,11 @@ func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
 }
 
 func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID string) map[string]bool {
+	out, _ := passwordFieldIDsFromHistoryForCardWithMatch(history, cardID)
+	return out
+}
+
+func passwordFieldIDsFromHistoryForCardWithMatch(history []agent.HistoryEntry, cardID string) (map[string]bool, bool) {
 	out := make(map[string]bool)
 	cardID = strings.TrimSpace(cardID)
 	if cardID != "" {
@@ -395,7 +452,7 @@ func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID str
 					continue
 				}
 				collectPasswordComponentIDs(payload["components"], out)
-				return out
+				return out, true
 			case "tool_call":
 				var tc agent.ToolCallContent
 				if err := json.Unmarshal(h.Content, &tc); err != nil {
@@ -412,9 +469,12 @@ func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID str
 					continue
 				}
 				collectPasswordComponentIDs(payload["components"], out)
-				return out
+				return out, true
 			}
 		}
+		// An explicit card=<id> was provided on the submission, so do not merge
+		// password field IDs from unrelated earlier cards in the conversation.
+		return out, false
 	}
 	for _, h := range history {
 		if len(h.Content) == 0 {
@@ -449,7 +509,7 @@ func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID str
 			collectPasswordComponentIDs(payload["components"], out)
 		}
 	}
-	return out
+	return out, false
 }
 
 func submissionCardID(message string) string {
@@ -611,8 +671,8 @@ func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwne
 		return message
 	}
 
-	pwFields := passwordFieldIDsFromHistoryForCard(history, submissionCardID(message))
-	mutated, vaultedKeys, cardOrigins := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
+	pwFields, cardFound := passwordFieldIDsFromHistoryForCardWithMatch(history, submissionCardID(message))
+	mutated, vaultedKeys, cardOrigins := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields, cardFound)
 	if mutated || len(cardOrigins) > 0 {
 		s.uiSecrets.bindSubmissionOrigins(userEmail, convID, vaultedKeys, cardOrigins)
 	}
@@ -683,7 +743,7 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 	return false
 }
 
-func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) (mutated bool, vaultedKeys []string, cardOrigins []string) {
+func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool, cardFound bool) (mutated bool, vaultedKeys []string, cardOrigins []string) {
 	scopeKey := uiSecretKey(userEmail, convID)
 	for k, rawVal := range data {
 		stashKey := k
@@ -695,13 +755,17 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 			if strings.TrimSpace(val) == "" || strings.HasPrefix(strings.TrimSpace(val), "$secret:") {
 				continue
 			}
-			if pwFields[k] || pwFields[strings.ToLower(k)] || isLikelySecretFieldID(k) {
+			// When the submitted card was resolved in conversation history (cardFound == true),
+			// its component tree is authoritative: ONLY fields explicitly declared with
+			// `format: "password"` on that card are vaulted. Heuristic field-name matching
+			// applies only as a fallback when no matching card spec was found in history.
+			if pwFields[k] || pwFields[strings.ToLower(k)] || (!cardFound && isLikelySecretFieldID(k)) {
 				s.uiSecrets.put(userEmail, convID, stashKey, val)
-				agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+stashKey, true, val)
+				registerUISecretLiteral("ui_secret:"+scopeKey+":"+stashKey, val)
 				vaultedKeys = append(vaultedKeys, stashKey)
 				if stashKey != k {
 					s.uiSecrets.put(userEmail, convID, k, val)
-					agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+k, true, val)
+					registerUISecretLiteral("ui_secret:"+scopeKey+":"+k, val)
 					vaultedKeys = append(vaultedKeys, k)
 				}
 				data[k] = "$secret:" + stashKey
@@ -716,7 +780,7 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 				cardOrigins = append(cardOrigins, val)
 			}
 		case map[string]any:
-			subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields)
+			subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields, cardFound)
 			if subMut {
 				mutated = true
 			}
@@ -726,7 +790,7 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 			for idx, item := range val {
 				if itemMap, ok := item.(map[string]any); ok {
 					itemPrefix := fmt.Sprintf("%s[%d]", stashKey, idx)
-					subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, itemPrefix, itemMap, pwFields)
+					subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, itemPrefix, itemMap, pwFields, cardFound)
 					if subMut {
 						mutated = true
 					}
@@ -809,7 +873,7 @@ func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, co
 		return "", fmt.Errorf("vaulted secret %q is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", strings.TrimSpace(refOrValue), targetHost)
 	}
 	if fieldID != "" {
-		agentcore.RegisterSecretLiterals("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, true, val)
+		registerUISecretLiteral("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, val)
 	}
 	return val, nil
 }
@@ -995,7 +1059,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		return nil, err
 	}
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("probe_http:"+uiSecretKey(user, convID), true, secret)
+		registerUISecretLiteral("probe_http:"+uiSecretKey(user, convID), secret)
 	}
 
 	reqURL := targetURL
@@ -1123,10 +1187,10 @@ func (s *Server) resolvePlaywrightCredentials(ctx context.Context, user, convID,
 	}
 	scopeKey := uiSecretKey(user, convID)
 	if password != "" {
-		agentcore.RegisterSecretLiterals("pw_password:"+scopeKey, true, password)
+		registerUISecretLiteral("pw_password:"+scopeKey, password)
 	}
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("pw_secret:"+scopeKey, true, secret)
+		registerUISecretLiteral("pw_secret:"+scopeKey, secret)
 	}
 	return playwrightrunner.Credentials{
 		Username: username,
@@ -1305,7 +1369,7 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 		return nil, err
 	}
 	if apiKey != "" {
-		agentcore.RegisterSecretLiterals("connect_mcp:"+uiSecretKey(user, convID), true, apiKey)
+		registerUISecretLiteral("connect_mcp:"+uiSecretKey(user, convID), apiKey)
 	}
 
 	var clientID, clientSecret string

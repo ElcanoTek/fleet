@@ -558,4 +558,16 @@ func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswor
 	if got, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:custom_cred", "https://example.com/api"); err != nil || got != "my-new-secret-pw" {
 		t.Fatalf("expected exact origin https://example.com to resolve secret, got %q, err=%v", got, err)
 	}
+
+	// 8. When a card is resolved in history (card=card-plain), non-password fields must NEVER be vaulted
+	// even if their field ID looks like a token/secret (e.g. page_token, password), and short/common words
+	// submitted in a password card must not poison the process-wide ShowUIRedactor.
+	plainSub := s.vaultUISubmissionSecretsWithHistoryAndOwner("admin@example.com", "admin@example.com", conv.ID, `[UI submission] card=card-plain {"custom_cred":"visible-value","page_token":"next-page-12345","password":"plain-text-field-not-marked-password"}`, history)
+	if strings.Contains(plainSub, "$secret:") {
+		t.Fatalf("expected resolved non-password card submission not to vault any fields, got %s", plainSub)
+	}
+	s.vaultUISubmissionSecretsWithHistoryAndOwner("admin@example.com", "admin@example.com", conv.ID, `[UI submission] card=card-pw {"url":"https://example.com/login","custom_cred":"password"}`, history)
+	if redacted := agentcore.RedactSecrets(`{"format":"password","required":true}`); strings.Contains(redacted, "[REDACTED]") {
+		t.Fatalf("short/common word 'password' submitted in password field must not poison process-wide redactor: %s", redacted)
+	}
 }

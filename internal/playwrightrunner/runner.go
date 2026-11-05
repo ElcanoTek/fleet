@@ -717,6 +717,19 @@ func scrubArbitraryValue(v any, creds Credentials) any {
 	}
 }
 
+func isSensitiveHeaderName(name string) bool {
+	k := strings.ToLower(strings.TrimSpace(name))
+	if k == "" {
+		return false
+	}
+	for _, sub := range []string{"auth", "token", "secret", "key", "password", "passwd", "cookie", "session", "credential", "jwt", "sig"} {
+		if strings.Contains(k, sub) {
+			return true
+		}
+	}
+	return false
+}
+
 func maskSecrets(text string, creds Credentials) string {
 	if text == "" {
 		return ""
@@ -736,8 +749,8 @@ func maskSecrets(text string, creds Credentials) string {
 	if creds.Secret != "" {
 		rawSecrets = append(rawSecrets, creds.Secret)
 	}
-	for _, v := range creds.Headers {
-		if v != "" {
+	for k, v := range creds.Headers {
+		if v != "" && isSensitiveHeaderName(k) {
 			rawSecrets = append(rawSecrets, v)
 		}
 	}
