@@ -275,6 +275,7 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 		MCPBroker:        tc.MCPBroker,
 		MCPCatalog:       tc.MCPCatalog,
 		MCPToolAllowlist: tc.Allowlist,
+		OptionalServers:  tc.OptionalServers,
 		NativeTools:      tc.NativeTools,
 		SystemPrompt:     tc.SystemPrompt,
 		Persona:          tc.Persona,
@@ -290,8 +291,40 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 	host.runtimePolicy = policy
 	host.spawnObserver = obs
 	for _, choice := range tc.Selection {
-		if s := strings.TrimSpace(choice.Server); s != "" {
+		s := strings.TrimSpace(choice.Server)
+		if s != "" {
 			host.loadedServers[s] = true
+		}
+		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
+			host.loadedServers[reg] = true
+			if s != "" && reg != s {
+				if host.seatBaseServers == nil {
+					host.seatBaseServers = make(map[string]string)
+				}
+				host.seatBaseServers[reg] = s
+			}
+		}
+	}
+	for _, choice := range tc.Overlay.SeatSelection() {
+		s := strings.TrimSpace(choice.Server)
+		if s != "" {
+			host.loadedServers[s] = true
+		}
+		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
+			host.loadedServers[reg] = true
+			if s != "" && reg != s {
+				if host.seatBaseServers == nil {
+					host.seatBaseServers = make(map[string]string)
+				}
+				host.seatBaseServers[reg] = s
+			}
+		}
+	}
+	if tc.Overlay != nil {
+		for reg, ok := range tc.Overlay.Servers {
+			if ok && strings.TrimSpace(reg) != "" {
+				host.loadedServers[strings.TrimSpace(reg)] = true
+			}
 		}
 	}
 	return host

@@ -253,13 +253,14 @@ func filterExploreDeniedTools(all []fantasy.AgentTool) []fantasy.AgentTool {
 }
 
 // exploreDeniedMCPNamePattern is the BEST-EFFORT MCP write-tool name denylist
-// for role=explore children (#1043): an MCP tool whose snake_case name contains
-// one of these mutation verbs as a whole segment is excluded from the child's
-// Gate-2 allowlist. Name-based only, by design — the issue scopes explore's MCP
-// stripping to "a simple name denylist"; a mutator with an innocuous name still
-// gets through and is covered by the child's read-only prompt section instead.
-// Read verbs (get/list/search/read/fetch/find/view/download) never match.
-var exploreDeniedMCPNamePattern = regexp.MustCompile(`(?i)(?:^|_)(write|create|update|delete|remove|insert|upsert|send|upload|post|put|patch|set|add|modify|rename|move|copy|archive|cancel|trash|untrash|mark|publish|execute|submit|respond|forward|reply)(?:$|_)`)
+// for role=explore children (#1043): an MCP tool whose snake_case or kebab-case
+// name contains one of these mutation verbs as a whole segment is excluded from
+// the child's Gate-2 allowlist. Name-based only, by design — the issue scopes
+// explore's MCP stripping to "a simple name denylist"; a mutator with an
+// innocuous name still gets through and is covered by the child's read-only
+// prompt section instead. Read verbs (get/list/search/read/fetch/find/view/
+// download) never match.
+var exploreDeniedMCPNamePattern = regexp.MustCompile(`(?i)(?:^|[_-])(write|create|update|delete|remove|insert|upsert|send|upload|post|put|patch|set|add|modify|rename|move|copy|archive|cancel|trash|untrash|mark|publish|execute|submit|respond|forward|reply)(?:$|[_-])`)
 
 // exploreNoToolsSentinel is placed in a server's allowlist entry when the
 // explore filter removes EVERY tool: agentcore treats an EMPTY entry as "allow
@@ -870,7 +871,31 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 			parentLoaded[name] = true
 		}
 	}
+	seatBase := make(map[string]string, len(a.seatBaseServers))
+	for reg, base := range a.seatBaseServers {
+		seatBase[reg] = base
+	}
 	a.mu.Unlock()
+	for _, st := range a.baseMCPCatalog() {
+		if st.ServerName != "" && !a.optionalServers[st.ServerName] {
+			parentLoaded[st.ServerName] = true
+		}
+	}
+	if a.overlay != nil {
+		for reg, ok := range a.overlay.Servers {
+			if ok && reg != "" {
+				parentLoaded[reg] = true
+			}
+		}
+		for reg, seat := range a.overlay.Seats {
+			if seat.Server != "" {
+				parentLoaded[seat.Server] = true
+				if reg != "" && reg != seat.Server {
+					seatBase[reg] = seat.Server
+				}
+			}
+		}
+	}
 
 	if len(allowServers) == 0 {
 		return parentLoaded // inherit the full parent set
@@ -880,11 +905,49 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 	child := make(map[string]bool)
 	for _, name := range allowServers {
 		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
 		if parentLoaded[name] {
 			child[name] = true
 		}
+		for reg, base := range seatBase {
+			if base == name && parentLoaded[reg] {
+				child[reg] = true
+			}
+		}
 	}
 	return child
+}
+
+func (a *Agent) baseMCPCatalog() []mcp.ServerTool {
+	if a.mcpCatalog != nil {
+		return a.mcpCatalog
+	}
+	if a.mcpClient != nil {
+		return a.mcpClient.GetAllTools()
+	}
+	return nil
+}
+
+func filterMCPCatalogByServers(catalog []mcp.ServerTool, allowed map[string]bool) []mcp.ServerTool {
+	out := make([]mcp.ServerTool, 0, len(catalog))
+	for _, st := range catalog {
+		if allowed[st.ServerName] {
+			out = append(out, st)
+		}
+	}
+	return out
+}
+
+func mergeCatalogWithOverlay(base []mcp.ServerTool, overlay *RemoteMCPOverlay) []mcp.ServerTool {
+	if !overlay.Active() || len(overlay.Catalog) == 0 {
+		return base
+	}
+	merged := make([]mcp.ServerTool, 0, len(base)+len(overlay.Catalog))
+	merged = append(merged, base...)
+	merged = append(merged, overlay.Catalog...)
+	return merged
 }
 
 // buildChild constructs the CHILD Agent that the spawn runs through Execute. It
@@ -930,6 +993,21 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	// what a child was observed doing: hunting for protocols/self-audit.md it
 	// could not read, then narrating the hunt into the answer the parent
 	// received. This section states the child's actual contract instead.
+	childLoaded := a.childSelection(allowServers)
+	baseCatalog := a.baseMCPCatalog()
+	childCatalog := a.mcpCatalog
+	var childOverlay *RemoteMCPOverlay
+	if len(allowServers) > 0 {
+		childCatalog = filterMCPCatalogByServers(baseCatalog, childLoaded)
+		childOverlay = a.overlay.ForChild(childLoaded)
+	} else {
+		childOverlay = a.overlay.ForChild(nil)
+	}
+	effectiveCatalog := mergeCatalogWithOverlay(baseCatalog, childOverlay)
+	if len(allowServers) > 0 {
+		effectiveCatalog = mergeCatalogWithOverlay(childCatalog, childOverlay)
+	}
+
 	childSystemPrompt := a.systemPrompt + subagentChildPromptSection
 	childMCPAllowlist := a.mcpToolAllowlist
 	if a.mcpRosterNarrowing != "" {
@@ -938,7 +1016,7 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		// anything derives from it, because the explore filter below reads a
 		// missing entry as "allow all" — without this an explore child of a
 		// narrowed run would see tools its parent could not call.
-		childMCPAllowlist = explicitNarrowedAllowlist(a.mcpCatalog, a.mcpToolAllowlist)
+		childMCPAllowlist = explicitNarrowedAllowlist(effectiveCatalog, a.mcpToolAllowlist)
 	}
 	if role == SubagentRoleExplore {
 		childSystemPrompt += exploreChildPromptSection
@@ -946,7 +1024,7 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		// allowlist is the parent's, minus write-verb tool names, with every
 		// catalog server covered explicitly. Name-based only; the prompt section
 		// above is the guard for mutators the pattern cannot recognize.
-		childMCPAllowlist = exploreMCPToolAllowlist(a.mcpCatalog, childMCPAllowlist)
+		childMCPAllowlist = exploreMCPToolAllowlist(effectiveCatalog, childMCPAllowlist)
 	}
 
 	child := NewAgent(Options{
@@ -957,8 +1035,11 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		FallbackModels:   a.fallbackModels,
 		MCPClient:        a.mcpClient,
 		MCPBroker:        a.mcpBroker,
-		MCPCatalog:       a.mcpCatalog,
+		MCPCatalog:       childCatalog,
 		MCPToolAllowlist: childMCPAllowlist,
+		OptionalServers:  a.optionalServers,
+		PersonaPolicy:    a.personaPolicy,
+		Overlay:          childOverlay,
 		// Monotonic privilege: a child of a chat turn inherits the turn's
 		// interactive-hidden tools (agent_policy.interactive_hidden_tools),
 		// so delegating cannot reach a tool chat could not.
@@ -1017,7 +1098,15 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	}
 	child.logFile = childLogFilePath(a.logFile, child.logSession.ID)
 	// Narrow the child's loaded-server selection (intersection; never a superset).
-	child.loadedServers = a.childSelection(allowServers)
+	child.loadedServers = childLoaded
+	if len(a.seatBaseServers) > 0 {
+		child.seatBaseServers = make(map[string]string, len(a.seatBaseServers))
+		for reg, base := range a.seatBaseServers {
+			if childLoaded[reg] {
+				child.seatBaseServers[reg] = base
+			}
+		}
+	}
 	// Hand the child its SLICED budget ceiling. Execute applies these as the
 	// child's MaxCostUSD/MaxTotalTokens, so the child's own agentcore.Run enforces
 	// the slice via the SAME checkCeilings/budgetGuardedStep the parent uses. The
@@ -1206,6 +1295,7 @@ const subagentChildPromptSection = `
 You were spawned by another agent to complete ONE scoped task — the message below is that task, and it is all you get: you cannot see the conversation that produced it, and there is no user reading along or available to answer questions.
 
 - Complete the task with the tools you have, then stop. Do not ask for clarification; if the task is ambiguous, state the assumption you made and continue.
+- Check "## MCP Tools (live registry)" at the end of this system prompt for how MCP tools are registered in YOUR run: if they are listed there by name, call mcp_<connector>_<tool> directly (even if the task text mentions tool_search or tool_call); if the registry says they are deferred behind the bridge tools, use tool_search, tool_describe, and tool_call.
 - Your FINAL MESSAGE is the entire product. The agent that spawned you receives that text and nothing else — not your tool calls, not your intermediate notes — so it must stand alone: the findings, the numbers, the file paths, in full.
 - There is no end-of-run self-audit gate on your run. Do not look for protocols/self-audit.md and do not narrate an audit; the agent that spawned you owns that check. (If a specific tool is gated behind confirm_audit, follow that tool's own instructions.)
 - If something blocks you, say plainly what blocked you and what you did get. A short honest failure is more useful to your parent than a padded guess.

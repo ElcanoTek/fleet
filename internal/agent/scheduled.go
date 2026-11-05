@@ -142,11 +142,16 @@ type Agent struct {
 	tokenCeilingOverride int
 
 	// loadedServers is the set of MCP servers whose tools are currently
-	// registered. mcpServersDirty signals the loop to rebuild the tool list
-	// after a mcp_load_servers call registered new servers.
+	// registered. seatBaseServers maps a registered seat name (server_account)
+	// to its base server name so allow_servers can resolve named seats without
+	// prefix-matching unrelated underscore-containing server names.
+	// mcpServersDirty signals the loop to rebuild the tool list after a
+	// mcp_load_servers call registered new servers.
 	mu              sync.Mutex
 	loadedServers   map[string]bool
+	seatBaseServers map[string]string
 	mcpServersDirty bool
+	optionalServers agentcore.MCPOptionalSet
 
 	// logFile is where the session log is persisted at run end ("" = default).
 	logFile string
@@ -198,10 +203,13 @@ type Options struct {
 	// injects the public allowlist here; nil derives the gate from
 	// Config.MCPServers (the local compatibility path).
 	MCPToolAllowlist agentcore.MCPAllowlist
-	NativeTools      []fantasy.AgentTool
-	SystemPrompt     string
-	Persona          string
-	MaxIterations    int
+	// OptionalServers is the optional-server gate (Gate-1) inherited by
+	// children spawned from an interactive chat turn.
+	OptionalServers agentcore.MCPOptionalSet
+	NativeTools     []fantasy.AgentTool
+	SystemPrompt    string
+	Persona         string
+	MaxIterations   int
 	// MaxCostUSD / MaxTotalTokens are the TASK's own per-run ceilings (#1533):
 	// 0 = inherit the deployment ceiling; >0 replaces it for this run through
 	// the same checkCeilings path a spawned child's sliced budget uses.
@@ -391,6 +399,7 @@ func NewAgent(opts Options) *Agent {
 		mcpBroker:            opts.MCPBroker,
 		mcpCatalog:           cloneScheduledMCPCatalog(opts.MCPCatalog),
 		mcpToolAllowlist:     opts.MCPToolAllowlist,
+		optionalServers:      opts.OptionalServers,
 		mcpRosterNarrowing:   opts.MCPRosterNarrowing,
 		overlay:              opts.Overlay,
 		nativeTools:          opts.NativeTools,
@@ -1669,6 +1678,11 @@ func (a *Agent) clearMCPDirty() {
 func (a *Agent) mcpGates() (agentcore.MCPAllowlist, agentcore.MCPOptionalSet) {
 	allow := agentcore.MCPAllowlist{}
 	optional := agentcore.MCPOptionalSet{}
+	for name, ok := range a.optionalServers {
+		if ok {
+			optional[name] = true
+		}
+	}
 	if a.mcpToolAllowlist != nil {
 		for name, list := range a.mcpToolAllowlist {
 			if len(list) > 0 {
