@@ -6,7 +6,7 @@ state — **no live model, no API key, and no cost**:
 
 - `docs/screenshots/web/chat.png` — **Chat** (*Talk it through*)
 - `docs/screenshots/web/patrols.png` — **Patrols** (*Chats that check in on a schedule*)
-- `docs/screenshots/web/orchestrator.png` — **Background tasks** (*Run headless, without a chat*)
+- `docs/screenshots/web/orchestrator.png` — **Background tasks** (*Runs without a chat*)
 - `docs/screenshots/tui/chat.png` — **Terminal chat (`fleet chat`)**
 
 ## Regenerating the automated screenshots

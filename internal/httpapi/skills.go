@@ -66,7 +66,7 @@ func (s *Server) bundleSkills() []clientconfig.Skill {
 
 // listSkills serves GET /skills: the bundle's skill roster in `skills` (used
 // by composer "/" autocomplete) plus active workspace-shared teammate skills
-// in `shared_skills` (used by Settings → Skills → Workspace pack for 1-click
+// in `shared_skills` (used by Settings → Skills → Workspace skills for 1-click
 // opt-in installation). Member-gated like /personas.
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

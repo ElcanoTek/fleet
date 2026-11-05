@@ -697,7 +697,7 @@ describe("Composer — share button and overflow options menu", () => {
     expect(moreBtn).toHaveFocus();
   });
 
-  it("shows Compact conversation only inside More options and not as a standalone toolbar icon", () => {
+  it("shows Summarize earlier messages only inside More options and not as a standalone toolbar icon", () => {
     const setConfirmSummarize = vi.fn();
     render(
       <Host

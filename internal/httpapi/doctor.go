@@ -10,7 +10,7 @@ import (
 )
 
 // handleDoctor is the admin-only, READ-ONLY box-health report behind
-// Settings → Admin → Doctor (GET /admin/doctor). It runs the in-process
+// Settings → Admin → System checks (GET /admin/doctor). It runs the in-process
 // boxdoctor checks — DBs, disk headroom, rootless-podman prerequisites,
 // sandbox image, sibling systemd units — from the service process's own
 // vantage point, and each warn/fail carries the on-box repair command

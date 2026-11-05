@@ -118,7 +118,7 @@ yourself are already in the box, tested, and governed by the same core:
   analysis; optional PII redaction.
 - **Three ways of working, plus a terminal client.** **Chat** (*Talk it through*),
   **Patrols** (*Chats that check in on a schedule* via the guided Patrol Launchpad
-  or `chat_patrol`), **Background tasks** (*Run headless, without a chat*), and a
+  or `chat_patrol`), **Background tasks** (*Runs without a chat*), and a
   full terminal client (`fleet chat`) — all thin views over the same governed API.
 
 ## Built for trust: governed, auditable delegation
