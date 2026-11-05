@@ -80,11 +80,22 @@ func classifyRiskyBrowser(toolName, rawInput string) (bool, string) {
 		return false, ""
 	}
 	act := strings.ToLower(strings.TrimSpace(payload.Action))
-	if toolName == toolNameConnectorStudio && act != "probe_browser" && act != "start_copilot_session" {
-		return false, ""
+	if toolName == toolNameConnectorStudio {
+		switch act {
+		case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe",
+			"start_copilot_session", "start_session", "copilot_session", "live_browser", "open_live_browser":
+		default:
+			return false, ""
+		}
 	}
-	if toolName == toolNamePlaywrightBrowser && act != "" && act != "run" && act != "start_session" && act != "steps" {
-		return false, ""
+	if toolName == toolNamePlaywrightBrowser {
+		switch act {
+		case "", "run", "probe", "navigate", "browse",
+			"start_session", "copilot", "live", "open_session",
+			"steps", "step", "run_steps", "act":
+		default:
+			return false, ""
+		}
 	}
 	for _, st := range payload.Steps {
 		switch strings.ToLower(strings.TrimSpace(st.Action)) {

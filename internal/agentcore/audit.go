@@ -374,14 +374,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 		return true, msg
 	}
 
-	isCriticalCall := o.isRunCriticalTool(toolName)
-	if !isCriticalCall {
-		if risky, _ := classifyRiskyBrowser(toolName, rawInput); risky {
-			isCriticalCall = true
-		}
-	}
-
-	if isCriticalCall {
+	if o.isRunCriticalTool(toolName) {
 		key := retryBudgetKey(toolName, hashString(rawInput))
 		if attempts := o.criticalToolFailureAttempts[key]; attempts >= maxAttemptsPerCriticalAction {
 			log.Printf("Enforcement: Blocking %s — retry budget exhausted (%d/%d failed attempts with identical args)",
@@ -396,7 +389,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 	// An aborted email-last run's single failure-summary email passes with no
 	// live audit (abortEmailAllowed): the abort cleared auditConfirmed, and
 	// without the allowance a failed batch reached its reader as silence.
-	if isCriticalCall && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
+	if o.isRunCriticalTool(toolName) && !o.auditConfirmed && !o.abortEmailAllowed(toolName) {
 		log.Printf("Enforcement: Blocking %s — audit not confirmed", toolName)
 		argsHash := hashString(rawInput)
 		alreadyPending := false
@@ -419,7 +412,7 @@ func (o *orchestrationState) checkCriticalTool(toolName, _ string, rawInput stri
 			toolName, strings.ToUpper(instruction[:1])+instruction[1:], toolName)
 	}
 
-	if isCriticalCall && o.auditConfirmed {
+	if o.isRunCriticalTool(toolName) && o.auditConfirmed {
 		// Email-last, enforced from the email side: the summary email waits
 		// until every email-last obligation is settled.
 		if blocked, msg := o.checkSummaryEmailOrder(toolName); blocked {

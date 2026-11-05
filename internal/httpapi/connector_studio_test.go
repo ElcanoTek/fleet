@@ -420,7 +420,8 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 		t.Fatalf("expected probe_http POST rejection, got %v", err)
 	}
 
-	// 7. Updating with share_scope="personal" revokes everyone share, and POST tools carry per-run Critical metadata and require approval gate instead of test_custom_tool.
+	// 7. Updating with share_scope="personal" revokes everyone share AND direct email grants, and POST tools carry per-run Critical metadata and require approval gate instead of test_custom_tool.
+	_ = memStore.ShareRemoteMCPServer(context.Background(), "admin@example.com", createMap["server_id"].(string), "colleague@example.com")
 	_, err = h(context.Background(), tools.ConnectorStudioParams{
 		Action:     tools.ConnectorStudioActionCreateCustom,
 		Name:       "acme_ads",
@@ -449,6 +450,10 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 	sharedAfter, _ := memStore.ListRemoteMCPServersSharedWith(context.Background(), "other@example.com")
 	if len(sharedAfter) != 0 {
 		t.Fatalf("expected everyone share to be revoked after personal update, got %v", sharedAfter)
+	}
+	directSharedAfter, _ := memStore.ListRemoteMCPServersSharedWith(context.Background(), "colleague@example.com")
+	if len(directSharedAfter) != 0 {
+		t.Fatalf("expected direct colleague share to be revoked after personal update, got %v", directSharedAfter)
 	}
 	_, err = h(context.Background(), tools.ConnectorStudioParams{
 		Action:   tools.ConnectorStudioActionTestCustomTool,
@@ -505,17 +510,33 @@ func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswor
 	}
 
 	trRaw, _ := json.Marshal(agent.ToolResultContent{
+		ID:   "card-pw",
 		Name: "show_ui",
-		Card: `{"components":[{"type":"form","fields":[{"id":"vault_pw","type":"string","format":"password"}]}]}`,
+		Card: `{"components":[{"type":"form","fields":[{"id":"custom_cred","type":"string","format":"password"}]}]}`,
+	})
+	tcPlainRaw, _ := json.Marshal(agent.ToolCallContent{
+		ID:    "card-plain",
+		Name:  "show_ui",
+		Input: `{"components":[{"type":"form","fields":[{"id":"custom_cred","type":"string"}]}]}`,
 	})
 	history := []agent.HistoryEntry{
 		{
 			Type:    "tool_result",
 			Content: trRaw,
 		},
+		{
+			Type:    "tool_call",
+			Content: tcPlainRaw,
+		},
 	}
 	pwFields := passwordFieldIDsFromHistory(history)
-	if !pwFields["vault_pw"] {
-		t.Fatalf("expected passwordFieldIDsFromHistory to extract vault_pw from tool_result.Card, got %v", pwFields)
+	if !pwFields["custom_cred"] {
+		t.Fatalf("expected passwordFieldIDsFromHistory to extract custom_cred from tool_result.Card, got %v", pwFields)
+	}
+	if pwPlain := passwordFieldIDsFromHistoryForCard(history, "card-plain"); pwPlain["custom_cred"] {
+		t.Fatalf("expected card-plain not to inherit custom_cred password flag from earlier card-pw, got %v", pwPlain)
+	}
+	if pwCard := passwordFieldIDsFromHistoryForCard(history, "card-pw"); !pwCard["custom_cred"] {
+		t.Fatalf("expected card-pw to report custom_cred as password field, got %v", pwCard)
 	}
 }

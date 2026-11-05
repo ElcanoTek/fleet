@@ -1037,6 +1037,13 @@ func (s *Service) upsertCustomConnector(ctx context.Context, email, name, accoun
 		if err := s.store.UnshareRemoteMCPServer(ctx, email, srv.ID, store.GranteeEveryone); err != nil && !errors.Is(err, store.ErrRemoteMCPNotFound) {
 			return nil, fmt.Errorf("revoke everyone share on custom connector: %w", err)
 		}
+		if shares, err := s.store.ListRemoteMCPSharesByOwner(ctx, email); err == nil {
+			for _, grantee := range shares[srv.ID] {
+				if err := s.store.UnshareRemoteMCPServer(ctx, email, srv.ID, grantee); err != nil && !errors.Is(err, store.ErrRemoteMCPNotFound) {
+					return nil, fmt.Errorf("revoke share %q on custom connector: %w", grantee, err)
+				}
+			}
+		}
 	}
 	return srv, nil
 }

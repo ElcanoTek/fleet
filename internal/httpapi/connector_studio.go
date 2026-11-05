@@ -25,6 +25,7 @@ import (
 const uiSecretTTL = 2 * time.Hour
 
 type uiSecretBucket struct {
+	bucketKey          string
 	convID             string
 	values             map[string]string
 	fieldIDs           map[string]bool
@@ -53,9 +54,17 @@ func retireExpiredSecretBucket(b *uiSecretBucket) {
 	if b == nil {
 		return
 	}
-	for fieldID := range b.fieldIDs {
-		agentcore.RegisterSecretLiterals("ui_secret:"+b.convID+":"+fieldID, true)
+	scopeKey := b.bucketKey
+	if scopeKey == "" {
+		scopeKey = b.convID
 	}
+	for fieldID := range b.fieldIDs {
+		agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+fieldID, true)
+	}
+	agentcore.RegisterSecretLiterals("probe_http:"+scopeKey, true)
+	agentcore.RegisterSecretLiterals("connect_mcp:"+scopeKey, true)
+	agentcore.RegisterSecretLiterals("pw_password:"+scopeKey, true)
+	agentcore.RegisterSecretLiterals("pw_secret:"+scopeKey, true)
 }
 
 func normalizeOriginHost(rawURLOrHost string) string {
@@ -109,6 +118,7 @@ func (st *uiSecretStash) ensureBucketLocked(userEmail, convID string, now time.T
 	b, ok := st.buckets[key]
 	if !ok {
 		b = &uiSecretBucket{
+			bucketKey:    key,
 			convID:       strings.TrimSpace(convID),
 			values:       make(map[string]string),
 			fieldIDs:     make(map[string]bool),
@@ -291,7 +301,54 @@ func isLikelySecretFieldID(fieldID string) bool {
 // `format: "password"` in any `show_ui` tool call in the conversation history,
 // walking nested layout components (`section`, `columns`, `tabs`, `repeater`).
 func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
+	return passwordFieldIDsFromHistoryForCard(history, "")
+}
+
+func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID string) map[string]bool {
 	out := make(map[string]bool)
+	cardID = strings.TrimSpace(cardID)
+	if cardID != "" {
+		// Scan in reverse so a reused tool-call ID resolves to the latest card with that ID.
+		for i := len(history) - 1; i >= 0; i-- {
+			h := history[i]
+			if len(h.Content) == 0 {
+				continue
+			}
+			switch h.Type {
+			case "tool_result":
+				var tr agent.ToolResultContent
+				if err := json.Unmarshal(h.Content, &tr); err != nil {
+					continue
+				}
+				if tr.ID != cardID || strings.TrimSpace(tr.Card) == "" {
+					continue
+				}
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(tr.Card), &payload); err != nil {
+					continue
+				}
+				collectPasswordComponentIDs(payload["components"], out)
+				return out
+			case "tool_call":
+				var tc agent.ToolCallContent
+				if err := json.Unmarshal(h.Content, &tc); err != nil {
+					continue
+				}
+				if tc.ID != cardID || tc.Name != "show_ui" || strings.TrimSpace(tc.Input) == "" {
+					continue
+				}
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(tc.Input), &payload); err != nil {
+					continue
+				}
+				if _, ok := payload["components"]; !ok {
+					continue
+				}
+				collectPasswordComponentIDs(payload["components"], out)
+				return out
+			}
+		}
+	}
 	for _, h := range history {
 		if len(h.Content) == 0 {
 			continue
@@ -326,6 +383,22 @@ func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
 		}
 	}
 	return out
+}
+
+func submissionCardID(message string) string {
+	header := message
+	if nl := strings.IndexByte(header, '\n'); nl >= 0 {
+		header = header[:nl]
+	}
+	if brace := strings.IndexByte(header, '{'); brace >= 0 {
+		header = header[:brace]
+	}
+	for _, field := range strings.Fields(header) {
+		if strings.HasPrefix(field, "card=") {
+			return strings.Trim(strings.TrimPrefix(field, "card="), " []")
+		}
+	}
+	return ""
 }
 
 func collectPasswordComponentIDs(node any, out map[string]bool) {
@@ -447,7 +520,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwne
 		return message
 	}
 
-	pwFields := passwordFieldIDsFromHistory(history)
+	pwFields := passwordFieldIDsFromHistoryForCard(history, submissionCardID(message))
 	mutated := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
 	for _, u := range userConfirmedOriginsFromHistory(history, userEmail, convOwnerEmail) {
 		s.uiSecrets.allowOrigin(userEmail, convID, u)
@@ -521,6 +594,7 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 
 func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) bool {
 	mutated := false
+	scopeKey := uiSecretKey(userEmail, convID)
 	for k, rawVal := range data {
 		stashKey := k
 		if prefix != "" {
@@ -533,10 +607,10 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 			}
 			if pwFields[k] || pwFields[strings.ToLower(k)] || isLikelySecretFieldID(k) {
 				s.uiSecrets.put(userEmail, convID, stashKey, val)
-				agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+stashKey, true, val)
+				agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+stashKey, true, val)
 				if stashKey != k {
 					s.uiSecrets.put(userEmail, convID, k, val)
-					agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+k, true, val)
+					agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+k, true, val)
 				}
 				data[k] = "$secret:" + stashKey
 				mutated = true
@@ -567,10 +641,12 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 	return mutated
 }
 
-// isCatalogApprovedHost reports whether targetHost matches an operator-curated
-// RemoteMCPCatalog entry URL.
+// isCatalogApprovedHost reports whether targetHost matches the operator-curated
+// RemoteMCPCatalog entry URL for the named connector. An empty connectorName
+// never matches so catalog approval is strictly bound to the selected connector.
 func (s *Server) isCatalogApprovedHost(connectorName, targetURLOrHost string) bool {
-	if s.clientConfig == nil {
+	connectorName = strings.TrimSpace(connectorName)
+	if s.clientConfig == nil || connectorName == "" {
 		return false
 	}
 	targetHost := normalizeOriginHost(targetURLOrHost)
@@ -578,7 +654,7 @@ func (s *Server) isCatalogApprovedHost(connectorName, targetURLOrHost string) bo
 		return false
 	}
 	for _, entry := range s.clientConfig.RemoteMCPCatalog {
-		if connectorName != "" && !strings.EqualFold(strings.TrimSpace(entry.Name), strings.TrimSpace(connectorName)) {
+		if !strings.EqualFold(strings.TrimSpace(entry.Name), connectorName) {
 			continue
 		}
 		if hostMatchesAllowedOrigin(targetHost, normalizeOriginHost(entry.URL)) {
@@ -590,10 +666,12 @@ func (s *Server) isCatalogApprovedHost(connectorName, targetURLOrHost string) bo
 
 // resolveSecretForURL resolves a "$secret:<field_id>" reference (or stashed
 // secret) only after verifying that targetURL's host matches a user-confirmed
-// origin from the conversation's show_ui submission, user chat messages, or
-// operator-curated MCP catalog. This prevents prompt-injected model output from
-// sending vaulted user credentials to an attacker-controlled endpoint.
+// origin from the conversation's show_ui submission or user chat messages.
 func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, refOrValue, targetURL string) (string, error) {
+	return s.resolveSecretForConnectorURL(ctx, userEmail, convID, "", refOrValue, targetURL)
+}
+
+func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, convID, connectorName, refOrValue, targetURL string) (string, error) {
 	val, isVaulted := s.uiSecrets.lookupSecret(userEmail, convID, refOrValue)
 	if !isVaulted {
 		return val, nil
@@ -608,7 +686,7 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 	if targetHost == "" {
 		return "", fmt.Errorf("vaulted secret %q requires a valid target URL", strings.TrimSpace(refOrValue))
 	}
-	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost("", targetHost) {
+	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost(connectorName, targetHost) {
 		if s.store != nil && convID != "" {
 			if history, err := s.store.LoadHistory(ctx, convID); err == nil {
 				ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
@@ -618,12 +696,12 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 			}
 		}
 	}
-	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost("", targetHost) {
+	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost(connectorName, targetHost) {
 		return "", fmt.Errorf("vaulted secret %q is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", strings.TrimSpace(refOrValue), targetHost)
 	}
 	if strings.HasPrefix(strings.TrimSpace(refOrValue), "$secret:") {
 		fieldID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(refOrValue), "$secret:"))
-		agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+fieldID, true, val)
+		agentcore.RegisterSecretLiterals("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, true, val)
 	}
 	return val, nil
 }
@@ -809,7 +887,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		return nil, err
 	}
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("probe_http:"+convID, true, secret)
+		agentcore.RegisterSecretLiterals("probe_http:"+uiSecretKey(user, convID), true, secret)
 	}
 
 	reqURL := targetURL
@@ -824,7 +902,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader)
+	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader) //nolint:gosec // G704: reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -850,7 +928,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		}
 	}
 
-	resp, err := s.safeProbeHTTPClient().Do(req)
+	resp, err := s.safeProbeHTTPClient().Do(req) //nolint:gosec // G704: reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %s", agentcore.RedactSecrets(err.Error()))
 	}
@@ -935,11 +1013,12 @@ func (s *Server) resolvePlaywrightCredentials(ctx context.Context, user, convID,
 	if err != nil {
 		return playwrightrunner.Credentials{}, err
 	}
+	scopeKey := uiSecretKey(user, convID)
 	if password != "" {
-		agentcore.RegisterSecretLiterals("pw_password:"+convID, true, password)
+		agentcore.RegisterSecretLiterals("pw_password:"+scopeKey, true, password)
 	}
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("pw_secret:"+convID, true, secret)
+		agentcore.RegisterSecretLiterals("pw_secret:"+scopeKey, true, secret)
 	}
 	return playwrightrunner.Credentials{
 		Username: username,
@@ -1113,12 +1192,12 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	if strings.EqualFold(strings.TrimSpace(params.ShareScope), "everyone") && !s.userConfirmedEveryoneShare(ctx, user, convID) {
 		return nil, fmt.Errorf("share_scope=\"everyone\" requires explicit user confirmation in the show_ui form (share_scope=\"everyone\") or chat conversation; use share_scope=\"personal\" or ask the user to confirm fleet-wide sharing first")
 	}
-	apiKey, err := s.resolveSecretForURL(ctx, user, convID, params.SecretRef, params.URL)
+	apiKey, err := s.resolveSecretForConnectorURL(ctx, user, convID, params.Name, params.SecretRef, params.URL)
 	if err != nil {
 		return nil, err
 	}
 	if apiKey != "" {
-		agentcore.RegisterSecretLiterals("connect_mcp:"+convID, true, apiKey)
+		agentcore.RegisterSecretLiterals("connect_mcp:"+uiSecretKey(user, convID), true, apiKey)
 	}
 
 	var clientID, clientSecret string
@@ -1331,6 +1410,54 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	}, nil
 }
 
+func resolveMountedCustomTool(ov *agent.RemoteMCPOverlay, wantName, wantAcct, wantTool string) (regName, resolvedAcct, resolvedTool, fullToolName string) {
+	regName = agentcore.RegisteredMCPName(wantName, wantAcct)
+	resolvedAcct = wantAcct
+	for rn, seat := range ov.Seats {
+		if strings.EqualFold(seat.Server, wantName) && (wantAcct == "" || strings.EqualFold(seat.Account, wantAcct)) {
+			regName = rn
+			resolvedAcct = seat.Account
+			break
+		}
+	}
+	if !ov.Servers[regName] {
+		for _, st := range ov.Catalog {
+			if st.ServerName != "" {
+				regName = st.ServerName
+				break
+			}
+		}
+	}
+	resolvedTool = strings.TrimPrefix(wantTool, "mcp_"+regName+"_")
+	resolvedTool = strings.TrimPrefix(resolvedTool, "mcp_"+wantName+"_")
+	fullToolName = fmt.Sprintf("mcp_%s_%s", regName, resolvedTool)
+	return regName, resolvedAcct, resolvedTool, fullToolName
+}
+
+func (s *Server) checkCustomToolTestReadOnly(ctx context.Context, ov *agent.RemoteMCPOverlay, user, wantName, wantAcct, regName, wantTool, fullToolName string) error {
+	if agentcore.IsCriticalTool(fullToolName) {
+		return fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
+	}
+	for _, st := range ov.Catalog {
+		if st.ServerName == regName && st.Tool.Name == wantTool && st.Tool.Critical {
+			return fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
+		}
+	}
+	if conns, cerr := s.remoteMCP.ConnectedServersForUser(ctx, user); cerr == nil {
+		for _, c := range conns {
+			if !strings.EqualFold(c.Name, wantName) || (wantAcct != "" && c.Account != wantAcct) {
+				continue
+			}
+			for _, ct := range c.CustomTools {
+				if ct.Name == wantTool && c.Transport == "http_tools" && ct.Method != "" && !strings.EqualFold(ct.Method, http.MethodGet) {
+					return fmt.Errorf("test_custom_tool only executes read-only GET tools directly; %q uses HTTP %s — invoke %s directly so it routes through the approval gate", wantTool, ct.Method, fullToolName)
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string, params tools.ConnectorStudioParams) (any, error) {
 	if s.remoteMCP == nil || !s.remoteMCP.Enabled() {
 		return nil, fmt.Errorf("remote MCP connections are not configured on this server")
@@ -1357,43 +1484,9 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	}
 	defer ov.Close()
 
-	regName := agentcore.RegisteredMCPName(wantName, wantAcct)
-	for rn, seat := range ov.Seats {
-		if strings.EqualFold(seat.Server, wantName) && (wantAcct == "" || strings.EqualFold(seat.Account, wantAcct)) {
-			regName = rn
-			wantAcct = seat.Account
-			break
-		}
-	}
-	if !ov.Servers[regName] {
-		for _, st := range ov.Catalog {
-			if st.ServerName != "" {
-				regName = st.ServerName
-				break
-			}
-		}
-	}
-	wantTool = strings.TrimPrefix(wantTool, "mcp_"+regName+"_")
-	wantTool = strings.TrimPrefix(wantTool, "mcp_"+wantName+"_")
-	fullToolName := fmt.Sprintf("mcp_%s_%s", regName, wantTool)
-	if agentcore.IsCriticalTool(fullToolName) {
-		return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
-	}
-	for _, st := range ov.Catalog {
-		if st.ServerName == regName && st.Tool.Name == wantTool && st.Tool.Critical {
-			return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
-		}
-	}
-	if conns, cerr := s.remoteMCP.ConnectedServersForUser(ctx, user); cerr == nil {
-		for _, c := range conns {
-			if strings.EqualFold(c.Name, wantName) && (wantAcct == "" || c.Account == wantAcct) {
-				for _, ct := range c.CustomTools {
-					if ct.Name == wantTool && c.Transport == "http_tools" && ct.Method != "" && !strings.EqualFold(ct.Method, http.MethodGet) {
-						return nil, fmt.Errorf("test_custom_tool only executes read-only GET tools directly; %q uses HTTP %s — invoke %s directly so it routes through the approval gate", wantTool, ct.Method, fullToolName)
-					}
-				}
-			}
-		}
+	regName, wantAcct, wantTool, fullToolName := resolveMountedCustomTool(ov, wantName, wantAcct, wantTool)
+	if err := s.checkCustomToolTestReadOnly(ctx, ov, user, wantName, wantAcct, regName, wantTool, fullToolName); err != nil {
+		return nil, err
 	}
 	args := params.ToolArgs
 	if args == nil {
@@ -1403,7 +1496,7 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	if err != nil {
 		return map[string]any{
 			"status": "error",
-			"tool":   fmt.Sprintf("mcp_%s_%s", regName, wantTool),
+			"tool":   fullToolName,
 			"error":  agentcore.RedactSecrets(err.Error()),
 		}, nil
 	}
@@ -1420,7 +1513,7 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	return map[string]any{
 		"status":   status,
 		"is_error": res.IsError,
-		"tool":     fmt.Sprintf("mcp_%s_%s", regName, wantTool),
+		"tool":     fullToolName,
 		"output":   strings.Join(texts, "\n"),
 	}, nil
 }

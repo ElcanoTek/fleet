@@ -1398,6 +1398,19 @@ else
       fi
     fi
   fi
+  # Ensure host-side headless Chromium + Python playwright are present on
+  # single-box installations upgraded from before Connector Studio / built-in
+  # browser automation shipped.
+  if ! command -v chromium-browser >/dev/null 2>&1 && ! command -v chromium >/dev/null 2>&1 && ! [[ -x /usr/lib64/chromium-browser/headless_shell ]]; then
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y chromium-headless >/dev/null 2>&1 || warn "dnf install chromium-headless failed — install chromium-headless for built-in browser automation."
+    elif command -v apt-get >/dev/null 2>&1; then
+      apt-get install -y chromium >/dev/null 2>&1 || apt-get install -y chromium-browser >/dev/null 2>&1 || warn "apt-get install chromium failed — install chromium for built-in browser automation."
+    fi
+  fi
+  if command -v python3 >/dev/null 2>&1 && ! python3 -c "import playwright" >/dev/null 2>&1; then
+    python3 -m pip install --break-system-packages playwright >/dev/null 2>&1 || warn "pip install playwright failed — install python3 playwright for built-in browser automation."
+  fi
   # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
   if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
     info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
