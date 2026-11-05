@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -29,6 +30,7 @@ type uiSecretBucket struct {
 	convID             string
 	values             map[string]string
 	fieldIDs           map[string]bool
+	fieldOrigins       map[string]map[string]bool
 	allowedHosts       map[string]bool
 	shareScopeSet      bool
 	allowEveryoneShare bool
@@ -72,20 +74,30 @@ func normalizeOriginHost(rawURLOrHost string) string {
 	if s == "" {
 		return ""
 	}
-	if strings.Contains(s, "://") {
-		u, err := url.Parse(s)
-		if err != nil || u.Hostname() == "" {
+	if !strings.Contains(s, "://") {
+		if !strings.ContainsAny(s, " \t\r\n/\\@") && strings.Contains(s, ".") {
+			s = "https://" + s
+		} else {
 			return ""
 		}
-		return strings.ToLower(strings.TrimSpace(u.Hostname()))
 	}
-	if !strings.ContainsAny(s, " \t\r\n/\\:@") && strings.Contains(s, ".") {
-		u, err := url.Parse("https://" + s)
-		if err == nil && u.Hostname() != "" {
-			return strings.ToLower(strings.TrimSpace(u.Hostname()))
-		}
+	u, err := url.Parse(s)
+	if err != nil || u.Hostname() == "" {
+		return ""
 	}
-	return ""
+	scheme := strings.ToLower(strings.TrimSpace(u.Scheme))
+	if scheme != "https" && scheme != "http" {
+		return ""
+	}
+	host := strings.ToLower(strings.TrimSpace(u.Hostname()))
+	port := u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	if port != "" {
+		return scheme + "://" + net.JoinHostPort(host, port)
+	}
+	return scheme + "://" + host
 }
 
 func hostMatchesAllowedOrigin(targetHost, allowedHost string) bool {
@@ -94,14 +106,7 @@ func hostMatchesAllowedOrigin(targetHost, allowedHost string) bool {
 	if targetHost == "" || allowedHost == "" {
 		return false
 	}
-	if targetHost == allowedHost {
-		return true
-	}
-	base := strings.TrimPrefix(allowedHost, "www.")
-	if base != "" && strings.Contains(base, ".") && (targetHost == base || strings.HasSuffix(targetHost, "."+base)) {
-		return true
-	}
-	return false
+	return targetHost == allowedHost
 }
 
 func (st *uiSecretStash) ensureBucketLocked(userEmail, convID string, now time.Time) *uiSecretBucket {
@@ -122,9 +127,13 @@ func (st *uiSecretStash) ensureBucketLocked(userEmail, convID string, now time.T
 			convID:       strings.TrimSpace(convID),
 			values:       make(map[string]string),
 			fieldIDs:     make(map[string]bool),
+			fieldOrigins: make(map[string]map[string]bool),
 			allowedHosts: make(map[string]bool),
 		}
 		st.buckets[key] = b
+	}
+	if b.fieldOrigins == nil {
+		b.fieldOrigins = make(map[string]map[string]bool)
 	}
 	if b.allowedHosts == nil {
 		b.allowedHosts = make(map[string]bool)
@@ -148,6 +157,36 @@ func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
 	b.updatedAt = now
 }
 
+func (st *uiSecretStash) bindSubmissionOrigins(userEmail, convID string, fieldIDs []string, rawURLs []string) {
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b := st.ensureBucketLocked(userEmail, convID, now)
+	originSet := make(map[string]bool, len(rawURLs))
+	for _, raw := range rawURLs {
+		if o := normalizeOriginHost(raw); o != "" {
+			originSet[o] = true
+		}
+	}
+	for _, fid := range fieldIDs {
+		fid = strings.TrimSpace(fid)
+		if fid == "" {
+			continue
+		}
+		cp := make(map[string]bool, len(originSet))
+		for o := range originSet {
+			cp[o] = true
+		}
+		b.fieldOrigins[fid] = cp
+		b.fieldOrigins[strings.ToLower(fid)] = cp
+	}
+	b.allowedHosts = make(map[string]bool, len(originSet))
+	for o := range originSet {
+		b.allowedHosts[o] = true
+	}
+	b.updatedAt = now
+}
+
 func (st *uiSecretStash) allowOrigin(userEmail, convID, rawURLOrHost string) {
 	host := normalizeOriginHost(rawURLOrHost)
 	if host == "" {
@@ -158,6 +197,15 @@ func (st *uiSecretStash) allowOrigin(userEmail, convID, rawURLOrHost string) {
 	defer st.mu.Unlock()
 	b := st.ensureBucketLocked(userEmail, convID, now)
 	b.allowedHosts[host] = true
+	for fid, origins := range b.fieldOrigins {
+		if len(origins) == 0 {
+			if origins == nil {
+				origins = make(map[string]bool, 1)
+				b.fieldOrigins[fid] = origins
+			}
+			origins[host] = true
+		}
+	}
 	b.updatedAt = now
 }
 
@@ -194,28 +242,47 @@ func (st *uiSecretStash) consumeEveryoneShare(userEmail, convID string) (allow b
 	return allow, true
 }
 
-func (st *uiSecretStash) isHostAllowed(userEmail, convID, targetURLOrHost string) bool {
+func (st *uiSecretStash) isFieldOriginAllowed(userEmail, convID, fieldID, targetURLOrHost string) (allowed bool, hasExplicitBinding bool) {
 	targetHost := normalizeOriginHost(targetURLOrHost)
 	if targetHost == "" {
-		return false
+		return false, false
 	}
 	now := time.Now()
 	key := uiSecretKey(userEmail, convID)
+	fieldID = strings.TrimSpace(fieldID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.buckets == nil {
-		return false
+		return false, false
 	}
 	b, ok := st.buckets[key]
 	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
-		return false
+		return false, false
 	}
-	for allowed := range b.allowedHosts {
-		if hostMatchesAllowedOrigin(targetHost, allowed) {
-			return true
+	if fieldID != "" && b.fieldOrigins != nil {
+		if origins, has := b.fieldOrigins[fieldID]; has {
+			for allowedOrigin := range origins {
+				if hostMatchesAllowedOrigin(targetHost, allowedOrigin) {
+					return true, true
+				}
+			}
+			return false, len(origins) > 0
+		}
+		if origins, has := b.fieldOrigins[strings.ToLower(fieldID)]; has {
+			for allowedOrigin := range origins {
+				if hostMatchesAllowedOrigin(targetHost, allowedOrigin) {
+					return true, true
+				}
+			}
+			return false, len(origins) > 0
 		}
 	}
-	return false
+	for allowedOrigin := range b.allowedHosts {
+		if hostMatchesAllowedOrigin(targetHost, allowedOrigin) {
+			return true, false
+		}
+	}
+	return false, false
 }
 
 func (st *uiSecretStash) get(userEmail, convID, fieldID string) (string, bool) {
@@ -482,9 +549,28 @@ func extractURLTokensFromText(text string) []string {
 	return out
 }
 
-func userConfirmedOriginsFromHistory(history []agent.HistoryEntry, userEmail, convOwnerEmail string) []string {
+func postSubmissionConfirmedOriginsFromHistory(history []agent.HistoryEntry, userEmail, convOwnerEmail string) []string {
+	lastSubmissionIdx := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		h := history[i]
+		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
+			continue
+		}
+		var tc agent.TextContent
+		if err := json.Unmarshal(h.Content, &tc); err != nil {
+			continue
+		}
+		if strings.HasPrefix(strings.TrimSpace(tc.Text), "[UI submission]") {
+			lastSubmissionIdx = i
+			break
+		}
+	}
+	if lastSubmissionIdx < 0 {
+		return nil
+	}
 	var out []string
-	for _, h := range history {
+	for i := len(history) - 1; i > lastSubmissionIdx; i-- {
+		h := history[i]
 		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
 			continue
 		}
@@ -495,7 +581,11 @@ func userConfirmedOriginsFromHistory(history []agent.HistoryEntry, userEmail, co
 		if !historyEntryAuthoredByCaller(tc, userEmail, convOwnerEmail) {
 			continue
 		}
-		out = append(out, extractURLTokensFromText(tc.Text)...)
+		tokens := extractURLTokensFromText(tc.Text)
+		if len(tokens) > 0 {
+			out = append(out, tokens...)
+			break
+		}
 	}
 	return out
 }
@@ -505,6 +595,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 }
 
 func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwnerEmail, convID, message string, history []agent.HistoryEntry) string {
+	_ = convOwnerEmail
 	trimmed := strings.TrimSpace(message)
 	if !strings.HasPrefix(trimmed, "[UI submission]") {
 		return message
@@ -521,9 +612,9 @@ func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwne
 	}
 
 	pwFields := passwordFieldIDsFromHistoryForCard(history, submissionCardID(message))
-	mutated := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
-	for _, u := range userConfirmedOriginsFromHistory(history, userEmail, convOwnerEmail) {
-		s.uiSecrets.allowOrigin(userEmail, convID, u)
+	mutated, vaultedKeys, cardOrigins := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
+	if mutated || len(cardOrigins) > 0 {
+		s.uiSecrets.bindSubmissionOrigins(userEmail, convID, vaultedKeys, cardOrigins)
 	}
 	if !mutated {
 		return message
@@ -592,8 +683,7 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 	return false
 }
 
-func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) bool {
-	mutated := false
+func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) (mutated bool, vaultedKeys []string, cardOrigins []string) {
 	scopeKey := uiSecretKey(userEmail, convID)
 	for k, rawVal := range data {
 		stashKey := k
@@ -608,9 +698,11 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 			if pwFields[k] || pwFields[strings.ToLower(k)] || isLikelySecretFieldID(k) {
 				s.uiSecrets.put(userEmail, convID, stashKey, val)
 				agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+stashKey, true, val)
+				vaultedKeys = append(vaultedKeys, stashKey)
 				if stashKey != k {
 					s.uiSecrets.put(userEmail, convID, k, val)
 					agentcore.RegisterSecretLiterals("ui_secret:"+scopeKey+":"+k, true, val)
+					vaultedKeys = append(vaultedKeys, k)
 				}
 				data[k] = "$secret:" + stashKey
 				mutated = true
@@ -621,24 +713,30 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 				s.uiSecrets.setAllowEveryone(userEmail, convID, vLower == "everyone" || vLower == "fleet" || vLower == "workspace" || vLower == "*")
 			}
 			if isLikelyURLFieldID(k) || strings.HasPrefix(strings.TrimSpace(val), "https://") || strings.HasPrefix(strings.TrimSpace(val), "http://") {
-				s.uiSecrets.allowOrigin(userEmail, convID, val)
+				cardOrigins = append(cardOrigins, val)
 			}
 		case map[string]any:
-			if s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields) {
+			subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields)
+			if subMut {
 				mutated = true
 			}
+			vaultedKeys = append(vaultedKeys, subKeys...)
+			cardOrigins = append(cardOrigins, subOrigins...)
 		case []any:
 			for idx, item := range val {
 				if itemMap, ok := item.(map[string]any); ok {
 					itemPrefix := fmt.Sprintf("%s[%d]", stashKey, idx)
-					if s.vaultSubmissionMap(userEmail, convID, itemPrefix, itemMap, pwFields) {
+					subMut, subKeys, subOrigins := s.vaultSubmissionMap(userEmail, convID, itemPrefix, itemMap, pwFields)
+					if subMut {
 						mutated = true
 					}
+					vaultedKeys = append(vaultedKeys, subKeys...)
+					cardOrigins = append(cardOrigins, subOrigins...)
 				}
 			}
 		}
 	}
-	return mutated
+	return mutated, vaultedKeys, cardOrigins
 }
 
 // isCatalogApprovedHost reports whether targetHost matches the operator-curated
@@ -671,6 +769,14 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 	return s.resolveSecretForConnectorURL(ctx, userEmail, convID, "", refOrValue, targetURL)
 }
 
+func secretFieldID(refOrValue string) string {
+	trimmed := strings.TrimSpace(refOrValue)
+	if strings.HasPrefix(trimmed, "$secret:") {
+		return strings.TrimSpace(strings.TrimPrefix(trimmed, "$secret:"))
+	}
+	return trimmed
+}
+
 func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, convID, connectorName, refOrValue, targetURL string) (string, error) {
 	val, isVaulted := s.uiSecrets.lookupSecret(userEmail, convID, refOrValue)
 	if !isVaulted {
@@ -686,21 +792,23 @@ func (s *Server) resolveSecretForConnectorURL(ctx context.Context, userEmail, co
 	if targetHost == "" {
 		return "", fmt.Errorf("vaulted secret %q requires a valid target URL", strings.TrimSpace(refOrValue))
 	}
-	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost(connectorName, targetHost) {
+	fieldID := secretFieldID(refOrValue)
+	allowed, hasExplicitBinding := s.uiSecrets.isFieldOriginAllowed(userEmail, convID, fieldID, targetHost)
+	if !allowed && !hasExplicitBinding && !s.isCatalogApprovedHost(connectorName, targetHost) {
 		if s.store != nil && convID != "" {
 			if history, err := s.store.LoadHistory(ctx, convID); err == nil {
 				ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
-				for _, u := range userConfirmedOriginsFromHistory(history, userEmail, ownerEmail) {
+				for _, u := range postSubmissionConfirmedOriginsFromHistory(history, userEmail, ownerEmail) {
 					s.uiSecrets.allowOrigin(userEmail, convID, u)
 				}
 			}
 		}
+		allowed, _ = s.uiSecrets.isFieldOriginAllowed(userEmail, convID, fieldID, targetHost)
 	}
-	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost(connectorName, targetHost) {
+	if !allowed && !s.isCatalogApprovedHost(connectorName, targetHost) {
 		return "", fmt.Errorf("vaulted secret %q is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", strings.TrimSpace(refOrValue), targetHost)
 	}
-	if strings.HasPrefix(strings.TrimSpace(refOrValue), "$secret:") {
-		fieldID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(refOrValue), "$secret:"))
+	if fieldID != "" {
 		agentcore.RegisterSecretLiterals("ui_secret:"+uiSecretKey(userEmail, convID)+":"+fieldID, true, val)
 	}
 	return val, nil
@@ -902,7 +1010,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader) //nolint:gosec // G704: reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
+	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader) // #nosec G704 — reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -928,7 +1036,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		}
 	}
 
-	resp, err := s.safeProbeHTTPClient().Do(req) //nolint:gosec // G704: reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
+	resp, err := s.safeProbeHTTPClient().Do(req) // #nosec G704 — reqURL is validated via mcpoauth.ValidateServerURL and dialed via safeProbeHTTPClient
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %s", agentcore.RedactSecrets(err.Error()))
 	}

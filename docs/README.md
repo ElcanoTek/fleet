@@ -250,6 +250,7 @@ above fails otherwise.
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
 - [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
 - [`CONNECTION-SHARING.md`](CONNECTION-SHARING.md) — Sharing a remote MCP connection
+- [`CONNECTOR-BUILDER.md`](CONNECTOR-BUILDER.md) — Connector Builder (`/connector-builder`), Custom Connector Runtime (`http_tools` & `playwright`), and Co-Piloted Live Browser View
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients
 - [`CONNECTOR-PREFS.md`](CONNECTOR-PREFS.md) — Unified connector enablement — availability, selection, binding
 - [`CONTEXT-HANDLES.md`](CONTEXT-HANDLES.md) — Composer context handles (#517)

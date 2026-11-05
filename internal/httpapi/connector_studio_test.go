@@ -539,4 +539,23 @@ func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswor
 	if pwCard := passwordFieldIDsFromHistoryForCard(history, "card-pw"); !pwCard["custom_cred"] {
 		t.Fatalf("expected card-pw to report custom_cred as password field, got %v", pwCard)
 	}
+
+	// Verify exact origin matching and that prior unrelated URLs in history do not authorize a later password-card submission.
+	oldUserMsg, _ := json.Marshal(agent.TextContent{Text: "Earlier we looked at https://old-unrelated.example.com/docs", SenderEmail: "admin@example.com"})
+	historyWithOldURL := append([]agent.HistoryEntry{
+		{Role: "user", Type: "text", Content: oldUserMsg},
+	}, history...)
+	s.vaultUISubmissionSecretsWithHistoryAndOwner("admin@example.com", "admin@example.com", conv.ID, `[UI submission] card=card-pw {"url":"https://example.com/login","custom_cred":"my-new-secret-pw"}`, historyWithOldURL)
+	if _, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:custom_cred", "https://old-unrelated.example.com/api"); err == nil {
+		t.Fatal("expected prior unrelated URL in history not to be authorized for newly vaulted secret")
+	}
+	if _, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:custom_cred", "https://evil.example.com/api"); err == nil {
+		t.Fatal("expected subdomain https://evil.example.com not to match exact origin https://example.com")
+	}
+	if _, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:custom_cred", "https://example.com:8443/api"); err == nil {
+		t.Fatal("expected non-default port https://example.com:8443 not to match exact origin https://example.com")
+	}
+	if got, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:custom_cred", "https://example.com/api"); err != nil || got != "my-new-secret-pw" {
+		t.Fatalf("expected exact origin https://example.com to resolve secret, got %q, err=%v", got, err)
+	}
 }

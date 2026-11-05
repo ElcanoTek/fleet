@@ -150,9 +150,9 @@ func normalizeConnectorStudioAction(raw string) string {
 		return ConnectorStudioActionSearchCatalog
 	case "probe_http", "test_http", "http_probe":
 		return ConnectorStudioActionProbeHTTP
-	case "probe_browser", "browser_probe", "inspect_browser":
+	case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe":
 		return ConnectorStudioActionProbeBrowser
-	case "start_copilot_session", "start_session", "copilot_session", "live_view":
+	case "start_copilot_session", "start_session", "copilot_session", "live_view", "live_browser", "open_live_browser":
 		return ConnectorStudioActionStartCopilotSession
 	case "connect_mcp", "add_mcp", "register_mcp":
 		return ConnectorStudioActionConnectMCP

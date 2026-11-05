@@ -216,3 +216,44 @@ func TestValidateStepsAndScrubStructuredResult(t *testing.T) {
 		t.Fatalf("expected NetworkCalls to scrub short secret 'abc123': %+v", res.NetworkCalls[0])
 	}
 }
+
+func TestRunAbortsSecretFillAfterCrossOriginRedirect(t *testing.T) {
+	origDial := DialContext
+	DialContext = guardedDialContext(func(_ net.IP) bool { return false })
+	defer func() { DialContext = origDial }()
+
+	attackerSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, `<!doctype html><html><body><input id="pass" type="password" /></body></html>`)
+	}))
+	defer attackerSrv.Close()
+
+	approvedSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, attackerSrv.URL+"/phish", http.StatusFound)
+	}))
+	defer approvedSrv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	_, err := Run(ctx, RunRequest{
+		URL: approvedSrv.URL + "/login",
+		Credentials: Credentials{
+			Password: "super-secret-pass-999",
+		},
+		Steps: []Step{
+			{Action: "fill", Selector: "#pass", Value: "{{PASSWORD}}", Optional: true},
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected Run to abort when target_url redirects cross-origin before filling {{PASSWORD}}")
+	}
+	if strings.Contains(err.Error(), "not available") ||
+		strings.Contains(strings.ToLower(err.Error()), "executable doesn't exist") ||
+		strings.Contains(strings.ToLower(err.Error()), "browsertype.launch") {
+		t.Skipf("skipping live Playwright browser test when playwright/chromium is not installed in this environment: %v", err)
+	}
+	if !strings.Contains(err.Error(), "cross-origin") {
+		t.Fatalf("expected cross-origin error, got: %v", err)
+	}
+}

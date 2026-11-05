@@ -407,6 +407,7 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 	s.touch()
 	s.mu.Lock()
 	creds := s.credentials
+	currentURL := s.currentURL
 	s.mu.Unlock()
 	for i := range steps {
 		steps[i].Action = strings.ToLower(strings.TrimSpace(steps[i].Action))
@@ -415,6 +416,11 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 		}
 		if err := validateStepNavigationOrigin(s.baseURL, creds, steps[i]); err != nil {
 			return nil, err
+		}
+		if stepUsesCredentials(steps[i].Value, creds) && currentURL != "" {
+			if err := validateStepNavigationOrigin(s.baseURL, creds, Step{Action: "goto", Value: currentURL}); err != nil {
+				return nil, fmt.Errorf("refusing secret-bearing step %q after cross-origin navigation: %w", steps[i].Action, err)
+			}
 		}
 	}
 	reqID, _ := randomHex(8)
@@ -567,15 +573,18 @@ func (s *LiveSession) sendCommand(ctx context.Context, cmd workerCommand, timeou
 		if !ok {
 			return nil, errors.New("browser session closed while waiting for response")
 		}
+		s.mu.Lock()
+		creds := s.credentials
+		s.mu.Unlock()
 		if !msg.OK {
-			errMsg := maskSecrets(msg.Error, s.credentials)
+			errMsg := maskSecrets(msg.Error, creds)
 			if errMsg == "" {
 				errMsg = "browser session command failed"
 			}
 			return nil, errors.New(errMsg)
 		}
 		if msg.Result != nil {
-			scrubResult(msg.Result, s.credentials)
+			scrubResult(msg.Result, creds)
 			s.mu.Lock()
 			if msg.Result.FinalURL != "" {
 				s.currentURL = msg.Result.FinalURL
@@ -615,15 +624,16 @@ func (s *LiveSession) readLoop(stdout io.ReadCloser) {
 			if msg.Data == "" {
 				continue
 			}
+			s.mu.Lock()
+			creds := s.credentials
 			ev := FrameEvent{
 				Data:      msg.Data,
-				URL:       maskSecrets(msg.URL, s.credentials),
-				Title:     maskSecrets(msg.Title, s.credentials),
+				URL:       maskSecrets(msg.URL, creds),
+				Title:     maskSecrets(msg.Title, creds),
 				Width:     sessionViewportW,
 				Height:    sessionViewportH,
 				Timestamp: time.Now().UnixMilli(),
 			}
-			s.mu.Lock()
 			if ev.URL != "" {
 				s.currentURL = ev.URL
 			}
@@ -728,6 +738,29 @@ def replace_secrets(val, creds):
     s = creds.get("secret") or p or ""
     return val.replace("{{USERNAME}}", u).replace("{{PASSWORD}}", p).replace("{{SECRET}}", s)
 
+def step_uses_secrets(raw_val, creds):
+    if not isinstance(raw_val, str) or not raw_val:
+        return False
+    u = creds.get("username") or ""
+    p = creds.get("password") or ""
+    s = creds.get("secret") or p or ""
+    if "{{USERNAME}}" in raw_val and u:
+        return True
+    if "{{PASSWORD}}" in raw_val and p:
+        return True
+    if "{{SECRET}}" in raw_val and s:
+        return True
+    return False
+
+def ensure_same_origin(current_url, base_origin, reason):
+    if not base_origin:
+        raise RuntimeError(f"refusing {reason}: missing base origin")
+    import urllib.parse
+    cp = urllib.parse.urlsplit(current_url or "")
+    cur_origin = f"{cp.scheme.lower()}://{cp.netloc.lower()}" if cp.scheme and cp.netloc else ""
+    if cur_origin != base_origin:
+        raise RuntimeError(f"refusing {reason} after cross-origin navigation ({cur_origin or current_url} != {base_origin})")
+
 def find_chromium_executable():
     candidates = [
         os.environ.get("FLEET_CHROMIUM_EXECUTABLE", ""),
@@ -805,11 +838,14 @@ async def inspect_page(page, context, network_calls, extracted, inspect_dom, exp
         "storage_state": state,
     }
 
-async def run_steps(page, steps, creds, extracted):
+async def run_steps(page, steps, creds, extracted, base_origin=""):
     for st in (steps or []):
         action = (st.get("action") or "").lower().strip()
         sel = st.get("selector") or ""
-        val = replace_secrets(st.get("value") or "", creds)
+        raw_val = st.get("value") or ""
+        if step_uses_secrets(raw_val, creds):
+            ensure_same_origin(page.url, base_origin, f"secret-bearing step '{action}'")
+        val = replace_secrets(raw_val, creds)
         mode = (st.get("mode") or "text").lower().strip()
         attr = st.get("attribute") or ""
         st_timeout = min(max(int(st.get("timeout_ms") or 12000), 500), 30000)
@@ -889,6 +925,9 @@ async def main():
     req_id = init_cmd.get("req_id") or ""
     creds = init_cmd.get("credentials") or {}
     proxy_server = init_cmd.get("proxy_server") or ""
+    import urllib.parse
+    parsed_base = urllib.parse.urlsplit(replace_secrets(init_cmd.get("url") or "", creds))
+    base_origin = f"{parsed_base.scheme.lower()}://{parsed_base.netloc.lower()}" if parsed_base.scheme and parsed_base.netloc else ""
 
     launch_args = [
         "--disable-dev-shm-usage",
@@ -996,7 +1035,7 @@ async def main():
             except Exception:
                 pass
             if init_cmd.get("steps"):
-                await run_steps(page, init_cmd.get("steps"), creds, extracted)
+                await run_steps(page, init_cmd.get("steps"), creds, extracted, base_origin)
             await push_snapshot_frame(page)
             res = await inspect_page(page, context, network_calls, extracted, bool(init_cmd.get("inspect_dom")), False)
             emit({"event": "cmd_result", "req_id": req_id, "ok": True, "result": res})
@@ -1063,7 +1102,7 @@ async def main():
                             if cv:
                                 creds[ck] = cv
                     extracted.clear()
-                    await run_steps(page, cmd.get("steps") or [], creds, extracted)
+                    await run_steps(page, cmd.get("steps") or [], creds, extracted, base_origin)
                     await push_snapshot_frame(page)
                     res = await inspect_page(page, context, network_calls, extracted, bool(cmd.get("inspect_dom")), bool(cmd.get("export_state")))
                     emit({"event": "cmd_result", "req_id": cid, "ok": True, "result": res})
@@ -1099,6 +1138,30 @@ function replaceSecrets(val, creds) {
   const p = (creds && creds.password) || "";
   const s = (creds && creds.secret) || p || "";
   return val.split("{{USERNAME}}").join(u).split("{{PASSWORD}}").join(p).split("{{SECRET}}").join(s);
+}
+
+function stepUsesSecrets(rawVal, creds) {
+  if (typeof rawVal !== "string" || !rawVal) return false;
+  const u = (creds && creds.username) || "";
+  const p = (creds && creds.password) || "";
+  const s = (creds && creds.secret) || p || "";
+  if (rawVal.includes("{{USERNAME}}") && u) return true;
+  if (rawVal.includes("{{PASSWORD}}") && p) return true;
+  if (rawVal.includes("{{SECRET}}") && s) return true;
+  return false;
+}
+
+function ensureSameOrigin(currentUrl, baseOrigin, reason) {
+  if (!baseOrigin) {
+    throw new Error("refusing " + reason + ": missing base origin");
+  }
+  let curOrigin = "";
+  try {
+    curOrigin = new URL(currentUrl || "").origin.toLowerCase();
+  } catch (_) {}
+  if (curOrigin !== baseOrigin) {
+    throw new Error("refusing " + reason + " after cross-origin navigation (" + (curOrigin || currentUrl) + " != " + baseOrigin + ")");
+  }
 }
 
 function findChromiumExecutable() {
@@ -1200,11 +1263,15 @@ async function inspectPage(page, context, networkCalls, extracted, inspectDom, e
   };
 }
 
-async function runSteps(page, steps, creds, extracted) {
+async function runSteps(page, steps, creds, extracted, baseOrigin) {
   for (const st of steps || []) {
     const action = String(st.action || "").toLowerCase().trim();
     const sel = st.selector || "";
-    const val = replaceSecrets(st.value || "", creds);
+    const rawVal = st.value || "";
+    if (stepUsesSecrets(rawVal, creds)) {
+      ensureSameOrigin(page.url(), baseOrigin || "", "secret-bearing step '" + action + "'");
+    }
+    const val = replaceSecrets(rawVal, creds);
     const mode = String(st.mode || "text").toLowerCase().trim();
     const attr = st.attribute || "";
     const stTimeout = Math.min(Math.max(Number(st.timeout_ms) || 12000, 500), 30000);
@@ -1286,6 +1353,10 @@ async function pushSnapshotFrame(page) {
   const reqId = initCmd.req_id || "";
   const creds = initCmd.credentials || {};
   const proxyServer = initCmd.proxy_server || "";
+  let baseOrigin = "";
+  try {
+    baseOrigin = new URL(replaceSecrets(initCmd.url || "", creds)).origin.toLowerCase();
+  } catch (_) {}
 
   let pw;
   try {
@@ -1399,7 +1470,7 @@ async function pushSnapshotFrame(page) {
       await page.waitForLoadState("networkidle", { timeout: 3000 });
     } catch (_) {}
     if (Array.isArray(initCmd.steps) && initCmd.steps.length > 0) {
-      await runSteps(page, initCmd.steps, creds, extracted);
+      await runSteps(page, initCmd.steps, creds, extracted, baseOrigin);
     }
     await pushSnapshotFrame(page);
     const res = await inspectPage(page, context, networkCalls, extracted, Boolean(initCmd.inspect_dom), false);
@@ -1468,7 +1539,7 @@ async function pushSnapshotFrame(page) {
           }
         }
         extracted.length = 0;
-        await runSteps(page, cmd.steps || [], creds, extracted);
+        await runSteps(page, cmd.steps || [], creds, extracted, baseOrigin);
         await pushSnapshotFrame(page);
         const res = await inspectPage(page, context, networkCalls, extracted, Boolean(cmd.inspect_dom), Boolean(cmd.export_state));
         emit({ event: "cmd_result", req_id: cid, ok: true, result: res });

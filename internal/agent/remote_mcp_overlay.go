@@ -996,6 +996,9 @@ func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteM
 			if tURL == "" {
 				tURL = conn.URL
 			}
+			if conn.AuthQuery != "" && creds.Secret != "" {
+				tURL = attachQueryParamToURLTemplate(tURL, conn.AuthQuery, creds.Secret)
+			}
 			steps := make([]playwrightrunner.Step, 0, len(ct.Steps))
 			for _, st := range ct.Steps {
 				steps = append(steps, playwrightrunner.Step{
@@ -1081,20 +1084,40 @@ func parsePlaywrightCredentials(bearer string, conn RemoteMCPConn) playwrightrun
 	if trimmed == "" {
 		return playwrightrunner.Credentials{}
 	}
+	var creds playwrightrunner.Credentials
+	parsedBundle := false
 	if strings.HasPrefix(trimmed, "{") {
-		var creds playwrightrunner.Credentials
 		if err := json.Unmarshal([]byte(trimmed), &creds); err == nil {
 			if creds.Username != "" || creds.Password != "" || creds.Secret != "" || len(creds.Headers) > 0 || len(creds.StorageState) > 0 {
-				return creds
+				parsedBundle = true
 			}
 		}
 	}
-	creds := playwrightrunner.Credentials{
-		Password: bearer,
-		Secret:   bearer,
+	if !parsedBundle {
+		creds = playwrightrunner.Credentials{
+			Password: bearer,
+			Secret:   bearer,
+		}
 	}
-	if conn.AuthHeader != "" {
-		creds.Headers = map[string]string{conn.AuthHeader: conn.AuthPrefix + bearer}
+	if creds.Secret == "" && creds.Password != "" {
+		creds.Secret = creds.Password
+	}
+	if conn.AuthQuery == "" && creds.Secret != "" {
+		if conn.AuthHeader != "" {
+			if creds.Headers == nil {
+				creds.Headers = make(map[string]string, 1)
+			}
+			if _, exists := creds.Headers[conn.AuthHeader]; !exists {
+				creds.Headers[conn.AuthHeader] = conn.AuthPrefix + creds.Secret
+			}
+		} else if creds.Username == "" || creds.Secret != creds.Password {
+			if creds.Headers == nil {
+				creds.Headers = make(map[string]string, 1)
+			}
+			if _, exists := creds.Headers["Authorization"]; !exists {
+				creds.Headers["Authorization"] = "Bearer " + creds.Secret
+			}
+		}
 	}
 	return creds
 }

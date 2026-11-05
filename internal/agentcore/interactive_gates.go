@@ -83,7 +83,7 @@ func classifyRiskyBrowser(toolName, rawInput string) (bool, string) {
 	if toolName == toolNameConnectorStudio {
 		switch act {
 		case "probe_browser", "browser_probe", "inspect_browser", "playwright_probe",
-			"start_copilot_session", "start_session", "copilot_session", "live_browser", "open_live_browser":
+			"start_copilot_session", "start_session", "copilot_session", "live_view", "live_browser", "open_live_browser":
 		default:
 			return false, ""
 		}

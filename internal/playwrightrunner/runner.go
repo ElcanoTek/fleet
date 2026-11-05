@@ -222,6 +222,22 @@ func hasCredentials(c Credentials) bool {
 	return c.Username != "" || c.Password != "" || c.Secret != "" || len(c.Headers) > 0 || len(c.StorageState) > 0
 }
 
+func stepUsesCredentials(rawVal string, c Credentials) bool {
+	if rawVal == "" {
+		return false
+	}
+	if strings.Contains(rawVal, "{{USERNAME}}") && c.Username != "" {
+		return true
+	}
+	if strings.Contains(rawVal, "{{PASSWORD}}") && c.Password != "" {
+		return true
+	}
+	if strings.Contains(rawVal, "{{SECRET}}") && (c.Secret != "" || c.Password != "") {
+		return true
+	}
+	return false
+}
+
 func sameOriginURL(a, b string) bool {
 	ua, errA := url.Parse(strings.TrimSpace(a))
 	ub, errB := url.Parse(strings.TrimSpace(b))
@@ -793,6 +809,29 @@ def replace_secrets(val, creds):
     val = val.replace("{{USERNAME}}", u).replace("{{PASSWORD}}", p).replace("{{SECRET}}", s)
     return val
 
+def step_uses_secrets(raw_val, creds):
+    if not isinstance(raw_val, str) or not raw_val:
+        return False
+    u = creds.get("username") or ""
+    p = creds.get("password") or ""
+    s = creds.get("secret") or p or ""
+    if "{{USERNAME}}" in raw_val and u:
+        return True
+    if "{{PASSWORD}}" in raw_val and p:
+        return True
+    if "{{SECRET}}" in raw_val and s:
+        return True
+    return False
+
+def ensure_same_origin(current_url, base_origin, reason):
+    if not base_origin:
+        raise RuntimeError(f"refusing {reason}: missing base origin")
+    import urllib.parse
+    cp = urllib.parse.urlsplit(current_url or "")
+    cur_origin = f"{cp.scheme.lower()}://{cp.netloc.lower()}" if cp.scheme and cp.netloc else ""
+    if cur_origin != base_origin:
+        raise RuntimeError(f"refusing {reason} after cross-origin navigation ({cur_origin or current_url} != {base_origin})")
+
 def find_chromium_executable():
     candidates = [
         os.environ.get("FLEET_CHROMIUM_EXECUTABLE", ""),
@@ -951,7 +990,10 @@ def main():
             for st in steps:
                 action = (st.get("action") or "").lower().strip()
                 sel = st.get("selector") or ""
-                val = replace_secrets(st.get("value") or "", creds)
+                raw_val = st.get("value") or ""
+                if step_uses_secrets(raw_val, creds):
+                    ensure_same_origin(page.url, base_origin, f"secret-bearing step '{action}'")
+                val = replace_secrets(raw_val, creds)
                 mode = (st.get("mode") or "text").lower().strip()
                 attr = st.get("attribute") or ""
                 st_timeout = int(st.get("timeout_ms") or step_default_ms)
@@ -1081,6 +1123,30 @@ function replaceSecrets(val, creds) {
   const p = (creds && creds.password) || "";
   const s = (creds && creds.secret) || p || "";
   return val.split("{{USERNAME}}").join(u).split("{{PASSWORD}}").join(p).split("{{SECRET}}").join(s);
+}
+
+function stepUsesSecrets(rawVal, creds) {
+  if (typeof rawVal !== "string" || !rawVal) return false;
+  const u = (creds && creds.username) || "";
+  const p = (creds && creds.password) || "";
+  const s = (creds && creds.secret) || p || "";
+  if (rawVal.includes("{{USERNAME}}") && u) return true;
+  if (rawVal.includes("{{PASSWORD}}") && p) return true;
+  if (rawVal.includes("{{SECRET}}") && s) return true;
+  return false;
+}
+
+function ensureSameOrigin(currentUrl, baseOrigin, reason) {
+  if (!baseOrigin) {
+    throw new Error("refusing " + reason + ": missing base origin");
+  }
+  let curOrigin = "";
+  try {
+    curOrigin = new URL(currentUrl || "").origin.toLowerCase();
+  } catch (_) {}
+  if (curOrigin !== baseOrigin) {
+    throw new Error("refusing " + reason + " after cross-origin navigation (" + (curOrigin || currentUrl) + " != " + baseOrigin + ")");
+  }
 }
 
 function findChromiumExecutable() {
@@ -1270,7 +1336,11 @@ function loadPlaywright() {
     for (const st of steps) {
       const action = String(st.action || "").toLowerCase().trim();
       const sel = st.selector || "";
-      const val = replaceSecrets(st.value || "", creds);
+      const rawVal = st.value || "";
+      if (stepUsesSecrets(rawVal, creds)) {
+        ensureSameOrigin(page.url(), baseOrigin, "secret-bearing step '" + action + "'");
+      }
+      const val = replaceSecrets(rawVal, creds);
       const mode = String(st.mode || "text").toLowerCase().trim();
       const attr = st.attribute || "";
       const stTimeout = Math.min(Math.max(Number(st.timeout_ms) || stepDefaultMs, 500), 30000);
