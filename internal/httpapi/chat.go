@@ -466,6 +466,10 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 		s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 	}
 
+	// Vault any password/secret fields from a `[UI submission]` card before the
+	// message is queued, claimed, persisted, or sent to the LLM.
+	req.Message = s.vaultUISubmissionSecrets(r.Context(), user, conv.ID, req.Message)
+
 	// Busy path (#785): a running turn means this submission QUEUES — never an
 	// implicit cancel. The row is durable before the 202 acknowledgement;
 	// steer-mode rows are additionally offered to the running turn's next
@@ -1086,6 +1090,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		return true
 	}
 	history = redactHistoryForSender(history, user, conv.UserEmail)
+	req.Message = s.vaultUISubmissionSecretsWithHistory(user, conv.ID, req.Message, history)
 
 	// Project context (#509): a conversation in a project injects the
 	// project's standing instructions plus its SHARED memories (tagged
@@ -1736,6 +1741,8 @@ func (s *Server) runTurnAsync(
 	commits := &turnCommits{store: s.store, convID: conv.ID, turnID: buf.turnID, journal: journal}
 	turnCtx = tools.WithChatPatrolHandler(turnCtx, s.newChatPatrolHandler(conv, user, buf))
 	turnCtx = tools.WithPersonaStudioHandler(turnCtx, s.newPersonaStudioHandler(user))
+	turnCtx = tools.WithConnectorStudioHandler(turnCtx, s.newConnectorStudioHandler(conv, user))
+	turnCtx = tools.WithPlaywrightBrowserContext(turnCtx, s.newPlaywrightBrowserContext(conv, user))
 	// A "user:<name>" persona runs as its bundle base plus the owner's layer
 	// (only when the turn sender is the owner; non-owner participants run on
 	// the caller's own persona layer or the bundle base without exposing the

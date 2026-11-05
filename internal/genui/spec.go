@@ -264,7 +264,7 @@ var components = map[string]compSpec{
 	// ── inputs ──
 	"text_input": {input: true, props: withInput(map[string]prop{
 		"placeholder": p(kString), "multiline": p(kBool),
-		"min_length": p(kInt), "max_length": p(kInt), "format": enum("text", "email", "url"),
+		"min_length": p(kInt), "max_length": p(kInt), "format": enum("text", "email", "url", "password"),
 	})},
 	"number": {input: true, props: withInput(map[string]prop{
 		"min": p(kNumber), "max": p(kNumber), "step": p(kNumber),

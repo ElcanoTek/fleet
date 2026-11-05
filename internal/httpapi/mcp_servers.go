@@ -325,12 +325,29 @@ func (s *Server) alwaysOnMCPServerCatalogEntries() []map[string]any {
 // route — this conversation's override. Seats carry labels only, never
 // credentials.
 func (s *Server) remoteCatalogEntry(g agent.RemoteMCPSeatGroup, enabled bool, account string) map[string]any {
+	desc := "Remote MCP server you connected (" + g.URL + ")."
+	tools := []string{}
+	toolCount := 0
+	switch g.Transport {
+	case store.RemoteMCPTransportHTTPTools:
+		desc = "Custom API connector (" + g.URL + ")."
+		if len(g.Tools) > 0 {
+			tools = g.Tools
+			toolCount = g.ToolCount
+		}
+	case store.RemoteMCPTransportPlaywright:
+		desc = "Browser automation connector (" + g.URL + ")."
+		if len(g.Tools) > 0 {
+			tools = g.Tools
+			toolCount = g.ToolCount
+		}
+	}
 	return map[string]any{
 		"name":               g.Name,
 		"display_name":       g.Name,
-		"description":        "Remote MCP server you connected (" + g.URL + ").",
-		"tools":              []string{},
-		"tool_count":         0,
+		"description":        desc,
+		"tools":              tools,
+		"tool_count":         toolCount,
 		"enabled":            enabled,
 		"beta":               false,
 		"enabled_by_default": true,

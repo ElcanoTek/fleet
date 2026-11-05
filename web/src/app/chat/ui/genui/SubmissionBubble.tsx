@@ -9,7 +9,7 @@
 import { useContext, useState } from "react";
 import type { Message } from "../history";
 import type { Reply, Submission } from "./model";
-import { fieldLabels, GenUiContext, summarizeValue } from "./transcript";
+import { fieldLabels, GenUiContext, passwordFields, summarizeValue } from "./transcript";
 
 // A card answer the server refused (or never received) stays in the
 // transcript until a reload; it says so, rather than reading as sent.
@@ -36,9 +36,15 @@ export function SubmissionBubble({
   const { cards, answerSpecs } = useContext(GenUiContext);
   const spec = (message && answerSpecs.get(message)) ?? cards.get(submission.cardId);
   const labels = fieldLabels(spec);
+  const secrets = passwordFields(spec);
   const action = spec?.actions?.find((a) => a.id === submission.actionId)?.label ?? submission.actionId;
   const [showRaw, setShowRaw] = useState(false);
   const entries = Object.entries(submission.values);
+  const isSecretEntry = (k: string, v: unknown) =>
+    (secrets.has(k) || (typeof v === "string" && v.startsWith("$secret:"))) &&
+    v !== null &&
+    v !== undefined &&
+    v !== "";
   return (
     <div
       data-testid="genui-submission-bubble"
@@ -55,7 +61,7 @@ export function SubmissionBubble({
           {entries.slice(0, 12).map(([k, v]) => (
             <div key={k} className="contents">
               <dt className="text-[var(--color-text-muted)]">{labels.get(k) ?? k}</dt>
-              <dd className="m-0 min-w-0">{summarizeValue(v)}</dd>
+              <dd className="m-0 min-w-0">{isSecretEntry(k, v) ? "••••••••" : summarizeValue(v)}</dd>
             </div>
           ))}
         </dl>

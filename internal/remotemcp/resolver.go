@@ -86,16 +86,50 @@ func (s *Service) ConnectedServersForUser(ctx context.Context, email string) ([]
 }
 
 func connFor(srv store.RemoteMCPServer, owner string) agent.RemoteMCPConn {
+	var customTools []agent.RemoteMCPCustomTool
+	if len(srv.CustomTools) > 0 {
+		customTools = make([]agent.RemoteMCPCustomTool, 0, len(srv.CustomTools))
+		for _, ct := range srv.CustomTools {
+			var steps []agent.RemoteMCPCustomStep
+			if len(ct.Steps) > 0 {
+				steps = make([]agent.RemoteMCPCustomStep, 0, len(ct.Steps))
+				for _, st := range ct.Steps {
+					steps = append(steps, agent.RemoteMCPCustomStep{
+						Action:     st.Action,
+						Selector:   st.Selector,
+						Value:      st.Value,
+						Mode:       st.Mode,
+						Attribute:  st.Attribute,
+						Expression: st.Expression,
+						TimeoutMs:  st.TimeoutMs,
+						Optional:   st.Optional,
+					})
+				}
+			}
+			customTools = append(customTools, agent.RemoteMCPCustomTool{
+				Name:        ct.Name,
+				Description: ct.Description,
+				Method:      ct.Method,
+				URL:         ct.URL,
+				Headers:     ct.Headers,
+				Body:        ct.Body,
+				InputSchema: ct.InputSchema,
+				Steps:       steps,
+			})
+		}
+	}
 	return agent.RemoteMCPConn{
-		ID:         srv.ID,
-		Name:       srv.Name,
-		Account:    srv.Account,
-		Default:    srv.IsDefault,
-		URL:        srv.URL,
-		Owner:      owner,
-		AuthHeader: srv.APIKeyHeader,
-		AuthQuery:  srv.APIKeyQuery,
-		AuthPrefix: srv.APIKeyPrefix,
+		ID:          srv.ID,
+		Name:        srv.Name,
+		Account:     srv.Account,
+		Default:     srv.IsDefault,
+		URL:         srv.URL,
+		Transport:   srv.Transport,
+		Owner:       owner,
+		AuthHeader:  srv.APIKeyHeader,
+		AuthQuery:   srv.APIKeyQuery,
+		AuthPrefix:  srv.APIKeyPrefix,
+		CustomTools: customTools,
 	}
 }
 

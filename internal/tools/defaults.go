@@ -40,6 +40,7 @@ var interactiveOnlyToolNames = map[string]bool{
 	// review; a headless run has no owner reviewing in the moment.
 	PersonaStudioToolName:       true,
 	EnableMCPConnectorsToolName: true,
+	ConnectorStudioToolName:     true,
 }
 
 // ExcludeInteractiveOnly returns the tools minus the interactive-staging-card
@@ -90,6 +91,8 @@ func DefaultTools() []fantasy.AgentTool {
 		NewChatPatrolTool(),
 		NewPersonaStudioTool(),
 		NewEnableMCPConnectorsTool(),
+		NewConnectorStudioTool(),
+		NewPlaywrightBrowserTool(),
 	}
 }
 
@@ -128,6 +131,8 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewChatPatrolTool(),
 		NewPersonaStudioTool(),
 		NewEnableMCPConnectorsTool(),
+		NewConnectorStudioTool(),
+		NewPlaywrightBrowserTool(),
 	}
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)

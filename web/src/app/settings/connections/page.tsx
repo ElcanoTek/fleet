@@ -3,12 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Icon } from "@/app/shared/ui/Icon";
+import { navigate } from "@/app/lib/navigation";
 import {
   authHint,
   categoriesOf,
   categoryIcon,
+  connectorBuilderMessage,
   connectorParamOf,
   consentRequired,
+  customTransportBadge,
   FEATURED_SLUG,
   effectiveAutoEnable,
   effectiveEnabled,
@@ -96,6 +99,8 @@ type RemoteServer = {
   // connection. Absent when the row matches its entry, or no directory entry
   // has its name — the join is the name, not where the row came from.
   catalog_drift?: { url?: string; auth?: string; key_sent_as?: string };
+  // Custom HTTP API or Playwright browser tools synthesized by connector_studio.
+  custom_tools?: Array<{ name: string; description?: string }>;
 };
 
 // A server another user shared with you: usable in your chats and scheduled
@@ -1845,15 +1850,30 @@ function ConnectionsPageInner() {
 
         <ConnPanel>
           <ConnPanelHead title="Remote servers">
-            <RevealButton
-              open={addServerOpen}
-              closedLabel="Add remote server"
-              onClick={() => setAddServerOpen((o) => !o)}
-            />
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                data-testid="create-custom-connection-btn"
+                onClick={() =>
+                  navigate(
+                    `/chat?draft=${encodeURIComponent(connectorBuilderMessage())}`,
+                  )
+                }
+                className={btnClass({ sm: true, variant: "primary" })}
+              >
+                Create your own connection
+              </button>
+              <RevealButton
+                open={addServerOpen}
+                closedLabel="Add remote server"
+                onClick={() => setAddServerOpen((o) => !o)}
+              />
+            </div>
           </ConnPanelHead>
           <ConnPanelSub>
-            Hosted MCP endpoints you’ve connected yourself — from the directory
-            below, or by URL.
+            Hosted MCP endpoints and custom connections you’ve added yourself —
+            from the directory below, by URL, or built with the guided
+            connection assistant in chat.
           </ConnPanelSub>
           {addServerOpen ? (
             <form onSubmit={addServer}>
@@ -1924,6 +1944,13 @@ function ConnectionsPageInner() {
                     {group.seats.map((s) => {
                       const enabledForMe = effectiveEnabled(prefs, "remote", s.id);
                       const shareCount = shares[s.id]?.length ?? 0;
+                      const customBadge = customTransportBadge(
+                        s.transport,
+                        s.custom_tools?.length,
+                      );
+                      const isCustomTransport =
+                        s.transport === "http_tools" ||
+                        s.transport === "playwright";
                       return (
                         <ConnRow
                           key={s.id}
@@ -1933,6 +1960,11 @@ function ConnectionsPageInner() {
                               <ConnBadge title="Account label for this login">
                                 {seatLabel(s)}
                               </ConnBadge>
+                              {customBadge ? (
+                                <ConnBadge title="Custom connector synthesized in Connector Studio">
+                                  {customBadge}
+                                </ConnBadge>
+                              ) : null}
                               {s.is_default ? (
                                 <ConnBadge
                                   variant="overridden"
@@ -1996,7 +2028,7 @@ function ConnectionsPageInner() {
                                 >
                                   Update key
                                 </button>
-                              ) : s.auth_kind === "open" ? null : (
+                              ) : s.auth_kind === "open" || isCustomTransport ? null : (
                                 <button
                                   type="button"
                                   onClick={() => connect(s.id)}
@@ -2008,6 +2040,7 @@ function ConnectionsPageInner() {
                               )}
                               {s.auth_kind !== "api_key" &&
                               s.auth_kind !== "open" &&
+                              !isCustomTransport &&
                               s.status === "connected" ? (
                                 <button
                                   type="button"
@@ -2373,6 +2406,10 @@ function ConnectionsPageInner() {
             <ConnRows>
               {sharedWithMe.map((s) => {
                 const on = effectiveEnabled(prefs, "remote", s.id);
+                const sharedCustomBadge = customTransportBadge(
+                  s.transport,
+                  s.custom_tools?.length,
+                );
                 return (
                   <ConnRow
                     key={s.id}
@@ -2382,6 +2419,11 @@ function ConnectionsPageInner() {
                         <ConnBadge title="The owner's account label for this login">
                           {seatLabel(s)}
                         </ConnBadge>
+                        {sharedCustomBadge ? (
+                          <ConnBadge title="Custom connector synthesized in Connector Studio">
+                            {sharedCustomBadge}
+                          </ConnBadge>
+                        ) : null}
                         <ConnBadge variant={statusVariant(s.status)}>
                           {STATUS_LABEL[s.status] ?? s.status}
                         </ConnBadge>
@@ -2546,11 +2588,33 @@ function ConnectionsPageInner() {
                 ) : null}
                 {dirHits.length === 0 ? (
                   <ConnEmpty>
-                    No servers match “{trimmedQuery}”
-                    {!trimmedQuery && catalogCategory
-                      ? ` in ${activeCategoryLabel}`
-                      : ""}
-                    .
+                    <span>
+                      No servers match “{trimmedQuery}”
+                      {!trimmedQuery && catalogCategory
+                        ? ` in ${activeCategoryLabel}`
+                        : ""}
+                      .
+                    </span>
+                    <span className="mt-2 block">
+                      <button
+                        type="button"
+                        data-testid="dir-empty-create-custom-btn"
+                        onClick={() =>
+                          navigate(
+                            `/chat?draft=${encodeURIComponent(
+                              connectorBuilderMessage({
+                                target: trimmedQuery || undefined,
+                              }),
+                            )}`,
+                          )
+                        }
+                        className={btnClass({ sm: true })}
+                      >
+                        {trimmedQuery
+                          ? `Build a custom “${trimmedQuery}” connection in chat`
+                          : "Create your own connection in chat"}
+                      </button>
+                    </span>
                   </ConnEmpty>
                 ) : (
                   groupByCategory(dirHits).map((group) => (

@@ -259,7 +259,9 @@ func (t *httpToolTransport) Close() error { return nil }
 // http.DefaultTransport would have followed a 30x straight to cloud metadata.
 func (t *httpToolTransport) httpClient() *http.Client {
 	t.clientOnce.Do(func() {
-		t.client = newHTTPToolClient(httpToolDialContext)
+		if t.client == nil {
+			t.client = newHTTPToolClient(httpToolDialContext)
+		}
 	})
 	return t.client
 }

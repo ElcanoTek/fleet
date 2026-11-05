@@ -388,3 +388,54 @@ export function connectorParamOf(search: string): string | null {
   const name = (raw ?? "").trim().toLowerCase();
   return name === "" ? null : name;
 }
+
+// connectorBuilderMessage composes the guided chat draft that preloads the
+// built-in `/connector-builder` skill when a user clicks "Create your own
+// connection" in Settings → Connections.
+export function connectorBuilderMessage(opts?: {
+  target?: string;
+  goal?: string;
+  shareScope?: "personal" | "everyone";
+}): string {
+  const target = (opts?.target ?? "").trim();
+  const goal = (opts?.goal ?? "").trim();
+  const scope =
+    opts?.shareScope === "everyone"
+      ? "everyone on this Fleet box (share_scope='everyone')"
+      : "just for me (share_scope='personal')";
+  const lines = [
+    "/connector-builder Help me build and configure a connection in Fleet the best way possible.",
+  ];
+  if (target) {
+    lines.push("", `Target website, portal, or service: ${target}`);
+  }
+  if (goal) {
+    lines.push(`What I want to do with it: ${goal}`);
+  }
+  lines.push(
+    "",
+    `Access scope: ${scope}.`,
+    "Please check the official MCP catalog first with connector_studio, otherwise probe for an API or use local Playwright + Co-Pilot Live Browser View, collect any credentials via show_ui (format='password'), create the connector, and test it end-to-end.",
+  );
+  return lines.join("\n");
+}
+
+// customTransportBadge returns a human badge label for custom HTTP API
+// ("http_tools") and Playwright browser ("playwright") connectors.
+export function customTransportBadge(
+  transport: string | undefined,
+  toolCount?: number,
+): string | null {
+  const suffix =
+    typeof toolCount === "number" && toolCount > 0
+      ? ` · ${toolCount} ${toolCount === 1 ? "tool" : "tools"}`
+      : "";
+  switch ((transport ?? "").trim().toLowerCase()) {
+    case "http_tools":
+      return `Custom API${suffix}`;
+    case "playwright":
+      return `Browser automation${suffix}`;
+    default:
+      return null;
+  }
+}

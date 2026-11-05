@@ -170,6 +170,8 @@ type Server struct {
 	// mutations so parallel tool calls or approval executions never clobber
 	// OptionalMCPServersEnabled or race SupersedePendingApprovals.
 	connectorLocks keyedLocks
+	// uiSecrets holds host-side vaulted secrets from show_ui password inputs.
+	uiSecrets uiSecretStash
 
 	// clientConfig is the loaded client bundle that backs GET /client-config
 	// (branding + empty-state). nil in tests / mock mode that don't supply one;

@@ -125,4 +125,16 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 			},
 		})
 	})
+
+	// GET /api/browser-sessions/{id}/stream — live Co-Pilot browser JPEG screencast stream.
+	mux.HandleFunc("GET /api/browser-sessions/{id}/stream", func(w http.ResponseWriter, r *http.Request) {
+		s := g.session(r)
+		if s == nil {
+			unauthorized(w)
+			return
+		}
+		h := g.chatHeaders(identityOf(s))
+		target := withRawQuery("/browser-sessions/"+p(r, "id")+"/stream", r)
+		g.dispatch(w, r, g.chat, "chat-server", call{method: http.MethodGet, target: target, header: h}, sseOut)
+	})
 }

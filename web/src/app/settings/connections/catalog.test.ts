@@ -5,8 +5,10 @@ import {
   categoriesOf,
   categoryIcon,
   categoryLabel,
+  connectorBuilderMessage,
   connectorParamOf,
   consentRequired,
+  customTransportBadge,
   FEATURED_SLUG,
   fillPlaceholders,
   filterCatalog,
@@ -254,5 +256,34 @@ describe("connectorParamOf", () => {
     expect(connectorParamOf("?connected=1")).toBeNull();
     expect(connectorParamOf("?connector=")).toBeNull();
     expect(connectorParamOf("?connector=%20")).toBeNull();
+  });
+});
+
+describe("connectorBuilderMessage", () => {
+  it("starts with /connector-builder so the chat skill activates", () => {
+    const msg = connectorBuilderMessage();
+    expect(msg.startsWith("/connector-builder ")).toBe(true);
+    expect(msg).toContain("show_ui");
+  });
+
+  it("includes target, goal, and scope when provided", () => {
+    const msg = connectorBuilderMessage({
+      target: "https://portal.acme.com",
+      goal: "Export weekly invoices",
+      shareScope: "everyone",
+    });
+    expect(msg.startsWith("/connector-builder ")).toBe(true);
+    expect(msg).toContain("https://portal.acme.com");
+    expect(msg).toContain("Export weekly invoices");
+    expect(msg).toContain("everyone on this Fleet box");
+  });
+});
+
+describe("customTransportBadge", () => {
+  it("formats http_tools and playwright transports with optional tool count", () => {
+    expect(customTransportBadge("http_tools", 3)).toBe("Custom API · 3 tools");
+    expect(customTransportBadge("http_tools", 1)).toBe("Custom API · 1 tool");
+    expect(customTransportBadge("playwright", 2)).toBe("Browser automation · 2 tools");
+    expect(customTransportBadge("http", 5)).toBeNull();
   });
 });
