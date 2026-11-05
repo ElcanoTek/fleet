@@ -18,6 +18,9 @@ const (
 	// verifierScalarMaxLen bounds a string retained verbatim as a scalar: one
 	// identifier-like token — an id, a status, a date, an e-mail address.
 	verifierScalarMaxLen = 128
+	// verifierScalarListMaxLen bounds a comma-separated list of recipient
+	// e-mail addresses (e.g. a multi-recipient to_email / cc_email argument).
+	verifierScalarListMaxLen = 512
 	// Bulk text (multi-line, or longer than the scalar limit: a tool's printed
 	// output, a file body) is not retained; a bounded head … tail excerpt is
 	// recorded under <path>#excerpt instead, so a read-only check the model ran
@@ -169,10 +172,36 @@ func (p *verifierProjection) collect(value map[string]any, path string, depth in
 
 // verifierTextScalar reports whether a string is retained verbatim: one
 // identifier-like token (ids, statuses, dates, e-mail addresses) of at most
-// verifierScalarMaxLen bytes that is not a URL. Free text with spaces is not
-// a scalar; bulk text may still surface as an excerpt (verifierBulkText).
+// verifierScalarMaxLen bytes that is not a URL, or a comma-separated list of
+// recipient e-mail addresses up to verifierScalarListMaxLen bytes. Free text
+// with spaces is not a scalar; bulk text may still surface as an excerpt
+// (verifierBulkText).
 func verifierTextScalar(s string) bool {
-	return verifierValue.MatchString(s) && !strings.Contains(s, "://")
+	if strings.Contains(s, "://") {
+		return false
+	}
+	return verifierValue.MatchString(s) || verifierRecipientList(s)
+}
+
+// verifierRecipientList reports whether s is a comma-separated list of
+// e-mail addresses (such as a multi-recipient to_email / cc_email argument).
+// Requiring '@' in every token keeps comma-punctuated prose ("Ignore, task")
+// out of scalar evidence while preserving multi-recipient lists verbatim.
+func verifierRecipientList(s string) bool {
+	if !strings.Contains(s, ",") || len(s) > verifierScalarListMaxLen {
+		return false
+	}
+	parts := strings.Split(s, ",")
+	if len(parts) < 2 || len(parts) > verifierEvidenceArrayCap {
+		return false
+	}
+	for _, raw := range parts {
+		part := strings.TrimSpace(raw)
+		if !strings.Contains(part, "@") || !verifierValue.MatchString(part) {
+			return false
+		}
+	}
+	return true
 }
 
 // verifierBulkText reports whether a non-scalar string is bulk text worth an

@@ -257,3 +257,43 @@ func TestListUserPatrols_UsesItsIndex(t *testing.T) {
 		t.Errorf("the patrols query does not use its index:\n%s", plan.String())
 	}
 }
+
+func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	const user = "patroller@elcanotek.com"
+
+	conv, err := s.CreateConversation(ctx, user, "Command Center refresh", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	if _, err := s.CreateApproval(ctx, conv.ID, user, "suggest_advanced_model", "", `{"reason":"compacted"}`, time.Now().Unix()+86400, ApprovalSeat{}); err != nil {
+		t.Fatalf("CreateApproval: %v", err)
+	}
+	sched, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID,
+		UserEmail:      user,
+		Title:          "Command Center refresh (2h)",
+		Prompt:         "Refresh the dashboard.",
+		CronExpr:       "0 */2 * * *",
+		Timezone:       "UTC",
+	})
+	if err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+
+	due := time.Unix(sched.NextRunAt+1, 0).UTC()
+	claimed, err := s.ClaimDueChatSchedules(ctx, due, 20)
+	if err != nil {
+		t.Fatalf("ClaimDueChatSchedules: %v", err)
+	}
+	var found bool
+	for _, c := range claimed {
+		if c.Schedule.ID == sched.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("pending suggest_advanced_model card must not block due chat schedule %s", sched.ID)
+	}
+}

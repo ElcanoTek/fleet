@@ -326,7 +326,7 @@ func selectApprovalResumeUserTx(ctx context.Context, tx *sql.Tx, req ApprovalRes
 	rows, err := tx.QueryContext(ctx,
 		`SELECT id, COALESCE(NULLIF(TRIM(user_email), ''), $3) FROM approvals
 		  WHERE conversation_id = $1
-		    AND ((status = 'pending' AND tool_name <> 'preview_email')
+		    AND ((status = 'pending' AND tool_name NOT IN ('preview_email', 'suggest_advanced_model'))
 		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
 		  ORDER BY created_at, id`,
 		req.ConversationID, ApprovalExecutingSentinel, owner)

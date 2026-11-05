@@ -1683,6 +1683,7 @@ func (s *Server) runTurnAsync(
 	// this turn (rows carry a per-call duration, not a per-call start — see
 	// deriveToolCallEntries).
 	startedAtUnix := time.Now().Unix()
+	buf.inputKind = inputKind
 	// Order matters: finishTurn must seal the buffer and schedule
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.
@@ -2032,6 +2033,7 @@ func (s *Server) newTurnStager(ctx context.Context, conv *store.Conversation, us
 		groupID:           buf.turnID,
 		modelAllowed:      s.cfg.LockdownAllows,
 		lockdownOnly:      s.cfg.LockdownOnly,
+		inputKind:         buf.inputKind,
 	}
 }
 

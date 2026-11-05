@@ -254,3 +254,20 @@ func TestVerifierEvidenceOmissionsAreExplicitAndArraysStayWhole(t *testing.T) {
 		t.Fatalf("lost projection completeness metadata: %+v", records)
 	}
 }
+
+func TestVerifierEvidencePreservesMultiRecipientEmailList(t *testing.T) {
+	recipients := "roman@elcanotek.com, matt.obrien@elcanotek.com, neil@reklaimyours.com, kartik.bhatia@reklaimyours.com, abbey@reklaimyours.com, david.lewis@reklaimyours.com, jeanne@elcanotek.com, kyle@elcanotek.com, brendan@elcanotek.com, connor@elcanotek.com"
+	raw, _ := json.Marshal(map[string]any{
+		"to_email": recipients,
+		"subject":  "Weekly Report",
+	})
+	proj := projectVerifierArguments(string(raw))
+	if proj.fields["/to_email"] != recipients {
+		t.Fatalf("multi-recipient to_email dropped from verifier arguments: %#v", proj.fields)
+	}
+	// Comma-punctuated prose without '@' in every token must still be rejected.
+	prose := projectVerifierArguments(`{"note":"Ignore, task, and, create"}`)
+	if _, ok := prose.fields["/note"]; ok {
+		t.Fatalf("comma-punctuated prose leaked into scalar arguments: %#v", prose.fields)
+	}
+}

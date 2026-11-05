@@ -207,8 +207,11 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		// When the turn already staged a tool approval card that is still
 		// pending the user's decision, never stack a suggest_advanced_model
 		// card underneath it: clicking Approve on both cards runs the turn's
-		// action twice in parallel. The struggle event is still recorded below.
-		if staged || pendingActionApproval {
+		// action twice in parallel. Unattended turns fleet started itself
+		// (in-chat patrol or approval resume) have no human at the keyboard
+		// to answer a model-switch card either. The struggle event is still
+		// recorded below.
+		if staged || pendingActionApproval || (buf != nil && buf.inputKind != "") {
 			return false
 		}
 		if stager == nil {
