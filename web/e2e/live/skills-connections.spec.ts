@@ -90,27 +90,30 @@ test("connections page: directory searches and an availability toggle persists",
   await page.goto("/settings/connections");
 
   // The built-in hosted directory is inherited by the default bundle: search
-  // narrows to Stripe with its Official badge and vet links.
-  const search = page.getByPlaceholder(/Search servers/);
+  // reaches entries outside the popular preview, with their vet links.
+  const search = page.getByRole("textbox", { name: "Search connector directory" });
   await expect(search).toBeVisible();
   await search.fill("stripe");
   const stripeCard = page
     .locator('[data-testid^="dir-card-"]', { hasText: "Stripe" })
     .first();
   await expect(stripeCard).toBeVisible();
-  await expect(stripeCard.getByText("Official")).toBeVisible();
+  await expect(stripeCard.getByText("Official", { exact: true })).toHaveCount(0);
   await expect(stripeCard.getByRole("link", { name: "docs" })).toBeVisible();
 
   // Availability layer: the synthetic image_generation connector is Optional
   // in every deployment, so it always has a switch. Disable → reload →
   // still disabled (a real user_connector_prefs row) → reset to default.
-  const imgCard = page.getByTestId("bundled-card-image_generation");
+  // The deep link opens Show all when the connector is beyond the preview.
+  // The last copy is in that dialog when open, otherwise it is the preview.
+  await page.goto("/settings/connections#connector-image_generation");
+  const imgCard = page.getByTestId("bundled-card-image_generation").last();
   await expect(imgCard).toBeVisible();
   await imgCard.getByRole("switch", { name: /Enable Image generation for me/ }).click();
   await expect(imgCard.getByText("Disabled for me")).toBeVisible();
 
   await page.reload();
-  const imgCardAfter = page.getByTestId("bundled-card-image_generation");
+  const imgCardAfter = page.getByTestId("bundled-card-image_generation").last();
   await expect(imgCardAfter.getByText("Disabled for me")).toBeVisible();
 
   await imgCardAfter.getByRole("button", { name: "Reset" }).click();

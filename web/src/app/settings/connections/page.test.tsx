@@ -203,7 +203,7 @@ describe("ConnectionsPage ?connector= deep link", () => {
   it("does not open a form when the entry is unknown", async () => {
     vi.stubGlobal("fetch", mockFetch());
     visit("?connector=nonexistent");
-    await screen.findByTestId("dir-filter-bar");
+    await screen.findByLabelText("Search connector directory");
     expect(screen.queryByTestId("dir-form-browserbase")).toBeNull();
   });
 });
@@ -598,14 +598,22 @@ describe("ConnectionsPage needs-setup connectors", () => {
     expect(await screen.findByTestId("remote-group-gamma")).toHaveAttribute("id", "connector-gamma");
   });
 
-  it("scrolls a #connector- deep link into view once the catalog loads", async () => {
-    vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [BQ] }));
+  it("opens a hidden #connector- deep link and follows another fragment on the same page", async () => {
+    const preview = Array.from({ length: 4 }, (_, i) => ({ ...BUNDLED_IMG, name: `image-${i}` }));
+    vi.stubGlobal("fetch", mockFetch(undefined, { ...CATALOG, bundled: [...preview, BQ] }));
     const scroll = vi.fn();
     Element.prototype.scrollIntoView = scroll;
     window.history.replaceState({}, "", "/settings/connections#connector-bigquery");
     render(<ConnectionsPage />);
-    await screen.findByTestId("bundled-card-bigquery");
+    const dialog = await screen.findByRole("dialog", { name: "Bundled by your workspace" });
+    expect(within(dialog).getByTestId("bundled-card-bigquery")).toBeInTheDocument();
     await waitFor(() => expect(scroll).toHaveBeenCalled());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByTestId("bundled-card-bigquery")).toBeNull();
+    window.location.hash = "#connector-image-0";
+    await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+    window.location.hash = "#connector-bigquery";
+    expect(await screen.findByRole("dialog", { name: "Bundled by your workspace" })).toBeInTheDocument();
   });
 });
 
@@ -861,9 +869,7 @@ describe("ConnectionsPage multi-login seats", () => {
     );
     visit("");
 
-    // Browserbase is featured, so the unfiltered directory renders its card
-    // twice (Featured shelf + category group); either copy will do.
-    const card = (await screen.findAllByTestId("dir-card-browserbase"))[0];
+    const card = await screen.findByTestId("dir-card-browserbase");
     // The primary Add is spent ("Added"); the second affordance opens the form.
     expect((within(card).getByTestId("dir-add-browserbase") as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(card).getByTestId("dir-add-account-browserbase"));

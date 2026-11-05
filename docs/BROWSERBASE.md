@@ -128,8 +128,8 @@ That one key both drives the browser and mints the live-view links.
 Getting there is one click: `/settings/connections?connector=browserbase` opens the
 connector directory filtered to the Browserbase card with its key form open and focused
 — paste, Add, done. The deep link works for any directory entry by name (the built-in
-`browserbase` skill hands it to users whose chat has no connector), the entry is on the
-directory's Featured shelf, and the add is validated against the vendor before the key
+`browserbase` skill hands it to users whose chat has no connector), and Browserbase is
+also available through directory search. The add is validated against the vendor before the key
 is stored, so a bad paste fails loudly with the form still open.
 
 **Optional box-wide fallback** (for scheduled runs, or an operator who wants minting to

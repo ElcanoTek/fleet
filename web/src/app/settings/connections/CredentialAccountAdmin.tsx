@@ -51,6 +51,7 @@ type Status = { state: "ok" | "err"; msg: string };
 
 export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccountAdminProps) {
   const [open, setOpen] = useState(false);
+  const [accountsExpanded, setAccountsExpanded] = useState(false);
   const [server, setServer] = useState<string>(servers[0]?.name ?? "");
   const [account, setAccount] = useState<string>("");
   const [secrets, setSecrets] = useState<SecretField[]>([{ key: "", value: "" }]);
@@ -146,28 +147,43 @@ export function CredentialAccountAdmin({ servers, onChanged }: CredentialAccount
 
         {/* Existing accounts: names ONLY, never secret values. */}
         {accountRows.length > 0 ? (
-          <ConnRows>
-            {accountRows.map(({ srv, acct }) => (
-              <ConnRow
-                key={`${srv}:${acct}`}
-                name={
-                  <span data-testid={`credential-account-${srv}-${acct}`}>
-                    <code>{srv}</code> / {acct}
-                  </span>
-                }
-                actions={
-                  <InlineConfirmButton
-                    label="Delete"
-                    onConfirm={() => void remove(srv, acct)}
-                    disabled={submitting}
-                    testId={`credential-account-delete-${srv}-${acct}`}
-                  />
-                }
-              />
-            ))}
-          </ConnRows>
+          <div id="credential-account-list">
+            <ConnRows>
+              {(accountsExpanded ? accountRows : accountRows.slice(0, 4)).map(({ srv, acct }) => (
+                <ConnRow
+                  key={`${srv}:${acct}`}
+                  name={
+                    <span data-testid={`credential-account-${srv}-${acct}`}>
+                      <code>{srv}</code> / {acct}
+                    </span>
+                  }
+                  actions={
+                    <InlineConfirmButton
+                      label="Delete"
+                      onConfirm={() => void remove(srv, acct)}
+                      disabled={submitting}
+                      testId={`credential-account-delete-${srv}-${acct}`}
+                    />
+                  }
+                />
+              ))}
+            </ConnRows>
+          </div>
         ) : !open ? (
           <ConnEmpty>No accounts yet.</ConnEmpty>
+        ) : null}
+
+        {accountRows.length > 4 ? (
+          <button
+            type="button"
+            aria-expanded={accountsExpanded}
+            aria-controls="credential-account-list"
+            onClick={() => setAccountsExpanded((expanded) => !expanded)}
+            className={`${btnClass({ sm: true })} mt-3`}
+          >
+            {accountsExpanded ? "Show less" : `Show all (${accountRows.length})`}
+            <Icon name="chevron-down" className={`size-3.5 transition-transform ${accountsExpanded ? "rotate-180" : ""}`} />
+          </button>
         ) : null}
 
         {status ? (

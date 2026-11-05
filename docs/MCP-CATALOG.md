@@ -172,8 +172,8 @@ releases.
                                   # clients, so the secret field is mandatory
   oauth_client_id: "${SLACK_MCP_CLIENT_ID:-}"         # optional operator-provisioned
   oauth_client_secret: "${SLACK_MCP_CLIENT_SECRET:-}" # OAuth client (turns manual into 1-click)
-  featured: true                  # curated Featured-shelf pick (kept small:
-                                  # 8–20 built-in entries, never community)
+  featured: true                  # preferred fallback for the eight-card preview
+                                  # (8–20 built-in entries, never community)
 ```
 
 **Provenance is the hosting-operator trust tier** — who runs the endpoint,
@@ -247,21 +247,32 @@ vars to set; members are told to ask their administrator).
 
 ## UI
 
-Settings → Connections renders the "Connector directory" panel (open by
-default; the search/grouping/badge helpers live in
-`web/src/app/settings/connections/catalog.ts`, unit-tested):
+Settings → Connections keeps the existing-connection lists compact and opens
+the connector directory by default:
 
-- **Featured shelf** — a short curated section of household-name connectors
-  (Gmail, Drive, Notion, Slack, Stripe, GitHub, …) rendered before the
-  category listing on the unfiltered view. `featured: true` in the catalog;
-  a test caps the built-in shelf at 8–20 entries and forbids featuring
-  community entries (hidden by default, so a featured one would silently
-  vanish).
-- **Search** across name, description, vendor, category, and tags, plus
-  category filter chips with counts; results grouped under category headers.
-- **Provenance badges** — green "Official", amber "Aggregator"
-  (`third_party`), amber "Community". An unknown provenance value renders as
-  Community — bad input never inflates trust.
+- **Bundled by your workspace** previews four connectors. **Show all (N)**
+  opens a scrollable dialog with every connector and the same availability,
+  new-chat and default-account controls. The dialog supports Escape, focus
+  return and keyboard navigation. A `#connector-<name>` link to a bundled
+  connector beyond the preview opens the dialog and scrolls to that card.
+- **Credential accounts** previews four account rows. **Show all (N)** expands
+  them inline; **Show less** collapses them. Add/delete and write-only secret
+  handling are unchanged.
+- **Popular picks** — eight editorial choices, not measured usage rankings:
+  Microsoft 365 (the `microsoft-workiq-mail` Outlook endpoint), GitHub, Slack,
+  Gmail, Google Drive, Notion, Linear and Salesforce. Short card titles keep
+  the catalog's endpoint, operator and setup requirements intact. When a
+  workspace omits a pick, the remaining slots use its `featured` entries,
+  then its catalog order, up to eight cards in total.
+- **Search** covers the full catalog by name, description, vendor, category
+  and tags. Clearing it restores the eight picks. Category filter chips and
+  grouped/duplicate featured listings are removed. Cards show only a
+  **Popular** tag on the eight named picks; fallback cards are not badged.
+  The directory explains that connected services can receive conversation
+  content when their tools are used. Operator details and the existing
+  non-official consent step still identify who handles calls.
+- **Connector requests** — the note below search links **Contact Elcano** to
+  `hello@elcanotek.com` with a connector-request subject.
 - **Vet-it links** — every card links the vendor `docs` and, when present, the
   `source` repository and the `setup guide`.
 - **Setup hints** — an entry's `setup_hint` renders visibly on the card (not a
@@ -282,8 +293,12 @@ default; the search/grouping/badge helpers live in
   holds the delegated access token, with the docs/source links inline. A badge
   alone gets scrolled past; the consent gate keys off the operator identity,
   so a mislabeled provenance degrades to *more* friction, not silent egress.
-- **Bundled by your workspace** — unchanged: green "Bundled" badge,
-  informational (toggled per conversation in the Tools picker).
+
+This is a presentation change: the catalog API, endpoints, authentication,
+credential storage and permissions are unchanged. The popup for bundled
+connectors and expandable accounts list both use a four-item
+preview. Usage-based popularity rankings and adding new integrations are
+outside this change.
 
 ### Tenant-scoped entries
 
