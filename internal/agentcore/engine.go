@@ -100,6 +100,11 @@ type engine struct {
 	// compaction (#209) behind the FLEET_SCHEDULED_AUTO_COMPACT env var. It is
 	// driver-supplied data (scheduled sets it true), never a trunk Mode branch.
 	requireCompactionOptIn bool
+	// enableResendBudget opts an unattended recurring in-chat patrol turn into
+	// the cost-aware resend-budget compaction (#1534) so long-running patrols on
+	// 1M-window models compact into durable CompactionRecords at the resend budget
+	// instead of growing unbounded across ticks.
+	enableResendBudget bool
 	// resendCheckpoints counts the resend-budget pauses this run has taken
 	// (see resendBudgetCheckpoint); at maxResendCheckpoints the checkpoint
 	// stop condition goes inert so the loop cannot end every round after one
@@ -870,7 +875,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// The threshold is the checkpoint's (effectiveResendBudget): once the floor
 	// rule applies, compacting at the plain budget would summarize the history
 	// at every round start however little of it there is (#1600).
-	if e.requireCompactionOptIn {
+	if e.resendBudgetEnabled() {
 		if budget := e.resendBudget(); budget > 0 && used >= e.effectiveResendBudget(budget) {
 			pressure := e.withResendFloorFields(map[string]any{evtFieldUsedTokens: used, evtFieldResendBudget: budget, evtFieldTrigger: "resend_budget"}, budget)
 			// Stale bulky tool results are replaced with stubs first (#1742);
@@ -1346,11 +1351,15 @@ func (e *engine) checkpointThreshold(activeModel fantasy.LanguageModel) int {
 // model's limit". A scheduled run is one round of many tool steps, so without
 // this its window compaction would be checked only at round start and a long
 // run could grow past the window before the next one.
+func (e *engine) resendBudgetEnabled() bool {
+	return e != nil && (e.requireCompactionOptIn || e.enableResendBudget)
+}
+
 func (e *engine) windowCheckpointActive() bool {
-	if !e.requireCompactionOptIn {
+	if !e.resendBudgetEnabled() {
 		return true
 	}
-	return contextResendBudgetTokens(e.envPrefix) <= 0 && e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT")
+	return contextResendBudgetTokens(e.envPrefix) <= 0 && (!e.requireCompactionOptIn || e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT"))
 }
 
 // compactionCheckpoint returns the StopCondition that pauses a round's tool
@@ -1392,7 +1401,7 @@ func (e *engine) compactionCheckpoint(input []fantasy.Message, activeModel fanta
 // against is effectiveResendBudget, not the raw budget (#1600), and input is
 // the round's input history, which the minResendCheckpointHistory guard counts.
 func (e *engine) resendBudgetCheckpoint(input []fantasy.Message) fantasy.StopCondition {
-	if !e.requireCompactionOptIn {
+	if !e.resendBudgetEnabled() {
 		return nil
 	}
 	budget := e.resendBudget()
@@ -1611,7 +1620,7 @@ func (e *engine) resendFloorCrowdsBudget() bool {
 // step is judged against the floor it just set and never pauses on its own
 // size. Scheduled engines only: nothing else reads the floor.
 func (e *engine) noteResendFloor(usage fantasy.Usage) {
-	if !e.requireCompactionOptIn || (e.resendPrefix > 0 && !e.resendFloorStale) {
+	if !e.resendBudgetEnabled() || (e.resendPrefix > 0 && !e.resendFloorStale) {
 		return
 	}
 	resent := int(usage.InputTokens + usage.CacheReadTokens)

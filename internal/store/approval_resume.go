@@ -49,6 +49,7 @@ const (
 	ApprovalResumeSkipRateLimited      = "rate_limited"
 	ApprovalResumeSkipQueueFull        = "queue_full"
 	ApprovalResumeSkipConversationGone = "conversation_gone"
+	ApprovalResumeSkipTimedOut         = "timed_out"
 )
 
 // Notice kinds written into the conversation (agent.EntryTypeNotice).
@@ -248,9 +249,29 @@ func (s *Store) ClaimApprovalResume(ctx context.Context, req ApprovalResumeReque
 		return claimed[i].item.ID < claimed[j].item.ID
 	})
 	ids := make([]string, len(claimed))
+	allTimedOut := true
 	for i, c := range claimed {
 		out.Claimed = append(out.Claimed, c.item)
 		ids[i] = c.item.ID
+		if c.item.Outcome != ApprovalResumeOutcomeTimedOut {
+			allTimedOut = false
+		}
+	}
+
+	if allTimedOut {
+		var hasSchedule bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM chat_schedules WHERE conversation_id = $1 AND status IN ('active', 'paused'))`,
+			req.ConversationID).Scan(&hasSchedule); err != nil {
+			return out, err
+		}
+		if hasSchedule {
+			out.Skipped = ApprovalResumeSkipTimedOut
+			if err := markApprovalResumeTx(ctx, tx, ids, ApprovalResumeSkipped); err != nil {
+				return out, err
+			}
+			return out, tx.Commit()
+		}
 	}
 
 	if err := tx.QueryRowContext(ctx,

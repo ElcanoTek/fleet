@@ -626,6 +626,7 @@ func describeTools(client *mcp.Client) []mcpbroker.ToolDescriptor {
 			Tool:        st.Tool.Name,
 			Description: st.Tool.Description,
 			InputSchema: st.Tool.InputSchema,
+			Critical:    st.Tool.Critical,
 		})
 	}
 	return out

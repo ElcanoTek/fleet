@@ -110,6 +110,13 @@ type RunConfig struct {
 	// opt-in it only warns. Interactive leaves it false (compact freely). This is
 	// driver-supplied DATA, not a trunk Mode branch (see TestSeamPurity).
 	RequireCompactionOptIn bool
+	// EnableResendBudget enables cost-aware resend-budget compaction (#1534) for
+	// unattended recurring in-chat patrol turns (InputKindChatPatrol) without
+	// requiring FLEET_SCHEDULED_AUTO_COMPACT for window compaction. On 1M-window
+	// models an in-chat patrol otherwise accumulates 250K–500K tokens of stale
+	// history across runs and pays a cold-cache resend on every tick before ever
+	// reaching the 90% window threshold.
+	EnableResendBudget bool
 	// LoaderTools are extra always-registered tools (scheduled mcp_list/load).
 	LoaderTools []fantasy.AgentTool
 	// NativeTools are the mode's native tools (bash/python via Executor, etc.).
@@ -1056,6 +1063,7 @@ func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 		maxIterations:          cfg.MaxIterations,
 		healthRegistry:         deps.HealthRegistry,
 		requireCompactionOptIn: cfg.RequireCompactionOptIn,
+		enableResendBudget:     cfg.EnableResendBudget,
 		thinkingConfig:         cfg.ThinkingConfig,
 	}
 	if len(fallbackModels) > 0 {

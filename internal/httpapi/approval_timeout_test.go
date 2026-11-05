@@ -302,4 +302,20 @@ func TestStage_ConversationAutoApprove(t *testing.T) {
 	if id == agentcore.PreApprovedSentinel {
 		t.Errorf("Stage after toggle off returned PreApprovedSentinel, want staged card")
 	}
+
+	// 7. In an auto-approved patrol turn, a self-addressed inline digest email is
+	// pre-approved, whereas an email to another recipient is not pre-approved and
+	// patrol resolveTimeoutSeconds enforces at least the 24-hour patrol floor.
+	liveFlag = true
+	a.inputKind = agent.InputKindChatPatrol
+	id, err = a.Stage("mcp_sendgrid_send_email", "call_patrol_self", `{"to_email":"alice@example.com","subject":"Daily Brief","content":"<p>Summary</p>"}`)
+	if err != nil || id != agentcore.PreApprovedSentinel {
+		t.Fatalf("self-addressed patrol email = (%q, %v), want PreApprovedSentinel", id, err)
+	}
+	if a.isSelfAddressedPatrolEmail("mcp_sendgrid_send_email", `{"to_email":"bob@example.com","subject":"Daily Brief","content":"<p>Summary</p>"}`) {
+		t.Fatalf("expected other-recipient patrol email not to match isSelfAddressedPatrolEmail")
+	}
+	if got := a.resolveTimeoutSeconds("mcp_sendgrid_send_email"); got < defaultApprovalTimeoutSeconds {
+		t.Errorf("patrol resolveTimeoutSeconds = %d, want >= %d", got, defaultApprovalTimeoutSeconds)
+	}
 }

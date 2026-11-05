@@ -259,9 +259,28 @@ func (t *httpToolTransport) Close() error { return nil }
 // http.DefaultTransport would have followed a 30x straight to cloud metadata.
 func (t *httpToolTransport) httpClient() *http.Client {
 	t.clientOnce.Do(func() {
-		t.client = newHTTPToolClient(httpToolDialContext)
+		if t.client == nil {
+			t.client = newHTTPToolClient(httpToolDialContext)
+		}
 	})
 	return t.client
+}
+
+func validateFixedURLOrigin(rawURL string) error {
+	rawURL = strings.TrimSpace(rawURL)
+	schemeEnd := strings.Index(rawURL, "://")
+	if schemeEnd <= 0 {
+		return fmt.Errorf("http tool: url must include http(s):// scheme")
+	}
+	rest := rawURL[schemeEnd+3:]
+	authority := rest
+	if slashIdx := strings.IndexAny(rest, "/?#"); slashIdx >= 0 {
+		authority = rest[:slashIdx]
+	}
+	if strings.ContainsAny(rawURL[:schemeEnd]+authority, "{}") {
+		return fmt.Errorf("http tool: url scheme and host must be fixed; {param} placeholders are allowed only in the path and query")
+	}
+	return nil
 }
 
 // newHTTPToolClient builds the inline-HTTP-tool client around dial. Split out
@@ -290,6 +309,9 @@ func newHTTPToolClient(dial func(ctx context.Context, network, addr string) (net
 // about the failure (matching the issue's acceptance criteria). When response_jq
 // is set and the body is valid JSON, the jq program filters/transforms it first.
 func executeHTTPTool(ctx context.Context, client *http.Client, spec HTTPToolSpec, args map[string]interface{}) (*ToolResult, error) {
+	if err := validateFixedURLOrigin(spec.URL); err != nil {
+		return nil, err
+	}
 	reqURL := substituteTokens(spec.URL, args, substModeURL)
 
 	var body io.Reader

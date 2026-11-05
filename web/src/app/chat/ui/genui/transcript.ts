@@ -231,6 +231,19 @@ export function fieldLabels(spec: CardSpec | undefined): Map<string, string> {
   return out;
 }
 
+/** Input ids whose component is a password field (format: "password"). */
+export function passwordFields(spec: CardSpec | undefined): Set<string> {
+  const out = new Set<string>();
+  if (!spec) return out;
+  const visit = (list: CardSpec["components"]) =>
+    walkInputs(list, (c) => {
+      if (c.id && c.type === "text_input" && c.format === "password") out.add(c.id);
+      if (c.type === "repeater" && Array.isArray(c.fields)) visit(c.fields as CardSpec["components"]);
+    });
+  visit(spec.components);
+  return out;
+}
+
 // The bubble is a summary: each shown value is bounded (the full text is
 // behind "Show what was sent"), so a long answer does not lay out in full.
 const SUMMARY_VALUE_CHARS = 120;

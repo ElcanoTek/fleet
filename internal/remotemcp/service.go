@@ -52,9 +52,9 @@ var ErrManualClientRequired = errors.New("authorization server does not support 
 // GitHub verification in #1006 actionable.
 var ErrClientSecretRequired = errors.New("this authorization server requires a client secret (it accepts no public clients) — add the OAuth client's secret along with its client ID")
 
-// tokenStore is the slice of *store.Store this package needs (kept narrow so it
+// TokenStore is the slice of *store.Store this package needs (kept narrow so it
 // is easy to fake in tests).
-type tokenStore interface {
+type TokenStore interface {
 	RemoteMCPEncryptionEnabled() bool
 	CreateRemoteMCPServer(ctx context.Context, in store.RemoteMCPServerInput) (*store.RemoteMCPServer, error)
 	GetRemoteMCPServer(ctx context.Context, userEmail, id string) (*store.RemoteMCPServer, error)
@@ -83,6 +83,12 @@ type tokenStore interface {
 	ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]store.ConnectorPref, error)
 }
 
+type customConnectorUpdater interface {
+	UpdateCustomConnector(ctx context.Context, id string, in store.RemoteMCPServerInput) (*store.RemoteMCPServer, error)
+}
+
+type tokenStore = TokenStore
+
 // Config is the deployment configuration for the feature.
 type Config struct {
 	// PublicBaseURL is the externally-reachable origin of the web app, e.g.
@@ -105,6 +111,8 @@ type Config struct {
 	HTTPTimeout time.Duration
 	// RefreshTimeout bounds the token refresh held under the DB row lock. Default 10s.
 	RefreshTimeout time.Duration
+	// HTTPClient overrides the default SSRF-safe HTTP client (tests only).
+	HTTPClient *http.Client
 }
 
 func (c *Config) withDefaults() {
@@ -172,9 +180,13 @@ func secretScope(serverID string) string {
 // NewService builds a Service. cfg is normalized; the SSRF-safe HTTP client is
 // constructed once. The store must have a token cipher installed for the
 // feature to be enabled.
-func NewService(st *store.Store, cfg Config) *Service {
+func NewService(st TokenStore, cfg Config) *Service {
 	cfg.withDefaults()
-	return &Service{store: st, cfg: cfg, httpClient: mcpoauth.SafeHTTPClient(cfg.HTTPTimeout)}
+	hc := cfg.HTTPClient
+	if hc == nil {
+		hc = mcpoauth.SafeHTTPClient(cfg.HTTPTimeout)
+	}
+	return &Service{store: st, cfg: cfg, httpClient: hc}
 }
 
 // SetSecretObserver registers fn to receive every credential this service
@@ -605,12 +617,435 @@ func (s *Service) SetAPIKey(ctx context.Context, email, serverID, apiKey string)
 	// Same registration as the add-time probe (#1274): the rotated key rides
 	// this request and the wrapped failure reaches the caller.
 	s.noteSecrets(apiKey)
+	if server.Transport == store.RemoteMCPTransportHTTPTools || server.Transport == store.RemoteMCPTransportPlaywright {
+		keyToStore := s.mergePlaywrightRotatedKey(ctx, server, apiKey)
+		if err := s.store.SetRemoteMCPAPIKey(ctx, email, serverID, keyToStore); err != nil {
+			return ProbeReport{}, err
+		}
+		return ProbeReport{ToolCount: len(server.CustomTools), KeyVerified: false}, nil
+	}
 	report, err := s.probeServer(ctx, server.URL, server.APIKeyHeader, server.APIKeyQuery, server.APIKeyPrefix, apiKey)
 	if err != nil {
 		log.Print(agentcore.RedactSecrets(fmt.Sprintf("remote-mcp: key rotation probe of %s for %s refused: %s", logSafeURL(server.URL), email, err.Error())))
 		return ProbeReport{}, fmt.Errorf("the server did not accept this API key — the previous key is unchanged: %w", err)
 	}
 	return report, s.store.SetRemoteMCPAPIKey(ctx, email, serverID, apiKey)
+}
+
+// AddCustomConnectorInput configures a user-owned or shared custom HTTP API
+// ("http_tools") or Playwright browser ("playwright") connector.
+type AddCustomConnectorInput struct {
+	Email        string
+	Name         string
+	Account      string
+	BaseURL      string
+	Transport    string // "http_tools" or "playwright"
+	AuthMode     string // "open" or "api_key"
+	APIKey       string // plaintext secret or JSON credential bundle; sealed in api_key_enc
+	APIKeyHeader string
+	APIKeyQuery  string
+	APIKeyPrefix string
+	CustomTools  []store.CustomConnectorTool
+	ShareScope   string // "personal" (default) or "everyone" ("*")
+}
+
+// AddCustomConnector validates and persists a custom HTTP API ("http_tools") or
+// Playwright browser ("playwright") connector in remote_mcp_servers. If a seat
+// with the same (email, name, account) already exists and is a custom connector,
+// it updates its tools and credentials in place so iterative connector building
+// in chat is seamless.
+func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorInput) (*store.RemoteMCPServer, error) {
+	if !s.Enabled() {
+		return nil, ErrDisabled
+	}
+	name := strings.ToLower(strings.TrimSpace(in.Name))
+	if name == "" {
+		return nil, errors.New("a connector name is required")
+	}
+	if !isValidCustomToolIdentifier(name) {
+		return nil, fmt.Errorf("connector name %q must match ^[a-z0-9][a-z0-9_]{0,48}$", in.Name)
+	}
+	account, err := store.CanonicalRemoteMCPAccount(in.Account)
+	if err != nil {
+		return nil, err
+	}
+	canonURL, err := mcpoauth.ValidateServerURL(in.BaseURL, s.cfg.AllowInsecureHTTP)
+	if err != nil {
+		return nil, err
+	}
+	transport := strings.ToLower(strings.TrimSpace(in.Transport))
+	if transport != store.RemoteMCPTransportHTTPTools && transport != store.RemoteMCPTransportPlaywright {
+		return nil, fmt.Errorf("unsupported custom connector transport %q (expected http_tools or playwright)", in.Transport)
+	}
+	if len(in.CustomTools) == 0 {
+		return nil, errors.New("at least one custom tool definition is required")
+	}
+
+	in = s.inheritExistingCustomAuth(ctx, name, account, canonURL, in)
+	authKind, header, query, prefix, err := s.resolveCustomConnectorAuth(in)
+	if err != nil {
+		return nil, err
+	}
+
+	regName := agentcore.RegisteredMCPName(name, account)
+	customTools, err := s.validateCustomConnectorTools(regName, canonURL, transport, authKind, in.CustomTools)
+	if err != nil {
+		return nil, err
+	}
+
+	input := store.RemoteMCPServerInput{
+		UserEmail:    in.Email,
+		Name:         name,
+		Account:      account,
+		URL:          canonURL,
+		Transport:    transport,
+		Status:       store.RemoteMCPStatusConnected,
+		AuthKind:     authKind,
+		APIKeyHeader: header,
+		APIKeyQuery:  query,
+		APIKeyPrefix: prefix,
+		APIKey:       in.APIKey,
+		CustomTools:  customTools,
+	}
+
+	return s.upsertCustomConnector(ctx, in.Email, name, account, in.ShareScope, input)
+}
+
+func sameCustomOrigin(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ua.Hostname() == "" || ub.Hostname() == "" {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
+func (s *Service) inheritExistingCustomAuth(ctx context.Context, name, account, canonURL string, in AddCustomConnectorInput) AddCustomConnectorInput {
+	if strings.TrimSpace(in.AuthMode) != "" || strings.TrimSpace(in.APIKey) != "" {
+		return in
+	}
+	existingList, err := s.store.ListRemoteMCPServers(ctx, in.Email)
+	if err != nil {
+		return in
+	}
+	for _, ex := range existingList {
+		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
+			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) &&
+			ex.AuthKind == store.RemoteMCPAuthAPIKey &&
+			sameCustomOrigin(ex.URL, canonURL) {
+			if key, kerr := s.store.GetRemoteMCPAPIKey(ctx, &ex); kerr == nil && strings.TrimSpace(key) != "" {
+				in.AuthMode = store.RemoteMCPAuthAPIKey
+				in.APIKey = key
+				if strings.TrimSpace(in.APIKeyHeader) == "" && strings.TrimSpace(in.APIKeyQuery) == "" {
+					in.APIKeyHeader = ex.APIKeyHeader
+					in.APIKeyQuery = ex.APIKeyQuery
+					if strings.TrimSpace(in.APIKeyPrefix) == "" {
+						in.APIKeyPrefix = ex.APIKeyPrefix
+					}
+				}
+			}
+			break
+		}
+	}
+	return in
+}
+
+func (s *Service) mergePlaywrightRotatedKey(ctx context.Context, server *store.RemoteMCPServer, apiKey string) string {
+	if server == nil || server.Transport != store.RemoteMCPTransportPlaywright || strings.HasPrefix(strings.TrimSpace(apiKey), "{") {
+		return apiKey
+	}
+	existing, err := s.store.GetRemoteMCPAPIKey(ctx, server)
+	if err != nil || !strings.HasPrefix(strings.TrimSpace(existing), "{") {
+		return apiKey
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal([]byte(existing), &bundle); err != nil || len(bundle) == 0 {
+		return apiKey
+	}
+	bundle["password"] = apiKey
+	bundle["secret"] = apiKey
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		return apiKey
+	}
+	return string(raw)
+}
+
+func (s *Service) resolveCustomConnectorAuth(in AddCustomConnectorInput) (authKind, header, query, prefix string, err error) {
+	authKind = strings.ToLower(strings.TrimSpace(in.AuthMode))
+	if authKind == "" {
+		if strings.TrimSpace(in.APIKey) != "" {
+			authKind = store.RemoteMCPAuthAPIKey
+		} else {
+			authKind = store.RemoteMCPAuthOpen
+		}
+	}
+	if authKind == store.RemoteMCPAuthAPIKey {
+		header, err = validateAPIKeyAuth(in.APIKey, in.APIKeyHeader)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		query = strings.TrimSpace(in.APIKeyQuery)
+		if query != "" {
+			if header != "" {
+				return "", "", "", "", errors.New("an API key is sent under a header OR a query parameter, not both")
+			}
+			if !mcp.QueryParamNameOK(query) {
+				return "", "", "", "", fmt.Errorf("invalid API key query-parameter name %q", query)
+			}
+		}
+		prefix, err = validateAPIKeyPrefix(in.APIKeyPrefix, header)
+		if err != nil {
+			return "", "", "", "", err
+		}
+		s.noteSecrets(in.APIKey)
+		return authKind, header, query, prefix, nil
+	}
+	if authKind != store.RemoteMCPAuthOpen {
+		return "", "", "", "", fmt.Errorf("custom connectors support auth_mode \"api_key\" or \"open\" (got %q)", authKind)
+	}
+	return authKind, "", "", "", nil
+}
+
+func (s *Service) validateCustomConnectorTools(regName, canonURL, transport, authKind string, tools []store.CustomConnectorTool) ([]store.CustomConnectorTool, error) {
+	baseOriginURL, err := url.Parse(canonURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+	baseOrigin := strings.ToLower(baseOriginURL.Scheme) + "://" + strings.ToLower(baseOriginURL.Host)
+	requireSameOrigin := authKind == store.RemoteMCPAuthAPIKey
+
+	out := make([]store.CustomConnectorTool, len(tools))
+	copy(out, tools)
+	seenNames := make(map[string]bool, len(out))
+	for i := range out {
+		tName, nerr := validateCustomToolName(regName, out[i].Name, i, seenNames)
+		if nerr != nil {
+			return nil, nerr
+		}
+		out[i].Name = tName
+		normSchema, ierr := validateCustomToolInputSchema(out[i].InputSchema, i, tName)
+		if ierr != nil {
+			return nil, ierr
+		}
+		out[i].InputSchema = normSchema
+		tURL, uerr := s.validateCustomToolURL(out[i].URL, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, i, tName)
+		if uerr != nil {
+			return nil, uerr
+		}
+		out[i].URL = tURL
+		if transport == store.RemoteMCPTransportHTTPTools {
+			method, merr := normalizeCustomHTTPMethod(out[i].Method, i, tName)
+			if merr != nil {
+				return nil, merr
+			}
+			out[i].Method = method
+		} else if serr := s.validateCustomPlaywrightSteps(out[i].Steps, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, i, tName); serr != nil {
+			return nil, serr
+		}
+	}
+	return out, nil
+}
+
+func validateCustomToolInputSchema(raw json.RawMessage, idx int, tName string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema must be a JSON object: %w", idx, tName, err)
+	}
+	if typ, ok := m["type"]; ok {
+		s, ok := typ.(string)
+		if !ok || s != "object" {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.type must be \"object\"", idx, tName)
+		}
+	} else {
+		m["type"] = "object"
+	}
+	if props, ok := m["properties"]; ok && props != nil {
+		pm, ok := props.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.properties must be an object", idx, tName)
+		}
+		for pk, pv := range pm {
+			if _, ok := pv.(map[string]any); !ok {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.properties[%q] must be an object", idx, tName, pk)
+			}
+		}
+	}
+	if req, ok := m["required"]; ok && req != nil {
+		arr, ok := req.([]any)
+		if !ok {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.required must be an array of strings", idx, tName)
+		}
+		for _, item := range arr {
+			if _, ok := item.(string); !ok {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.required must contain only strings", idx, tName)
+			}
+		}
+	}
+	norm, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("custom_tools[%d] (%s): marshal input_schema: %w", idx, tName, err)
+	}
+	return norm, nil
+}
+
+func validateCustomToolName(regName, rawName string, idx int, seen map[string]bool) (string, error) {
+	tName := strings.TrimSpace(rawName)
+	if tName == "" {
+		return "", fmt.Errorf("custom_tools[%d]: name is required", idx)
+	}
+	if !isValidCustomToolIdentifier(tName) {
+		return "", fmt.Errorf("custom_tools[%d] (%s): name must match ^[a-z0-9][a-z0-9_]{0,48}$", idx, tName)
+	}
+	if len("mcp_"+regName+"_"+tName) > 64 {
+		return "", fmt.Errorf("custom_tools[%d] (%s): full tool name %q exceeds 64 characters", idx, tName, "mcp_"+regName+"_"+tName)
+	}
+	if seen[tName] {
+		return "", fmt.Errorf("custom_tools[%d] (%s): duplicate tool name", idx, tName)
+	}
+	seen[tName] = true
+	return tName, nil
+}
+
+func isValidCustomToolIdentifier(name string) bool {
+	if len(name) == 0 || len(name) > 49 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		isLowerOrDigit := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+		if i == 0 && !isLowerOrDigit {
+			return false
+		}
+		if !isLowerOrDigit && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Service) validateCustomToolURL(rawURL, canonURL string, baseOriginURL *url.URL, baseOrigin string, requireSameOrigin bool, idx int, tName string) (string, error) {
+	tURL := strings.TrimSpace(rawURL)
+	if tURL == "" {
+		tURL = canonURL
+	} else if strings.HasPrefix(tURL, "/") {
+		tURL = baseOriginURL.Scheme + "://" + baseOriginURL.Host + tURL
+	}
+	schemeEnd := strings.Index(tURL, "://")
+	if schemeEnd <= 0 {
+		return "", fmt.Errorf("custom_tools[%d] (%s): url must include http(s):// scheme", idx, tName)
+	}
+	restAfterScheme := tURL[schemeEnd+3:]
+	authority := restAfterScheme
+	if slashIdx := strings.IndexAny(restAfterScheme, "/?#"); slashIdx >= 0 {
+		authority = restAfterScheme[:slashIdx]
+	}
+	if strings.ContainsAny(tURL[:schemeEnd]+authority, "{}") {
+		return "", fmt.Errorf("custom_tools[%d] (%s): url scheme and host must be fixed; {param} placeholders are allowed only in the path and query", idx, tName)
+	}
+	probeURL := strings.NewReplacer("{", "_", "}", "_").Replace(tURL)
+	validatedToolURL, verr := mcpoauth.ValidateServerURL(probeURL, s.cfg.AllowInsecureHTTP)
+	if verr != nil {
+		return "", fmt.Errorf("custom_tools[%d] (%s): %w", idx, tName, verr)
+	}
+	if requireSameOrigin {
+		tu, perr := url.Parse(validatedToolURL)
+		if perr != nil {
+			return "", fmt.Errorf("custom_tools[%d] (%s): %w", idx, tName, perr)
+		}
+		toolOrigin := strings.ToLower(tu.Scheme) + "://" + strings.ToLower(tu.Host)
+		if toolOrigin != baseOrigin {
+			return "", fmt.Errorf("custom_tools[%d] (%s): authenticated tool URL %q must share the connector's base origin %q", idx, tName, tURL, baseOrigin)
+		}
+	}
+	return tURL, nil
+}
+
+func (s *Service) validateCustomPlaywrightSteps(steps []store.CustomConnectorStep, canonURL string, baseOriginURL *url.URL, baseOrigin string, requireSameOrigin bool, idx int, tName string) error {
+	for j, st := range steps {
+		act := strings.ToLower(strings.TrimSpace(st.Action))
+		switch act {
+		case "goto":
+			dest := strings.TrimSpace(st.Value)
+			if dest == "" {
+				dest = strings.TrimSpace(st.Selector)
+			}
+			if dest == "" {
+				return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: goto requires value (URL)", idx, tName, j)
+			}
+			if _, err := s.validateCustomToolURL(dest, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, idx, tName); err != nil {
+				return fmt.Errorf("steps[%d]: %w", j, err)
+			}
+		case "fill", "click", "press", "select", "extract":
+			if strings.TrimSpace(st.Selector) == "" {
+				return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: %s requires selector", idx, tName, j, act)
+			}
+		case "wait_for", "sleep":
+		default:
+			return fmt.Errorf("custom_tools[%d] (%s) steps[%d]: unsupported playwright step action %q", idx, tName, j, st.Action)
+		}
+	}
+	return nil
+}
+
+func normalizeCustomHTTPMethod(rawMethod string, idx int, toolName string) (string, error) {
+	method := strings.ToUpper(strings.TrimSpace(rawMethod))
+	if method == "" {
+		return http.MethodGet, nil
+	}
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return method, nil
+	default:
+		return "", fmt.Errorf("custom_tools[%d] (%s): unsupported HTTP method %q", idx, toolName, method)
+	}
+}
+
+func (s *Service) upsertCustomConnector(ctx context.Context, email, name, account, shareScope string, input store.RemoteMCPServerInput) (*store.RemoteMCPServer, error) {
+	var srv *store.RemoteMCPServer
+	var err error
+	existingList, _ := s.store.ListRemoteMCPServers(ctx, email)
+	for _, ex := range existingList {
+		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
+			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) {
+			if updater, ok := s.store.(customConnectorUpdater); ok {
+				srv, err = updater.UpdateCustomConnector(ctx, ex.ID, input)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				_ = s.store.DeleteRemoteMCPServer(ctx, email, ex.ID)
+			}
+			break
+		}
+	}
+	if srv == nil {
+		srv, err = s.store.CreateRemoteMCPServer(ctx, input)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if strings.EqualFold(strings.TrimSpace(shareScope), "everyone") || strings.TrimSpace(shareScope) == store.GranteeEveryone {
+		if err := s.store.ShareRemoteMCPServer(ctx, email, srv.ID, store.GranteeEveryone); err != nil {
+			return nil, fmt.Errorf("share custom connector with everyone: %w", err)
+		}
+	} else {
+		if err := s.store.UnshareRemoteMCPServer(ctx, email, srv.ID, store.GranteeEveryone); err != nil && !errors.Is(err, store.ErrRemoteMCPNotFound) {
+			return nil, fmt.Errorf("revoke everyone share on custom connector: %w", err)
+		}
+		if shares, err := s.store.ListRemoteMCPSharesByOwner(ctx, email); err == nil {
+			for _, grantee := range shares[srv.ID] {
+				if err := s.store.UnshareRemoteMCPServer(ctx, email, srv.ID, grantee); err != nil && !errors.Is(err, store.ErrRemoteMCPNotFound) {
+					return nil, fmt.Errorf("revoke share %q on custom connector: %w", grantee, err)
+				}
+			}
+		}
+	}
+	return srv, nil
 }
 
 // SetDefaultSeat makes serverID the default seat among the caller's seats of

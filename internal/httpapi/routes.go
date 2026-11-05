@@ -89,6 +89,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("/remote-mcp-servers", auth(member(mutate(http.HandlerFunc(s.remoteMCPServers)))))
 	mux.Handle("/remote-mcp-servers/", auth(member(mutate(http.HandlerFunc(s.remoteMCPServerByID)))))
 	mux.Handle("/oauth/mcp/callback", auth(member(mutate(http.HandlerFunc(s.remoteMCPOAuthCallback)))))
+	// Co-Piloted live browser sessions (local Playwright + headless Chromium).
+	mux.Handle("/browser-sessions/", auth(member(mutate(http.HandlerFunc(s.handleBrowserSessions)))))
 	// Browser Web Push (#292): subscribe/unsubscribe/renew manage only the
 	// caller's own rows, status reads only the caller's own rows, and the VAPID
 	// public key is a non-secret read. All answer 501 until the operator

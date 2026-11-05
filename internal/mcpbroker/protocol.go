@@ -78,6 +78,7 @@ type ToolDescriptor struct {
 	Tool        string         `json:"tool"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"inputSchema,omitempty"`
+	Critical    bool           `json:"critical,omitempty"`
 }
 
 // ScopeChoice selects one named account for a server. Both fields are public

@@ -535,6 +535,14 @@ func buildFantasyToolsWithRoster(
 		// deferred registry. That makes direct and tool_call dispatch identical;
 		// wrapping only the advertised bridge would leave the hidden tool itself
 		// as a future bypass route.
+		if st.Tool.Critical {
+			if orch, ok := policyOrchestration(policy); ok && orch != nil {
+				if orch.runCriticalTools == nil {
+					orch.runCriticalTools = make(map[string]string)
+				}
+				orch.runCriticalTools[mt.Name()] = st.Tool.Name
+			}
+		}
 		mcpTools = append(mcpTools, withModelOutputBoundary(mt))
 		mcpNames = append(mcpNames, mt.Name())
 		mcpByServer[st.ServerName]++

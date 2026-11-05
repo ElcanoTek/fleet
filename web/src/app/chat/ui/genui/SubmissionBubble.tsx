@@ -9,7 +9,7 @@
 import { useContext, useState } from "react";
 import type { Message } from "../history";
 import type { Reply, Submission } from "./model";
-import { fieldLabels, GenUiContext, summarizeValue } from "./transcript";
+import { fieldLabels, GenUiContext, passwordFields, summarizeValue } from "./transcript";
 
 // A card answer the server refused (or never received) stays in the
 // transcript until a reload; it says so, rather than reading as sent.
@@ -36,9 +36,40 @@ export function SubmissionBubble({
   const { cards, answerSpecs } = useContext(GenUiContext);
   const spec = (message && answerSpecs.get(message)) ?? cards.get(submission.cardId);
   const labels = fieldLabels(spec);
+  const secrets = passwordFields(spec);
   const action = spec?.actions?.find((a) => a.id === submission.actionId)?.label ?? submission.actionId;
   const [showRaw, setShowRaw] = useState(false);
   const entries = Object.entries(submission.values);
+  const isSecretEntry = (k: string, v: unknown) =>
+    (secrets.has(k) || (typeof v === "string" && v.startsWith("$secret:"))) &&
+    v !== null &&
+    v !== undefined &&
+    v !== "";
+  const safeRaw = (() => {
+    if (secrets.size === 0 && !entries.some(([k, v]) => isSecretEntry(k, v))) {
+      return raw;
+    }
+    const redactVal = (val: unknown): unknown => {
+      if (Array.isArray(val)) return val.map(redactVal);
+      if (val && typeof val === "object") {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(val as Record<string, unknown>)) {
+          out[k] = isSecretEntry(k, v) ? "••••••••" : redactVal(v);
+        }
+        return out;
+      }
+      return val;
+    };
+    const openIdx = raw.indexOf("{");
+    const closeIdx = raw.lastIndexOf("}");
+    if (openIdx < 0 || closeIdx <= openIdx) return raw;
+    try {
+      const parsed = JSON.parse(raw.slice(openIdx, closeIdx + 1));
+      return `${raw.slice(0, openIdx)}${JSON.stringify(redactVal(parsed), null, 2)}${raw.slice(closeIdx + 1)}`;
+    } catch {
+      return raw;
+    }
+  })();
   return (
     <div
       data-testid="genui-submission-bubble"
@@ -55,7 +86,7 @@ export function SubmissionBubble({
           {entries.slice(0, 12).map(([k, v]) => (
             <div key={k} className="contents">
               <dt className="text-[var(--color-text-muted)]">{labels.get(k) ?? k}</dt>
-              <dd className="m-0 min-w-0">{summarizeValue(v)}</dd>
+              <dd className="m-0 min-w-0">{isSecretEntry(k, v) ? "••••••••" : summarizeValue(v)}</dd>
             </div>
           ))}
         </dl>
@@ -77,7 +108,7 @@ export function SubmissionBubble({
           className="mt-1 max-h-60 overflow-auto whitespace-pre-wrap break-all rounded-md bg-[var(--color-surface-inset)] p-2 text-[0.72rem]"
           style={{ fontFamily: "var(--font-code)" }}
         >
-          {raw}
+          {safeRaw}
         </pre>
       ) : null}
     </div>

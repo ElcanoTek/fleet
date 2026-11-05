@@ -1045,4 +1045,51 @@ describe("ConnectionsPage manual OAuth client with a required secret", () => {
     });
     await waitFor(() => expect(add.disabled).toBe(false));
   });
+
+  it("renders Create your own connection button and custom connector transport badges", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockFetch(undefined, CATALOG, {
+        ...EMPTY_LIST,
+        servers: [
+          {
+            id: "c1",
+            name: "acme_crm",
+            url: "https://api.acme.example.com",
+            transport: "http_tools",
+            status: "connected",
+            auth_kind: "api_key",
+            account: "",
+            is_default: true,
+            created_at: 1,
+            updated_at: 1,
+            custom_tools: [{ name: "list_deals" }, { name: "get_deal" }],
+          },
+          {
+            id: "c2",
+            name: "legacy_portal",
+            url: "https://portal.acme.example.com",
+            transport: "playwright",
+            status: "connected",
+            auth_kind: "api_key",
+            account: "",
+            is_default: true,
+            created_at: 1,
+            updated_at: 1,
+            custom_tools: [{ name: "export_report" }],
+          },
+        ],
+      }),
+    );
+    visit("");
+
+    const createBtn = await screen.findByTestId("create-custom-connection-btn");
+    expect(createBtn).toHaveTextContent("Create your own connection");
+
+    const crmGroup = await screen.findByTestId("remote-group-acme_crm");
+    expect(within(crmGroup).getByText("Custom API · 2 tools")).toBeInTheDocument();
+
+    const portalGroup = await screen.findByTestId("remote-group-legacy_portal");
+    expect(within(portalGroup).getByText("Browser automation · 1 tool")).toBeInTheDocument();
+  });
 });

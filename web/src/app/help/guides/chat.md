@@ -785,6 +785,17 @@ An administrator can also set that app's client ID and secret once on the
 server so everyone else in the workspace connects with one click. After the
 form, you sign in at the vendor as usual.
 
+When the service you need is not in the directory — or only has an HTTP API or
+a web portal — click **Create your own connection** in **Settings →
+Connections** (or type `/connector-builder` in Chat) to open a guided
+Connector Studio chat. The assistant checks for an official MCP server first,
+falls back to a custom HTTP API connector (badged **Custom API**) or a headless
+Chromium automation connector (badged **Playwright Browser**, with an optional
+live Co-Pilot browser view when you need to complete SSO, 2FA, or a CAPTCHA
+yourself), collects any API key or password through a masked password field so
+the secret stays on the host, and saves the connection for you alone or for the
+whole workspace.
+
 Every connector call shows up in the execution trail as a chip. If a figure looks
 wrong, open the chip and read what the connector actually returned before
 questioning the arithmetic.

@@ -18,6 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
+	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -66,6 +67,36 @@ type RemoteMCPConn struct {
 	// AuthHeader ("Token token=" → "Authorization: Token token=<key>"), from
 	// the directory entry; empty for the raw-key and bearer shapes.
 	AuthPrefix string
+	// Transport is the remote connector's transport ("streamable_http", "sse",
+	// "http_tools", or "playwright").
+	Transport string
+	// CustomTools holds declarative tool definitions for custom HTTP
+	// ("http_tools") or Playwright ("playwright") connectors.
+	CustomTools []RemoteMCPCustomTool
+}
+
+// RemoteMCPCustomStep is a declarative browser action in a Playwright custom connector tool.
+type RemoteMCPCustomStep struct {
+	Action    string `json:"action"`
+	Selector  string `json:"selector,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Optional  bool   `json:"optional,omitempty"`
+}
+
+// RemoteMCPCustomTool is the store-agnostic shape of a tool inside a custom
+// HTTP ("http_tools") or Playwright ("playwright") connector.
+type RemoteMCPCustomTool struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description,omitempty"`
+	Method      string                `json:"method,omitempty"`
+	URL         string                `json:"url"`
+	Headers     map[string]string     `json:"headers,omitempty"`
+	Body        string                `json:"body,omitempty"`
+	InputSchema json.RawMessage       `json:"input_schema,omitempty"`
+	Steps       []RemoteMCPCustomStep `json:"steps,omitempty"`
 }
 
 // RemoteMCPResolver supplies a user's connected remote servers and mints fresh
@@ -227,6 +258,13 @@ type RemoteMCPSeatGroup struct {
 	// Owner is non-empty when EVERY seat of this name was shared with the
 	// user (display attribution); mixed groups report the user's own.
 	Owner string
+	// Transport is the default seat's transport ("streamable_http", "sse",
+	// "http_tools", or "playwright").
+	Transport string
+	// ToolCount and Tools are populated for custom connectors ("http_tools" and
+	// "playwright") whose tool definitions are stored on the connection row.
+	ToolCount int
+	Tools     []string
 }
 
 // GroupRemoteMCPSeats collapses per-seat connections into one group per name,
@@ -245,7 +283,22 @@ func GroupRemoteMCPSeats(conns []RemoteMCPConn) []RemoteMCPSeatGroup {
 	for _, name := range order {
 		seats := byName[name]
 		def := defaultRemoteSeat(seats)
-		g := RemoteMCPSeatGroup{Name: name, URL: def.URL, DefaultAccount: def.Account, Accounts: []string{}, Owner: def.Owner}
+		var toolNames []string
+		for _, ct := range def.CustomTools {
+			if n := strings.TrimSpace(ct.Name); n != "" {
+				toolNames = append(toolNames, n)
+			}
+		}
+		g := RemoteMCPSeatGroup{
+			Name:           name,
+			URL:            def.URL,
+			DefaultAccount: def.Account,
+			Accounts:       []string{},
+			Owner:          def.Owner,
+			Transport:      def.Transport,
+			ToolCount:      len(toolNames),
+			Tools:          toolNames,
+		}
 		for _, c := range seats {
 			if c.Account != "" {
 				g.Accounts = append(g.Accounts, c.Account)
@@ -870,6 +923,17 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 			overlay.skipConn(conn, tokenSkipReason(terr))
 			continue
 		}
+		if conn.Transport == "http_tools" || conn.Transport == "playwright" {
+			if cerr := mountCustomRemoteConnector(client, regName, conn, bearer, httpClient); cerr != nil {
+				log.Printf("remote-mcp: skipping custom connector %q for %s: %s", regName, email, connectFailureReason(bearer, cerr))
+				overlay.skipConn(conn, SkipReasonUnknown)
+				continue
+			}
+			overlay.Servers[regName] = true
+			overlay.Seats[regName] = agentcore.MCPChoice{Server: conn.Name, Account: conn.Account}
+			registered++
+			continue
+		}
 		opts := mcp.HTTPServerOptions{HTTPClient: httpClient}
 		if bearer != "" {
 			switch {
@@ -918,6 +982,155 @@ func BuildRemoteMCPOverlay(ctx context.Context, resolver RemoteMCPResolver, emai
 
 	overlay.Catalog = client.GetAllTools()
 	return overlay, nil
+}
+
+func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteMCPConn, bearer string, httpClient *http.Client) error {
+	if len(conn.CustomTools) == 0 {
+		return errors.New("custom connector has no tools defined")
+	}
+	if conn.Transport == "playwright" {
+		creds := parsePlaywrightCredentials(bearer, conn)
+		specs := make([]mcp.PlaywrightToolSpec, 0, len(conn.CustomTools))
+		for _, ct := range conn.CustomTools {
+			tURL := strings.TrimSpace(ct.URL)
+			if tURL == "" {
+				tURL = conn.URL
+			}
+			if conn.AuthQuery != "" && creds.Secret != "" {
+				tURL = attachQueryParamToURLTemplate(tURL, conn.AuthQuery, creds.Secret)
+			}
+			steps := make([]playwrightrunner.Step, 0, len(ct.Steps))
+			for _, st := range ct.Steps {
+				steps = append(steps, playwrightrunner.Step{
+					Action:    st.Action,
+					Selector:  st.Selector,
+					Value:     st.Value,
+					Mode:      st.Mode,
+					Attribute: st.Attribute,
+					TimeoutMs: st.TimeoutMs,
+					Optional:  st.Optional,
+				})
+			}
+			specs = append(specs, mcp.PlaywrightToolSpec{
+				Name:        ct.Name,
+				Description: ct.Description,
+				URL:         tURL,
+				Steps:       steps,
+				Credentials: creds,
+				InputSchema: decodeCustomToolSchema(ct.InputSchema),
+			})
+		}
+		return client.AddPlaywrightToolsOnServer(regName, specs)
+	}
+
+	specs := make([]mcp.HTTPToolSpec, 0, len(conn.CustomTools))
+	for _, ct := range conn.CustomTools {
+		tURL := strings.TrimSpace(ct.URL)
+		if tURL == "" {
+			tURL = conn.URL
+		}
+		headers := make(map[string]string, len(ct.Headers)+1)
+		for k, v := range ct.Headers {
+			headers[k] = v
+		}
+		if bearer != "" {
+			switch {
+			case conn.AuthQuery != "":
+				tURL = attachQueryParamToURLTemplate(tURL, conn.AuthQuery, bearer)
+			case conn.AuthHeader != "":
+				headers[conn.AuthHeader] = conn.AuthPrefix + bearer
+			default:
+				headers["Authorization"] = "Bearer " + bearer
+			}
+		}
+		specs = append(specs, mcp.HTTPToolSpec{
+			Name:         ct.Name,
+			Description:  ct.Description,
+			Method:       ct.Method,
+			URL:          tURL,
+			Headers:      headers,
+			BodyTemplate: ct.Body,
+			InputSchema:  decodeCustomToolSchema(ct.InputSchema),
+		})
+	}
+	return client.AddHTTPToolsOnServer(regName, specs, httpClient)
+}
+
+func decodeCustomToolSchema(raw json.RawMessage) map[string]interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
+	if typ, ok := m["type"]; ok {
+		if s, ok := typ.(string); !ok || s != "object" {
+			return nil
+		}
+	} else {
+		m["type"] = "object"
+	}
+	if props, ok := m["properties"]; ok && props != nil {
+		if _, ok := props.(map[string]interface{}); !ok {
+			return nil
+		}
+	}
+	return m
+}
+
+func parsePlaywrightCredentials(bearer string, conn RemoteMCPConn) playwrightrunner.Credentials {
+	trimmed := strings.TrimSpace(bearer)
+	if trimmed == "" {
+		return playwrightrunner.Credentials{}
+	}
+	var creds playwrightrunner.Credentials
+	parsedBundle := false
+	if strings.HasPrefix(trimmed, "{") {
+		if err := json.Unmarshal([]byte(trimmed), &creds); err == nil {
+			if creds.Username != "" || creds.Password != "" || creds.Secret != "" || len(creds.Headers) > 0 || len(creds.StorageState) > 0 {
+				parsedBundle = true
+			}
+		}
+	}
+	if !parsedBundle {
+		creds = playwrightrunner.Credentials{
+			Password: bearer,
+			Secret:   bearer,
+		}
+	}
+	if creds.Secret == "" && creds.Password != "" {
+		creds.Secret = creds.Password
+	}
+	if conn.AuthQuery == "" && creds.Secret != "" {
+		if conn.AuthHeader != "" {
+			if creds.Headers == nil {
+				creds.Headers = make(map[string]string, 1)
+			}
+			if _, exists := creds.Headers[conn.AuthHeader]; !exists {
+				creds.Headers[conn.AuthHeader] = conn.AuthPrefix + creds.Secret
+			}
+		} else if creds.Username == "" || creds.Secret != creds.Password {
+			if creds.Headers == nil {
+				creds.Headers = make(map[string]string, 1)
+			}
+			if _, exists := creds.Headers["Authorization"]; !exists {
+				creds.Headers["Authorization"] = "Bearer " + creds.Secret
+			}
+		}
+	}
+	return creds
+}
+
+func attachQueryParamToURLTemplate(rawURL, paramName, paramValue string) string {
+	if paramName == "" || paramValue == "" {
+		return rawURL
+	}
+	encoded := url.QueryEscape(paramName) + "=" + url.QueryEscape(paramValue)
+	if strings.Contains(rawURL, "?") {
+		return rawURL + "&" + encoded
+	}
+	return rawURL + "?" + encoded
 }
 
 // SeatSelection returns the public {connection name, account} of every seat

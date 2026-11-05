@@ -364,6 +364,35 @@ func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
 	}
 }
 
+// A patrol conversation (chat_schedules) whose armed approval cards all timed
+// out marks them skipped without enqueuing an unattended cold-cache resume turn.
+func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	conv := resumeConv(t, s)
+	if _, err := s.CreateChatSchedule(ctx, ChatScheduleInput{
+		ConversationID: conv.ID,
+		UserEmail:      resumeUser,
+		Title:          "Inbox Patrol",
+		Prompt:         "Check inbox",
+		CronExpr:       "0 */6 * * *",
+		Timezone:       "UTC",
+	}); err != nil {
+		t.Fatalf("CreateChatSchedule: %v", err)
+	}
+	a := stageResume(t, s, conv.ID, "mcp_ses_outbound_send_email", true)
+	if ok, err := s.ClaimApproval(ctx, resumeUser, a.ID, "rejected", "Approval timed out — auto-denied."); err != nil || !ok {
+		t.Fatalf("ClaimApproval = %t, %v", ok, err)
+	}
+	res := claimResume(t, s, conv.ID)
+	if res.Input != nil || res.Skipped != ApprovalResumeSkipTimedOut {
+		t.Fatalf("patrol timeout claim = %+v, want Skipped=%q and nil Input", res, ApprovalResumeSkipTimedOut)
+	}
+	if got := resumeState(t, s, a.ID); got != ApprovalResumeSkipped {
+		t.Fatalf("resume_state = %q, want %q", got, ApprovalResumeSkipped)
+	}
+}
+
 // The restart rule: a due resume that never started (armed settled card, or
 // a queued resume row) is dropped with one note per conversation; a pending
 // armed card stays armed; nothing is re-run and a second boot notes nothing.

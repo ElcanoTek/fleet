@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -39,7 +40,33 @@ const (
 const (
 	RemoteMCPTransportStreamableHTTP = "streamable_http"
 	RemoteMCPTransportSSE            = "sse"
+	RemoteMCPTransportHTTPTools      = "http_tools"
+	RemoteMCPTransportPlaywright     = "playwright"
 )
+
+// CustomConnectorStep is a single declarative Playwright step in a custom browser connector tool.
+type CustomConnectorStep struct {
+	Action    string `json:"action"`
+	Selector  string `json:"selector,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Optional  bool   `json:"optional,omitempty"`
+}
+
+// CustomConnectorTool defines a single declarative tool inside a custom HTTP
+// ("http_tools") or Playwright ("playwright") connector stored in remote_mcp_servers.
+type CustomConnectorTool struct {
+	Name        string                `json:"name"`
+	Description string                `json:"description,omitempty"`
+	Method      string                `json:"method,omitempty"`
+	URL         string                `json:"url"`
+	Headers     map[string]string     `json:"headers,omitempty"`
+	Body        string                `json:"body,omitempty"`
+	InputSchema json.RawMessage       `json:"input_schema,omitempty"`
+	Steps       []CustomConnectorStep `json:"steps,omitempty"`
+}
 
 // Remote-MCP auth kinds — how a connection authenticates to the server.
 const (
@@ -112,24 +139,25 @@ type RemoteMCPServer struct {
 	// the same as URL (rows created before the column, and every vendor whose
 	// PRM names its endpoint). It is NOT dialed: Slack declares its bare origin
 	// while serving MCP at /mcp (#1006).
-	Resource              string `json:"-"`
-	Transport             string `json:"transport"`
-	Status                string `json:"status"`
-	StatusDetail          string `json:"status_detail,omitempty"`
-	AuthKind              string `json:"auth_kind,omitempty"`      // oauth | open | api_key (non-secret; drives the UI's connect affordance)
-	APIKeyHeader          string `json:"-"`                        // header NAME the sealed key is sent under; "" = Authorization: Bearer
-	APIKeyQuery           string `json:"-"`                        // query-parameter NAME the sealed key is sent under; "" = not query-authenticated
-	APIKeyPrefix          string `json:"api_key_prefix,omitempty"` // scheme sent in front of the key under APIKeyHeader ("Token token="); non-secret, shown by the key form
-	Issuer                string `json:"-"`
-	AuthorizationEndpoint string `json:"-"`
-	TokenEndpoint         string `json:"-"`
-	RegistrationEndpoint  string `json:"-"`
-	RevocationEndpoint    string `json:"-"`
-	Scopes                string `json:"-"` // space-delimited
-	AuthMethods           string `json:"-"` // space-delimited
-	ClientID              string `json:"-"`
-	CreatedAt             int64  `json:"created_at"`
-	UpdatedAt             int64  `json:"updated_at"`
+	Resource              string                `json:"-"`
+	Transport             string                `json:"transport"`
+	Status                string                `json:"status"`
+	StatusDetail          string                `json:"status_detail,omitempty"`
+	AuthKind              string                `json:"auth_kind,omitempty"`      // oauth | open | api_key (non-secret; drives the UI's connect affordance)
+	APIKeyHeader          string                `json:"-"`                        // header NAME the sealed key is sent under; "" = Authorization: Bearer
+	APIKeyQuery           string                `json:"-"`                        // query-parameter NAME the sealed key is sent under; "" = not query-authenticated
+	APIKeyPrefix          string                `json:"api_key_prefix,omitempty"` // scheme sent in front of the key under APIKeyHeader ("Token token="); non-secret, shown by the key form
+	Issuer                string                `json:"-"`
+	AuthorizationEndpoint string                `json:"-"`
+	TokenEndpoint         string                `json:"-"`
+	RegistrationEndpoint  string                `json:"-"`
+	RevocationEndpoint    string                `json:"-"`
+	Scopes                string                `json:"-"` // space-delimited
+	AuthMethods           string                `json:"-"` // space-delimited
+	ClientID              string                `json:"-"`
+	CustomTools           []CustomConnectorTool `json:"custom_tools,omitempty"`
+	CreatedAt             int64                 `json:"created_at"`
+	UpdatedAt             int64                 `json:"updated_at"`
 }
 
 // RemoteMCPServerInput is the full server row to insert after discovery + DCR.
@@ -156,6 +184,7 @@ type RemoteMCPServerInput struct {
 	APIKeyQuery           string // api_key only: query-parameter NAME ("" = header auth)
 	APIKeyPrefix          string // api_key only: scheme sent in front of the key under APIKeyHeader ("" = none)
 	APIKey                string // api_key only: plaintext; encrypted before insert
+	CustomTools           []CustomConnectorTool
 }
 
 // RemoteMCPTokens is a decrypted token pair plus its expiry (unix seconds).
@@ -257,6 +286,14 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 	if authKind == "" {
 		authKind = RemoteMCPAuthOAuth
 	}
+	customToolsJSON := "[]"
+	if len(in.CustomTools) > 0 {
+		raw, merr := json.Marshal(in.CustomTools)
+		if merr != nil {
+			return nil, fmt.Errorf("encode custom tools: %w", merr)
+		}
+		customToolsJSON = string(raw)
+	}
 	// is_default is decided in the same statement that inserts the row: the
 	// seat is the default iff no other seat of this name already holds it. The
 	// partial unique index makes a concurrent double-insert fail loudly rather
@@ -267,16 +304,17 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 			issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
 			scopes, auth_methods, client_id, client_secret_enc, registration_access_token_enc,
 			auth_kind, api_key_header, api_key_query, api_key_prefix, api_key_enc,
-			account, is_default,
+			account, is_default, custom_tools,
 			created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$23,$5,$6,'',$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$24,$20,
 			$22,
 			NOT EXISTS (SELECT 1 FROM remote_mcp_servers d WHERE d.user_email = $2 AND d.name = $3 AND d.is_default),
+			$25::jsonb,
 			$21,$21)`,
 		id, email, in.Name, in.URL, in.Transport, status,
 		in.Issuer, in.AuthorizationEndpoint, in.TokenEndpoint, in.RegistrationEndpoint, in.RevocationEndpoint,
 		in.Scopes, in.AuthMethods, in.ClientID, secretEnc, regEnc,
-		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource), in.APIKeyPrefix)
+		authKind, in.APIKeyHeader, in.APIKeyQuery, apiKeyEnc, now, account, strings.TrimSpace(in.Resource), in.APIKeyPrefix, customToolsJSON)
 	if err != nil {
 		if pgUniqueViolation(err) {
 			if account == "" {
@@ -291,16 +329,141 @@ func (s *Store) CreateRemoteMCPServer(ctx context.Context, in RemoteMCPServerInp
 
 const remoteMCPColumns = `id, user_email, name, url, resource, transport, status, status_detail,
 	issuer, authorization_endpoint, token_endpoint, registration_endpoint, revocation_endpoint,
-	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, api_key_prefix, account, is_default, created_at, updated_at`
+	scopes, auth_methods, client_id, auth_kind, api_key_header, api_key_query, api_key_prefix, account, is_default, custom_tools, created_at, updated_at`
 
 func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer, error) {
 	var m RemoteMCPServer
+	var customToolsRaw []byte
 	if err := row.Scan(&m.ID, &m.UserEmail, &m.Name, &m.URL, &m.Resource, &m.Transport, &m.Status, &m.StatusDetail,
 		&m.Issuer, &m.AuthorizationEndpoint, &m.TokenEndpoint, &m.RegistrationEndpoint, &m.RevocationEndpoint,
-		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.APIKeyPrefix, &m.Account, &m.IsDefault, &m.CreatedAt, &m.UpdatedAt); err != nil {
+		&m.Scopes, &m.AuthMethods, &m.ClientID, &m.AuthKind, &m.APIKeyHeader, &m.APIKeyQuery, &m.APIKeyPrefix, &m.Account, &m.IsDefault, &customToolsRaw, &m.CreatedAt, &m.UpdatedAt); err != nil {
 		return nil, err
 	}
+	if len(customToolsRaw) > 0 {
+		_ = json.Unmarshal(customToolsRaw, &m.CustomTools)
+	}
 	return &m, nil
+}
+
+// UpdateCustomConnector updates an existing custom HTTP ("http_tools") or
+// Playwright ("playwright") connector row in place so iterative rebuilds in
+// chat preserve its id, share grants (remote_mcp_shares), and user preferences.
+func (s *Store) UpdateCustomConnector(ctx context.Context, id string, in RemoteMCPServerInput) (*RemoteMCPServer, error) {
+	if s.tokenCipher == nil {
+		return nil, secretbox.ErrNoCipher
+	}
+	email := normalizeEmail(in.UserEmail)
+	if email == "" || id == "" || in.URL == "" {
+		return nil, errors.New("user email, id, and url are required")
+	}
+	status := in.Status
+	if status == "" {
+		status = RemoteMCPStatusConnected
+	}
+	authKind := in.AuthKind
+	if authKind == "" {
+		authKind = RemoteMCPAuthOpen
+	}
+	customToolsJSON := "[]"
+	if len(in.CustomTools) > 0 {
+		raw, merr := json.Marshal(in.CustomTools)
+		if merr != nil {
+			return nil, fmt.Errorf("encode custom tools: %w", merr)
+		}
+		customToolsJSON = string(raw)
+	}
+	now := time.Now().Unix()
+
+	if in.APIKey != "" || authKind == RemoteMCPAuthOpen {
+		apiKeyEnc, err := s.sealSecret(in.APIKey, aadPurposeAPIKey, email, in.URL)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt api key: %w", err)
+		}
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE remote_mcp_servers
+			SET url = $3,
+			    transport = $4,
+			    status = $5,
+			    status_detail = '',
+			    auth_kind = $6,
+			    api_key_header = $7,
+			    api_key_query = $8,
+			    api_key_prefix = $9,
+			    api_key_enc = $10,
+			    custom_tools = $11::jsonb,
+			    updated_at = $12
+			WHERE user_email = $1 AND id = $2`,
+			email, id, in.URL, in.Transport, status, authKind,
+			in.APIKeyHeader, in.APIKeyQuery, in.APIKeyPrefix, apiKeyEnc,
+			customToolsJSON, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrRemoteMCPNotFound
+		}
+	} else {
+		// Preserve the existing sealed API key (re-sealing if the base URL changed).
+		existing, err := s.GetRemoteMCPServer(ctx, email, id)
+		if err != nil {
+			return nil, err
+		}
+		existingKey, err := s.GetRemoteMCPAPIKey(ctx, existing)
+		if err != nil {
+			return nil, err
+		}
+		apiKeyEnc, err := s.sealSecret(existingKey, aadPurposeAPIKey, email, in.URL)
+		if err != nil {
+			return nil, fmt.Errorf("re-encrypt api key: %w", err)
+		}
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE remote_mcp_servers
+			SET url = $3,
+			    transport = $4,
+			    status = $5,
+			    status_detail = '',
+			    auth_kind = $6,
+			    api_key_header = $7,
+			    api_key_query = $8,
+			    api_key_prefix = $9,
+			    api_key_enc = $10,
+			    custom_tools = $11::jsonb,
+			    updated_at = $12
+			WHERE user_email = $1 AND id = $2`,
+			email, id, in.URL, in.Transport, status, authKind,
+			in.APIKeyHeader, in.APIKeyQuery, in.APIKeyPrefix, apiKeyEnc,
+			customToolsJSON, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrRemoteMCPNotFound
+		}
+	}
+	return s.GetRemoteMCPServer(ctx, email, id)
+}
+
+// UpdateRemoteMCPCustomTools updates the declarative tool definitions for a
+// custom HTTP ("http_tools") or Playwright ("playwright") connector.
+func (s *Store) UpdateRemoteMCPCustomTools(ctx context.Context, userEmail, id string, tools []CustomConnectorTool) error {
+	raw := []byte("[]")
+	if len(tools) > 0 {
+		var err error
+		raw, err = json.Marshal(tools)
+		if err != nil {
+			return fmt.Errorf("encode custom tools: %w", err)
+		}
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE remote_mcp_servers SET custom_tools = $3::jsonb, updated_at = $4 WHERE user_email = $1 AND id = $2`,
+		normalizeEmail(userEmail), id, string(raw), time.Now().Unix())
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrRemoteMCPNotFound
+	}
+	return nil
 }
 
 // GetRemoteMCPServer fetches one server scoped to the user.

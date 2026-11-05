@@ -855,11 +855,34 @@ function CardBody({
     (fn: (v: Values) => Values) => {
       setValuesState((prev) => {
         const next = fn(prev);
-        if (!readOnly) saveDraft(storeId, next, answerKeyRef.current, clearedRef.current);
+        if (!readOnly) {
+          const safe = { ...next };
+          walkInputs(spec.components, (c) => {
+            if (c.id && c.type === "text_input" && c.format === "password") {
+              delete safe[c.id];
+            } else if (c.id && c.type === "repeater" && Array.isArray(safe[c.id])) {
+              const pwIds = new Set<string>();
+              walkInputs(children(c, "fields"), (fc) => {
+                if (fc.id && fc.type === "text_input" && fc.format === "password") {
+                  pwIds.add(fc.id);
+                }
+              });
+              if (pwIds.size > 0) {
+                safe[c.id] = (safe[c.id] as Values[]).map((row) => {
+                  if (!row || typeof row !== "object") return row;
+                  const copy = { ...row };
+                  for (const pid of pwIds) delete copy[pid];
+                  return copy;
+                });
+              }
+            }
+          });
+          saveDraft(storeId, safe, answerKeyRef.current, clearedRef.current);
+        }
         return next;
       });
     },
-    [storeId, readOnly],
+    [storeId, readOnly, spec.components],
   );
 
   const setField = useCallback(
@@ -2259,6 +2282,7 @@ function InputField({ c, Render }: { c: Component; Render: Renderer }) {
 }
 
 function TextInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
+  const [revealed, setRevealed] = useState(false);
   const v = typeof value === "string" ? value : "";
   const common = {
     id: inputId,
@@ -2268,8 +2292,30 @@ function TextInput({ c, value, onChange, inputId }: Parameters<Renderer>[0]) {
     required: c.required === true,
     className: inputClass,
   };
-  if (c.multiline === true) {
+  if (c.multiline === true && c.format !== "password") {
     return <textarea {...common} rows={3} onChange={(e) => onChange?.(e.target.value)} />;
+  }
+  if (c.format === "password") {
+    return (
+      <div className="flex min-w-0 items-center gap-1.5">
+        <input
+          {...common}
+          type={revealed ? "text" : "password"}
+          autoComplete="new-password"
+          onChange={(e) => onChange?.(e.target.value)}
+        />
+        {v ? (
+          <button
+            type="button"
+            className={actionButton + " shrink-0"}
+            aria-label={revealed ? "Hide secret" : "Show secret"}
+            onClick={() => setRevealed((r) => !r)}
+          >
+            {revealed ? "Hide" : "Show"}
+          </button>
+        ) : null}
+      </div>
+    );
   }
   const type = c.format === "email" ? "email" : c.format === "url" ? "url" : "text";
   return <input {...common} type={type} onChange={(e) => onChange?.(e.target.value)} />;

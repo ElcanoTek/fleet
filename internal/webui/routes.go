@@ -409,6 +409,20 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		{"GET /api/shared-files", fixed("/shared-files"), noBody, passthroughJSON},
 		{"PATCH /api/shared-files/{id}", func(r *http.Request) string { return "/shared-files/" + p(r, "id") }, jsonBodyIfAny, passthroughJSON},
 		{"DELETE /api/shared-files/{id}", func(r *http.Request) string { return "/shared-files/" + p(r, "id") }, noBody, passthroughJSON},
+
+		// ── co-piloted live browser sessions ──
+		{"GET /api/browser-sessions/{id}/view", func(r *http.Request) string {
+			return withRawQuery("/browser-sessions/"+p(r, "id")+"/view", r)
+		}, noBody, out{headers: contentTypeOnly, ctFallback: "text/html; charset=utf-8", firstPartyHTML: true}},
+		{"GET /api/browser-sessions/{id}/copilot.js", func(r *http.Request) string {
+			return withRawQuery("/browser-sessions/"+p(r, "id")+"/copilot.js", r)
+		}, noBody, out{headers: contentTypeOnly, ctFallback: "application/javascript; charset=utf-8"}},
+		{"POST /api/browser-sessions/{id}/input", func(r *http.Request) string {
+			return withRawQuery("/browser-sessions/"+p(r, "id")+"/input", r)
+		}, jsonBodyIfAny, textJSON},
+		{"POST /api/browser-sessions/{id}/close", func(r *http.Request) string {
+			return withRawQuery("/browser-sessions/"+p(r, "id")+"/close", r)
+		}, noBody, textJSON},
 	}
 	for _, rt := range chat {
 		mux.HandleFunc(rt.pattern, g.handleChatRoute(rt))

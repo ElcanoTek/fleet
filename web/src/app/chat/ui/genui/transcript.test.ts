@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Message } from "../history";
 import { buildReplyMessage, buildSubmissionMessage } from "./model";
-import { cardSpecOf, deriveGenUiState, fieldLabels, isRenderableCardCall, summarizeValue } from "./transcript";
+import { cardSpecOf, deriveGenUiState, fieldLabels, isRenderableCardCall, passwordFields, summarizeValue } from "./transcript";
 
 const card = (title: string, extra: Record<string, unknown> = {}) =>
   JSON.stringify({ title, components: [{ type: "text", text: "x" }], ...extra });
@@ -259,6 +259,25 @@ describe("fieldLabels", () => {
     expect(labels.get("a")).toBe("a");
     expect(labels.get("b")).toBe("Name");
     expect(labels.get("f")).toBe("f");
+  });
+});
+
+describe("passwordFields", () => {
+  it("collects format=password text_input ids including repeater fields", () => {
+    const secrets = passwordFields({
+      title: "Login",
+      components: [
+        { type: "text_input", id: "username", label: "Username" },
+        { type: "text_input", id: "password", label: "Password", format: "password" },
+        {
+          type: "repeater",
+          id: "tokens",
+          label: "Tokens",
+          fields: [{ type: "text_input", id: "secret_token", label: "Token", format: "password" }],
+        },
+      ],
+    } as never);
+    expect([...secrets]).toEqual(["password", "secret_token"]);
   });
 });
 

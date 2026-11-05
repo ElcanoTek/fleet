@@ -5,6 +5,11 @@ description: Drive a real hosted browser and hand it to the user when a page nee
 
 # Hosted browser sessions
 
+> **Built-in Local Playwright + Co-Pilot Live View (No Browserbase Required):**
+> Fleet includes the native **`playwright_browser`** tool (and **`connector_studio`** for building reusable connectors) backed by local headless Chromium and a built-in Co-Piloted Live Browser View (`/api/browser-sessions/{id}/view?token=...`).
+> - If no Browserbase connector is present in this conversation, **use `playwright_browser` directly** (`action="run"` for headless automation, or `action="start_session"` to mint a Co-Pilot `live_view_url` so the user can solve logins, CAPTCHAs, or 2FA in real time, then `action="snapshot"` or `action="steps"` with that `session_id` once they reply). You do **not** need a Browserbase account or API key to automate browsers or hand a live browser view to the user.
+> - Use the Browserbase-specific workflow below only when the user explicitly asks for Browserbase or has enabled a Browserbase MCP connector in this conversation.
+
 Some sites have no API and cannot be automated end to end: they want a
 password, a one-time code, or a captcha. This skill is how you get through
 that — you drive a hosted browser, and when it needs a person you hand them a

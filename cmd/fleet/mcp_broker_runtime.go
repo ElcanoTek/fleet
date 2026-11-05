@@ -332,6 +332,7 @@ func brokerToolCatalog(descriptors []mcpbroker.ToolDescriptor) []mcp.ServerTool 
 				Name:        descriptor.Tool,
 				Description: descriptor.Description,
 				InputSchema: descriptor.InputSchema,
+				Critical:    descriptor.Critical,
 			},
 		})
 	}
