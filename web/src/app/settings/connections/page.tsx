@@ -1,20 +1,18 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import { Icon } from "@/app/shared/ui/Icon";
 import {
   authHint,
-  categoriesOf,
   categoryIcon,
   connectorParamOf,
   consentRequired,
-  FEATURED_SLUG,
   effectiveAutoEnable,
   effectiveEnabled,
   fillPlaceholders,
   filterCatalog,
-  groupByCategory,
   placeholderLabel,
   placeholdersOf,
   placeholderValueOK,
@@ -53,8 +51,6 @@ import {
   ConnPanelSub,
   ConnRow,
   ConnRows,
-  DirCatHead,
-  DirChip,
   DirSearch,
   SetSection,
 } from "../ui/panels";
@@ -109,12 +105,26 @@ type ListResponse = {
   shared_with_me?: SharedServer[];
 };
 
-// The trust-labeled MCP directory (#538, expanded into a categorized,
-// searchable connector directory). Bundled entries are the operator's
+// The searchable MCP directory. Bundled entries are the operator's
 // sandboxed connectors, surfaced under "Your connections" with the per-user
 // availability toggle; third-party entries are hosted servers the user can
-// add to the connect flow. Types + the grouping/search/provenance helpers
+// add to the connect flow. Types + the search/provenance helpers
 // live in ./catalog (unit-tested there).
+
+const BUNDLED_PREVIEW_COUNT = 4;
+const DIRECTORY_PREVIEW_COUNT = 8;
+// Editorial picks, in display order; these are not usage rankings. Keep the
+// catalog's endpoint, operator and setup instructions behind the short names.
+const POPULAR_CONNECTORS = new Map([
+  ["microsoft-workiq-mail", "Microsoft 365 (Outlook)"],
+  ["github", "GitHub"],
+  ["slack", "Slack"],
+  ["google-gmail", "Gmail"],
+  ["google-drive", "Google Drive"],
+  ["notion", "Notion"],
+  ["linear", "Linear"],
+  ["salesforce", "Salesforce"],
+]);
 
 const STATUS_LABEL: Record<string, string> = {
   login_required: "Login required",
@@ -242,6 +252,16 @@ function readConnectorSpotlight(): string | null {
   return connectorParamOf(window.location.search);
 }
 
+function readConnectorAnchor(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const hash = decodeURIComponent(window.location.hash.slice(1));
+    return hash.startsWith("connector-") ? hash : null;
+  } catch {
+    return null;
+  }
+}
+
 // readCallbackBanner derives the one-shot notice/error from the OAuth callback's
 // ?connected / ?error query params. Computed lazily during render (not in an
 // effect) so it doesn't trip react-hooks/set-state-in-effect; guarded for SSR.
@@ -367,10 +387,10 @@ const BUNDLED_CARD =
 // for. Nothing to toggle; the copy says who can fix it. Connector credentials
 // are set on the server, not in this app, so the admin copy says so rather
 // than offering a form that does not exist.
-function NeedsSetupCard({ entry, isAdmin }: { entry: CatalogBundled; isAdmin: boolean }) {
+function NeedsSetupCard({ entry, isAdmin, idPrefix = "" }: { entry: CatalogBundled; isAdmin: boolean; idPrefix?: string }) {
   const label = entry.display_name || entry.name;
   return (
-    <div id={connectorAnchor(entry.name)} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
+    <div id={`${idPrefix}${connectorAnchor(entry.name)}`} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
       <div className="flex flex-wrap items-center gap-[0.55rem]">
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
@@ -391,6 +411,7 @@ function NeedsSetupCard({ entry, isAdmin }: { entry: CatalogBundled; isAdmin: bo
 
 function BundledCard({
   entry,
+  idPrefix = "",
   pref,
   on,
   autoOn,
@@ -402,6 +423,7 @@ function BundledCard({
   onReset,
 }: {
   entry: CatalogBundled;
+  idPrefix?: string;
   pref: ConnectorPref | undefined;
   on: boolean;
   autoOn: boolean;
@@ -415,7 +437,7 @@ function BundledCard({
 }) {
   const label = entry.display_name || entry.name;
   return (
-    <div id={connectorAnchor(entry.name)} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
+    <div id={`${idPrefix}${connectorAnchor(entry.name)}`} data-testid={`bundled-card-${entry.name}`} className={BUNDLED_CARD}>
       <div className="flex flex-wrap items-center gap-[0.55rem]">
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
@@ -448,13 +470,13 @@ function BundledCard({
         ) : null}
         {on && (entry.accounts?.length ?? 0) > 0 ? (
           <label
-            htmlFor={`bundledAccount-${entry.name}`}
+            htmlFor={`${idPrefix}bundledAccount-${entry.name}`}
             className="inline-flex items-center gap-[0.45rem] text-[0.73rem] text-[var(--color-text-muted)]"
           >
             Account
             <span className="select-wrap inline-block">
               <select
-                id={`bundledAccount-${entry.name}`}
+                id={`${idPrefix}bundledAccount-${entry.name}`}
                 className={COMPACT_SELECT}
                 value={pref?.default_account ?? ""}
                 onChange={(e) => onPickAccount(e.target.value)}
@@ -512,7 +534,7 @@ function dirAddButtonClass(added: boolean): string {
   ].join(" ");
 }
 
-// DirectoryCard — one third-party entry (.dir-card): provenance badge,
+// DirectoryCard — one third-party entry (.dir-card): optional Popular badge,
 // clamped description, vendor + vetting + setup-guide links, a VISIBLE setup
 // hint, and the gated Add. Entries a user can't one-click add get a guided
 // inline form instead of a bare "needs your URL" label: one input per
@@ -520,6 +542,7 @@ function dirAddButtonClass(added: boolean): string {
 // resulting endpoint), and a write-only key field for api_key entries.
 function DirectoryCard({
   entry,
+  popular,
   added,
   addedURL,
   busy,
@@ -529,6 +552,7 @@ function DirectoryCard({
   autoOpenForm,
 }: {
   entry: CatalogThirdParty;
+  popular: boolean;
   added: boolean;
   // The URL the entry's first seat was added on, when added: a second seat
   // starts on the same endpoint (the row-level "add another" copies it too).
@@ -637,9 +661,7 @@ function DirectoryCard({
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {entry.display_name}
         </span>
-        <ConnBadge variant={provenanceVariant(entry.provenance)}>
-          {provenanceBadge(entry.provenance).label}
-        </ConnBadge>
+        {popular ? <ConnBadge>Popular</ConnBadge> : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
       {entry.setup_hint ? (
@@ -1048,6 +1070,21 @@ function ConnectionsPageInner() {
   // an entry means the operator default.
   const [prefs, setPrefs] = useState<ConnectorPref[]>([]);
   const [catalog, setCatalog] = useState<CatalogResponse | null>(null);
+  const [bundledAnchor, setBundledAnchor] = useState(readConnectorAnchor);
+  // A link to a connector outside the preview opens its full list as soon as
+  // the catalog arrives. An explicit open/close choice wins after that.
+  const [bundledDialogOpen, setBundledDialogOpen] = useState<boolean | null>(null);
+  const showBundledDialog = bundledDialogOpen ?? (catalog?.bundled
+    .slice(BUNDLED_PREVIEW_COUNT)
+    .some((entry) => connectorAnchor(entry.name) === bundledAnchor) ?? false);
+  useEffect(() => {
+    const onHashChange = () => {
+      setBundledAnchor(readConnectorAnchor());
+      setBundledDialogOpen(null);
+    };
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
   // The ?connector=<name> deep link: filter the directory to that entry and
   // open its guided form, so "add your Browserbase key" is one click + one
   // paste from anywhere that can mint a URL. One-shot, like the OAuth banner.
@@ -1057,9 +1094,8 @@ function ConnectionsPageInner() {
   const [catalogOpen, setCatalogOpen] = useState(true);
   // Seeding the search from the spotlight is what filters the directory to the
   // linked entry — search spans every category, so this works wherever the
-  // entry is grouped, and clearing the box restores the full directory.
+  // entry is grouped, and clearing the box restores the popular picks.
   const [catalogQuery, setCatalogQuery] = useState(spotlight ?? "");
-  const [catalogCategory, setCatalogCategory] = useState("");
   // Consent modal state: the non-official (aggregator/community) entry
   // awaiting the user's explicit, operator-named consent, plus whatever the
   // card's guided form collected (tenant URL / API key) so the confirm can
@@ -1117,12 +1153,6 @@ function ConnectionsPageInner() {
   // The MCP server catalog (names + credential-account names, never secrets)
   // feeds the credential-accounts panel, same as the old General page did.
   const { servers: mcpServers, reload: reloadMcpServers } = useMcpServers(true);
-  // Anchor for the directory results: clicking a category pill scrolls back
-  // to the top of the list (the sticky bar keeps search + chips in view).
-  const directoryResultsRef = useRef<HTMLDivElement | null>(null);
-  // The sticky search + chip bar itself — measured on chip clicks so the
-  // scroll can land the results just below it instead of underneath it.
-  const dirBarRef = useRef<HTMLDivElement | null>(null);
 
   // apply/refresh are memoized so the focus-refresh effect below can list
   // refresh as its one dependency and subscribe once, instead of tearing down
@@ -1647,33 +1677,116 @@ function ConnectionsPageInner() {
       .finally(() => setBusy(false));
   };
 
-  // Directory filtering. A live search spans EVERY category — it overrides
-  // the active pill (without clearing it, so emptying the search restores the
-  // filter). Pills themselves are true filters.
-  const thirdParty = catalog?.third_party ?? [];
-  const trimmedQuery = catalogQuery.trim();
-  const effectiveCategory = trimmedQuery ? "" : catalogCategory;
-  const dirHits = filterCatalog(thirdParty, catalogQuery, effectiveCategory);
-  const dirFiltering = trimmedQuery !== "" || catalogCategory !== "";
-  const dirCategories = categoriesOf(thirdParty);
-  // The Featured shelf: curated household-name picks, rendered before the
-  // category listing on the unfiltered view only (searching or picking a
-  // category means the user already knows what they want).
-  const dirFeatured = thirdParty.filter((e) => e.featured);
-  const activeCategoryLabel =
-    catalogCategory === FEATURED_SLUG
-      ? "Featured"
-      : (dirCategories.find((c) => c.slug === catalogCategory)?.label ??
-        catalogCategory);
+  const renderBundledCard = (b: CatalogBundled, idPrefix = "") => {
+    if (b.needs_setup) {
+      return <NeedsSetupCard key={b.name} entry={b} isAdmin={adminState === "admin"} idPrefix={idPrefix} />;
+    }
+    if (b.optional === false) {
+      // Always-on: operator-wired into every turn; shown locked so
+      // nothing is invisibly enabled.
+      return (
+        <div key={b.name} id={`${idPrefix}${connectorAnchor(b.name)}`} className={BUNDLED_CARD}>
+          <div className="flex flex-wrap items-center gap-[0.55rem]">
+            <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
+              {b.display_name || b.name}
+            </span>
+            <ConnBadge>Always on</ConnBadge>
+          </div>
+          {/* .conn-desc.muted — the important flag is needed
+              because ClampText's own text color would otherwise
+              win the same-property utility ordering. */}
+          <ClampText
+            text={
+              b.description ||
+              "Enabled by your operator in every conversation."
+            }
+            className="text-[var(--color-text-muted)]!"
+          />
+          <DataSourceChips sources={b.data_sources} />
+        </div>
+      );
+    }
+    const pref = prefFor(prefs, "bundled", b.name);
+    const on = effectiveEnabled(prefs, "bundled", b.name);
+    const autoOn = effectiveAutoEnable(
+      prefs,
+      b.name,
+      b.enabled_by_default,
+    );
+    return (
+      <BundledCard
+        key={b.name}
+        entry={b}
+        idPrefix={idPrefix}
+        appName={branding.app_name}
+        pref={pref}
+        on={on}
+        autoOn={autoOn}
+        busy={busy}
+        onToggle={() =>
+          setConnectorPref({
+            kind: "bundled",
+            connector_id: b.name,
+            enabled: !on,
+            // First explicit row inherits the current effective
+            // seeding state so flipping availability alone never
+            // changes new-chat behavior; disabling clears both.
+            auto_enable: on ? false : autoOn,
+            default_account: on ? "" : pref?.default_account,
+          })
+        }
+        onToggleAuto={() =>
+          setConnectorPref({
+            kind: "bundled",
+            connector_id: b.name,
+            enabled: true,
+            auto_enable: !autoOn,
+            default_account: pref?.default_account,
+          })
+        }
+        onPickAccount={(account) =>
+          setConnectorPref({
+            kind: "bundled",
+            connector_id: b.name,
+            enabled: true,
+            auto_enable: autoOn,
+            default_account: account,
+          })
+        }
+        onReset={() => resetConnectorPref("bundled", b.name)}
+      />
+    );
+  };
 
-  // One card, one prop wiring — shared by the Featured shelf and the category
-  // groups. Added-state matches by URL for one-click entries and by
-  // registration name for tenant entries (their added URL has the user's
-  // placeholder values filled in).
+  // Keep the landing view small; a search still covers the whole catalog.
+  // Workspace overrides can omit our picks, so fill any remaining slots from
+  // featured entries, then the workspace's own catalog order.
+  const popularNames = [...POPULAR_CONNECTORS.keys()];
+  const thirdParty = (catalog?.third_party ?? []).map((entry) => {
+    const displayName = POPULAR_CONNECTORS.get(entry.name);
+    return displayName
+      ? {
+          ...entry,
+          display_name: displayName,
+          tags: [...(entry.tags ?? []), entry.display_name.toLowerCase()],
+        }
+      : entry;
+  });
+  const popularRank = (entry: CatalogThirdParty) => {
+    const index = popularNames.indexOf(entry.name);
+    return index >= 0 ? index : popularNames.length + (entry.featured ? 0 : 1);
+  };
+  const dirPopular = [...thirdParty]
+    .sort((a, b) => popularRank(a) - popularRank(b))
+    .slice(0, DIRECTORY_PREVIEW_COUNT);
+  const trimmedQuery = catalogQuery.trim();
+  const dirHits = trimmedQuery ? filterCatalog(thirdParty, catalogQuery, "") : dirPopular;
+
   const renderDirCard = (tp: CatalogThirdParty) => (
     <DirectoryCard
       key={tp.name}
       entry={tp}
+      popular={POPULAR_CONNECTORS.has(tp.name)}
       added={(servers ?? []).some(
         (s) => s.url === tp.url || s.name === tp.name,
       )}
@@ -1688,21 +1801,13 @@ function ConnectionsPageInner() {
     />
   );
 
-  // A link from the chat Tools library (#connector-<name>) lands on a card
-  // that only exists once the catalog has loaded, so the browser's own
-  // fragment scroll misses it; scroll once it is there.
+  // Hidden bundled cards live in the popup. Prefix its anchors and account
+  // inputs so the preview and dialog never duplicate DOM ids.
   useEffect(() => {
-    if (!catalog || typeof window === "undefined") return;
-    const hash = window.location.hash.slice(1);
-    if (!hash.startsWith("connector-")) return;
-    let id: string;
-    try {
-      id = decodeURIComponent(hash);
-    } catch {
-      return; // a malformed escape is an unusable link, not a page error
-    }
+    if (!catalog || !bundledAnchor) return;
+    const id = showBundledDialog ? `all-bundled-${bundledAnchor}` : bundledAnchor;
     document.getElementById(id)?.scrollIntoView({ behavior: "auto", block: "center" });
-  }, [catalog]);
+  }, [catalog, bundledAnchor, showBundledDialog]);
 
   // Once the directory has loaded, bring the deep-linked card into view. The
   // spotlight card is usually the only hit (the search box was seeded with its
@@ -1713,27 +1818,6 @@ function ConnectionsPageInner() {
       .querySelector(`[data-testid="dir-card-${CSS.escape(spotlight)}"]`)
       ?.scrollIntoView({ behavior: "auto", block: "center" });
   }, [spotlight, catalog]);
-
-  const scrollDirectoryResults = () => {
-    const el = directoryResultsRef.current;
-    if (!el) return;
-    // The sticky bar overlays the top of the scrollport, so a bare
-    // scrollIntoView would park the results count, category heading, and
-    // first card row underneath it. Its height varies with how the chips wrap
-    // at each viewport width, so measure it at click time (plus breathing
-    // room) rather than hardcoding a scroll margin.
-    const barHeight = dirBarRef.current?.getBoundingClientRect().height ?? 0;
-    el.style.scrollMarginTop = `${Math.ceil(barHeight) + 16}px`;
-    const reduce =
-      typeof window.matchMedia === "function" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "start" });
-  };
-
-  const pickCategory = (slug: string) => {
-    setCatalogCategory((cur) => (cur === slug ? "" : slug));
-    scrollDirectoryResults();
-  };
 
   return (
     <SetSection
@@ -1749,96 +1833,24 @@ function ConnectionsPageInner() {
 
         {catalog && catalog.bundled.length > 0 ? (
           <ConnPanel>
-            <ConnPanelHead title="Bundled by your workspace" />
+            <ConnPanelHead title="Bundled by your workspace">
+              {catalog.bundled.length > BUNDLED_PREVIEW_COUNT ? (
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  onClick={() => setBundledDialogOpen(true)}
+                  className={btnClass({ sm: true })}
+                >
+                  Show all ({catalog.bundled.length})
+                </button>
+              ) : null}
+            </ConnPanelHead>
             <ConnPanelSub>
-              Reviewed and shipped by your operator. These run inside the
-              sandbox on this deployment with credentials held server-side —
-              nothing leaves the box except the connector’s own API calls.
-              Turning one off here hides it from your chats; pick a default
-              credential account and each conversation can still narrow the set
-              in the Tools picker. Scheduled tasks pin their own selection and
-              are unaffected.
+              Included with your workspace. Choose which connectors are available
+              in your chats and the accounts they use.
             </ConnPanelSub>
             <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
-              {catalog.bundled.map((b) => {
-                if (b.needs_setup) {
-                  return <NeedsSetupCard key={b.name} entry={b} isAdmin={adminState === "admin"} />;
-                }
-                if (b.optional === false) {
-                  // Always-on: operator-wired into every turn; shown locked so
-                  // nothing is invisibly enabled.
-                  return (
-                    <div key={b.name} id={connectorAnchor(b.name)} className={BUNDLED_CARD}>
-                      <div className="flex flex-wrap items-center gap-[0.55rem]">
-                        <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
-                          {b.display_name || b.name}
-                        </span>
-                        <ConnBadge>Always on</ConnBadge>
-                      </div>
-                      {/* .conn-desc.muted — the important flag is needed
-                          because ClampText's own text color would otherwise
-                          win the same-property utility ordering. */}
-                      <ClampText
-                        text={
-                          b.description ||
-                          "Enabled by your operator in every conversation."
-                        }
-                        className="text-[var(--color-text-muted)]!"
-                      />
-                      <DataSourceChips sources={b.data_sources} />
-                    </div>
-                  );
-                }
-                const pref = prefFor(prefs, "bundled", b.name);
-                const on = effectiveEnabled(prefs, "bundled", b.name);
-                const autoOn = effectiveAutoEnable(
-                  prefs,
-                  b.name,
-                  b.enabled_by_default,
-                );
-                return (
-                  <BundledCard
-                    key={b.name}
-                    entry={b}
-                    appName={branding.app_name}
-                    pref={pref}
-                    on={on}
-                    autoOn={autoOn}
-                    busy={busy}
-                    onToggle={() =>
-                      setConnectorPref({
-                        kind: "bundled",
-                        connector_id: b.name,
-                        enabled: !on,
-                        // First explicit row inherits the current effective
-                        // seeding state so flipping availability alone never
-                        // changes new-chat behavior; disabling clears both.
-                        auto_enable: on ? false : autoOn,
-                        default_account: on ? "" : pref?.default_account,
-                      })
-                    }
-                    onToggleAuto={() =>
-                      setConnectorPref({
-                        kind: "bundled",
-                        connector_id: b.name,
-                        enabled: true,
-                        auto_enable: !autoOn,
-                        default_account: pref?.default_account,
-                      })
-                    }
-                    onPickAccount={(account) =>
-                      setConnectorPref({
-                        kind: "bundled",
-                        connector_id: b.name,
-                        enabled: true,
-                        auto_enable: autoOn,
-                        default_account: account,
-                      })
-                    }
-                    onReset={() => resetConnectorPref("bundled", b.name)}
-                  />
-                );
-              })}
+              {catalog.bundled.slice(0, BUNDLED_PREVIEW_COUNT).map((entry) => renderBundledCard(entry))}
             </div>
           </ConnPanel>
         ) : null}
@@ -2455,120 +2467,46 @@ function ConnectionsPageInner() {
                 {catalogOpen ? "Hide" : `Browse ${catalog.third_party.length}`}
               </button>
             </div>
-            <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)] [&_b]:font-semibold [&_b]:text-[var(--color-text-secondary)]">
-              Hosted servers run by the named operator, not by your workspace.
-              Connecting one signs you in with that operator and sends tool
-              calls — which can include parts of your conversation — to their
-              service under their terms. <b>Official</b> = the service’s own
-              vendor runs the endpoint; <b>Aggregator</b> and <b>Community</b>{" "}
-              endpoints are run by someone else — vet them via the linked docs
-              and source before connecting.
+            <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)]">
+              Connect the tools you use every day. Start with a popular connector,
+              or search for what you’re looking for.
+              {" "}Connected services can receive content from your conversations
+              when their tools are used.
             </p>
           </div>
 
           {catalogOpen ? (
             <>
-              <div
-                ref={dirBarRef}
-                data-testid="dir-filter-bar"
-                className="sticky top-0 z-20 mb-[1.1rem] grid gap-[0.55rem] border-b border-[var(--color-border)] bg-[var(--color-bg)] pb-[0.75rem] pt-[0.7rem] [background-attachment:fixed] [background-image:var(--gradient-bg)] [background-size:cover]"
-              >
+              <div className="mb-[1.1rem] grid gap-[0.55rem]">
                 <DirSearch
                   value={catalogQuery}
                   onChange={setCatalogQuery}
-                  placeholder="Search servers — try “postgres”, “crm”, “scraping”…"
+                  placeholder="Search all connectors…"
                   label="Search connector directory"
                 />
-                <div
-                  className="flex flex-wrap gap-[0.35rem]"
-                  role="tablist"
-                  aria-label="Filter by category"
-                >
-                  <DirChip
-                    active={catalogCategory === ""}
-                    onClick={() => {
-                      setCatalogCategory("");
-                      scrollDirectoryResults();
-                    }}
-                    count={catalog.third_party.length}
-                    role="tab"
-                    ariaSelected={catalogCategory === ""}
-                  >
-                    All
-                  </DirChip>
-                  {dirFeatured.length > 0 ? (
-                    <DirChip
-                      active={catalogCategory === FEATURED_SLUG}
-                      onClick={() => pickCategory(FEATURED_SLUG)}
-                      count={dirFeatured.length}
-                      role="tab"
-                      ariaSelected={catalogCategory === FEATURED_SLUG}
-                    >
-                      ✦ Featured
-                    </DirChip>
-                  ) : null}
-                  {dirCategories.map((c) => (
-                    <DirChip
-                      key={c.slug}
-                      active={catalogCategory === c.slug}
-                      onClick={() => pickCategory(c.slug)}
-                      count={c.count}
-                      role="tab"
-                      ariaSelected={catalogCategory === c.slug}
-                      leading={
-                        <Icon
-                          name={categoryIcon(c.slug)}
-                          className="mr-[0.32rem] size-3 shrink-0 self-center"
-                        />
-                      }
-                    >
-                      {c.label}
-                    </DirChip>
-                  ))}
-                </div>
+                <p className="m-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
+                  Can’t find what you’re looking for?{" "}
+                  <a href="mailto:hello@elcanotek.com?subject=Connector%20request" className="text-[var(--color-link)] underline underline-offset-2">
+                    Contact Elcano
+                  </a>{" "}
+                  if you’re interested in adding a connector.
+                </p>
               </div>
 
-              <div ref={directoryResultsRef}>
-                {dirFiltering ? (
-                  <p className="m-0 text-[0.72rem] text-[var(--color-text-muted)]">
+              <div>
+                {trimmedQuery ? (
+                  <p role="status" className="mb-3 mt-0 text-[0.75rem] text-[var(--color-text-muted)]">
                     {dirHits.length === 1
-                      ? "1 server matches"
-                      : `${dirHits.length} servers match`}
+                      ? "1 connector matches"
+                      : `${dirHits.length} connectors match`}
                   </p>
                 ) : null}
-                {!dirFiltering && dirFeatured.length > 0 ? (
-                  <div data-testid="dir-featured">
-                    <DirCatHead>✦ Featured</DirCatHead>
-                    <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
-                      {dirFeatured.map(renderDirCard)}
-                    </div>
-                  </div>
-                ) : null}
                 {dirHits.length === 0 ? (
-                  <ConnEmpty>
-                    No servers match “{trimmedQuery}”
-                    {!trimmedQuery && catalogCategory
-                      ? ` in ${activeCategoryLabel}`
-                      : ""}
-                    .
-                  </ConnEmpty>
+                  <ConnEmpty>No connectors match “{trimmedQuery}”. Try another name or keyword.</ConnEmpty>
                 ) : (
-                  groupByCategory(dirHits).map((group) => (
-                    <div key={group.slug}>
-                      <DirCatHead>
-                        <span className="inline-flex items-center gap-[0.35rem]">
-                          <Icon
-                            name={categoryIcon(group.slug)}
-                            className="size-3 shrink-0"
-                          />
-                          {group.label}
-                        </span>
-                      </DirCatHead>
-                      <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
-                        {group.entries.map(renderDirCard)}
-                      </div>
-                    </div>
-                  ))
+                  <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+                    {dirHits.map(renderDirCard)}
+                  </div>
                 )}
                 {!catalog.remote_mcp_enabled ? (
                   <p className="mt-2 text-[0.72rem] text-[var(--color-text-muted)]">
@@ -2595,6 +2533,46 @@ function ConnectionsPageInner() {
             </>
           ) : null}
         </ConnGroup>
+      ) : null}
+
+      {/* Escape the settings entrance animation's stacking context so the
+          popup and scrim cover the navigation rail as well as the page. */}
+      {showBundledDialog && catalog ? createPortal(
+        <DialogShell
+          label="Bundled by your workspace"
+          scrimLabel="Close bundled connections"
+          layer="rail"
+          onDismiss={() => setBundledDialogOpen(false)}
+          className="flex max-h-[85dvh] max-w-4xl flex-col p-5"
+        >
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h3 className="m-0 text-[1rem] font-semibold">Bundled by your workspace</h3>
+              <p className="mb-0 mt-1 text-[0.78rem] text-[var(--color-text-muted)]">
+                All {catalog.bundled.length} workspace connectors. Changes apply to your chats;
+                scheduled tasks keep their own selection.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setBundledDialogOpen(false)}
+              className={btnClass({ sm: true })}
+            >
+              Close
+            </button>
+          </div>
+          {errorBanner.text ? (
+            <p role="alert" className="mb-3 mt-0 text-[0.78rem] text-[var(--color-danger-text)]">
+              {errorBanner.text}
+            </p>
+          ) : null}
+          <div className="min-h-0 overflow-y-auto p-1">
+            <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
+              {catalog.bundled.map((entry) => renderBundledCard(entry, "all-bundled-"))}
+            </div>
+          </div>
+        </DialogShell>,
+        document.body,
       ) : null}
 
       {/* Consent step for endpoints not operated by the service's own vendor.

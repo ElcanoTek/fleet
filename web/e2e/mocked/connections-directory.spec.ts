@@ -2,31 +2,39 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 
-// Regression for the connector directory's category-chip scroll: the sticky
-// search + chip bar overlays the top of the settings scrollport, and a bare
-// scrollIntoView used to park the results count, the category heading, and the
-// first row of cards UNDERNEATH it — invisible until the user scrolled back
-// up. The page now measures the bar and sets scroll-margin-top on the results
-// container, so after a chip click the top of the filtered results must sit
-// fully below the bar's bottom edge.
+// The directory starts with eight popular connectors. Searching must still
+// reach entries outside that preview, with the count and cards below the
+// search input instead of hidden beneath a sticky filter bar.
 
 // A synthetic catalog big enough that the directory genuinely scrolls: three
-// categories × 20 hosted servers each.
+// categories × 20 hosted servers each, plus the eight popular picks.
 const CATEGORIES = ["development", "cloud-infrastructure", "databases"];
+const POPULAR = [
+  "microsoft-workiq-mail", "github", "slack", "google-gmail",
+  "google-drive", "notion", "linear", "salesforce",
+];
 const catalog = {
   bundled: [],
   remote_mcp_enabled: true,
-  third_party: CATEGORIES.flatMap((category) =>
+  third_party: [...POPULAR].reverse().map((name) => ({
+    name,
+    display_name: name,
+    description: `Popular connector ${name}.`,
+    url: `https://mcp.example.com/${name}`,
+    vendor: "Example, Inc.",
+    provenance: "official",
+    category: "productivity",
+  })).concat(CATEGORIES.flatMap((category) =>
     Array.from({ length: 20 }, (_, i) => ({
       name: `${category}-${i}`,
       display_name: `${category} server ${i}`,
-      description: `Synthetic ${category} entry #${i} for the chip-scroll regression spec.`,
+      description: `Synthetic ${category} entry #${i} outside the popular preview.`,
       url: `https://mcp.example.com/${category}/${i}`,
       vendor: "Example, Inc.",
       provenance: "official",
       category,
     })),
-  ),
+  )),
 };
 
 async function mockConnectionsBoot(page: Page) {
@@ -50,35 +58,49 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("category chip scroll lands the results below the sticky filter bar", async ({ page }) => {
+test("popular preview stays compact and search reaches the full directory", async ({ page }) => {
   await mockConnectionsBoot(page);
-  // Reduced motion makes the chip-click scroll instant (behavior: "auto"), so
-  // the geometry assertions don't race a smooth-scroll animation.
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/settings/connections");
 
-  const bar = page.getByTestId("dir-filter-bar");
-  await expect(bar).toBeVisible({ timeout: 15_000 });
+  const search = page.getByRole("textbox", { name: "Search connector directory" });
+  await expect(search).toBeVisible({ timeout: 15_000 });
+  const cards = page.locator('[data-testid^="dir-card-"]');
+  await expect(cards).toHaveCount(8);
+  expect(await cards.evaluateAll((els) => els.map((el) => el.getAttribute("data-testid"))))
+    .toEqual(POPULAR.map((name) => `dir-card-${name}`));
+  await expect(cards.getByText("Popular", { exact: true })).toHaveCount(8);
+  await expect(page.getByRole("tablist")).toHaveCount(0);
+  await expect(cards.getByText("Official", { exact: true })).toHaveCount(0);
 
-  await page.getByRole("tab", { name: /^Databases/ }).click();
-  await expect(page.getByText("20 servers match")).toBeVisible();
+  await search.fill("databases");
+  await expect(page.getByRole("status")).toHaveText("20 connectors match");
+  await expect(cards).toHaveCount(20);
+  await expect(cards.getByText("Popular", { exact: true })).toHaveCount(0);
 
-  // The occlusion check toBeVisible can't do: the filtered results' top — the
-  // match count, the category heading, and the first card — must sit BELOW
-  // the sticky bar's bottom edge, not underneath the bar.
+  // Visibility alone doesn't catch overlapping content. Search results must
+  // remain below the search input as the full catalog replaces the preview.
   await expect(async () => {
-    const barBox = await bar.boundingBox();
-    expect(barBox).not.toBeNull();
-    const barBottom = barBox!.y + barBox!.height;
+    const searchBox = await search.boundingBox();
+    expect(searchBox).not.toBeNull();
+    const searchBottom = searchBox!.y + searchBox!.height;
     const tops = [
-      page.getByText("20 servers match"),
-      page.getByText("Databases", { exact: true }),
+      page.getByRole("status"),
       page.getByTestId("dir-card-databases-0"),
     ];
     for (const target of tops) {
       const box = await target.boundingBox();
       expect(box).not.toBeNull();
-      expect(box!.y).toBeGreaterThanOrEqual(barBottom);
+      expect(box!.y).toBeGreaterThanOrEqual(searchBottom);
     }
   }).toPass();
+
+  await search.fill("missing-connector");
+  await expect(cards).toHaveCount(0);
+  await expect(page.getByText(/No connectors match/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Contact Elcano" })).toHaveAttribute(
+    "href", "mailto:hello@elcanotek.com?subject=Connector%20request",
+  );
+  await search.clear();
+  await expect(cards).toHaveCount(8);
 });

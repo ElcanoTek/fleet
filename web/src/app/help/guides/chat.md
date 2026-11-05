@@ -697,6 +697,20 @@ Center.
 | Selection | The **Tools** menu (the wrench) in the composer, its library, or an **Enable MCP connector?** card in chat | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; if a task needs a connected bundled optional MCP connector that is currently off in the conversation, the assistant can suggest turning it on for you to approve (or turn it on itself when **Auto-approve** is active). |
 | Binding | The task form on the Background tasks page | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
+**Settings → Connections** shows four bundled connectors at first. **Show all**
+opens a popup with every workspace connector and the same availability,
+new-chat, and default-account controls. A link to a connector outside the
+preview opens that popup automatically. **Credential accounts** also previews
+four accounts; **Show all** expands the list below it and **Show less** folds it
+back up.
+
+The **Connector directory** starts with eight curated **Popular** picks:
+Microsoft 365 (Outlook), GitHub, Slack, Gmail, Google Drive, Notion, Linear, and
+Salesforce. A workspace with a different catalog may show different picks.
+Search by name or keyword to find connectors across the full directory;
+clearing the search restores the popular picks. If the connector you want is
+missing, use **Contact Elcano** below the search to request it.
+
 The Tools menu opens with its search field ready: type to filter by a
 connector's name, its description, its category, or the name of one of its
 tools (a match inside a connector shows under it, as in `↳ ix_clone_deal`).

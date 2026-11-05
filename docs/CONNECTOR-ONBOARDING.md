@@ -172,9 +172,9 @@ raw-URL add form and every vendor that carries no flag.
   deliberately not listed): Zendesk, Xero, QuickBooks, Discord, Perplexity,
   ElevenLabs, Workday, LinkedIn, Reddit, eBay — revisit in future releases.
 
-**Featured shelf + catalog curation pass**: entries can set `featured: true`
-to appear in a short curated section rendered before the category listing
-(unfiltered view only). The built-in shelf holds the household names — the
+**Catalog curation**: entries can set `featured: true` to be preferred
+fallbacks when a workspace omits one of the directory's eight popular picks
+(see [MCP-CATALOG.md](MCP-CATALOG.md)). The built-in featured roster holds the
 Google Workspace trio, GitHub, Notion, Slack, Linear, Atlassian, Asana,
 monday.com, Airtable, Stripe, PayPal, HubSpot, Canva, Figma, Zapier, Hugging
 Face — and a test caps it at 8–20 entries, never community provenance. The
