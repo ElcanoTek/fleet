@@ -1,11 +1,39 @@
-# Generating the demo GIFs (TUI + web)
+# Generating the README screenshots (Web + TUI)
 
-The README links to an animated GIF of `fleet chat`
-(`docs/screenshots/tui/demo.gif`) showing a real two-turn session: a question,
-live tool calls (`bash`, `run_python`) resolving to ✓, a glamour-rendered
-markdown answer streaming in, `/help`, and a follow-up. This page documents how
-that GIF is produced **deterministically, with no model, no API key, and no
-cost** — so anyone can regenerate it after a TUI change.
+The README embeds four automated PNG screenshots generated directly from the
+shipped web bundle and terminal UI against deterministic, in-memory/mocked
+state — **no live model, no API key, and no cost**:
+
+- `docs/screenshots/web/chat.png` — **Chat** (*Talk it through*)
+- `docs/screenshots/web/patrols.png` — **Patrols** (*Chats that check in on a schedule*)
+- `docs/screenshots/web/orchestrator.png` — **Background tasks** (*Run headless, without a chat*)
+- `docs/screenshots/tui/chat.png` — **Terminal chat (`fleet chat`)**
+
+## Regenerating the automated screenshots
+
+ Both generators run in CI via [`.github/workflows/screenshots.yml`](../.github/workflows/screenshots.yml) and can be run locally after any UI or TUI change:
+
+```sh
+# 1. Web screenshots (Chat, Patrols, Background tasks)
+cd web && npm run test:e2e:screenshots && cd ..
+
+# 2. TUI screenshot (fleet chat via charmbracelet/freeze)
+./scripts/generate-tui-screenshot.sh
+```
+
+- **Web screenshots** (`web/e2e/screenshots/gui.spec.ts`): Playwright boots the
+  production web bundle behind `cmd/web-e2e-server`, intercepts `/api/*` with
+  deterministic fixtures, and captures `chat.png`, `patrols.png`, and
+  `orchestrator.png` into `docs/screenshots/web/`.
+- **TUI screenshot** (`scripts/generate-tui-screenshot.sh` +
+  `internal/chattui/screenshot_gen_test.go`): renders a representative
+  `fleet chat` frame from in-memory Bubble Tea model state and converts the
+  ANSI output to `docs/screenshots/tui/chat.png` via `charmbracelet/freeze`.
+
+## Optional: recording animated demos (TUI + web)
+
+If you need an animated GIF or video for release notes or talks, the opt-in
+recording scripts remain available in `docs/scripts/`.
 
 ## How it works
 

@@ -160,11 +160,11 @@ jobs:
         env:
           FLEET_CACHE_LIVE: '1'
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          FLEET_CACHE_LIVE_MODELS: ${{ inputs.model }}
+          FLEET_CACHE_LIVE_MODELS: ${{ inputs.model || 'all' }}
         run: |
           set -uo pipefail
           rc=0
-          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
+          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive(/_|$)' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
           {
             echo "### Live Prompt-Cache Canary (exit $rc)"
             echo '```'

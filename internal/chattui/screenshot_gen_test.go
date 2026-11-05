@@ -23,9 +23,9 @@ func TestGenerateTUIScreenshot(t *testing.T) {
 	m := newModel(Config{
 		ServerURL: "http://fleet.internal:8080",
 		Email:     "you@example.com",
-		Model:     "anthropic/claude-opus-4-8",
+		Model:     "anthropic/claude-opus-5.5",
 	})
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 92, Height: 26})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 94, Height: 29})
 	m = updated.(*model)
 	// Force glamour's dark style: a piped `go test` isn't a TTY, so auto-style
 	// would fall back to plain notty and the reply would lose its bold/color.
@@ -40,6 +40,7 @@ func TestGenerateTUIScreenshot(t *testing.T) {
 	m.streaming = true
 	m.applyEvent(Event{Name: "conversation", Data: map[string]any{"id": "a1b2c3d4e5f6"}})
 	m.applyEvent(Event{Name: "tool.call", Data: map[string]any{"name": "bash"}})
+	m.applyEvent(Event{Name: "tool.result", Data: map[string]any{"name": "bash", "is_err": false}})
 	m.applyEvent(Event{Name: "text.delta", Data: map[string]any{"text": "**3** scheduled tasks failed in the last 24h:\n\n" +
 		"- `nightly-etl` — exit 1 (upstream API returned 503)\n" +
 		"- `db-backup` — timed out after 30m\n" +
