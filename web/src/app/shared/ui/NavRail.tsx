@@ -368,14 +368,14 @@ export function NavRail({
               collapsed
                 ? typeof opsCount === "number" && opsCount > 0
                   ? `Background tasks · ${opsCount} running`
-                  : "Background tasks — run headless, without a chat"
+                  : "Background tasks · Runs without a chat"
                 : undefined
             }
           >
             <span className={navTileClass(activeView === "orchestrator")} aria-hidden="true">
               <Icon name="grid" className="size-[1rem]" />
             </span>
-            <RailLabel title="Background tasks" subtitle="Run headless, without a chat" collapsed={collapsed} />
+            <RailLabel title="Background tasks" subtitle="Runs without a chat" collapsed={collapsed} />
             {typeof opsCount === "number" && opsCount > 0 ? (
               <span
                 className={[

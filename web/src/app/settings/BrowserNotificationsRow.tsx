@@ -299,13 +299,28 @@ export function BrowserNotificationsRow() {
       label="Browser notifications"
       desc={
         <>
-          Get alerts in this browser, even when this tab is in the background. By default you get
-          one when a task you created finishes, is waiting for your answer, or sends a progress
-          note while it runs; when an action in one of your chats needs your approval, and, for
-          some actions, when an approved one finishes or the chat does not continue on its own
-          once its card is approved, declined or timed out; and when you create a task while your
-          spending is past your budget&apos;s soft limit. An alert shows only a short title, such
-          as the start of the task&apos;s prompt, never the conversation or a result.
+          Get an alert in this browser when something needs you, even if this tab is in the
+          background.
+          {/* The full list stays one click away: the row's job is the on/off
+              decision, and the details only matter to someone deciding. */}
+          <details className="mt-[0.3rem] [&_summary]:cursor-pointer">
+            <summary className="w-fit text-[var(--color-link)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]">
+              Which alerts will I get?
+            </summary>
+            <ul className="mb-0 mt-[0.35rem] list-disc pl-[1.1rem] leading-[1.55]">
+              <li>A task you created finishes, needs your answer, or sends a progress update.</li>
+              <li>An action in one of your chats needs your approval.</li>
+              <li>
+                Some approved actions finish, or a chat is waiting for you after an approval
+                card is approved, declined, or times out.
+              </li>
+              <li>You create a task after going over your spending alert limit.</li>
+            </ul>
+            <p className="mb-0 mt-[0.35rem]">
+              Alerts show only a short title, such as the start of a task. They never show the
+              conversation or its results.
+            </p>
+          </details>
           {note ? <span className="mt-[0.3rem] block">{note}</span> : null}
         </>
       }

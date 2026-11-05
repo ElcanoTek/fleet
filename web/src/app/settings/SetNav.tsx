@@ -36,7 +36,7 @@ const SECTIONS = [
 export const ADMIN_SUBS = [
   { href: "/settings/admin", label: "Overview" },
   { href: "/settings/admin/server", label: "Server" },
-  { href: "/settings/admin/doctor", label: "Doctor" },
+  { href: "/settings/admin/doctor", label: "System checks" },
   { href: "/settings/admin/users", label: "Users" },
   { href: "/settings/admin/features", label: "Features" },
   { href: "/settings/admin/providers", label: "Providers" },

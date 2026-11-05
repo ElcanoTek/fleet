@@ -723,13 +723,13 @@ describe("Composer — share button and overflow options menu", () => {
     // No standalone compact icon or context ring renders on the toolbar outside More options.
     expect(screen.queryByTestId("composer-context-ring")).toBeNull();
     expect(
-      screen.queryByRole("button", { name: /Context .* full — click to compact/ }),
+      screen.queryByRole("button", { name: /Chat .* full\. Summarize earlier messages/ }),
     ).toBeNull();
 
     // Opening More options exposes the Compact conversation menuitem.
     fireEvent.click(screen.getByTestId("composer-more-button"));
     const compactItem = screen.getByRole("menuitem", {
-      name: "Compact conversation (42% full)",
+      name: "Summarize earlier messages (42% full)",
     });
     expect(compactItem).toBeInTheDocument();
     fireEvent.click(compactItem);

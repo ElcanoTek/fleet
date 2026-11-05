@@ -415,9 +415,9 @@ export default function SkillsPage() {
       title="Skills"
       intro={
         <>
-          Packaged, on-demand capabilities the agent can pick up when a task matches — your
-          workspace’s own skills plus fleet’s built-in pack. Invoke one explicitly by starting a
-          chat message with <CodeChip>/skill-name</CodeChip> (click a name below to copy it).
+          Skills are saved instructions for jobs you repeat. The assistant uses one when it fits
+          the request, or you can ask for one by starting a message with{" "}
+          <CodeChip>/skill-name</CodeChip>. Click a name below to copy it.
         </>
       }
     >
@@ -433,8 +433,8 @@ export default function SkillsPage() {
           />
         </ConnPanelHead>
         <ConnPanelSub>
-          Skills you write here load into your chats (invoke with <CodeChip>/name</CodeChip>). You
-          can keep a skill private or share it with everyone in this workspace in one click.
+          Skills you write work in your chats. Keep one private or share it with your
+          workspace.
         </ConnPanelSub>
 
         {draft ? (
@@ -480,9 +480,8 @@ export default function SkillsPage() {
                 }
               />
               <span>
-                Share with this workspace — publish to the Workspace pack so teammates can inspect{" "}
-                <CodeChip>/{draft.name || "name"}</CodeChip> and add it to their own skills in one
-                click
+                Share with your workspace so teammates can see{" "}
+                <CodeChip>/{draft.name || "name"}</CodeChip> and add it to their own skills
               </span>
             </label>
             {/* The design tightens .conn-form-actions' top margin inside
@@ -529,7 +528,7 @@ export default function SkillsPage() {
           <p className={LOADING}>Loading…</p>
         ) : mine.length === 0 && mineError ? null : mine.length === 0 && !draft ? (
           <ConnEmpty>
-            No skills yet — capture a workflow you repeat and the agent will pick it up whenever it
+            No skills yet. Write down a job you repeat and the assistant will use it when it
             fits.
           </ConnEmpty>
         ) : (
@@ -638,10 +637,9 @@ export default function SkillsPage() {
       </ConnPanel>
 
       <ConnPanel>
-        <ConnPanelHead title="Workspace pack" />
+        <ConnPanelHead title="Workspace skills" />
         <ConnPanelSub>
-          Shared with everyone in the workspace — your operator’s skills plus fleet’s built-in
-          pack.
+          Available to everyone in your workspace, including the skills that come with Fleet.
         </ConnPanelSub>
         <DirSearch
           className="mb-[0.35rem]"

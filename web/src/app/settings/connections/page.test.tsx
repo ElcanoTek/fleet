@@ -175,7 +175,7 @@ describe("ConnectionsPage ?connector= deep link", () => {
     expect(form).toBeTruthy();
     // The search box was seeded so the directory shows the linked entry.
     const search = screen.getByLabelText(
-      "Search connector directory",
+      "Search connections",
     ) as HTMLInputElement;
     expect(search.value).toBe("browserbase");
     // One paste away: the key field already holds focus.
@@ -203,7 +203,7 @@ describe("ConnectionsPage ?connector= deep link", () => {
   it("does not open a form when the entry is unknown", async () => {
     vi.stubGlobal("fetch", mockFetch());
     visit("?connector=nonexistent");
-    await screen.findByLabelText("Search connector directory");
+    await screen.findByLabelText("Search connections");
     expect(screen.queryByTestId("dir-form-browserbase")).toBeNull();
   });
 });
@@ -534,10 +534,10 @@ describe("ConnectionsPage availability toggle", () => {
     // from the accessibility tree instead of being a second, unexplained
     // control next to it…
     expect(
-      within(card).queryByRole("button", { name: "Enabled for me" }),
+      within(card).queryByRole("button", { name: "On for me" }),
     ).toBeNull();
     // …while remaining the pointer hit target it always was.
-    fireEvent.click(within(card).getByText("Enabled for me"));
+    fireEvent.click(within(card).getByText("On for me"));
     await waitFor(() =>
       expect(
         calls.some(
@@ -605,7 +605,7 @@ describe("ConnectionsPage needs-setup connectors", () => {
     Element.prototype.scrollIntoView = scroll;
     window.history.replaceState({}, "", "/settings/connections#connector-bigquery");
     render(<ConnectionsPage />);
-    const dialog = await screen.findByRole("dialog", { name: "Bundled by your workspace" });
+    const dialog = await screen.findByRole("dialog", { name: "Included with your workspace" });
     expect(within(dialog).getByTestId("bundled-card-bigquery")).toBeInTheDocument();
     await waitFor(() => expect(scroll).toHaveBeenCalled());
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
@@ -613,7 +613,7 @@ describe("ConnectionsPage needs-setup connectors", () => {
     window.location.hash = "#connector-image-0";
     await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
     window.location.hash = "#connector-bigquery";
-    expect(await screen.findByRole("dialog", { name: "Bundled by your workspace" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Included with your workspace" })).toBeInTheDocument();
   });
 });
 
@@ -1084,7 +1084,7 @@ describe("ConnectionsPage manual OAuth client with a required secret", () => {
     visit("");
 
     const createBtn = await screen.findByTestId("create-custom-connection-btn");
-    expect(createBtn).toHaveTextContent("Create your own connection");
+    expect(createBtn).toHaveTextContent("Build a connection in chat");
 
     const crmGroup = await screen.findByTestId("remote-group-acme_crm");
     expect(within(crmGroup).getByText("Custom API · 2 tools")).toBeInTheDocument();

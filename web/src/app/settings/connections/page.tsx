@@ -60,6 +60,7 @@ import {
 import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { CloseButton } from "@/app/shared/ui/CloseButton";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -132,20 +133,36 @@ const POPULAR_CONNECTORS = new Map([
 ]);
 
 const STATUS_LABEL: Record<string, string> = {
-  login_required: "Login required",
+  login_required: "Sign-in needed",
   connected: "Connected",
-  needs_reauth: "Reconnect needed",
+  needs_reauth: "Sign-in needed",
   error: "Error",
 };
 
 const STATUS_VARIANTS: Record<string, BadgeVariant> = {
   connected: "success",
+  login_required: "warn",
   needs_reauth: "warn",
   error: "warn",
 };
 
+// The badge text for a seat. A rejected API key and an ended OAuth sign-in
+// share needs_reauth; the key case asks for a new key, matching its Update key
+// button.
+function statusLabel(status: string, authKind?: string): string {
+  if (status === "needs_reauth" && authKind === "api_key") return "New key needed";
+  return STATUS_LABEL[status] ?? status;
+}
+
 function statusVariant(status: string): BadgeVariant {
   return STATUS_VARIANTS[status] ?? "neutral";
+}
+
+// A seat whose tools can't run until the user signs in (or pastes a new key).
+// Its sign-in action becomes the row's one filled button so it is the first
+// thing a reader sees.
+function needsSignIn(status: string): boolean {
+  return status === "login_required" || status === "needs_reauth" || status === "error";
 }
 
 // hostOf shows an endpoint by its host in the card's endpoint select, where a
@@ -296,7 +313,7 @@ async function fetchCatalog(): Promise<CatalogResponse | null> {
 }
 
 // ToggleForMe — the design's .conn-toggle: a small switch plus a clickable
-// state label ("Enabled for me" / "Off for me" …). The switch is the
+// state label ("On for me" / "Off for me" …). The switch is the
 // accessible control; the label is a convenience click target.
 function ToggleForMe({
   on,
@@ -447,7 +464,6 @@ function BundledCard({
         <span className="text-[0.85rem] font-semibold text-[var(--color-text-primary)] [overflow-wrap:anywhere]">
           {label}
         </span>
-        <ConnBadge variant="success">Bundled</ConnBadge>
         {entry.beta ? <ConnBadge>Beta</ConnBadge> : null}
       </div>
       {entry.description ? <ClampText text={entry.description} /> : null}
@@ -455,8 +471,8 @@ function BundledCard({
       <div className="mt-auto flex flex-wrap items-center gap-[0.8rem]">
         <ToggleForMe
           on={on}
-          onLabel="Enabled for me"
-          offLabel="Disabled for me"
+          onLabel="On for me"
+          offLabel="Off for me"
           ariaLabel={`Enable ${label} for me`}
           onToggle={onToggle}
           disabled={busy}
@@ -1264,7 +1280,7 @@ function ConnectionsPageInner() {
         setUrl("");
         setAccountLabel("");
         setAddServerOpen(false);
-        setNotice("Server added. Click Connect to log in.");
+        setNotice("Connection added. Click Sign in to finish.");
         if (data.id)
           setConnectPromptFor({ id: data.id, name: data.name || "the server" });
         refresh();
@@ -1446,7 +1462,7 @@ function ConnectionsPageInner() {
         setAddSeatKey("");
         setAddSeatURL("");
         if (authKind === "oauth") {
-          setNotice(`${shown} added. Click Connect to sign in.`);
+          setNotice(`${shown} added. Click Sign in to finish.`);
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
         } else {
           setNotice(
@@ -1536,7 +1552,7 @@ function ConnectionsPageInner() {
             `${shown} connected${toolCountSuffix(data.tool_count)}${keyVerifiedSuffix(data.key_verified)}.`,
           );
         } else {
-          setNotice(`${shown} added. Click Connect to sign in.`);
+          setNotice(`${shown} added. Click Sign in to finish.`);
           // OAuth adds land in login_required — offer the sign-in right here
           // instead of making the user find the row in "Your connections".
           if (data.id) setConnectPromptFor({ id: data.id, name: shown });
@@ -1653,7 +1669,7 @@ function ConnectionsPageInner() {
           );
         }
         setNotice(
-          "Signed out. The connection is kept — Connect signs back in.",
+          "Signed out. The connection is kept; click Sign in to use it again.",
         );
         refresh();
       })
@@ -1827,32 +1843,31 @@ function ConnectionsPageInner() {
   return (
     <SetSection
       title="Connections"
-      intro="Connect remote (hosted) MCP servers and sign in to each with your own account. Connected servers’ tools become available to you in chat and your scheduled tasks. Credentials are stored encrypted on the server and never shared with other users."
+      intro="Choose the apps and data your chats and tasks can use. You sign in with your own account; your credentials are encrypted and never shared."
     >
       {/* ── Group 1 — Your connections ── */}
       <ConnGroup>
         <ConnGroupHead title="Your connections">
-          Everything already available to you — the connectors bundled with your
-          workspace, plus any remote servers you’ve added yourself.
+          Everything your chats can use today.
         </ConnGroupHead>
 
         {catalog && catalog.bundled.length > 0 ? (
           <ConnPanel>
-            <ConnPanelHead title="Bundled by your workspace">
+            <ConnPanelHead title="Included with your workspace">
               {catalog.bundled.length > BUNDLED_PREVIEW_COUNT ? (
                 <button
                   type="button"
                   aria-haspopup="dialog"
                   onClick={() => setBundledDialogOpen(true)}
-                  className={btnClass({ sm: true })}
+                  className={btnClass({ sm: true, reveal: true })}
                 >
+                  <Icon name="maximize" className="size-[0.85rem]" />
                   Show all ({catalog.bundled.length})
                 </button>
               ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
-              Included with your workspace. Choose which connectors are available
-              in your chats and the accounts they use.
+              Choose which ones your chats use.
             </ConnPanelSub>
             <div className="grid grid-cols-2 gap-[0.7rem] max-[860px]:grid-cols-1">
               {catalog.bundled.slice(0, BUNDLED_PREVIEW_COUNT).map((entry) => renderBundledCard(entry))}
@@ -1861,7 +1876,7 @@ function ConnectionsPageInner() {
         ) : null}
 
         <ConnPanel>
-          <ConnPanelHead title="Remote servers">
+          <ConnPanelHead title="Added by you">
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -1873,19 +1888,18 @@ function ConnectionsPageInner() {
                 }
                 className={btnClass({ sm: true, variant: "primary" })}
               >
-                Create your own connection
+                Build a connection in chat
               </button>
               <RevealButton
                 open={addServerOpen}
-                closedLabel="Add remote server"
+                closedLabel="Add by URL"
                 onClick={() => setAddServerOpen((o) => !o)}
               />
             </div>
           </ConnPanelHead>
           <ConnPanelSub>
-            Hosted MCP endpoints and custom connections you’ve added yourself —
-            from the directory below, by URL, or built with the guided
-            connection assistant in chat.
+            Connections you added from the directory, by URL, or with the
+            connection assistant.
           </ConnPanelSub>
           {addServerOpen ? (
             <form onSubmit={addServer}>
@@ -1936,21 +1950,27 @@ function ConnectionsPageInner() {
               Loading…
             </p>
           ) : servers && servers.length > 0 ? (
-            <div className="grid">
-              {/* One visual group per connection name; one row per seat
-                  (login) inside it (#988). A single-seat group looks like the
-                  old flat list plus its account badge. */}
+            <div className="grid gap-[0.7rem]">
+              {/* One card per connection name; one row per seat (login)
+                  inside it (#988). A card with a login that needs signing in
+                  takes the warning border so it stands out in a long list. */}
               {groupSeats(servers).map((group) => {
                 const multi = group.seats.length > 1;
                 const template = group.seats[0];
                 const groupAuth = template?.auth_kind || "oauth";
+                const groupNeedsSignIn = group.seats.some((s) => needsSignIn(s.status));
                 return (
                   <div
                     key={group.name}
                     // The chat Tools library's "Manage in Settings" lands here.
                     id={connectorAnchor(group.name)}
                     data-testid={`remote-group-${group.name}`}
-                    className="scroll-mt-24 border-b border-[var(--color-border-subtle)] last:border-b-0 target:shadow-[inset_0_0_0_1px_var(--color-accent)]"
+                    className={[
+                      "scroll-mt-24 rounded-[var(--radius-md)] border bg-[var(--color-overlay-soft)] px-[0.9rem] py-[0.3rem] target:border-[var(--color-accent)] target:shadow-[0_0_0_1px_var(--color-accent)]",
+                      groupNeedsSignIn
+                        ? "border-[var(--color-panel-warn-border)]"
+                        : "border-[var(--color-border)]",
+                    ].join(" ")}
                   >
                     <ConnRows>
                     {group.seats.map((s) => {
@@ -1968,7 +1988,7 @@ function ConnectionsPageInner() {
                           key={s.id}
                           name={
                             <span className="inline-flex flex-wrap items-center gap-[0.55rem]">
-                              {s.name}
+                              <span className="text-[0.95rem] font-semibold">{s.name}</span>
                               <ConnBadge title="Account label for this login">
                                 {seatLabel(s)}
                               </ConnBadge>
@@ -1986,7 +2006,7 @@ function ConnectionsPageInner() {
                                 </ConnBadge>
                               ) : null}
                               <ConnBadge variant={statusVariant(s.status)}>
-                                {STATUS_LABEL[s.status] ?? s.status}
+                                {statusLabel(s.status, s.auth_kind)}
                               </ConnBadge>
                               {s.catalog_drift ? (
                                 <ConnBadge variant="warn">Directory changed</ConnBadge>
@@ -2036,7 +2056,11 @@ function ConnectionsPageInner() {
                                     );
                                   }}
                                   disabled={busy}
-                                  className={btnClass({ sm: true, reveal: true })}
+                                  className={btnClass({
+                                    sm: true,
+                                    reveal: true,
+                                    variant: needsSignIn(s.status) ? "primary" : "ghost",
+                                  })}
                                 >
                                   Update key
                                 </button>
@@ -2045,9 +2069,13 @@ function ConnectionsPageInner() {
                                   type="button"
                                   onClick={() => connect(s.id)}
                                   disabled={busy}
-                                  className={btnClass({ sm: true, reveal: true })}
+                                  className={btnClass({
+                                    sm: true,
+                                    reveal: true,
+                                    variant: needsSignIn(s.status) ? "primary" : "ghost",
+                                  })}
                                 >
-                                  {s.status === "connected" ? "Reconnect" : "Connect"}
+                                  {s.status === "connected" ? "Sign in again" : "Sign in"}
                                 </button>
                               )}
                               {s.auth_kind !== "api_key" &&
@@ -2058,8 +2086,8 @@ function ConnectionsPageInner() {
                                   type="button"
                                   onClick={() => signOut(s.id)}
                                   disabled={busy}
-                                  title="Ends the authorization but keeps the connection and its OAuth client — Connect signs back in without re-entering credentials."
-                                  className={btnClass({ sm: true, reveal: true })}
+                                  title="Sign out of this account and keep the connection. Click Sign in to use it again."
+                                  className={btnClass({ sm: true })}
                                 >
                                   Sign out
                                 </button>
@@ -2070,7 +2098,7 @@ function ConnectionsPageInner() {
                                   onClick={() => setDefaultSeat(s.id)}
                                   disabled={busy}
                                   title="Chats and tasks mount this login unless a conversation or task picks another."
-                                  className={btnClass({ sm: true, reveal: true })}
+                                  className={btnClass({ sm: true })}
                                 >
                                   Set default
                                 </button>
@@ -2087,7 +2115,7 @@ function ConnectionsPageInner() {
                                   );
                                 }}
                                 disabled={busy}
-                                className={btnClass({ sm: true, reveal: true })}
+                                className={btnClass({ sm: true })}
                               >
                                 Rename
                               </button>
@@ -2103,7 +2131,7 @@ function ConnectionsPageInner() {
                                   );
                                 }}
                                 disabled={busy}
-                                className={btnClass({ sm: true, reveal: true })}
+                                className={btnClass({ sm: true })}
                               >
                                 Share{shareCount > 0 ? ` (${shareCount})` : ""}
                               </button>
@@ -2178,14 +2206,12 @@ function ConnectionsPageInner() {
                               <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border-subtle)] bg-[var(--color-overlay-soft)] px-3 py-2.5">
                                 <p className="mb-2 mt-0 text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
                                   People you share with can use this connection in
-                                  their chats and scheduled tasks. Their tool calls
-                                  run under{" "}
+                                  their chats and scheduled tasks through{" "}
                                   <strong className="text-[var(--color-text-secondary)]">
                                     your
                                   </strong>{" "}
-                                  login, brokered server-side — they never see the
-                                  credential, and removing a share revokes access
-                                  immediately.
+                                  account. They never see your sign-in details, and
+                                  removing a share stops their access right away.
                                 </p>
                                 {(shares[s.id] ?? []).length > 0 ? (
                                   <ul className="mb-2 flex flex-wrap gap-1.5">
@@ -2273,6 +2299,10 @@ function ConnectionsPageInner() {
                         disabled={busy}
                         className={btnClass({ sm: true })}
                       >
+                        <Icon
+                          name={addSeatFor === group.name ? "close" : "plus"}
+                          className="size-[0.85rem]"
+                        />
                         {addSeatFor === group.name
                           ? "Cancel"
                           : "Add another account"}
@@ -2401,8 +2431,7 @@ function ConnectionsPageInner() {
             </div>
           ) : (
             <ConnEmpty>
-              No remote servers yet — pick one from the directory below, or add
-              one by URL.
+              Nothing added yet. Pick one from the list below, or add one by URL.
             </ConnEmpty>
           )}
         </ConnPanel>
@@ -2411,9 +2440,8 @@ function ConnectionsPageInner() {
           <ConnPanel>
             <ConnPanelHead title="Shared with you" />
             <ConnPanelSub>
-              Connections other users shared with you. Their tools are available
-              in your chats and scheduled tasks; calls run under the
-              owner&apos;s login, brokered server-side.
+              Connections other people shared with you. You can use them in your
+              chats and scheduled tasks through the owner&apos;s account.
             </ConnPanelSub>
             <ConnRows>
               {sharedWithMe.map((s) => {
@@ -2437,7 +2465,7 @@ function ConnectionsPageInner() {
                           </ConnBadge>
                         ) : null}
                         <ConnBadge variant={statusVariant(s.status)}>
-                          {STATUS_LABEL[s.status] ?? s.status}
+                          {statusLabel(s.status, s.auth_kind)}
                         </ConnBadge>
                       </span>
                     }
@@ -2497,23 +2525,21 @@ function ConnectionsPageInner() {
               the title row. */}
           <div className="mb-[0.8rem]">
             <div className="flex items-center justify-between gap-4">
-              <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">
-                Connector directory
+              <h3 className="m-0 text-[1.08rem] font-semibold text-[var(--color-text-primary)]">
+                Find more connections
               </h3>
               <button
                 type="button"
                 aria-expanded={catalogOpen}
                 onClick={() => setCatalogOpen((v) => !v)}
-                className={btnClass({ sm: true })}
+                className={btnClass({ sm: true, reveal: true })}
               >
-                {catalogOpen ? "Hide" : `Browse ${catalog.third_party.length}`}
+                {catalogOpen ? "Hide" : `Browse all ${catalog.third_party.length}`}
               </button>
             </div>
             <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)]">
-              Connect the tools you use every day. Start with a popular connector,
-              or search for what you’re looking for.
-              {" "}Connected services can receive content from your conversations
-              when their tools are used.
+              Start with a popular app, or search for the one you use. An app you
+              connect sees the parts of your conversations the assistant sends it.
             </p>
           </div>
 
@@ -2523,8 +2549,8 @@ function ConnectionsPageInner() {
                 <DirSearch
                   value={catalogQuery}
                   onChange={setCatalogQuery}
-                  placeholder="Search all connectors…"
-                  label="Search connector directory"
+                  placeholder="Search connections…"
+                  label="Search connections"
                 />
                 <p className="m-0 text-[0.75rem] leading-[1.55] text-[var(--color-text-muted)]">
                   Can’t find what you’re looking for?{" "}
@@ -2605,27 +2631,21 @@ function ConnectionsPageInner() {
           popup and scrim cover the navigation rail as well as the page. */}
       {showBundledDialog && catalog ? createPortal(
         <DialogShell
-          label="Bundled by your workspace"
-          scrimLabel="Close bundled connections"
+          label="Included with your workspace"
+          scrimLabel="Close included connections"
           layer="rail"
           onDismiss={() => setBundledDialogOpen(false)}
           className="flex max-h-[85dvh] max-w-4xl flex-col p-5"
         >
           <div className="mb-4 flex items-center justify-between gap-4">
             <div>
-              <h3 className="m-0 text-[1rem] font-semibold">Bundled by your workspace</h3>
+              <h3 className="m-0 text-[1rem] font-semibold">Included with your workspace</h3>
               <p className="mb-0 mt-1 text-[0.78rem] text-[var(--color-text-muted)]">
-                All {catalog.bundled.length} workspace connectors. Changes apply to your chats;
-                scheduled tasks keep their own selection.
+                All {catalog.bundled.length} connections. Changes apply to your chats. Scheduled
+                tasks keep the connections they were set up with.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setBundledDialogOpen(false)}
-              className={btnClass({ sm: true })}
-            >
-              Close
-            </button>
+            <CloseButton label="Close" onClick={() => setBundledDialogOpen(false)} />
           </div>
           {errorBanner.text ? (
             <p role="alert" className="mb-3 mt-0 text-[0.78rem] text-[var(--color-danger-text)]">
@@ -2648,7 +2668,7 @@ function ConnectionsPageInner() {
           operator-named confirmation. */}
       {/* Post-add sign-in prompt: an OAuth server was just added and needs a
           login to finish connecting. Offer it here so the user doesn't have
-          to scroll up to the "Your connections" row to click Connect. */}
+          to scroll up to the "Your connections" row to click Sign in. */}
       {connectPromptFor ? (
         <DialogShell
           label={`Sign in to ${connectPromptFor.name}?`}
@@ -2660,8 +2680,8 @@ function ConnectionsPageInner() {
             {connectPromptFor.name} added — sign in now?
           </h3>
           <p className="mb-4 text-[0.8125rem] text-[var(--color-text-secondary)]">
-            One step left: sign in so its tools become available to you. You can
-            also do it later from the Connect button under Your connections.
+            One step left: sign in so you can use it in your chats. You can also
+            do it later with its Sign in button under Your connections.
           </p>
           <div className="flex justify-end gap-2">
             <button

@@ -113,7 +113,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     expect((convs.conversations ?? []).some((c) => c.title === "Doomed chat")).toBe(false);
   });
 
-  test("'Delete all unpinned' leaves pinned conversations untouched", async ({ page, login }) => {
+  test("'Delete temporary chats' leaves pinned conversations untouched", async ({ page, login }) => {
     test.setTimeout(120_000);
     await login();
 
@@ -129,7 +129,7 @@ test.describe("live conversation management (real chat server + Postgres)", () =
     await page.getByRole("menuitem", { name: "Pin", exact: true }).click();
     expect((await pinResponse).status()).toBe(200);
 
-    await page.getByRole("button", { name: /delete all unpinned/i }).click();
+    await page.getByRole("button", { name: /delete temporary chats/i }).click();
     await page.getByRole("button", { name: /^delete all$/i }).click();
 
     await expect(bar.getByText("Unpinned victim", { exact: true })).toHaveCount(0, { timeout: 10_000 });

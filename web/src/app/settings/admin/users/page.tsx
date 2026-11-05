@@ -82,17 +82,17 @@ const OPS_ROLE_OPTIONS = [
   {
     value: "none",
     label: "None",
-    description: "No access to the Ops Center.",
+    description: "No access to Background tasks.",
   },
   {
     value: "readonly",
     label: "Viewer",
-    description: "Can view Ops Center tasks and logs but cannot change them.",
+    description: "Can see background tasks and their logs but can't change them.",
   },
   {
     value: "client",
     label: "Contributor",
-    description: "Can view, create, and run Ops Center tasks.",
+    description: "Can see, create, and run background tasks.",
   },
 ] as const satisfies readonly {
   value: OpsRole;
@@ -159,7 +159,7 @@ function PermissionFields({
             id={`${fieldBaseId}-admin-description`}
             className={descriptionClass}
           >
-            Full permissions in both Chat and the Ops Center.
+            Full access to Chat and Background tasks.
           </small>
         </label>
       </fieldset>
@@ -204,11 +204,11 @@ function PermissionFields({
         ))}
       </fieldset>
       <fieldset
-        aria-label={`${ariaPrefix}Ops Center permissions`}
+        aria-label={`${ariaPrefix}Background tasks permissions`}
         className="m-0 grid min-w-0 gap-[0.15rem] border-0 p-0"
       >
         <legend className="mb-[0.3rem] text-[0.64rem] font-bold uppercase tracking-[0.07em] text-[var(--color-text-muted)]">
-          Ops Center
+          Background tasks
         </legend>
         {OPS_ROLE_OPTIONS.map((option) => (
           <label
@@ -958,15 +958,15 @@ export default function AdminUsersPage() {
               <span className="select-wrap block min-w-[7.5rem] flex-1 basis-0">
                 <select
                   id="filterOpsRole"
-                  aria-label="Filter by Ops Center role"
+                  aria-label="Filter by Background tasks role"
                   value={filterOps}
                   onChange={(e) => setFilterOps(e.target.value)}
                   className={`${SETTINGS_INPUT} appearance-none pr-8!`}
                 >
-                  <option value="all">Ops: all</option>
+                  <option value="all">Tasks: all</option>
                   {OPS_ROLE_OPTIONS.map((o) => (
                     <option key={o.value} value={o.value}>
-                      Ops: {o.label.toLowerCase()}
+                      Tasks: {o.label.toLowerCase()}
                     </option>
                   ))}
                 </select>
@@ -1494,9 +1494,9 @@ export default function AdminUsersPage() {
                 </p>
               ) : null}
               <p className="mt-2 text-[0.75rem] text-[var(--color-text-muted)]">
-                Chat and Ops Center permissions are separate: chat Viewer is
-                read-only, while Contributor can actively use Chat or create Ops
-                Center tasks. Admin is one unified grant across both. CLI
+                Chat and Background tasks permissions are separate: a chat Viewer
+                is read-only, while a Contributor can use Chat or create
+                background tasks. Admin is one unified grant across both. CLI
                 equivalent for the admin case:{" "}
                 <code className="font-[family-name:var(--font-code)]">
                   fleet admin add
@@ -1508,7 +1508,7 @@ export default function AdminUsersPage() {
             <div className="mt-2 border-t border-[var(--color-border-subtle)] pt-3">
               <p className="text-[0.75rem] leading-[1.5] text-[var(--color-text-muted)]">
                 People sign in to this Fleet through Auth and are managed
-                there: adding someone, their Chat and Ops Center roles, their
+                there: adding someone, their Chat and Background tasks roles, their
                 team and password resets. Granting someone Fleet in Auth creates
                 their account here; removing it signs them out and keeps their
                 data.{" "}

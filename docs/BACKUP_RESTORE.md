@@ -212,7 +212,7 @@ Backups used to be the one operational essential doctor did not check, so a box
 with no backups at all could report `38 ok, 0 advisories` (issue #966 — found on
 a production deployment five days in). Both halves of doctor
 ([`scripts/doctor.sh`](../scripts/doctor.sh) and the in-process
-`internal/boxdoctor` behind Settings → Admin → Doctor) now report:
+`internal/boxdoctor` behind Settings → Admin → System checks) now report:
 
 | State | Verdict |
 |---|---|

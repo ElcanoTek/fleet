@@ -701,7 +701,7 @@ export function ChatTranscript({
                                   onClick={() => setSummaryExpanded(true)}
                                 >
                                   <Icon name="chevron-down" className="size-3" />
-                                  Show {summaryIndex} earlier turn{summaryIndex === 1 ? "" : "s"} — compacted below
+                                  Show {summaryIndex} earlier message{summaryIndex === 1 ? "" : "s"}, summarized below
                                 </button>
                               );
                             }
@@ -1815,11 +1815,11 @@ function SummarizeProgressCard({
         <LoadingLogo size={22} />
         <div className="flex min-w-0 flex-1 flex-col">
           <span className="text-[0.78rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-            Compacting conversation
+            Summarizing earlier messages
           </span>
           <span className="text-[0.72rem] text-[var(--color-text-muted)]">
-            Replacing earlier turns with a short summary so the next turn fits in
-            the model&apos;s context window.
+            Replacing earlier messages with a short summary so the chat can keep
+            going.
           </span>
         </div>
         <span

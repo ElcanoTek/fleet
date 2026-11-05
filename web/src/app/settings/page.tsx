@@ -52,7 +52,7 @@ function SendOnEnterRow() {
   return (
     <SetRow
       label="Send on Enter"
-      desc="Enter sends the message; Shift+Enter adds a line. When off, Enter adds a line and ⌘+Enter sends. The composer toggle mirrors this."
+      desc="On: Enter sends and Shift+Enter starts a new line. Off: Enter starts a new line and Ctrl+Enter (⌘+Enter on a Mac) sends."
     >
       <SetSwitch on={sendOnEnter} onToggle={toggle} label="Send on Enter" />
     </SetRow>
@@ -65,7 +65,7 @@ export default function GeneralSettingsPage() {
   return (
     <SetSection
       title="General"
-      intro="Personal preferences — they affect only you, not your workspace."
+      intro="Your own preferences. They only change things for you."
     >
       <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-1)] px-[1.15rem] py-[0.3rem]">
         <SetRow

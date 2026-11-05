@@ -3446,7 +3446,7 @@ export function ChatExperience({
       if (!response.ok) {
         if (response.status === 409) {
           throw new Error(
-            "A turn is currently running — wait for it to finish before compacting.",
+            "A reply is still running. Wait for it to finish, then summarize.",
           );
         }
         const text = await response.text();
@@ -3483,9 +3483,9 @@ export function ChatExperience({
           } else if (event.event === "summary.error") {
             try {
               const p = JSON.parse(event.data) as { message?: string };
-              streamErr = p.message ?? "Compact failed.";
+              streamErr = p.message ?? "Summarizing failed.";
             } catch {
-              streamErr = "Compact failed.";
+              streamErr = "Summarizing failed.";
             }
             completed = true;
           }
@@ -3499,7 +3499,7 @@ export function ChatExperience({
       // returns.
       await loadConversation(activeConversationId);
     } catch (err) {
-      setSummarizeError(err instanceof Error ? err.message : "Compact failed.");
+      setSummarizeError(err instanceof Error ? err.message : "Summarizing failed.");
     } finally {
       setIsSummarizing(false);
       setSummarizeStream("");
@@ -6890,13 +6890,13 @@ export function ChatExperience({
 
         {confirmBulkDelete ? (
           <DialogShell
-            label="Delete all unpinned chats?"
+            label="Delete all temporary chats?"
             scrimLabel="Close delete-all confirmation"
             onDismiss={() => setConfirmBulkDelete(false)}
             className="max-w-[26rem] p-5"
           >
             <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Delete all unpinned chats?
+              Delete all temporary chats?
             </h2>
             <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
               {/* Counts what the server actually deletes: unpinned chats
@@ -6909,8 +6909,8 @@ export function ChatExperience({
               {countDeletedByDeleteAllUnpinned(conversations) === 1
                 ? ""
                 : "s"}{" "}
-              will be removed. Pinned chats — and chats filed in a project — are
-              kept. This cannot be undone.
+              in Temporary will be deleted. Pinned chats and chats in a project
+              are kept. This can&apos;t be undone.
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -7415,19 +7415,19 @@ export function ChatExperience({
 
         {confirmSummarize ? (
           <DialogShell
-            label="Compact this conversation?"
-            scrimLabel="Close compact confirmation"
+            label="Summarize earlier messages?"
+            scrimLabel="Close summarize confirmation"
             onDismiss={() => setConfirmSummarize(false)}
             className="max-w-[26rem] p-5"
           >
             <h2 className="mb-1 text-[1rem] font-semibold text-[var(--color-text-primary)]">
-              Compact this conversation?
+              Summarize earlier messages?
             </h2>
             <p className="mb-4 text-[0.875rem] leading-[1.6] text-[var(--color-text-secondary)]">
-              Long conversations get expensive and can hit the model&apos;s
-              context window. Compacting replaces earlier turns with a short
-              summary so the next turn stays affordable and fits. The originals
-              collapse below a banner — you can expand them again anytime.
+              Long chats cost more and can run out of room. This replaces
+              earlier messages with a short summary so the chat can keep going.
+              The original messages fold away under a banner, and you can open
+              them again anytime.
             </p>
             <div className="flex items-center justify-end gap-2">
               <button
@@ -7445,7 +7445,7 @@ export function ChatExperience({
                   void summarizeConversation();
                 }}
               >
-                Compact
+                Summarize
               </button>
             </div>
           </DialogShell>

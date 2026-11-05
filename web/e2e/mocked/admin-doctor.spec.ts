@@ -98,9 +98,9 @@ test("the deep run goes through the explicit button and reports the smoke", asyn
   await expect(page.getByText("healthy", { exact: true })).toBeVisible();
 });
 
-test("Doctor appears in the settings admin sub-nav", async ({ page }) => {
+test("System checks appears in the settings admin sub-nav", async ({ page }) => {
   await mockAdmin(page);
   await page.goto("/settings/admin");
   await expect(page.getByTestId("setnav-admin")).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("link", { name: "Doctor" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "System checks" })).toBeVisible();
 });

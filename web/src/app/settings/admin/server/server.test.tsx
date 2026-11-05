@@ -95,7 +95,7 @@ describe("AdminServerPage", () => {
     render(<AdminServerPage />);
 
     await screen.findByTestId("storage-panel");
-    expect(screen.getByLabelText(/Idle more than/)).toHaveAttribute(
+    expect(screen.getByLabelText(/Cutoff/)).toHaveAttribute(
       "id",
       "cleanupDays",
     );
@@ -103,7 +103,7 @@ describe("AdminServerPage", () => {
       "id",
       "cleanupDeleteChats",
     );
-    expect(screen.getByLabelText("Sweep aged upload files")).toHaveAttribute(
+    expect(screen.getByLabelText("Delete old uploaded files")).toHaveAttribute(
       "id",
       "cleanupSweepFiles",
     );
@@ -133,7 +133,7 @@ describe("AdminServerPage", () => {
       fetchMock.mock.calls.filter(([u, i]) => String(u).includes("/storage/cleanup") && i?.method === "POST");
     // First click arms; nothing is deleted yet.
     fireEvent.click(run);
-    expect(run).toHaveTextContent("Confirm cleanup");
+    expect(run).toHaveTextContent("Permanently delete");
     expect(posts()).toHaveLength(0);
     // Second click fires the POST and the result line reports what went.
     fireEvent.click(run);
@@ -219,12 +219,12 @@ describe("AdminServerPage", () => {
 
     // The server counted at ITS default (30 days); a different cutoff must not
     // borrow that number.
-    fireEvent.change(screen.getByLabelText(/Idle more than/), { target: { value: "7" } });
+    fireEvent.change(screen.getByLabelText(/Cutoff/), { target: { value: "7" } });
     expect(preview).toHaveTextContent("At the default 30-day cutoff a cleanup would remove 7 conversations");
     expect(preview).toHaveTextContent("the count at 7 days isn't known until it runs");
     expect(preview).not.toHaveTextContent("A cleanup at 7 days would remove");
 
-    fireEvent.change(screen.getByLabelText(/Idle more than/), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText(/Cutoff/), { target: { value: "30" } });
     expect(preview).toHaveTextContent("A cleanup at 30 days would remove 7 conversations");
   });
 

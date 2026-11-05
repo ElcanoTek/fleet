@@ -13,7 +13,7 @@
        - **Share this chat** — opens the Share dialog to share with your team, copy a public link, or toggle Multiplayer mode.
        - **Patrol & schedule** — opens the recurring patrol / one-shot timer popover.
        - **Auto-approve tools** — toggles per-conversation auto-approve for session-approvable tools.
-       - **Compact conversation** — summarizes earlier turns to free context window space once a conversation has messages.
+       - **Summarize earlier messages** — summarizes earlier turns to free context window space once a conversation has messages.
      - **View & Input Preferences:**
        - **Show details** — toggles the assistant's reasoning, working notes, tool calls, and per-turn cost/token stats on or off.
        - **Dashboard view** — switches between standard chat and the live Dashboard board (`D`).
@@ -23,7 +23,7 @@
      - Active **Patrol** count pill (`N` active schedule(s); hidden below `sm` while closed, rendered when opened from **More options**)
      - Active **Share / Multiplayer** status indicator (`composer-share-button`, `hidden sm:inline-flex`) when a conversation is shared with your team, shared by public link, or in Multiplayer mode
      - Active **Auto-approve** (`⚡`) toggle badge (`hidden sm:inline-flex`)
-     - **Compact conversation** lives exclusively inside **More options** (`•••`) (showing the context usage percentage when available) rather than rendering a standalone icon button on the composer toolbar.
+     - **Summarize earlier messages** lives exclusively inside **More options** (`•••`) (showing the context usage percentage when available) rather than rendering a standalone icon button on the composer toolbar.
 
 2. **Share in More options (`•••`) from the start of a chat, with an active status indicator when shared**
    - **More options (`•••`) menu & active indicator:** **Share this chat** (`composer-share-button`) lives inside **More options** (`•••`) from the moment a new chat opens — before or after the first message is sent — keeping the high-traffic area next to **Send / Stop** uncluttered when a chat is in its default private (`Only you`) state.

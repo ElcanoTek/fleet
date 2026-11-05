@@ -182,16 +182,16 @@ export function ContextRing({
         : `${Math.max(0, Math.round(usage.fraction * 100))}%`
       : null;
   const titleText = (() => {
-    if (isSummarizing) return "Compacting conversation…";
-    if (!usage) return "Compact this conversation — replace earlier turns with a short summary so the next turn fits in the model's context window and stays cheap.";
-    return `${formatContextUsage(usage)} — click to compact and free up context.`;
+    if (isSummarizing) return "Summarizing earlier messages…";
+    if (!usage) return "Summarize earlier messages: replace them with a short summary so the chat can keep going and stays cheap.";
+    return `${formatContextUsage(usage)}. Click to summarize earlier messages and make room.`;
   })();
 
   return (
     <button
       type="button"
-      aria-label={isSummarizing ? "Compacting conversation…" : pct !== null ? `Context ${pct} full — click to compact` : "Compact this conversation"}
-      data-tip-top={isSummarizing ? "Compacting conversation…" : pct !== null ? `Compact conversation — ${pct} full` : "Compact conversation"}
+      aria-label={isSummarizing ? "Summarizing earlier messages…" : pct !== null ? `Chat ${pct} full. Summarize earlier messages` : "Summarize earlier messages"}
+      data-tip-top={isSummarizing ? "Summarizing earlier messages…" : pct !== null ? `Summarize earlier messages (${pct} full)` : "Summarize earlier messages"}
       title={titleText}
       disabled={disabled}
       onClick={onClick}
@@ -375,9 +375,9 @@ export function SummaryBanner({
               className="rounded-[var(--radius-md)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:bg-[var(--color-overlay-strong)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-50"
               onClick={onResummarize}
               disabled={isSummarizing}
-              title="Compact again against the current scroll. Replace semantics: this banner's text is swapped, not chained."
+              title="Write a fresh summary of the conversation so far. It replaces this one."
             >
-              {isSummarizing ? "Compacting…" : "Compact again"}
+              {isSummarizing ? "Summarizing…" : "Summarize again"}
             </button>
           ) : null}
         </span>
@@ -387,7 +387,7 @@ export function SummaryBanner({
       </div>
       {meta?.model || (meta?.costUsd ?? 0) > 0 ? (
         <p className="mt-2 text-[0.65rem] text-[var(--color-text-muted)] tabular-nums">
-          {meta?.model ? <>Compacted by <span className="font-medium">{shortModelName(meta.model)}</span></> : null}
+          {meta?.model ? <>Summarized by <span className="font-medium">{shortModelName(meta.model)}</span></> : null}
           {(meta?.costUsd ?? 0) > 0 ? <> · {meta!.costUsd! < 0.01 ? `$${meta!.costUsd!.toFixed(4)}` : `$${meta!.costUsd!.toFixed(2)}`}</> : null}
           {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString()} prompt tokens condensed</> : null}
         </p>

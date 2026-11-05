@@ -61,7 +61,7 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   answers `incorrect_client_credentials` with HTTP 200. Tokens live 8 hours
   with a refresh token; `bad_refresh_token` means the user must reconnect.
   "Revoke all user tokens" on the app is noticed at the next mount (401 →
-  *Reconnect needed*). No revocation endpoint: sign-out clears fleet's copy.
+  *Sign-in needed*). No revocation endpoint: sign-out clears fleet's copy.
 - **Google Workspace (Drive, Gmail, …)** — a Google Cloud OAuth client (Web
   application) with fleet's callback; secret required. Enable the Workspace
   MCP APIs on the project. fleet asks for `access_type=offline` and
@@ -179,7 +179,7 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
   under a row lock. Network errors and 5xx stay transient (the refresh path in
   `internal/remotemcp/service.go`): the connection is skipped for that run,
   remains connected, and is retried on the next call. Only terminal OAuth
-  errors (e.g. `invalid_grant`) mark the connection *Reconnect needed*
+  errors (e.g. `invalid_grant`) mark the connection *Sign-in needed*
   (`needs_reauth`). In either case, the run completes without the skipped
   connector.
 - **More than 128 tools (by default)** switches the run to deferred mode:
@@ -201,7 +201,7 @@ Read `fleet.log` first. The lines that matter:
 
 - `remote-mcp: skipping server "<name>" for <user> — token unavailable` —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
-  marked *Reconnect needed* (`needs_reauth`); have the owner click Connect. For
+  marked *Sign-in needed* (`needs_reauth`); have the owner click Sign in again. For
   transient network errors or vendor 5xx, the same line is logged but the
   connection stays connected and the next call retries automatically.
 - `remote-mcp: skipping server "<name>" … — failed to connect: … HTTP 404` —

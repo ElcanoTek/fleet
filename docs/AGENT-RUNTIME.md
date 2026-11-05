@@ -1074,7 +1074,7 @@ How the invariants hold:
   answers the per-turn connect with HTTP 401 — a revoked grant, GitHub's
   "Revoke all user tokens", a key rotated on the vendor side — the connection
   is marked `needs_reauth` with the status in its detail, so Settings →
-  Connections shows "Reconnect needed" immediately instead of after the
+  Connections shows "Sign-in needed" immediately instead of after the
   token's natural expiry (eight hours, measured for #1006). Only a 401 marks:
   a 5xx, a timeout or a TLS failure says nothing about the credential. The
   transport reports such answers as the status plus the body's first line

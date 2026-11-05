@@ -557,7 +557,7 @@ Things that bite:
   migrate fails.
 
 Admins also get a **read-only** version of this report in the web UI —
-**Settings → Admin → Doctor** — run from inside the fleet process (DBs, disk
+**Settings → Admin → System checks** — run from inside the fleet process (DBs, disk
 headroom, subuid ranges, sandbox image, unit states), with the on-box fix
 command shown next to every failing check and an explicit "Run deep checks"
 button for the sandbox smoke. See [`docs/DOCTOR.md`](DOCTOR.md).

@@ -76,7 +76,7 @@ equivalents are part of the production checklist in
 ## Honest scope / deliberately not done
 
 - **No `fleet timers status`.** Timer state is already reported by
-  `fleet doctor` and the admin Doctor panel; a third reporter would be one
+  `fleet doctor` and the admin System checks page; a third reporter would be one
   more place for the verdicts to drift.
 - **No uninstall verb.** `systemctl disable --now <timer>` plus removing the
   two files is the whole operation, and doctor treats an absent pair as an

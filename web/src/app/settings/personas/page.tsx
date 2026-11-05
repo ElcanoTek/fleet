@@ -270,10 +270,9 @@ export default function PersonasPage() {
       title="Personas"
       intro={
         <>
-          A persona shapes how the assistant thinks, writes and patrols in the chats you start with
-          it. Build a digital twin that works the way you do, or a specialist for one job. Yours are
-          private — only your own chats can use them. Pick one from the persona menu in a new chat,
-          or start a patrol straight from its card.
+          A persona sets how the assistant works and writes. Make one that works like you, or one
+          for a single job. Yours are private. Pick one from the persona menu when you start a
+          chat.
         </>
       }
     >

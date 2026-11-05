@@ -1,4 +1,4 @@
-# Doctor — box-level diagnose + repair (`fleet doctor` + Settings → Admin → Doctor)
+# Doctor — box-level diagnose + repair (`fleet doctor` + Settings → Admin → System checks)
 
 ## What shipped
 
@@ -32,7 +32,7 @@ Two halves of one feature, split by privilege:
    freshness is *report-only* — pulling/rebuilding stays `fleet update`'s job,
    and doctor never runs migrations.
 2. **`GET /admin/doctor`** (`internal/boxdoctor` + the Settings → Admin →
-   Doctor panel) — the **read-only** sibling run from inside the fleet
+   System checks page) — the **read-only** sibling run from inside the fleet
    process, for admins who don't have a shell open: chat + sched DB pings,
    `OPENROUTER_API_KEY` presence (never the value), disk headroom on the data
    dir and the podman image store (warn ≥ 85 %, fail ≥ 95 %), subuid/subgid

@@ -306,7 +306,7 @@ self-migrates on start.
 | `fleet update` | `git pull` + rebuild + reinstall the binaries in place |
 | `scripts/fleet-upgrade.sh` | drain, swap, health-gate, and auto-roll-back on failure |
 | `fleet status` / `fleet diagnose` | quick health report / redacted support bundle |
-| `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → Doctor) |
+| `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → System checks) |
 | `fleet restart` · `stop` · `logs` | service lifecycle |
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
 | `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |

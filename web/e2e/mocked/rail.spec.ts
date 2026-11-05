@@ -47,7 +47,7 @@ test("the rail marks the active surface and links to the other", async ({ page }
   await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
 
   // By test id: each rail item's accessible name includes its subtitle, and
-  // "Run headless, without a chat" contains "chat" too.
+  // "Runs without a chat" contains "chat" too.
   await expect(page.getByTestId("nav-to-chat")).toHaveAttribute("aria-current", "page");
   await expect(page.getByTestId("nav-to-chat")).toContainText("Talk it through");
   // The rail names the ways of working: Chat · Patrols (an index of patrol

@@ -6,7 +6,7 @@
 // chips, the .skill-chip copy control, and the .stats-bar.admin-stats cards.
 // Metrics are the design's exact values on the app's semantic tokens.
 
-import { useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useId, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 
 /* ── Section frame (.set-section / .set-head) ── */
@@ -23,11 +23,11 @@ export function SetSection({
   return (
     <section>
       <header className="mb-[1.1rem]">
-        <h2 className="m-0 text-[1.15rem] font-semibold text-[var(--color-text-primary)]">
+        <h2 className="m-0 text-[1.4rem] font-semibold tracking-[-0.01em] text-[var(--color-text-primary)]">
           {title}
         </h2>
         {intro ? (
-          <p className="mb-0 mt-[0.35rem] text-[0.82rem] leading-[1.55] text-[var(--color-text-muted)]">
+          <p className="mb-0 mt-[0.4rem] max-w-[46rem] text-[0.875rem] leading-[1.55] text-[var(--color-text-secondary)]">
             {intro}
           </p>
         ) : null}
@@ -39,14 +39,23 @@ export function SetSection({
 
 /* ── Groups + panels (.conn-group / .conn-group-head / .panel.conn-panel) ── */
 
+// A panel inside a ConnGroup sits under the group's h3, so its title is an h4;
+// a panel directly under the page's h2 takes h3. The context keeps the outline
+// correct without every call site passing a level.
+const InConnGroup = createContext(false);
+
 export function ConnGroup({ children }: { children: ReactNode }) {
-  return <div className="mb-[2.1rem]">{children}</div>;
+  return (
+    <InConnGroup.Provider value={true}>
+      <div className="mb-[2.1rem]">{children}</div>
+    </InConnGroup.Provider>
+  );
 }
 
 export function ConnGroupHead({ title, children }: { title: ReactNode; children?: ReactNode }) {
   return (
     <div className="mb-[0.8rem]">
-      <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">{title}</h3>
+      <h3 className="m-0 text-[1.08rem] font-semibold text-[var(--color-text-primary)]">{title}</h3>
       {children ? (
         <p className="mb-0 mt-[0.35rem] text-[0.78rem] leading-[1.55] text-[var(--color-text-muted)] [&_b]:font-semibold [&_b]:text-[var(--color-text-secondary)]">
           {children}
@@ -76,11 +85,14 @@ export function ConnPanel({
 }
 
 export function ConnPanelHead({ title, children }: { title: ReactNode; children?: ReactNode }) {
+  const Heading = useContext(InConnGroup) ? "h4" : "h3";
   return (
     <div className="flex min-h-[1.8rem] items-center justify-between gap-4">
-      <span className="text-[0.68rem] font-bold uppercase tracking-[0.09em] text-[var(--color-text-secondary)]">
+      {/* A panel title names the block a reader is looking for, so it reads
+          as a heading in the primary text color, not a faint overline. */}
+      <Heading className="m-0 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
         {title}
-      </span>
+      </Heading>
       {children}
     </div>
   );
@@ -127,7 +139,7 @@ export function ConnRow({
     <div className="border-b border-[var(--color-border-subtle)] px-[0.1rem] py-[0.55rem] last:border-b-0">
       <div className="flex flex-wrap items-center justify-between gap-x-[0.8rem] gap-y-[0.5rem]">
         <div className="grid min-w-[min(14rem,100%)] flex-1 gap-[0.15rem]">
-          <span className="text-[0.83rem] font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere] [&_code]:font-[family-name:var(--font-code)] [&_code]:text-[0.76rem] [&_code]:text-[var(--color-text-secondary)]">
+          <span className="text-[0.875rem] font-medium text-[var(--color-text-primary)] [overflow-wrap:anywhere] [&_code]:font-[family-name:var(--font-code)] [&_code]:text-[0.76rem] [&_code]:text-[var(--color-text-secondary)]">
             {name}
           </span>
           {sub ? (

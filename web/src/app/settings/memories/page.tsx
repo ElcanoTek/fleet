@@ -238,7 +238,7 @@ export default function MemoriesPage() {
   return (
     <SetSection
       title="Memories"
-      intro="Personal facts, preferences, and standing rules the assistant carries into every chat you start. Pin the rules that must always come first, retire anything stale, or delete what you no longer want kept."
+      intro="Facts and preferences the assistant remembers in every chat you start."
     >
       {error ? (
         <p
@@ -377,7 +377,7 @@ export default function MemoriesPage() {
               ) : null}
             </ConnPanelHead>
             <ConnPanelSub>
-              Pinned memories are always given to the assistant first. Retiring a memory keeps it for the record while stopping it from being injected into future chats.
+              Pinned memories come first. Retire a memory to stop using it in new chats while keeping a record of it.
             </ConnPanelSub>
 
             {memories === null ? (

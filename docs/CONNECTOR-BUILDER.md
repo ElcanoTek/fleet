@@ -8,7 +8,7 @@ Design note for the interactive **Connector Builder** skill (`/connector-builder
 
 ### 1.1 Tiered Connector Strategy & Built-In Skill (`internal/clientconfig/builtin_skills/connector-builder/SKILL.md`)
 
-Fleet ships a built-in `/connector-builder` skill and a **"Create your own connection"** shortcut button in **Settings → Connections** (`/chat?prompt=%2Fconnector-builder+Help+me+create+a+custom+connection`).
+Fleet ships a built-in `/connector-builder` skill and a **"Build a connection in chat"** shortcut button in **Settings → Connections** (`/chat?prompt=%2Fconnector-builder+Help+me+create+a+custom+connection`).
 
 When a user or solutions engineer asks to integrate a third-party service, the builder evaluates three tiers in priority order:
 
