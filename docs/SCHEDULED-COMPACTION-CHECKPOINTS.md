@@ -865,11 +865,111 @@ final one. Against them, runs of #1862's code on the same task:
   2026-10-26, top to bottom); the twelve reports came to 293, 292 and 296 KB
   as sent. This round cost about $13.
 
+#### Final round on main after the fixes (2026-11-03 and 2026-11-04)
+
+Five models on `v2026.11.02.8` (2026-11-03), three runs each way, each run its
+own task. MiniMax M2.7 and Kimi K2 were added to test smaller windows: on 205K
+the raise reaches about 154K, and below about 152K it cannot fire at all.
+
+| Model (window) | Off: mean | On: mean | Most summaries in a run (off / on) | Correct cells of 72 (off; on) |
+|---|---|---|---|---|
+| Sonnet 5.5 (~1M) | $2.10 | $2.10 | 2 / 2 | 72, 72, 72; 72, 72, 72 |
+| Haiku 5.5 (~1M) | $0.44 | $0.46 | 3 / 2 | 63, 72, 63; 71, 71, 72 |
+| Gemini 3.8 Flash (~1M) | $1.10 | $1.62 ($1.19 without one run, below) | 3 / 2 | 72, 72, 72; 72, 72, 68 |
+| MiniMax M2.7 (205K) | $0.18 | $0.12 | 2 / 2 | 62, 60, 72; 63, 62, 60 |
+| Kimi K2 (131K) | $0.55 (2 runs; 3rd failed on provider error) | $0.37 | 3 / 4 | 57, 47; 60, 58, 60 |
+
+- **The loop is gone.** No run took more than four summaries, against 34 for
+  Sonnet and 12–28 for Gemini with elision off before #1891. The raise after a
+  summarized call fired 12 times, and none of those runs summarized again.
+- **Elision now costs about the same as off** on Sonnet, Haiku and Gemini, and
+  less on MiniMax and Kimi. Gemini caches 84–92% of its prompt in these runs.
+- **Small windows.** On Kimi K2 the raise cannot fire. One run fetched all
+  twelve reports again after a summary and took four summaries ($0.58), then
+  stopped.
+- **The Gemini run left out** ($2.49) read other jobs' files with `bash` before
+  #1900 (`v2026.11.03.3`). Its answer was its own (72 cells, against 62 in the
+  file it read).
+- **Lower cell counts** mostly come from listing each store's number of
+  low-stock SKUs instead of naming them; the counts were right. Kimi also got
+  some order counts and discounts wrong.
+- **Not re-measured on the final code:** GPT-6.1 Sol, DeepSeek, Opus and Luna
+  Pro. In the seven-model round they already cost the same or less with
+  elision.
+- **Follow-up after #1913** (`v2026.11.04.2`, 2026-11-04): Sonnet averaged
+  $1.73 with 16–40% of the prompt cached, and Haiku $0.55 with 36–61% (before
+  #1913, 38–66% and 15–48% on a different business date). On this 80K-budget
+  bench, all twelve reports (~150K tokens) arrive in Step 1 (cold), immediately
+  cross the 80K resend budget while the self-audit holds elision back, and buy
+  two LLM compaction summaries (`summarizeDroppedMiddleWith`), each of which
+  sends the ~150K history under the summarizer's own system prompt (uncached)
+  and rewrites the middle of history so the kept half is cold on the step after
+  it. In production (below), where `FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0` and
+  `FLEET_SCHEDULED_AUTO_COMPACT=1` keep history append-only unless a run nears
+  the 900K window threshold, Anthropic models cache **91.5–94.8%** of their
+  prompt tokens.
+
+#### Production before/after (`fleet.elcanotek.com`, `sched` DB `logs`)
+
+In production (`fleet.elcanotek.com`), `FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0`
+and `FLEET_SCHEDULED_AUTO_COMPACT=1` (#1764) have been set since
+`2026-10-16T01:05:49Z`, so scheduled runs compact at the window checkpoint
+(900K tokens on a 1M window) rather than every 80K of resent history. Across
+all 1,557 succeeded scheduled runs in `sched` DB `logs` from `2026-09-23`
+through `2026-11-05`:
+
+| Period | Succeeded runs | Checkpoints / run (total) | `trigger: "elision"` | LLM summaries | Mean completion tokens | Mean prompt tokens | Prompt cache hit % | Mean / median cost |
+|---|---|---|---|---|---|---|---|---|
+| `2026-09-23..2026-10-15` (80K resend budget, #1600 floor rule) | 587 | 1.38 (808) | 0 | 808 | 68,694 | 4,361,538 | 84.9% | $0.238 / $0.126 |
+| `2026-10-16..2026-10-21` (window checkpoint, pre-`v2026.10.21.12`) | 181 | 0.00 (0) | 0 | 0 | 28,577 | 2,571,946 | 91.0% | $1.064 / $0.667 |
+| `2026-10-21..2026-11-02` (`v2026.10.21.12`..`v2026.11.02.2`) | 628 (638 total) | 0.003 (2 across all 638 runs) | **2** | **0** | 17,399 | 2,107,073 | 90.0% | $1.105 / $0.731 |
+| `2026-11-02..2026-11-05` (`v2026.11.02.6+`) | 161 (171 total) | 0.00 (0) | 0 | 0 | 22,636 | 2,741,264 | **93.5%** | $1.557 / $0.970 |
+
+*(Note: unit cost per run rose after `2026-10-15` because production tasks moved
+from `openai/gpt-6-luna-pro` to `google/gemini-4-argon` and
+`anthropic/claude-opus-5.5`.)*
+
+On the same three recurring Pages refresh tasks measured in
+[The prompt floor (#1600)](#the-prompt-floor-1600) (`Husqvarna Daily Update`,
+`twc-client-overview refresh`, and `Brookfield Zoo Daily Update`):
+
+| Recurring task | Period | Model | Runs | Checkpoints / run | Elisions | Summaries | Mean completion tokens | Cache hit % | Mean cost |
+|---|---|---|---|---|---|---|---|---|---|
+| A: `Husqvarna Daily Update` | Pre-#1764 (80K budget) | `openai/gpt-6-luna-pro` | 21 | 1.8 | 0 | 38 | 94,047 | 84.7% | $0.159 |
+| A: `Husqvarna Daily Update` | Pre-`v2026.10.21.12` (window) | `google/gemini-4-argon` | 7 | 0.0 | 0 | 0 | 29,954 | 92.4% | $0.925 |
+| A: `Husqvarna Daily Update` | `v2026.10.21.12`..`v2026.11.02.2` | `anthropic/claude-opus-5.5` | 6 | 0.0 | 0 | 0 | 15,623 | 94.1% | $1.268 |
+| A: `Husqvarna Daily Update` | `v2026.11.02.6+` | `anthropic/claude-opus-5.5` | 3 | 0.0 | 0 | 0 | 13,899 | 93.6% | $1.039 |
+| B: `twc-client-overview refresh` | Pre-#1764 (80K budget) | `openai/gpt-6-luna-pro` | 18 | 1.4 | 0 | 26 | 80,054 | 84.9% | $0.145 |
+| B: `twc-client-overview refresh` | Pre-`v2026.10.21.12` (window) | `google/gemini-4-argon` | 4 | 0.0 | 0 | 0 | 25,405 | 87.1% | $0.807 |
+| B: `twc-client-overview refresh` | `v2026.10.21.12`..`v2026.11.02.2` | `anthropic/claude-opus-5.5` | 5 | 0.0 | 0 | 0 | 11,510 | 91.5% | $1.079 |
+| B: `twc-client-overview refresh` | `v2026.11.02.6+` | `anthropic/claude-opus-5.5` | 3 | 0.0 | 0 | 0 | 14,392 | 93.4% | $1.122 |
+| C: `Brookfield Zoo Daily Update` | Pre-#1764 (80K budget) | `openai/gpt-6-luna-pro` | 25 | 1.6 | 0 | 40 | 80,683 | 86.0% | $0.133 |
+| C: `Brookfield Zoo Daily Update` | Pre-`v2026.10.21.12` (window) | `google/gemini-4-argon` | 7 | 0.0 | 0 | 0 | 25,964 | 90.0% | $0.827 |
+| C: `Brookfield Zoo Daily Update` | `v2026.10.21.12`..`v2026.11.02.2` | `anthropic/claude-opus-5.5` | 6 | 0.0 | 0 | 0 | 16,302 | 93.9% | $1.152 |
+| C: `Brookfield Zoo Daily Update` | `v2026.11.02.6+` | `anthropic/claude-opus-5.5` | 3 | 0.0 | 0 | 0 | 15,873 | 94.8% | $0.928 |
+
+When a long production run **did** reach the 900K window checkpoint after
+`v2026.10.21.12` shipped (2 runs out of 809 total runs across `fleet.elcanotek.com`),
+**both (2 of 2) `fleet.context_compacted` events used `trigger: "elision"`
+(`elision_trigger: "window"`) and required 0 LLM summaries**:
+- `133650ac-1088-4793-82fc-9433e132bf60` (`2026-10-26 09:00 UTC`,
+  `google/gemini-4-argon`, 28.97M prompt tokens, 88.8% cached, 59,168
+  completion tokens, $16.22): paused at `908,824` tokens after 31 steps;
+  `[context_elided]` stubbed 90 tool results (`1,069,055` bytes → estimated
+  `353,593` tokens after) and needed no summary.
+- `4d7e82f9-1750-4206-a379-3bba3678ce50` (`2026-10-29 02:26 UTC`,
+  `Jira Campaign Health (report-only)`, `anthropic/claude-sonnet-5.5`, 63.64M
+  prompt tokens, 93.5% cached, 254,905 completion tokens, $18.08): paused at
+  `902,902` tokens after 28 steps; `[context_elided]` stubbed 90 tool results
+  (`651,482` bytes → estimated `562,133` tokens after) and needed no summary.
+
 ### Deviations from the issue
 
-- The before/after numbers come from local instances, not a production
-  recurring task: a synthetic seed task, and a recurring store-KPI task with a
-  self-audit whose connector serves generated data ([Measured](#measured)).
+- Because production switched to `FLEET_CONTEXT_RESEND_BUDGET_TOKENS=0` and
+  `FLEET_SCHEDULED_AUTO_COMPACT=1` (#1764) on `2026-10-16`, controlled
+  80K-budget before/after comparisons were measured on a local synthetic seed
+  task and a local recurring store-KPI task with a self-audit, supplemented by
+  the production `sched` DB `logs` comparison above ([Measured](#measured)).
 - The breadcrumb is `[context_elided]`, as asked, but the event is the existing
   `fleet.context_compacted` with `trigger: "elision"`, so the scheduler stream
   forwards it with no change.
@@ -889,43 +989,14 @@ final one. Against them, runs of #1862's code on the same task:
 
 ### Not done
 
-- The raise after a summarized call on other models. It was measured on
-  Sonnet and Haiku, whose runs loop on summaries most
-  ([above](#with-the-raise-after-a-summarized-call-2026-11-02)).
-- Gemini 3.8 Flash costing more with elision. Over all the bench's runs,
-  four with elision cost $2.25 a run and five without $1.49. The runs with
-  elision summarized less (1–2 times against 2–12) but sent more (2.4–3.9M
-  prompt tokens, against 0.5–2.4M in four of the five without): a trim keeps
-  more history than a summary, Gemini takes many small steps, and only
-  about 15–20% of its prompt is cached. They were also more accurate (69
-  cells against 64 on average; the two cheapest runs without elision stopped
-  early with wrong values). The raise did not fire in any of them. The low
-  cached share was fleet's cache marker: on Gemini it held the cache read to
-  the marked prefix (the system prompt and tools, and the compaction summary
-  when there is one) however long the history grew. It now gives way to
-  Google's implicit cache once the history outgrows that prefix
-  ([PROMPT-CACHE-CONTRACT.md](PROMPT-CACHE-CONTRACT.md#where-the-breakpoints-are-placed));
-  what elision costs Gemini since then is not measured on this build.
-- Stopping the search for trimmed data. The second wording asks for a
-  repeated call and names where the data is not, but in three runs of six
-  Gemini still probed the environment or the process list first, and in one
-  it searched the sandbox and answered from another task's result file.
-  Every sandbox can read the whole workspace root
-  ([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#what-this-does-not-fix));
-  the wording cannot close that.
-- Gemini on #1889's final rule. With the second wording and the cache
-  marker as before #1889, Gemini cost $4.14 a run against $1.14 with elision
-  off, its history mostly uncached ([the second
-  wording](#the-second-stub-wording-2026-11-01)). The runs with both changes
-  used an earlier version of #1889's rule; its final rule also counts the
-  tool definitions, so the marker gives way a little later. Elision with the
-  second wording on that rule is not measured. On this task the Anthropic
-  models read back only 11% to 59% of their prompt too, against 58% to 87%
-  on GPT-6.1 Sol and DeepSeek. Why is not looked into.
-- The second wording on the other models. It was measured on Gemini and on
-  two Haiku runs that never elided; its effect on the other models'
-  re-fetches is not measured. The text invites them, and on a window too
-  small for a raise (128K, say) a re-fetch can feed the summary loop above.
+- Re-measuring GPT-6.1 Sol, DeepSeek, Opus and Luna Pro on the `v2026.11.02.8`
+  final code (in the seven-model round they already cost the same or less with
+  elision; the 3–4 November final round measured Sonnet 5.5, Haiku 5.5,
+  Gemini 3.8 Flash, MiniMax M2.7 and Kimi K2
+  [above](#final-round-on-main-after-the-fixes-2026-11-03-and-2026-11-04)).
+- Stopping a model from probing `env` or `ps aux` before re-calling a reading
+  tool when its output was trimmed (cross-task workspace file reads via `bash`
+  were closed in #1900, `v2026.11.03.3`).
 - Holding elision back during a verifier or phone-a-friend repair round. Such a
   round comes after the audit was accepted, so it is not held, though it may
   re-read evidence too. Not measured.
