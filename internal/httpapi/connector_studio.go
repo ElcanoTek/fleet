@@ -428,7 +428,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader) //nolint:gosec // URL validated and dial-guarded by s.safeProbeHTTPClient() via netguard.
+	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -454,7 +454,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		}
 	}
 
-	resp, err := s.safeProbeHTTPClient().Do(req) //nolint:gosec // SSRF prevented by netguard DialContext on safeProbeHTTPClient.
+	resp, err := s.safeProbeHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %s", agentcore.RedactSecrets(err.Error()))
 	}

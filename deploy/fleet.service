@@ -153,6 +153,11 @@ UnsetEnvironment=FLEET_ENV_FILE
 # equivalent; both work, so this line never needs to change in lockstep with a
 # binary upgrade (no restart-mid-upgrade can brick the daemon). Operator verbs
 # (`fleet update`, `fleet status`, `fleet chat`, …) live in the same binary.
+# Ensure /opt/fleet/client (when present) is owned by fleet:fleet before
+# rootless Podman bind-mounts its subdirectories with SELinux relabeling (:ro,z);
+# a root-owned file from a manual `git pull` as root otherwise fails lsetxattr
+# with EPERM (exit status 126).
+ExecStartPre=-+/usr/bin/chown -R fleet:fleet /opt/fleet/client
 ExecStart=/opt/fleet/fleet
 Restart=always
 RestartSec=5s

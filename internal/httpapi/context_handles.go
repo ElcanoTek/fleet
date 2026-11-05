@@ -181,7 +181,7 @@ func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
 	if !utf8.ValidString(content) {
 		return "", fmt.Sprintf("@file is not UTF-8 text: %s", relPath)
 	}
-	block = fmt.Sprintf("**Contents of @file:\"%s\":**\n\n```\n%s\n```", relPath, content)
+	block = fmt.Sprintf("**Contents of @file:%q:**\n\n```\n%s\n```", relPath, content)
 	if truncated {
 		block += "\n_(truncated)_"
 	}
