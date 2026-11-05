@@ -759,6 +759,27 @@ describe("TaskCreateModal — edit mode", () => {
     expect(body.sla_fail_multiplier).toBe(3);
   });
 
+  it("saves an unchanged edit form without sending priority or max_total_tokens so the server preserves them", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        priority: 75,
+        max_total_tokens: 500_000,
+      },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [, body] = updateTask.mock.calls[0];
+    // Both fields are omitted by the browser form so UpdateTask / UpdateEditableTask
+    // preserve the stored values server-side without re-submitting admin-only ceilings.
+    expect(body).not.toHaveProperty("priority");
+    expect(body).not.toHaveProperty("max_total_tokens");
+  });
+
   it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     renderModal({

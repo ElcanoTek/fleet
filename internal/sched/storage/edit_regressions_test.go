@@ -160,6 +160,51 @@ func TestPriorityEditChangesDispatchOrder(t *testing.T) {
 	}
 }
 
+// TestUpdateEditableTaskPreservesOmittedPriorityAndMaxTotalTokens verifies that
+// an edit omitting priority (0 sentinel, SetPriority=false) and max_total_tokens
+// (nil, SetMaxTotalTokens=false) preserves the task's stored values instead of
+// dropping priority to 0 or clearing max_total_tokens.
+func TestUpdateEditableTaskPreservesOmittedPriorityAndMaxTotalTokens(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+
+	maxTokens := 250_000
+	task := &models.Task{
+		ID:                uuid.New(),
+		Prompt:            "campaign-health scan",
+		Status:            models.TaskStatusPending,
+		Priority:          models.PriorityLow,
+		EffectivePriority: models.PriorityLow,
+		MaxTotalTokens:    &maxTokens,
+		CreatedAt:         time.Now().UTC(),
+	}
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	edited, err := store.UpdateEditableTask(ctx, task.ID, TaskEdit{Prompt: "campaign-health scan v2"})
+	if err != nil {
+		t.Fatalf("UpdateEditableTask: %v", err)
+	}
+	if edited.Priority != models.PriorityLow || edited.EffectivePriority != models.PriorityLow {
+		t.Fatalf("omitted priority reset to (%d,%d), want (%d,%d)", edited.Priority, edited.EffectivePriority, models.PriorityLow, models.PriorityLow)
+	}
+	if edited.MaxTotalTokens == nil || *edited.MaxTotalTokens != maxTokens {
+		t.Fatalf("omitted max_total_tokens = %v, want %d", edited.MaxTotalTokens, maxTokens)
+	}
+
+	reloaded, err := store.GetTask(task.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Priority != models.PriorityLow || reloaded.EffectivePriority != models.PriorityLow {
+		t.Fatalf("reloaded priority = (%d,%d), want (%d,%d)", reloaded.Priority, reloaded.EffectivePriority, models.PriorityLow, models.PriorityLow)
+	}
+	if reloaded.MaxTotalTokens == nil || *reloaded.MaxTotalTokens != maxTokens {
+		t.Fatalf("reloaded max_total_tokens = %v, want %d", reloaded.MaxTotalTokens, maxTokens)
+	}
+}
+
 // TaskEditFromTask is the overlay the chat manage_tasks adapter builds its
 // few-field edit on so it can go through UpdateEditableTask instead of the
 // unlocked UpdateTask upsert (#1104). It must carry every definition field
@@ -171,13 +216,14 @@ func TestTaskEditFromTaskRoundTripsAndRefusesALiveRun(t *testing.T) {
 
 	future := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
 	until := future.Add(48 * time.Hour)
-	remaining, maxIter, think := 3, 7, 2048
+	remaining, maxIter, think, maxTokens := 3, 7, 2048, 500_000
+	maxCost := 12.5
 	model, fallback := "test/model", "test/fallback"
 	task := &models.Task{
 		ID: uuid.New(), Prompt: "definition-heavy task", Title: "Heavy", Description: "docs",
 		Status: models.TaskStatusScheduled, ScheduledFor: &future, Recurrence: "0 9 * * *", Timezone: "UTC",
 		RecurrenceUntil: &until, RecurrenceRemaining: &remaining,
-		Model: &model, FallbackModel: &fallback, MaxIterations: &maxIter, ThinkingBudgetTokens: &think,
+		Model: &model, FallbackModel: &fallback, MaxIterations: &maxIter, MaxCostUSD: &maxCost, MaxTotalTokens: &maxTokens, ThinkingBudgetTokens: &think,
 		Priority: models.PriorityHigh, Persona: "analyst", Tags: []string{"nightly"},
 		Files: []string{"a.csv"}, FileNames: []string{"input"},
 		AllowNetwork: true, CarryContext: true, InstructionSelfImprove: true,

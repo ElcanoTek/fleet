@@ -927,14 +927,23 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID, reason string) (*models.Tas
 
 // TaskEdit carries the user-editable fields of a task.
 type TaskEdit struct {
-	Prompt                 string
-	Model                  *string
-	FallbackModel          *string
-	MaxIterations          *int
-	MaxCostUSD             *float64
-	MaxTotalTokens         *int
-	MCPSelection           models.MCPSelection
-	Priority               int
+	Prompt         string
+	Model          *string
+	FallbackModel  *string
+	MaxIterations  *int
+	MaxCostUSD     *float64
+	MaxTotalTokens *int
+	// SetMaxTotalTokens distinguishes "leave max_total_tokens unchanged" from
+	// "replace" — the orchestrator edit form does not expose a token-limit
+	// input, so an omitted field on PUT /tasks/{id} must not clear a limit set
+	// via the API.
+	SetMaxTotalTokens bool
+	MCPSelection      models.MCPSelection
+	Priority          int
+	// SetPriority distinguishes "leave priority unchanged" from "replace" — 0 is
+	// the unset sentinel on TaskCreate, so an omitted field on PUT /tasks/{id}
+	// must keep the task's stored priority instead of dropping it to 0.
+	SetPriority            bool
 	InstructionSelfImprove bool
 	AllowNetwork           bool
 	CarryContext           bool
@@ -1035,6 +1044,9 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 		Model:                   t.Model,
 		FallbackModel:           t.FallbackModel,
 		MaxIterations:           t.MaxIterations,
+		MaxCostUSD:              t.MaxCostUSD,
+		MaxTotalTokens:          t.MaxTotalTokens,
+		SetMaxTotalTokens:       true,
 		MCPSelection:            t.MCPSelection,
 		SetMCPSelection:         true,
 		CredentialAllowlist:     t.CredentialAllowlist,
@@ -1048,6 +1060,7 @@ func TaskEditFromTask(t *models.Task) TaskEdit {
 		RunIf:                   t.RunIf,
 		SetRunIf:                true,
 		Priority:                t.Priority,
+		SetPriority:             true,
 		InstructionSelfImprove:  t.InstructionSelfImprove,
 		AllowNetwork:            t.AllowNetwork,
 		CarryContext:            t.CarryContext,
@@ -1108,7 +1121,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	task.FallbackModel = edit.FallbackModel
 	task.MaxIterations = edit.MaxIterations
 	task.MaxCostUSD = edit.MaxCostUSD
-	task.MaxTotalTokens = edit.MaxTotalTokens
+	if edit.SetMaxTotalTokens || edit.MaxTotalTokens != nil {
+		task.MaxTotalTokens = edit.MaxTotalTokens
+	}
 	if edit.SetMCPSelection {
 		task.MCPSelection = edit.MCPSelection
 	}
@@ -1128,7 +1143,9 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 		task.RunIf = edit.RunIf
 	}
 	priorPriority := task.Priority
-	task.Priority = edit.Priority
+	if edit.SetPriority || edit.Priority > 0 {
+		task.Priority = models.NormalizePriority(edit.Priority)
+	}
 	task.InstructionSelfImprove = edit.InstructionSelfImprove
 	task.AllowNetwork = edit.AllowNetwork
 	task.CarryContext = edit.CarryContext

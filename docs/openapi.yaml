@@ -244,7 +244,7 @@ components:
         fallback_model: { type: string }
         max_iterations: { type: integer }
         max_cost_usd: { type: number, description: "This task's own per-run cost ceiling in USD (#1533). Omit to inherit the deployment ceiling; a value above the deployment ceiling requires admin permission." }
-        max_total_tokens: { type: integer, description: "This task's own per-run uncached-token ceiling (#1533). Omit to inherit the deployment ceiling; a value above it requires admin permission." }
+        max_total_tokens: { type: integer, nullable: true, description: "This task's own per-run uncached-token ceiling (#1533). On create, omit or pass null to inherit the deployment ceiling; on PUT /tasks/{task_id}, omit to preserve the task's stored ceiling or pass null to clear it back to inherit. A value above the deployment ceiling requires admin permission." }
         mcp_selection: { $ref: "#/components/schemas/MCPSelection" }
         credential_allowlist:
           type: array
@@ -292,7 +292,7 @@ components:
             levels, or 2,048 JSON nodes. A structured task reaches success only
             when schema-valid output_json is committed atomically with success.
         carry_context: { type: boolean, default: false, description: "Recurring runs carry a bounded handoff from the prior run (#504). Default false = each run starts fresh." }
-        priority: { type: integer }
+        priority: { type: integer, description: "Queue priority in [1, 100] (lower = more urgent; 10=critical, 25=high, 50=normal, 75=low, 90=bulk). 0 is the unset sentinel normalized to 50. On create, omit or pass 0 for normal (50); on PUT /tasks/{task_id}, omit to preserve the task's stored priority or pass 0 to reset it to normal (50)." }
         instruction_self_improve: { type: boolean, default: false, description: "Captain's Log: give this scheduled task persistent memory across runs (the remember/recall tools + run-start injection, stored in fleet's DB and scoped to this task). Default false = each run starts fresh. Never touches the operator-owned config bundle." }
         allow_network: { type: boolean, default: false, description: "Allow this scheduled task's execution sandbox outbound network egress. Default false seals it with --network=none, matching the interactive lockdown path." }
         allow_task_creation: { type: boolean, default: false, description: "Grant this task's SCHEDULED runs the built-in create_task tool so they can enqueue follow-up tasks. Default false: the tool is never registered, so interactive/unprivileged runs cannot self-schedule (no privilege escalation)." }
@@ -1122,6 +1122,14 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
     put:
       summary: Update a task.
+      description: >-
+        Updates a pending or scheduled task's definition. Omitting optional
+        collection/ceiling/priority fields (mcp_selection, tags, files,
+        credential_allowlist, loop_config, worktree_config, retry_policy,
+        priority, max_total_tokens) preserves the task's stored values; pass an
+        explicit null for max_total_tokens to clear a task-specific token
+        ceiling back to inheriting the deployment ceiling, or 0 for priority to
+        reset it to normal (50).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       requestBody:
         content:

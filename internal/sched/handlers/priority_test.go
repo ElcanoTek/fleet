@@ -66,6 +66,7 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 	})
 	r.Post("/tasks", h.CreateTask)
 	r.Post("/tasks/batch", h.CreateTaskBatch)
+	r.With(h.AdminOrUserAuthMiddleware).Put("/tasks/{task_id}", h.UpdateTask)
 
 	cleanup := func() {
 		store.Close()
@@ -216,5 +217,95 @@ func TestQueueStats(t *testing.T) {
 	}
 	if byTier["critical"] != 2 || byTier["bulk"] != 1 {
 		t.Errorf("tier counts wrong: critical=%d bulk=%d (%+v)", byTier["critical"], byTier["bulk"], stats.Tiers)
+	}
+}
+
+// TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted verifies that
+// PUT /tasks/{id} preserves a task's priority and max_total_tokens when the
+// request body omits them (such as an orchestrator UI edit), while updating
+// them when explicitly supplied and enforcing the API key priority ceiling.
+func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) {
+	r, _, keyMgr, cleanup := setupPriorityHandler(t)
+	defer cleanup()
+
+	key, raw, err := keyMgr.CreateKey("editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	forty := 40
+	if err := keyMgr.SetMaxPriority(key.KeyID, &forty); err != nil {
+		t.Fatalf("SetMaxPriority: %v", err)
+	}
+
+	w := postTask(t, r, `{"prompt":"campaign-health scan","priority":75,"max_total_tokens":250000}`, raw)
+	if w.Code != http.StatusOK {
+		t.Fatalf("create: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var created models.Task
+	if err := json.NewDecoder(w.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	put := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("PUT", "/tasks/"+created.ID.String(), bytes.NewBufferString(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-API-Key", raw)
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		return rec
+	}
+
+	// Edit without priority or max_total_tokens → both stay intact (never reset to 0 / nil).
+	w = put(`{"prompt":"campaign-health scan v2"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update omitted: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var updated models.Task
+	if err := json.NewDecoder(w.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode update: %v", err)
+	}
+	if updated.Priority != 75 || updated.EffectivePriority != 75 {
+		t.Fatalf("priority after omitted edit = (%d,%d), want (75,75)", updated.Priority, updated.EffectivePriority)
+	}
+	if updated.MaxTotalTokens == nil || *updated.MaxTotalTokens != 250000 {
+		t.Fatalf("max_total_tokens after omitted edit = %v, want 250000", updated.MaxTotalTokens)
+	}
+
+	// Explicit priority and max_total_tokens within key ceiling → updated.
+	w = put(`{"prompt":"campaign-health scan v3","priority":60,"max_total_tokens":500000}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update explicit: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var updatedExplicit models.Task
+	if err := json.NewDecoder(w.Body).Decode(&updatedExplicit); err != nil {
+		t.Fatalf("decode explicit update: %v", err)
+	}
+	if updatedExplicit.Priority != 60 || updatedExplicit.EffectivePriority != 60 {
+		t.Fatalf("priority after explicit edit = (%d,%d), want (60,60)", updatedExplicit.Priority, updatedExplicit.EffectivePriority)
+	}
+	if updatedExplicit.MaxTotalTokens == nil || *updatedExplicit.MaxTotalTokens != 500000 {
+		t.Fatalf("max_total_tokens after explicit edit = %v, want 500000", updatedExplicit.MaxTotalTokens)
+	}
+
+	// Explicit null clears max_total_tokens back to nil (inherit deployment ceiling),
+	// and explicit priority: 0 resets priority to Normal (50).
+	w = put(`{"prompt":"campaign-health scan v3b","priority":0,"max_total_tokens":null}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("update explicit null max_total_tokens and priority 0: got %d, want 200 (%s)", w.Code, w.Body.String())
+	}
+	var updatedCleared models.Task
+	if err := json.NewDecoder(w.Body).Decode(&updatedCleared); err != nil {
+		t.Fatalf("decode cleared update: %v", err)
+	}
+	if updatedCleared.MaxTotalTokens != nil {
+		t.Fatalf("max_total_tokens after explicit null = %v, want nil", updatedCleared.MaxTotalTokens)
+	}
+	if updatedCleared.Priority != 50 || updatedCleared.EffectivePriority != 50 {
+		t.Fatalf("priority after explicit 0 = (%d,%d), want (50,50)", updatedCleared.Priority, updatedCleared.EffectivePriority)
+	}
+
+	// Editing priority above the key's ceiling (10 < 40) → 403 Forbidden.
+	if w := put(`{"prompt":"campaign-health scan v4","priority":10}`); w.Code != http.StatusForbidden {
+		t.Fatalf("priority 10 over cap 40 on edit: got %d, want 403 (%s)", w.Code, w.Body.String())
 	}
 }
