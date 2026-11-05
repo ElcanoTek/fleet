@@ -174,7 +174,7 @@ jobs:
           if [ "$rc" -ne 0 ]; then
             exit "$rc"
           fi
-          if ! grep -q -- 'SUMMARY:' prompt-cache-canary.log || ! grep -q -- 'long-chain:' prompt-cache-canary.log; then
+          if ! grep -q -- 'SUMMARY requests=' prompt-cache-canary.log || ! grep -q -- 'long-chain ' prompt-cache-canary.log; then
             echo "::error::Live prompt-cache canary subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
             exit 1
           fi

@@ -100,7 +100,7 @@ jobs:
               exit 0 ;;
           esac
 
-          files="$(git diff --name-only "$range")"
+          files="$(git diff --name-only --no-renames "$range")"
           echo "Changed files in ${range}:"
           printf '%s\n' "$files"
 
@@ -1019,7 +1019,7 @@ jobs:
             echo "::error::A live prompt-cache test SKIPPED; refusing to pass vacuously."
             exit 1
           fi
-          if ! grep -q -- 'SUMMARY:' prompt-cache-live.log || ! grep -q -- 'long-chain:' prompt-cache-live.log; then
+          if ! grep -q -- 'SUMMARY requests=' prompt-cache-live.log || ! grep -q -- 'long-chain ' prompt-cache-live.log; then
             echo "::error::Live prompt-cache subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
             exit 1
           fi
