@@ -1997,9 +1997,22 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// admin-permission principal's payload is authoritative (SetRunIf below),
 	// so an admin edit that changes or removes the gate actually persists.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
-	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &tc); msg != "" {
+	ceilingsCheck := tc
+	if task.MaxCostUSD != nil && tc.MaxCostUSD != nil && *tc.MaxCostUSD <= *task.MaxCostUSD {
+		ceilingsCheck.MaxCostUSD = nil
+	}
+	if task.MaxTotalTokens != nil && tc.MaxTotalTokens != nil && *tc.MaxTotalTokens <= *task.MaxTotalTokens {
+		ceilingsCheck.MaxTotalTokens = nil
+	}
+	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &ceilingsCheck); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
+	}
+	if p.apiKey != nil && tc.Priority > 0 && tc.Priority != task.Priority {
+		if err := priorityCapError(p.apiKey.MaxPriority, tc.Priority); err != nil {
+			writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
 	}
 	runIfChanged := !reflect.DeepEqual(tc.RunIf.Normalized(), task.RunIf.Normalized())
 	if !canAuthorRunIf && runIfChanged {
@@ -2076,6 +2089,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		MaxIterations:          tc.MaxIterations,
 		MaxCostUSD:             tc.MaxCostUSD,
 		MaxTotalTokens:         tc.MaxTotalTokens,
+		SetMaxTotalTokens:      tc.MaxTotalTokens != nil,
 		MCPSelection:           tc.MCPSelection,
 		SetMCPSelection:        tc.MCPSelection != nil,
 		CredentialAllowlist:    tc.CredentialAllowlist,
@@ -2087,6 +2101,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		RetryPolicy:            tc.RetryPolicy,
 		SetRetryPolicy:         tc.RetryPolicy != nil,
 		Priority:               tc.Priority,
+		SetPriority:            tc.Priority > 0,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,

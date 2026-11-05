@@ -759,6 +759,25 @@ describe("TaskCreateModal — edit mode", () => {
     expect(body.sla_fail_multiplier).toBe(3);
   });
 
+  it("saves an unchanged edit form and preserves priority and max_total_tokens", async () => {
+    updateTask.mockResolvedValue({ id: EDIT_ID });
+    renderModal({
+      editTask: {
+        ...baseEdit,
+        priority: 75,
+        max_total_tokens: 500_000,
+      },
+      onUpdated: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+
+    await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
+    const [, body] = updateTask.mock.calls[0];
+    expect(body.priority).toBe(75);
+    expect(body.max_total_tokens).toBe(500_000);
+  });
+
   it("asks all-future-runs vs run-once for a recurring task; PUT for the definition", async () => {
     updateTask.mockResolvedValue({ id: EDIT_ID });
     renderModal({
