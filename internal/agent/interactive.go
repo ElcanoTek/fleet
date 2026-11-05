@@ -275,6 +275,7 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 		MCPBroker:        tc.MCPBroker,
 		MCPCatalog:       tc.MCPCatalog,
 		MCPToolAllowlist: tc.Allowlist,
+		OptionalServers:  tc.OptionalServers,
 		NativeTools:      tc.NativeTools,
 		SystemPrompt:     tc.SystemPrompt,
 		Persona:          tc.Persona,
@@ -292,6 +293,24 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 	for _, choice := range tc.Selection {
 		if s := strings.TrimSpace(choice.Server); s != "" {
 			host.loadedServers[s] = true
+		}
+		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
+			host.loadedServers[reg] = true
+		}
+	}
+	for _, choice := range tc.Overlay.SeatSelection() {
+		if s := strings.TrimSpace(choice.Server); s != "" {
+			host.loadedServers[s] = true
+		}
+		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
+			host.loadedServers[reg] = true
+		}
+	}
+	if tc.Overlay != nil {
+		for reg, ok := range tc.Overlay.Servers {
+			if ok && strings.TrimSpace(reg) != "" {
+				host.loadedServers[strings.TrimSpace(reg)] = true
+			}
 		}
 	}
 	return host

@@ -279,13 +279,13 @@ func TestExploreMCPToolAllowlist(t *testing.T) {
 	if got := out["other"]; len(got) != 1 || got[0] != "anything" {
 		t.Fatalf("non-catalog parent entry must be preserved, got %v", got)
 	}
-	// Read verbs never match the denylist pattern.
-	for _, ok := range []string{"get_posts", "list_reports", "download_file", "search_emails", "find_meeting_availability"} {
+	// Read verbs never match the denylist pattern (snake_case or kebab-case).
+	for _, ok := range []string{"get_posts", "list_reports", "download_file", "search_emails", "find_meeting_availability", "list-mail-folder-messages", "get-mail-message", "list-mail-folders"} {
 		if exploreDeniedMCPNamePattern.MatchString(ok) {
 			t.Errorf("read tool %q must not match the explore denylist", ok)
 		}
 	}
-	for _, bad := range []string{"send_email", "batch_delete_messages", "sharepoint_upload_file", "set_vacation", "create_event", "respond_to_event"} {
+	for _, bad := range []string{"send_email", "batch_delete_messages", "sharepoint_upload_file", "set_vacation", "create_event", "respond_to_event", "send-mail", "create-draft-email", "delete-mail-message", "reply-mail-message", "forward-mail-message"} {
 		if !exploreDeniedMCPNamePattern.MatchString(bad) {
 			t.Errorf("writer %q must match the explore denylist", bad)
 		}

@@ -199,6 +199,39 @@ func TestOutOfRoster_DeferredCallRunsThroughToolCall(t *testing.T) {
 	}
 }
 
+// When MCP tools are registered directly (below the disclosure threshold) and a
+// model calls tool_call {"name": "mcp_...", "arguments": {...}} — e.g. a
+// sub-agent whose parent had a deferred roster and wrote "use tool_call" in the
+// task string — outOfRoster unwraps the call into the direct MCP tool, while a
+// gated tool is still refused with its gate explanation.
+func TestOutOfRoster_ToolCallUnwrapsDirectMCPToolWhenNotDeferred(t *testing.T) {
+	broker := &fakeBroker{}
+	session := NewLogSession()
+	model := newOORModel("oor-direct-unwrap",
+		[]oorCall{
+			{"c1", toolNameToolCall, `{"name":"mcp_srv_slack_send_message_0","arguments":{"text":"hi"}}`},
+			{"c2", toolNameToolCall, `{"name":"mcp_srv_jira_create_issue_1","arguments":{}}`},
+			{"c3", toolNameToolSearch, `{"query":"slack"}`},
+		},
+	)
+	runOOR(t, RunConfig{
+		NativeTools:   discNative(2),
+		PersonaName:   "analyst",
+		PersonaPolicy: &PersonaToolPermissions{Deny: []string{"mcp:srv/jira_create_issue_1"}},
+	}, Deps{Model: model, MCPCatalog: discMCPTools(3), MCPBroker: broker, LogSession: session})
+
+	if broker.lastServer != "srv" || broker.lastTool != "slack_send_message_0" || broker.lastArgs != `{"text":"hi"}` {
+		t.Fatalf("broker got %s/%s %s, want srv/slack_send_message_0 {\"text\":\"hi\"}", broker.lastServer, broker.lastTool, broker.lastArgs)
+	}
+	wantDenied := `mcp_srv_jira_create_issue_1 is not available in this run and was not called: the "analyst" persona's tool policy does not allow it.`
+	if got := model.resultSeen(2, "c2"); got != wantDenied {
+		t.Fatalf("c2 result = %q, want %q", got, wantDenied)
+	}
+	if got := model.resultSeen(2, "c3"); !strings.Contains(got, "registered directly in your tool list") {
+		t.Fatalf("c3 result = %q, want direct-roster explanation", got)
+	}
+}
+
 // A call to a tool a gate removed is never run, and its result says which
 // gate removed it: in the transcript, and in what the model is sent, the same
 // on every later step.

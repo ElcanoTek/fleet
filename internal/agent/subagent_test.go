@@ -324,11 +324,33 @@ func TestSpawn_AllowServersOnlyNarrows(t *testing.T) {
 
 func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
 	broker := &interactiveRecordingBroker{}
+	overlayBroker := &interactiveRecordingBroker{}
+	closed := false
+	overlay := &RemoteMCPOverlay{
+		Broker: overlayBroker,
+		Catalog: []mcp.ServerTool{
+			{ServerName: "microsoft-365", Tool: mcp.Tool{Name: "list-mail-folder-messages"}},
+			{ServerName: "microsoft-365", Tool: mcp.Tool{Name: "send-mail"}},
+			{ServerName: "github", Tool: mcp.Tool{Name: "get_issue"}},
+		},
+		Servers: map[string]bool{"microsoft-365": true, "github": true},
+		Seats: map[string]agentcore.MCPChoice{
+			"microsoft-365": {Server: "microsoft-365"},
+			"github":        {Server: "github"},
+		},
+		CloseScope: func(context.Context) error {
+			closed = true
+			return nil
+		},
+	}
+	personaPol := &agentcore.PersonaToolPermissions{Deny: []string{"mcp:github/get_issue"}}
 	parent := NewAgent(Options{
-		Config:       &config.Config{},
-		MCPBroker:    broker,
-		MCPCatalog:   []mcp.ServerTool{{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}}},
-		SystemPrompt: "parent",
+		Config:        &config.Config{},
+		MCPBroker:     broker,
+		MCPCatalog:    []mcp.ServerTool{{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}}},
+		Overlay:       overlay,
+		PersonaPolicy: personaPol,
+		SystemPrompt:  "parent",
 	})
 	child := parent.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0)
 	if child.mcpBroker != broker {
@@ -336,6 +358,34 @@ func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
 	}
 	if len(child.mcpCatalog) != 1 || child.mcpCatalog[0].ServerName != "bundle" || child.mcpCatalog[0].Tool.Name != "lookup" {
 		t.Fatalf("child MCP catalog = %+v, want inherited bundle.lookup", child.mcpCatalog)
+	}
+	if !child.overlay.Active() || child.overlay.Broker != overlayBroker || len(child.overlay.Catalog) != 3 {
+		t.Fatalf("child overlay = %+v, want active overlay with 3 tools", child.overlay)
+	}
+	if child.overlay.CloseScope != nil {
+		t.Fatal("child overlay must not carry CloseScope (parent owns lifecycle)")
+	}
+	child.overlay.Close()
+	if closed {
+		t.Fatal("closing child overlay must not close parent scope")
+	}
+	if child.personaPolicy != personaPol {
+		t.Fatal("child did not inherit parent PersonaPolicy")
+	}
+
+	// Explore role strips write tools from overlay servers too (including kebab-case).
+	exploreChild := parent.buildChild(SubagentRoleExplore, nil, nil, nil, 0, 0, 0)
+	if got := exploreChild.mcpToolAllowlist["microsoft-365"]; len(got) != 1 || got[0] != "list-mail-folder-messages" {
+		t.Fatalf("explore child microsoft-365 allowlist = %v, want [list-mail-folder-messages] (send-mail stripped)", got)
+	}
+
+	// allow_servers narrows both bundle catalog and remote overlay.
+	narrowedChild := parent.buildChild(SubagentRoleWorker, nil, nil, []string{"microsoft-365", "nonexistent"}, 0, 0, 0)
+	if len(narrowedChild.mcpCatalog) != 0 {
+		t.Fatalf("narrowed child bundle catalog = %+v, want empty (bundle not in allow_servers)", narrowedChild.mcpCatalog)
+	}
+	if !narrowedChild.overlay.Active() || !narrowedChild.overlay.Servers["microsoft-365"] || narrowedChild.overlay.Servers["github"] || len(narrowedChild.overlay.Catalog) != 2 {
+		t.Fatalf("narrowed child overlay = %+v, want only microsoft-365", narrowedChild.overlay)
 	}
 }
 

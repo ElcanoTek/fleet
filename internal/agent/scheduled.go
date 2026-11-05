@@ -147,6 +147,7 @@ type Agent struct {
 	mu              sync.Mutex
 	loadedServers   map[string]bool
 	mcpServersDirty bool
+	optionalServers agentcore.MCPOptionalSet
 
 	// logFile is where the session log is persisted at run end ("" = default).
 	logFile string
@@ -198,6 +199,9 @@ type Options struct {
 	// injects the public allowlist here; nil derives the gate from
 	// Config.MCPServers (the local compatibility path).
 	MCPToolAllowlist agentcore.MCPAllowlist
+	// OptionalServers is the optional-server gate (Gate-1) inherited by
+	// children spawned from an interactive chat turn.
+	OptionalServers agentcore.MCPOptionalSet
 	NativeTools      []fantasy.AgentTool
 	SystemPrompt     string
 	Persona          string
@@ -391,6 +395,7 @@ func NewAgent(opts Options) *Agent {
 		mcpBroker:            opts.MCPBroker,
 		mcpCatalog:           cloneScheduledMCPCatalog(opts.MCPCatalog),
 		mcpToolAllowlist:     opts.MCPToolAllowlist,
+		optionalServers:      opts.OptionalServers,
 		mcpRosterNarrowing:   opts.MCPRosterNarrowing,
 		overlay:              opts.Overlay,
 		nativeTools:          opts.NativeTools,
@@ -1669,6 +1674,11 @@ func (a *Agent) clearMCPDirty() {
 func (a *Agent) mcpGates() (agentcore.MCPAllowlist, agentcore.MCPOptionalSet) {
 	allow := agentcore.MCPAllowlist{}
 	optional := agentcore.MCPOptionalSet{}
+	for name, ok := range a.optionalServers {
+		if ok {
+			optional[name] = true
+		}
+	}
 	if a.mcpToolAllowlist != nil {
 		for name, list := range a.mcpToolAllowlist {
 			if len(list) > 0 {

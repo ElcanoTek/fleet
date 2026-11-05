@@ -249,7 +249,16 @@ type outOfRosterOutcome struct {
 func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy.AgentTool, validation error) outOfRosterOutcome {
 	o.mu.Lock()
 	deferred := o.roster.deferredMCP > 0 && slices.Contains(o.roster.mcp, call.ToolName)
+	directBridge := o.roster.deferredMCP == 0 && len(o.roster.directMCP) > 0 && isDisclosureBridge(call.ToolName)
+	directMCP := o.roster.directMCP
 	gate := o.roster.removed[call.ToolName]
+	var targetGate, targetName string
+	if o.roster.deferredMCP == 0 && call.ToolName == toolNameToolCall {
+		if name, _, ok := parseBridgeCallInput(call.Input); ok {
+			targetName = name
+			targetGate = o.roster.removed[name]
+		}
+	}
 	var inferred, server string
 	if gate == "" && !deferred && strings.HasPrefix(call.ToolName, "mcp_") {
 		inferred, server = o.gates.gateFor(call.ToolName, o.roster.servers)
@@ -275,6 +284,20 @@ func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy
 		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
 			"%s was not called: it is reachable only through tool_call. "+
 				"Call tool_call with {\"name\": %q, \"arguments\": {...}}, with the arguments as a JSON object.", call.ToolName, call.ToolName)}
+	case targetName != "" && slices.Contains(directMCP, targetName) && hasTool(available, targetName):
+		if _, args, ok := parseBridgeCallInput(call.Input); ok {
+			repaired := call
+			repaired.ToolName = targetName
+			repaired.Input = args
+			return outOfRosterOutcome{reason: outOfRosterDeferred, repaired: &repaired}
+		}
+	case targetName != "" && targetGate != "":
+		return outOfRosterOutcome{reason: targetGate, note: o.gateNote(targetName, targetGate)}
+	case directBridge:
+		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
+			"%s was not called: MCP tools in this run are registered directly in your tool list (not deferred behind %s). "+
+				"Call the mcp_<connector>_<tool> tool directly by name (see \"## MCP Tools (live registry)\" in your system prompt).",
+			call.ToolName, call.ToolName)}
 	case gate != "":
 		return outOfRosterOutcome{reason: gate, note: o.gateNote(call.ToolName, gate)}
 	case inferred != "":
@@ -393,6 +416,41 @@ func deferredCallInput(name, input string) (string, bool) {
 		return "", false
 	}
 	return `{"name":"` + name + `","arguments":` + args + `}`, true
+}
+
+// parseBridgeCallInput extracts the target tool name and normalized JSON
+// arguments object from a tool_call payload {"name": ..., "arguments": ...}
+// when a model calls tool_call in a run whose MCP roster was small enough to
+// register directly (e.g. a sub-agent whose parent had a deferred roster and
+// wrote "use tool_call" in the delegated task string).
+func parseBridgeCallInput(input string) (string, string, bool) {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
+		return "", "", false
+	}
+	if !json.Valid([]byte(raw)) {
+		repaired, err := jsonrepair.RepairJSON(raw)
+		if err != nil || !json.Valid([]byte(repaired)) {
+			return "", "", false
+		}
+		raw = strings.TrimSpace(repaired)
+	}
+	var p struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return "", "", false
+	}
+	name := strings.TrimSpace(p.Name)
+	if !plainToolName(name) {
+		return "", "", false
+	}
+	args, err := normalizeDeferredArguments(p.Arguments)
+	if err != nil {
+		return name, "", false
+	}
+	return name, string(args), true
 }
 
 // plainToolName reports whether name uses only the MCP spec's tool-name

@@ -1133,6 +1133,70 @@ func attachQueryParamToURLTemplate(rawURL, paramName, paramValue string) string 
 	return rawURL + "?" + encoded
 }
 
+// ForChild returns a child-scoped view of the overlay for a spawned sub-agent.
+// CloseScope is nil so a child can never tear down the parent run's scope.
+// When allowed is non-nil (spawn_subagent allow_servers was set), the view is
+// narrowed to servers whose registration name or base connection name is in
+// allowed; if none match, it returns nil.
+func (o *RemoteMCPOverlay) ForChild(allowed map[string]bool) *RemoteMCPOverlay {
+	if !o.Active() {
+		return nil
+	}
+	if allowed == nil {
+		servers := make(map[string]bool, len(o.Servers))
+		for k, v := range o.Servers {
+			servers[k] = v
+		}
+		var seats map[string]agentcore.MCPChoice
+		if len(o.Seats) > 0 {
+			seats = make(map[string]agentcore.MCPChoice, len(o.Seats))
+			for k, v := range o.Seats {
+				seats[k] = v
+			}
+		}
+		return &RemoteMCPOverlay{
+			Client:  o.Client,
+			Broker:  o.Broker,
+			Catalog: append([]mcp.ServerTool(nil), o.Catalog...),
+			Servers: servers,
+			Seats:   seats,
+		}
+	}
+	keepReg := make(map[string]bool, len(o.Servers))
+	var seats map[string]agentcore.MCPChoice
+	for reg, ok := range o.Servers {
+		if !ok {
+			continue
+		}
+		seat := o.Seats[reg]
+		if allowed[reg] || (seat.Server != "" && allowed[seat.Server]) {
+			keepReg[reg] = true
+			if seat.Server != "" || seat.Account != "" {
+				if seats == nil {
+					seats = make(map[string]agentcore.MCPChoice, len(o.Seats))
+				}
+				seats[reg] = seat
+			}
+		}
+	}
+	if len(keepReg) == 0 {
+		return nil
+	}
+	catalog := make([]mcp.ServerTool, 0, len(o.Catalog))
+	for _, st := range o.Catalog {
+		if keepReg[st.ServerName] {
+			catalog = append(catalog, st)
+		}
+	}
+	return &RemoteMCPOverlay{
+		Client:  o.Client,
+		Broker:  o.Broker,
+		Catalog: catalog,
+		Servers: keepReg,
+		Seats:   seats,
+	}
+}
+
 // SeatSelection returns the public {connection name, account} of every seat
 // the overlay mounted, ordered by registration name, for approval staging
 // (#988): the stager keys seats by agentcore.RegisteredMCPName, which is
