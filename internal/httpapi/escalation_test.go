@@ -515,3 +515,27 @@ func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
 		t.Fatalf("events = %+v, want one recorded long_turn signal with Suggested=false", ev)
 	}
 }
+
+// Unattended background turns (in-chat patrols and approval-resume turns)
+// still record struggle signals for admin observability, but never stage a
+// suggest_advanced_model card that nobody is at the keyboard to answer.
+func TestEscalateAfterTurn_SuppressesCardOnBackgroundTurn(t *testing.T) {
+	s := serverFixture(t)
+	s.agent = &fakeTurnEngine{}
+	s.cfg.EscalationSignalsEnabled = true
+	const user = "brendan@x.com"
+	conv := seedConv(t, s, user)
+	buf := newTurnBuffer(conv.ID, "turn-patrol")
+	buf.inputKind = agent.InputKindChatPatrol
+	res := &TurnResult{Model: "openrouter/auto", NewHistory: repeat(toolResult(t, "ok", false), escalationLongTurnToolCalls)}
+
+	s.escalateAfterTurn(context.Background(), buf, conv, user, nil, res, nil)
+
+	if pendingSuggestion(t, s, user, conv.ID) != nil {
+		t.Fatal("must not stage a suggest_advanced_model card on an unattended patrol turn")
+	}
+	ev := escalationEvents(t, s, conv.ID)
+	if len(ev) != 1 || ev[0].Signal != escalationSignalLongTurn || ev[0].Suggested {
+		t.Fatalf("events = %+v, want one recorded long_turn signal with Suggested=false", ev)
+	}
+}

@@ -786,6 +786,9 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 	if conv != nil && (conv.Lockdown || a.lockdownOnly) && a.modelAllowed != nil && !a.modelAllowed(advancedModel) {
 		return "", "SUGGESTION_SUPPRESSED: this is a lockdown conversation and its allowed models do not include the advanced model. Do not call suggest_advanced_model again — keep working with the current model.", nil
 	}
+	if a.inputKind != "" {
+		return "", "SUGGESTION_SUPPRESSED: this is an unattended background turn with no live user at the keyboard. Do not call suggest_advanced_model — proceed with the current model.", nil
+	}
 
 	prior, err := a.store.LatestApprovalByTool(a.ctx, a.conversationID, tools.SuggestAdvancedModelToolName)
 	if err != nil {
@@ -796,6 +799,9 @@ func (a *approvalStager) stageSuggestionGated(reason, source string) (string, st
 		case "pending":
 			return "", "SUGGESTION_SUPPRESSED: a model-switch suggestion is already pending the user's response. Do not stage another.", nil
 		case "approved", "rejected":
+			if strings.HasPrefix(prior.ResultText, "Superseded ") {
+				break
+			}
 			// The cooldown runs from the user's answer, not from when the card
 			// appeared: messages sent while it sat pending are not "after" it.
 			// Seconds alone cannot order a message against an answer in the

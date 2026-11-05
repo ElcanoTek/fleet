@@ -847,7 +847,7 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 			 WHERE conversation_id = $1
 			   AND user_email = $2
 			   AND status = 'pending'
-			   AND tool_name <> 'preview_email'
+			   AND tool_name NOT IN ('preview_email', 'suggest_advanced_model')
 		)`,
 		convID, sched.UserEmail,
 	).Scan(&hasPendingApproval); err != nil {
@@ -913,6 +913,10 @@ func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID str
 		newRunCount, nowUnix, nextRunAt, nextStatus, sched.ID,
 	))
 	if err != nil {
+		return nil, err
+	}
+
+	if err := supersedePendingModelSuggestionsTx(ctx, tx, convID, nowUnix); err != nil {
 		return nil, err
 	}
 

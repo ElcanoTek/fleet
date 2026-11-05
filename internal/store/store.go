@@ -1123,6 +1123,9 @@ func (s *Store) AutoApproveEnableMCPConnectors(
 		if len(priorIDs) > 0 {
 			firstID = priorIDs[0]
 		}
+		if err := supersedePendingModelSuggestionsTx(ctx, tx, req.ConversationID, now); err != nil {
+			return out, err
+		}
 		row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 			ID:             uuid.NewString(),
 			ConversationID: req.ConversationID,
@@ -1167,7 +1170,7 @@ func hasOutstandingApprovalsTx(ctx context.Context, tx *sql.Tx, convID, userEmai
 		`SELECT id FROM approvals
 		  WHERE conversation_id = $1
 		    AND ($3 = '' OR LOWER(user_email) = LOWER($3))
-		    AND ((status = 'pending' AND tool_name <> 'preview_email')
+		    AND ((status = 'pending' AND tool_name NOT IN ('preview_email', 'suggest_advanced_model'))
 		      OR (status = 'approved' AND is_err IS NULL AND result_text = $2))
 		  ORDER BY created_at, id`,
 		convID, ApprovalExecutingSentinel, strings.TrimSpace(userEmail),
@@ -3423,6 +3426,25 @@ func (s *Store) SupersedePendingApprovals(ctx context.Context, userEmail, convID
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// supersedePendingModelSuggestionsTx resolves any pending suggest_advanced_model
+// cards in convID when a background patrol or approval-resume turn is enqueued,
+// so a later "Switch & retry" click cannot truncate and re-submit the newer
+// background turn instead of the user message that triggered the suggestion.
+func supersedePendingModelSuggestionsTx(ctx context.Context, tx *sql.Tx, convID string, nowUnix int64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE approvals
+		   SET status = 'rejected',
+		       result_text = 'Superseded by a newer turn.',
+		       resolved_at = $1,
+		       resume_state = CASE WHEN resume_state = 'armed' THEN 'superseded' ELSE resume_state END
+		 WHERE conversation_id = $2
+		   AND tool_name = 'suggest_advanced_model'
+		   AND status = 'pending'`,
+		nowUnix, convID,
+	)
+	return err
 }
 
 // MaxMessageIDForRole returns the DB row id of the latest message for this

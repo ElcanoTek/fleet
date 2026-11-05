@@ -42,8 +42,9 @@ type eventSinkPersister interface {
 // goroutine that batch-writes them to Postgres, so a crash mid-turn
 // can still be recovered by reading turn_events.
 type turnBuffer struct {
-	convID string
-	turnID string
+	convID    string
+	turnID    string
+	inputKind string
 
 	// stoppedByKey records that a Stop naming this turn's input key reached
 	// it, confirmed or not: the turn's settlement then cancels its drained
