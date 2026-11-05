@@ -2787,6 +2787,12 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 	if approval.ToolName == "bash" {
 		return s.runStagedBash(ctx, approval)
 	}
+	if approval.ToolName == tools.PlaywrightBrowserToolName {
+		return s.runStagedPlaywrightBrowser(ctx, approval)
+	}
+	if approval.ToolName == tools.ConnectorStudioToolName {
+		return s.runStagedConnectorStudio(ctx, approval)
+	}
 	// preview_email is preview-only by design: there is no send path.
 	// When the user clicks Dismiss, we just mark it resolved with a
 	// canned acknowledgment so the history reflects "user saw it".
@@ -3120,6 +3126,40 @@ func (s *Server) runStagedBash(ctx context.Context, approval *store.Approval) (s
 	}
 	defer cleanup()
 	return tools.RunBashForApproval(ctx, sb, params)
+}
+
+func (s *Server) runStagedPlaywrightBrowser(ctx context.Context, approval *store.Approval) (string, error) {
+	var params tools.PlaywrightBrowserParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &params); err != nil {
+		return "", fmt.Errorf("parse playwright_browser args: %w", err)
+	}
+	var conv *store.Conversation
+	if s.store != nil && strings.TrimSpace(approval.ConversationID) != "" {
+		conv, _ = s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
+	}
+	pctx := s.newPlaywrightBrowserContext(conv, approval.UserEmail)
+	return tools.RunPlaywrightBrowserForApproval(ctx, pctx, params)
+}
+
+func (s *Server) runStagedConnectorStudio(ctx context.Context, approval *store.Approval) (string, error) {
+	var params tools.ConnectorStudioParams
+	if err := json.Unmarshal([]byte(approval.ArgsJSON), &params); err != nil {
+		return "", fmt.Errorf("parse connector_studio args: %w", err)
+	}
+	var conv *store.Conversation
+	if s.store != nil && strings.TrimSpace(approval.ConversationID) != "" {
+		conv, _ = s.getOwnedOrMultiplayerConversation(ctx, approval.UserEmail, approval.ConversationID)
+	}
+	handler := s.newConnectorStudioHandler(conv, approval.UserEmail)
+	res, err := handler(ctx, params)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode connector_studio result: %w", err)
+	}
+	return string(out), nil
 }
 
 // takeApprovalSandbox acquires the sandbox an approved action runs in: the

@@ -75,6 +75,7 @@ type SessionInfo struct {
 type SessionManager struct {
 	mu       sync.Mutex
 	sessions map[string]*LiveSession
+	starting int
 }
 
 var defaultSessionManager = NewSessionManager()
@@ -164,7 +165,7 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 
 	owner := strings.ToLower(strings.TrimSpace(req.OwnerEmail))
 	m.mu.Lock()
-	if len(m.sessions) >= maxActiveSessions {
+	if len(m.sessions)+m.starting >= maxActiveSessions {
 		// Evict only the caller's own oldest session so one user cannot terminate
 		// another user's active Co-Piloted login/CAPTCHA flow.
 		var oldestID string
@@ -189,7 +190,16 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 		delete(m.sessions, oldestID)
 		go old.Close()
 	}
+	m.starting++
 	m.mu.Unlock()
+	slotReleased := false
+	defer func() {
+		if !slotReleased {
+			m.mu.Lock()
+			m.starting--
+			m.mu.Unlock()
+		}
+	}()
 
 	sessionID, err := randomHex(12)
 	if err != nil {
@@ -251,6 +261,8 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 	}
 
 	m.mu.Lock()
+	m.starting--
+	slotReleased = true
 	m.sessions[sessionID] = sess
 	m.mu.Unlock()
 
@@ -365,14 +377,43 @@ func (s *LiveSession) SendInput(ctx context.Context, ev InputEvent) error {
 
 // RunSteps executes additional declarative steps in the live session and returns
 // the updated page inspection result (including optional storage_state).
+// BaseURL returns the initial target URL of the session.
+func (s *LiveSession) BaseURL() string {
+	return s.baseURL
+}
+
+// UpdateCredentials merges newly supplied credentials into the session.
+func (s *LiveSession) UpdateCredentials(creds Credentials) {
+	s.mu.Lock()
+	if creds.Username != "" {
+		s.credentials.Username = creds.Username
+	}
+	if creds.Password != "" {
+		s.credentials.Password = creds.Password
+	}
+	if creds.Secret != "" {
+		s.credentials.Secret = creds.Secret
+	}
+	if len(creds.Headers) > 0 {
+		s.credentials.Headers = creds.Headers
+	}
+	if len(creds.StorageState) > 0 {
+		s.credentials.StorageState = creds.StorageState
+	}
+	s.mu.Unlock()
+}
+
 func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM bool, exportState bool) (*RunResult, error) {
 	s.touch()
+	s.mu.Lock()
+	creds := s.credentials
+	s.mu.Unlock()
 	for i := range steps {
 		steps[i].Action = strings.ToLower(strings.TrimSpace(steps[i].Action))
 		if err := ValidateStep(steps[i]); err != nil {
 			return nil, err
 		}
-		if err := validateStepNavigationOrigin(s.baseURL, s.credentials, steps[i]); err != nil {
+		if err := validateStepNavigationOrigin(s.baseURL, creds, steps[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -380,6 +421,7 @@ func (s *LiveSession) RunSteps(ctx context.Context, steps []Step, inspectDOM boo
 	return s.sendCommand(ctx, workerCommand{
 		Cmd:         "steps",
 		ReqID:       reqID,
+		Credentials: creds,
 		Steps:       steps,
 		InspectDOM:  inspectDOM,
 		ExportState: exportState,
@@ -863,18 +905,18 @@ async def main():
 
     async def launch_browser(p):
         exe = find_chromium_executable()
-        for extra in ([], ["--no-sandbox", "--disable-setuid-sandbox"]):
-            for exe_candidate in ([None, exe] if exe else [None]):
-                kwargs = {"headless": True, "args": launch_args + extra}
-                if proxy_server:
-                    kwargs["proxy"] = {"server": proxy_server}
-                if exe_candidate:
-                    kwargs["executable_path"] = exe_candidate
-                try:
-                    return await p.chromium.launch(**kwargs)
-                except Exception as exc:
-                    last_exc = exc
-        raise last_exc
+        last_exc = None
+        for exe_candidate in ([None, exe] if exe else [None]):
+            kwargs = {"headless": True, "args": list(launch_args)}
+            if proxy_server:
+                kwargs["proxy"] = {"server": proxy_server}
+            if exe_candidate:
+                kwargs["executable_path"] = exe_candidate
+            try:
+                return await p.chromium.launch(**kwargs)
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(f"failed to launch sandboxed Chromium browser (verify unprivileged user namespaces / Chromium sandbox support on this host): {last_exc}") from last_exc
 
     async with async_playwright() as p:
         try:
@@ -1015,6 +1057,11 @@ async def main():
                         await push_snapshot_frame(page)
                     emit({"event": "cmd_result", "req_id": cid, "ok": True, "result": {"final_url": page.url, "title": await page.title(), "content": ""}})
                 elif cname == "steps":
+                    cmd_creds = cmd.get("credentials") or {}
+                    if isinstance(cmd_creds, dict):
+                        for ck, cv in cmd_creds.items():
+                            if cv:
+                                creds[ck] = cv
                     extracted.clear()
                     await run_steps(page, cmd.get("steps") or [], creds, extracted)
                     await push_snapshot_frame(page)
@@ -1262,19 +1309,17 @@ async function pushSnapshotFrame(page) {
   async function launchBrowser() {
     const exe = findChromiumExecutable();
     let lastErr;
-    for (const extra of [[], ["--no-sandbox", "--disable-setuid-sandbox"]]) {
-      for (const exeCandidate of exe ? [null, exe] : [null]) {
-        const opts = { headless: true, args: [...launchArgs, ...extra] };
-        if (proxyServer) opts.proxy = { server: proxyServer };
-        if (exeCandidate) opts.executablePath = exeCandidate;
-        try {
-          return await pw.chromium.launch(opts);
-        } catch (err) {
-          lastErr = err;
-        }
+    for (const exeCandidate of exe ? [null, exe] : [null]) {
+      const opts = { headless: true, args: [...launchArgs] };
+      if (proxyServer) opts.proxy = { server: proxyServer };
+      if (exeCandidate) opts.executablePath = exeCandidate;
+      try {
+        return await pw.chromium.launch(opts);
+      } catch (err) {
+        lastErr = err;
       }
     }
-    throw lastErr;
+    throw new Error("failed to launch sandboxed Chromium browser (verify unprivileged user namespaces / Chromium sandbox support on this host): " + (lastErr && lastErr.message ? lastErr.message : String(lastErr)));
   }
 
   const networkCalls = [];
@@ -1417,6 +1462,11 @@ async function pushSnapshotFrame(page) {
         try { title = await page.title(); } catch (_) {}
         emit({ event: "cmd_result", req_id: cid, ok: true, result: { final_url: page.url(), title, content: "" } });
       } else if (cname === "steps") {
+        if (cmd.credentials && typeof cmd.credentials === "object") {
+          for (const [ck, cv] of Object.entries(cmd.credentials)) {
+            if (cv) creds[ck] = cv;
+          }
+        }
         extracted.length = 0;
         await runSteps(page, cmd.steps || [], creds, extracted);
         await pushSnapshotFrame(page);

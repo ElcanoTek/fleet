@@ -83,6 +83,20 @@ func NewPlaywrightBrowserTool() fantasy.AgentTool {
 	)
 }
 
+// RunPlaywrightBrowserForApproval executes an approved playwright_browser call.
+func RunPlaywrightBrowserForApproval(ctx context.Context, pctx PlaywrightBrowserContext, params PlaywrightBrowserParams) (string, error) {
+	ctx = WithPlaywrightBrowserContext(ctx, pctx)
+	res, err := executePlaywrightBrowserTool(ctx, params)
+	if err != nil {
+		return "", err
+	}
+	out, err := json.MarshalIndent(res, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode playwright_browser result: %w", err)
+	}
+	return string(out), nil
+}
+
 func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserParams) (any, error) {
 	action := strings.ToLower(strings.TrimSpace(params.Action))
 	if action == "" {
@@ -90,6 +104,11 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 	}
 	pctx := playwrightBrowserContextFrom(ctx)
 	targetURL := strings.TrimSpace(params.URL)
+	if targetURL == "" && strings.TrimSpace(params.SessionID) != "" {
+		if sess, serr := playwrightrunner.DefaultSessionManager().GetSession(params.SessionID, pctx.UserEmail, ""); serr == nil && sess != nil {
+			targetURL = sess.BaseURL()
+		}
+	}
 	for _, st := range params.Steps {
 		if targetURL == "" && strings.EqualFold(strings.TrimSpace(st.Action), "goto") {
 			targetURL = strings.TrimSpace(st.Value)
@@ -191,6 +210,9 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 		sess, err := playwrightrunner.DefaultSessionManager().GetSession(params.SessionID, pctx.UserEmail, "")
 		if err != nil {
 			return nil, err
+		}
+		if creds.Username != "" || creds.Password != "" || creds.Secret != "" {
+			sess.UpdateCredentials(creds)
 		}
 		res, err := sess.RunSteps(ctx, params.Steps, params.InspectDOM, false)
 		if err != nil {

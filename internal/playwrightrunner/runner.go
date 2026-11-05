@@ -263,7 +263,7 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	targetURL := substituteArgs(strings.TrimSpace(req.URL), req.Args)
+	targetURL := substituteURLArgs(strings.TrimSpace(req.URL), req.Args)
 	if targetURL == "" {
 		return nil, errors.New("playwright runner: url is required")
 	}
@@ -283,8 +283,13 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		if err := ValidateStep(st); err != nil {
 			return nil, err
 		}
-		st.Selector = substituteArgs(st.Selector, req.Args)
-		st.Value = substituteArgs(st.Value, req.Args)
+		if st.Action == "goto" {
+			st.Selector = substituteURLArgs(st.Selector, req.Args)
+			st.Value = substituteURLArgs(st.Value, req.Args)
+		} else {
+			st.Selector = substituteArgs(st.Selector, req.Args)
+			st.Value = substituteArgs(st.Value, req.Args)
+		}
 		if err := validateStepNavigationOrigin(targetURL, req.Credentials, st); err != nil {
 			return nil, err
 		}
@@ -558,9 +563,18 @@ func handleProxyHTTP(w http.ResponseWriter, r *http.Request, transport *http.Tra
 }
 
 func substituteArgs(tmpl string, args map[string]any) string {
+	return substituteArgsWithMode(tmpl, args, false)
+}
+
+func substituteURLArgs(tmpl string, args map[string]any) string {
+	return substituteArgsWithMode(tmpl, args, true)
+}
+
+func substituteArgsWithMode(tmpl string, args map[string]any, urlEncode bool) string {
 	if len(args) == 0 || !strings.Contains(tmpl, "{") {
 		return tmpl
 	}
+	qIdx := strings.IndexAny(tmpl, "?#")
 	var sb strings.Builder
 	for i := 0; i < len(tmpl); {
 		if tmpl[i] != '{' {
@@ -584,7 +598,20 @@ func substituteArgs(tmpl string, args map[string]any) string {
 		}
 		key := tmpl[i+1 : i+end]
 		if v, ok := args[key]; ok && isTokenIdent(key) {
-			_, _ = fmt.Fprintf(&sb, "%v", v)
+			raw := fmt.Sprintf("%v", v)
+			if urlEncode {
+				if qIdx >= 0 && i > qIdx {
+					sb.WriteString(url.QueryEscape(raw))
+				} else {
+					esc := url.PathEscape(raw)
+					if esc == "." || esc == ".." {
+						esc = strings.ReplaceAll(esc, ".", "%2E")
+					}
+					sb.WriteString(esc)
+				}
+			} else {
+				sb.WriteString(raw)
+			}
 			i += end + 1
 			continue
 		}
@@ -822,18 +849,18 @@ def main():
 
     def launch_browser(p):
         exe = find_chromium_executable()
-        for extra in ([], ["--no-sandbox", "--disable-setuid-sandbox"]):
-            for exe_candidate in ([None, exe] if exe else [None]):
-                kwargs = {"headless": True, "args": launch_args + extra}
-                if proxy_server:
-                    kwargs["proxy"] = {"server": proxy_server}
-                if exe_candidate:
-                    kwargs["executable_path"] = exe_candidate
-                try:
-                    return p.chromium.launch(**kwargs)
-                except Exception as exc:
-                    last_exc = exc
-        raise last_exc
+        last_exc = None
+        for exe_candidate in ([None, exe] if exe else [None]):
+            kwargs = {"headless": True, "args": list(launch_args)}
+            if proxy_server:
+                kwargs["proxy"] = {"server": proxy_server}
+            if exe_candidate:
+                kwargs["executable_path"] = exe_candidate
+            try:
+                return p.chromium.launch(**kwargs)
+            except Exception as exc:
+                last_exc = exc
+        raise RuntimeError(f"failed to launch sandboxed Chromium browser (verify unprivileged user namespaces / Chromium sandbox support on this host): {last_exc}") from last_exc
 
     try:
         with sync_playwright() as p:
@@ -1138,19 +1165,17 @@ function loadPlaywright() {
   async function launchBrowser() {
     const exe = findChromiumExecutable();
     let lastErr;
-    for (const extra of [[], ["--no-sandbox", "--disable-setuid-sandbox"]]) {
-      for (const exeCandidate of exe ? [null, exe] : [null]) {
-        const opts = { headless: true, args: [...launchArgs, ...extra] };
-        if (proxyServer) opts.proxy = { server: proxyServer };
-        if (exeCandidate) opts.executablePath = exeCandidate;
-        try {
-          return await pw.chromium.launch(opts);
-        } catch (err) {
-          lastErr = err;
-        }
+    for (const exeCandidate of exe ? [null, exe] : [null]) {
+      const opts = { headless: true, args: [...launchArgs] };
+      if (proxyServer) opts.proxy = { server: proxyServer };
+      if (exeCandidate) opts.executablePath = exeCandidate;
+      try {
+        return await pw.chromium.launch(opts);
+      } catch (err) {
+        lastErr = err;
       }
     }
-    throw lastErr;
+    throw new Error("failed to launch sandboxed Chromium browser (verify unprivileged user namespaces / Chromium sandbox support on this host): " + (lastErr && lastErr.message ? lastErr.message : String(lastErr)));
   }
 
   const networkCalls = [];

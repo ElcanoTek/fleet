@@ -293,21 +293,37 @@ func isLikelySecretFieldID(fieldID string) bool {
 func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
 	out := make(map[string]bool)
 	for _, h := range history {
-		if h.Type != "tool_call" || len(h.Content) == 0 {
+		if len(h.Content) == 0 {
 			continue
 		}
-		var tc agent.ToolCallContent
-		if err := json.Unmarshal(h.Content, &tc); err != nil {
-			continue
+		switch h.Type {
+		case "tool_call":
+			var tc agent.ToolCallContent
+			if err := json.Unmarshal(h.Content, &tc); err != nil {
+				continue
+			}
+			if tc.Name != "show_ui" || strings.TrimSpace(tc.Input) == "" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(tc.Input), &payload); err != nil {
+				continue
+			}
+			collectPasswordComponentIDs(payload["components"], out)
+		case "tool_result":
+			var tr agent.ToolResultContent
+			if err := json.Unmarshal(h.Content, &tr); err != nil {
+				continue
+			}
+			if strings.TrimSpace(tr.Card) == "" {
+				continue
+			}
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(tr.Card), &payload); err != nil {
+				continue
+			}
+			collectPasswordComponentIDs(payload["components"], out)
 		}
-		if tc.Name != "show_ui" || strings.TrimSpace(tc.Input) == "" {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(tc.Input), &payload); err != nil {
-			continue
-		}
-		collectPasswordComponentIDs(payload["components"], out)
 	}
 	return out
 }
@@ -585,6 +601,9 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 	if val == "" {
 		return "", fmt.Errorf("vaulted secret %q was not found or expired; ask the user to submit the credential again via show_ui", strings.TrimSpace(refOrValue))
 	}
+	if _, err := mcpoauth.ValidateServerURL(targetURL, s.allowInsecureHTTP()); err != nil {
+		return "", fmt.Errorf("vaulted secret %q requires a valid HTTPS target URL: %w", strings.TrimSpace(refOrValue), err)
+	}
 	targetHost := normalizeOriginHost(targetURL)
 	if targetHost == "" {
 		return "", fmt.Errorf("vaulted secret %q requires a valid target URL", strings.TrimSpace(refOrValue))
@@ -761,6 +780,10 @@ func (s *Server) connectorStudioSearchCatalog(ctx context.Context, user, query s
 	}, nil
 }
 
+func (s *Server) allowInsecureHTTP() bool {
+	return s.remoteMCP != nil && s.remoteMCP.AllowInsecureHTTP()
+}
+
 func (s *Server) safeProbeHTTPClient() *http.Client {
 	if s.remoteMCP != nil && s.remoteMCP.SafeHTTPClient() != nil {
 		return s.remoteMCP.SafeHTTPClient()
@@ -776,7 +799,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 	if method != http.MethodGet && method != http.MethodHead {
 		return nil, fmt.Errorf("probe_http only supports read-only GET or HEAD requests (got %q); save mutating methods as custom connector tools so they route through the approval gate", method)
 	}
-	targetURL, err := mcpoauth.ValidateServerURL(strings.TrimSpace(params.URL), false)
+	targetURL, err := mcpoauth.ValidateServerURL(strings.TrimSpace(params.URL), s.allowInsecureHTTP())
 	if err != nil {
 		return nil, fmt.Errorf("invalid url: %w", err)
 	}
@@ -801,7 +824,6 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
-	//nolint:gosec // G704: URL is validated via mcpoauth.ValidateServerURL, bound to user-confirmed origins for vaulted secrets, and dialed through SafeHTTPClient's netguard SSRF classifier.
 	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -828,7 +850,6 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		}
 	}
 
-	//nolint:gosec // G704: URL is validated via mcpoauth.ValidateServerURL, bound to user-confirmed origins for vaulted secrets, and dialed through SafeHTTPClient's netguard SSRF classifier.
 	resp, err := s.safeProbeHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %s", agentcore.RedactSecrets(err.Error()))
@@ -953,7 +974,28 @@ func substituteStepCreds(steps []playwrightrunner.Step, creds playwrightrunner.C
 }
 
 func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
-	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
+	sessionID := strings.TrimSpace(params.SessionID)
+	var sess *playwrightrunner.LiveSession
+	if sessionID != "" {
+		var serr error
+		sess, serr = playwrightrunner.DefaultSessionManager().GetSession(sessionID, user, "")
+		if serr != nil {
+			return nil, serr
+		}
+	}
+	cleanURL := strings.TrimSpace(params.URL)
+	if cleanURL != "" || sess == nil {
+		var uerr error
+		cleanURL, uerr = playwrightrunner.ValidateTargetURL(params.URL, s.allowInsecureHTTP())
+		if uerr != nil {
+			return nil, uerr
+		}
+	}
+	credTargetURL := cleanURL
+	if credTargetURL == "" && sess != nil {
+		credTargetURL = sess.BaseURL()
+	}
+	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, credTargetURL, params)
 	if err != nil {
 		return nil, err
 	}
@@ -964,14 +1006,13 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 		captureNet = true
 	}
 
-	if sessionID := strings.TrimSpace(params.SessionID); sessionID != "" {
-		sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, user, "")
-		if err != nil {
-			return nil, err
+	if sess != nil {
+		if creds.Username != "" || creds.Password != "" || creds.Secret != "" {
+			sess.UpdateCredentials(creds)
 		}
 		steps := substituteStepCreds(params.Steps, creds)
-		if strings.TrimSpace(params.URL) != "" && (len(steps) == 0 || steps[0].Action != "goto") {
-			steps = append([]playwrightrunner.Step{{Action: "goto", Value: strings.TrimSpace(params.URL)}}, steps...)
+		if cleanURL != "" && (len(steps) == 0 || steps[0].Action != "goto") {
+			steps = append([]playwrightrunner.Step{{Action: "goto", Value: cleanURL}}, steps...)
 		}
 		if len(steps) > 0 {
 			return sess.RunSteps(ctx, steps, inspectDOM, false)
@@ -980,7 +1021,7 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 	}
 
 	return playwrightrunner.Run(ctx, playwrightrunner.RunRequest{
-		URL:            strings.TrimSpace(params.URL),
+		URL:            cleanURL,
 		Steps:          params.Steps,
 		Credentials:    creds,
 		InspectDOM:     inspectDOM,
@@ -989,11 +1030,11 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 }
 
 func (s *Server) connectorStudioStartCopilotSession(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
-	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
+	cleanURL, err := playwrightrunner.ValidateTargetURL(params.URL, s.allowInsecureHTTP())
 	if err != nil {
 		return nil, err
 	}
-	cleanURL, err := playwrightrunner.ValidateTargetURL(params.URL, false)
+	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, cleanURL, params)
 	if err != nil {
 		return nil, err
 	}
@@ -1174,7 +1215,6 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 	}
 
 	storeTools := make([]store.CustomConnectorTool, 0, len(params.CustomTools))
-	toolNames := make([]string, 0, len(params.CustomTools))
 	for _, spec := range params.CustomTools {
 		var rawSchema json.RawMessage
 		if len(spec.InputSchema) > 0 {
@@ -1204,7 +1244,6 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 			InputSchema: rawSchema,
 			Steps:       steps,
 		})
-		toolNames = append(toolNames, fmt.Sprintf("mcp_%s_%s", strings.TrimSpace(params.Name), strings.TrimSpace(spec.Name)))
 	}
 
 	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
@@ -1269,6 +1308,12 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 
 	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
 
+	regName := agentcore.RegisteredMCPName(server.Name, server.Account)
+	toolNames := make([]string, 0, len(server.CustomTools))
+	for _, ct := range server.CustomTools {
+		toolNames = append(toolNames, fmt.Sprintf("mcp_%s_%s", regName, ct.Name))
+	}
+
 	return map[string]any{
 		"status":               "connected",
 		"server_id":            server.ID,
@@ -1313,6 +1358,23 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	defer ov.Close()
 
 	regName := agentcore.RegisteredMCPName(wantName, wantAcct)
+	for rn, seat := range ov.Seats {
+		if strings.EqualFold(seat.Server, wantName) && (wantAcct == "" || strings.EqualFold(seat.Account, wantAcct)) {
+			regName = rn
+			wantAcct = seat.Account
+			break
+		}
+	}
+	if !ov.Servers[regName] {
+		for _, st := range ov.Catalog {
+			if st.ServerName != "" {
+				regName = st.ServerName
+				break
+			}
+		}
+	}
+	wantTool = strings.TrimPrefix(wantTool, "mcp_"+regName+"_")
+	wantTool = strings.TrimPrefix(wantTool, "mcp_"+wantName+"_")
 	fullToolName := fmt.Sprintf("mcp_%s_%s", regName, wantTool)
 	if agentcore.IsCriticalTool(fullToolName) {
 		return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)

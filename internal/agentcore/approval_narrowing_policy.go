@@ -94,7 +94,11 @@ func installNarrowableArgs(entries map[string]string, modes map[string]string, c
 // behaviour that needs an MCP request (a narrowed argument told to the server
 // in _meta, a cooperative cancellation) can never apply to one, so a policy
 // key that names one exactly is reported instead of silently doing nothing.
-var nativeExecutableTools = map[string]bool{toolNameBash: true}
+var nativeExecutableTools = map[string]bool{
+	toolNameBash:              true,
+	toolNamePlaywrightBrowser: true,
+	toolNameConnectorStudio:   true,
+}
 
 // SelectsOnlySyntheticTransport reports whether a policy suffix can match
 // only tools of fleet's synthetic servers (inline http_tools under

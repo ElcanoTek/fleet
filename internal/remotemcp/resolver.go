@@ -171,5 +171,8 @@ func (s *Service) MarkRemoteMCPUnauthorized(ctx context.Context, ownerEmail, ser
 // (also reused as the data-plane transport for the overlay MCP client).
 func (s *Service) SafeHTTPClient() *http.Client { return s.httpClient }
 
+// AllowInsecureHTTP reports whether http:// URLs are permitted (dev/test escape hatch).
+func (s *Service) AllowInsecureHTTP() bool { return s != nil && s.cfg.AllowInsecureHTTP }
+
 // Ensure *Service satisfies the agent-side resolver contract at compile time.
 var _ agent.RemoteMCPResolver = (*Service)(nil)

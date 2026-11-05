@@ -658,9 +658,12 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 	if !s.Enabled() {
 		return nil, ErrDisabled
 	}
-	name := strings.TrimSpace(in.Name)
+	name := strings.ToLower(strings.TrimSpace(in.Name))
 	if name == "" {
 		return nil, errors.New("a connector name is required")
+	}
+	if !isValidCustomToolIdentifier(name) {
+		return nil, fmt.Errorf("connector name %q must match ^[a-z0-9][a-z0-9_]{0,48}$", in.Name)
 	}
 	account, err := store.CanonicalRemoteMCPAccount(in.Account)
 	if err != nil {
@@ -821,6 +824,11 @@ func (s *Service) validateCustomConnectorTools(regName, canonURL, transport, aut
 			return nil, nerr
 		}
 		out[i].Name = tName
+		normSchema, ierr := validateCustomToolInputSchema(out[i].InputSchema, i, tName)
+		if ierr != nil {
+			return nil, ierr
+		}
+		out[i].InputSchema = normSchema
 		tURL, uerr := s.validateCustomToolURL(out[i].URL, canonURL, baseOriginURL, baseOrigin, requireSameOrigin, i, tName)
 		if uerr != nil {
 			return nil, uerr
@@ -837,6 +845,52 @@ func (s *Service) validateCustomConnectorTools(regName, canonURL, transport, aut
 		}
 	}
 	return out, nil
+}
+
+func validateCustomToolInputSchema(raw json.RawMessage, idx int, tName string) (json.RawMessage, error) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema must be a JSON object: %w", idx, tName, err)
+	}
+	if typ, ok := m["type"]; ok {
+		s, ok := typ.(string)
+		if !ok || s != "object" {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.type must be \"object\"", idx, tName)
+		}
+	} else {
+		m["type"] = "object"
+	}
+	if props, ok := m["properties"]; ok && props != nil {
+		pm, ok := props.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.properties must be an object", idx, tName)
+		}
+		for pk, pv := range pm {
+			if _, ok := pv.(map[string]any); !ok {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.properties[%q] must be an object", idx, tName, pk)
+			}
+		}
+	}
+	if req, ok := m["required"]; ok && req != nil {
+		arr, ok := req.([]any)
+		if !ok {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.required must be an array of strings", idx, tName)
+		}
+		for _, item := range arr {
+			if _, ok := item.(string); !ok {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): input_schema.required must contain only strings", idx, tName)
+			}
+		}
+	}
+	norm, err := json.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("custom_tools[%d] (%s): marshal input_schema: %w", idx, tName, err)
+	}
+	return norm, nil
 }
 
 func validateCustomToolName(regName, rawName string, idx int, seen map[string]bool) (string, error) {

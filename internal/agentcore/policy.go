@@ -70,6 +70,9 @@ func (p *InteractivePolicy) BeforeToolCall(toolName, toolCallID, rawInput string
 	if blocked, msg := p.orch.checkBashSafety(toolName, toolCallID, rawInput); blocked {
 		return true, msg
 	}
+	if blocked, msg := p.orch.checkBrowserSafety(toolName, toolCallID, rawInput); blocked {
+		return true, msg
+	}
 	if blocked, msg := p.orch.checkPreviewEmailSafety(toolName, toolCallID, rawInput); blocked {
 		return true, msg
 	}

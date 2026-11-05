@@ -19,6 +19,8 @@ import (
 
 const (
 	toolNameBash                 = "bash"
+	toolNamePlaywrightBrowser    = "playwright_browser"
+	toolNameConnectorStudio      = "connector_studio"
 	toolNamePreviewEmail         = "preview_email"
 	toolNameSuggestAdvancedModel = "suggest_advanced_model"
 	toolNameScheduleTask         = "schedule_task"
@@ -64,6 +66,63 @@ func (o *orchestrationState) checkBashSafety(toolName, toolCallID, rawInput stri
 	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
 }
 
+func classifyRiskyBrowser(toolName, rawInput string) (bool, string) {
+	if toolName != toolNamePlaywrightBrowser && toolName != toolNameConnectorStudio {
+		return false, ""
+	}
+	var payload struct {
+		Action string `json:"action"`
+		Steps  []struct {
+			Action string `json:"action"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &payload); err != nil {
+		return false, ""
+	}
+	act := strings.ToLower(strings.TrimSpace(payload.Action))
+	if toolName == toolNameConnectorStudio && act != "probe_browser" && act != "start_copilot_session" {
+		return false, ""
+	}
+	if toolName == toolNamePlaywrightBrowser && act != "" && act != "run" && act != "start_session" && act != "steps" {
+		return false, ""
+	}
+	for _, st := range payload.Steps {
+		switch strings.ToLower(strings.TrimSpace(st.Action)) {
+		case "fill", "click", "press", "select":
+			return true, fmt.Sprintf("%s contains mutating browser step %q", toolName, strings.ToLower(strings.TrimSpace(st.Action)))
+		}
+	}
+	return false, ""
+}
+
+// checkBrowserSafety stages native playwright_browser and connector_studio calls
+// that execute mutating browser steps (fill, click, press, select) for explicit
+// user approval in interactive mode. Read-only browser calls (goto, wait_for,
+// sleep, extract, snapshot) pass through un-gated.
+func (o *orchestrationState) checkBrowserSafety(toolName, toolCallID, rawInput string) (bool, string) {
+	risky, reason := classifyRiskyBrowser(toolName, rawInput)
+	if !risky {
+		return false, ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.approvalSink == nil {
+		return false, ""
+	}
+	id, err := o.approvalSink.Stage(toolName, toolCallID, rawInput)
+	if err != nil {
+		log.Printf("approval stage failed (%s): %v", toolName, err)
+		return true, fmt.Sprintf("APPROVAL_REQUIRED: %s. Could not stage for user approval (%v).", reason, err)
+	}
+	switch id {
+	case PreApprovedSentinel:
+		return false, ""
+	case PreDeniedSentinel:
+		return true, fmt.Sprintf("APPROVAL_DENIED: %s — the user pre-denied %s for this conversation (session policy). Do NOT retry.", reason, toolName)
+	}
+	return true, fmt.Sprintf("APPROVAL_REQUIRED: %s — staged for user approval (approval_id=%s). Do NOT retry. Summarize intent and wait for the user to click Approve.", reason, id)
+}
+
 // checkCriticalToolApproval stages bundle-declared critical tools (the
 // manifest's agent_policy.critical_tools suffixes, e.g. SSP deal-creation and
 // deal-mutation tools) for explicit user approval in INTERACTIVE mode. It is
@@ -90,7 +149,7 @@ func (o *orchestrationState) checkCriticalToolApproval(toolName, toolCallID, raw
 		return false, "" // checkEmailSafety owns send_email end-to-end
 	}
 	switch toolName {
-	case toolNameBash, toolNamePreviewEmail, toolNameScheduleTask, toolNameSuggestAdvancedModel:
+	case toolNameBash, toolNamePlaywrightBrowser, toolNameConnectorStudio, toolNamePreviewEmail, toolNameScheduleTask, toolNameSuggestAdvancedModel:
 		return false, "" // dedicated gates own these
 	}
 	o.mu.Lock()

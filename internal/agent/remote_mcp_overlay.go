@@ -1061,6 +1061,18 @@ func decodeCustomToolSchema(raw json.RawMessage) map[string]interface{} {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil
 	}
+	if typ, ok := m["type"]; ok {
+		if s, ok := typ.(string); !ok || s != "object" {
+			return nil
+		}
+	} else {
+		m["type"] = "object"
+	}
+	if props, ok := m["properties"]; ok && props != nil {
+		if _, ok := props.(map[string]interface{}); !ok {
+			return nil
+		}
+	}
 	return m
 }
 

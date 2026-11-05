@@ -46,7 +46,9 @@ export function SubmissionBubble({
     v !== undefined &&
     v !== "";
   const safeRaw = (() => {
-    if (secrets.size === 0) return raw;
+    if (secrets.size === 0 && !entries.some(([k, v]) => isSecretEntry(k, v))) {
+      return raw;
+    }
     const redactVal = (val: unknown): unknown => {
       if (Array.isArray(val)) return val.map(redactVal);
       if (val && typeof val === "object") {
@@ -58,11 +60,12 @@ export function SubmissionBubble({
       }
       return val;
     };
-    const nl = raw.indexOf("\n");
-    if (nl < 0) return raw;
+    const openIdx = raw.indexOf("{");
+    const closeIdx = raw.lastIndexOf("}");
+    if (openIdx < 0 || closeIdx <= openIdx) return raw;
     try {
-      const parsed = JSON.parse(raw.slice(nl + 1));
-      return `${raw.slice(0, nl + 1)}${JSON.stringify(redactVal(parsed), null, 2)}`;
+      const parsed = JSON.parse(raw.slice(openIdx, closeIdx + 1));
+      return `${raw.slice(0, openIdx)}${JSON.stringify(redactVal(parsed), null, 2)}${raw.slice(closeIdx + 1)}`;
     } catch {
       return raw;
     }

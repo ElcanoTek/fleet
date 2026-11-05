@@ -475,3 +475,47 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 		t.Errorf("expected custom tool criticality to be per-run rather than process-global")
 	}
 }
+
+func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswords(t *testing.T) {
+	memStore := newMemRemoteMCPStore()
+	rmcp := remotemcp.NewService(memStore, remotemcp.Config{
+		PublicBaseURL:     "https://fleet.example.com",
+		AllowInsecureHTTP: false,
+	})
+	chatSt := newFakeChatStore()
+	conv, _ := chatSt.CreateConversation(context.Background(), "admin@example.com", "Build Connector", "default", "", false)
+
+	s := &Server{
+		store:     chatSt,
+		remoteMCP: rmcp,
+	}
+	s.uiSecrets.put("admin@example.com", conv.ID, "password", "super-secret-pw")
+	s.uiSecrets.allowOrigin("admin@example.com", conv.ID, "http://portal.example.com")
+
+	h := s.newConnectorStudioHandler(conv, "admin@example.com")
+	if _, err := h(context.Background(), tools.ConnectorStudioParams{
+		Action:      tools.ConnectorStudioActionProbeBrowser,
+		URL:         "http://portal.example.com/login",
+		PasswordRef: "$secret:password",
+	}); err == nil {
+		t.Fatal("expected probe_browser with http:// URL to be rejected when AllowInsecureHTTP is false")
+	}
+	if _, err := s.resolveSecretForURL(context.Background(), "admin@example.com", conv.ID, "$secret:password", "http://portal.example.com/login"); err == nil {
+		t.Fatal("expected resolveSecretForURL to reject http:// target URL when AllowInsecureHTTP is false")
+	}
+
+	trRaw, _ := json.Marshal(agent.ToolResultContent{
+		Name: "show_ui",
+		Card: `{"components":[{"type":"form","fields":[{"id":"vault_pw","type":"string","format":"password"}]}]}`,
+	})
+	history := []agent.HistoryEntry{
+		{
+			Type:    "tool_result",
+			Content: trRaw,
+		},
+	}
+	pwFields := passwordFieldIDsFromHistory(history)
+	if !pwFields["vault_pw"] {
+		t.Fatalf("expected passwordFieldIDsFromHistory to extract vault_pw from tool_result.Card, got %v", pwFields)
+	}
+}
