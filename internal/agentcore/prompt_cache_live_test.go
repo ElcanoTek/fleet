@@ -25,10 +25,13 @@ import (
 //
 // Two live tests run when FLEET_CACHE_LIVE=1 and OPENROUTER_API_KEY are set:
 //
-//  1. TestPromptCacheLive — runs across Fleet's multi-provider model matrix
-//     (default: anthropic/claude-opus-5.5, anthropic/claude-haiku-5.5,
-//     google/gemini-3.8-flash, google/gemini-4-argon, openai/gpt-6-luna-pro;
-//     overridable via FLEET_CACHE_LIVE_MODELS). For each model, it executes a
+//  1. TestPromptCacheLive — runs across Fleet's live prompt-cache model set
+//     (default fast/low-cost CI tier: anthropic/claude-haiku-5.5 and
+//     google/gemini-3.8-flash, which exercise both explicit cache-control
+//     wire families; pass FLEET_CACHE_LIVE_MODELS=all for the full 5-model
+//     flagship matrix including anthropic/claude-opus-5.5,
+//     google/gemini-4-argon, and openai/gpt-6-luna-pro, or a comma-separated
+//     model list). For each model, it executes a
 //     realistic 3-turn production conversation with a 6-tool Fleet roster:
 //     - Turn 1: a 3-step sequential tool chain (tool_search -> query_metrics
 //     -> inspect_box -> final synthesis = 4 LLM requests in Turn 1), where
@@ -52,11 +55,46 @@ import (
 //     FLEET_CACHE_LIVE=1 OPENROUTER_API_KEY=… go test -tags fleet_host_executor \
 //     -run TestPromptCacheLive -v ./internal/agentcore/
 var defaultLiveCacheModels = []string{
+	"anthropic/claude-haiku-5.5", // Anthropic fast tier (explicit rolling 4-breakpoint cache + content-block normalization)
+	"google/gemini-3.8-flash",    // Google Gemini explicit stable-prefix + implicit cache
+}
+
+var fullLiveCacheModels = []string{
 	DefaultCoreModel,             // anthropic/claude-opus-5.5 (Anthropic flagship, explicit rolling 4-breakpoint cache)
 	"anthropic/claude-haiku-5.5", // Anthropic fast tier (explicit rolling 4-breakpoint cache)
 	"google/gemini-3.8-flash",    // Google Gemini explicit stable-prefix + implicit cache
 	DefaultMaxModel,              // google/gemini-4-argon (Google implicit prefix cache)
 	"openai/gpt-6-luna-pro",      // OpenAI implicit prefix cache + sticky provider routing
+}
+
+func resolveLiveCacheModels(env string) []string {
+	v := strings.TrimSpace(env)
+	if v == "" {
+		return append([]string(nil), defaultLiveCacheModels...)
+	}
+	if strings.EqualFold(v, "all") {
+		return append([]string(nil), fullLiveCacheModels...)
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if slug := strings.TrimSpace(p); slug != "" {
+			out = append(out, slug)
+		}
+	}
+	return out
+}
+
+func TestResolveLiveCacheModels(t *testing.T) {
+	if got := resolveLiveCacheModels(""); len(got) != 2 || got[0] != "anthropic/claude-haiku-5.5" || got[1] != "google/gemini-3.8-flash" {
+		t.Fatalf("resolveLiveCacheModels(\"\") = %v, want fast 2-model default tier", got)
+	}
+	if got := resolveLiveCacheModels("all"); len(got) != 5 || got[0] != DefaultCoreModel || got[3] != DefaultMaxModel {
+		t.Fatalf("resolveLiveCacheModels(\"all\") = %v, want full 5-model matrix", got)
+	}
+	if got := resolveLiveCacheModels(" anthropic/claude-opus-5.5 , openai/gpt-6-luna-pro "); len(got) != 2 || got[0] != "anthropic/claude-opus-5.5" || got[1] != "openai/gpt-6-luna-pro" {
+		t.Fatalf("resolveLiveCacheModels(custom) = %v", got)
+	}
 }
 
 func TestPromptCacheLive(t *testing.T) {
@@ -67,15 +105,8 @@ func TestPromptCacheLive(t *testing.T) {
 	if key == "" {
 		t.Fatal("FLEET_CACHE_LIVE=1 needs OPENROUTER_API_KEY")
 	}
-	slugs := defaultLiveCacheModels
-	if v := strings.TrimSpace(os.Getenv("FLEET_CACHE_LIVE_MODELS")); v != "" {
-		slugs = strings.Split(v, ",")
-	}
+	slugs := resolveLiveCacheModels(os.Getenv("FLEET_CACHE_LIVE_MODELS"))
 	for _, slug := range slugs {
-		slug := strings.TrimSpace(slug)
-		if slug == "" {
-			continue
-		}
 		t.Run(strings.ReplaceAll(slug, "/", "_"), func(t *testing.T) {
 			t.Parallel()
 			runPromptCacheLive(t, key, slug)

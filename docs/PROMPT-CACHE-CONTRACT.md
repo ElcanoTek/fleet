@@ -247,15 +247,19 @@ upstream pins, realistic 6-tool roster (`tool_search`, `query_metrics`,
 provider, prompt / cached / cache-write tokens, hit rate, and cost.
 
 Two tests run in the `prompt-cache-live` CI gate (`.github/workflows/ci.yml`,
-required by `CI gate`) and the nightly canary (`.github/workflows/e2e-canary.yml`):
+required by `CI gate`, path-gated on PRs to prompt-cache-relevant changes and
+always run on `main`) and the nightly canary (`.github/workflows/e2e-canary.yml`):
 
 1. `TestPromptCacheLive`: runs a 3-turn multi-tool conversation (Turn 1 makes 3
    sequential tool calls returning ~1,200–1,400 tokens each; Turn 2 replays
    Turn 1 via `liveReplayEntries`, sends a ~1,300-token user message, and calls
-   `read_runbook`; Turn 3 synthesizes across both turns) across
-   `anthropic/claude-opus-5.5`, `anthropic/claude-haiku-5.5`,
+   `read_runbook`; Turn 3 synthesizes across both turns). By default in CI it
+   runs across the fast representative models for each explicit cache family
+   (`anthropic/claude-haiku-5.5` and `google/gemini-3.8-flash`); with
+   `FLEET_CACHE_LIVE_MODELS=all` (used by the nightly canary) it runs across the
+   full 5-model matrix (`anthropic/claude-opus-5.5`, `anthropic/claude-haiku-5.5`,
    `google/gemini-3.8-flash`, `google/gemini-4-argon`, and
-   `openai/gpt-6-luna-pro`.
+   `openai/gpt-6-luna-pro`).
 2. `TestPromptCacheLive_LongToolChainCrossTurn`: runs a 10-step sequential
    pagination tool chain in Turn 1 (>20 content blocks, exceeding Anthropic's
    20-block lookback window) followed by Turn 2 after history replay, asserting

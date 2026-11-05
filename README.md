@@ -11,34 +11,28 @@ compute, your data, your know-how. You own the means of production.
 
 ## See it in action
 
-One story, three surfaces: **plan the work in chat, automate the
-follow-through, ride along from anywhere.** These show the current web app and
-terminal client with scripted example data; no live model is used. Each
-screenshot is its recording's final frame; tap it to watch ([how they're made](docs/generating-demo-gif.md)).
+One story, four surfaces: **talk it through in Chat, set up Patrols that check
+in on a schedule, run headless Background tasks, and drive the same fleet from
+your terminal.** These automated screenshots render the shipped web app and
+terminal client against deterministic fixtures ([how they're generated](docs/generating-demo-gif.md)).
 
-<!-- Keep the GIFs linked, not inlined: the GitHub mobile app re-renders the
-     whole README on every GIF frame, so inline recordings make the page flicker
-     nonstop (github.com/orgs/community/discussions/50309). -->
+**Chat — talk it through and plan the work** _(automated screenshot)_
 
-**Chat — plan the kickoff** _(scripted example)_
+![Fleet chat UI — a six-week customer kickoff plan with owners and revenue calculation](docs/screenshots/web/chat.png)
 
-[![Fleet chat UI — a six-week customer kickoff plan with owners](docs/screenshots/web/chat-demo.png)](docs/screenshots/web/chat-demo.gif)
+**Patrols — chats that check in on a schedule** _(automated screenshot)_
 
-▶ [Watch the chat recording](docs/screenshots/web/chat-demo.gif)
+![Fleet Patrols — an in-chat recurring patrol checking deal pacing and spend on a weekday schedule](docs/screenshots/web/patrols.png)
 
-**Background tasks — the follow-through, automated** _(example tasks)_
+**Background tasks — run headless, without a chat** _(automated screenshot)_
 
-[![Fleet Background tasks — agent slots, task counts and upcoming scheduled runs](docs/screenshots/web/ops-demo.png)](docs/screenshots/web/ops-demo.gif)
+![Fleet Background tasks — agent slots, task counts, sleeping timers, and scheduled runs](docs/screenshots/web/orchestrator.png)
 
-▶ [Watch the Background tasks recording](docs/screenshots/web/ops-demo.gif)
+**Terminal chat (`fleet chat`) — the same fleet, from your shell** _(automated screenshot)_
 
-**Terminal chat (`fleet chat`) — the same fleet, from your shell**
+![Fleet terminal chat — scheduled task failure triage rendered in the TUI](docs/screenshots/tui/chat.png)
 
-[![Fleet terminal chat — a kickoff meeting agenda drafted in the TUI](docs/screenshots/tui/demo.png)](docs/screenshots/tui/demo.gif)
-
-▶ [Watch the terminal recording](docs/screenshots/tui/demo.gif)
-
-More: [screenshots of every surface](docs/screenshots/).
+More: [all automated screenshots](docs/screenshots/).
 
 ## Contents
 
@@ -122,9 +116,10 @@ yourself are already in the box, tested, and governed by the same core:
   (`fleet eval`) that replays golden prompts through the real loop and gates
   model/bundle changes ([`docs/EVALS.md`](docs/EVALS.md)); per-run error
   analysis; optional PII redaction.
-- **Three clients out of the box.** The web chat UI, Background tasks (the headless task view),
-  and a full terminal client (`fleet chat`) — all thin views over the same
-  governed API.
+- **Three ways of working, plus a terminal client.** **Chat** (*Talk it through*),
+  **Patrols** (*Chats that check in on a schedule* via the guided Patrol Launchpad
+  or `chat_patrol`), **Background tasks** (*Run headless, without a chat*), and a
+  full terminal client (`fleet chat`) — all thin views over the same governed API.
 
 ## Built for trust: governed, auditable delegation
 

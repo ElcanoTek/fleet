@@ -1,11 +1,39 @@
-# Generating the demo GIFs (TUI + web)
+# Generating the README screenshots (Web + TUI)
 
-The README links to an animated GIF of `fleet chat`
-(`docs/screenshots/tui/demo.gif`) showing a real two-turn session: a question,
-live tool calls (`bash`, `run_python`) resolving to ✓, a glamour-rendered
-markdown answer streaming in, `/help`, and a follow-up. This page documents how
-that GIF is produced **deterministically, with no model, no API key, and no
-cost** — so anyone can regenerate it after a TUI change.
+The README embeds four automated PNG screenshots generated directly from the
+shipped web bundle and terminal UI against deterministic, in-memory/mocked
+state — **no live model, no API key, and no cost**:
+
+- `docs/screenshots/web/chat.png` — **Chat** (*Talk it through*)
+- `docs/screenshots/web/patrols.png` — **Patrols** (*Chats that check in on a schedule*)
+- `docs/screenshots/web/orchestrator.png` — **Background tasks** (*Run headless, without a chat*)
+- `docs/screenshots/tui/chat.png` — **Terminal chat (`fleet chat`)**
+
+## Regenerating the automated screenshots
+
+ Both generators run in CI via [`.github/workflows/screenshots.yml`](../.github/workflows/screenshots.yml) and can be run locally after any UI or TUI change:
+
+```sh
+# 1. Web screenshots (Chat, Patrols, Background tasks)
+cd web && npm run test:e2e:screenshots && cd ..
+
+# 2. TUI screenshot (fleet chat via charmbracelet/freeze)
+./scripts/generate-tui-screenshot.sh
+```
+
+- **Web screenshots** (`web/e2e/screenshots/gui.spec.ts`): Playwright boots the
+  production web bundle behind `cmd/web-e2e-server`, intercepts `/api/*` with
+  deterministic fixtures, and captures `chat.png`, `patrols.png`, and
+  `orchestrator.png` into `docs/screenshots/web/`.
+- **TUI screenshot** (`scripts/generate-tui-screenshot.sh` +
+  `internal/chattui/screenshot_gen_test.go`): renders a representative
+  `fleet chat` frame from in-memory Bubble Tea model state and converts the
+  ANSI output to `docs/screenshots/tui/chat.png` via `charmbracelet/freeze`.
+
+## Optional: recording animated demos (TUI + web)
+
+If you need an animated GIF or video for release notes or talks, the opt-in
+recording scripts remain available in `docs/scripts/`.
 
 ## How it works
 
@@ -48,31 +76,17 @@ docs/scripts/generate-tui-gif.sh
 
 The script builds `./fleet`, sets `VHS_NO_SANDBOX=true` when running as root
 (headless Chromium refuses the sandbox as root), runs the tape, and writes
-`docs/screenshots/tui/demo.gif` (1080×620 px).
-
-If you change the TUI's layout, keybindings, or the demo script, re-run the
-generator and eyeball the GIF end to end — timing is the only fragile part
-(the `Sleep`s in the tape must outlast the mock server's streaming delays).
-
-The static PNG screenshot (`docs/screenshots/tui/chat.png`, from
-`scripts/generate-tui-screenshot.sh` + `freeze`) still exists for contexts
-where an animation is inappropriate.
-
-The README does not embed the GIFs inline: the GitHub mobile app re-renders the
-whole README on every GIF frame, so inline recordings make the page flicker
-nonstop ([community discussion #50309](https://github.com/orgs/community/discussions/50309)).
-It shows each recording's **final frame** as a still (`tui/demo.png`,
-`web/chat-demo.png`, `web/ops-demo.png`) linked to the GIF. Both generator
-scripts write that still next to the GIF (`ffmpeg … -update 1`), so a
-regenerated recording and its still never drift apart — commit them together.
+an optional `docs/screenshots/tui/demo.gif` (1080×620 px) and `demo.png` still
+for release notes or presentations (not committed to the repo by default; the
+README uses the automated static PNG `docs/screenshots/tui/chat.png` from
+`scripts/generate-tui-screenshot.sh` + `freeze`).
 
 
 ## The web demo GIFs
 
-The GIFs record the current web app (the SPA behind the Go gateway) with deterministic, fictional API
-responses, just like the mocked browser suite. They demonstrate the interface;
-they do not certify live model, sandbox, or scheduler execution. The README
-labels them accordingly. The separate live e2e suite covers that integration.
+The opt-in web recording scripts capture the current web app (the SPA behind the
+Go gateway) with deterministic, fictional API responses for release notes or
+demos, without requiring live model credentials or incurring model cost.
 
 ```sh
 cd web && npm ci && npx playwright install chromium && cd ..
@@ -81,17 +95,16 @@ docs/scripts/generate-web-gifs.sh /tmp/fleet-web-demos/chat.webm /tmp/fleet-web-
 ```
 
 Playwright starts the app, creates a throwaway authenticated session, records
-the kickoff conversation and Operations Center, and asserts the expected
+the kickoff conversation and Background tasks view, and asserts the expected
 content before saving each video. A missing tab or reply fails the recording.
 The capture lives in `web/e2e/screenshots/demos.spec.ts` and is opt-in, so normal
 screenshot jobs do not record videos. `DEMO_OUT_DIR` overrides the video directory.
 The harness always drives the production build (the Go gateway serving the
 embedded bundle); `E2E_SKIP_BUILD=1` reuses the last one.
 
-The converter uses ffmpeg and optionally gifsicle. Inspect the videos and the
-`chat-final.png` / `ops-final.png` captures before committing all three GIFs.
-The web conversation uses a scripted completed response; the terminal demo
-uses paced SSE frames. Neither requires credentials or incurs model cost.
+The converter uses ffmpeg and optionally gifsicle. Both the web and terminal
+demo recordings use deterministic SSE fixtures, so neither requires credentials
+or incurs model cost.
 
 ## The bug the recordings caught
 

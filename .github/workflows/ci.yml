@@ -63,6 +63,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       docs_only: ${{ steps.detect.outputs.docs_only }}
+      cache_relevant: ${{ steps.detect.outputs.cache_relevant }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -87,15 +88,19 @@ jobs:
               # New branch / unknown base (all-zero SHA): can't diff, run everything.
               if [ -z "${PUSH_BEFORE}" ] || [ "${PUSH_BEFORE}" = "0000000000000000000000000000000000000000" ]; then
                 echo "No usable base SHA for this push; running the full suite."
-                echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+                echo "docs_only=false" >> "$GITHUB_OUTPUT"
+                echo "cache_relevant=true" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               range="${PUSH_BEFORE}...${PUSH_AFTER}" ;;
             *)
               echo "Event '$EVENT_NAME' is not gated; running the full suite."
-              echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              echo "docs_only=false" >> "$GITHUB_OUTPUT"
+              echo "cache_relevant=true" >> "$GITHUB_OUTPUT"
+              exit 0 ;;
           esac
 
-          files="$(git diff --name-only "$range")"
+          files="$(git diff --name-only --no-renames "$range")"
           echo "Changed files in ${range}:"
           printf '%s\n' "$files"
 
@@ -108,10 +113,20 @@ jobs:
           # everything.
           if [ -z "$(printf '%s' "$files" | tr -d '[:space:]')" ]; then
             echo "empty diff for ${range}; refusing to classify as docs-only."
-            echo "docs_only=false" >> "$GITHUB_OUTPUT"; exit 0
+            echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "cache_relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           docs_only=true
+          # Always run live prompt-cache verification on push to main; on PRs,
+          # only spend OpenRouter tokens when a changed file can affect prompt
+          # assembly, wire serialization, history replay, or the workflow itself.
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            cache_relevant=false
+          else
+            cache_relevant=true
+          fi
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             # `*` in a shell case pattern spans '/', so these match at any depth.
@@ -142,10 +157,20 @@ jobs:
               CODE_OF_CONDUCT.md|AGENTS.md|CLAUDE.md|ONBOARDING.md) : ;;
               *) docs_only=false ;;
             esac
+            case "$f" in
+              internal/agentcore/*|internal/agent/*|internal/chat/*|internal/sched/*|internal/clientconfig/*)
+                cache_relevant=true ;;
+              config/default/system_prompts/*|go.mod|go.sum)
+                cache_relevant=true ;;
+              .github/workflows/ci.yml|.github/workflows/e2e-canary.yml)
+                cache_relevant=true ;;
+            esac
           done <<< "$files"
 
           echo "docs_only=${docs_only}"
+          echo "cache_relevant=${cache_relevant}"
           echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+          echo "cache_relevant=${cache_relevant}" >> "$GITHUB_OUTPUT"
 
   gitleaks:
     name: Secret scan (gitleaks)
@@ -891,21 +916,36 @@ jobs:
     # Blocking live prompt-cache regression gate against OpenRouter.
     # Exercises Fleet's real multi-turn, multi-step tool-calling loop
     # (TestPromptCacheLive + TestPromptCacheLive_LongToolChainCrossTurn) across
-    # Anthropic (claude-opus-5.5, claude-haiku-5.5), Google (gemini-3.8-flash,
-    # gemini-4-argon), and OpenAI (gpt-6-luna-pro) plus a 10-step sequential
-    # tool chain exceeding Anthropic's 20-block lookback window. Any PR that
-    # breaks wire cache_control placement, prefix stability, or cross-turn
-    # history replay fails this gate and cannot merge.
+    # the fast representative cache families (claude-haiku-5.5 for Anthropic's
+    # explicit 4-breakpoint rolling cache + gemini-3.8-flash for Google's
+    # explicit stable-prefix + implicit cache) plus a 10-step sequential tool
+    # chain exceeding Anthropic's 20-block lookback window. The full 5-model
+    # flagship matrix (FLEET_CACHE_LIVE_MODELS=all) runs nightly in
+    # e2e-canary.yml. On pull_request events that do not touch prompt-cache-
+    # relevant paths, the job skips the live OpenRouter call while offline
+    # wire contract tests still run in the `go` job and the live suite runs on
+    # merge to main.
     name: Live prompt-cache gate (OpenRouter)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
+      - name: Skip live OpenRouter calls on non-cache PR changes
+        if: ${{ needs.changes.outputs.cache_relevant != 'true' }}
+        run: |
+          echo "::notice::No prompt-cache-relevant paths changed in this PR; offline wire contract tests still run in the go job, and prompt-cache-live runs on merge to main."
+          {
+            echo "## Live OpenRouter Prompt-Cache Gate (skipped on non-cache PR paths)"
+            echo "No prompt-cache-relevant paths changed in this PR. Offline wire contract tests run in the \`go\` job, and the live OpenRouter suite runs on push to \`main\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Checkout
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
@@ -913,12 +953,14 @@ jobs:
           cache: false
 
       - name: Reclaim runner disk space for Go build cache
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         run: |
           df -h /
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           df -h /
 
       - name: Restore the Go build cache
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -930,6 +972,7 @@ jobs:
             go-build-cover-${{ runner.os }}-
 
       - name: Prefetch Go modules (retried — the proxy is not always up)
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         run: |
           set -euo pipefail
           for attempt in 1 2 3; do
@@ -943,6 +986,7 @@ jobs:
           exit 1
 
       - name: Run live multi-provider prompt-cache regression suite
+        if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           EVENT_NAME: ${{ github.event_name }}
@@ -960,7 +1004,7 @@ jobs:
             exit 1
           fi
           rc=0
-          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
+          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 15m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
           {
             echo "## Live OpenRouter Prompt-Cache Gate (exit $rc)"
             echo '```'
@@ -973,6 +1017,10 @@ jobs:
           fi
           if grep -q -- '--- SKIP' prompt-cache-live.log; then
             echo "::error::A live prompt-cache test SKIPPED; refusing to pass vacuously."
+            exit 1
+          fi
+          if ! grep -q -- 'SUMMARY requests=' prompt-cache-live.log || ! grep -q -- 'long-chain ' prompt-cache-live.log; then
+            echo "::error::Live prompt-cache subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
             exit 1
           fi
 
