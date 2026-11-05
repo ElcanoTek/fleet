@@ -1004,7 +1004,7 @@ jobs:
             exit 1
           fi
           rc=0
-          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive(/_|$)' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
+          FLEET_CACHE_LIVE=1 go test -tags fleet_host_executor -count=1 -v -timeout 15m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-live.log || rc=$?
           {
             echo "## Live OpenRouter Prompt-Cache Gate (exit $rc)"
             echo '```'
@@ -1017,6 +1017,10 @@ jobs:
           fi
           if grep -q -- '--- SKIP' prompt-cache-live.log; then
             echo "::error::A live prompt-cache test SKIPPED; refusing to pass vacuously."
+            exit 1
+          fi
+          if ! grep -q -- 'SUMMARY:' prompt-cache-live.log || ! grep -q -- 'long-chain:' prompt-cache-live.log; then
+            echo "::error::Live prompt-cache subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
             exit 1
           fi
 

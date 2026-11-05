@@ -164,14 +164,20 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run 'TestPromptCacheLive(/_|$)' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
+          go test -tags fleet_host_executor -count=1 -v -timeout 15m -run '^TestPromptCacheLive($|_)' ./internal/agentcore/ 2>&1 | tee prompt-cache-canary.log || rc=$?
           {
             echo "### Live Prompt-Cache Canary (exit $rc)"
             echo '```'
             grep -E '(SUMMARY|long-chain|--- PASS|--- FAIL)' prompt-cache-canary.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          exit "$rc"
+          if [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          if ! grep -q -- 'SUMMARY:' prompt-cache-canary.log || ! grep -q -- 'long-chain:' prompt-cache-canary.log; then
+            echo "::error::Live prompt-cache canary subtests did not emit expected SUMMARY/long-chain records; refusing to pass vacuously."
+            exit 1
+          fi
 
       - name: Upload canary report on failure
         # Playwright report ONLY — deliberately not `.e2e-run/logs/`.
