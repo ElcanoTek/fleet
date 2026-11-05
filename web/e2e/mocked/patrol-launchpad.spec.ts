@@ -133,6 +133,11 @@ for (const scheme of ["light", "dark"] as const) {
       await page.goto("/help?launchpad=1");
       const dialog = page.getByRole("dialog", { name: "Patrol Launchpad" });
       await expect(dialog.getByTestId("launchpad-mind")).toBeVisible({ timeout: 15_000 });
+      // Visible can still mean mid-fade. Axe must measure the settled panel,
+      // otherwise its entrance opacity blends text with the scrim behind it.
+      await expect
+        .poll(() => dialog.evaluate((el) => getComputedStyle(el).opacity))
+        .toBe("1");
       const steps = ["why", "welcome", "tools", "rules", "watch", "schedule"];
       for (const step of steps) {
         await expect(dialog.getByTestId(`launchpad-step-${step}`)).toBeVisible();

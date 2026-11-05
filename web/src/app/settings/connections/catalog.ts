@@ -42,7 +42,7 @@ export type CatalogThirdParty = {
   // so a manual client ID is useless without its secret; the guided form makes
   // the secret field mandatory instead of "optional" (GitHub, #1006).
   client_secret?: string;
-  // Curated Featured-shelf pick, rendered before the category listing.
+  // Preferred fallback for the popular picks when a workspace omits a default pick.
   featured?: boolean;
 };
 
