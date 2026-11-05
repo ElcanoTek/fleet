@@ -120,7 +120,7 @@ On the right of every row sit four actions:
 | --- | --- |
 | **Run now** | Queue an immediate run, on top of whatever schedule exists. Offered on a task that is waiting or finished — not on one that is in flight or paused (see below). |
 | **Edit task** | Open the task for changes. See [Everyday actions](#5-everyday-actions) for what editing means on a finished task. |
-| **Stop** | On a one-time task, the run stops at its next checkpoint and keeps what it has done so far. On a repeating task, Stop ends the schedule for good: the confirmation reads **Stop this schedule for good?** and the task will not run again, so create a new task to bring it back. Either way its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
+| **Stop** | A one-time task that has not started yet is cancelled and never runs; one that is already running stops at its next checkpoint and keeps what it has done so far. On a repeating task, Stop ends the schedule for good: the confirmation reads **Stop this schedule for good?** and the task will not run again, so create a new task to bring it back. Either way its history stays on the board. A deliberate stop is not treated as a failure: nothing retries, nothing alerts. |
 | **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
 
 Two kinds of row show fewer than four. While a run is **live** it can only be

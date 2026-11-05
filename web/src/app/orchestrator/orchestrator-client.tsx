@@ -728,7 +728,9 @@ function OrchestratorInner({
           stopTask
             ? stopTask.recurrence
               ? `"${taskRunLabel(stopTask)}" won't run again. If it is running now, that run stops at its next checkpoint too. To bring it back later, create a new task.`
-              : `"${taskRunLabel(stopTask)}" stops at its next checkpoint. Anything it has done so far is kept.`
+              : stopTask.status === "pending" || stopTask.status === "scheduled"
+                ? `"${taskRunLabel(stopTask)}" hasn't started yet, so it is cancelled and won't run.`
+                : `"${taskRunLabel(stopTask)}" stops at its next checkpoint. Anything it has done so far is kept.`
             : ""
         }
         confirmLabel={
