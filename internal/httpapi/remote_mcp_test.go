@@ -65,6 +65,15 @@ func TestOperatorOAuthClientFor(t *testing.T) {
 			OAuthClientID:      "ado-cid",
 			OAuthClientSecret:  "ado-csec",
 		},
+		{
+			Name:               "salesforce",
+			URL:                "https://api.salesforce.com/platform/mcp/v1/{server_path}",
+			Auth:               "tenant",
+			ClientRegistration: "manual",
+			ClientSecret:       "required",
+			OAuthClientID:      "sf-cid",
+			OAuthClientSecret:  "sf-csec",
+		},
 	}
 
 	// Exact URL match -> injects credentials.
@@ -100,5 +109,33 @@ func TestOperatorOAuthClientFor(t *testing.T) {
 	}
 	if tenantTemplateMatchesURL("https://{tenant}example.com/mcp", "https://attackerexample.com/mcp") {
 		t.Error("tenant template without DNS label boundary before literal domain must be rejected")
+	}
+	// A "_path" placeholder spans segments: Salesforce's production and
+	// sandbox server paths both get the operator's External Client App.
+	for _, u := range []string{
+		"https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads",
+		"https://api.salesforce.com/platform/mcp/v1/sandbox/platform/sobject-reads",
+	} {
+		if cid, csec, ok := operatorOAuthClientFor("salesforce", u, "oauth", catalog); !ok || cid != "sf-cid" || csec != "sf-csec" {
+			t.Errorf("salesforce %s = (%q, %q, %v), want (sf-cid, sf-csec, true)", u, cid, csec, ok)
+		}
+	}
+	// ...but never an empty segment, a dot segment (escaped or not), a query
+	// or another host, and a plain placeholder still takes exactly one segment.
+	for _, u := range []string{
+		"https://api.salesforce.com/platform/mcp/v1/",
+		"https://api.salesforce.com/platform/mcp/v1/platform//sobject-reads",
+		"https://api.salesforce.com/platform/mcp/v1/../../evil",
+		"https://api.salesforce.com/platform/mcp/v1/platform/%2e%2e/x",
+		"https://api.salesforce.com/platform/mcp/v1/./platform/sobject-reads",
+		"https://api.salesforce.com/platform/mcp/v1/platform/sobject-reads?x=1",
+		"https://evil.example.com/platform/mcp/v1/platform/sobject-reads",
+	} {
+		if cid, csec, ok := operatorOAuthClientFor("salesforce", u, "oauth", catalog); ok || cid != "" || csec != "" {
+			t.Errorf("salesforce %s must not receive operator credentials, got (%q, %q, %v)", u, cid, csec, ok)
+		}
+	}
+	if tenantTemplateMatchesURL("https://mcp.dev.azure.com/{organization}", "https://mcp.dev.azure.com/../x") {
+		t.Error("a dot segment must never instantiate a single-segment placeholder")
 	}
 }

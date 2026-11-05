@@ -2519,7 +2519,7 @@ servers:
       Fully managed MCP servers exposing org data and logic — SObject CRUD,
       Flows, invocable Apex, Data 360, Tableau Next. Endpoint is per-org; copy
       it from Setup → API Catalog → MCP Servers.
-    url: "https://api.salesforce.com/platform/mcp/v1/{environment}/platform/{server}"
+    url: "https://api.salesforce.com/platform/mcp/v1/{server_path}"
     vendor: Salesforce, Inc.
     docs_url: "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/references/reference/servers-reference.html"
     category: crm-sales
@@ -2527,10 +2527,17 @@ servers:
     provenance: official
     auth: tenant
     setup_hint: >-
-      An admin must first toggle the servers on in Setup > API Catalog >
-      MCP Servers and register an External Client App for OAuth; your
-      org's exact endpoint URL is copied from that same MCP Servers page.
+      {server_path} is the part of the server's URL after /v1/ on Setup >
+      API Catalog > MCP Servers: platform/sobject-reads for a production org,
+      sandbox/platform/sobject-reads for a sandbox. An admin first turns the
+      server on there and creates an External Client App with the callback URL
+      shown in your Fleet instance's OAuth settings, the mcp_api and
+      refresh_token scopes, PKCE, JWT-based access tokens, and Require Secret
+      for Web Server Flow (without it there is no Consumer Secret to paste);
+      paste its Consumer Key and Consumer Secret here.
     setup_url: "https://developer.salesforce.com/docs/platform/hosted-mcp-servers/guide/hosted-mcp-servers-overview.html"
+    client_registration: manual
+    client_secret: required
   - name: zoominfo
     display_name: ZoomInfo
     description: >-

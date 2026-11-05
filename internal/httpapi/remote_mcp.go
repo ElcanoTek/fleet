@@ -420,7 +420,11 @@ func catalogEntryMatchesURL(e clientconfig.RemoteMCPCatalogEntry, canonURL strin
 // of an https:// catalog URL template carrying {placeholder} tokens (such as
 // "https://mcp.dev.azure.com/{organization}"). The template's host must end
 // with a literal registrable domain suffix (never a bare "{host}" placeholder)
-// and each {placeholder} matches a single non-empty DNS label or path segment.
+// and each {placeholder} matches a single non-empty DNS label or path segment,
+// except a path placeholder whose name ends in "_path" (Salesforce's
+// {server_path}: "platform/sobject-reads" or "sandbox/platform/sobject-reads"),
+// which matches one or more non-empty segments. A "." or ".." segment never
+// matches, so no placeholder can climb out of the template's fixed path prefix.
 func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
 	if !strings.HasPrefix(rawTemplate, "https://") {
 		return false
@@ -449,11 +453,16 @@ func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
 	if !strings.Contains(literalHost, ".") {
 		return false
 	}
-	hostPattern, ok := templatePartToRegex(strings.ToLower(hostTpl), `[a-z0-9-]+`)
+	hostPattern, ok := templatePartToRegex(strings.ToLower(hostTpl), func(string) string { return `[a-z0-9-]+` })
 	if !ok {
 		return false
 	}
-	pathPattern, ok := templatePartToRegex(pathTpl, `[^/?#@]+`)
+	pathPattern, ok := templatePartToRegex(pathTpl, func(name string) string {
+		if strings.HasSuffix(name, "_path") {
+			return `[^/?#@]+(?:/[^/?#@]+)*`
+		}
+		return `[^/?#@]+`
+	})
 	if !ok {
 		return false
 	}
@@ -461,10 +470,26 @@ func tenantTemplateMatchesURL(rawTemplate, canonURL string) bool {
 	if err != nil {
 		return false
 	}
-	return re.MatchString(canonURL)
+	return re.MatchString(canonURL) && !hasDotSegment(canonURL)
 }
 
-func templatePartToRegex(part, placeholderPattern string) (string, bool) {
+// hasDotSegment reports whether rawURL's path carries a "." or ".." segment,
+// escaped or not (%2e%2e). A server could resolve one against the template's
+// fixed prefix, so a URL that has one is never an instantiation of a template.
+func hasDotSegment(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return true
+	}
+	for _, seg := range strings.Split(u.EscapedPath(), "/") {
+		if s, err := url.PathUnescape(seg); err != nil || s == "." || s == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+func templatePartToRegex(part string, placeholderPattern func(name string) string) (string, bool) {
 	var sb strings.Builder
 	for len(part) > 0 {
 		open := strings.IndexByte(part, '{')
@@ -484,7 +509,7 @@ func templatePartToRegex(part, placeholderPattern string) (string, bool) {
 		if closeIdx <= 0 {
 			return "", false
 		}
-		sb.WriteString(placeholderPattern)
+		sb.WriteString(placeholderPattern(part[:closeIdx]))
 		part = part[closeIdx+1:]
 	}
 	return sb.String(), true
