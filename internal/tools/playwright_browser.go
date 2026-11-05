@@ -33,7 +33,7 @@ type PlaywrightBrowserParams struct {
 type PlaywrightBrowserContext struct {
 	UserEmail     string
 	PublicBaseURL string
-	ResolveSecret func(ref string) string
+	ResolveSecret func(ctx context.Context, ref, targetURL string) (string, error)
 }
 
 type playwrightBrowserCtxKey struct{}
@@ -89,22 +89,40 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 		action = "run"
 	}
 	pctx := playwrightBrowserContextFrom(ctx)
-	resolve := func(val string) string {
+	targetURL := strings.TrimSpace(params.URL)
+	for _, st := range params.Steps {
+		if targetURL == "" && strings.EqualFold(strings.TrimSpace(st.Action), "goto") {
+			targetURL = strings.TrimSpace(st.Value)
+		}
+	}
+	resolve := func(val string) (string, error) {
 		val = strings.TrimSpace(val)
 		if val == "" {
-			return ""
+			return "", nil
 		}
 		if pctx.ResolveSecret != nil {
-			if resolved := pctx.ResolveSecret(val); resolved != "" {
-				return resolved
+			resolved, err := pctx.ResolveSecret(ctx, val, targetURL)
+			if err != nil {
+				return "", err
+			}
+			if resolved != "" {
+				return resolved, nil
 			}
 		}
-		return val
+		return val, nil
+	}
+	username, err := resolve(params.UsernameRef)
+	if err != nil {
+		return nil, err
+	}
+	password, err := resolve(params.PasswordRef)
+	if err != nil {
+		return nil, err
 	}
 	creds := playwrightrunner.Credentials{
-		Username: resolve(params.UsernameRef),
-		Password: resolve(params.PasswordRef),
-		Secret:   resolve(params.PasswordRef),
+		Username: username,
+		Password: password,
+		Secret:   password,
 	}
 
 	switch action {
@@ -139,7 +157,7 @@ func executePlaywrightBrowserTool(ctx context.Context, params PlaywrightBrowserP
 		if err != nil {
 			return nil, err
 		}
-		viewPath := fmt.Sprintf("/api/browser-sessions/%s/view?token=%s", info.ID, info.ViewToken)
+		viewPath := fmt.Sprintf("/api/browser-sessions/%s/view", info.ID)
 		liveURL := viewPath
 		if base := strings.TrimRight(strings.TrimSpace(pctx.PublicBaseURL), "/"); base != "" {
 			liveURL = base + viewPath

@@ -258,7 +258,7 @@ func (a *approvalStager) isPatrolOrPatrolResume() bool {
 
 func (a *approvalStager) resolveTimeoutSeconds(toolName string) int {
 	t := a.resolveBaseTimeoutSeconds(toolName)
-	if agentcore.ApprovalTimeoutForTool(toolName) <= 0 && a.isPatrolOrPatrolResume() && t < defaultApprovalTimeoutSeconds {
+	if a.isPatrolOrPatrolResume() && t < defaultApprovalTimeoutSeconds {
 		return defaultApprovalTimeoutSeconds
 	}
 	return t
@@ -362,6 +362,64 @@ func (a *approvalStager) isAutoApprove() bool {
 	return a.convAutoApprove
 }
 
+// isSelfAddressedPatrolEmail reports whether an outbound email call during an
+// unattended in-chat patrol turn is addressed exclusively to the conversation
+// owner (with no cc/bcc and inline content that requires no staging-time file
+// materialization), so a user who opted into auto-approve on their patrol can
+// receive their own patrol digest email without a manual approval card.
+func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) bool {
+	if !a.isPatrolOrPatrolResume() || strings.TrimSpace(a.userEmail) == "" {
+		return false
+	}
+	if !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) {
+		return false
+	}
+	if toolName == previewEmailToolName {
+		return false
+	}
+	if err := validateEmailHasContent(toolName, rawInput); err != nil {
+		return false
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(rawInput), &payload); err != nil {
+		return false
+	}
+	if cf, _ := payload["content_file"].(string); strings.TrimSpace(cf) != "" {
+		return false
+	}
+	if att, ok := payload["attachments"]; ok && att != nil {
+		return false
+	}
+	for _, field := range []string{"cc", "bcc", "cc_emails", "bcc_emails"} {
+		switch v := payload[field].(type) {
+		case string:
+			if strings.TrimSpace(v) != "" {
+				return false
+			}
+		case []any:
+			if len(v) > 0 {
+				return false
+			}
+		}
+	}
+	toRaw, ok := payload["to_email"]
+	if !ok {
+		toRaw = payload["to"]
+	}
+	switch v := toRaw.(type) {
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), strings.TrimSpace(a.userEmail))
+	case []any:
+		if len(v) != 1 {
+			return false
+		}
+		s, ok := v[0].(string)
+		return ok && strings.EqualFold(strings.TrimSpace(s), strings.TrimSpace(a.userEmail))
+	default:
+		return false
+	}
+}
+
 func (a *approvalStager) emitUserScoped(name string, payload map[string]any) {
 	if a.userEmail != "" {
 		payload["user_email"] = a.userEmail
@@ -419,7 +477,8 @@ func (a *approvalStager) Stage(toolName, toolCallID, rawInput string) (string, e
 	// suggest_advanced_model), outbound email (send_email, send_template_email),
 	// and bundle-declared critical_tool_no_session_approval tools still stage an
 	// explicit card.
-	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && !tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName) && agentcore.SessionApprovalAllowed(toolName) {
+	if a.isAutoApprove() && !handlerOnlyApproval(toolName) && agentcore.SessionApprovalAllowed(toolName) &&
+		((!tools.IsEmailToolName(toolName) && !agentcore.IsOutboundEmailTool(toolName)) || a.isSelfAddressedPatrolEmail(toolName, rawInput)) {
 		a.emitUserScoped("tool.auto_resolved", map[string]any{
 			"tool": toolName,
 			"mode": "approve",

@@ -25,15 +25,19 @@ import (
 const uiSecretTTL = 2 * time.Hour
 
 type uiSecretBucket struct {
-	convID    string
-	values    map[string]string
-	fieldIDs  map[string]bool
-	updatedAt time.Time
+	convID       string
+	values       map[string]string
+	fieldIDs     map[string]bool
+	allowedHosts map[string]bool
+	updatedAt    time.Time
 }
 
 // uiSecretStash holds host-side vaulted secrets submitted through show_ui
 // password inputs during a conversation so they never enter conversation
-// history, LLM prompts, or sandbox files. Zero value is ready to use.
+// history, LLM prompts, or sandbox files. Each vaulted secret is bound to the
+// user-confirmed origin(s) submitted by the user in their show_ui form or
+// chat messages so prompt-injected model output cannot exfiltrate credentials
+// to an arbitrary third-party host. Zero value is ready to use.
 type uiSecretStash struct {
 	mu      sync.Mutex
 	buckets map[string]*uiSecretBucket
@@ -52,16 +56,44 @@ func retireExpiredSecretBucket(b *uiSecretBucket) {
 	}
 }
 
-func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
-	fieldID = strings.TrimSpace(fieldID)
-	convID = strings.TrimSpace(convID)
-	if fieldID == "" || secret == "" {
-		return
+func normalizeOriginHost(rawURLOrHost string) string {
+	s := strings.TrimSpace(rawURLOrHost)
+	if s == "" {
+		return ""
 	}
-	now := time.Now()
-	key := uiSecretKey(userEmail, convID)
-	st.mu.Lock()
-	defer st.mu.Unlock()
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil || u.Hostname() == "" {
+			return ""
+		}
+		return strings.ToLower(strings.TrimSpace(u.Hostname()))
+	}
+	if !strings.ContainsAny(s, " \t\r\n/\\:@") && strings.Contains(s, ".") {
+		u, err := url.Parse("https://" + s)
+		if err == nil && u.Hostname() != "" {
+			return strings.ToLower(strings.TrimSpace(u.Hostname()))
+		}
+	}
+	return ""
+}
+
+func hostMatchesAllowedOrigin(targetHost, allowedHost string) bool {
+	targetHost = strings.ToLower(strings.TrimSpace(targetHost))
+	allowedHost = strings.ToLower(strings.TrimSpace(allowedHost))
+	if targetHost == "" || allowedHost == "" {
+		return false
+	}
+	if targetHost == allowedHost {
+		return true
+	}
+	base := strings.TrimPrefix(allowedHost, "www.")
+	if base != "" && strings.Contains(base, ".") && (targetHost == base || strings.HasSuffix(targetHost, "."+base)) {
+		return true
+	}
+	return false
+}
+
+func (st *uiSecretStash) ensureBucketLocked(userEmail, convID string, now time.Time) *uiSecretBucket {
 	if st.buckets == nil {
 		st.buckets = make(map[string]*uiSecretBucket)
 	}
@@ -71,19 +103,74 @@ func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
 			delete(st.buckets, k)
 		}
 	}
+	key := uiSecretKey(userEmail, convID)
 	b, ok := st.buckets[key]
 	if !ok {
 		b = &uiSecretBucket{
-			convID:   convID,
-			values:   make(map[string]string),
-			fieldIDs: make(map[string]bool),
+			convID:       strings.TrimSpace(convID),
+			values:       make(map[string]string),
+			fieldIDs:     make(map[string]bool),
+			allowedHosts: make(map[string]bool),
 		}
 		st.buckets[key] = b
 	}
+	if b.allowedHosts == nil {
+		b.allowedHosts = make(map[string]bool)
+	}
+	return b
+}
+
+func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
+	fieldID = strings.TrimSpace(fieldID)
+	convID = strings.TrimSpace(convID)
+	if fieldID == "" || secret == "" {
+		return
+	}
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b := st.ensureBucketLocked(userEmail, convID, now)
 	b.values[fieldID] = secret
 	b.values[strings.ToLower(fieldID)] = secret
 	b.fieldIDs[fieldID] = true
 	b.updatedAt = now
+}
+
+func (st *uiSecretStash) allowOrigin(userEmail, convID, rawURLOrHost string) {
+	host := normalizeOriginHost(rawURLOrHost)
+	if host == "" {
+		return
+	}
+	now := time.Now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	b := st.ensureBucketLocked(userEmail, convID, now)
+	b.allowedHosts[host] = true
+	b.updatedAt = now
+}
+
+func (st *uiSecretStash) isHostAllowed(userEmail, convID, targetURLOrHost string) bool {
+	targetHost := normalizeOriginHost(targetURLOrHost)
+	if targetHost == "" {
+		return false
+	}
+	now := time.Now()
+	key := uiSecretKey(userEmail, convID)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.buckets == nil {
+		return false
+	}
+	b, ok := st.buckets[key]
+	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
+		return false
+	}
+	for allowed := range b.allowedHosts {
+		if hostMatchesAllowedOrigin(targetHost, allowed) {
+			return true
+		}
+	}
+	return false
 }
 
 func (st *uiSecretStash) get(userEmail, convID, fieldID string) (string, bool) {
@@ -118,21 +205,29 @@ func (st *uiSecretStash) get(userEmail, convID, fieldID string) (string, bool) {
 // resolve turns a "$secret:<field_id>" reference (or bare field_id if present
 // in the conversation's secret stash) into the raw secret value.
 func (st *uiSecretStash) resolve(userEmail, convID, refOrValue string) string {
+	v, _ := st.lookupSecret(userEmail, convID, refOrValue)
+	return v
+}
+
+// lookupSecret returns (resolvedValue, isVaultedSecret). When isVaultedSecret
+// is true, the value came from the conversation's secret vault and MUST only be
+// transmitted to a user-confirmed origin.
+func (st *uiSecretStash) lookupSecret(userEmail, convID, refOrValue string) (string, bool) {
 	trimmed := strings.TrimSpace(refOrValue)
 	if trimmed == "" {
-		return ""
+		return "", false
 	}
 	if strings.HasPrefix(trimmed, "$secret:") {
 		fieldID := strings.TrimSpace(strings.TrimPrefix(trimmed, "$secret:"))
 		if v, ok := st.get(userEmail, convID, fieldID); ok {
-			return v
+			return v, true
 		}
-		return ""
+		return "", true
 	}
 	if v, ok := st.get(userEmail, convID, trimmed); ok {
-		return v
+		return v, true
 	}
-	return refOrValue
+	return refOrValue, false
 }
 
 // isLikelySecretFieldID reports whether a show_ui form field ID represents a
@@ -224,6 +319,32 @@ func (s *Server) vaultUISubmissionSecrets(ctx context.Context, userEmail, convID
 	return s.vaultUISubmissionSecretsWithHistory(userEmail, convID, message, history)
 }
 
+func extractURLTokensFromText(text string) []string {
+	var out []string
+	for _, field := range strings.Fields(text) {
+		tok := strings.Trim(field, " \t\r\n\"'`()[]{}<>,;!")
+		if strings.HasPrefix(tok, "https://") || strings.HasPrefix(tok, "http://") {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func userConfirmedOriginsFromHistory(history []agent.HistoryEntry) []string {
+	var out []string
+	for _, h := range history {
+		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
+			continue
+		}
+		var tc agent.TextContent
+		if err := json.Unmarshal(h.Content, &tc); err != nil {
+			continue
+		}
+		out = append(out, extractURLTokensFromText(tc.Text)...)
+	}
+	return out
+}
+
 func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message string, history []agent.HistoryEntry) string {
 	trimmed := strings.TrimSpace(message)
 	if !strings.HasPrefix(trimmed, "[UI submission]") {
@@ -243,6 +364,9 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 
 	pwFields := passwordFieldIDsFromHistory(history)
 	mutated := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
+	for _, u := range userConfirmedOriginsFromHistory(history) {
+		s.uiSecrets.allowOrigin(userEmail, convID, u)
+	}
 	if !mutated {
 		return message
 	}
@@ -252,6 +376,15 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 	}
 	suffix := rest[closeIdx+1:]
 	return "[UI submission] " + string(redactedBytes) + suffix
+}
+
+func isLikelyURLFieldID(fieldID string) bool {
+	k := strings.ToLower(strings.TrimSpace(fieldID))
+	switch k {
+	case "url", "base_url", "api_url", "portal_url", "server_url", "endpoint", "host", "domain", "site", "origin", "website":
+		return true
+	}
+	return strings.HasSuffix(k, "_url") || strings.HasSuffix(k, "_endpoint") || strings.HasSuffix(k, "_host") || strings.HasSuffix(k, "_domain")
 }
 
 func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) bool {
@@ -275,6 +408,10 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 				}
 				data[k] = "$secret:" + stashKey
 				mutated = true
+				continue
+			}
+			if isLikelyURLFieldID(k) || strings.HasPrefix(strings.TrimSpace(val), "https://") || strings.HasPrefix(strings.TrimSpace(val), "http://") {
+				s.uiSecrets.allowOrigin(userEmail, convID, val)
 			}
 		case map[string]any:
 			if s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields) {
@@ -294,6 +431,63 @@ func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[s
 	return mutated
 }
 
+// isCatalogApprovedHost reports whether targetHost matches an operator-curated
+// RemoteMCPCatalog entry URL.
+func (s *Server) isCatalogApprovedHost(connectorName, targetURLOrHost string) bool {
+	if s.clientConfig == nil {
+		return false
+	}
+	targetHost := normalizeOriginHost(targetURLOrHost)
+	if targetHost == "" {
+		return false
+	}
+	for _, entry := range s.clientConfig.RemoteMCPCatalog {
+		if connectorName != "" && !strings.EqualFold(strings.TrimSpace(entry.Name), strings.TrimSpace(connectorName)) {
+			continue
+		}
+		if hostMatchesAllowedOrigin(targetHost, normalizeOriginHost(entry.URL)) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveSecretForURL resolves a "$secret:<field_id>" reference (or stashed
+// secret) only after verifying that targetURL's host matches a user-confirmed
+// origin from the conversation's show_ui submission, user chat messages, or
+// operator-curated MCP catalog. This prevents prompt-injected model output from
+// sending vaulted user credentials to an attacker-controlled endpoint.
+func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, refOrValue, targetURL string) (string, error) {
+	val, isVaulted := s.uiSecrets.lookupSecret(userEmail, convID, refOrValue)
+	if !isVaulted {
+		return val, nil
+	}
+	if val == "" {
+		return "", fmt.Errorf("vaulted secret %q was not found or expired; ask the user to submit the credential again via show_ui", strings.TrimSpace(refOrValue))
+	}
+	targetHost := normalizeOriginHost(targetURL)
+	if targetHost == "" {
+		return "", fmt.Errorf("vaulted secret %q requires a valid target URL", strings.TrimSpace(refOrValue))
+	}
+	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost("", targetHost) {
+		if s.store != nil && convID != "" {
+			if history, err := s.store.LoadHistory(ctx, convID); err == nil {
+				for _, u := range userConfirmedOriginsFromHistory(history) {
+					s.uiSecrets.allowOrigin(userEmail, convID, u)
+				}
+			}
+		}
+	}
+	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost("", targetHost) {
+		return "", fmt.Errorf("vaulted secret %q is not authorized for host %q; ask the user to confirm the target URL in a show_ui form alongside the credential or in their chat message", strings.TrimSpace(refOrValue), targetHost)
+	}
+	if strings.HasPrefix(strings.TrimSpace(refOrValue), "$secret:") {
+		fieldID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(refOrValue), "$secret:"))
+		agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+fieldID, true, val)
+	}
+	return val, nil
+}
+
 // newPlaywrightBrowserContext builds the per-turn PlaywrightBrowserContext that
 // resolves vaulted secrets and wires live Co-Pilot browser sessions.
 func (s *Server) newPlaywrightBrowserContext(conv *store.Conversation, user string) tools.PlaywrightBrowserContext {
@@ -308,13 +502,8 @@ func (s *Server) newPlaywrightBrowserContext(conv *store.Conversation, user stri
 	return tools.PlaywrightBrowserContext{
 		UserEmail:     user,
 		PublicBaseURL: pubURL,
-		ResolveSecret: func(ref string) string {
-			val := s.uiSecrets.resolve(user, convID, ref)
-			if val != "" && strings.HasPrefix(strings.TrimSpace(ref), "$secret:") {
-				fieldID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "$secret:"))
-				agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+fieldID, true, val)
-			}
-			return val
+		ResolveSecret: func(ctx context.Context, ref, targetURL string) (string, error) {
+			return s.resolveSecretForURL(ctx, user, convID, ref, targetURL)
 		},
 	}
 }
@@ -468,7 +657,10 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		method = http.MethodGet
 	}
 
-	secret := s.uiSecrets.resolve(user, convID, params.SecretRef)
+	secret, err := s.resolveSecretForURL(ctx, user, convID, params.SecretRef, targetURL)
+	if err != nil {
+		return nil, err
+	}
 	if secret != "" {
 		agentcore.RegisterSecretLiterals("probe_http:"+convID, true, secret)
 	}
@@ -485,6 +677,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	probeCtx, cancel := context.WithTimeout(ctx, 25*time.Second)
 	defer cancel()
+	//nolint:gosec // G704: URL is validated via mcpoauth.ValidateServerURL, bound to user-confirmed origins for vaulted secrets, and dialed through SafeHTTPClient's netguard SSRF classifier.
 	req, err := http.NewRequestWithContext(probeCtx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
@@ -511,6 +704,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 		}
 	}
 
+	//nolint:gosec // G704: URL is validated via mcpoauth.ValidateServerURL, bound to user-confirmed origins for vaulted secrets, and dialed through SafeHTTPClient's netguard SSRF classifier.
 	resp, err := s.safeProbeHTTPClient().Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("probe request failed: %s", agentcore.RedactSecrets(err.Error()))
@@ -553,10 +747,49 @@ func appendQueryParam(rawURL, key, val string) string {
 	return rawURL + "?" + encoded
 }
 
-func (s *Server) resolvePlaywrightCredentials(user, convID string, params tools.ConnectorStudioParams) playwrightrunner.Credentials {
-	username := s.uiSecrets.resolve(user, convID, params.UsernameRef)
-	password := s.uiSecrets.resolve(user, convID, params.PasswordRef)
-	secret := s.uiSecrets.resolve(user, convID, params.SecretRef)
+func (s *Server) resolvePlaywrightCredentials(ctx context.Context, user, convID, targetURL string, params tools.ConnectorStudioParams) (playwrightrunner.Credentials, error) {
+	checkURLs := []string{strings.TrimSpace(targetURL)}
+	for _, st := range params.Steps {
+		if strings.EqualFold(strings.TrimSpace(st.Action), "goto") && strings.TrimSpace(st.Value) != "" {
+			checkURLs = append(checkURLs, strings.TrimSpace(st.Value))
+		}
+	}
+	for _, spec := range params.CustomTools {
+		for _, st := range spec.Steps {
+			if strings.EqualFold(strings.TrimSpace(st.Action), "goto") && strings.TrimSpace(st.Value) != "" {
+				checkURLs = append(checkURLs, strings.TrimSpace(st.Value))
+			}
+		}
+	}
+	resolveAll := func(ref string) (string, error) {
+		var resolved string
+		for _, u := range checkURLs {
+			if u == "" {
+				continue
+			}
+			v, err := s.resolveSecretForURL(ctx, user, convID, ref, u)
+			if err != nil {
+				return "", err
+			}
+			resolved = v
+		}
+		if resolved == "" && strings.TrimSpace(ref) != "" {
+			return s.resolveSecretForURL(ctx, user, convID, ref, targetURL)
+		}
+		return resolved, nil
+	}
+	username, err := resolveAll(params.UsernameRef)
+	if err != nil {
+		return playwrightrunner.Credentials{}, err
+	}
+	password, err := resolveAll(params.PasswordRef)
+	if err != nil {
+		return playwrightrunner.Credentials{}, err
+	}
+	secret, err := resolveAll(params.SecretRef)
+	if err != nil {
+		return playwrightrunner.Credentials{}, err
+	}
 	if password != "" {
 		agentcore.RegisterSecretLiterals("pw_password:"+convID, true, password)
 	}
@@ -567,7 +800,7 @@ func (s *Server) resolvePlaywrightCredentials(user, convID string, params tools.
 		Username: username,
 		Password: password,
 		Secret:   secret,
-	}
+	}, nil
 }
 
 func substituteStepCreds(steps []playwrightrunner.Step, creds playwrightrunner.Credentials) []playwrightrunner.Step {
@@ -596,7 +829,10 @@ func substituteStepCreds(steps []playwrightrunner.Step, creds playwrightrunner.C
 }
 
 func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
-	creds := s.resolvePlaywrightCredentials(user, convID, params)
+	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
+	if err != nil {
+		return nil, err
+	}
 	inspectDOM := params.InspectDOM
 	captureNet := params.CaptureNetwork
 	if !inspectDOM && !captureNet {
@@ -629,7 +865,10 @@ func (s *Server) connectorStudioProbeBrowser(ctx context.Context, user, convID s
 }
 
 func (s *Server) connectorStudioStartCopilotSession(ctx context.Context, user, convID string, params tools.ConnectorStudioParams) (any, error) {
-	creds := s.resolvePlaywrightCredentials(user, convID, params)
+	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
+	if err != nil {
+		return nil, err
+	}
 	cleanURL, err := playwrightrunner.ValidateTargetURL(params.URL, false)
 	if err != nil {
 		return nil, err
@@ -644,7 +883,7 @@ func (s *Server) connectorStudioStartCopilotSession(ctx context.Context, user, c
 	if err != nil {
 		return nil, err
 	}
-	liveViewURL := fmt.Sprintf("/api/browser-sessions/%s/view?token=%s", info.ID, info.ViewToken)
+	liveViewURL := fmt.Sprintf("/api/browser-sessions/%s/view", info.ID)
 	if s.cfg != nil && strings.TrimSpace(s.cfg.PublicBaseURL) != "" {
 		liveViewURL = strings.TrimRight(strings.TrimSpace(s.cfg.PublicBaseURL), "/") + liveViewURL
 	}
@@ -691,7 +930,10 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	if conv != nil {
 		convID = conv.ID
 	}
-	apiKey := s.uiSecrets.resolve(user, convID, params.SecretRef)
+	apiKey, err := s.resolveSecretForURL(ctx, user, convID, params.SecretRef, params.URL)
+	if err != nil {
+		return nil, err
+	}
 	if apiKey != "" {
 		agentcore.RegisterSecretLiterals("connect_mcp:"+convID, true, apiKey)
 	}
@@ -820,7 +1062,10 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 		toolNames = append(toolNames, fmt.Sprintf("mcp_%s_%s", strings.TrimSpace(params.Name), strings.TrimSpace(spec.Name)))
 	}
 
-	creds := s.resolvePlaywrightCredentials(user, convID, params)
+	creds, err := s.resolvePlaywrightCredentials(ctx, user, convID, params.URL, params)
+	if err != nil {
+		return nil, err
+	}
 	hasStorageState := false
 	if sessionID := strings.TrimSpace(params.SessionID); sessionID != "" {
 		sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, user, "")

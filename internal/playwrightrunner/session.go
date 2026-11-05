@@ -153,12 +153,17 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 
 	m.reapExpired()
 
+	owner := strings.ToLower(strings.TrimSpace(req.OwnerEmail))
 	m.mu.Lock()
 	if len(m.sessions) >= maxActiveSessions {
-		// Evict oldest session to make room.
+		// Evict only the caller's own oldest session so one user cannot terminate
+		// another user's active Co-Piloted login/CAPTCHA flow.
 		var oldestID string
 		var oldestTime time.Time
 		for id, s := range m.sessions {
+			if owner == "" || s.ownerEmail != owner {
+				continue
+			}
 			s.mu.Lock()
 			la := s.lastActive
 			s.mu.Unlock()
@@ -167,11 +172,13 @@ func (m *SessionManager) StartSession(ctx context.Context, req SessionStartReque
 				oldestTime = la
 			}
 		}
-		if oldestID != "" {
-			old := m.sessions[oldestID]
-			delete(m.sessions, oldestID)
-			go old.Close()
+		if oldestID == "" {
+			m.mu.Unlock()
+			return nil, errors.New("live browser session capacity reached; please close an existing session or try again shortly")
 		}
+		old := m.sessions[oldestID]
+		delete(m.sessions, oldestID)
+		go old.Close()
 	}
 	m.mu.Unlock()
 
@@ -295,13 +302,17 @@ func (m *SessionManager) reapExpired() {
 	}
 }
 
-// Authorize checks whether the caller owns the session or holds its viewToken.
+// Authorize checks whether the caller owns the session (when an owner is bound)
+// or holds its viewToken for unowned sessions. When s.ownerEmail is set, the
+// authenticated caller MUST match s.ownerEmail so a link or token shared in a
+// multiplayer conversation never grants another user access to the owner's
+// live browser session.
 func (s *LiveSession) Authorize(ownerEmail string, viewToken string) bool {
-	if viewToken != "" && subtle.ConstantTimeCompare([]byte(viewToken), []byte(s.viewToken)) == 1 {
-		return true
-	}
 	caller := strings.ToLower(strings.TrimSpace(ownerEmail))
-	if caller != "" && s.ownerEmail != "" && caller == s.ownerEmail {
+	if s.ownerEmail != "" {
+		return caller != "" && caller == s.ownerEmail
+	}
+	if viewToken != "" && subtle.ConstantTimeCompare([]byte(viewToken), []byte(s.viewToken)) == 1 {
 		return true
 	}
 	return false

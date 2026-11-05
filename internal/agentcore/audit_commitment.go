@@ -279,6 +279,9 @@ func criticalSuffixFor(toolName string) string {
 	best := ""
 	policyMu.RLock()
 	defer policyMu.RUnlock()
+	if s, ok := customCriticalTools[toolName]; ok && len(s) > len(best) {
+		best = s
+	}
 	for _, suffix := range activeCriticalSuffixes {
 		if toolName != suffix && !strings.HasSuffix(toolName, "_"+suffix) {
 			continue

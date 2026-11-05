@@ -66,6 +66,11 @@ func TestRunAndLiveSessionWithLocalPlaywright(t *testing.T) {
 		ExportState:    true,
 	})
 	if err != nil {
+		if strings.Contains(err.Error(), "not available") ||
+			strings.Contains(strings.ToLower(err.Error()), "executable doesn't exist") ||
+			strings.Contains(strings.ToLower(err.Error()), "browsertype.launch") {
+			t.Skipf("skipping live Playwright browser test when playwright/chromium is not installed in this environment: %v", err)
+		}
 		t.Fatalf("Run failed: %v", err)
 	}
 	if res.Title != "Portal Login" {
@@ -101,9 +106,12 @@ func TestRunAndLiveSessionWithLocalPlaywright(t *testing.T) {
 	}
 	defer func() { _ = mgr.CloseSession(info.ID, "alice@example.com", "") }()
 
-	sess, err := mgr.GetSession(info.ID, "", info.ViewToken)
+	if _, err := mgr.GetSession(info.ID, "bob@example.com", info.ViewToken); err == nil {
+		t.Fatalf("expected non-owner bob@example.com to be rejected even with viewToken")
+	}
+	sess, err := mgr.GetSession(info.ID, "alice@example.com", "")
 	if err != nil {
-		t.Fatalf("GetSession with viewToken failed: %v", err)
+		t.Fatalf("GetSession for owner failed: %v", err)
 	}
 
 	frames, unsub, err := sess.SubscribeFrames()
@@ -152,5 +160,50 @@ func TestRunBlocksLoopbackSSRFByDefault(t *testing.T) {
 	})
 	if err == nil && res != nil && strings.Contains(res.Content, "should never be reached") {
 		t.Fatalf("expected SSRF guard proxy to block loopback server, got content: %q", res.Content)
+	}
+}
+
+func TestValidateStepsAndScrubStructuredResult(t *testing.T) {
+	if err := ValidateStep(Step{Action: "eval_js", Value: "document.cookie"}); err == nil {
+		t.Fatalf("expected eval_js step action to be rejected by ValidateStep")
+	}
+	if err := ValidateStep(Step{Action: "goto", Value: "file:///etc/passwd"}); err == nil {
+		t.Fatalf("expected non-http(s) goto step URL to be rejected by ValidateStep")
+	}
+	if err := ValidateStep(Step{Action: "fill", Selector: "#user", Value: "{{USERNAME}}"}); err != nil {
+		t.Fatalf("expected valid fill step to pass ValidateStep, got %v", err)
+	}
+
+	res := &RunResult{
+		FinalURL: "https://portal.example.com/callback?key=abc123",
+		Title:    "Welcome abc123",
+		Content:  "Token is abc123",
+		Extracted: []any{
+			map[string]any{
+				"nested_token": "abc123",
+				"encoded":      "YWJjMTIz", // base64("abc123")
+			},
+		},
+		DOMElements: []DOMElement{
+			{Tag: "input", Type: "password", Selector: "#pin", Text: "abc123", Placeholder: "abc123"},
+		},
+		NetworkCalls: []NetworkCall{
+			{URL: "https://portal.example.com/api?pin=abc123", ResponsePreview: `{"pin":"abc123"}`},
+		},
+	}
+	scrubResult(res, Credentials{Password: "abc123", Secret: "abc123"})
+
+	if strings.Contains(res.FinalURL, "abc123") || strings.Contains(res.Title, "abc123") || strings.Contains(res.Content, "abc123") {
+		t.Fatalf("expected top-level fields to scrub short secret 'abc123': %+v", res)
+	}
+	if strings.Contains(res.DOMElements[0].Text, "abc123") || strings.Contains(res.DOMElements[0].Placeholder, "abc123") {
+		t.Fatalf("expected DOMElements to scrub short secret 'abc123': %+v", res.DOMElements[0])
+	}
+	extractedMap, _ := res.Extracted[0].(map[string]any)
+	if strings.Contains(fmt.Sprint(extractedMap["nested_token"]), "abc123") || strings.Contains(fmt.Sprint(extractedMap["encoded"]), "YWJjMTIz") {
+		t.Fatalf("expected nested Extracted map to scrub plaintext and base64 secret: %+v", extractedMap)
+	}
+	if strings.Contains(res.NetworkCalls[0].URL, "abc123") || strings.Contains(res.NetworkCalls[0].ResponsePreview, "abc123") {
+		t.Fatalf("expected NetworkCalls to scrub short secret 'abc123': %+v", res.NetworkCalls[0])
 	}
 }

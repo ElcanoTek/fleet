@@ -41,7 +41,10 @@ type TurnConfig struct {
 	// (assembleTurnMessages); it becomes agentcore.RunConfig.RuntimeDateInInput.
 	// False for callers that build Messages themselves: Run appends the note.
 	RuntimeDateInMessages bool
-	Label                 string
+	// EnableResendBudget opts an unattended recurring patrol turn into
+	// cost-aware resend-budget compaction (#1534).
+	EnableResendBudget bool
+	Label              string
 	// ConversationID is operator-only panic attribution for the governed run.
 	// It is never added to the model prompt or tool arguments.
 	ConversationID string
@@ -245,6 +248,7 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
 		RuntimeDateInInput:  tc.RuntimeDateInMessages,
+		EnableResendBudget:  tc.EnableResendBudget,
 	}
 	return agentcore.Run(ctx, agentcore.ModeInteractive, cfg, deps)
 }

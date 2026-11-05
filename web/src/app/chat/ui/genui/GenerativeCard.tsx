@@ -860,6 +860,21 @@ function CardBody({
           walkInputs(spec.components, (c) => {
             if (c.id && c.type === "text_input" && c.format === "password") {
               delete safe[c.id];
+            } else if (c.id && c.type === "repeater" && Array.isArray(safe[c.id])) {
+              const pwIds = new Set<string>();
+              walkInputs(c.fields ?? [], (fc) => {
+                if (fc.id && fc.type === "text_input" && fc.format === "password") {
+                  pwIds.add(fc.id);
+                }
+              });
+              if (pwIds.size > 0) {
+                safe[c.id] = (safe[c.id] as Values[]).map((row) => {
+                  if (!row || typeof row !== "object") return row;
+                  const copy = { ...row };
+                  for (const pid of pwIds) delete copy[pid];
+                  return copy;
+                });
+              }
             }
           });
           saveDraft(storeId, safe, answerKeyRef.current, clearedRef.current);

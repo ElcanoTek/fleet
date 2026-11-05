@@ -515,4 +515,3 @@ const browserCopilotScript = `(() => {
   };
 })();
 `
-

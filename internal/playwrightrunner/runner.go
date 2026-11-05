@@ -3,6 +3,7 @@ package playwrightrunner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -144,8 +145,16 @@ type RunResult struct {
 func ValidateStep(st Step) error {
 	switch strings.ToLower(strings.TrimSpace(st.Action)) {
 	case "goto":
-		if strings.TrimSpace(st.Value) == "" && strings.TrimSpace(st.Selector) == "" {
+		target := strings.TrimSpace(st.Value)
+		if target == "" {
+			target = strings.TrimSpace(st.Selector)
+		}
+		if target == "" {
 			return errors.New("goto step requires value (the target URL)")
+		}
+		probeTarget := strings.NewReplacer("{", "_", "}", "_").Replace(target)
+		if _, err := ValidateTargetURL(probeTarget, false); err != nil {
+			return fmt.Errorf("goto step: %w", err)
 		}
 	case "fill":
 		if strings.TrimSpace(st.Selector) == "" {
@@ -631,6 +640,10 @@ func maskSecrets(text string, creds Credentials) string {
 			add(url.QueryEscape(base))
 			add(strings.ReplaceAll(url.QueryEscape(base), "+", "%20"))
 			add(url.PathEscape(base))
+			add(base64.StdEncoding.EncodeToString([]byte(base)))
+			add(base64.RawStdEncoding.EncodeToString([]byte(base)))
+			add(base64.URLEncoding.EncodeToString([]byte(base)))
+			add(base64.RawURLEncoding.EncodeToString([]byte(base)))
 			if b, err := json.Marshal(base); err == nil && len(b) >= 2 {
 				add(string(b[1 : len(b)-1]))
 			}

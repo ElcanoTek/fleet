@@ -123,7 +123,9 @@ RUN /out/fleet version --web
 
 # ── runtime stage ──
 FROM registry.fedoraproject.org/fedora-minimal:latest
-RUN microdnf install -y git ca-certificates tzdata && microdnf clean all
+RUN microdnf install -y git ca-certificates tzdata python3 python3-pip chromium-headless && \
+    pip3 install --no-cache-dir playwright && \
+    microdnf clean all
 COPY --from=build /out/fleet /usr/local/bin/fleet
 # Bake the client bundle in (the generic one here; substitute your own).
 COPY config/default /opt/fleet/client

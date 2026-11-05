@@ -1988,6 +1988,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		// assembleTurnMessages ended Messages with this turn's persisted
 		// runtime_today note; Run must not add a request-local one.
 		RuntimeDateInMessages: true,
+		EnableResendBudget:    in.InputKind == InputKindChatPatrol,
 		Label:                 in.ConversationID,
 		ConversationID:        in.ConversationID,
 		Model:                 model,

@@ -104,6 +104,9 @@ func IsCriticalTool(toolName string) bool { return isCriticalTool(toolName) }
 func isCriticalTool(toolName string) bool {
 	policyMu.RLock()
 	defer policyMu.RUnlock()
+	if _, ok := customCriticalTools[toolName]; ok {
+		return true
+	}
 	for _, suffix := range activeCriticalSuffixes {
 		if toolName == suffix || strings.HasSuffix(toolName, "_"+suffix) {
 			return true
@@ -140,6 +143,13 @@ func matchCriticalSuffix(declared string) string {
 	best := ""
 	policyMu.RLock()
 	defer policyMu.RUnlock()
+	for full, suffix := range customCriticalTools {
+		if strings.Contains(needle, strings.ToLower(full)) || strings.Contains(needle, strings.ToLower(suffix)) {
+			if len(suffix) > len(best) {
+				best = suffix
+			}
+		}
+	}
 	for _, suffix := range activeCriticalSuffixes {
 		if !strings.Contains(needle, suffix) {
 			continue
