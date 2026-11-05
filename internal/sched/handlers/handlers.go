@@ -1929,24 +1929,26 @@ func (p principal) stopLabel() string {
 }
 
 // decodeTaskUpdate reads the PUT /tasks/{id} body into models.TaskCreate and
-// reports whether "max_total_tokens" was explicitly present in the top-level
-// JSON object (so an explicit null clears the task's token limit while an
-// omitted field preserves it).
-func decodeTaskUpdate(r *http.Request) (models.TaskCreate, bool, error) {
+// reports whether "max_total_tokens" and "priority" were explicitly present in
+// the top-level JSON object (so an explicit null clears the task's token limit
+// and an explicit 0 resets priority to Normal, while omitting either field
+// preserves the task's stored value).
+func decodeTaskUpdate(r *http.Request) (models.TaskCreate, bool, bool, error) {
 	var raw json.RawMessage
 	if err := readJSON(r, &raw); err != nil {
-		return models.TaskCreate{}, false, err
+		return models.TaskCreate{}, false, false, err
 	}
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &fields); err != nil {
-		return models.TaskCreate{}, false, err
+		return models.TaskCreate{}, false, false, err
 	}
 	_, hasMaxTotalTokens := fields["max_total_tokens"]
+	_, hasPriority := fields["priority"]
 	var tc models.TaskCreate
 	if err := json.Unmarshal(raw, &tc); err != nil {
-		return models.TaskCreate{}, false, err
+		return models.TaskCreate{}, false, false, err
 	}
-	return tc, hasMaxTotalTokens, nil
+	return tc, hasMaxTotalTokens, hasPriority, nil
 }
 
 // refreshEditedRecurrenceSchedule recalculates tc.ScheduledFor when an edit
@@ -2024,7 +2026,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse the update payload
-	tc, hasMaxTotalTokens, err := decodeTaskUpdate(r)
+	tc, hasMaxTotalTokens, hasPriority, err := decodeTaskUpdate(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
@@ -2052,8 +2054,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
-	if p.apiKey != nil && tc.Priority > 0 {
-		if err := priorityCapError(p.apiKey.MaxPriority, tc.Priority); err != nil {
+	if p.apiKey != nil && hasPriority {
+		if err := priorityCapError(p.apiKey.MaxPriority, models.NormalizePriority(tc.Priority)); err != nil {
 			writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
@@ -2119,7 +2121,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		RetryPolicy:            tc.RetryPolicy,
 		SetRetryPolicy:         tc.RetryPolicy != nil,
 		Priority:               tc.Priority,
-		SetPriority:            tc.Priority > 0,
+		SetPriority:            hasPriority,
 		InstructionSelfImprove: tc.InstructionSelfImprove,
 		AllowNetwork:           tc.AllowNetwork,
 		CarryContext:           tc.CarryContext,

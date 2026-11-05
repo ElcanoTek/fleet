@@ -228,7 +228,7 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
-	key, raw, err := keyMgr.CreateKey("editor", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
+	key, raw, err := keyMgr.CreateKey("editor", []models.Permission{models.PermissionCreateTask, models.PermissionViewTasks}, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateKey: %v", err)
 	}
@@ -272,7 +272,7 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 	}
 
 	// Explicit priority and max_total_tokens within key ceiling → updated.
-	w = put(`{"prompt":"campaign-health scan v3","priority":50,"max_total_tokens":500000}`)
+	w = put(`{"prompt":"campaign-health scan v3","priority":60,"max_total_tokens":500000}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update explicit: got %d, want 200 (%s)", w.Code, w.Body.String())
 	}
@@ -280,17 +280,18 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 	if err := json.NewDecoder(w.Body).Decode(&updatedExplicit); err != nil {
 		t.Fatalf("decode explicit update: %v", err)
 	}
-	if updatedExplicit.Priority != 50 || updatedExplicit.EffectivePriority != 50 {
-		t.Fatalf("priority after explicit edit = (%d,%d), want (50,50)", updatedExplicit.Priority, updatedExplicit.EffectivePriority)
+	if updatedExplicit.Priority != 60 || updatedExplicit.EffectivePriority != 60 {
+		t.Fatalf("priority after explicit edit = (%d,%d), want (60,60)", updatedExplicit.Priority, updatedExplicit.EffectivePriority)
 	}
 	if updatedExplicit.MaxTotalTokens == nil || *updatedExplicit.MaxTotalTokens != 500000 {
 		t.Fatalf("max_total_tokens after explicit edit = %v, want 500000", updatedExplicit.MaxTotalTokens)
 	}
 
-	// Explicit null clears max_total_tokens back to nil (inherit deployment ceiling).
-	w = put(`{"prompt":"campaign-health scan v3b","max_total_tokens":null}`)
+	// Explicit null clears max_total_tokens back to nil (inherit deployment ceiling),
+	// and explicit priority: 0 resets priority to Normal (50).
+	w = put(`{"prompt":"campaign-health scan v3b","priority":0,"max_total_tokens":null}`)
 	if w.Code != http.StatusOK {
-		t.Fatalf("update explicit null max_total_tokens: got %d, want 200 (%s)", w.Code, w.Body.String())
+		t.Fatalf("update explicit null max_total_tokens and priority 0: got %d, want 200 (%s)", w.Code, w.Body.String())
 	}
 	var updatedCleared models.Task
 	if err := json.NewDecoder(w.Body).Decode(&updatedCleared); err != nil {
@@ -300,7 +301,7 @@ func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) 
 		t.Fatalf("max_total_tokens after explicit null = %v, want nil", updatedCleared.MaxTotalTokens)
 	}
 	if updatedCleared.Priority != 50 || updatedCleared.EffectivePriority != 50 {
-		t.Fatalf("priority after clearing max_total_tokens = (%d,%d), want (50,50)", updatedCleared.Priority, updatedCleared.EffectivePriority)
+		t.Fatalf("priority after explicit 0 = (%d,%d), want (50,50)", updatedCleared.Priority, updatedCleared.EffectivePriority)
 	}
 
 	// Editing priority above the key's ceiling (10 < 40) → 403 Forbidden.

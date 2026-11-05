@@ -124,7 +124,7 @@ export type TaskCreate = {
   fallback_model?: string;
   max_iterations?: number;
   max_cost_usd?: number;
-  max_total_tokens?: number;
+  max_total_tokens?: number | null;
   priority?: number;
   mcp_selection?: MCPChoice[];
   instruction_self_improve?: boolean;
