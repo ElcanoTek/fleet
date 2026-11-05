@@ -79,7 +79,7 @@ const META: Record<string, SettingMeta> = {
   pii_redaction_mode: {
     label: "PII redaction",
     description:
-      "Off by default. When on, Fleet looks for personal details (emails, ID numbers, card numbers, phone numbers, IP addresses) in what connected tools send back, before the assistant sees it. What people type into chat is never changed. Secret filtering (passwords, keys) stays on whatever this is set to. Both are pattern-based and can miss things.",
+      "Off by default. When on, Fleet looks for personal details (emails, US Social Security numbers, card numbers, phone numbers, IP addresses) in what connected tools send back, before the assistant sees it. What people type into chat is never changed. Secret filtering (passwords, keys) stays on whatever this is set to. Both are pattern-based and can miss things.",
     optionHelp: {
       off: "Off (default): tool output passes through unchanged. PII is never redacted anywhere.",
       observe: "Detect and audit-log findings (kind + count, never the value) without changing the output — a monitoring posture.",
