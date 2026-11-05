@@ -1134,14 +1134,16 @@ func attachQueryParamToURLTemplate(rawURL, paramName, paramValue string) string 
 }
 
 // ForChild returns a child-scoped view of the overlay for a spawned sub-agent.
-// CloseScope is nil so a child can never tear down the parent run's scope.
-// When allowed is non-nil (spawn_subagent allow_servers was set), the view is
-// narrowed to servers whose registration name or base connection name is in
-// allowed; if none match, it returns nil.
+// It binds Broker via CallBroker() and leaves Client and CloseScope nil so a
+// child can never close the parent run's client or broker scope. When allowed
+// is non-nil (spawn_subagent allow_servers was set), the view is narrowed to
+// servers whose registration name or base connection name is in allowed; if
+// none match, it returns nil.
 func (o *RemoteMCPOverlay) ForChild(allowed map[string]bool) *RemoteMCPOverlay {
 	if !o.Active() {
 		return nil
 	}
+	callBroker := o.CallBroker()
 	if allowed == nil {
 		servers := make(map[string]bool, len(o.Servers))
 		for k, v := range o.Servers {
@@ -1155,8 +1157,7 @@ func (o *RemoteMCPOverlay) ForChild(allowed map[string]bool) *RemoteMCPOverlay {
 			}
 		}
 		return &RemoteMCPOverlay{
-			Client:  o.Client,
-			Broker:  o.Broker,
+			Broker:  callBroker,
 			Catalog: append([]mcp.ServerTool(nil), o.Catalog...),
 			Servers: servers,
 			Seats:   seats,
@@ -1189,8 +1190,7 @@ func (o *RemoteMCPOverlay) ForChild(allowed map[string]bool) *RemoteMCPOverlay {
 		}
 	}
 	return &RemoteMCPOverlay{
-		Client:  o.Client,
-		Broker:  o.Broker,
+		Broker:  callBroker,
 		Catalog: catalog,
 		Servers: keepReg,
 		Seats:   seats,

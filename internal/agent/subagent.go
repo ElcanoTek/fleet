@@ -871,12 +871,14 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 			parentLoaded[name] = true
 		}
 	}
+	seatBase := make(map[string]string, len(a.seatBaseServers))
+	for reg, base := range a.seatBaseServers {
+		seatBase[reg] = base
+	}
 	a.mu.Unlock()
-	if len(parentLoaded) == 0 {
-		for _, st := range a.mcpCatalog {
-			if st.ServerName != "" && !a.optionalServers[st.ServerName] {
-				parentLoaded[st.ServerName] = true
-			}
+	for _, st := range a.baseMCPCatalog() {
+		if st.ServerName != "" && !a.optionalServers[st.ServerName] {
+			parentLoaded[st.ServerName] = true
 		}
 	}
 	if a.overlay != nil {
@@ -885,9 +887,12 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 				parentLoaded[reg] = true
 			}
 		}
-		for _, seat := range a.overlay.Seats {
+		for reg, seat := range a.overlay.Seats {
 			if seat.Server != "" {
 				parentLoaded[seat.Server] = true
+				if reg != "" && reg != seat.Server {
+					seatBase[reg] = seat.Server
+				}
 			}
 		}
 	}
@@ -906,20 +911,26 @@ func (a *Agent) childSelection(allowServers []string) map[string]bool {
 		if parentLoaded[name] {
 			child[name] = true
 		}
-		prefix := name + "_"
-		for loaded := range parentLoaded {
-			if strings.HasPrefix(loaded, prefix) {
-				child[loaded] = true
+		for reg, base := range seatBase {
+			if base == name && parentLoaded[reg] {
+				child[reg] = true
 			}
 		}
 	}
 	return child
 }
 
-func filterMCPCatalogByServers(catalog []mcp.ServerTool, allowed map[string]bool) []mcp.ServerTool {
-	if len(catalog) == 0 {
-		return nil
+func (a *Agent) baseMCPCatalog() []mcp.ServerTool {
+	if a.mcpCatalog != nil {
+		return a.mcpCatalog
 	}
+	if a.mcpClient != nil {
+		return a.mcpClient.GetAllTools()
+	}
+	return nil
+}
+
+func filterMCPCatalogByServers(catalog []mcp.ServerTool, allowed map[string]bool) []mcp.ServerTool {
 	out := make([]mcp.ServerTool, 0, len(catalog))
 	for _, st := range catalog {
 		if allowed[st.ServerName] {
@@ -983,15 +994,19 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	// could not read, then narrating the hunt into the answer the parent
 	// received. This section states the child's actual contract instead.
 	childLoaded := a.childSelection(allowServers)
+	baseCatalog := a.baseMCPCatalog()
 	childCatalog := a.mcpCatalog
 	var childOverlay *RemoteMCPOverlay
 	if len(allowServers) > 0 {
-		childCatalog = filterMCPCatalogByServers(a.mcpCatalog, childLoaded)
+		childCatalog = filterMCPCatalogByServers(baseCatalog, childLoaded)
 		childOverlay = a.overlay.ForChild(childLoaded)
 	} else {
 		childOverlay = a.overlay.ForChild(nil)
 	}
-	effectiveCatalog := mergeCatalogWithOverlay(childCatalog, childOverlay)
+	effectiveCatalog := mergeCatalogWithOverlay(baseCatalog, childOverlay)
+	if len(allowServers) > 0 {
+		effectiveCatalog = mergeCatalogWithOverlay(childCatalog, childOverlay)
+	}
 
 	childSystemPrompt := a.systemPrompt + subagentChildPromptSection
 	childMCPAllowlist := a.mcpToolAllowlist
@@ -1084,6 +1099,14 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 	child.logFile = childLogFilePath(a.logFile, child.logSession.ID)
 	// Narrow the child's loaded-server selection (intersection; never a superset).
 	child.loadedServers = childLoaded
+	if len(a.seatBaseServers) > 0 {
+		child.seatBaseServers = make(map[string]string, len(a.seatBaseServers))
+		for reg, base := range a.seatBaseServers {
+			if childLoaded[reg] {
+				child.seatBaseServers[reg] = base
+			}
+		}
+	}
 	// Hand the child its SLICED budget ceiling. Execute applies these as the
 	// child's MaxCostUSD/MaxTotalTokens, so the child's own agentcore.Run enforces
 	// the slice via the SAME checkCeilings/budgetGuardedStep the parent uses. The

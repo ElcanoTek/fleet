@@ -291,19 +291,33 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 	host.runtimePolicy = policy
 	host.spawnObserver = obs
 	for _, choice := range tc.Selection {
-		if s := strings.TrimSpace(choice.Server); s != "" {
+		s := strings.TrimSpace(choice.Server)
+		if s != "" {
 			host.loadedServers[s] = true
 		}
 		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
 			host.loadedServers[reg] = true
+			if s != "" && reg != s {
+				if host.seatBaseServers == nil {
+					host.seatBaseServers = make(map[string]string)
+				}
+				host.seatBaseServers[reg] = s
+			}
 		}
 	}
 	for _, choice := range tc.Overlay.SeatSelection() {
-		if s := strings.TrimSpace(choice.Server); s != "" {
+		s := strings.TrimSpace(choice.Server)
+		if s != "" {
 			host.loadedServers[s] = true
 		}
 		if reg := strings.TrimSpace(agentcore.RegisteredMCPName(choice.Server, choice.Account)); reg != "" {
 			host.loadedServers[reg] = true
+			if s != "" && reg != s {
+				if host.seatBaseServers == nil {
+					host.seatBaseServers = make(map[string]string)
+				}
+				host.seatBaseServers[reg] = s
+			}
 		}
 	}
 	if tc.Overlay != nil {

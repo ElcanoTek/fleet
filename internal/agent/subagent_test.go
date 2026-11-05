@@ -345,25 +345,31 @@ func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
 	}
 	personaPol := &agentcore.PersonaToolPermissions{Deny: []string{"mcp:github/get_issue"}}
 	parent := NewAgent(Options{
-		Config:        &config.Config{},
-		MCPBroker:     broker,
-		MCPCatalog:    []mcp.ServerTool{{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}}},
+		Config:    &config.Config{},
+		MCPBroker: broker,
+		MCPCatalog: []mcp.ServerTool{
+			{ServerName: "bundle", Tool: mcp.Tool{Name: "lookup"}},
+			{ServerName: "github", Tool: mcp.Tool{Name: "list_repos"}},
+			{ServerName: "github_enterprise", Tool: mcp.Tool{Name: "list_enterprise_repos"}},
+			{ServerName: "github_work", Tool: mcp.Tool{Name: "list_work_repos"}},
+		},
 		Overlay:       overlay,
 		PersonaPolicy: personaPol,
 		SystemPrompt:  "parent",
 	})
+	parent.seatBaseServers = map[string]string{"github_work": "github"}
 	child := parent.buildChild(SubagentRoleWorker, nil, nil, nil, 0, 0, 0)
 	if child.mcpBroker != broker {
 		t.Fatal("child did not inherit the parent's MCP broker")
 	}
-	if len(child.mcpCatalog) != 1 || child.mcpCatalog[0].ServerName != "bundle" || child.mcpCatalog[0].Tool.Name != "lookup" {
+	if len(child.mcpCatalog) != 4 || child.mcpCatalog[0].ServerName != "bundle" || child.mcpCatalog[0].Tool.Name != "lookup" {
 		t.Fatalf("child MCP catalog = %+v, want inherited bundle.lookup", child.mcpCatalog)
 	}
 	if !child.overlay.Active() || child.overlay.Broker != overlayBroker || len(child.overlay.Catalog) != 3 {
 		t.Fatalf("child overlay = %+v, want active overlay with 3 tools", child.overlay)
 	}
-	if child.overlay.CloseScope != nil {
-		t.Fatal("child overlay must not carry CloseScope (parent owns lifecycle)")
+	if child.overlay.CloseScope != nil || child.overlay.Client != nil {
+		t.Fatal("child overlay must not carry CloseScope or Client (parent owns lifecycle)")
 	}
 	child.overlay.Close()
 	if closed {
@@ -379,13 +385,20 @@ func TestBuildChild_InheritsMCPBrokerAndCatalog(t *testing.T) {
 		t.Fatalf("explore child microsoft-365 allowlist = %v, want [list-mail-folder-messages] (send-mail stripped)", got)
 	}
 
-	// allow_servers narrows both bundle catalog and remote overlay.
+	// allow_servers narrows both bundle catalog and remote overlay, resolving
+	// explicit seat registrations (github_work) without prefix-matching unrelated
+	// servers (github_enterprise), and preserving a non-nil empty slice when no
+	// bundle server matches.
 	narrowedChild := parent.buildChild(SubagentRoleWorker, nil, nil, []string{"microsoft-365", "nonexistent"}, 0, 0, 0)
-	if len(narrowedChild.mcpCatalog) != 0 {
-		t.Fatalf("narrowed child bundle catalog = %+v, want empty (bundle not in allow_servers)", narrowedChild.mcpCatalog)
+	if narrowedChild.mcpCatalog == nil || len(narrowedChild.mcpCatalog) != 0 {
+		t.Fatalf("narrowed child bundle catalog = %#v, want non-nil empty slice (bundle not in allow_servers)", narrowedChild.mcpCatalog)
 	}
 	if !narrowedChild.overlay.Active() || !narrowedChild.overlay.Servers["microsoft-365"] || narrowedChild.overlay.Servers["github"] || len(narrowedChild.overlay.Catalog) != 2 {
 		t.Fatalf("narrowed child overlay = %+v, want only microsoft-365", narrowedChild.overlay)
+	}
+	seatChild := parent.buildChild(SubagentRoleWorker, nil, nil, []string{"github"}, 0, 0, 0)
+	if !seatChild.loadedServers["github"] || !seatChild.loadedServers["github_work"] || seatChild.loadedServers["github_enterprise"] {
+		t.Fatalf("seatChild loadedServers = %v, want github + github_work without github_enterprise", seatChild.loadedServers)
 	}
 }
 
