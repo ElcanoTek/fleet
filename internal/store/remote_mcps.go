@@ -46,14 +46,13 @@ const (
 
 // CustomConnectorStep is a single declarative Playwright step in a custom browser connector tool.
 type CustomConnectorStep struct {
-	Action     string `json:"action"`
-	Selector   string `json:"selector,omitempty"`
-	Value      string `json:"value,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Attribute  string `json:"attribute,omitempty"`
-	Expression string `json:"expression,omitempty"`
-	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	Optional   bool   `json:"optional,omitempty"`
+	Action    string `json:"action"`
+	Selector  string `json:"selector,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Optional  bool   `json:"optional,omitempty"`
 }
 
 // CustomConnectorTool defines a single declarative tool inside a custom HTTP
@@ -344,6 +343,104 @@ func scanRemoteMCPServer(row interface{ Scan(...any) error }) (*RemoteMCPServer,
 		_ = json.Unmarshal(customToolsRaw, &m.CustomTools)
 	}
 	return &m, nil
+}
+
+// UpdateCustomConnector updates an existing custom HTTP ("http_tools") or
+// Playwright ("playwright") connector row in place so iterative rebuilds in
+// chat preserve its id, share grants (remote_mcp_shares), and user preferences.
+func (s *Store) UpdateCustomConnector(ctx context.Context, id string, in RemoteMCPServerInput) (*RemoteMCPServer, error) {
+	if s.tokenCipher == nil {
+		return nil, secretbox.ErrNoCipher
+	}
+	email := normalizeEmail(in.UserEmail)
+	if email == "" || id == "" || in.URL == "" {
+		return nil, errors.New("user email, id, and url are required")
+	}
+	status := in.Status
+	if status == "" {
+		status = RemoteMCPStatusConnected
+	}
+	authKind := in.AuthKind
+	if authKind == "" {
+		authKind = RemoteMCPAuthOpen
+	}
+	customToolsJSON := "[]"
+	if len(in.CustomTools) > 0 {
+		raw, merr := json.Marshal(in.CustomTools)
+		if merr != nil {
+			return nil, fmt.Errorf("encode custom tools: %w", merr)
+		}
+		customToolsJSON = string(raw)
+	}
+	now := time.Now().Unix()
+
+	if in.APIKey != "" || authKind == RemoteMCPAuthOpen {
+		apiKeyEnc, err := s.sealSecret(in.APIKey, aadPurposeAPIKey, email, in.URL)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt api key: %w", err)
+		}
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE remote_mcp_servers
+			SET url = $3,
+			    transport = $4,
+			    status = $5,
+			    status_detail = '',
+			    auth_kind = $6,
+			    api_key_header = $7,
+			    api_key_query = $8,
+			    api_key_prefix = $9,
+			    api_key_enc = $10,
+			    custom_tools = $11::jsonb,
+			    updated_at = $12
+			WHERE user_email = $1 AND id = $2`,
+			email, id, in.URL, in.Transport, status, authKind,
+			in.APIKeyHeader, in.APIKeyQuery, in.APIKeyPrefix, apiKeyEnc,
+			customToolsJSON, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrRemoteMCPNotFound
+		}
+	} else {
+		// Preserve the existing sealed API key (re-sealing if the base URL changed).
+		existing, err := s.GetRemoteMCPServer(ctx, email, id)
+		if err != nil {
+			return nil, err
+		}
+		existingKey, err := s.GetRemoteMCPAPIKey(ctx, existing)
+		if err != nil {
+			return nil, err
+		}
+		apiKeyEnc, err := s.sealSecret(existingKey, aadPurposeAPIKey, email, in.URL)
+		if err != nil {
+			return nil, fmt.Errorf("re-encrypt api key: %w", err)
+		}
+		res, err := s.db.ExecContext(ctx, `
+			UPDATE remote_mcp_servers
+			SET url = $3,
+			    transport = $4,
+			    status = $5,
+			    status_detail = '',
+			    auth_kind = $6,
+			    api_key_header = $7,
+			    api_key_query = $8,
+			    api_key_prefix = $9,
+			    api_key_enc = $10,
+			    custom_tools = $11::jsonb,
+			    updated_at = $12
+			WHERE user_email = $1 AND id = $2`,
+			email, id, in.URL, in.Transport, status, authKind,
+			in.APIKeyHeader, in.APIKeyQuery, in.APIKeyPrefix, apiKeyEnc,
+			customToolsJSON, now)
+		if err != nil {
+			return nil, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return nil, ErrRemoteMCPNotFound
+		}
+	}
+	return s.GetRemoteMCPServer(ctx, email, id)
 }
 
 // UpdateRemoteMCPCustomTools updates the declarative tool definitions for a

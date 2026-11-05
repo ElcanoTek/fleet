@@ -413,7 +413,10 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 		// ── co-piloted live browser sessions ──
 		{"GET /api/browser-sessions/{id}/view", func(r *http.Request) string {
 			return withRawQuery("/browser-sessions/"+p(r, "id")+"/view", r)
-		}, noBody, out{headers: contentTypeOnly, ctFallback: "text/html; charset=utf-8"}},
+		}, noBody, out{headers: contentTypeOnly, ctFallback: "text/html; charset=utf-8", firstPartyHTML: true}},
+		{"GET /api/browser-sessions/{id}/copilot.js", func(r *http.Request) string {
+			return withRawQuery("/browser-sessions/"+p(r, "id")+"/copilot.js", r)
+		}, noBody, out{headers: contentTypeOnly, ctFallback: "application/javascript; charset=utf-8"}},
 		{"POST /api/browser-sessions/{id}/input", func(r *http.Request) string {
 			return withRawQuery("/browser-sessions/"+p(r, "id")+"/input", r)
 		}, jsonBodyIfAny, textJSON},

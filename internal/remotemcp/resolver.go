@@ -95,14 +95,13 @@ func connFor(srv store.RemoteMCPServer, owner string) agent.RemoteMCPConn {
 				steps = make([]agent.RemoteMCPCustomStep, 0, len(ct.Steps))
 				for _, st := range ct.Steps {
 					steps = append(steps, agent.RemoteMCPCustomStep{
-						Action:     st.Action,
-						Selector:   st.Selector,
-						Value:      st.Value,
-						Mode:       st.Mode,
-						Attribute:  st.Attribute,
-						Expression: st.Expression,
-						TimeoutMs:  st.TimeoutMs,
-						Optional:   st.Optional,
+						Action:    st.Action,
+						Selector:  st.Selector,
+						Value:     st.Value,
+						Mode:      st.Mode,
+						Attribute: st.Attribute,
+						TimeoutMs: st.TimeoutMs,
+						Optional:  st.Optional,
 					})
 				}
 			}

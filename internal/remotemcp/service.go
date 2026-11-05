@@ -83,6 +83,10 @@ type TokenStore interface {
 	ListConnectorPrefs(ctx context.Context, userEmail string) (map[string]store.ConnectorPref, error)
 }
 
+type customConnectorUpdater interface {
+	UpdateCustomConnector(ctx context.Context, id string, in store.RemoteMCPServerInput) (*store.RemoteMCPServer, error)
+}
+
 type tokenStore = TokenStore
 
 // Config is the deployment configuration for the feature.
@@ -672,41 +676,6 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 	if len(in.CustomTools) == 0 {
 		return nil, errors.New("at least one custom tool definition is required")
 	}
-	for i := range in.CustomTools {
-		tName := strings.TrimSpace(in.CustomTools[i].Name)
-		if tName == "" {
-			return nil, fmt.Errorf("custom_tools[%d]: name is required", i)
-		}
-		in.CustomTools[i].Name = tName
-		tURL := strings.TrimSpace(in.CustomTools[i].URL)
-		if tURL == "" {
-			tURL = canonURL
-		} else if strings.HasPrefix(tURL, "/") {
-			u, perr := url.Parse(canonURL)
-			if perr != nil {
-				return nil, fmt.Errorf("custom_tools[%d]: invalid base URL", i)
-			}
-			tURL = u.Scheme + "://" + u.Host + tURL
-		}
-		// Validate the scheme/host portion (strip any {param} in path/query before checking).
-		probeURL := strings.NewReplacer("{", "_", "}", "_").Replace(tURL)
-		if _, verr := mcpoauth.ValidateServerURL(probeURL, s.cfg.AllowInsecureHTTP); verr != nil {
-			return nil, fmt.Errorf("custom_tools[%d] (%s): %w", i, tName, verr)
-		}
-		in.CustomTools[i].URL = tURL
-		if transport == store.RemoteMCPTransportHTTPTools {
-			method := strings.ToUpper(strings.TrimSpace(in.CustomTools[i].Method))
-			if method == "" {
-				method = http.MethodGet
-			}
-			switch method {
-			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
-			default:
-				return nil, fmt.Errorf("custom_tools[%d] (%s): unsupported HTTP method %q", i, tName, method)
-			}
-			in.CustomTools[i].Method = method
-		}
-	}
 
 	authKind := strings.ToLower(strings.TrimSpace(in.AuthMode))
 	if authKind == "" {
@@ -741,17 +710,71 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 		return nil, fmt.Errorf("custom connectors support auth_mode \"api_key\" or \"open\" (got %q)", authKind)
 	}
 
-	// Check if this user already has a custom connector seat with the same (name, account).
-	existingList, _ := s.store.ListRemoteMCPServers(ctx, in.Email)
-	for _, ex := range existingList {
-		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
-			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) {
-			_ = s.store.DeleteRemoteMCPServer(ctx, in.Email, ex.ID)
-			break
+	baseOriginURL, err := url.Parse(canonURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid base URL: %w", err)
+	}
+	baseOrigin := strings.ToLower(baseOriginURL.Scheme) + "://" + strings.ToLower(baseOriginURL.Host)
+
+	for i := range in.CustomTools {
+		tName := strings.TrimSpace(in.CustomTools[i].Name)
+		if tName == "" {
+			return nil, fmt.Errorf("custom_tools[%d]: name is required", i)
+		}
+		in.CustomTools[i].Name = tName
+		tURL := strings.TrimSpace(in.CustomTools[i].URL)
+		if tURL == "" {
+			tURL = canonURL
+		} else if strings.HasPrefix(tURL, "/") {
+			tURL = baseOriginURL.Scheme + "://" + baseOriginURL.Host + tURL
+		}
+		// Reject any {param} placeholder in the URL scheme or authority (host[:port])
+		// before substituting path/query placeholders: a placeholder in the host
+		// would let model-supplied arguments steer the connector's sealed API key
+		// to an arbitrary origin.
+		schemeEnd := strings.Index(tURL, "://")
+		if schemeEnd <= 0 {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): url must include http(s):// scheme", i, tName)
+		}
+		restAfterScheme := tURL[schemeEnd+3:]
+		authority := restAfterScheme
+		if slashIdx := strings.IndexAny(restAfterScheme, "/?#"); slashIdx >= 0 {
+			authority = restAfterScheme[:slashIdx]
+		}
+		if strings.ContainsAny(tURL[:schemeEnd]+authority, "{}") {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): url scheme and host must be fixed; {param} placeholders are allowed only in the path and query", i, tName)
+		}
+		probeURL := strings.NewReplacer("{", "_", "}", "_").Replace(tURL)
+		validatedToolURL, verr := mcpoauth.ValidateServerURL(probeURL, s.cfg.AllowInsecureHTTP)
+		if verr != nil {
+			return nil, fmt.Errorf("custom_tools[%d] (%s): %w", i, tName, verr)
+		}
+		if authKind == store.RemoteMCPAuthAPIKey && transport == store.RemoteMCPTransportHTTPTools {
+			tu, perr := url.Parse(validatedToolURL)
+			if perr != nil {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): %w", i, tName, perr)
+			}
+			toolOrigin := strings.ToLower(tu.Scheme) + "://" + strings.ToLower(tu.Host)
+			if toolOrigin != baseOrigin {
+				return nil, fmt.Errorf("custom_tools[%d] (%s): authenticated http_tools URL %q must share the connector's base origin %q", i, tName, tURL, baseOrigin)
+			}
+		}
+		in.CustomTools[i].URL = tURL
+		if transport == store.RemoteMCPTransportHTTPTools {
+			method := strings.ToUpper(strings.TrimSpace(in.CustomTools[i].Method))
+			if method == "" {
+				method = http.MethodGet
+			}
+			switch method {
+			case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+			default:
+				return nil, fmt.Errorf("custom_tools[%d] (%s): unsupported HTTP method %q", i, tName, method)
+			}
+			in.CustomTools[i].Method = method
 		}
 	}
 
-	srv, err := s.store.CreateRemoteMCPServer(ctx, store.RemoteMCPServerInput{
+	input := store.RemoteMCPServerInput{
 		UserEmail:    in.Email,
 		Name:         name,
 		Account:      account,
@@ -764,9 +787,31 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 		APIKeyPrefix: prefix,
 		APIKey:       in.APIKey,
 		CustomTools:  in.CustomTools,
-	})
-	if err != nil {
-		return nil, err
+	}
+
+	// Check if this user already has a custom connector seat with the same (name, account).
+	// If so, update it in place so its id, share grants, and preferences are preserved.
+	var srv *store.RemoteMCPServer
+	existingList, _ := s.store.ListRemoteMCPServers(ctx, in.Email)
+	for _, ex := range existingList {
+		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
+			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) {
+			if updater, ok := s.store.(customConnectorUpdater); ok {
+				srv, err = updater.UpdateCustomConnector(ctx, ex.ID, input)
+				if err != nil {
+					return nil, err
+				}
+			} else {
+				_ = s.store.DeleteRemoteMCPServer(ctx, in.Email, ex.ID)
+			}
+			break
+		}
+	}
+	if srv == nil {
+		srv, err = s.store.CreateRemoteMCPServer(ctx, input)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if strings.EqualFold(strings.TrimSpace(in.ShareScope), "everyone") || strings.TrimSpace(in.ShareScope) == store.GranteeEveryone {
 		_ = s.store.ShareRemoteMCPServer(ctx, in.Email, srv.ID, store.GranteeEveryone)

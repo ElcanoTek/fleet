@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"html"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -39,6 +40,14 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.serveBrowserSessionView(w, r, sess, viewToken)
+	case "copilot.js":
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = w.Write([]byte(browserCopilotScript))
 	case "stream":
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -140,6 +149,11 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
 
 	sid := html.EscapeString(info.ID)
 	tok := html.EscapeString(viewToken)
+	scriptSrc := "/api/browser-sessions/" + url.PathEscape(info.ID) + "/copilot.js"
+	if viewToken != "" {
+		scriptSrc += "?token=" + url.QueryEscape(viewToken)
+	}
+	scriptSrcAttr := html.EscapeString(scriptSrc)
 	initURL := html.EscapeString(info.CurrentURL)
 	initTitle := html.EscapeString(info.Title)
 	if initTitle == "" {
@@ -309,7 +323,7 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
   }
 </style>
 </head>
-<body>
+<body data-session-id="%s" data-token="%s">
 <header>
   <span class="badge" id="status-badge"><span class="dot" id="status-dot"></span><span id="status-text">Co-Pilot Live Browser</span></span>
   <div class="nav-group">
@@ -338,10 +352,16 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
     <img id="screen" alt="Live browser stream" />
   </div>
 </main>
-<script>
-(() => {
-  const sessionId = %q;
-  const token = %q;
+<script src="%s" defer></script>
+</body>
+</html>`, initTitle, sid, tok, initURL, scriptSrcAttr)
+
+	_, _ = w.Write([]byte(pageHTML))
+}
+
+const browserCopilotScript = `(() => {
+  const sessionId = document.body.dataset.sessionId || "";
+  const token = document.body.dataset.token || "";
   const qs = token ? ("?token=" + encodeURIComponent(token)) : "";
   const basePath = "/api/browser-sessions/" + encodeURIComponent(sessionId);
 
@@ -411,7 +431,7 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
   stageWrap.addEventListener("keydown", (ev) => {
     if (ev.target !== stageWrap) return;
     if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") {
-      return; // allow paste event
+      return;
     }
     ev.preventDefault();
     if (ev.key && ev.key.length === 1 && !ev.ctrlKey && !ev.metaKey && !ev.altKey) {
@@ -494,9 +514,5 @@ func (s *Server) serveBrowserSessionView(w http.ResponseWriter, _ *http.Request,
     statusText.textContent = "Reconnecting…";
   };
 })();
-</script>
-</body>
-</html>`, initTitle, initURL, sid, tok)
+`
 
-	_, _ = w.Write([]byte(pageHTML))
-}

@@ -33,7 +33,14 @@ func (c *Client) AddHTTPToolsOnServer(serverName string, specs []HTTPToolSpec, h
 
 	tr := &httpToolTransport{tools: make(map[string]HTTPToolSpec, len(specs))}
 	if len(httpClient) > 0 && httpClient[0] != nil {
-		tr.client = httpClient[0]
+		// Preserve newHTTPToolClient's redirect policy (follow redirects while
+		// stripping credential headers on cross-origin hops) even when the caller
+		// passes an httpClient configured with a custom DialContext.
+		dial := httpToolDialContext
+		if ht, ok := httpClient[0].Transport.(*http.Transport); ok && ht != nil && ht.DialContext != nil {
+			dial = ht.DialContext
+		}
+		tr.client = newHTTPToolClient(dial)
 	}
 	server := &Server{
 		name:      serverName,

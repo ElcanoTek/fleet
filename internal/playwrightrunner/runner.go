@@ -75,15 +75,14 @@ func guardedDialContext(isBlocked func(net.IP) bool) func(ctx context.Context, n
 // Step is one declarative browser action in a Playwright automation run.
 type Step struct {
 	// Action is one of: "goto", "fill", "click", "wait_for", "press",
-	// "select", "extract", "eval_js", "sleep".
-	Action     string `json:"action"`
-	Selector   string `json:"selector,omitempty"`
-	Value      string `json:"value,omitempty"`
-	Mode       string `json:"mode,omitempty"`       // for extract: "text" (default), "markdown", "html", "table_json", "attribute"
-	Attribute  string `json:"attribute,omitempty"`  // for extract when mode == "attribute"
-	Expression string `json:"expression,omitempty"` // for eval_js
-	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	Optional   bool   `json:"optional,omitempty"`
+	// "select", "extract", "sleep".
+	Action    string `json:"action"`
+	Selector  string `json:"selector,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Mode      string `json:"mode,omitempty"`      // for extract: "text" (default), "markdown", "html", "table_json", "attribute"
+	Attribute string `json:"attribute,omitempty"` // for extract when mode == "attribute"
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Optional  bool   `json:"optional,omitempty"`
 }
 
 // Credentials holds host-side authentication secrets injected into a browser run.
@@ -172,14 +171,10 @@ func ValidateStep(st Step) error {
 		if strings.TrimSpace(st.Selector) == "" {
 			return errors.New("extract step requires selector")
 		}
-	case "eval_js":
-		if strings.TrimSpace(st.Expression) == "" && strings.TrimSpace(st.Value) == "" {
-			return errors.New("eval_js step requires expression")
-		}
 	case "sleep":
 		// valid; uses timeout_ms
 	default:
-		return fmt.Errorf("unsupported playwright step action %q (expected goto, fill, click, wait_for, press, select, extract, eval_js, or sleep)", st.Action)
+		return fmt.Errorf("unsupported playwright step action %q (expected goto, fill, click, wait_for, press, select, extract, or sleep)", st.Action)
 	}
 	return nil
 }
@@ -233,7 +228,6 @@ func Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 		}
 		st.Selector = substituteArgs(st.Selector, req.Args)
 		st.Value = substituteArgs(st.Value, req.Args)
-		st.Expression = substituteArgs(st.Expression, req.Args)
 		steps = append(steps, st)
 	}
 
@@ -334,14 +328,33 @@ func runSubprocess(ctx context.Context, bin string, args []string, env []string,
 }
 
 func buildRunnerEnv() []string {
-	env := os.Environ()
+	allowKeys := []string{
+		"PATH",
+		"HOME",
+		"TMPDIR",
+		"LANG",
+		"LC_ALL",
+		"PLAYWRIGHT_BROWSERS_PATH",
+		"PYTHONPATH",
+		"NODE_PATH",
+		"XDG_CACHE_HOME",
+		"FLEET_CHROMIUM_EXECUTABLE",
+		"LD_LIBRARY_PATH",
+		"FONTCONFIG_PATH",
+	}
+	var env []string
 	hasBrowsersPath := false
 	hasNodePath := false
-	for _, kv := range env {
-		if strings.HasPrefix(kv, "PLAYWRIGHT_BROWSERS_PATH=") {
+	for _, k := range allowKeys {
+		v := os.Getenv(k)
+		if v == "" {
+			continue
+		}
+		env = append(env, k+"="+v)
+		if k == "PLAYWRIGHT_BROWSERS_PATH" {
 			hasBrowsersPath = true
 		}
-		if strings.HasPrefix(kv, "NODE_PATH=") {
+		if k == "NODE_PATH" {
 			hasNodePath = true
 		}
 	}
@@ -546,10 +559,42 @@ func scrubResult(res *RunResult, creds Credentials) {
 		res.NetworkCalls[i].URL = maskSecrets(res.NetworkCalls[i].URL, creds)
 		res.NetworkCalls[i].ResponsePreview = maskSecrets(res.NetworkCalls[i].ResponsePreview, creds)
 	}
+	for i := range res.DOMElements {
+		res.DOMElements[i].Name = maskSecrets(res.DOMElements[i].Name, creds)
+		res.DOMElements[i].ID = maskSecrets(res.DOMElements[i].ID, creds)
+		res.DOMElements[i].Placeholder = maskSecrets(res.DOMElements[i].Placeholder, creds)
+		res.DOMElements[i].Text = maskSecrets(res.DOMElements[i].Text, creds)
+		res.DOMElements[i].Selector = maskSecrets(res.DOMElements[i].Selector, creds)
+	}
 	for i := range res.Extracted {
-		if s, ok := res.Extracted[i].(string); ok {
-			res.Extracted[i] = maskSecrets(s, creds)
+		res.Extracted[i] = scrubArbitraryValue(res.Extracted[i], creds)
+	}
+}
+
+func scrubArbitraryValue(v any, creds Credentials) any {
+	switch val := v.(type) {
+	case string:
+		return maskSecrets(val, creds)
+	case []any:
+		out := make([]any, len(val))
+		for i := range val {
+			out[i] = scrubArbitraryValue(val[i], creds)
 		}
+		return out
+	case []string:
+		out := make([]string, len(val))
+		for i := range val {
+			out[i] = maskSecrets(val[i], creds)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(val))
+		for k, item := range val {
+			out[maskSecrets(k, creds)] = scrubArbitraryValue(item, creds)
+		}
+		return out
+	default:
+		return v
 	}
 }
 
@@ -681,8 +726,6 @@ def main():
     step_default_ms = min(15000, timeout_ms // 2)
 
     launch_args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--disable-extensions",
@@ -697,20 +740,24 @@ def main():
     network_calls = []
     extracted = []
 
+    def launch_browser(p):
+        exe = find_chromium_executable()
+        for extra in ([], ["--no-sandbox", "--disable-setuid-sandbox"]):
+            for exe_candidate in ([None, exe] if exe else [None]):
+                kwargs = {"headless": True, "args": launch_args + extra}
+                if proxy_server:
+                    kwargs["proxy"] = {"server": proxy_server}
+                if exe_candidate:
+                    kwargs["executable_path"] = exe_candidate
+                try:
+                    return p.chromium.launch(**kwargs)
+                except Exception as exc:
+                    last_exc = exc
+        raise last_exc
+
     try:
         with sync_playwright() as p:
-            launch_kwargs = {"headless": True, "args": launch_args}
-            if proxy_server:
-                launch_kwargs["proxy"] = {"server": proxy_server}
-            browser = None
-            try:
-                browser = p.chromium.launch(**launch_kwargs)
-            except Exception:
-                exe = find_chromium_executable()
-                if not exe:
-                    raise
-                launch_kwargs["executable_path"] = exe
-                browser = p.chromium.launch(**launch_kwargs)
+            browser = launch_browser(p)
 
             extra_headers = {}
             raw_headers = creds.get("headers") or {}
@@ -785,7 +832,6 @@ def main():
                 action = (st.get("action") or "").lower().strip()
                 sel = st.get("selector") or ""
                 val = replace_secrets(st.get("value") or "", creds)
-                expr = replace_secrets(st.get("expression") or "", creds)
                 mode = (st.get("mode") or "text").lower().strip()
                 attr = st.get("attribute") or ""
                 st_timeout = int(st.get("timeout_ms") or step_default_ms)
@@ -839,10 +885,6 @@ def main():
                         else:
                             texts = loc.all_inner_texts()
                             extracted.append("\n".join(t.strip() for t in texts if t.strip())[:32768])
-                    elif action == "eval_js":
-                        code = expr or val
-                        res_js = page.evaluate(code)
-                        extracted.append(res_js)
                 except Exception as step_exc:
                     if not optional:
                         raise RuntimeError(f"step '{action}' ({sel}) failed: {step_exc}") from step_exc
@@ -860,7 +902,9 @@ def main():
                             const name = el.getAttribute('name') || '';
                             const type = el.getAttribute('type') || '';
                             const placeholder = el.getAttribute('placeholder') || '';
-                            const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80);
+                            const isPw = type.toLowerCase() === 'password';
+                            const rawText = isPw ? (el.getAttribute('aria-label') || '') : (el.innerText || el.value || el.getAttribute('aria-label') || '');
+                            const text = rawText.trim().slice(0, 80);
                             let selector = tag;
                             if (id) selector = '#' + CSS.escape(id);
                             else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\"') + '"]';
@@ -986,8 +1030,6 @@ function loadPlaywright() {
   const stepDefaultMs = Math.min(15000, Math.floor(timeoutMs / 2));
 
   const launchArgs = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--disable-extensions",
@@ -1000,22 +1042,29 @@ function loadPlaywright() {
     launchArgs.push("--proxy-bypass-list=<-loopback>");
   }
 
+  async function launchBrowser() {
+    const exe = findChromiumExecutable();
+    let lastErr;
+    for (const extra of [[], ["--no-sandbox", "--disable-setuid-sandbox"]]) {
+      for (const exeCandidate of exe ? [null, exe] : [null]) {
+        const opts = { headless: true, args: [...launchArgs, ...extra] };
+        if (proxyServer) opts.proxy = { server: proxyServer };
+        if (exeCandidate) opts.executablePath = exeCandidate;
+        try {
+          return await pw.chromium.launch(opts);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+    }
+    throw lastErr;
+  }
+
   const networkCalls = [];
   const extracted = [];
   let browser;
   try {
-    const launchOpts = { headless: true, args: launchArgs };
-    if (proxyServer) {
-      launchOpts.proxy = { server: proxyServer };
-    }
-    try {
-      browser = await pw.chromium.launch(launchOpts);
-    } catch (_) {
-      const exe = findChromiumExecutable();
-      if (!exe) throw _;
-      launchOpts.executablePath = exe;
-      browser = await pw.chromium.launch(launchOpts);
-    }
+    browser = await launchBrowser();
 
     const extraHeaders = {};
     if (creds.headers && typeof creds.headers === "object") {
@@ -1091,7 +1140,6 @@ function loadPlaywright() {
       const action = String(st.action || "").toLowerCase().trim();
       const sel = st.selector || "";
       const val = replaceSecrets(st.value || "", creds);
-      const expr = replaceSecrets(st.expression || "", creds);
       const mode = String(st.mode || "text").toLowerCase().trim();
       const attr = st.attribute || "";
       const stTimeout = Math.min(Math.max(Number(st.timeout_ms) || stepDefaultMs, 500), 30000);
@@ -1149,10 +1197,6 @@ function loadPlaywright() {
             const texts = await loc.allInnerTexts();
             extracted.push(texts.map((t) => t.trim()).filter(Boolean).join("\n").slice(0, 32768));
           }
-        } else if (action === "eval_js") {
-          const code = expr || val;
-          const resJs = await page.evaluate(code);
-          extracted.push(resJs);
         }
       } catch (stepErr) {
         if (!optional) {
@@ -1174,7 +1218,9 @@ function loadPlaywright() {
             const name = el.getAttribute("name") || "";
             const type = el.getAttribute("type") || "";
             const placeholder = el.getAttribute("placeholder") || "";
-            const text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 80);
+            const isPw = type.toLowerCase() === "password";
+            const rawText = isPw ? (el.getAttribute("aria-label") || "") : (el.innerText || el.value || el.getAttribute("aria-label") || "");
+            const text = rawText.trim().slice(0, 80);
             let selector = tag;
             if (id) selector = "#" + CSS.escape(id);
             else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\"') + '"]';

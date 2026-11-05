@@ -36,7 +36,7 @@ type ConnectorStudioToolSpec struct {
 	Headers     map[string]string       `json:"headers,omitempty" description:"Optional static non-secret headers (e.g. {'Accept': 'application/json'}). Never put secrets here; secrets are injected automatically from the connector's sealed credential."`
 	Body        string                  `json:"body,omitempty" description:"Optional request body template for POST/PUT/PATCH (may contain {param} placeholders)."`
 	InputSchema map[string]any          `json:"input_schema,omitempty" description:"JSON Schema object describing the tool's parameters (e.g. {'type':'object','properties':{'query':{'type':'string'}}})"`
-	Steps       []playwrightrunner.Step `json:"steps,omitempty" description:"For 'playwright' connectors: ordered browser steps ('goto', 'fill', 'click', 'wait_for', 'press', 'select', 'extract', 'eval_js', 'sleep'). Use '{{USERNAME}}' and '{{PASSWORD}}' in step values and '{param}' for tool arguments."`
+	Steps       []playwrightrunner.Step `json:"steps,omitempty" description:"For 'playwright' connectors: ordered browser steps ('goto', 'fill', 'click', 'wait_for', 'press', 'select', 'extract', 'sleep'). Use '{{USERNAME}}' and '{{PASSWORD}}' in step values and '{param}' for tool arguments."`
 }
 
 // ConnectorStudioParams is the schema-generating input struct for connector_studio.

@@ -77,14 +77,13 @@ type RemoteMCPConn struct {
 
 // RemoteMCPCustomStep is a declarative browser action in a Playwright custom connector tool.
 type RemoteMCPCustomStep struct {
-	Action     string `json:"action"`
-	Selector   string `json:"selector,omitempty"`
-	Value      string `json:"value,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	Attribute  string `json:"attribute,omitempty"`
-	Expression string `json:"expression,omitempty"`
-	TimeoutMs  int    `json:"timeout_ms,omitempty"`
-	Optional   bool   `json:"optional,omitempty"`
+	Action    string `json:"action"`
+	Selector  string `json:"selector,omitempty"`
+	Value     string `json:"value,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Attribute string `json:"attribute,omitempty"`
+	TimeoutMs int    `json:"timeout_ms,omitempty"`
+	Optional  bool   `json:"optional,omitempty"`
 }
 
 // RemoteMCPCustomTool is the store-agnostic shape of a tool inside a custom
@@ -1000,14 +999,13 @@ func mountCustomRemoteConnector(client *mcp.Client, regName string, conn RemoteM
 			steps := make([]playwrightrunner.Step, 0, len(ct.Steps))
 			for _, st := range ct.Steps {
 				steps = append(steps, playwrightrunner.Step{
-					Action:     st.Action,
-					Selector:   st.Selector,
-					Value:      st.Value,
-					Mode:       st.Mode,
-					Attribute:  st.Attribute,
-					Expression: st.Expression,
-					TimeoutMs:  st.TimeoutMs,
-					Optional:   st.Optional,
+					Action:    st.Action,
+					Selector:  st.Selector,
+					Value:     st.Value,
+					Mode:      st.Mode,
+					Attribute: st.Attribute,
+					TimeoutMs: st.TimeoutMs,
+					Optional:  st.Optional,
 				})
 			}
 			specs = append(specs, mcp.PlaywrightToolSpec{

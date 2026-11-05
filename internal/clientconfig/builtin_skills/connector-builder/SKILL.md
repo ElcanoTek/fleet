@@ -45,7 +45,7 @@ Always evaluate and choose the highest tier that works for the target service:
 
 - Set `"format": "password"` on every `text_input` that collects a password, API key, token, or client secret.
 - Fleet's UI masks `format: "password"` fields in the form (`••••`), excludes them from browser `localStorage` drafts, and vaults the submitted value on the host as `"$secret:<field_id>"` before it ever reaches the database or LLM.
-- Include a `radio_group` (id: `"share_scope"`) asking whether the connector should be:
+- Include a `choice` component (`"variant": "radio"`, id: `"share_scope"`) asking whether the connector should be:
   - `"personal"` — **Just for me** (only visible and usable by the current user)
   - `"everyone"` — **Fleet-wide (Everyone on this box)** (shared with `*` so all teammates and scheduled tasks can use it)
 
@@ -54,44 +54,54 @@ Example `show_ui` credential & scope intake card:
 ```json
 {
   "title": "Configure Acme Portal Connection",
-  "submit_label": "Connect & Test",
   "components": [
     {
       "type": "section",
       "title": "Connection Details",
-      "subtitle": "Passwords and API keys are encrypted host-side and stayed sealed on this device."
-    },
-    {
-      "type": "text_input",
-      "id": "portal_url",
-      "label": "Portal or API URL",
-      "format": "url",
-      "value": "https://portal.acme.com",
-      "required": true
-    },
-    {
-      "type": "text_input",
-      "id": "username",
-      "label": "Username / Email (if using login)",
-      "placeholder": "you@company.com"
-    },
-    {
-      "type": "text_input",
-      "id": "password",
-      "label": "Password or API Key",
-      "format": "password",
-      "placeholder": "Enter password or API token",
-      "required": true
-    },
-    {
-      "type": "radio_group",
-      "id": "share_scope",
-      "label": "Who should have access to this connector?",
-      "value": "personal",
-      "options": [
-        { "value": "personal", "label": "Just for me (Personal connection)" },
-        { "value": "everyone", "label": "Everyone on this Fleet box (Fleet-wide)" }
+      "description": "Passwords and API keys are encrypted host-side and stay sealed on this device.",
+      "children": [
+        {
+          "type": "text_input",
+          "id": "portal_url",
+          "label": "Portal or API URL",
+          "format": "url",
+          "value": "https://portal.acme.com",
+          "required": true
+        },
+        {
+          "type": "text_input",
+          "id": "username",
+          "label": "Username / Email (if using login)",
+          "placeholder": "you@company.com"
+        },
+        {
+          "type": "text_input",
+          "id": "password",
+          "label": "Password or API Key",
+          "format": "password",
+          "placeholder": "Enter password or API token",
+          "required": true
+        },
+        {
+          "type": "choice",
+          "variant": "radio",
+          "id": "share_scope",
+          "label": "Who should have access to this connector?",
+          "value": "personal",
+          "options": [
+            { "value": "personal", "label": "Just for me (Personal connection)" },
+            { "value": "everyone", "label": "Everyone on this Fleet box (Fleet-wide)" }
+          ]
+        }
       ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "connect",
+      "label": "Connect & Test",
+      "kind": "submit",
+      "style": "primary"
     }
   ]
 }
@@ -138,8 +148,8 @@ Pass `"$secret:password"` directly in `secret_ref` or `password_ref` on `connect
   - Define 1 to 6 high-value, well-named `snake_case` tools in `custom_tools`.
   - Use `{param}` placeholders in `url` or `body` matching properties in `input_schema`.
 - **Custom Playwright Browser Connector (`create_custom_connector` with `transport="playwright"`)**:
-  - Define declarative `steps` (`goto`, `fill`, `click`, `wait_for`, `press`, `select`, `extract`, `eval_js`, `sleep`).
-  - Include at least one `extract` step (`mode: "text"`, `"table_json"`, `"html"`, or `"attribute"`) or `eval_js` step so the tool returns structured data from the page.
+  - Define declarative `steps` (`goto`, `fill`, `click`, `wait_for`, `press`, `select`, `extract`, `sleep`).
+  - Include at least one `extract` step (`mode: "text"`, `"table_json"`, `"html"`, or `"attribute"`) so the tool returns structured data from the page.
   - Pass `session_id` if the user authenticated in a Co-Pilot Live Browser session so their `storage_state` cookies are sealed into the connector.
 
 ### Step 5 — Verify End-to-End with `test_custom_tool`

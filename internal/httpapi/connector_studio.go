@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -24,7 +25,9 @@ import (
 const uiSecretTTL = 2 * time.Hour
 
 type uiSecretBucket struct {
+	convID    string
 	values    map[string]string
+	fieldIDs  map[string]bool
 	updatedAt time.Time
 }
 
@@ -40,8 +43,18 @@ func uiSecretKey(userEmail, convID string) string {
 	return strings.ToLower(strings.TrimSpace(userEmail)) + "\x00" + strings.TrimSpace(convID)
 }
 
+func retireExpiredSecretBucket(b *uiSecretBucket) {
+	if b == nil {
+		return
+	}
+	for fieldID := range b.fieldIDs {
+		agentcore.RegisterSecretLiterals("ui_secret:"+b.convID+":"+fieldID, true)
+	}
+}
+
 func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
 	fieldID = strings.TrimSpace(fieldID)
+	convID = strings.TrimSpace(convID)
 	if fieldID == "" || secret == "" {
 		return
 	}
@@ -54,16 +67,22 @@ func (st *uiSecretStash) put(userEmail, convID, fieldID, secret string) {
 	}
 	for k, b := range st.buckets {
 		if now.Sub(b.updatedAt) > uiSecretTTL {
+			retireExpiredSecretBucket(b)
 			delete(st.buckets, k)
 		}
 	}
 	b, ok := st.buckets[key]
 	if !ok {
-		b = &uiSecretBucket{values: make(map[string]string)}
+		b = &uiSecretBucket{
+			convID:   convID,
+			values:   make(map[string]string),
+			fieldIDs: make(map[string]bool),
+		}
 		st.buckets[key] = b
 	}
 	b.values[fieldID] = secret
 	b.values[strings.ToLower(fieldID)] = secret
+	b.fieldIDs[fieldID] = true
 	b.updatedAt = now
 }
 
@@ -82,6 +101,7 @@ func (st *uiSecretStash) get(userEmail, convID, fieldID string) (string, bool) {
 	b, ok := st.buckets[key]
 	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
 		if ok {
+			retireExpiredSecretBucket(b)
 			delete(st.buckets, key)
 		}
 		return "", false
@@ -138,7 +158,8 @@ func isLikelySecretFieldID(fieldID string) bool {
 }
 
 // passwordFieldIDsFromHistory extracts all field IDs declared with
-// `format: "password"` in any `show_ui` tool call in the conversation history.
+// `format: "password"` in any `show_ui` tool call in the conversation history,
+// walking nested layout components (`section`, `columns`, `tabs`, `repeater`).
 func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
 	out := make(map[string]bool)
 	for _, h := range history {
@@ -152,25 +173,35 @@ func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
 		if tc.Name != "show_ui" || strings.TrimSpace(tc.Input) == "" {
 			continue
 		}
-		var payload struct {
-			Components []struct {
-				Type   string `json:"type"`
-				ID     string `json:"id"`
-				Format string `json:"format"`
-			} `json:"components"`
-		}
+		var payload map[string]any
 		if err := json.Unmarshal([]byte(tc.Input), &payload); err != nil {
 			continue
 		}
-		for _, c := range payload.Components {
-			if strings.EqualFold(strings.TrimSpace(c.Format), "password") && strings.TrimSpace(c.ID) != "" {
-				id := strings.TrimSpace(c.ID)
-				out[id] = true
-				out[strings.ToLower(id)] = true
+		collectPasswordComponentIDs(payload["components"], out)
+	}
+	return out
+}
+
+func collectPasswordComponentIDs(node any, out map[string]bool) {
+	switch v := node.(type) {
+	case []any:
+		for _, item := range v {
+			collectPasswordComponentIDs(item, out)
+		}
+	case map[string]any:
+		format, _ := v["format"].(string)
+		id, _ := v["id"].(string)
+		if strings.EqualFold(strings.TrimSpace(format), "password") && strings.TrimSpace(id) != "" {
+			cleanID := strings.TrimSpace(id)
+			out[cleanID] = true
+			out[strings.ToLower(cleanID)] = true
+		}
+		for _, childKey := range []string{"children", "fields", "tabs", "columns", "left", "right"} {
+			if child, ok := v[childKey]; ok {
+				collectPasswordComponentIDs(child, out)
 			}
 		}
 	}
-	return out
 }
 
 // vaultUISubmissionSecrets intercepts `[UI submission] {...}` messages before
@@ -211,22 +242,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 	}
 
 	pwFields := passwordFieldIDsFromHistory(history)
-	mutated := false
-	for k, rawVal := range data {
-		strVal, ok := rawVal.(string)
-		if !ok {
-			continue
-		}
-		if strings.TrimSpace(strVal) == "" || strings.HasPrefix(strings.TrimSpace(strVal), "$secret:") {
-			continue
-		}
-		if pwFields[k] || pwFields[strings.ToLower(k)] || isLikelySecretFieldID(k) {
-			s.uiSecrets.put(userEmail, convID, k, strVal)
-			agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+k, false, strVal)
-			data[k] = "$secret:" + k
-			mutated = true
-		}
-	}
+	mutated := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
 	if !mutated {
 		return message
 	}
@@ -236,6 +252,46 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 	}
 	suffix := rest[closeIdx+1:]
 	return "[UI submission] " + string(redactedBytes) + suffix
+}
+
+func (s *Server) vaultSubmissionMap(userEmail, convID, prefix string, data map[string]any, pwFields map[string]bool) bool {
+	mutated := false
+	for k, rawVal := range data {
+		stashKey := k
+		if prefix != "" {
+			stashKey = prefix + "." + k
+		}
+		switch val := rawVal.(type) {
+		case string:
+			if strings.TrimSpace(val) == "" || strings.HasPrefix(strings.TrimSpace(val), "$secret:") {
+				continue
+			}
+			if pwFields[k] || pwFields[strings.ToLower(k)] || isLikelySecretFieldID(k) {
+				s.uiSecrets.put(userEmail, convID, stashKey, val)
+				agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+stashKey, true, val)
+				if stashKey != k {
+					s.uiSecrets.put(userEmail, convID, k, val)
+					agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+k, true, val)
+				}
+				data[k] = "$secret:" + stashKey
+				mutated = true
+			}
+		case map[string]any:
+			if s.vaultSubmissionMap(userEmail, convID, stashKey, val, pwFields) {
+				mutated = true
+			}
+		case []any:
+			for idx, item := range val {
+				if itemMap, ok := item.(map[string]any); ok {
+					itemPrefix := fmt.Sprintf("%s[%d]", stashKey, idx)
+					if s.vaultSubmissionMap(userEmail, convID, itemPrefix, itemMap, pwFields) {
+						mutated = true
+					}
+				}
+			}
+		}
+	}
+	return mutated
 }
 
 // newPlaywrightBrowserContext builds the per-turn PlaywrightBrowserContext that
@@ -255,7 +311,8 @@ func (s *Server) newPlaywrightBrowserContext(conv *store.Conversation, user stri
 		ResolveSecret: func(ref string) string {
 			val := s.uiSecrets.resolve(user, convID, ref)
 			if val != "" && strings.HasPrefix(strings.TrimSpace(ref), "$secret:") {
-				agentcore.RegisterSecretLiterals("ui_secret:"+convID, false, val)
+				fieldID := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(ref), "$secret:"))
+				agentcore.RegisterSecretLiterals("ui_secret:"+convID+":"+fieldID, true, val)
 			}
 			return val
 		},
@@ -413,7 +470,7 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 
 	secret := s.uiSecrets.resolve(user, convID, params.SecretRef)
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("probe_http:"+convID, false, secret)
+		agentcore.RegisterSecretLiterals("probe_http:"+convID, true, secret)
 	}
 
 	reqURL := targetURL
@@ -489,10 +546,11 @@ func (s *Server) connectorStudioProbeHTTP(ctx context.Context, user, convID stri
 }
 
 func appendQueryParam(rawURL, key, val string) string {
+	encoded := url.QueryEscape(key) + "=" + url.QueryEscape(val)
 	if strings.Contains(rawURL, "?") {
-		return rawURL + "&" + key + "=" + val
+		return rawURL + "&" + encoded
 	}
-	return rawURL + "?" + key + "=" + val
+	return rawURL + "?" + encoded
 }
 
 func (s *Server) resolvePlaywrightCredentials(user, convID string, params tools.ConnectorStudioParams) playwrightrunner.Credentials {
@@ -500,10 +558,10 @@ func (s *Server) resolvePlaywrightCredentials(user, convID string, params tools.
 	password := s.uiSecrets.resolve(user, convID, params.PasswordRef)
 	secret := s.uiSecrets.resolve(user, convID, params.SecretRef)
 	if password != "" {
-		agentcore.RegisterSecretLiterals("pw_password:"+convID, false, password)
+		agentcore.RegisterSecretLiterals("pw_password:"+convID, true, password)
 	}
 	if secret != "" {
-		agentcore.RegisterSecretLiterals("pw_secret:"+convID, false, secret)
+		agentcore.RegisterSecretLiterals("pw_secret:"+convID, true, secret)
 	}
 	return playwrightrunner.Credentials{
 		Username: username,
@@ -532,7 +590,6 @@ func substituteStepCreds(steps []playwrightrunner.Step, creds playwrightrunner.C
 	for i, st := range steps {
 		st.Value = repl(st.Value)
 		st.Selector = repl(st.Selector)
-		st.Expression = repl(st.Expression)
 		out[i] = st
 	}
 	return out
@@ -636,7 +693,7 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 	}
 	apiKey := s.uiSecrets.resolve(user, convID, params.SecretRef)
 	if apiKey != "" {
-		agentcore.RegisterSecretLiterals("connect_mcp:"+convID, false, apiKey)
+		agentcore.RegisterSecretLiterals("connect_mcp:"+convID, true, apiKey)
 	}
 
 	var clientID, clientSecret string
@@ -741,14 +798,13 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 		var steps []store.CustomConnectorStep
 		for _, st := range spec.Steps {
 			steps = append(steps, store.CustomConnectorStep{
-				Action:     st.Action,
-				Selector:   st.Selector,
-				Value:      st.Value,
-				Mode:       st.Mode,
-				Attribute:  st.Attribute,
-				Expression: st.Expression,
-				TimeoutMs:  st.TimeoutMs,
-				Optional:   st.Optional,
+				Action:    st.Action,
+				Selector:  st.Selector,
+				Value:     st.Value,
+				Mode:      st.Mode,
+				Attribute: st.Attribute,
+				TimeoutMs: st.TimeoutMs,
+				Optional:  st.Optional,
 			})
 		}
 		storeTools = append(storeTools, store.CustomConnectorTool{

@@ -83,7 +83,22 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   for a HUMAN; it drives no browser, so ADR-0044's "browser automation is a
   connector" stands. Registered per turn only when a credential is actually
   reachable — the running user's own Browserbase connector key, or a box-wide
-  `BROWSERBASE_API_KEY`; see `docs/BROWSERBASE.md`). These use host-side
+  `BROWSERBASE_API_KEY`; see `docs/BROWSERBASE.md`), `playwright_browser`
+  (`internal/tools/playwright_browser.go`, `internal/playwrightrunner/` —
+  brokered headless Chromium automation and Co-Piloted Live Browser View
+  sessions), and `connector_studio` (`probe_http`, `probe_browser`,
+  `start_copilot_session`, `test_custom_tool` in
+  `internal/tools/connector_studio.go`, `internal/httpapi/connector_studio.go`).
+  `playwright_browser` and `connector_studio`'s browser probes execute a fixed,
+  compile-time embedded Playwright runner with a minimal allowlisted
+  environment (no host `os.Environ()` or Fleet secrets), accept only fixed
+  declarative selector/navigation steps (`goto`, `fill`, `click`, `wait_for`,
+  `press`, `select`, `extract`, `sleep` — no model-authored JS evaluation),
+  route all browser egress through an ephemeral host-side `netguard.IsBlockedIP`
+  SSRF proxy, block non-`http(s)` schemes (`file://`, `javascript:`, `data:`),
+  resolve `$secret:<field_id>` references host-side from the `show_ui` password
+  stash, and scrub all credential forms from returned content, DOM elements,
+  network calls, and extracted values. These use host-side
   credentials and the egress-proxy/allowlist posture; running them in the sandbox would either leak
   credentials in or lose the host broker.
 - **Host workspace staging** (path-validated legacy exception):
@@ -113,8 +128,14 @@ host-brokered credentials/network that by invariant never enter the sandbox:
   send, not a general file API. They remain a documented check-then-read host
   exception and are candidates for FileOp migration.
 - **Host datastore / control state**: `task_tracker`, `notes`, `memory`,
-  `publish_artifact`, and `enable_mcp_connectors` write governed
+  `publish_artifact`, `enable_mcp_connectors`, and `connector_studio`
+  (`search_catalog`, `connect_mcp`, `create_custom_connector`) write governed
   database/control records, not arbitrary model-selected host files.
+  `connector_studio` is scoped to the authenticated interactive chat user,
+  seals API keys and Playwright credentials/storage state via `secretbox` in
+  `remote_mcp_servers.api_key_enc`, enforces fixed URL origins on
+  `http_tools` connectors, and enables the saved connector on the current
+  conversation under `connectorLocks`.
   `enable_mcp_connectors` (`internal/tools/enable_mcp_connectors.go`,
   `internal/httpapi/enable_mcp_connectors.go`) is the interactive chat
   connector-selection control-plane tool: it mutates only the conversation's

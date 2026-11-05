@@ -37,6 +37,7 @@ GET /api/auth/oidc/start
 GET /api/brand/logo
 GET /api/brand/share-image
 GET /api/browser-sessions/{id}/view
+GET /api/browser-sessions/{id}/copilot.js
 GET /api/browser-sessions/{id}/stream
 POST /api/browser-sessions/{id}/input
 POST /api/browser-sessions/{id}/close

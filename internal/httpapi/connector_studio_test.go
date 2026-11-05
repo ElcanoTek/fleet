@@ -22,7 +22,7 @@ func TestVaultUISubmissionSecrets(t *testing.T) {
 	user := "admin@example.com"
 	convID := "conv-vault-1"
 
-	showUIInput := `{"title":"Connect Portal","components":[{"type":"text_input","id":"username","label":"Username"},{"type":"text_input","id":"custom_pin","label":"Security PIN","format":"password"}]}`
+	showUIInput := `{"title":"Connect Portal","components":[{"type":"section","title":"Login","children":[{"type":"text_input","id":"username","label":"Username"},{"type":"text_input","id":"custom_pin","label":"Security PIN","format":"password"}]},{"type":"repeater","id":"accounts","label":"Accounts","fields":[{"type":"text_input","id":"seat_secret","label":"Seat Secret","format":"password"}]}]}`
 	tcJSON, _ := json.Marshal(agent.ToolCallContent{
 		ID:    "tc-1",
 		Name:  "show_ui",
@@ -36,7 +36,7 @@ func TestVaultUISubmissionSecrets(t *testing.T) {
 		},
 	}
 
-	rawSubmission := `[UI submission] {"username":"alice@example.com","password":"my-super-secret-password-999","custom_pin":"pin-secret-88888"}`
+	rawSubmission := `[UI submission] {"username":"alice@example.com","password":"my-super-secret-password-999","custom_pin":"pin-secret-88888","accounts":[{"seat_secret":"repeater-secret-77777"}]}`
 	vaulted := s.vaultUISubmissionSecretsWithHistory(user, convID, rawSubmission, history)
 
 	if strings.Contains(vaulted, "my-super-secret-password-999") {
@@ -45,11 +45,17 @@ func TestVaultUISubmissionSecrets(t *testing.T) {
 	if strings.Contains(vaulted, "pin-secret-88888") {
 		t.Fatalf("vaulted message still contains plaintext custom_pin: %s", vaulted)
 	}
+	if strings.Contains(vaulted, "repeater-secret-77777") {
+		t.Fatalf("vaulted message still contains plaintext repeater seat_secret: %s", vaulted)
+	}
 	if !strings.Contains(vaulted, `"$secret:password"`) {
 		t.Fatalf("vaulted message missing $secret:password placeholder: %s", vaulted)
 	}
 	if !strings.Contains(vaulted, `"$secret:custom_pin"`) {
 		t.Fatalf("vaulted message missing $secret:custom_pin placeholder: %s", vaulted)
+	}
+	if !strings.Contains(vaulted, `"$secret:accounts[0].seat_secret"`) {
+		t.Fatalf("vaulted message missing $secret:accounts[0].seat_secret placeholder: %s", vaulted)
 	}
 	if !strings.Contains(vaulted, `"alice@example.com"`) {
 		t.Fatalf("vaulted message should preserve non-secret username: %s", vaulted)
@@ -60,6 +66,9 @@ func TestVaultUISubmissionSecrets(t *testing.T) {
 	}
 	if got := s.uiSecrets.resolve(user, convID, "$secret:custom_pin"); got != "pin-secret-88888" {
 		t.Fatalf("resolve($secret:custom_pin) = %q, want pin-secret-88888", got)
+	}
+	if got := s.uiSecrets.resolve(user, convID, "$secret:accounts[0].seat_secret"); got != "repeater-secret-77777" {
+		t.Fatalf("resolve($secret:accounts[0].seat_secret) = %q, want repeater-secret-77777", got)
 	}
 	if redacted := agentcore.RedactSecrets("leaked: my-super-secret-password-999"); strings.Contains(redacted, "my-super-secret-password-999") {
 		t.Fatalf("RedactSecrets did not scrub vaulted secret: %q", redacted)
@@ -198,6 +207,25 @@ func (m *memRemoteMCPStore) GetRemoteMCPServerForUse(_ context.Context, _, id st
 func (m *memRemoteMCPStore) ListConnectorPrefs(_ context.Context, _ string) (map[string]store.ConnectorPref, error) {
 	return map[string]store.ConnectorPref{}, nil
 }
+func (m *memRemoteMCPStore) UpdateCustomConnector(_ context.Context, id string, in store.RemoteMCPServerInput) (*store.RemoteMCPServer, error) {
+	r, ok := m.servers[id]
+	if !ok {
+		return nil, store.ErrRemoteMCPNotFound
+	}
+	r.URL = in.URL
+	r.Transport = in.Transport
+	r.Status = in.Status
+	r.AuthKind = in.AuthKind
+	r.APIKeyHeader = in.APIKeyHeader
+	r.APIKeyQuery = in.APIKeyQuery
+	r.APIKeyPrefix = in.APIKeyPrefix
+	r.CustomTools = in.CustomTools
+	if in.APIKey != "" || in.AuthKind == store.RemoteMCPAuthOpen {
+		m.apiKeys[id] = in.APIKey
+	}
+	cp := *r
+	return &cp, nil
+}
 func (m *memRemoteMCPStore) UpdateRemoteMCPCustomTools(_ context.Context, _, id string, customTools []store.CustomConnectorTool) error {
 	if r, ok := m.servers[id]; ok {
 		r.CustomTools = customTools
@@ -299,5 +327,45 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 	}
 	if !strings.Contains(testMap["output"].(string), "c-42") {
 		t.Fatalf("expected campaign output c-42, got %q", testMap["output"])
+	}
+
+	// 4. Reject host placeholder in custom tool URL.
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:    tools.ConnectorStudioActionCreateCustom,
+		Name:      "acme_ads",
+		URL:       upstream.URL,
+		Transport: "http_tools",
+		SecretRef: "$secret:api_key",
+		CustomTools: []tools.ConnectorStudioToolSpec{
+			{
+				Name:        "evil_host",
+				Description: "Should be rejected because host has placeholder.",
+				Method:      "GET",
+				URL:         "https://{host}/v1/campaigns",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "scheme and host must be fixed") {
+		t.Fatalf("expected fixed host error, got %v", err)
+	}
+
+	// 5. Reject cross-origin tool URL on api_key custom connector.
+	_, err = h(context.Background(), tools.ConnectorStudioParams{
+		Action:    tools.ConnectorStudioActionCreateCustom,
+		Name:      "acme_ads",
+		URL:       upstream.URL,
+		Transport: "http_tools",
+		SecretRef: "$secret:api_key",
+		CustomTools: []tools.ConnectorStudioToolSpec{
+			{
+				Name:        "cross_origin",
+				Description: "Should be rejected because origin differs from base URL.",
+				Method:      "GET",
+				URL:         "https://other.example.com/v1/campaigns",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must share the connector's base origin") {
+		t.Fatalf("expected base origin mismatch error, got %v", err)
 	}
 }

@@ -693,7 +693,9 @@ async def inspect_page(page, context, network_calls, extracted, inspect_dom, exp
                     const name = el.getAttribute('name') || '';
                     const type = el.getAttribute('type') || '';
                     const placeholder = el.getAttribute('placeholder') || '';
-                    const text = (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 80);
+                    const isPw = type.toLowerCase() === 'password';
+                    const rawText = isPw ? (el.getAttribute('aria-label') || '') : (el.innerText || el.value || el.getAttribute('aria-label') || '');
+                    const text = rawText.trim().slice(0, 80);
                     let selector = tag;
                     if (id) selector = '#' + CSS.escape(id);
                     else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\"') + '"]';
@@ -742,7 +744,6 @@ async def run_steps(page, steps, creds, extracted):
         action = (st.get("action") or "").lower().strip()
         sel = st.get("selector") or ""
         val = replace_secrets(st.get("value") or "", creds)
-        expr = replace_secrets(st.get("expression") or "", creds)
         mode = (st.get("mode") or "text").lower().strip()
         attr = st.get("attribute") or ""
         st_timeout = min(max(int(st.get("timeout_ms") or 12000), 500), 30000)
@@ -787,9 +788,6 @@ async def run_steps(page, steps, creds, extracted):
                 else:
                     texts = await loc.all_inner_texts()
                     extracted.append("\n".join(t.strip() for t in texts if t.strip())[:32768])
-            elif action == "eval_js":
-                res_js = await page.evaluate(expr or val)
-                extracted.append(res_js)
         except Exception as exc:
             if not optional:
                 raise RuntimeError(f"step '{action}' ({sel}) failed: {exc}") from exc
@@ -827,8 +825,6 @@ async def main():
     proxy_server = init_cmd.get("proxy_server") or ""
 
     launch_args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--disable-extensions",
@@ -841,19 +837,24 @@ async def main():
     network_calls = []
     extracted = []
 
+    async def launch_browser(p):
+        exe = find_chromium_executable()
+        for extra in ([], ["--no-sandbox", "--disable-setuid-sandbox"]):
+            for exe_candidate in ([None, exe] if exe else [None]):
+                kwargs = {"headless": True, "args": launch_args + extra}
+                if proxy_server:
+                    kwargs["proxy"] = {"server": proxy_server}
+                if exe_candidate:
+                    kwargs["executable_path"] = exe_candidate
+                try:
+                    return await p.chromium.launch(**kwargs)
+                except Exception as exc:
+                    last_exc = exc
+        raise last_exc
+
     async with async_playwright() as p:
         try:
-            launch_kwargs = {"headless": True, "args": launch_args}
-            if proxy_server:
-                launch_kwargs["proxy"] = {"server": proxy_server}
-            try:
-                browser = await p.chromium.launch(**launch_kwargs)
-            except Exception:
-                exe = find_chromium_executable()
-                if not exe:
-                    raise
-                launch_kwargs["executable_path"] = exe
-                browser = await p.chromium.launch(**launch_kwargs)
+            browser = await launch_browser(p)
 
             ctx_kwargs = {
                 "viewport": {"width": 1280, "height": 720},
@@ -1081,7 +1082,9 @@ async function inspectPage(page, context, networkCalls, extracted, inspectDom, e
           const name = el.getAttribute("name") || "";
           const type = el.getAttribute("type") || "";
           const placeholder = el.getAttribute("placeholder") || "";
-          const text = (el.innerText || el.value || el.getAttribute("aria-label") || "").trim().slice(0, 80);
+          const isPw = type.toLowerCase() === "password";
+          const rawText = isPw ? (el.getAttribute("aria-label") || "") : (el.innerText || el.value || el.getAttribute("aria-label") || "");
+          const text = rawText.trim().slice(0, 80);
           let selector = tag;
           if (id) selector = "#" + CSS.escape(id);
           else if (name) selector = tag + '[name="' + name.replace(/"/g, '\\"') + '"]';
@@ -1131,7 +1134,6 @@ async function runSteps(page, steps, creds, extracted) {
     const action = String(st.action || "").toLowerCase().trim();
     const sel = st.selector || "";
     const val = replaceSecrets(st.value || "", creds);
-    const expr = replaceSecrets(st.expression || "", creds);
     const mode = String(st.mode || "text").toLowerCase().trim();
     const attr = st.attribute || "";
     const stTimeout = Math.min(Math.max(Number(st.timeout_ms) || 12000, 500), 30000);
@@ -1178,8 +1180,6 @@ async function runSteps(page, steps, creds, extracted) {
           const texts = await loc.allInnerTexts();
           extracted.push(texts.map((t) => t.trim()).filter(Boolean).join("\n").slice(0, 32768));
         }
-      } else if (action === "eval_js") {
-        extracted.push(await page.evaluate(expr || val));
       }
     } catch (err) {
       if (!optional) {
@@ -1225,8 +1225,6 @@ async function pushSnapshotFrame(page) {
   }
 
   const launchArgs = [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
     "--disable-extensions",
@@ -1237,6 +1235,24 @@ async function pushSnapshotFrame(page) {
     launchArgs.push("--proxy-bypass-list=<-loopback>");
   }
 
+  async function launchBrowser() {
+    const exe = findChromiumExecutable();
+    let lastErr;
+    for (const extra of [[], ["--no-sandbox", "--disable-setuid-sandbox"]]) {
+      for (const exeCandidate of exe ? [null, exe] : [null]) {
+        const opts = { headless: true, args: [...launchArgs, ...extra] };
+        if (proxyServer) opts.proxy = { server: proxyServer };
+        if (exeCandidate) opts.executablePath = exeCandidate;
+        try {
+          return await pw.chromium.launch(opts);
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+    }
+    throw lastErr;
+  }
+
   const networkCalls = [];
   const extracted = [];
   let browser;
@@ -1244,16 +1260,7 @@ async function pushSnapshotFrame(page) {
   let page;
 
   try {
-    const launchOpts = { headless: true, args: launchArgs };
-    if (proxyServer) launchOpts.proxy = { server: proxyServer };
-    try {
-      browser = await pw.chromium.launch(launchOpts);
-    } catch (_) {
-      const exe = findChromiumExecutable();
-      if (!exe) throw _;
-      launchOpts.executablePath = exe;
-      browser = await pw.chromium.launch(launchOpts);
-    }
+    browser = await launchBrowser();
 
     const ctxOpts = {
       viewport: { width: 1280, height: 720 },
