@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -607,16 +608,32 @@ func isTokenIdent(s string) bool {
 	return true
 }
 
+var (
+	reSensitiveJSONField  = regexp.MustCompile(`(?i)("(?:access_token|refresh_token|id_token|client_secret|api_key|apikey|secret|secret_key|password|passwd|session_token|auth_token|bearer_token|private_key|token|jwt|sid)"\s*:\s*)"[^"]*"`)
+	reSensitiveQueryParam = regexp.MustCompile(`(?i)([?&](?:access_token|refresh_token|id_token|client_secret|api_key|apikey|secret|password|token|jwt|sid|code)=)[^&#\s"]*`)
+	reBearerToken         = regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._\-+/=]{8,}`)
+)
+
+func redactSensitiveTokens(s string) string {
+	if s == "" {
+		return ""
+	}
+	s = reSensitiveJSONField.ReplaceAllString(s, `$1"[REDACTED]"`)
+	s = reSensitiveQueryParam.ReplaceAllString(s, `$1[REDACTED]`)
+	s = reBearerToken.ReplaceAllString(s, `$1[REDACTED]`)
+	return s
+}
+
 func scrubResult(res *RunResult, creds Credentials) {
 	if res == nil {
 		return
 	}
 	res.Content = maskSecrets(res.Content, creds)
 	res.Title = maskSecrets(res.Title, creds)
-	res.FinalURL = maskSecrets(res.FinalURL, creds)
+	res.FinalURL = redactSensitiveTokens(maskSecrets(res.FinalURL, creds))
 	for i := range res.NetworkCalls {
-		res.NetworkCalls[i].URL = maskSecrets(res.NetworkCalls[i].URL, creds)
-		res.NetworkCalls[i].ResponsePreview = maskSecrets(res.NetworkCalls[i].ResponsePreview, creds)
+		res.NetworkCalls[i].URL = redactSensitiveTokens(maskSecrets(res.NetworkCalls[i].URL, creds))
+		res.NetworkCalls[i].ResponsePreview = redactSensitiveTokens(maskSecrets(res.NetworkCalls[i].ResponsePreview, creds))
 	}
 	for i := range res.DOMElements {
 		res.DOMElements[i].Name = maskSecrets(res.DOMElements[i].Name, creds)
@@ -876,7 +893,9 @@ def main():
                         if rtype not in ("xhr", "fetch") and "json" not in ct and "graphql" not in req.url.lower():
                             return
                         preview = ""
-                        if "json" in ct or "text" in ct:
+                        req_url_lower = req.url.lower()
+                        is_auth_ep = any(seg in req_url_lower for seg in ("/login", "/signin", "/auth", "/oauth", "/token", "/session", "/sso", "/saml"))
+                        if not is_auth_ep and ("json" in ct or "text" in ct):
                             try:
                                 body_txt = resp.text()
                                 if len(body_txt) > 600:
@@ -1197,7 +1216,9 @@ function loadPlaywright() {
             return;
           }
           let preview = "";
-          if (ct.includes("json") || ct.includes("text")) {
+          const reqUrlLower = req.url().toLowerCase();
+          const isAuthEp = ["/login", "/signin", "/auth", "/oauth", "/token", "/session", "/sso", "/saml"].some((seg) => reqUrlLower.includes(seg));
+          if (!isAuthEp && (ct.includes("json") || ct.includes("text"))) {
             try {
               let txt = await resp.text();
               if (txt.length > 600) txt = txt.slice(0, 600) + "…";

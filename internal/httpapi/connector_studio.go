@@ -29,6 +29,7 @@ type uiSecretBucket struct {
 	values             map[string]string
 	fieldIDs           map[string]bool
 	allowedHosts       map[string]bool
+	shareScopeSet      bool
 	allowEveryoneShare bool
 	updatedAt          time.Time
 }
@@ -155,23 +156,32 @@ func (st *uiSecretStash) setAllowEveryone(userEmail, convID string, allow bool) 
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	b := st.ensureBucketLocked(userEmail, convID, now)
+	b.shareScopeSet = true
 	b.allowEveryoneShare = allow
 	b.updatedAt = now
 }
 
-func (st *uiSecretStash) isEveryoneShareAllowed(userEmail, convID string) bool {
+func (st *uiSecretStash) consumeEveryoneShare(userEmail, convID string) (allow bool, explicit bool) {
 	now := time.Now()
 	key := uiSecretKey(userEmail, convID)
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.buckets == nil {
-		return false
+		return false, false
 	}
 	b, ok := st.buckets[key]
 	if !ok || now.Sub(b.updatedAt) > uiSecretTTL {
-		return false
+		return false, false
 	}
-	return b.allowEveryoneShare
+	if !b.shareScopeSet {
+		return false, false
+	}
+	allow = b.allowEveryoneShare
+	// Consume a positive confirmation so it cannot be reused on a subsequent connector.
+	if b.allowEveryoneShare {
+		b.allowEveryoneShare = false
+	}
+	return allow, true
 }
 
 func (st *uiSecretStash) isHostAllowed(userEmail, convID, targetURLOrHost string) bool {
@@ -330,6 +340,33 @@ func collectPasswordComponentIDs(node any, out map[string]bool) {
 // like `password` or `api_key`) is stored in the host-side `uiSecrets` stash,
 // registered with the process-wide secret redactor, and replaced in the message
 // JSON with `"$secret:<field_id>"`.
+func (s *Server) conversationOwnerEmail(ctx context.Context, userEmail, convID string) string {
+	if s.store == nil || strings.TrimSpace(convID) == "" {
+		return ""
+	}
+	if conv, err := s.getOwnedOrMultiplayerConversation(ctx, userEmail, convID); err == nil && conv != nil {
+		return strings.TrimSpace(conv.UserEmail)
+	}
+	return ""
+}
+
+func historyEntryAuthoredByCaller(tc agent.TextContent, userEmail, convOwnerEmail string) bool {
+	if strings.TrimSpace(tc.Kind) != "" {
+		return false
+	}
+	caller := strings.TrimSpace(userEmail)
+	if caller == "" {
+		return false
+	}
+	if sender := strings.TrimSpace(tc.SenderEmail); sender != "" {
+		return strings.EqualFold(sender, caller)
+	}
+	if owner := strings.TrimSpace(convOwnerEmail); owner != "" {
+		return strings.EqualFold(owner, caller)
+	}
+	return true
+}
+
 func (s *Server) vaultUISubmissionSecrets(ctx context.Context, userEmail, convID, message string) string {
 	trimmed := strings.TrimSpace(message)
 	if !strings.HasPrefix(trimmed, "[UI submission]") {
@@ -341,7 +378,8 @@ func (s *Server) vaultUISubmissionSecrets(ctx context.Context, userEmail, convID
 			history = h
 		}
 	}
-	return s.vaultUISubmissionSecretsWithHistory(userEmail, convID, message, history)
+	ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
+	return s.vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, ownerEmail, convID, message, history)
 }
 
 func extractURLTokensFromText(text string) []string {
@@ -355,7 +393,7 @@ func extractURLTokensFromText(text string) []string {
 	return out
 }
 
-func userConfirmedOriginsFromHistory(history []agent.HistoryEntry) []string {
+func userConfirmedOriginsFromHistory(history []agent.HistoryEntry, userEmail, convOwnerEmail string) []string {
 	var out []string
 	for _, h := range history {
 		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
@@ -365,23 +403,29 @@ func userConfirmedOriginsFromHistory(history []agent.HistoryEntry) []string {
 		if err := json.Unmarshal(h.Content, &tc); err != nil {
 			continue
 		}
+		if !historyEntryAuthoredByCaller(tc, userEmail, convOwnerEmail) {
+			continue
+		}
 		out = append(out, extractURLTokensFromText(tc.Text)...)
 	}
 	return out
 }
 
 func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message string, history []agent.HistoryEntry) string {
+	return s.vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, "", convID, message, history)
+}
+
+func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwnerEmail, convID, message string, history []agent.HistoryEntry) string {
 	trimmed := strings.TrimSpace(message)
 	if !strings.HasPrefix(trimmed, "[UI submission]") {
 		return message
 	}
-	rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "[UI submission]"))
-	openIdx := strings.IndexByte(rest, '{')
-	closeIdx := strings.LastIndexByte(rest, '}')
+	openIdx := strings.IndexByte(message, '{')
+	closeIdx := strings.LastIndexByte(message, '}')
 	if openIdx < 0 || closeIdx <= openIdx {
 		return message
 	}
-	jsonPart := rest[openIdx : closeIdx+1]
+	jsonPart := message[openIdx : closeIdx+1]
 	var data map[string]any
 	if err := json.Unmarshal([]byte(jsonPart), &data); err != nil || len(data) == 0 {
 		return message
@@ -389,7 +433,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 
 	pwFields := passwordFieldIDsFromHistory(history)
 	mutated := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields)
-	for _, u := range userConfirmedOriginsFromHistory(history) {
+	for _, u := range userConfirmedOriginsFromHistory(history, userEmail, convOwnerEmail) {
 		s.uiSecrets.allowOrigin(userEmail, convID, u)
 	}
 	if !mutated {
@@ -399,8 +443,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistory(userEmail, convID, message 
 	if err != nil {
 		return message
 	}
-	suffix := rest[closeIdx+1:]
-	return "[UI submission] " + string(redactedBytes) + suffix
+	return message[:openIdx] + string(redactedBytes) + message[closeIdx+1:]
 }
 
 func isLikelyURLFieldID(fieldID string) bool {
@@ -422,8 +465,8 @@ func isShareScopeFieldID(fieldID string) bool {
 }
 
 func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, convID string) bool {
-	if s.uiSecrets.isEveryoneShareAllowed(userEmail, convID) {
-		return true
+	if allow, explicit := s.uiSecrets.consumeEveryoneShare(userEmail, convID); explicit {
+		return allow
 	}
 	if s.store == nil || strings.TrimSpace(convID) == "" {
 		return false
@@ -432,7 +475,9 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 	if err != nil {
 		return false
 	}
-	for _, h := range history {
+	ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
+	for i := len(history) - 1; i >= 0; i-- {
+		h := history[i]
 		if h.Role != "user" || (h.Type != "" && h.Type != "text") || len(h.Content) == 0 {
 			continue
 		}
@@ -440,14 +485,20 @@ func (s *Server) userConfirmedEveryoneShare(ctx context.Context, userEmail, conv
 		if err := json.Unmarshal(h.Content, &tc); err != nil {
 			continue
 		}
+		if !historyEntryAuthoredByCaller(tc, userEmail, ownerEmail) {
+			continue
+		}
 		lower := strings.ToLower(tc.Text)
-		if strings.Contains(lower, "everyone") ||
+		confirmed := strings.Contains(lower, "everyone") ||
 			strings.Contains(lower, "fleet-wide") ||
 			strings.Contains(lower, "fleet wide") ||
 			strings.Contains(lower, "all users") ||
-			strings.Contains(lower, "whole team") {
-			return true
+			strings.Contains(lower, "whole team")
+		if confirmed {
+			// Mark consumed so a single turn's confirmation cannot authorize a later connector.
+			s.uiSecrets.setAllowEveryone(userEmail, convID, false)
 		}
+		return confirmed
 	}
 	return false
 }
@@ -541,7 +592,8 @@ func (s *Server) resolveSecretForURL(ctx context.Context, userEmail, convID, ref
 	if !s.uiSecrets.isHostAllowed(userEmail, convID, targetHost) && !s.isCatalogApprovedHost("", targetHost) {
 		if s.store != nil && convID != "" {
 			if history, err := s.store.LoadHistory(ctx, convID); err == nil {
-				for _, u := range userConfirmedOriginsFromHistory(history) {
+				ownerEmail := s.conversationOwnerEmail(ctx, userEmail, convID)
+				for _, u := range userConfirmedOriginsFromHistory(history, userEmail, ownerEmail) {
 					s.uiSecrets.allowOrigin(userEmail, convID, u)
 				}
 			}
@@ -969,28 +1021,43 @@ func (s *Server) connectorStudioStartCopilotSession(ctx context.Context, user, c
 	}, nil
 }
 
-func (s *Server) enableConnectorOnConversation(ctx context.Context, user string, conv *store.Conversation, connectorName string) {
+func (s *Server) enableConnectorOnConversation(ctx context.Context, user string, conv *store.Conversation, connectorName, account string) {
 	if s.store == nil || conv == nil || strings.TrimSpace(connectorName) == "" {
 		return
 	}
 	norm := strings.ToLower(strings.TrimSpace(connectorName))
+	cleanAcct := strings.TrimSpace(account)
 	unlock := s.connectorLocks.lock(conv.ID)
 	defer unlock()
 	fresh, err := s.getOwnedOrMultiplayerConversation(ctx, user, conv.ID)
 	if err != nil || fresh == nil {
 		fresh = conv
 	}
+	ownerEmail := convOwnerEmail(fresh, user)
 	merged := append([]string(nil), fresh.OptionalMCPServersEnabled...)
+	found := false
 	for _, existing := range merged {
 		if strings.EqualFold(strings.TrimSpace(existing), norm) {
-			return
+			found = true
+			break
 		}
 	}
-	merged = append(merged, norm)
-	sort.Strings(merged)
-	ownerEmail := convOwnerEmail(fresh, user)
-	if err := s.store.SetOptionalMCPServers(ctx, ownerEmail, fresh.ID, merged); err == nil {
-		conv.OptionalMCPServersEnabled = merged
+	if !found {
+		merged = append(merged, norm)
+		sort.Strings(merged)
+		if err := s.store.SetOptionalMCPServers(ctx, ownerEmail, fresh.ID, merged); err == nil {
+			conv.OptionalMCPServersEnabled = merged
+		}
+	}
+	if cleanAcct != "" {
+		accounts := make(map[string]string, len(fresh.MCPAccounts)+1)
+		for k, v := range fresh.MCPAccounts {
+			accounts[k] = v
+		}
+		accounts[norm] = cleanAcct
+		if err := s.store.SetConversationMCPAccounts(ctx, ownerEmail, fresh.ID, accounts); err == nil {
+			conv.MCPAccounts = accounts
+		}
 	}
 }
 
@@ -1045,7 +1112,7 @@ func (s *Server) connectorStudioConnectMCP(ctx context.Context, user string, con
 		}
 	}
 
-	s.enableConnectorOnConversation(ctx, user, conv, server.Name)
+	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
 
 	if server.Status == store.RemoteMCPStatusLoginRequired {
 		authURL, aerr := s.remoteMCP.Authorize(ctx, user, server.ID)
@@ -1200,7 +1267,7 @@ func (s *Server) connectorStudioCreateCustom(ctx context.Context, user string, c
 		return nil, fmt.Errorf("create custom connector: %s", agentcore.RedactSecrets(err.Error()))
 	}
 
-	s.enableConnectorOnConversation(ctx, user, conv, server.Name)
+	s.enableConnectorOnConversation(ctx, user, conv, server.Name, server.Account)
 
 	return map[string]any{
 		"status":               "connected",
@@ -1249,6 +1316,11 @@ func (s *Server) connectorStudioTestCustomTool(ctx context.Context, user string,
 	fullToolName := fmt.Sprintf("mcp_%s_%s", regName, wantTool)
 	if agentcore.IsCriticalTool(fullToolName) {
 		return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
+	}
+	for _, st := range ov.Catalog {
+		if st.ServerName == regName && st.Tool.Name == wantTool && st.Tool.Critical {
+			return nil, fmt.Errorf("test_custom_tool only executes read-only tools directly; %q is a mutating/critical tool — invoke %s directly so it routes through the approval gate", wantTool, fullToolName)
+		}
 	}
 	if conns, cerr := s.remoteMCP.ConnectedServersForUser(ctx, user); cerr == nil {
 		for _, c := range conns {

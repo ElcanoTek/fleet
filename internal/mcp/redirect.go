@@ -37,6 +37,7 @@ func stripHeadersOnCrossOriginRedirect(req *http.Request, via []*http.Request) e
 		for k := range origin.Header {
 			req.Header.Del(k)
 		}
+		req.Header.Del("Referer")
 	}
 	return nil
 }

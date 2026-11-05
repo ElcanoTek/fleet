@@ -134,6 +134,12 @@ func (c *Client) AddPlaywrightToolsOnServer(serverName string, specs []Playwrigh
 }
 
 func isPlaywrightToolSpecCritical(spec PlaywrightToolSpec) bool {
+	for _, st := range spec.Steps {
+		switch strings.ToLower(strings.TrimSpace(st.Action)) {
+		case "fill", "click", "press", "select":
+			return true
+		}
+	}
 	lower := strings.ToLower(strings.TrimSpace(spec.Name))
 	for _, verb := range []string{"create", "update", "delete", "remove", "destroy", "submit", "write"} {
 		if lower == verb || strings.HasPrefix(lower, verb+"_") || strings.HasSuffix(lower, "_"+verb) {

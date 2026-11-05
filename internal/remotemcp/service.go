@@ -678,7 +678,7 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 		return nil, errors.New("at least one custom tool definition is required")
 	}
 
-	in = s.inheritExistingCustomAuth(ctx, name, account, in)
+	in = s.inheritExistingCustomAuth(ctx, name, account, canonURL, in)
 	authKind, header, query, prefix, err := s.resolveCustomConnectorAuth(in)
 	if err != nil {
 		return nil, err
@@ -708,7 +708,16 @@ func (s *Service) AddCustomConnector(ctx context.Context, in AddCustomConnectorI
 	return s.upsertCustomConnector(ctx, in.Email, name, account, in.ShareScope, input)
 }
 
-func (s *Service) inheritExistingCustomAuth(ctx context.Context, name, account string, in AddCustomConnectorInput) AddCustomConnectorInput {
+func sameCustomOrigin(a, b string) bool {
+	ua, errA := url.Parse(strings.TrimSpace(a))
+	ub, errB := url.Parse(strings.TrimSpace(b))
+	if errA != nil || errB != nil || ua.Hostname() == "" || ub.Hostname() == "" {
+		return false
+	}
+	return strings.EqualFold(ua.Scheme, ub.Scheme) && strings.EqualFold(ua.Host, ub.Host)
+}
+
+func (s *Service) inheritExistingCustomAuth(ctx context.Context, name, account, canonURL string, in AddCustomConnectorInput) AddCustomConnectorInput {
 	if strings.TrimSpace(in.AuthMode) != "" || strings.TrimSpace(in.APIKey) != "" {
 		return in
 	}
@@ -719,7 +728,8 @@ func (s *Service) inheritExistingCustomAuth(ctx context.Context, name, account s
 	for _, ex := range existingList {
 		if strings.EqualFold(ex.Name, name) && ex.Account == account &&
 			(ex.Transport == store.RemoteMCPTransportHTTPTools || ex.Transport == store.RemoteMCPTransportPlaywright) &&
-			ex.AuthKind == store.RemoteMCPAuthAPIKey {
+			ex.AuthKind == store.RemoteMCPAuthAPIKey &&
+			sameCustomOrigin(ex.URL, canonURL) {
 			if key, kerr := s.store.GetRemoteMCPAPIKey(ctx, &ex); kerr == nil && strings.TrimSpace(key) != "" {
 				in.AuthMode = store.RemoteMCPAuthAPIKey
 				in.APIKey = key
@@ -926,23 +936,6 @@ func (s *Service) validateCustomPlaywrightSteps(steps []store.CustomConnectorSte
 		}
 	}
 	return nil
-}
-
-func isCustomToolCritical(transport string, ct store.CustomConnectorTool) bool {
-	method := strings.ToUpper(strings.TrimSpace(ct.Method))
-	if transport == store.RemoteMCPTransportHTTPTools {
-		return method != "" && method != http.MethodGet
-	}
-	if method != "" && method != http.MethodGet {
-		return true
-	}
-	name := strings.ToLower(strings.TrimSpace(ct.Name))
-	for _, verb := range []string{"create", "update", "delete", "remove", "destroy", "submit", "write"} {
-		if name == verb || strings.HasPrefix(name, verb+"_") || strings.HasSuffix(name, "_"+verb) {
-			return true
-		}
-	}
-	return false
 }
 
 func normalizeCustomHTTPMethod(rawMethod string, idx int, toolName string) (string, error) {
