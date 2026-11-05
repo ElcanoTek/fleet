@@ -253,14 +253,6 @@ function taskToFormValues(task: Task | null) {
     maxIterations:
       typeof task?.max_iterations === "number" ? String(task.max_iterations) : "",
     maxCostUSD: typeof task?.max_cost_usd === "number" ? String(task.max_cost_usd) : "",
-    // The form has no priority or token-limit inputs; carried so an edit echoes
-    // API-set values faithfully instead of dropping priority to 0 or clearing
-    // max_total_tokens.
-    priority: typeof task?.priority === "number" && task.priority > 0 ? task.priority : 0,
-    maxTotalTokens:
-      typeof task?.max_total_tokens === "number" && task.max_total_tokens > 0
-        ? task.max_total_tokens
-        : 0,
     captainsLog: Boolean(task?.instruction_self_improve),
     allowNetwork: Boolean(task?.allow_network),
     // Sub-agent delegation (#1043) defaults ON: a fresh form starts true, and an
@@ -1156,8 +1148,6 @@ export function TaskCreateModal({
     if (fallbackModel) taskData.fallback_model = fallbackModel;
     if (maxIterations.trim()) taskData.max_iterations = Number.parseInt(maxIterations, 10);
     if (maxCostUSD.trim()) taskData.max_cost_usd = Number.parseFloat(maxCostUSD);
-    if (init.priority > 0) taskData.priority = init.priority;
-    if (init.maxTotalTokens > 0) taskData.max_total_tokens = init.maxTotalTokens;
     if (captainsLog) taskData.instruction_self_improve = true;
     if (allowNetwork) taskData.allow_network = true;
     // Delegation defaults ON server-side (#1043): omit when on, send the
