@@ -193,7 +193,7 @@ export function StoragePanel() {
         <div data-testid="storage-panel">
           {heavy ? (
             <NoticeBanner tone="warning" data-testid="storage-heavy-warning">
-              Chat data is using {formatBytes(chatDataBytes)} — more than half of this disk. Consider running a cleanup below.
+              Chat data is using {formatBytes(chatDataBytes)}, more than half of this disk. You can delete old data below.
             </NoticeBanner>
           ) : null}
           <AdminStats items={items} />
@@ -217,10 +217,10 @@ export function StoragePanel() {
           ) : null}
 
           <div className="mt-5 border-t border-[var(--color-border)] pt-4">
-            <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Clean up now</h4>
+            <h4 className="m-0 mb-1 text-[0.85rem] font-semibold text-[var(--color-text-primary)]">Delete old data</h4>
             <p className="m-0 mb-3 text-[0.8rem] text-[var(--color-text-muted)]">
-              Reclaims disk from chats and files idle longer than the cutoff. Pinned, archived, shared, and project
-              chats are never touched.{" "}
+              Permanently deletes chats with no activity, and uploaded files older than, the number of days
+              below. Pinned, archived, shared, and project chats are always kept.{" "}
               <span data-testid="storage-cleanup-preview">
                 {previewAtDefault ? (
                   <>
@@ -243,7 +243,7 @@ export function StoragePanel() {
                 className="flex items-center gap-1.5 text-[0.8rem] text-[var(--color-text-secondary)]"
                 htmlFor="cleanupDays"
               >
-                Idle more than
+                Cutoff
                 <input
                   id="cleanupDays"
                   type="number"
@@ -276,14 +276,14 @@ export function StoragePanel() {
                   checked={sweepFiles}
                   onChange={(e) => setSweepFiles(e.target.checked)}
                 />
-                Sweep aged upload files
+                Delete old uploaded files
               </label>
               {/* Cleanup deletes chats and files for good, so it takes the
                   same two-click inline confirmation as every other
                   irreversible action in Settings — no native dialog. */}
               <InlineConfirmButton
-                label={cleaning ? "Cleaning…" : "Run cleanup"}
-                confirmLabel="Confirm cleanup"
+                label={cleaning ? "Deleting…" : "Delete old data"}
+                confirmLabel="Permanently delete"
                 disabled={cleaning || (!deleteChats && !sweepFiles)}
                 onConfirm={() => void runCleanup()}
                 testId="storage-cleanup-run"

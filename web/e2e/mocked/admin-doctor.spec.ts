@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
 
-// Mocked e2e for Settings → Admin → Doctor: the box-health report renders
+// Mocked e2e for Settings → Admin → System checks: the box-health report renders
 // from GET /api/admin/doctor, failing checks show their on-box fix command,
 // and the deep run happens only via the explicit button (forwarding ?deep=1).
 
@@ -74,7 +74,7 @@ test.beforeEach(async ({ context }) => {
   await loginViaCookie(context);
 });
 
-test("the Doctor panel renders box checks with fix commands for failures", async ({ page }) => {
+test("the System checks page renders box checks with fix commands for failures", async ({ page }) => {
   await mockAdmin(page);
   await page.goto("/settings/admin/doctor");
 
@@ -98,9 +98,9 @@ test("the deep run goes through the explicit button and reports the smoke", asyn
   await expect(page.getByText("healthy", { exact: true })).toBeVisible();
 });
 
-test("Doctor appears in the settings admin sub-nav", async ({ page }) => {
+test("System checks appears in the settings admin sub-nav", async ({ page }) => {
   await mockAdmin(page);
   await page.goto("/settings/admin");
   await expect(page.getByTestId("setnav-admin")).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByRole("link", { name: "Doctor" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "System checks" })).toBeVisible();
 });

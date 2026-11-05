@@ -8,7 +8,7 @@ import { creds, expect, test } from "./fixtures";
 // Selectors follow the fleet-unified settings redesign: rows/cards are divs
 // carrying skill-row-* / dir-card-* / bundled-card-* testids, deletes are
 // two-click inline confirms (no window.confirm dialog), and the bundled
-// availability control is a switch + "Enabled for me"/"Disabled for me" label.
+// availability control is a switch + "On for me"/"Off for me" label.
 
 const SKILL_NAME = "e2e-live-skill";
 
@@ -91,7 +91,7 @@ test("connections page: directory searches and an availability toggle persists",
 
   // The built-in hosted directory is inherited by the default bundle: search
   // reaches entries outside the popular preview, with their vet links.
-  const search = page.getByRole("textbox", { name: "Search connector directory" });
+  const search = page.getByRole("textbox", { name: "Search connections" });
   await expect(search).toBeVisible();
   await search.fill("stripe");
   const stripeCard = page
@@ -110,14 +110,14 @@ test("connections page: directory searches and an availability toggle persists",
   const imgCard = page.getByTestId("bundled-card-image_generation").last();
   await expect(imgCard).toBeVisible();
   await imgCard.getByRole("switch", { name: /Enable Image generation for me/ }).click();
-  await expect(imgCard.getByText("Disabled for me")).toBeVisible();
+  await expect(imgCard.getByText("Off for me")).toBeVisible();
 
   await page.reload();
   const imgCardAfter = page.getByTestId("bundled-card-image_generation").last();
-  await expect(imgCardAfter.getByText("Disabled for me")).toBeVisible();
+  await expect(imgCardAfter.getByText("Off for me")).toBeVisible();
 
   await imgCardAfter.getByRole("button", { name: "Reset" }).click();
-  await expect(imgCardAfter.getByText("Enabled for me")).toBeVisible();
+  await expect(imgCardAfter.getByText("On for me")).toBeVisible();
 });
 
 test("sharing: grantee sees a shared connection surface", async ({ page, login }) => {
@@ -127,7 +127,7 @@ test("sharing: grantee sees a shared connection surface", async ({ page, login }
   // unit-tested. Here we assert the surfaces exist and degrade correctly for
   // a user with no connections: no Shared-with-you section, no stray errors.
   await page.goto("/settings/connections");
-  await expect(page.getByText("Remote servers").first()).toBeVisible();
+  await expect(page.getByText("Added by you").first()).toBeVisible();
   await expect(page.getByText("Shared with you")).toHaveCount(0);
   await expect(page.getByText(/Authorization failed/)).toHaveCount(0);
   void creds; // fixture import kept for parity with sibling specs

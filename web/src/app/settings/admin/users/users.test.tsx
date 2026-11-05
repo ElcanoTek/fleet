@@ -452,7 +452,7 @@ describe("AdminUsersPage", () => {
     openKebab("bob@x.com");
 
     const chat = screen.getByRole("group", { name: "Chat permissions" });
-    const ops = screen.getByRole("group", { name: "Ops Center permissions" });
+    const ops = screen.getByRole("group", { name: "Background tasks permissions" });
     const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
     const permissionGroups = within(
       screen.getByRole("dialog", { name: "Edit bob@x.com" }),
@@ -460,7 +460,7 @@ describe("AdminUsersPage", () => {
     expect(permissionGroups.map((group) => group.getAttribute("aria-label"))).toEqual([
       "Fleet Admin permissions",
       "Chat permissions",
-      "Ops Center permissions",
+      "Background tasks permissions",
     ]);
     expect(
       within(chat)
@@ -474,7 +474,7 @@ describe("AdminUsersPage", () => {
     ).toEqual(["None", "Viewer", "Contributor"]);
     expect(
       within(admin).getByText(
-        "Full permissions in both Chat and the Ops Center.",
+        "Full access to Chat and Background tasks.",
       ),
     ).toBeVisible();
     expect(
@@ -487,14 +487,14 @@ describe("AdminUsersPage", () => {
         "Can actively use Chat, including creating and updating content.",
       ),
     ).toBeVisible();
-    expect(within(ops).getByText("No access to the Ops Center.")).toBeVisible();
+    expect(within(ops).getByText("No access to Background tasks.")).toBeVisible();
     expect(
       within(ops).getByText(
-        "Can view Ops Center tasks and logs but cannot change them.",
+        "Can see background tasks and their logs but can't change them.",
       ),
     ).toBeVisible();
     expect(
-      within(ops).getByText("Can view, create, and run Ops Center tasks."),
+      within(ops).getByText("Can see, create, and run background tasks."),
     ).toBeVisible();
     expect(within(chat).queryByRole("radio", { name: "Admin" })).toBeNull();
     expect(within(ops).queryByRole("radio", { name: "Admin" })).toBeNull();
@@ -558,7 +558,7 @@ describe("AdminUsersPage", () => {
 
     const admin = screen.getByRole("group", { name: "Fleet Admin permissions" });
     const chat = screen.getByRole("group", { name: "Chat permissions" });
-    const ops = screen.getByRole("group", { name: "Ops Center permissions" });
+    const ops = screen.getByRole("group", { name: "Background tasks permissions" });
     fireEvent.click(within(admin).getByRole("checkbox", { name: "Fleet Admin" }));
 
     expect(
@@ -615,7 +615,7 @@ describe("AdminUsersPage", () => {
       within(admin).getByRole("checkbox", { name: "Fleet Admin" }),
     ).not.toBeChecked();
     expect(
-      within(screen.getByRole("group", { name: "Ops Center permissions" })).getByRole(
+      within(screen.getByRole("group", { name: "Background tasks permissions" })).getByRole(
         "radio",
         { name: "None" },
       ),
@@ -629,7 +629,7 @@ describe("AdminUsersPage", () => {
     });
   });
 
-  it("creates a user with Chat, Ops Center, and team assignments", async () => {
+  it("creates a user with Chat, Background tasks, and team assignments", async () => {
     const calls: { body: string }[] = [];
     mockFetch((url, init) => {
       if (url === "/api/admin/users" && init?.method === "POST") {
@@ -671,7 +671,7 @@ describe("AdminUsersPage", () => {
       name: "New user Chat permissions",
     });
     const ops = screen.getByRole("group", {
-      name: "New user Ops Center permissions",
+      name: "New user Background tasks permissions",
     });
     expect(within(admin).getAllByRole("checkbox")).toHaveLength(1);
     expect(
@@ -690,7 +690,7 @@ describe("AdminUsersPage", () => {
       ),
     ).toBeVisible();
     expect(
-      within(ops).getByText("Can view, create, and run Ops Center tasks."),
+      within(ops).getByText("Can see, create, and run background tasks."),
     ).toBeVisible();
     fireEvent.click(within(chat).getByRole("radio", { name: "Viewer" }));
     fireEvent.click(within(ops).getByRole("radio", { name: "Contributor" }));

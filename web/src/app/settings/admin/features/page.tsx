@@ -79,7 +79,7 @@ const META: Record<string, SettingMeta> = {
   pii_redaction_mode: {
     label: "PII redaction",
     description:
-      "OPTIONAL and OFF by default. When on, scans every tool result for PII (emails, SSNs, credit cards, IPs, phone numbers) before it reaches the model, on top of the always-on secret scrubber. It only ever touches TOOL OUTPUT — never what users type into chat — so you can always send PII in a message; set the mode to Off to disable it entirely. Deterministic pattern matching — a redaction aid, not a certified DLP engine.",
+      "Off by default. When on, Fleet looks for personal details (emails, US Social Security numbers, card numbers, phone numbers, IP addresses) in what connected tools send back, before the assistant sees it. What people type into chat is never changed. Secret filtering (passwords, keys) stays on whatever this is set to. Both are pattern-based and can miss things.",
     optionHelp: {
       off: "Off (default): tool output passes through unchanged. PII is never redacted anywhere.",
       observe: "Detect and audit-log findings (kind + count, never the value) without changing the output — a monitoring posture.",
@@ -90,7 +90,7 @@ const META: Record<string, SettingMeta> = {
   guardrail_mode: {
     label: "Prompt-injection guardrail",
     description:
-      "Host-side screening of user/task input and tool output before it enters the model context. The detector is probabilistic and complements, never replaces, Fleet's sandbox and approvals.",
+      "Screens messages, task instructions and tool results for attempts to trick the assistant into ignoring its instructions. Needs a detector service (the URL below). It adds a layer of protection; the sandbox and approvals still apply.",
     optionHelp: {
       off: "Off (default): no detector calls and existing behavior is unchanged.",
       observe: "Record verdicts and detector outages without blocking content.",
@@ -100,101 +100,101 @@ const META: Record<string, SettingMeta> = {
   guardrail_url: {
     label: "Guardrail detector URL",
     description:
-      "HTTP endpoint for the operator-deployed detector. Fleet sends profile, source, and text and expects a flagged verdict. Keep it on loopback or a private network.",
+      "The web address of your detector service. Keep it on this server or a private network.",
   },
   tool_disclosure_threshold: {
     label: "Tool disclosure threshold",
     description:
-      "When a conversation's tool roster grows past this many tools, MCP tools are searched on demand (tool_search → tool_call) instead of all being advertised at once. Lower it to shrink prompts on tool-heavy workspaces.",
+      "When a chat has more tools than this, the assistant searches for the tool it needs instead of seeing them all at once. Lower it to keep requests small in workspaces with many connections.",
     unitHint: "tools",
   },
   max_tool_output_bytes: {
     label: "Tool output ceiling",
     description:
-      "Cap any single tool result before it enters the context window. Oversized structured output stays valid and points to governed workspace recovery when available; binary is never inlined.",
+      "The largest result a single tool can hand to the assistant. Anything bigger is shortened, with a pointer to the full result where one is available.",
     unitHint: "bytes — 0 uses 64 KiB; hard max 128 KiB",
   },
   max_cost_usd: {
     label: "Per-run cost ceiling",
     description:
-      "The most one chat turn or one scheduled run may spend before Fleet stops it (the run then dead-letters as cost_ceiling). Applies to every task on this deployment; read at the start of each run, so an edit governs the next run without a restart. Overrides FLEET_MAX_COST_USD until Reset, after which the env value (and env-file reloads) serve again.",
+      "The most one chat reply or one task run can spend before Fleet stops it. Applies to everyone on this workspace from the next run.",
     unitHint: "USD — 1 to 100000, cents allowed; 0 = no ceiling",
   },
   max_total_tokens: {
     label: "Per-run token ceiling",
     description:
-      "The most uncached tokens (prompt minus cache hits, plus output) one chat turn or one scheduled run may consume before Fleet stops it. Models with a low cache-hit rate trip this long before the cost ceiling: a 100-turn run that caches 12% of its prompt burns roughly three times the uncached tokens of the same run at 65%. Read at the start of each run; overrides FLEET_MAX_TOTAL_TOKENS until Reset.",
+      "The most text (counted in tokens) one chat reply or one task run can use before Fleet stops it. Repeated text the model provider caches does not count. Applies from the next run.",
     unitHint: "tokens — 10000 to 1000000000; default 10000000; 0 = no ceiling",
   },
   approval_timeout_seconds: {
     label: "Approval timeout",
     description:
-      "How long a pending approval card (send email, risky bash, scheduled-task changes, bundle-declared critical tools) waits for a human before it is auto-denied. The card shows a live countdown; a card that times out is safely denied and the agent is told the action was not taken. Set it once for the workspace — a per-conversation override and per-tool bundle windows still win when set. Email previews never expire (there is nothing to deny).",
+      "How long an action waiting for approval (sending an email, a risky command, changing a scheduled task) waits before it is declined automatically. The assistant is told the action did not happen. Some chats and tools set their own timeout, which wins. Email previews never expire.",
     unitHint: "seconds — 60 to 604800 (7d); default 86400 (24h)",
   },
   phone_a_friend_enabled: {
     label: "Phone-a-friend review",
     description:
-      "Have a second model review each scheduled run's final output once before it's accepted. Adds one extra model call per run.",
+      "A second model checks each scheduled task's final answer once before it is accepted. Adds one extra model call per run.",
   },
   subagents_enabled: {
     label: "Sub-agent delegation",
     description:
-      "Fleet-wide kill switch for governed sub-agents (on by default). When on, scheduled tasks (unless a task opts out via allow_delegation) and chat turns register spawn_subagent — the agent decides whether to use it. Children inherit ceilings and policy from the parent run; turning this off hides the tool everywhere.",
+      "On by default. Lets the assistant hand parts of a big job to helper assistants that follow the same limits and rules. Turn off to stop this everywhere. A single task can also opt out.",
   },
   memory_autoindex_enabled: {
     label: "Memory auto-index",
     description:
-      "After each chat turn, extract durable facts into the user's memory automatically instead of relying on explicit remember requests. Uses a cheap model call per turn.",
+      "After each chat reply, suggest lasting facts the person can save to their memories with one click. Uses one small model call per reply.",
   },
   error_analysis_enabled: {
     label: "Task error analysis",
     description:
-      "When a scheduled task fails terminally, run an LLM diagnosis of what went wrong and surface it on the task page.",
+      "When a scheduled task fails, have the assistant explain what went wrong on the task's page.",
   },
   auto_title_enabled: {
     label: "Auto-title conversations",
-    description: "Generate a conversation title from the first exchange with a cheap model call.",
+    description: "Name each new conversation from its first messages. Uses one small model call.",
   },
   connector_recommendations_enabled: {
     label: "Connector recommendations",
     description:
-      "Suggest a not-yet-enabled connector when a chat message looks relevant to it. Deterministic keyword matching over the catalog — no model call, nothing leaves the box.",
+      "Suggest a connection that isn't turned on when a message looks related to it. Uses keyword matching only: no model call, and nothing leaves this server.",
   },
   context_handles_enabled: {
     label: "Composer context handles",
-    description: "Let users @-reference files and past conversations from the chat composer.",
+    description: "Let people type @ in the message box to point the assistant at a file or an earlier conversation.",
   },
   team_chats_shared_by_default: {
     label: "Multiplayer team chats by default",
     description:
-      "When on, every new unfiled or team-project chat (outside Lockdown mode) created by a team member automatically starts in Multiplayer mode so everyone on the team can open it from the sidebar and send messages directly using their own email, credentials, and MCP connectors. Chats created inside a personal project stay private unless Multiplayer is turned on in the Share menu, and owners can still turn Multiplayer off or remove specific people per chat.",
+      "When on, new chats that team members start outside a personal project are shared with their team automatically, so teammates can open them and reply. Lockdown chats and chats in personal projects stay private. The chat's owner can stop sharing or remove people at any time. Everyone uses their own connected accounts.",
   },
   default_model: {
     label: "Default model",
     description:
-      "What a new conversation starts on — the first pinned, \u201Crecommended\u201D row in every model picker. Pick from the OpenRouter catalog or any workspace provider configured under Admin \u2192 Model providers (Bedrock, OpenAI-direct, \u2026 appear as provider/model), or type any slug. Applies live: the web re-reads it on every shell mount. Conversations that already picked a model keep it.",
+      "The model every new conversation starts on, shown first in each model picker. Pick from the list or type a model name. Conversations that already chose a model keep it.",
   },
   advanced_model: {
     label: "Fallback model",
     description:
-      "The secondary frontier model — what patrol/task runs fail over to, what the agent\u2019s model suggestion and spreadsheet nudge offer to switch to, and the second pinned picker row. Same sources as the default model. Applies to the next suggestion; a card already on screen keeps the model it offered.",
+      "The stronger model the assistant offers to switch to when a chat struggles, and the one tasks and patrols fall back to if their model fails. Shown second in each model picker.",
   },
   task_model: {
     label: "Task model",
     description:
-      "What background tasks run on: the model the new-task form pre-fills, the model a task scheduled from chat gets when the agent names none, and what a task with no model of its own runs on. Unset, it follows the default frontier model. Set it only to give tasks a different primary model from chat\u2019s default tier. Applies live to new tasks; a task that already has a model keeps it.",
+      "The model background tasks use unless a task picks its own. Leave it empty to use the default model. Tasks that already have a model keep it.",
     emptyDefault: "Follows the default model",
   },
   escalation_signals_enabled: {
     label: "Offer the advanced model when a turn struggles",
     description:
-      "After a chat reply on any model but the advanced one, offer the advanced model when the turn clearly struggled: three tool calls in a row failed, the agent repeated the same call and was stopped, the conversation had to be summarized to fit, or the turn took 25 or more tool steps. Free: it reads the turn itself, with no extra model call. The same card, cooldown and limits as the assistant's own suggestion.",
+      "After a reply that clearly struggled (several tool errors in a row, the same step repeated, the chat had to be summarized, or a very long run), offer to switch to the advanced model. Free: no extra model call.",
   },
   escalation_classifier_mode: {
     label: "Frustration check",
     description:
-      "A small decision model reads the end of the conversation after each user message (from the second on) and estimates whether the user is pushing back on a wrong or incomplete answer. Each check costs about $0.00002 with Jev and runs alongside the reply, so the reply is never delayed. It sends the recent user and assistant text, never tool output or files, to the decision model's provider through OpenRouter; lockdown chats are never checked.",
+      "After each message from the second on, a small model reads the end of the chat to tell whether the person is unhappy with an answer. It runs alongside the reply, so nothing is slowed down, and costs a tiny fraction of a cent. Only recent messages are sent to that model's provider, never files or tool results. Lockdown chats are never checked.",
     optionHelp: {
       off: "Off: no check, nothing sent.",
       observe: "Check every message and count frustrated ones on the Users page, without showing a card.",
@@ -204,12 +204,12 @@ const META: Record<string, SettingMeta> = {
   escalation_classifier_model: {
     label: "Frustration check model",
     description:
-      "Any OpenRouter decision model. The default, ~typesafe/jev-latest, follows Jev's newest release automatically. The list shows every paid decision model OpenRouter offers today, cheapest first, so new ones appear without a fleet update.",
+      "The small model used for the frustration check. The default follows its maker's newest release automatically. The list shows every model you can pick, cheapest first.",
   },
   escalation_classifier_threshold: {
     label: "Frustration threshold",
     description:
-      "How sure the check must be before a message counts as frustration. Higher means fewer, surer cards. Jev scored clear pushback at 0.95 to 0.99 and normal follow-ups below 0.15 in testing.",
+      "How sure the check must be before a message counts as frustration. Higher means fewer, more certain suggestions.",
     unitHint: "percent — 50 to 99; default 80",
   },
 };
@@ -407,7 +407,7 @@ function FeaturesAdmin() {
   return (
     <SetSection
       title="Features"
-      intro="Workspace-wide feature toggles. Every change applies live — the next turn, run, or tool call picks it up; nothing here needs a restart. Each setting’s deployment default comes from the env var shown on the row. Reset reverts to it."
+      intro="Settings for everyone in this workspace. Changes apply from the next message or task run, with no restart. Reset puts a setting back to the server default."
     >
       <div data-testid="feature-settings-panel">
         <div className="sticky top-0 z-20 mb-[1.1rem] grid gap-[0.55rem] border-b border-[var(--color-border)] bg-[var(--color-bg)] pb-[0.75rem] pt-[0.7rem] [background-attachment:fixed] [background-image:var(--gradient-bg)] [background-size:cover]">

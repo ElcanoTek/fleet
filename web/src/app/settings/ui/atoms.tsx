@@ -147,9 +147,11 @@ export function SetRow({
           {label}
         </span>
         {desc ? (
-          <span className="max-w-[32rem] text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
+          // A div, not a span: a description may hold block content (a
+          // details expander, a list).
+          <div className="max-w-[32rem] text-[0.78rem] leading-[1.5] text-[var(--color-text-muted)]">
             {desc}
-          </span>
+          </div>
         ) : null}
       </div>
       <div className="flex shrink-0 items-center">{children}</div>

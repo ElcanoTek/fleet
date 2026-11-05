@@ -78,6 +78,18 @@ function taskControlLabel(task: Task, action: string): string {
     : `${action} task ${label} (${idPart})`;
 }
 
+// Stopping a recurring task ends its schedule for good, so its control names
+// the schedule rather than reading like a pause.
+function stopVerb(task: Task): string {
+  return task.recurrence ? "Stop the schedule for" : "Stop";
+}
+
+function stopTitle(task: Task): string {
+  return task.recurrence
+    ? "Stop the schedule for good. It won't run again, and a run in progress stops too."
+    : "Stop this task";
+}
+
 // TasksTable — the Recent Tasks table + filter bar + pagination. React port of
 // moc dashboard.js renderTasks()/buildTaskQueryString()/pagination controls.
 // Clicking a row opens the log viewer (parent's onOpenLogs).
@@ -451,12 +463,8 @@ export function TasksTable({
                           <button
                             type="button"
                             className="icon-action task-stop-btn"
-                            aria-label={taskControlLabel(task, "Stop")}
-                            title={
-                              task.recurrence
-                                ? "Stop this job — it will not run again"
-                                : "Stop this task"
-                            }
+                            aria-label={taskControlLabel(task, stopVerb(task))}
+                            title={stopTitle(task)}
                             data-testid="task-stop-button"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -599,10 +607,8 @@ export function TasksTable({
                         role="button"
                         tabIndex={0}
                         className="icon-action task-stop-btn"
-                        aria-label={taskControlLabel(task, "Stop")}
-                        title={
-                          task.recurrence ? "Stop this job — it will not run again" : "Stop this task"
-                        }
+                        aria-label={taskControlLabel(task, stopVerb(task))}
+                        title={stopTitle(task)}
                         data-testid="task-stop-button-card"
                         onClick={(e) => {
                           e.stopPropagation();

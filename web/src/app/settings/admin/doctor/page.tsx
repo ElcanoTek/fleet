@@ -108,12 +108,12 @@ export default function AdminDoctorPage() {
 
   return (
     <SetSection
-      title="Doctor"
-      intro="Read-only box-health checks run from inside the Fleet process: databases, disk headroom, rootless-podman prerequisites, the sandbox image, and the systemd units. Repairs run on the box, not from here."
+      title="System checks"
+      intro="Checks the health of the server this workspace runs on: database, disk space, and the services Fleet needs. These checks only look; any fix is run on the server itself."
     >
       <ConnGroup>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">Box health</h3>
+          <h3 className="m-0 text-[0.98rem] font-semibold text-[var(--color-text-primary)]">Server health</h3>
           {report ? (
             <ConnBadge variant={report.healthy ? "success" : "warn"} title={`${report.summary.fail} failing / ${report.summary.warn} warnings`}>
               {report.healthy ? "healthy" : `${report.summary.fail} failing`}
@@ -162,7 +162,7 @@ export default function AdminDoctorPage() {
             replacing the whole panel with the banner. */}
         {error ? (
           <NoticeBanner tone="danger" data-testid="doctor-error" className={report ? "mb-3" : undefined}>
-            Doctor report unavailable: {error}
+            System checks unavailable: {error}
             {report ? " — showing the last completed report." : ""}
           </NoticeBanner>
         ) : null}

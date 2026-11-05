@@ -231,7 +231,7 @@ when a user marks an active skill as shared with the workspace (`Share with
 workspace` on the row or in the builder/Save-as-workflow dialog, bounded by
 `MaxWorkspaceSharedSkills = 100` distinct shared skill names), it is published
 to `GET /skills` under `shared_skills` (`source: "workspace"`,
-`shared_by: "<email>"`) and surfaced in **Settings → Skills → Workspace pack**.
+`shared_by: "<email>"`) and surfaced in **Settings → Skills → Workspace skills**.
 Teammates' shared skills are **never** auto-injected into another user's prompt
 or workspace without consent: a teammate inspects the skill in the Workspace
 pack and clicks **Add to my skills** to create an active private copy in their

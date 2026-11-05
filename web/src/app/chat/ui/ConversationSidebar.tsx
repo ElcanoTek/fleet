@@ -180,7 +180,7 @@ function RecentInfoButton() {
         onFocus={show}
         onBlur={hide}
       >
-        <Icon name="alert-triangle" className="size-[0.9rem]" />
+        <Icon name="info" className="size-[0.9rem]" />
       </button>
       {pos && typeof document !== "undefined"
         ? createPortal(
@@ -1808,12 +1808,14 @@ export function ConversationSidebar({
           {conversations.some((c) => !c.pinned) ? (
             <button
               type="button"
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.75rem] text-[var(--color-text-muted)] transition hover:bg-[var(--rail-hover)] hover:text-[var(--color-danger)]"
+              // Red at rest, not only on hover: this deletes many chats at
+              // once, so it must not read like the rail's ordinary rows.
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[0.75rem] font-medium text-[var(--color-danger-text)] transition hover:bg-[color-mix(in_srgb,var(--color-danger)_12%,transparent)]"
               onClick={() => setConfirmBulkDelete(true)}
-              title="Delete every unpinned conversation"
+              title="Delete every chat in Temporary"
             >
               <Icon name="trash" className="size-3.5 shrink-0" />
-              Delete all unpinned
+              Delete temporary chats
             </button>
           ) : null}
         </div>

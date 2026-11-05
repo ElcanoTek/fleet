@@ -277,7 +277,7 @@ describe("TasksTable Stop action (#1152)", () => {
 
   it("says a recurring job will not run again, so the consequence is on the button", () => {
     renderWithStop([scheduledJob], vi.fn());
-    expect(screen.getByTestId("task-stop-button").getAttribute("title")).toMatch(/not run again/i);
+    expect(screen.getByTestId("task-stop-button").getAttribute("title")).toMatch(/won't run again/i);
   });
 
   it("does not open the log viewer when Stop is clicked", () => {

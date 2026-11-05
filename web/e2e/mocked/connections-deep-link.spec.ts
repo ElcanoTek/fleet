@@ -83,7 +83,7 @@ test("?connector=browserbase lands one paste away from connected", async ({
   // The directory is filtered to the linked entry and its form is open.
   const form = page.getByTestId("dir-form-browserbase");
   await expect(form).toBeVisible({ timeout: 15_000 });
-  await expect(page.getByLabel("Search connector directory")).toHaveValue(
+  await expect(page.getByLabel("Search connections")).toHaveValue(
     "browserbase",
   );
   await expect(page.getByTestId("dir-card-exa")).toHaveCount(0);

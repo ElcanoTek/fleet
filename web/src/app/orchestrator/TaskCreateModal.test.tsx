@@ -84,7 +84,7 @@ describe("TaskCreateModal — default model pair", () => {
     createTask.mockResolvedValue({ id: "t1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
       model: DEFAULT_MODEL,
@@ -113,7 +113,7 @@ describe("TaskCreateModal — default model pair", () => {
       expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("acme/frontier-1"),
     );
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
       model: "acme/frontier-1",
@@ -166,7 +166,7 @@ describe("TaskCreateModal — default model pair", () => {
       expect((screen.getByLabelText("Fallback") as HTMLInputElement).value).toBe("acme/cheap-1"),
     );
     expect((screen.getByLabelText("Primary") as HTMLInputElement).value).toBe("user/pick-1");
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
       model: "user/pick-1",
@@ -179,7 +179,7 @@ describe("TaskCreateModal — default model pair", () => {
     createTask.mockResolvedValue({ id: "t1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({
       model: "acme/frontier-1",
@@ -195,7 +195,7 @@ describe("TaskCreateModal — default model pair", () => {
     createTask.mockResolvedValue({ id: "t1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ model: "acme/frontier-pro" });
   });
@@ -204,7 +204,7 @@ describe("TaskCreateModal — default model pair", () => {
 describe("TaskCreateModal — launch gating", () => {
   it("disables Launch with a visible reason only while the prompt is empty", () => {
     renderModal();
-    const launch = screen.getByRole("button", { name: "Launch task" });
+    const launch = screen.getByRole("button", { name: "Run task now" });
     expect(launch).toBeDisabled();
     expect(screen.getByText("Add a prompt to launch")).toBeInTheDocument();
 
@@ -249,7 +249,7 @@ describe("TaskCreateModal — schedule modes", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Fix 1 field above")).toBeInTheDocument();
     // Launch stays ENABLED with field errors — only an empty prompt disables it.
-    expect(screen.getByRole("button", { name: "Launch task" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start schedule" })).toBeEnabled();
 
     // A preset fixes the field and clears the error + echo returns.
     fireEvent.click(screen.getByText("Weekdays 9am"));
@@ -273,7 +273,7 @@ describe("TaskCreateModal — schedule modes", () => {
     );
     expect(monday).toBeEnabled();
     fireEvent.change(screen.getByLabelText("Repeat time"), { target: { value: "13:30" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start schedule" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "30 13 * * 1,3" });
@@ -290,7 +290,7 @@ describe("TaskCreateModal — schedule modes", () => {
     expect(screen.queryByText(/local time/)).not.toBeInTheDocument();
     expect(document.getElementById("recurrence-echo")).toHaveTextContent(`· ${zone}`);
     expect(screen.queryByTestId("repeat-timezone-hint")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start schedule" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ recurrence: "0 9 * * 1-5", timezone: zone });
@@ -308,7 +308,7 @@ describe("TaskCreateModal — schedule modes", () => {
 
     // Switching to UTC is an edit the PUT carries.
     fireEvent.change(screen.getByLabelText("Repeat time zone"), { target: { value: "UTC" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     fireEvent.click(await screen.findByTestId("edit-scope-definition"));
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     expect(updateTask.mock.calls[0][1]).toMatchObject({ recurrence: "0 8 * * 1-5", timezone: "UTC" });
@@ -328,7 +328,7 @@ describe("TaskCreateModal — schedule modes", () => {
     });
     expect(screen.getByLabelText("Repeat end date")).toHaveValue("2026-07-31");
     fireEvent.change(screen.getByLabelText("Repeat end date"), { target: { value: "2026-08-15" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     fireEvent.click(await screen.findByTestId("edit-scope-definition"));
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     expect(updateTask.mock.calls[0][1]).toMatchObject({
@@ -366,7 +366,7 @@ describe("TaskCreateModal — schedule modes", () => {
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("radio", { name: "Run once" }));
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Schedule task" }));
     expect(await screen.findByText("Pick a date and time.")).toBeInTheDocument();
     expect(createTask).not.toHaveBeenCalled();
   });
@@ -511,7 +511,7 @@ describe("TaskCreateModal — create path", () => {
     expect(screen.getByTestId("mcp-toggle-xandr")).not.toBeChecked();
 
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Read the inbox" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "email" }]);
@@ -540,7 +540,7 @@ describe("TaskCreateModal — create path", () => {
     fireEvent.click(screen.getByTestId("mcp-toggle-email"));
     fireEvent.click(screen.getByTestId("mcp-toggle-xandr"));
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Run Xandr only" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "xandr" }]);
@@ -557,7 +557,7 @@ describe("TaskCreateModal — create path", () => {
     expect(screen.getByTestId("mcp-always-on-email")).toBeChecked();
 
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Read email and Xandr" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0].mcp_selection).toEqual([{ server: "xandr" }]);
@@ -578,7 +578,7 @@ describe("TaskCreateModal — create path", () => {
     const { onClose, onCreated } = renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("radio", { name: "Repeat" }));
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start schedule" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const body = createTask.mock.calls[0][0] as Record<string, unknown>;
@@ -649,7 +649,7 @@ describe("TaskCreateModal — edit mode recipients", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), {
       target: { value: "The corrected library prompt" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalled());
     const saved = updateTask.mock.calls[0][1] as { prompt: string };
@@ -663,7 +663,7 @@ describe("TaskCreateModal — edit mode recipients", () => {
     renderModal({ editTask: withRecipients, onUpdated: vi.fn() });
 
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "Renamed" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalled());
     const saved = updateTask.mock.calls[0][1] as { prompt: string };
@@ -693,7 +693,7 @@ describe("TaskCreateModal — edit mode", () => {
     expect(screen.getByRole("heading", { name: "Edit Task" })).toBeTruthy();
 
     fireEvent.change(promptBox, { target: { value: "Weekly latency report v2" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     const [id, body] = updateTask.mock.calls[0];
@@ -719,7 +719,7 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), {
       target: { value: "Weekly latency report v2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     const [, body] = updateTask.mock.calls[0];
@@ -748,7 +748,7 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), {
       target: { value: "Weekly latency report v2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     const [, body] = updateTask.mock.calls[0];
@@ -770,7 +770,7 @@ describe("TaskCreateModal — edit mode", () => {
       onUpdated: vi.fn(),
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     const [, body] = updateTask.mock.calls[0];
@@ -786,7 +786,7 @@ describe("TaskCreateModal — edit mode", () => {
       editTask: { ...baseEdit, recurrence: "0 9 * * 1" },
       onUpdated: vi.fn(),
     });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     // no network call yet — the scope chooser interposes
     expect(updateTask).not.toHaveBeenCalled();
     const chooser = await screen.findByTestId("edit-scope-chooser");
@@ -805,7 +805,7 @@ describe("TaskCreateModal — edit mode", () => {
     });
     const promptBox = screen.getByLabelText("Prompt");
     fireEvent.change(promptBox, { target: { value: "One-off variant" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     fireEvent.click(await screen.findByTestId("edit-scope-once"));
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     const [id, overrides] = rerunTask.mock.calls[0];
@@ -821,7 +821,7 @@ describe("TaskCreateModal — edit mode", () => {
       onUpdated: vi.fn(),
     });
     expect(screen.getByText(/already ran — saving resubmits/i)).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(updateTask).not.toHaveBeenCalled();
     expect(screen.queryByTestId("edit-scope-chooser")).toBeNull();
@@ -837,7 +837,7 @@ describe("TaskCreateModal — edit mode", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Tools & files/ }));
     fireEvent.click(screen.getByTestId("mcp-toggle-email"));
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(rerunTask.mock.calls[0][1].mcp_selection).toEqual([{ server: "email" }]);
@@ -854,7 +854,7 @@ describe("TaskCreateModal — edit mode", () => {
     expect(screen.getByText(/Attach new files to replace them/)).toBeInTheDocument();
     const file = new File(["new report"], "report.csv", { type: "text/csv" });
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [file] } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(uploadFile).toHaveBeenCalledWith(file);
     expect(rerunTask.mock.calls[0][1]).toMatchObject({
@@ -876,7 +876,7 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Expensive scan" } });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "12.50" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0]).toMatchObject({ max_cost_usd: 12.5 });
     // A blank field never sends the key: the task inherits the deployment ceiling.
@@ -888,7 +888,7 @@ describe("TaskCreateModal — edit mode", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.change(screen.getByLabelText("Max cost (USD)"), { target: { value: "0" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     expect(screen.getByTestId("error-max-cost-usd")).toHaveTextContent(/above 0/);
     expect(createTask).not.toHaveBeenCalled();
   });
@@ -929,7 +929,7 @@ describe("TaskCreateModal — edit mode", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /Advanced/ }));
     fireEvent.change(screen.getByLabelText("Thinking budget"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(rerunTask.mock.calls[0][1].thinking_budget_tokens).toBe(-1);
     expect(rerunTask.mock.calls[0][1]).not.toHaveProperty("files");
@@ -1036,7 +1036,7 @@ describe("TaskCreateModal — title", () => {
       target: { value: "  Daily pacing summary  " },
     });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const body = createTask.mock.calls[0][0] as Record<string, unknown>;
@@ -1048,7 +1048,7 @@ describe("TaskCreateModal — title", () => {
     createTask.mockResolvedValue({ id: "t-1" });
     renderModal();
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const body = createTask.mock.calls[0][0] as Record<string, unknown>;
@@ -1060,7 +1060,7 @@ describe("TaskCreateModal — title", () => {
     renderModal();
     fireEvent.change(screen.getByLabelText("Title"), { target: { value: "a".repeat(121) } });
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
 
     expect(await screen.findByTestId("error-title")).toBeInTheDocument();
     expect(createTask).not.toHaveBeenCalled();
@@ -1198,7 +1198,7 @@ describe("TaskCreateModal — sub-agent delegation", () => {
     expect(
       screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }),
     ).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const body = createTask.mock.calls[0][0] as Record<string, unknown>;
     expect(body.allow_delegation).toBeUndefined();
@@ -1210,7 +1210,7 @@ describe("TaskCreateModal — sub-agent delegation", () => {
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do it" } });
     openAdvanced();
     fireEvent.click(screen.getByRole("checkbox", { name: /Allow sub-agent delegation/ }));
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     const body = createTask.mock.calls[0][0] as Record<string, unknown>;
     expect(body.allow_delegation).toBe(false);
@@ -1327,7 +1327,7 @@ describe("TaskCreateModal — dialog shell a11y", () => {
 });
 
 // A terminal edit is a RESUBMIT (POST /rerun with overrides), and the button
-// says "Resubmit with changes" — so every field the form shows editable must
+// says "Run again with changes" — so every field the form shows editable must
 // reach the copy. The SLA, sandbox-limit, pre-run-gate and switch fields used
 // to be dropped from the override payload and silently inherited from the
 // source task; unset fields now send the explicit clear value (0/null/false)
@@ -1347,7 +1347,7 @@ describe("TaskCreateModal — resubmit override payload", () => {
     fireEvent.change(screen.getByLabelText("Pre-run shell command"), {
       target: { value: "test -f /workspace/ready" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     expect(rerunTask.mock.calls[0][1]).toMatchObject({
@@ -1377,7 +1377,7 @@ describe("TaskCreateModal — resubmit override payload", () => {
     fireEvent.change(screen.getByLabelText("Expected duration"), { target: { value: "" } });
     fireEvent.change(screen.getByLabelText("Pre-run shell command"), { target: { value: "" } });
     fireEvent.click(screen.getByLabelText("Carry context across runs"));
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
 
     await waitFor(() => expect(rerunTask).toHaveBeenCalledTimes(1));
     const overrides = rerunTask.mock.calls[0][1];
@@ -1488,7 +1488,7 @@ describe("TaskCreateModal — pre-run gate timeout is clearable", () => {
     const timeout = screen.getByLabelText("Pre-run gate timeout seconds") as HTMLInputElement;
     expect(timeout.value).toBe("30");
     fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Weekly latency report v2" } });
-    fireEvent.click(screen.getByRole("button", { name: /save task changes/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^(save changes|run again with changes)$/i }));
     await waitFor(() => expect(updateTask).toHaveBeenCalledTimes(1));
     expect(updateTask.mock.calls[0][1].run_if.timeout_seconds).toBe(30);
   });
@@ -1501,7 +1501,7 @@ describe("TaskCreateModal — pre-run gate timeout is clearable", () => {
     fireEvent.change(screen.getByLabelText("Pre-run shell command"), { target: { value: "true" } });
     // Submit straight from a blank field — no blur in between.
     fireEvent.change(screen.getByLabelText("Pre-run gate timeout seconds"), { target: { value: "" } });
-    fireEvent.click(screen.getByRole("button", { name: "Launch task" }));
+    fireEvent.click(screen.getByRole("button", { name: "Run task now" }));
     await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
     expect(createTask.mock.calls[0][0].run_if.timeout_seconds).toBe(30);
   });

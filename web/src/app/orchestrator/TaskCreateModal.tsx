@@ -2323,16 +2323,16 @@ export function TaskCreateModal({
               <Reveal
                 id="task-tools-body"
                 label="Tools & files"
-                hint="MCP servers · attachments"
+                hint="Connections · attachments"
                 open={toolsOpen}
                 onToggle={() => setToolsOpen((o) => !o)}
                 right={<span className="task-reveal-summary">{toolsSummary}</span>}
               >
                 <div className="form-group" data-testid="task-mcp-section">
-                  <span className="task-field-label">MCP servers</span>
+                  <span className="task-field-label">Connections</span>
                   <p className="field-hint task-hint-tight">
-                    Always-on servers are added to every run. Select optional servers to add them;
-                    locked rows show live availability.
+                    Always-on connections are part of every run. Pick any others this task
+                    needs. Locked rows show whether a connection is available right now.
                   </p>
                   <McpServerPicker
                     mode="task"
@@ -2801,22 +2801,28 @@ export function TaskCreateModal({
             type="submit"
             form="createTaskForm"
             className="btn btn-primary task-launch-btn"
-            aria-label={editing ? "Save task changes" : "Launch task"}
             aria-describedby={footerStatus ? "task-footer-status" : undefined}
             disabled={promptEmpty || submitting}
           >
+            {/* The label says what the click does: start now, schedule for
+                later, or start a repeating schedule. No aria-label, so a
+                screen reader hears the same words. */}
             {submitting ? (
               <>
-                <Spinner /> {editing ? "Saving…" : "Launching…"}
+                <Spinner /> {editing ? "Saving…" : scheduleMode === "now" ? "Starting…" : "Scheduling…"}
               </>
             ) : editing ? (
               editTerminal ? (
-                "Resubmit with changes"
+                "Run again with changes"
               ) : (
                 "Save changes"
               )
+            ) : scheduleMode === "now" ? (
+              "Run task now"
+            ) : scheduleMode === "once" ? (
+              "Schedule task"
             ) : (
-              "Launch Task"
+              "Start schedule"
             )}
           </button>
         </div>

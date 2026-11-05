@@ -63,7 +63,7 @@ test("popular preview stays compact and search reaches the full directory", asyn
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto("/settings/connections");
 
-  const search = page.getByRole("textbox", { name: "Search connector directory" });
+  const search = page.getByRole("textbox", { name: "Search connections" });
   await expect(search).toBeVisible({ timeout: 15_000 });
   const cards = page.locator('[data-testid^="dir-card-"]');
   await expect(cards).toHaveCount(8);

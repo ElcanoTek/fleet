@@ -723,15 +723,19 @@ function OrchestratorInner({
           than asking "are you sure". */}
       <ConfirmDialog
         open={!!stopTask}
-        title="Stop task"
+        title={stopTask?.recurrence ? "Stop this schedule for good?" : "Stop this task?"}
         message={
           stopTask
             ? stopTask.recurrence
-              ? `Stop "${taskRunLabel(stopTask)}"? This ends the schedule — it will not run again. Create a new task to resume it.`
-              : `Stop "${taskRunLabel(stopTask)}"? A run in progress halts at its next checkpoint and keeps its partial transcript.`
+              ? `"${taskRunLabel(stopTask)}" won't run again. If it is running now, that run stops at its next checkpoint too. To bring it back later, create a new task.`
+              : stopTask.status === "pending" || stopTask.status === "scheduled"
+                ? `"${taskRunLabel(stopTask)}" hasn't started yet, so it is cancelled and won't run.`
+                : `"${taskRunLabel(stopTask)}" stops at its next checkpoint. Anything it has done so far is kept.`
             : ""
         }
-        confirmLabel={stopBusy ? "Stopping…" : "Stop"}
+        confirmLabel={
+          stopBusy ? "Stopping…" : stopTask?.recurrence ? "Stop schedule" : "Stop task"
+        }
         busy={stopBusy}
         onConfirm={() => {
           if (stopTask) void stop(stopTask);

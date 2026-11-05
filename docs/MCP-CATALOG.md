@@ -250,7 +250,7 @@ vars to set; members are told to ask their administrator).
 Settings → Connections keeps the existing-connection lists compact and opens
 the connector directory by default:
 
-- **Bundled by your workspace** previews four connectors. **Show all (N)**
+- **Included with your workspace** previews four connections. **Show all (N)**
   opens a scrollable dialog with every connector and the same availability,
   new-chat and default-account controls. The dialog supports Escape, focus
   return and keyboard navigation. A `#connector-<name>` link to a bundled

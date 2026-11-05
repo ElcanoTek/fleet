@@ -48,8 +48,8 @@ endpoint refuses an unknown seat up front.
 
 ## Surfaces
 
-- **Connections page**: bundled connectors get "Enabled for me" / "Disabled
-  for you" plus an Account seat picker (when the operator provisioned
+- **Connections page**: bundled connectors get "On for me" / "Off for me"
+  (the same label remote connections use) plus an Account seat picker (when the operator provisioned
   `<VAR>_<ACCOUNT>` seats) and a "Reset to default" that deletes the explicit
   row. Own remote connections get On/Off; shared-with-me connections get
   "On/Off for me".

@@ -20,7 +20,7 @@ const SERVERS: McpServer[] = [
 function normalize(html: string): string {
   return html
     .replace(/data-mode="(conversation|task)"/g, 'data-mode="MODE"')
-    .replace(/MCP servers for this (task|conversation)/g, "MCP servers for this MODE")
+    .replace(/Connections for this (task|conversation)/g, "Connections for this MODE")
     // The per-field DOM ids embed the mode only to keep them unique across the
     // two simultaneously-mounted instances; collapse the token so the
     // structural comparison ignores it.

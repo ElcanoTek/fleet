@@ -211,6 +211,6 @@ the operator or user must Remove the connector and re-add it.
   `remote_mcp_catalog_community: true` — the trust posture for
   community-provenance listings is unchanged even though *you* host these two.
 - **AWS SigV4 signing** remains deferred (docs/OPEN-REMOTE-MCP.md).
-- The manual "Add remote server" form still has no client-ID fields; the
+- The manual "Add by URL" form still has no client-ID fields; the
   backend's actionable error covers that path, and directory entries that
   need one carry the guided fields.

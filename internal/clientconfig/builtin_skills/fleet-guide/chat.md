@@ -301,7 +301,7 @@ At the top of the rail are the three ways of working, each with a one-line
 subtitle: **Chat** (*Talk it through*), **Patrols** (*Chats that check in on a
 schedule* — your patrol chats, and the
 [Patrol Launchpad](#patrol-launchpad-your-first-patrol-in-five-steps)) and
-**Background tasks** (*Run headless, without a chat* — formerly the
+**Background tasks** (*Runs without a chat*; formerly the
 Operations Center). **New chat** starts a fresh
 conversation. The search field, also reachable with
 `⌘K` or `Ctrl K`, matches conversation titles, and can search **In messages**
@@ -313,7 +313,7 @@ too. Below that, conversations are grouped:
 | **Team chats** | Conversations shared with you or open in **Multiplayer mode** from teammates, with the owner's short name and a **Live** badge when multiplayer is on. |
 | **Pinned** | Conversations you have chosen to keep. Pinned conversations never expire. With two or more, **Reorder** in the heading lets you put them in your own order (see [Ordering your chats](#ordering-your-chats)). |
 | **Labels** | Your labels, each a filter. Click one to show only conversations carrying it; click several to narrow further. |
-| **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity — 14 days on a default deployment. Pin a chat or move it into a project to keep it. |
+| **Temporary** | Everything else, most recently active first; the menu beside the heading can sort it by **Newest first** or **Title A–Z** instead. Chats here are deleted after a period of inactivity (14 days on a default deployment); the ⓘ beside the heading says so. Pin a chat or move it into a project to keep it. **Delete temporary chats**, in red at the bottom of the sidebar, deletes them all at once after you confirm. |
 | **Archived** | Collapsed by default. Conversations you have put away but not deleted; open the group to bring one back. |
 
 A chat row can carry two small badges, each labeled with its audience when you
@@ -357,9 +357,9 @@ they could not be renewed, reload the page.
 
 Administrators manage account access under **Settings → Admin → Users**. Chat
 defaults to **Contributor**; **Viewer** is read-only. **Fleet Admin** grants full
-Chat and Ops Center permissions and highlights the included Contributor choices.
+Chat and Background tasks permissions and highlights the included Contributor choices.
 Selecting Fleet Admin again turns it off and safely defaults to Chat Contributor
-with no Ops access. Accounts created and granted Fleet in central Auth are added
+with no Background tasks access. Accounts created and granted Fleet in central Auth are added
 here automatically with the roles selected there. When your deployment signs
 people in through central Auth, central Auth manages everyone by default: the
 sign-in page offers single sign-on only, and this page lists people and their
@@ -429,7 +429,7 @@ The toolbar beneath the message box keeps everyday controls upfront and groups s
 | Model selector | Shows the model this conversation runs on, with a cost band from `$` to `$$$$` where its pricing is known. Click to change it. See [Picking the model](#picking-the-model). |
 | Attach files | Add files to your next message. Dragging a file anywhere onto the conversation does the same. |
 | Tools | The wrench. Its badge counts the connectors on in this conversation, **Always on** ones included; hover it for "Tools, N on". See [Connectors in a conversation](#5-connectors-in-a-conversation). |
-| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Compact conversation** (once a conversation has messages, showing the current context usage percentage); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
+| More options (`•••`) | Opens a labeled menu organized into three groups: **Prompt library**, **Persona** (active on any new or empty chat before the first message is sent, and shown disabled with *"Personas can only be changed in a new chat"* once chatting has started), and **Memories**; **Share this chat**, **Patrol & schedule**, **Auto-approve tools**, and **Summarize earlier messages** (once a conversation has messages, showing how full the chat is); and **Show details**, **Dashboard view**, and **Send on Enter**. When a non-default persona, a patrol schedule, sharing (**Multiplayer**, team sharing, or a public link), or **Auto-approve** is active, **More options** shows an accent dot, and on desktop screens a quick status pill or indicator also appears directly on the toolbar so you can see or change it in one click. |
 | Send | At the far right. While the assistant is working it becomes **Stop**. |
 
 ### Dashboard view
@@ -587,9 +587,9 @@ own when a task fits, or that you can invoke directly by typing `/` at the very
 start of a message and choosing from the list. The platform ships a small pack
 of general-purpose skills, and your deployment can add its own. Under
 **Settings → Skills**, you can also create personal skills, publish a skill to
-the **Workspace pack** (**Share with workspace**), click **Add to my skills**
-on a teammate-shared skill in the Workspace pack to enable it for your own chats
-and tasks, or click **Clone & edit** on any Workspace pack skill to load its
+**Workspace skills** (**Share with your workspace**), click **Add to my skills**
+on a teammate-shared skill in Workspace skills to enable it for your own chats
+and tasks, or click **Clone & edit** on any workspace skill to load its
 instructions into the editor and customize it (you can also ask the assistant in
 chat to propose a skill or edit an existing one, then click **Approve** or
 **Approve & share** in **Settings → Skills**). Your active personal skills appear
@@ -697,14 +697,17 @@ Center.
 | Selection | The **Tools** menu (the wrench) in the composer, its library, or an **Enable MCP connector?** card in chat | Which of your available connectors are live in *this* conversation. Narrow it when a chat only needs one source; if a task needs a connected bundled optional MCP connector that is currently off in the conversation, the assistant can suggest turning it on for you to approve (or turn it on itself when **Auto-approve** is active). |
 | Binding | The task form on the Background tasks page | Which connectors a scheduled task may use, fixed when the task is created. A later change to your preferences never rewrites an existing task. |
 
-**Settings → Connections** shows four bundled connectors at first. **Show all**
+**Settings → Connections** shows four connections under **Included with your
+workspace** at first, and the ones you added yourself under **Added by you**.
+A connection that needs you to sign in has an amber outline and shows **Sign in**
+(**Sign in again** while it is connected, to refresh the sign-in). **Show all**
 opens a popup with every workspace connector and the same availability,
 new-chat, and default-account controls. A link to a connector outside the
 preview opens that popup automatically. **Credential accounts** also previews
 four accounts; **Show all** expands the list below it and **Show less** folds it
 back up.
 
-The **Connector directory** starts with eight curated **Popular** picks:
+**Find more connections** starts with eight curated **Popular** picks:
 Microsoft 365 (Outlook), GitHub, Slack, Gmail, Google Drive, Notion, Linear, and
 Salesforce. A workspace with a different catalog may show different picks.
 Search by name or keyword to find connectors across the full directory;
@@ -786,7 +789,7 @@ server so everyone else in the workspace connects with one click. After the
 form, you sign in at the vendor as usual.
 
 When the service you need is not in the directory — or only has an HTTP API or
-a web portal — click **Create your own connection** in **Settings →
+a web portal — click **Build a connection in chat** in **Settings →
 Connections** (or type `/connector-builder` in Chat) to open a guided
 Connector Studio chat. The assistant checks for an official MCP server first,
 falls back to a custom HTTP API connector (badged **Custom API**) or a headless
@@ -1318,12 +1321,12 @@ reload or a switch to another chat.
 
 ### Long conversations
 
-As a conversation grows, **Compact conversation** in **More options** (`•••`)
-shows the percentage of the model's context window currently in use. With **Show
+As a conversation grows, **Summarize earlier messages** in **More options** (`•••`)
+shows how full the chat is, as a percentage of the model's context window. With **Show
 details** on, a totals line above the composer gives the same figure as a
 percentage alongside the conversation's cumulative cost. When a conversation gets
 full, a banner says so and the assistant starts to slow down and cost more per
-turn. **Compact conversation**, in **More options** or on the banner, replaces the earlier
+turn. **Summarize earlier messages**, in **More options** or on the banner, replaces the earlier
 turns with a short summary so the conversation fits comfortably again; the
 transcript keeps its history, only the assistant's working view is shortened.
 You do not have to watch for it: by default, once a request reaches about 90% of
@@ -1426,7 +1429,7 @@ output, and notes. This run's names, dates, and targets are generalized; the
 method stays specific. In the save dialog, choose **Destination**: save it to the
 **Prompt Library** (private by default, or **Share with workspace**) or save it
 directly as an **Agent Skill (`/skill-name`)** (personal by default, or published
-to the **Workspace pack** so teammates can click **Add to my skills**).
+to **Workspace skills** so teammates can click **Add to my skills**).
 
 Save as workflow is a good fit for the afternoon you spent getting the assistant
 to profile a new dataset, compute a baseline, and draft a note, because next
@@ -1498,7 +1501,7 @@ row below.
 | Model unavailable | The banner offers **Pick a different model**. Choose one and resend; the conversation keeps its history. |
 | File refused | An attachment over the size limit is refused when you pick it, with the limit shown. Split the file, or trim it to the columns and dates you need. |
 | Connector unavailable | The picker shows **Unavailable** against a connector, or the trail shows a call that returned an error. Check **Settings → Connections** for a sign-in that has lapsed; otherwise bring it to your administrator along with a **Download chat** export in **Raw data** format — that one always carries the full record, so it offers no options to tick. |
-| Conversation is full | A banner reports the percentage. **Compact conversation**, or start a new one if the topic has moved on. |
+| Conversation is full | A banner reports the percentage. **Summarize earlier messages**, or start a new one if the topic has moved on. |
 | The answer is wrong | Open the chips in the execution trail and read what actually came back from each source. Then ask: "show me the rows behind that number". Most wrong answers are a wrong source or a misread identifier, and both are visible in the trail. |
 
 Anything you cannot resolve from the transcript goes to your administrator. The

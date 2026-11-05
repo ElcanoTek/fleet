@@ -159,7 +159,7 @@ func (s *Service) AcquireTokenByID(ctx context.Context, email, serverID string) 
 
 // MarkRemoteMCPUnauthorized records that a server refused the stored
 // credential at mount time (HTTP 401): the OWNER's row goes to needs_reauth
-// with the detail, so Settings → Connections shows "Reconnect needed" now
+// with the detail, so Settings → Connections shows "Sign-in needed" now
 // rather than after the token's natural expiry (#1006). Implements
 // agent.RemoteMCPStatusMarker. Runs in the credential-owning child like the
 // rest of the resolver; nothing about the credential crosses the wire.

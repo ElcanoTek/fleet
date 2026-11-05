@@ -97,10 +97,10 @@ export function McpServerPicker({ mode, servers, selection, onChange, disabled }
       className="mcp-server-picker"
       data-mode={mode}
       role="group"
-      aria-label={mode === "task" ? "MCP servers for this task" : "MCP servers for this conversation"}
+      aria-label={mode === "task" ? "Connections for this task" : "Connections for this conversation"}
     >
       {servers.length === 0 ? (
-        <p className="mcp-server-picker__empty">No MCP servers available.</p>
+        <p className="mcp-server-picker__empty">No connections available.</p>
       ) : (
         <ul className="mcp-server-picker__list">
           {ordered.map((server) => {

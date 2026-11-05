@@ -138,19 +138,19 @@ func TestBrowserNotificationsSwitchNamesEveryPush(t *testing.T) {
 // pushDescribedAs maps each push title in the trigger matrix (the words
 // before its colon) to the words the switch's description names it with.
 var pushDescribedAs = map[string][]string{
-	"✓ Task complete":           {"a task you created finishes"},
-	"✗ Task failed":             {"a task you created finishes"},
-	"⚠ Blocked":                 {"a task you created finishes"}, // a run that finished but recorded a blocked outcome (ADR-0092)
-	"⏸ Waiting for your answer": {"is waiting for your answer"},  // an ask pause
-	"✎ Progress note":           {"sends a progress note"},       // the agent's mid-run notify tool
-	"⚠ Budget alert":            {"past your budget's soft limit"},
+	"✓ Task complete":           {"A task you created finishes"},
+	"✗ Task failed":             {"A task you created finishes"},
+	"⚠ Blocked":                 {"A task you created finishes"}, // a run that finished but recorded a blocked outcome (ADR-0092)
+	"⏸ Waiting for your answer": {"needs your answer"},           // an ask pause
+	"✎ Progress note":           {"sends a progress update"},     // the agent's mid-run notify tool
+	"⚠ Budget alert":            {"over your spending alert limit"},
 	"⚠ Approval needed":         {"needs your approval"},
-	"✓ Done":                    {"an approved one finishes"},
-	"✗ Not applied":             {"an approved one finishes"},
+	"✓ Done":                    {"Some approved actions finish"},
+	"✗ Not applied":             {"Some approved actions finish"},
 	// The chat, after any settled card of an action that carries on by itself
 	// (noteApprovalSettled runs on a decline and a time-out too), so the
 	// description must not tie it to approvals alone.
-	"⏸ Waiting for you": {"does not continue on its own", "approved, declined or timed out"},
+	"⏸ Waiting for you": {"a chat is waiting for you", "approved, declined, or times out"},
 }
 
 // backtickedSpan is one `code span` in a Markdown table cell.
@@ -212,13 +212,25 @@ func tableCells(row string) []string {
 // expression (the note under it), with entities decoded and wrapping folded.
 func browserNotificationsDesc(t *testing.T, row string) string {
 	t.Helper()
+	// The description is a fragment: a one-line summary, then a "Which alerts
+	// will I get?" expander that lists every push, then the state note. Read
+	// the whole fragment up to the note, with JSX comments, spacers and tags
+	// folded away, so the list inside the expander counts.
 	_, rest, ok := strings.Cut(row, "desc={")
 	if ok {
 		_, rest, ok = strings.Cut(rest, "<>")
 	}
-	text, _, found := strings.Cut(rest, "{")
+	text, _, found := strings.Cut(rest, "{note ?")
 	if !ok || !found || strings.TrimSpace(text) == "" {
-		t.Fatal("BrowserNotificationsRow's desc no longer opens with plain text in a fragment (desc={<> text {note …}</>}) — the row's shape changed; fix this check rather than deleting it")
+		t.Fatal("BrowserNotificationsRow's desc no longer reads desc={<> text … {note ? …}</>} — the row's shape changed; fix this check rather than deleting it")
 	}
+	text = jsxComment.ReplaceAllString(text, " ")
+	text = strings.ReplaceAll(text, `{" "}`, " ")
+	text = jsxTag.ReplaceAllString(text, " ")
 	return strings.Join(strings.Fields(html.UnescapeString(text)), " ")
 }
+
+var (
+	jsxComment = regexp.MustCompile(`(?s)\{/\*.*?\*/\}`)
+	jsxTag     = regexp.MustCompile(`<[^>]*>`)
+)

@@ -118,7 +118,7 @@ yourself are already in the box, tested, and governed by the same core:
   analysis; optional PII redaction.
 - **Three ways of working, plus a terminal client.** **Chat** (*Talk it through*),
   **Patrols** (*Chats that check in on a schedule* via the guided Patrol Launchpad
-  or `chat_patrol`), **Background tasks** (*Run headless, without a chat*), and a
+  or `chat_patrol`), **Background tasks** (*Runs without a chat*), and a
   full terminal client (`fleet chat`) — all thin views over the same governed API.
 
 ## Built for trust: governed, auditable delegation
@@ -306,7 +306,7 @@ self-migrates on start.
 | `fleet update` | `git pull` + rebuild + reinstall the binaries in place |
 | `scripts/fleet-upgrade.sh` | drain, swap, health-gate, and auto-roll-back on failure |
 | `fleet status` / `fleet diagnose` | quick health report / redacted support bundle |
-| `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → Doctor) |
+| `fleet doctor` | diagnose **and repair** box-level drift (packages, podman prereqs, unit drift; also surfaced read-only in Settings → Admin → System checks) |
 | `fleet restart` · `stop` · `logs` | service lifecycle |
 | `fleet chat [--email you@org]` | terminal TUI for the agent (token auto-read on-box) |
 | `fleet backup` / `fleet restore` | disaster recovery ([`docs/BACKUP_RESTORE.md`](docs/BACKUP_RESTORE.md)) |

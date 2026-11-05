@@ -36,7 +36,7 @@ test.describe("live scheduled task → real worker pool + sandbox", () => {
     await page.getByTestId("new-task-btn").click();
     await expect(page.getByRole("dialog", { name: "Create New Task" })).toBeVisible();
     await page.getByLabel("Prompt", { exact: true }).fill(prompt);
-    await page.getByRole("button", { name: /launch task/i }).click();
+    await page.getByRole("button", { name: "Run task now" }).click();
 
     // The new task appears in the list, matched on the unique leading tag.
     const taskRow = page.locator("tr[data-task-id]", { hasText: tag });

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // Package boxdoctor runs READ-ONLY box-level health checks from inside the
-// fleet process, for the Settings → Admin → Doctor panel (/admin/doctor).
+// fleet process, for the Settings → Admin → System checks page (/admin/doctor).
 //
 // It is the in-process, unprivileged sibling of scripts/doctor.sh: the script
 // runs as root on the host and REPAIRS what it finds; this package only

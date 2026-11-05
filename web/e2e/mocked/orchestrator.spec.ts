@@ -164,7 +164,7 @@ test("create a task via the MCP picker (enable a server + select an account); ta
   await page.getByTestId("mcp-toggle-xandr").check();
   await page.getByTestId("mcp-account-xandr").selectOption("client_a");
 
-  await page.getByRole("button", { name: "Launch task" }).click();
+  await page.getByRole("button", { name: "Run task now" }).click();
 
   await expect.poll(() => captured.createBody).toBeTruthy();
   const body = captured.createBody as {
