@@ -1928,6 +1928,57 @@ func (p principal) stopLabel() string {
 	}
 }
 
+// decodeTaskUpdate reads the PUT /tasks/{id} body into models.TaskCreate and
+// reports whether "max_total_tokens" was explicitly present in the top-level
+// JSON object (so an explicit null clears the task's token limit while an
+// omitted field preserves it).
+func decodeTaskUpdate(r *http.Request) (models.TaskCreate, bool, error) {
+	var raw json.RawMessage
+	if err := readJSON(r, &raw); err != nil {
+		return models.TaskCreate{}, false, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return models.TaskCreate{}, false, err
+	}
+	_, hasMaxTotalTokens := fields["max_total_tokens"]
+	var tc models.TaskCreate
+	if err := json.Unmarshal(raw, &tc); err != nil {
+		return models.TaskCreate{}, false, err
+	}
+	return tc, hasMaxTotalTokens, nil
+}
+
+// refreshEditedRecurrenceSchedule recalculates tc.ScheduledFor when an edit
+// changes a task's cron recurrence without picking a new explicit fire time.
+func refreshEditedRecurrenceSchedule(fallbackLoc *time.Location, task *models.Task, tc *models.TaskCreate) error {
+	if tc.Recurrence == "" || tc.Recurrence == task.Recurrence {
+		return nil
+	}
+	shouldRecalculate := tc.ScheduledFor == nil
+	if !shouldRecalculate && tc.ScheduledFor != nil && task.ScheduledFor != nil {
+		requested := tc.ScheduledFor.UTC().Truncate(time.Minute)
+		existing := task.ScheduledFor.UTC().Truncate(time.Minute)
+		shouldRecalculate = requested.Equal(existing)
+	}
+	if !shouldRecalculate {
+		return nil
+	}
+	schedule, err := cron.ParseStandard(tc.Recurrence)
+	if err != nil {
+		return fmt.Errorf("recurrence must be a standard 5-field cron expression")
+	}
+	// Evaluate the cron expression in the task's own timezone (validated
+	// above). scheduled_for is always stored as an absolute UTC instant.
+	loc, lerr := time.LoadLocation(tc.Timezone)
+	if lerr != nil {
+		loc = fallbackLoc
+	}
+	nextUTC := schedule.Next(time.Now().In(loc)).UTC()
+	tc.ScheduledFor = &nextUTC
+	return nil
+}
+
 // UpdateTask handles PUT /tasks/{task_id}
 // Only tasks in pending or scheduled status can be edited.
 func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
@@ -1973,8 +2024,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse the update payload
-	var tc models.TaskCreate
-	if err := readJSON(r, &tc); err != nil {
+	tc, hasMaxTotalTokens, err := decodeTaskUpdate(r)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid request body")
 		return
 	}
@@ -1997,18 +2048,11 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	// admin-permission principal's payload is authoritative (SetRunIf below),
 	// so an admin edit that changes or removes the gate actually persists.
 	canAuthorRunIf := p.hasPermission(models.PermissionAdmin)
-	ceilingsCheck := tc
-	if task.MaxCostUSD != nil && tc.MaxCostUSD != nil && *tc.MaxCostUSD <= *task.MaxCostUSD {
-		ceilingsCheck.MaxCostUSD = nil
-	}
-	if task.MaxTotalTokens != nil && tc.MaxTotalTokens != nil && *tc.MaxTotalTokens <= *task.MaxTotalTokens {
-		ceilingsCheck.MaxTotalTokens = nil
-	}
-	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &ceilingsCheck); msg != "" {
+	if msg := h.requireAdminForCeilingsAboveDeployment(canAuthorRunIf, &tc); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
-	if p.apiKey != nil && tc.Priority > 0 && tc.Priority != task.Priority {
+	if p.apiKey != nil && tc.Priority > 0 {
 		if err := priorityCapError(p.apiKey.MaxPriority, tc.Priority); err != nil {
 			writeError(w, http.StatusForbidden, err.Error())
 			return
@@ -2045,35 +2089,9 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If recurrence is changed, refresh the next scheduled run unless the user
-	// explicitly chose a different schedule time in this edit.
-	if tc.Recurrence != "" && tc.Recurrence != task.Recurrence {
-		shouldRecalculateSchedule := tc.ScheduledFor == nil
-
-		if !shouldRecalculateSchedule && tc.ScheduledFor != nil && task.ScheduledFor != nil {
-			requested := tc.ScheduledFor.UTC().Truncate(time.Minute)
-			existing := task.ScheduledFor.UTC().Truncate(time.Minute)
-			if requested.Equal(existing) {
-				shouldRecalculateSchedule = true
-			}
-		}
-
-		if shouldRecalculateSchedule {
-			schedule, err := cron.ParseStandard(tc.Recurrence)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "recurrence must be a standard 5-field cron expression")
-				return
-			}
-
-			// Evaluate the cron expression in the task's own timezone (validated
-			// above). scheduled_for is always stored as an absolute UTC instant.
-			loc, lerr := time.LoadLocation(tc.Timezone)
-			if lerr != nil {
-				loc = h.storage.Location()
-			}
-			nextUTC := schedule.Next(time.Now().In(loc)).UTC()
-			tc.ScheduledFor = &nextUTC
-		}
+	if err := refreshEditedRecurrenceSchedule(h.storage.Location(), task, &tc); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	// Apply updates transactionally: the storage layer re-locks the row and
@@ -2089,7 +2107,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		MaxIterations:          tc.MaxIterations,
 		MaxCostUSD:             tc.MaxCostUSD,
 		MaxTotalTokens:         tc.MaxTotalTokens,
-		SetMaxTotalTokens:      tc.MaxTotalTokens != nil,
+		SetMaxTotalTokens:      hasMaxTotalTokens,
 		MCPSelection:           tc.MCPSelection,
 		SetMCPSelection:        tc.MCPSelection != nil,
 		CredentialAllowlist:    tc.CredentialAllowlist,

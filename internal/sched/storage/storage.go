@@ -927,19 +927,19 @@ func (s *Storage) CancelTaskAtomic(taskID uuid.UUID, reason string) (*models.Tas
 
 // TaskEdit carries the user-editable fields of a task.
 type TaskEdit struct {
-	Prompt                 string
-	Model                  *string
-	FallbackModel          *string
-	MaxIterations          *int
-	MaxCostUSD             *float64
-	MaxTotalTokens         *int
+	Prompt         string
+	Model          *string
+	FallbackModel  *string
+	MaxIterations  *int
+	MaxCostUSD     *float64
+	MaxTotalTokens *int
 	// SetMaxTotalTokens distinguishes "leave max_total_tokens unchanged" from
 	// "replace" — the orchestrator edit form does not expose a token-limit
 	// input, so an omitted field on PUT /tasks/{id} must not clear a limit set
 	// via the API.
-	SetMaxTotalTokens      bool
-	MCPSelection           models.MCPSelection
-	Priority               int
+	SetMaxTotalTokens bool
+	MCPSelection      models.MCPSelection
+	Priority          int
 	// SetPriority distinguishes "leave priority unchanged" from "replace" — 0 is
 	// the unset sentinel on TaskCreate, so an omitted field on PUT /tasks/{id}
 	// must keep the task's stored priority instead of dropping it to 0.
