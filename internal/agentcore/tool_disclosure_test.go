@@ -531,3 +531,36 @@ func firstStripe(listing string) string {
 	}
 	return ""
 }
+
+func TestDisclosureSearchClampsMultibyteUTF8OnRuneBoundary(t *testing.T) {
+	// Place a 3-byte UTF-8 em-dash ("—", \xe2\x80\x94) starting at byte 158 of
+	// the whitespace-collapsed description so a raw s[:160] slice would split
+	// the rune in half and cause boundModelVisibleToolResponse to suppress the
+	// entire tool_search listing as invalid-UTF-8 binary_suppressed=true.
+	prefix := strings.Repeat("a", 146) + " dimensions " // 158 ASCII bytes
+	desc := prefix + "— including advertiser and deal metrics for reporting"
+	if len(prefix) != 158 {
+		t.Fatalf("fixture prefix len = %d, want 158", len(prefix))
+	}
+	reg := newDeferredToolRegistry(mcpToolsFrom([]mcp.ServerTool{{
+		ServerName: "triplelift",
+		Tool: mcp.Tool{
+			Name:        "tl_advertiser_report",
+			Description: desc,
+			InputSchema: map[string]any{"type": "object"},
+		},
+	}}, &fakeBroker{}))
+
+	wrapped := BoundModelOutputTools([]fantasy.AgentTool{reg.searchTool()})[0]
+	resp, err := wrapped.Run(context.Background(), fantasy.ToolCall{
+		ID:    "search-utf8",
+		Name:  "tool_search",
+		Input: `{"query":"reporting dimensions metrics","limit":25}`,
+	})
+	if err != nil {
+		t.Fatalf("tool_search Run: %v", err)
+	}
+	if strings.Contains(resp.Content, "binary_suppressed") || !strings.Contains(resp.Content, "mcp_triplelift_tl_advertiser_report") {
+		t.Fatalf("tool_search output was falsely suppressed as binary: %s", resp.Content)
+	}
+}
