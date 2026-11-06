@@ -26,8 +26,8 @@ import (
 // line in force — the value the operator just set was silently ignored. The
 // first occurrence keeps its position; every later duplicate is dropped.
 //
-// The value is encoded so the shared parser (splitEnvKeyValue here,
-// config.loadEnvFile on the server) reads back the exact bytes given: values
+// The value is encoded so the shared parser (ParseEnvLine, which the server's
+// config loader also uses) reads back the exact bytes given: values
 // the parser would mangle (surrounding quotes, leading/trailing whitespace,
 // an inline ` #` sequence) are wrapped in one layer of quotes, which the
 // parser strips without touching the interior. A value containing a line
@@ -114,7 +114,7 @@ func ReadEnvValues(path string, keys ...string) (map[string]string, error) {
 	}
 	out := make(map[string]string)
 	for _, ln := range lines {
-		k, v, ok := splitEnvKeyValue(ln)
+		k, v, ok := ParseEnvLine(ln)
 		if !ok {
 			continue
 		}
@@ -225,16 +225,25 @@ func writeEnvLines(path string, lines []string) error {
 // splitEnvLine returns (key, true) for a KEY=VALUE line, skipping blanks and
 // comments. The key is trimmed; an `export ` prefix is tolerated.
 func splitEnvLine(line string) (string, bool) {
-	k, _, ok := splitEnvKeyValue(line)
+	k, _, ok := ParseEnvLine(line)
 	return k, ok
 }
 
-// splitEnvKeyValue parses a KEY=VALUE line into its key and processed value,
-// skipping blanks and `#` comments. An `export ` prefix is tolerated, the key
-// is trimmed, and the value is run through the same trimming the server applies
-// (inline-comment strip on unquoted values, then a single layer of surrounding
-// quotes). ok is false for non-assignment lines.
-func splitEnvKeyValue(line string) (key, value string, ok bool) {
+// ParseEnvLine parses a KEY=VALUE env-file line into its key and processed
+// value, skipping blanks and `#` comments. It is the ONE env-file line parser:
+// the server's config loader and this package's reader/writer both use it, so
+// the encoding encodeEnvValue writes is exactly what the server reads (#834).
+//
+//   - an `export ` prefix is tolerated, and the key is trimmed;
+//   - an UNQUOTED value ends at the first ` #` or `\t#` (inline comment) — a
+//     value that must contain a literal ` #` MUST be quoted, or it is
+//     truncated at the marker (SetEnvKey quotes such values automatically);
+//   - ONE layer of matching surrounding quotes (single or double) is stripped;
+//     the interior — including ` #`, edge whitespace and inner quotes — is
+//     preserved verbatim.
+//
+// ok is false for non-assignment lines.
+func ParseEnvLine(line string) (key, value string, ok bool) {
 	t := strings.TrimSpace(line)
 	if t == "" || strings.HasPrefix(t, "#") {
 		return "", "", false
@@ -245,12 +254,12 @@ func splitEnvKeyValue(line string) (key, value string, ok bool) {
 		return "", "", false
 	}
 	key = strings.TrimSpace(t[:eq])
-	value = stripEnvQuotes(stripEnvInlineComment(strings.TrimSpace(t[eq+1:])))
+	value = StripEnvQuotes(stripEnvInlineComment(strings.TrimSpace(t[eq+1:])))
 	return key, value, true
 }
 
 // stripEnvInlineComment trims a trailing ` #comment` off an unquoted value;
-// quoted values are left intact. Mirrors internal/config.stripInlineComment.
+// quoted values are left intact (StripEnvQuotes owns those).
 func stripEnvInlineComment(value string) string {
 	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`) {
 		return value
@@ -265,8 +274,8 @@ func stripEnvInlineComment(value string) string {
 }
 
 // encodeEnvValue returns the on-disk form of value such that every reader of
-// the file yields the original bytes: splitEnvKeyValue here and the server's
-// identical config.loadEnvFile, systemd's EnvironmentFile= (deploy/fleet.service
+// the file yields the original bytes: ParseEnvLine (which the server's
+// config loader also uses), systemd's EnvironmentFile= (deploy/fleet.service
 // reads /etc/fleet/fleet.env — that is what the running service sees), and the
 // scripts' env_get. scripts/lib/envfile.sh's fleet_env_encode applies the same
 // rules to what bootstrap.sh and update.sh write.
@@ -320,9 +329,11 @@ func envValueVerbatim(value string) bool {
 	return true
 }
 
-// stripEnvQuotes removes a single layer of matching surrounding quotes.
-// Mirrors internal/config.stripQuotes.
-func stripEnvQuotes(value string) string {
+// StripEnvQuotes removes a single layer of matching surrounding single or
+// double quotes. It is also how the server unquotes a value that reached the
+// process environment some other way (systemd, a container runtime), so a
+// quoted value reads the same whichever path delivered it.
+func StripEnvQuotes(value string) string {
 	if len(value) >= 2 &&
 		((strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
 			(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`))) {

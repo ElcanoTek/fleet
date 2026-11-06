@@ -6,6 +6,8 @@ import (
 	"io"
 	"math"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // PinnedModel is one operator-pinned picker row (FLEET_PINNED_MODELS): an
@@ -49,7 +51,7 @@ const (
 // boot error — the same posture as the IP lists — so a typo surfaces at start
 // instead of silently dropping the pins.
 func parsePinnedModels(raw string) ([]PinnedModel, error) {
-	raw = stripQuotes(strings.TrimSpace(raw))
+	raw = creds.StripEnvQuotes(strings.TrimSpace(raw))
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}

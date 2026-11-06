@@ -997,25 +997,6 @@ INDEXEXCHANGE_MARKETPLACE_ACCOUNT_ID_ZETA=1507580
 	})
 }
 
-func TestStripInlineComment(t *testing.T) {
-	cases := map[string]string{
-		"60067 # Elcano default":   "60067",
-		"50751\t# tab-then-hash":   "50751",
-		"plain-value":              "plain-value",
-		"value-with-#-mid":         "value-with-#-mid",
-		`"60067 # quoted"`:         `"60067 # quoted"`,
-		`'50751 # also quoted'`:    `'50751 # also quoted'`,
-		"":                         "",
-		"60067    # padded spaces": "60067",
-	}
-	for input, want := range cases {
-		got := stripInlineComment(input)
-		if got != want {
-			t.Errorf("stripInlineComment(%q) = %q, want %q", input, got, want)
-		}
-	}
-}
-
 func TestIsAllowedEnvVar(t *testing.T) {
 	// DSP connector credentials are no longer in the static allowlist; a client
 	// bundle registers them at startup. Register a couple here so the suffix-rule

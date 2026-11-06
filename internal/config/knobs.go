@@ -63,6 +63,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // knobKind is the value type an env knob parses to.
@@ -482,7 +484,7 @@ func (k *envKnob) lookup() (string, bool) {
 // blank result is treated as UNSET (the default applies) rather than
 // malformed.
 func cleanEnvValue(raw string) string {
-	return strings.TrimSpace(stripQuotes(strings.TrimSpace(raw)))
+	return strings.TrimSpace(creds.StripEnvQuotes(strings.TrimSpace(raw)))
 }
 
 // checkBounds enforces the knob's optional inclusive bounds. The message names
