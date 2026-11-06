@@ -169,35 +169,12 @@ var errBlockedUpstream = errors.New("egress proxy: destination resolves to a blo
 // from the HOST network namespace, which is precisely why a private-range
 // target must never be reachable through it.
 func dialPublic(ctx context.Context, host, port string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	if ip := net.ParseIP(host); ip != nil {
-		if netguard.IsBlockedIP(ip) {
-			return nil, errBlockedUpstream
-		}
-		return dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
-	}
-	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, fmt.Errorf("resolve %q: %w", host, err)
-	}
-	var lastErr error
-	for _, ipa := range ips {
-		if netguard.IsBlockedIP(ipa.IP) {
-			lastErr = errBlockedUpstream
-			continue
-		}
-		conn, derr := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ipa.IP.String(), port))
-		if derr != nil {
-			lastErr = derr
-			continue
-		}
-		return conn, nil
-	}
-	if lastErr == nil {
-		lastErr = errBlockedUpstream
-	}
-	return nil, lastErr
+	return dialPublicGuarded(ctx, "tcp", net.JoinHostPort(host, port))
 }
+
+// dialPublicGuarded has no keep-alive, unlike the HTTP-client dialers: it opens
+// a raw CONNECT tunnel whose lifetime the two endpoints own.
+var dialPublicGuarded = netguard.DialContext(&net.Dialer{Timeout: 10 * time.Second}, netguard.IsBlockedIP, errBlockedUpstream)
 
 // handle implements the CONNECT proxy: authenticate the per-turn token, check
 // the CONNECT target host against that token's allowlist, then tunnel raw bytes.

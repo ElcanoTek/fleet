@@ -12,8 +12,9 @@
 // two copies drifted — each blocked a range the other missed (tools covered the
 // RFC test/benchmark/reserved nets; mcpoauth covered all-multicast + fail-closed
 // nil). Centralizing it keeps the SSRF guard — a security invariant — honest:
-// one definition, one test, no silent under-blocking. It imports only the
-// standard net package, so it introduces no import cycle with either caller.
+// one definition, one test, no silent under-blocking. DialContext (dial.go) is
+// the one resolve-then-dial guard built on it. The package imports only the
+// standard library, so it introduces no import cycle with any caller.
 package netguard
 
 import "net"

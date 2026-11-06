@@ -37,41 +37,11 @@ var errBlockedAddress = errors.New("playwright browser: connection to a private,
 // exercising loopback httptest servers may override it.
 var DialContext = guardedDialContext(netguard.IsBlockedIP)
 
+// guardedDialContext returns the netguard resolve-then-dial guard with this
+// package's dialer settings and blocked-address error. isBlocked is a parameter
+// so tests can admit loopback httptest servers.
 func guardedDialContext(isBlocked func(net.IP) bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, fmt.Errorf("split host:port: %w", err)
-		}
-		if ip := net.ParseIP(host); ip != nil {
-			if isBlocked(ip) {
-				return nil, errBlockedAddress
-			}
-			return dialer.DialContext(ctx, network, addr)
-		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %q: %w", host, err)
-		}
-		var lastErr error
-		for _, ipa := range ips {
-			if isBlocked(ipa.IP) {
-				lastErr = errBlockedAddress
-				continue
-			}
-			conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
-			if derr != nil {
-				lastErr = derr
-				continue
-			}
-			return conn, nil
-		}
-		if lastErr == nil {
-			lastErr = errBlockedAddress
-		}
-		return nil, lastErr
-	}
+	return netguard.DialContext(&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}, isBlocked, errBlockedAddress)
 }
 
 // Step is one declarative browser action in a Playwright automation run.
