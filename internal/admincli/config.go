@@ -17,8 +17,8 @@ import (
 
 // cmdConfig dispatches the operator-friendly credential writers — the keys a
 // deployment needs beyond what bootstrap generates itself: the OpenRouter API
-// key (server env), the Elcano SSO verification key (web env), and the
-// Browserbase API key that mints hosted-browser live views (server env, #987).
+// key, the Elcano SSO verification key, and the Browserbase API key that mints
+// hosted-browser live views (#987). All three go to the server env file.
 // They exist so nobody has to hand-edit a 0600 env file; bootstrap's
 // interactive prompts call the same underlying writes.
 func cmdConfig(argv []string) int {

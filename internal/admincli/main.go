@@ -223,13 +223,13 @@ Users, credentials, notes:
   fleet config set-openrouter-key                     (hidden prompt; or --key -; upserts OPENROUTER_API_KEY into the server env file)
   fleet config set-browserbase-key                    (hidden prompt; or --key -; upserts BROWSERBASE_API_KEY into the server env file —
                                                        mints hosted-browser live views; see docs/BROWSERBASE.md)
-  fleet config set-auth-pubkey [<key>|--from <file>]  (enable Elcano SSO: validates + writes AUTH_SIGNING_PUBKEY into the web env file;
+  fleet config set-auth-pubkey [<key>|--from <file>]  (enable Elcano SSO: validates + writes AUTH_SIGNING_PUBKEY into the server env file;
                                                        accepts the "auth pubkey" output line verbatim; --login-url/--cookie-domain optional)
-  fleet config set-env <KEY> [--value -] [--web]      (upsert ANY key into the server — or web — env file as exactly one line:
+  fleet config set-env <KEY> [--value -]              (upsert ANY key into the server env file as exactly one line:
                                                        duplicates removed, 0600 + owner kept; value from stdin/hidden prompt, never argv)
-  fleet config unset-env <KEY> [--web]                (remove every line for KEY)
-  fleet env [show]                                    (print the server + web env files with secret values masked)
-  fleet env edit [--web] [--editor CMD]               (open the server env file — or the web one — in $EDITOR, or pick
+  fleet config unset-env <KEY>                        (remove every line for KEY)
+  fleet env [show]                                    (print the server env file with secret values masked)
+  fleet env edit [--editor CMD]                       (open the server env file in $EDITOR, or pick
                                                        nano/vim/helix interactively; offered via dnf install if missing.
                                                        Restores 0600 and prints the validate/restart apply hints)
   fleet chat user add <email>    --password -

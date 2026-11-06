@@ -92,7 +92,7 @@ func TestSetAuthPubkeyWritesEnvFile(t *testing.T) {
 	if !strings.Contains(content, "AUTH_COOKIE_DOMAIN=example.com") {
 		t.Errorf("env file missing cookie domain; got:\n%s", content)
 	}
-	// 0600: the web env holds session/token secrets alongside the (public) key.
+	// 0600: the env file holds session/token secrets alongside the (public) key.
 	if fi, err := os.Stat(envPath); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Errorf("env file mode = %v, %v; want 0600", fi.Mode().Perm(), err)
 	}

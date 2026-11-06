@@ -384,7 +384,7 @@ func dnfInstallEditor(name, pkg string, in *bufio.Reader, out io.Writer) error {
 // so edit can tell "saved unchanged" from a real change without keeping the
 // secret bytes around.
 func envFileDigest(path string) []byte {
-	b, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own env file, resolved by serverEnvFile/webEnvFile.
+	b, err := os.ReadFile(path) //nolint:gosec // G304: the operator's own env file, resolved by serverEnvFile.
 	if err != nil {
 		return nil
 	}
