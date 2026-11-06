@@ -2,7 +2,6 @@ package admincli
 
 import (
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -74,71 +73,5 @@ func TestFindScript(t *testing.T) {
 	}
 	if got := findScript("does-not-exist.sh"); got != "" {
 		t.Errorf("findScript(missing) = %q, want empty", got)
-	}
-}
-
-// TestSandboxProbeArgv — `fleet status` as root must probe the SERVICE user's
-// rootless image store (the one the unit actually runs from), not root's; as
-// anyone else it runs in the caller's store and must say so, because that
-// verdict is about a different store than the one that matters.
-func TestSandboxProbeArgv(t *testing.T) {
-	ref := "localhost/fleet-sandbox:latest"
-	argv, note := sandboxProbeArgv(ref, "fleet", "/var/lib/fleet", true)
-	want := []string{"runuser", "-u", "fleet", "--", "env", "HOME=/var/lib/fleet", "XDG_RUNTIME_DIR=/run/fleet", "podman", "run", "--rm", ref, "true"}
-	if strings.Join(argv, " ") != strings.Join(want, " ") {
-		t.Errorf("root+service user argv = %q, want %q", argv, want)
-	}
-	if !strings.Contains(note, "as fleet") {
-		t.Errorf("note = %q, want it to name the service user", note)
-	}
-
-	// Unknown home falls back to the StateDirectory convention.
-	argv, _ = sandboxProbeArgv(ref, "fleet", "", true)
-	if !strings.Contains(strings.Join(argv, " "), "HOME=/var/lib/fleet") {
-		t.Errorf("no-home argv = %q, want the /var/lib/<user> fallback", argv)
-	}
-
-	// Root with a root-run service: plain podman, root's store is the right one.
-	argv, note = sandboxProbeArgv(ref, "root", "/root", true)
-	if argv[0] != "podman" || !strings.Contains(note, "root's store") {
-		t.Errorf("root service argv=%q note=%q", argv, note)
-	}
-
-	// Non-root caller: plain podman, and the note points at the authoritative check.
-	argv, note = sandboxProbeArgv(ref, "fleet", "/var/lib/fleet", false)
-	if argv[0] != "podman" || !strings.Contains(note, "YOUR store") || !strings.Contains(note, "sudo fleet doctor") {
-		t.Errorf("non-root argv=%q note=%q", argv, note)
-	}
-
-	// No unit at all: plain podman, nothing to caveat.
-	argv, note = sandboxProbeArgv(ref, "", "", false)
-	if argv[0] != "podman" || note != "" {
-		t.Errorf("no-unit argv=%q note=%q", argv, note)
-	}
-}
-
-// TestServiceStorePodmanArgvCarriesAnySubcommand pins the generalisation
-// `fleet validate-config` shares: the store hop is about WHICH store podman
-// reads, so it must apply to `image exists` and `info` exactly as it does to
-// the `run` probe. validate-config ran those two as the caller and reported a
-// present, runnable image as a blocking failure on a box `fleet status` called
-// healthy — one store resolution, one set of rules, no second copy to drift.
-func TestServiceStorePodmanArgvCarriesAnySubcommand(t *testing.T) {
-	argv, note := ServiceStorePodmanArgv("fleet", "/var/lib/fleet", true, "image", "exists", "ref")
-	want := []string{"runuser", "-u", "fleet", "--", "env", "HOME=/var/lib/fleet", "XDG_RUNTIME_DIR=/run/fleet", "podman", "image", "exists", "ref"}
-	if strings.Join(argv, " ") != strings.Join(want, " ") {
-		t.Errorf("image-exists argv = %q, want %q", argv, want)
-	}
-	if !strings.Contains(note, "as fleet") {
-		t.Errorf("note = %q, want it to name the service user", note)
-	}
-
-	// `podman info` takes the identical hop, and a caller-store verdict still
-	// says whose store it is about.
-	if argv, _ = ServiceStorePodmanArgv("fleet", "/var/lib/fleet", true, "info"); strings.Join(argv, " ") != "runuser -u fleet -- env HOME=/var/lib/fleet XDG_RUNTIME_DIR=/run/fleet podman info" {
-		t.Errorf("info argv = %q", argv)
-	}
-	if argv, note = ServiceStorePodmanArgv("fleet", "/var/lib/fleet", false, "info"); argv[0] != "podman" || !strings.Contains(note, "YOUR store") {
-		t.Errorf("non-root info argv=%q note=%q", argv, note)
 	}
 }

@@ -3073,8 +3073,9 @@ func remoteMCPResolver(svc *remotemcp.Service) agent.RemoteMCPResolver {
 // setupRemoteMCP wires the per-user remote-MCP + OAuth feature (#443). It is
 // enabled only when an encryption key AND a public base URL are configured;
 // otherwise it fails closed (returns nil) and the endpoints report the
-// feature off. On enable it installs the token cipher on the chat store (secrets
-// encrypted at rest) and starts an hourly sweep of abandoned OAuth-flow rows.
+// feature off. On enable it relies on the token cipher installStoreCipher put
+// on the chat store (secrets encrypted at rest); a key that made no cipher
+// leaves the feature off.
 // The returned Service backs explicit HTTP control-plane operations. Agent runs
 // bind their MCP tools through the child-owned broker scope, which is where the
 // credentialed MCP client lives; the Service is additionally handed to the agent
@@ -3086,18 +3087,14 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 		log.Printf("remote MCP OAuth: disabled (set FLEET_MCP_OAUTH_ENCRYPTION_KEY + FLEET_PUBLIC_BASE_URL to enable)")
 		return nil
 	}
-	cipher, err := secretbox.NewCipher(cfg.MCPOAuthEncryptionKey)
-	if err != nil {
+	// installStoreCipher (which run() calls first) already put the cipher on
+	// the store; it installs nothing for a key that does not make a cipher.
+	if !chatStore.RemoteMCPEncryptionEnabled() {
 		// Config already validates the key length, so this is belt-and-suspenders:
 		// disable rather than crash the whole server on a bad key.
-		log.Printf("remote MCP OAuth: disabled — invalid encryption key: %v", err)
+		log.Printf("remote MCP OAuth: disabled — invalid encryption key (see the store secret cipher error)")
 		return nil
 	}
-	chatStore.SetTokenCipher(cipher)
-	svc := remotemcp.NewService(chatStore, remotemcp.Config{
-		PublicBaseURL:     cfg.PublicBaseURL,
-		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
-	})
 	// Same wiring the credential-owning child does (see mcp_broker.go, #1124),
 	// for this process's own redactor. The parent's control-plane service
 	// unseals per-user api_key secrets and mints/refreshes OAuth bearers —
@@ -3108,7 +3105,7 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// The observer is scope-aware (#1274): each server row's rotations
 	// supersede that row's previous generation, so a long-running process
 	// plateaus instead of scanning for every token it has ever seen.
-	svc.SetSecretObserver(agentcore.RegisterSecretLiterals)
+	svc := newRemoteMCPService(cfg, chatStore, agentcore.RegisterSecretLiterals)
 	// Abandoned OAuth flow rows are reclaimed by the maintenance loop (see
 	// runMaintenancePass), not by a daemon of their own. This used to be a
 	// `for range ticker.C` goroutine with a context.Background() per sweep —
@@ -3117,6 +3114,20 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// hourly fixed that and removed a redundant ticker.
 	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
+	return svc
+}
+
+// newRemoteMCPService builds the remote-MCP control-plane service over st,
+// which must already carry the token cipher, and wires observer to receive
+// every credential the service acquires at runtime (#1124). Shared by the
+// parent (setupRemoteMCP) and the credential-owning broker
+// (openMCPBrokerRemoteStore); each keeps its own gating and error policy.
+func newRemoteMCPService(cfg *config.Config, st *store.Store, observer remotemcp.SecretObserver) *remotemcp.Service {
+	svc := remotemcp.NewService(st, remotemcp.Config{
+		PublicBaseURL:     cfg.PublicBaseURL,
+		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
+	})
+	svc.SetSecretObserver(observer)
 	return svc
 }
 

@@ -232,16 +232,15 @@ func checkSandbox(r *report, bundle *clientconfig.Bundle) {
 	// scripts/build-sandbox-image.sh and doctor.sh use); as anyone else, say
 	// whose store the verdict is about so nobody chases it.
 	svcUser, svcHome := serviceUserAndHome(serviceName(""))
-	argv, storeNote := sandboxProbeArgv(ref, svcUser, svcHome, os.Geteuid() == 0)
+	// sandbox.ServiceStorePodmanExec is the one copy of that construction,
+	// shared with `fleet validate-config`'s preflights; it also sets the
+	// command's Dir to the service user's home, because rootless podman re-execs
+	// and chdir()s back to the inherited cwd, which that user may not be able
+	// to enter (e.g. /root).
+	execCtx, storeNote := sandbox.ServiceStorePodmanExec(svcUser, svcHome, os.Geteuid() == 0)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	//nolint:gosec // G204: fixed binaries (podman, or runuser+env+podman); ref is the operator's resolved bundle image and svcUser the unit's User=, not request/LLM input.
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	if svcHome != "" && os.Geteuid() == 0 && svcUser != "" && svcUser != "root" {
-		// Rootless podman re-execs and chdir()s back to the inherited cwd,
-		// which the service user may not be able to enter (e.g. /root).
-		cmd.Dir = svcHome
-	}
+	cmd := execCtx.CommandContext(ctx, "", "run", "--rm", ref, "true")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		detail := strings.TrimSpace(string(out))
 		if detail == "" {
@@ -264,50 +263,10 @@ func sandboxImageEnv() string {
 	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
 }
 
-// sandboxProbeArgv builds the `podman run --rm <ref> true` probe against the
-// image store the SERVICE uses. Pure, for tests; the store resolution itself is
-// ServiceStorePodmanArgv, which `fleet validate-config` shares (see its doc).
-func sandboxProbeArgv(ref, svcUser, svcHome string, asRoot bool) (argv []string, storeNote string) {
-	return ServiceStorePodmanArgv(svcUser, svcHome, asRoot, "run", "--rm", ref, "true")
-}
-
-// ServiceStorePodmanArgv wraps a podman invocation so it reads the image store
-// the fleet SERVICE uses, and returns a note naming whose store the verdict is
-// actually about.
-//
-// Rootless podman keeps one image store PER USER. The service runs as the
-// unit's User= (fleet), so the sandbox image lives in THAT store; a root shell
-// running podman inspects root's store instead and reports "missing" for an
-// image `fleet doctor` just verified as present and runnable. As root with a
-// non-root service user the command therefore goes through runuser with the
-// unit's HOME and XDG_RUNTIME_DIR (the same shape scripts/build-sandbox-image.sh
-// and doctor.sh use); as anyone else it runs as the caller and the note says
-// whose store that was, so nobody chases a phantom.
-//
-// Exported because `fleet validate-config` made exactly the mistake this
-// function exists to prevent: it probed as the caller and reported a present
-// image as a BLOCKING "not present" on a healthy box, while `fleet status` in
-// the same shell reported it present. Two copies of this reasoning is one copy
-// too many — callers share this one rather than growing a second, wronger
-// version. Pure, so both callers' tables can pin it.
-//
-// The runuser construction itself lives in ONE place — sandbox.ServiceStorePodmanExec,
-// which the sandbox preflights (runtime, network helper, KVM) also build on, so
-// the status probes and the preflights can never drift apart in whose podman
-// they ask. This wrapper only re-shapes that context back into a flat argv for
-// callers that exec directly.
-func ServiceStorePodmanArgv(svcUser, svcHome string, asRoot bool, podmanArgs ...string) (argv []string, storeNote string) {
-	execCtx, note := sandbox.ServiceStorePodmanExec(svcUser, svcHome, asRoot)
-	argv = make([]string, 0, len(execCtx.Prefix)+1+len(podmanArgs))
-	argv = append(argv, execCtx.Prefix...)
-	argv = append(argv, "podman")
-	return append(argv, podmanArgs...), note
-}
-
-// ServiceUserAndHome is the exported ServiceStorePodmanArgv companion: the
-// fleet unit's User= and that account's home, or empty strings when the unit,
-// systemd or the user is unknown (which ServiceStorePodmanArgv reads as "run as
-// the caller").
+// ServiceUserAndHome is the exported companion of
+// sandbox.ServiceStorePodmanExec: the fleet unit's User= and that account's
+// home, or empty strings when the unit, systemd or the user is unknown (which
+// ServiceStorePodmanExec reads as "run as the caller").
 func ServiceUserAndHome() (user, home string) { return serviceUserAndHome(serviceName("")) }
 
 // serviceUserAndHome returns the unit's User= and that account's home

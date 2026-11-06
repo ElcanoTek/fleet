@@ -69,10 +69,10 @@ func TestPodmanExecArgv(t *testing.T) {
 	}
 }
 
-// TestServiceStorePodmanExec is the same contract the admincli status probes
-// pin through ServiceStorePodmanArgv (which now delegates here): the runuser
-// shape, the whose-store note, and the Dir rule — Dir follows the home ONLY
-// when it is known, matching the status probe, which inherits otherwise.
+// TestServiceStorePodmanExec is the contract the admincli status probes and
+// `fleet validate-config` both build on: the runuser shape, the whose-store
+// note, and the Dir rule — Dir follows the home ONLY when it is known, and the
+// command inherits the cwd otherwise.
 func TestServiceStorePodmanExec(t *testing.T) {
 	cases := []struct {
 		name         string

@@ -19,7 +19,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
-	"github.com/ElcanoTek/fleet/internal/remotemcp"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -83,15 +82,15 @@ func runMCPBroker() error {
 }
 
 func mcpBrokerRemoteConfigured() bool {
-	configured := func(suffix string) bool {
-		for _, prefix := range []string{"FLEET_", "CHAT_", "CUTLASS_"} {
-			if strings.TrimSpace(os.Getenv(prefix+suffix)) != "" {
+	configured := func(name string) bool {
+		for _, alias := range config.EnvAliases(name) {
+			if strings.TrimSpace(os.Getenv(alias)) != "" {
 				return true
 			}
 		}
 		return false
 	}
-	return configured("MCP_OAUTH_ENCRYPTION_KEY") && configured("PUBLIC_BASE_URL")
+	return configured("FLEET_MCP_OAUTH_ENCRYPTION_KEY") && configured("FLEET_PUBLIC_BASE_URL")
 }
 
 func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCPResolver, error) {
@@ -127,10 +126,6 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 		return nil, nil, errors.New("open broker remote MCP store")
 	}
 	st.SetTokenCipher(cipher)
-	svc := remotemcp.NewService(st, remotemcp.Config{
-		PublicBaseURL:     cfg.PublicBaseURL,
-		AllowInsecureHTTP: cfg.RemoteMCPAllowInsecureHTTP,
-	})
 	// Runtime-acquired credentials — per-user OAuth bearers, rotated refresh
 	// tokens, unsealed api_key secrets — join THIS process's literal redactor at
 	// acquisition time (#1124): boot-time RegisterEnvLiterals only knows env-file
@@ -138,7 +133,7 @@ func openMCPBrokerRemoteStore(cfg *config.Config) (*store.Store, agent.RemoteMCP
 	// error string would reach the masked-error log unscrubbed. Rotations are
 	// scoped per server row (#1274), so this process's literal set plateaus
 	// instead of accumulating every token pair it has ever refreshed.
-	svc.SetSecretObserver(mcpbroker.RegisterSecretLiterals)
+	svc := newRemoteMCPService(cfg, st, mcpbroker.RegisterSecretLiterals)
 	if !svc.Enabled() {
 		_ = st.Close()
 		return nil, nil, errors.New("broker remote MCP service is not enabled")
