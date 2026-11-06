@@ -74,47 +74,12 @@ var errHTTPToolBlockedAddress = errors.New("http tool: connection to a private, 
 // httptest servers (loopback) substitute a plain dialer.
 var httpToolDialContext = guardedDialContext(netguard.IsBlockedIP)
 
-// guardedDialContext returns a DialContext that resolves the host, rejects any
-// resolved IP the isBlocked classifier refuses, and dials a validated address
-// directly — the same resolve-then-dial shape as mcpoauth.safeDialContext, so
-// a hostname that re-resolves to an internal IP between check and connect (DNS
-// rebinding) cannot slip through. isBlocked is a parameter only so a test can
-// admit its loopback origin while still refusing the redirect target.
+// guardedDialContext returns the netguard resolve-then-dial guard with this
+// package's dialer settings and blocked-address error. isBlocked is a parameter
+// only so a test can admit its loopback origin while still refusing the
+// redirect target.
 func guardedDialContext(isBlocked func(net.IP) bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		host, port, err := net.SplitHostPort(addr)
-		if err != nil {
-			return nil, fmt.Errorf("split host:port: %w", err)
-		}
-		if ip := net.ParseIP(host); ip != nil {
-			if isBlocked(ip) {
-				return nil, errHTTPToolBlockedAddress
-			}
-			return dialer.DialContext(ctx, network, addr)
-		}
-		ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-		if err != nil {
-			return nil, fmt.Errorf("resolve %q: %w", host, err)
-		}
-		var lastErr error
-		for _, ipa := range ips {
-			if isBlocked(ipa.IP) {
-				lastErr = errHTTPToolBlockedAddress
-				continue
-			}
-			conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ipa.IP.String(), port))
-			if derr != nil {
-				lastErr = derr
-				continue
-			}
-			return conn, nil
-		}
-		if lastErr == nil {
-			lastErr = errHTTPToolBlockedAddress
-		}
-		return nil, lastErr
-	}
+	return netguard.DialContext(&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}, isBlocked, errHTTPToolBlockedAddress)
 }
 
 // HTTPToolSpec is one inline HTTP tool to register, in the credential-bearing

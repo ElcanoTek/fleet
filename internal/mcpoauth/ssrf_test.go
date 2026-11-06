@@ -3,6 +3,8 @@ package mcpoauth
 import (
 	"net"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
 func TestIsBlockedIP(t *testing.T) {
@@ -29,8 +31,8 @@ func TestIsBlockedIP(t *testing.T) {
 		if ip == nil {
 			t.Fatalf("bad test IP %q", s)
 		}
-		if !isBlockedIP(ip) {
-			t.Errorf("isBlockedIP(%s) = false, want true (should be blocked)", s)
+		if !netguard.IsBlockedIP(ip) {
+			t.Errorf("netguard.IsBlockedIP(%s) = false, want true (should be blocked)", s)
 		}
 	}
 
@@ -45,13 +47,13 @@ func TestIsBlockedIP(t *testing.T) {
 		if ip == nil {
 			t.Fatalf("bad test IP %q", s)
 		}
-		if isBlockedIP(ip) {
-			t.Errorf("isBlockedIP(%s) = true, want false (public address)", s)
+		if netguard.IsBlockedIP(ip) {
+			t.Errorf("netguard.IsBlockedIP(%s) = true, want false (public address)", s)
 		}
 	}
 
-	if !isBlockedIP(nil) {
-		t.Error("isBlockedIP(nil) should be blocked (fail closed)")
+	if !netguard.IsBlockedIP(nil) {
+		t.Error("netguard.IsBlockedIP(nil) should be blocked (fail closed)")
 	}
 }
 
