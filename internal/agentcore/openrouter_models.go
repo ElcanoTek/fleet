@@ -7,8 +7,8 @@ package agentcore
 // the static prefix table in models.go for any slug OpenRouter knows about. The
 // static table (modelContextWindows) remains the cold-start / network-failure
 // fallback, and the observed-context cache (populated from provider
-// context-too-large errors via recordContextMax) is ground truth that overrides
-// both.
+// context-too-large errors via recordContextMaxForModel) is ground truth that
+// overrides both.
 //
 // The same fetch also backs the dynamic model-discovery endpoint (#251):
 // AllEntries() exposes the full catalog (id, name, pricing, capabilities) so an
@@ -16,9 +16,10 @@ package agentcore
 // the browser hitting OpenRouter directly. One fetch feeds both the
 // context-window map and the catalog slice — there is no second network call.
 //
-// Resolution order for context windows, implemented in contextWindowForModel
-// (models.go):
-//  1. observed cache (recordContextMax write-backs) — per-request ground truth
+// Resolution order for context windows, implemented in
+// contextWindowForActiveModel and contextWindowForModel (models.go):
+//  1. observed cache (recordContextMaxForModel write-backs, keyed by provider
+//     identity and slug) — per-request ground truth
 //  2. live /api/v1/models cache (this file) — refreshed every modelsCacheTTL
 //  3. static prefix table (models.go) — cold-start / offline fallback
 //  4. defaultModelContextWindow

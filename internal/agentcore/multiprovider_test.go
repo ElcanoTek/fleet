@@ -286,10 +286,11 @@ func TestContextWindowForActiveModel_OpenRouterCatalogOverridesDeclaration(t *te
 		observedContextWindows.mu.Unlock()
 	})
 
-	// Even the legacy unwrapped-model cache is isolated from a provider-wrapped
-	// model. This exercises OpenRouter's static/live fallback path without
-	// reintroducing a slug-only observation after the scoped lookup misses.
-	recordContextMax(slug, 2_000_000)
+	// Even an unwrapped model's observation of the same slug is isolated from a
+	// provider-wrapped model. This exercises OpenRouter's static/live fallback
+	// path without consulting a slug-only observation after the scoped lookup
+	// misses.
+	recordContextMaxForModel(&namedMockModel{name: slug}, 2_000_000)
 	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
 		t.Fatalf("OpenRouter active window = %d, want authoritative catalog 131072", got)
 	}

@@ -44,7 +44,7 @@ func TestOpenRouterModelsFetch_Live(t *testing.T) {
 		if got := contextLengthFromOpenRouterLive(slug); got != entry.ContextLength {
 			t.Errorf("contextLengthFromOpenRouterLive(%q) = %d, want %d", slug, got, entry.ContextLength)
 		}
-		// contextWindowForModel composes observed + live + static fallback.
+		// contextWindowForModel composes the live cache + static fallback.
 		if w := contextWindowForModel(slug); w != entry.ContextLength {
 			t.Errorf("contextWindowForModel(%q) = %d, want %d", slug, w, entry.ContextLength)
 		}

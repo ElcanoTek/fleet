@@ -484,8 +484,8 @@ See [ADR-0071](adr/0071-critical-tool-aliases.md) and the design note
 ## Context-window pressure (proactive compaction)
 
 Before each round's model call the run loop compares the prompt size against the
-active model's context window (resolved by `contextWindowForModel` — observed
-provider ground truth, the live OpenRouter cache, then a static table) and acts
+active model's context window (resolved by `contextWindowForActiveModel` —
+observed provider ground truth, the live OpenRouter cache, then a static table) and acts
 **before** the provider rejects an oversized request, rather than only recovering
 after a `context_length_exceeded` error:
 
