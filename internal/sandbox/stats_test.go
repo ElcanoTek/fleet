@@ -313,7 +313,7 @@ func TestContainerResourceUsage_E2E(t *testing.T) {
 	// Close finalizes telemetry (the poller publishes its rollup on teardown).
 	sb.Close()
 
-	summary, ok := sb.ResourceUsage()
+	summary, ok := sb.impl.(*containerImpl).resourceUsage()
 	if !ok {
 		t.Skip("no stats samples collected (host podman may restrict `podman stats` for rootless cgroupv1) — collection degraded gracefully, which is the intended fallback")
 	}

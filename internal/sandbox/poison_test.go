@@ -25,9 +25,6 @@ func (p *poisonableImpl) runBash(context.Context, BashRequest) (BashResult, erro
 func (p *poisonableImpl) runPython(context.Context, PythonRequest) (PythonResult, error) {
 	return PythonResult{Status: "success"}, nil
 }
-func (p *poisonableImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	return ResourceUsageSummary{}, false
-}
 func (p *poisonableImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
 	return FileOpResult{}, nil
 }

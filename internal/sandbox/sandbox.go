@@ -282,11 +282,6 @@ type impl interface {
 	// host process. See fileops.go.
 	runFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error)
 	bindFileOpRoot(ctx context.Context, root string) (FileOpRootIdentity, error)
-	// resourceUsage returns the per-run resource telemetry rollup (#263) and
-	// whether any was collected. Populated only after close() for the container
-	// backend (the poller publishes its rollup on teardown); the host backend
-	// has no container to sample and always returns ok=false.
-	resourceUsage() (ResourceUsageSummary, bool)
 	// poisoned reports whether a cancelled/timed-out invocation may have left
 	// processes running in the backend (#796: cleanup could not be proved).
 	// A poisoned backend refuses further work — the owner must retire it
@@ -308,8 +303,7 @@ var ErrPoisoned = errors.New("sandbox poisoned: a cancelled command may still be
 // calls unsandboxed on the host. See host.go / host_disabled.go (#159).
 func HostExecutorCompiledIn() bool { return hostExecutorCompiledIn }
 
-// Mode reports the backend in use. Useful for tests and for log lines
-// that want to disambiguate which path the turn ran through.
+// ModeName reports the backend in use ("host", "container", "kubernetes").
 func (s *Sandbox) ModeName() string {
 	switch s.mode {
 	case ModeHost:
@@ -387,18 +381,6 @@ func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResul
 		return PythonResult{}, ErrPoisoned
 	}
 	return s.impl.runPython(ctx, req)
-}
-
-// ResourceUsage returns the per-run sandbox resource telemetry (#263) — peak
-// and average CPU/memory plus cumulative I/O sampled from `podman stats` over
-// the sandbox's lifetime — and whether any was collected.
-//
-// Telemetry is finalized on Close (the poller publishes its rollup when the
-// container tears down), so callers should read this AFTER Close. ok is false
-// when collection was disabled, the host backend was in use (no container), or
-// `podman stats` was unavailable for the whole run.
-func (s *Sandbox) ResourceUsage() (ResourceUsageSummary, bool) {
-	return s.impl.resourceUsage()
 }
 
 // Close tears down the backend. Safe to call multiple times. After

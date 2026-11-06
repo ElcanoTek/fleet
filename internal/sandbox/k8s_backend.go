@@ -1449,13 +1449,6 @@ func (k *k8sImpl) podFailureSuffix() string {
 	return ""
 }
 
-// resourceUsage reports no telemetry: the k8s backend has no `podman stats`
-// counterpart wired up (kubelet metrics need a different collection path).
-// Recorded as an honest deviation in docs/DEPLOYMENT-KUBERNETES.md.
-func (k *k8sImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	return ResourceUsageSummary{}, false
-}
-
 func (k *k8sImpl) close() {
 	k.mu.Lock()
 	k.terminateBridgeLocked()
