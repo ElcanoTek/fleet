@@ -460,7 +460,7 @@ func run() error {
 		// paths resolve, and fileOpRoot treats the tree as a read-only
 		// supporting-doc root so write_file/edit_file refuse it (the sandbox
 		// mounts enforce the same read-only posture for bash/run_python).
-		tools.SharedFilesDirName: tools.SharedFilesDir(workspaceRootOrDefault(cfg.WorkspaceRoot)),
+		tools.SharedFilesDirName: tools.SharedFilesDir(cfg.WorkspaceRoot),
 	})
 
 	// Confine the host-side file tools (view_file/write_file/edit_file) to the
@@ -2312,28 +2312,18 @@ func warnIfNoAdminKey(adminKey string) {
 }
 
 // confineFileToolsToWorkspace registers the workspace root as the base for the
-// host-side file tools, resolved the SAME way the agent manager does
-// (cfg.WorkspaceRoot, else ./workspace). Without this their AllowedBaseDirs
-// falls back to the process cwd, which under systemd is the whole StateDirectory
-// (/var/lib/fleet) and would let an absolute path reach DataDir attachments/
-// uploads + api_keys.json that the sandbox never mounts. Extracted from run() to
-// keep it within the cyclomatic budget.
+// host-side file tools: the absolute cfg.WorkspaceRoot that PinWorkspaceRoot
+// resolved, the same value the agent manager reads. Without this their
+// AllowedBaseDirs falls back to the process cwd, which under systemd is the
+// whole StateDirectory (/var/lib/fleet) and would let an absolute path reach
+// DataDir attachments/uploads + api_keys.json that the sandbox never mounts.
+// The root is relative only when PinWorkspaceRoot could not read the cwd, where
+// filepath.Abs would fail too, so the IsAbs guard skips that case as before.
+// Extracted from run() to keep it within the cyclomatic budget.
 func confineFileToolsToWorkspace(workspaceRoot string) {
-	if abs, err := filepath.Abs(workspaceRootOrDefault(workspaceRoot)); err == nil {
-		tools.SetWorkspaceRoot(abs)
+	if filepath.IsAbs(workspaceRoot) {
+		tools.SetWorkspaceRoot(workspaceRoot)
 	}
-}
-
-// workspaceRootOrDefault resolves the workspace root the way the sandbox pool
-// does: FLEET_WORKSPACE_ROOT when set, ./workspace otherwise. One resolver so
-// the shared-file library, the file-tool confinement, and the bind mount can
-// never disagree about which tree they mean.
-func workspaceRootOrDefault(workspaceRoot string) string {
-	root := strings.TrimSpace(workspaceRoot)
-	if root == "" {
-		root = "workspace"
-	}
-	return root
 }
 
 func orchestratorAddr() string {

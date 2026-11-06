@@ -37,10 +37,9 @@ import (
 // TestEnvKnobsAreEnvFileSettable instead, which asserts the allowlist over the
 // whole registry rather than over one call shape.
 var driftDirectKeyFuncs = map[string]bool{
-	"getenvDefault":   true, // internal/config
-	"getenvInt":       true,
-	"getenvBool":      true,
-	"getEnvOrDefault": true,
+	"getenvDefault": true, // internal/config
+	"getenvInt":     true,
+	"getenvBool":    true,
 }
 
 // driftFleetSuffixFuncs read a FLEET_-prefixed knob by suffix; the value is

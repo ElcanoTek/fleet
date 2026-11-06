@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"slices"
 	"sort"
@@ -280,7 +281,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 	httpTools := append([]config.HTTPToolConfig(nil), b.httpTools...)
 	a2aPeers := append([]config.A2APeerConfig(nil), b.a2aPeers...)
 	bundleAllow := cloneToolAllowlist(b.bundleAllow)
-	enabled := cloneServerSet(b.enabled)
+	enabled := maps.Clone(b.enabled)
 	b.reloadMu.Unlock()
 	// Authorize the selection against the child's OWN enabled set before
 	// anything is spawned. The parent's claim about which servers exist is not
@@ -545,18 +546,12 @@ func (b *brokerBackend) CallMCP(ctx context.Context, server, tool string, args m
 	return b.MCPBroker.CallMCP(ctx, server, tool, args)
 }
 
+// cloneToolAllowlist deep-copies a server → names map (the tool allowlist and
+// the account inventory share the shape): a fresh map and fresh slices.
 func cloneToolAllowlist(src map[string][]string) map[string][]string {
 	dst := make(map[string][]string, len(src))
 	for name, list := range src {
 		dst[name] = append([]string(nil), list...)
-	}
-	return dst
-}
-
-func cloneServerSet(src map[string]bool) map[string]bool {
-	dst := make(map[string]bool, len(src))
-	for name, on := range src {
-		dst[name] = on
 	}
 	return dst
 }
@@ -597,22 +592,11 @@ func (b *brokerBackend) Close() error {
 func cloneMCPBases(src map[string]agentcore.MCPServerBase) map[string]agentcore.MCPServerBase {
 	dst := make(map[string]agentcore.MCPServerBase, len(src))
 	for name, base := range src {
-		base.BaseEnv = cloneStrings(base.BaseEnv)
-		base.HTTPHeaders = cloneStrings(base.HTTPHeaders)
+		base.BaseEnv = maps.Clone(base.BaseEnv)
+		base.HTTPHeaders = maps.Clone(base.HTTPHeaders)
 		base.Args = append([]string(nil), base.Args...)
 		base.IdentityEnv = append([]string(nil), base.IdentityEnv...)
 		dst[name] = base
-	}
-	return dst
-}
-
-func cloneStrings(src map[string]string) map[string]string {
-	if src == nil {
-		return nil
-	}
-	dst := make(map[string]string, len(src))
-	for key, value := range src {
-		dst[key] = value
 	}
 	return dst
 }
