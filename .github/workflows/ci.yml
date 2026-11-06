@@ -158,7 +158,7 @@ jobs:
               *) docs_only=false ;;
             esac
             case "$f" in
-              internal/agentcore/*|internal/agent/*|internal/chat/*|internal/sched/*|internal/clientconfig/*)
+              internal/agentcore/*|internal/agent/*|internal/sched/*|internal/clientconfig/*)
                 cache_relevant=true ;;
               config/default/system_prompts/*|go.mod|go.sum)
                 cache_relevant=true ;;

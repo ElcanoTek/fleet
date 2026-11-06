@@ -19,7 +19,7 @@
 # 40-hex commit SHA with the version in a trailing comment (which is also the
 # form Dependabot updates).
 #
-# The false positives (7 as of #1364 — see docs/SCANNING.md for the register)
+# The false positives (6 — see docs/SCANNING.md for the register)
 # are suppressed at the line with a `nosemgrep:` comment
 # naming the specific rule and the reason. They are worth knowing about, because
 # three of them were ALREADY formally triaged and suppressed for gosec (which
@@ -35,11 +35,12 @@
 #   unsafe-deserialization-interface internal/mcp/httptool.go
 #     json.Unmarshal into interface{} is REQUIRED — the value feeds a jq program
 #     over arbitrary JSON. A concrete struct is not expressible.
-#   x-frame-options-misconfiguration web/src/proxy.ts
-#     The header value is the literal string "DENY". No user input reaches it.
 #   insecure-file-permissions        internal/sandbox/fileops.py
 #     Advises 0o644 — WORLD-READABLE — for a sandbox directory. Following it
 #     would be a security REGRESSION. 0750 is the file-tool contract.
+#   use-tls                          scripts/a2a-tck-shim/main.go
+#     A loopback-only conformance-test harness; the official A2A TCK speaks
+#     plain HTTP to it. Already //nolint:gosec for the same reason.
 #
 # Each suppression was mutation-tested: removing it makes the finding reappear,
 # so a green scan means the waivers are doing the work rather than the rules
