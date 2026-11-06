@@ -67,7 +67,6 @@ line-length = 88
 
 exclude = [
     "node_modules",
-    "web/.next",
     ".git",
 ]
 

@@ -20,9 +20,6 @@ func (r *recordingImpl) runPython(_ context.Context, req PythonRequest) (PythonR
 	r.lastPython = req
 	return PythonResult{Status: "success"}, nil
 }
-func (r *recordingImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	return ResourceUsageSummary{}, false
-}
 func (r *recordingImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult, error) {
 	return FileOpResult{}, nil
 }

@@ -349,30 +349,27 @@ func TestLoad_AllowsPrefixedKeys(t *testing.T) {
 	dir := t.TempDir()
 	chdir(t, dir)
 
-	// Open-ended per-user credential prefixes are admitted by the client bundle
-	// at startup (no longer statically allowlisted). Register the prefix so its
-	// suffixed variants flow from the .env file.
-	RegisterAllowedEnvPrefixes("GAMMA_API_KEY_")
-
+	// allowedEnvPrefixes admits open-ended suffixes (here, operator-provisioned
+	// OAuth client ids) from the .env file.
 	_ = os.WriteFile(filepath.Join(dir, ".env.local"), []byte(
-		`GAMMA_API_KEY_BRAD="sk-gamma-brad"`+"\n"+
-			`GAMMA_API_KEY_ELYSE="sk-gamma-elyse"`+"\n",
+		`FLEET_OAUTH_CLIENT_ID_SLACK="slack-client"`+"\n"+
+			`FLEET_OAUTH_CLIENT_ID_NOTION="notion-client"`+"\n",
 	), 0o600)
 
 	envFile := filepath.Join(dir, ".env.local")
 	if _, err := Load(envFile); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := os.Getenv("GAMMA_API_KEY_BRAD"); got != "sk-gamma-brad" {
-		t.Errorf("GAMMA_API_KEY_BRAD = %q, want sk-gamma-brad", got)
+	if got := os.Getenv("FLEET_OAUTH_CLIENT_ID_SLACK"); got != "slack-client" {
+		t.Errorf("FLEET_OAUTH_CLIENT_ID_SLACK = %q, want slack-client", got)
 	}
-	if got := os.Getenv("GAMMA_API_KEY_ELYSE"); got != "sk-gamma-elyse" {
-		t.Errorf("GAMMA_API_KEY_ELYSE = %q, want sk-gamma-elyse", got)
+	if got := os.Getenv("FLEET_OAUTH_CLIENT_ID_NOTION"); got != "notion-client" {
+		t.Errorf("FLEET_OAUTH_CLIENT_ID_NOTION = %q, want notion-client", got)
 	}
 	// cleanup the prefixed keys this test set
 	t.Cleanup(func() {
-		os.Unsetenv("GAMMA_API_KEY_BRAD")
-		os.Unsetenv("GAMMA_API_KEY_ELYSE")
+		os.Unsetenv("FLEET_OAUTH_CLIENT_ID_SLACK")
+		os.Unsetenv("FLEET_OAUTH_CLIENT_ID_NOTION")
 	})
 }
 
@@ -382,20 +379,19 @@ func TestLoad_PrefixDoesNotMatchUnrelatedKeys(t *testing.T) {
 	chdir(t, dir)
 
 	_ = os.WriteFile(filepath.Join(dir, ".env.local"), []byte(
-		`GAMMA_API_KEY_=should-be-skipped-empty-suffix`+"\n"+
-			`SOME_GAMMA_API_KEY=evil`+"\n"+
-			`LD_PRELOAD_GAMMA_API_KEY=worse`+"\n",
+		`SOME_FLEET_OAUTH_CLIENT_ID_X=evil`+"\n"+
+			`LD_PRELOAD_FLEET_OAUTH_CLIENT_ID_X=worse`+"\n",
 	), 0o600)
 
 	envFile := filepath.Join(dir, ".env.local")
 	if _, err := Load(envFile); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if got := os.Getenv("SOME_GAMMA_API_KEY"); got != "" {
-		t.Errorf("SOME_GAMMA_API_KEY leaked: %q", got)
+	if got := os.Getenv("SOME_FLEET_OAUTH_CLIENT_ID_X"); got != "" {
+		t.Errorf("SOME_FLEET_OAUTH_CLIENT_ID_X leaked: %q", got)
 	}
-	if got := os.Getenv("LD_PRELOAD_GAMMA_API_KEY"); got != "" {
-		t.Errorf("LD_PRELOAD_GAMMA_API_KEY leaked: %q", got)
+	if got := os.Getenv("LD_PRELOAD_FLEET_OAUTH_CLIENT_ID_X"); got != "" {
+		t.Errorf("LD_PRELOAD_FLEET_OAUTH_CLIENT_ID_X leaked: %q", got)
 	}
 }
 
@@ -1255,48 +1251,6 @@ func TestMCPServersEmptyAfterLoad(t *testing.T) {
 	}
 }
 
-func TestValidateScheduled(t *testing.T) {
-	valid := &Config{
-		OpenRouterAPIKey: "sk-or-v1-abc123",
-		MaxIterations:    500,
-		MaxCostUSD:       10.0,
-		MaxTotalTokens:   1000000,
-		LLMMaxTokens:     65536,
-	}
-	if err := valid.ValidateScheduled(); err != nil {
-		t.Fatalf("expected valid config, got: %v", err)
-	}
-
-	bad := *valid
-	bad.OpenRouterAPIKey = ""
-	if err := bad.ValidateScheduled(); err == nil {
-		t.Fatal("expected error for missing API key")
-	}
-
-	bad = *valid
-	bad.OpenRouterAPIKey = "wrong-prefix-key"
-	if err := bad.ValidateScheduled(); err == nil {
-		t.Fatal("expected error for wrong API key prefix")
-	}
-
-	bad = *valid
-	bad.MaxIterations = 0
-	if err := bad.ValidateScheduled(); err == nil {
-		t.Fatal("expected error for zero max iterations")
-	}
-
-	bad.MaxIterations = 99999
-	if err := bad.ValidateScheduled(); err == nil {
-		t.Fatal("expected error for excessive max iterations")
-	}
-
-	bad = *valid
-	bad.LLMMaxTokens = 100
-	if err := bad.ValidateScheduled(); err == nil {
-		t.Fatal("expected error for too-low LLM max tokens")
-	}
-}
-
 func TestLoadWithQuotedEnvFromPodman(t *testing.T) {
 	clearEnvVars()
 	defer clearEnvVars()
@@ -1309,9 +1263,6 @@ func TestLoadWithQuotedEnvFromPodman(t *testing.T) {
 	}
 	if cfg.OpenRouterAPIKey != "sk-or-v1-abc123def" {
 		t.Errorf("Expected quotes stripped, got: %q", cfg.OpenRouterAPIKey)
-	}
-	if err := cfg.ValidateScheduled(); err != nil {
-		t.Errorf("Validation should pass with stripped key, got: %v", err)
 	}
 }
 

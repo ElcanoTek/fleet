@@ -267,9 +267,6 @@ func (p *probeRecordingImpl) runFileOp(context.Context, FileOpRequest) (FileOpRe
 func (p *probeRecordingImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
 	return FileOpRootIdentity{Dev: 1, Ino: 1}, nil
 }
-func (p *probeRecordingImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	return ResourceUsageSummary{}, false
-}
 func (p *probeRecordingImpl) poisoned() bool { return false }
 func (p *probeRecordingImpl) close()         { p.closed.Store(true) }
 

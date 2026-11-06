@@ -89,12 +89,6 @@ func SetAdvancedModel(slug string) {
 	modelTiers.mu.Unlock()
 }
 
-// SetFallbackModel installs the effective fallback frontier-tier slug (alias
-// of SetAdvancedModel).
-func SetFallbackModel(slug string) {
-	SetAdvancedModel(slug)
-}
-
 // SetTaskModel installs the task-tier override. Empty clears it, and the task
 // tier then follows the default tier (CurrentTaskModel).
 func SetTaskModel(slug string) {

@@ -120,9 +120,6 @@ func (s *slowCloseImpl) runFileOp(context.Context, FileOpRequest) (FileOpResult,
 func (s *slowCloseImpl) bindFileOpRoot(context.Context, string) (FileOpRootIdentity, error) {
 	return FileOpRootIdentity{Dev: 1, Ino: 1}, nil
 }
-func (s *slowCloseImpl) resourceUsage() (ResourceUsageSummary, bool) {
-	return ResourceUsageSummary{}, false
-}
 func (s *slowCloseImpl) poisoned() bool { return false }
 func (s *slowCloseImpl) close() {
 	<-s.unblock

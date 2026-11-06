@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 const (
@@ -87,7 +89,7 @@ func decodeVerifierJSON(raw string) map[string]any {
 	if len(raw) > verifierEvidenceInputCap {
 		return nil
 	}
-	decoder := json.NewDecoder(strings.NewReader(redactSecrets(raw)))
+	decoder := json.NewDecoder(strings.NewReader(agentcore.RedactSecrets(raw)))
 	decoder.UseNumber() // Keep large identifiers exact instead of rounding to float64.
 	var value map[string]any
 	if decoder.Decode(&value) != nil {

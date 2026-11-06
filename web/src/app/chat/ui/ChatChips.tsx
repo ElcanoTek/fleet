@@ -29,7 +29,6 @@ import {
 } from "./history";
 import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
-import { TeamGlyph } from "./ShareGlyphs";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 
 // PendingAttachment describes a file the user has picked to send with the
@@ -119,123 +118,6 @@ export function CopyButton({
       title={title}
     >
       {state === "idle" ? "Copy" : state === "ok" ? "Copied" : "Copy failed"}
-    </button>
-  );
-}
-
-// ── Context-usage ring ───────────────────────────────────────────────────
-//
-// Replaces the plain "compact this chat" icon button next to the
-// composer. Reads as a tiny progress ring: empty when the context is
-// cold, fills as the latest turn's prompt_tokens grows toward the
-// model's context_length, and color-shifts through three severity
-// bands (muted → accent → danger). The whole ring is the click
-// target — it opens the same compact-confirm modal the old icon
-// button did, so users get visual context AND a one-tap way to act on
-// it from the same control.
-//
-// Pre-first-turn (no usage data) we fall back to the old summarize
-// icon so the control still functions, just without the meter — the
-// catalog might not have loaded yet, or the model's context_length
-// is missing from the listing.
-export function ContextRing({
-  usage,
-  isSummarizing,
-  disabled,
-  onClick,
-}: {
-  usage: ContextUsage | null;
-  isSummarizing: boolean;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  // SVG ring math per the unified-shell design's .tool-btn.ring: the ring
-  // hugs the button's edge (inset 1px, r=14 in a 32-unit viewBox) around a
-  // centered compress icon. Two strokes on the same circle: the design's
-  // .ring-track (accent at 26%) plus a colored progress arc whose length =
-  // circumference * fraction. Stroke ends rounded so low fills don't read
-  // as a sharp splinter.
-  const r = 14;
-  const circumference = 2 * Math.PI * r;
-  const fraction = usage?.fraction ?? 0;
-  const cappedFraction = Math.min(1, fraction);
-  const dashFilled = circumference * cappedFraction;
-  const dashEmpty = circumference - dashFilled;
-
-  // Color follows the live severity bands (lib/contextUsage.ts: warn ≥70%,
-  // danger ≥90%) with the design's color ramp: accent → warning → danger.
-  const arcColor =
-    usage?.severity === "danger"
-      ? "var(--color-danger)"
-      : usage?.severity === "warn"
-        ? "var(--color-warning)"
-        : "var(--color-accent)";
-
-  // Same defensive clamp as formatContextUsage: if fraction > 1 we
-  // show "100%+" instead of an alarming impossible number. See the
-  // doc in lib/contextUsage.ts for the catalog-staleness / legacy-
-  // summary cases this guards against.
-  const pct =
-    usage?.fraction !== undefined
-      ? usage.fraction > 1
-        ? "100%+"
-        : `${Math.max(0, Math.round(usage.fraction * 100))}%`
-      : null;
-  const titleText = (() => {
-    if (isSummarizing) return "Summarizing earlier messages…";
-    if (!usage) return "Summarize earlier messages: replace them with a short summary so the chat can keep going and stays cheap.";
-    return `${formatContextUsage(usage)}. Click to summarize earlier messages and make room.`;
-  })();
-
-  return (
-    <button
-      type="button"
-      aria-label={isSummarizing ? "Summarizing earlier messages…" : pct !== null ? `Chat ${pct} full. Summarize earlier messages` : "Summarize earlier messages"}
-      data-tip-top={isSummarizing ? "Summarizing earlier messages…" : pct !== null ? `Summarize earlier messages (${pct} full)` : "Summarize earlier messages"}
-      title={titleText}
-      disabled={disabled}
-      onClick={onClick}
-      className="relative inline-flex h-[1.95rem] w-[1.95rem] shrink-0 items-center justify-center rounded-[var(--radius-pill)] text-[var(--color-text-secondary)] transition hover:bg-[color-mix(in_srgb,var(--color-accent)_12%,transparent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)] disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      {/* The design's .ring-svg: hugs the round button (inset 1px), with
-          the percent conveyed by the arc + aria-label/tip, never text. */}
-      <svg
-        viewBox="0 0 32 32"
-        fill="none"
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-[1px] h-[calc(100%-2px)] w-[calc(100%-2px)]"
-      >
-        {/* Track — full circle at 26% accent (the design's .ring-track).
-            Always rendered, even before the first turn summary lands, so
-            the user doesn't see an icon flicker into a ring when the
-            meter first arrives. Empty ring = "no usage data yet," not a
-            different control. */}
-        <circle
-          cx="16"
-          cy="16"
-          r={r}
-          stroke="color-mix(in srgb, var(--color-accent) 26%, transparent)"
-          strokeWidth="2"
-        />
-        {/* Progress arc — rotated -90deg so the fill starts at the */}
-        {/* top of the circle and walks clockwise. Length is 0 when */}
-        {/* usage is null, which renders as nothing on top of the   */}
-        {/* track.                                                  */}
-        {usage ? (
-          <circle
-            cx="16"
-            cy="16"
-            r={r}
-            stroke={arcColor}
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeDasharray={`${dashFilled} ${dashEmpty}`}
-            transform="rotate(-90 16 16)"
-            style={{ transition: "stroke-dasharray 240ms ease, stroke 240ms ease" }}
-          />
-        ) : null}
-      </svg>
-      <Icon name="compress" className="size-3.5" />
     </button>
   );
 }
@@ -543,46 +425,6 @@ export function PendingAttachmentChip({
         <Icon name="close" className="size-3" />
       </button>
     </span>
-  );
-}
-
-// ── "Shared with team" chip (chat header) ────────────────────────────────
-//
-// The same pill the project home puts beside a team-shared project's name,
-// reused on the one chat surface that stays visible while you type.
-//
-// The rail row and the project-home row both badge a team-shared chat, and
-// both of those are gone exactly when it matters: the rail collapses, and
-// under 900px it is a drawer. So a member composing in a shared chat had no
-// way to see that what they were typing would be readable by their team
-// without leaving the chat. It is a real button, because the thing a user
-// wants when they notice the badge is the dialog that controls it.
-//
-// The audience is NAMED, never inferred (ADR-0057): the team the chat is
-// stamped with, falling back to "your team" when the caller hasn't loaded a
-// team name. The label collapses to the glyph on a phone, the same way the
-// Lockdown badge next door does; the accessible name carries the audience at
-// every width.
-export function TeamSharedChip({
-  audience,
-  onClick,
-}: {
-  audience?: string;
-  onClick: () => void;
-}) {
-  const label = `Shared with ${audience || "your team"}`;
-  return (
-    <button
-      type="button"
-      aria-label={`${label} — open sharing`}
-      title={`${label} — read-only. Click to change sharing.`}
-      data-testid="chat-header-team-shared-chip"
-      onClick={onClick}
-      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-overlay-soft)] px-2 py-0.5 text-[0.7rem] text-[var(--color-text-muted)] transition hover:border-[var(--color-accent)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--focus-ring)]"
-    >
-      <TeamGlyph className="size-3 shrink-0" />
-      <span className="hidden sm:inline">Shared with team</span>
-    </button>
   );
 }
 

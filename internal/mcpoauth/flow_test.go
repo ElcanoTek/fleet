@@ -120,8 +120,8 @@ func TestTokenRequest2xxErrorBodyIsOAuthError(t *testing.T) {
 	if !errors.As(err, &oe) || oe.Code != "bad_refresh_token" || oe.HTTPStatus != http.StatusOK {
 		t.Fatalf("refresh err = %v (%T), want OAuthError bad_refresh_token with HTTPStatus 200", err, err)
 	}
-	if !IsTerminalRefreshError(err) || !IsInvalidGrant(err) {
-		t.Error("a dead GitHub refresh token must be terminal (and read as invalid_grant)")
+	if !IsTerminalRefreshError(err) {
+		t.Error("a dead GitHub refresh token must be terminal")
 	}
 	if ReauthDetail(err) != "authorization expired — reconnect required" {
 		t.Errorf("ReauthDetail = %q", ReauthDetail(err))
@@ -272,8 +272,9 @@ func TestRefreshInvalidGrant(t *testing.T) {
 	defer srv.Close()
 	f := FlowConfig{TokenEndpoint: srv.URL + "/token", ClientID: "c"}
 	_, err := f.Refresh(context.Background(), srv.Client(), "dead-rt")
-	if !IsInvalidGrant(err) {
-		t.Fatalf("expected invalid_grant, got %v", err)
+	var oe *OAuthError
+	if !errors.As(err, &oe) || oe.Code != "invalid_grant" || !IsTerminalRefreshError(err) {
+		t.Fatalf("expected a terminal invalid_grant, got %v", err)
 	}
 }
 

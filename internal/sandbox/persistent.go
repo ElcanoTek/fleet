@@ -350,7 +350,7 @@ func (p *Pool) reapIdlePersistent() {
 
 // PersistentStats reports how many persistent conversation sandboxes are live
 // and how many are currently idle (no in-flight turn). Both zero when
-// persistent mode is off. Useful for the health summary (#301).
+// persistent mode is off.
 func (p *Pool) PersistentStats() (live, idle int) {
 	if p == nil {
 		return 0, 0

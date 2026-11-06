@@ -269,7 +269,7 @@ downstream bundle repo calls fleet's reusable workflows. `@main` is the right
 guidance for a consumer tracking fleet, and Semgrep does not flag them (a YAML
 comment is not a `uses:` key).
 
-**The 7 false positives: suppressed at the line, with reasons.**
+**The 6 false positives: suppressed at the line, with reasons.**
 
 Worth reading, because three were **already formally triaged and suppressed for
 `gosec`** — which runs inside `golangci-lint` and already blocks — and one is
@@ -281,7 +281,6 @@ actively wrong:
 | `math-random-used` — `internal/runner/runner.go` | `math/rand/v2`, used once, for ±10% jitter on a retry interval. |
 | `cookie-missing-secure` — `internal/sched/handlers/elcano.go` | A **deletion** cookie (`Value=""`, `MaxAge=-1`), no secret; `Secure` is conditional so logout works over plain-HTTP dev. Already `//nolint:gosec G124`. |
 | `unsafe-deserialization-interface` — `internal/mcp/httptool.go` | `json.Unmarshal` into `interface{}` is **required** — the value feeds a jq program over arbitrary JSON. A concrete struct cannot express "whatever shape the response had". |
-| `x-frame-options-misconfiguration` — `web/src/proxy.ts` | The header value is the literal string `"DENY"`. No user input reaches it. |
 | `insecure-file-permissions` — `internal/sandbox/fileops.py` | Advises `0o644` — **world-readable** — for a sandbox directory. Following it would be a security **regression**; `0750` is the file-tool contract. |
 | `use-tls` — `scripts/a2a-tck-shim/main.go` | A loopback-only conformance-test harness (default listen `127.0.0.1`; its header forbids any other use). The official A2A TCK speaks plain HTTP to it; TLS on a loopback rig would add nothing. Already `//nolint:gosec` for the same reason. |
 
@@ -431,7 +430,7 @@ the difference is deliberate.**
 
 - **Semgrep: any unsuppressed finding.** `--error`, no `continue-on-error`. That
   is defensible because the tree is at zero unsuppressed findings across all four
-  packs, with the 7 false positives waived at the line and mutation-tested.
+  packs, with the 6 false positives waived at the line and mutation-tested.
 - **CodeQL: an unwaived finding in the High band** (`security-severity >= 7.0`,
   or level `error`/`warning` for a rule that publishes no security-severity),
   with the accepted-findings register applied. Below the band is advisory. It was

@@ -418,11 +418,6 @@ func (s *Storage) GetTasksFiltered(filter db.TaskFilter, limit, offset int) ([]*
 	return s.db.GetTasksFiltered(context.Background(), filter, limit, offset)
 }
 
-// GetUsersByIDs gets users by a list of IDs.
-func (s *Storage) GetUsersByIDs(userIDs []uuid.UUID) (map[uuid.UUID]string, error) {
-	return s.db.GetUsersByIDs(context.Background(), userIDs)
-}
-
 // OwnerDigestCandidates returns the rows the daily owner digest classifies
 // (db.OwnerDigestCandidates, docs/OWNER-DIGEST.md): per owner and job, the
 // latest terminal run since `since` when it is blocked, errored or
@@ -602,19 +597,9 @@ func (s *Storage) RecoverExpiredLeasesWithContext(ctx context.Context) (int, err
 	return requeued, nil
 }
 
-// GetRunningTasks gets all currently running tasks.
-func (s *Storage) GetRunningTasks() ([]*models.Task, error) {
-	return s.db.GetRunningTasks(context.Background())
-}
-
 // GetTasksByStatus gets all tasks with a specific status.
 func (s *Storage) GetTasksByStatus(status models.TaskStatus) ([]*models.Task, error) {
 	return s.db.GetTasksByStatus(context.Background(), status)
-}
-
-// GetTasksCompletedToday gets tasks completed today.
-func (s *Storage) GetTasksCompletedToday() ([]*models.Task, error) {
-	return s.db.GetTasksCompletedToday(context.Background())
 }
 
 // GetDashboardStats gets statistics for the dashboard.

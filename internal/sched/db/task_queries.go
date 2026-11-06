@@ -193,20 +193,6 @@ func (db *Database) PendingQueueStats(ctx context.Context) ([]models.QueuePriori
 	return out, rows.Err()
 }
 
-// GetRunningTasks gets all currently running tasks.
-func (db *Database) GetRunningTasks(ctx context.Context) ([]*models.Task, error) {
-	rows, err := db.conn.QueryContext(ctx, `
-		SELECT `+taskColumns+` FROM tasks
-		WHERE status IN ($1, $2)`,
-		string(models.TaskStatusRunning),
-		string(models.TaskStatusLeased))
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToTasks(rows)
-}
-
 // GetTasksByStatus gets all tasks with a specific status.
 func (db *Database) GetTasksByStatus(ctx context.Context, status models.TaskStatus) ([]*models.Task, error) {
 	rows, err := db.conn.QueryContext(ctx,
@@ -230,22 +216,6 @@ func (db *Database) GetDeadLetteredTasks(ctx context.Context, limit, offset int)
 		args = append(args, limit, offset)
 	}
 	rows, err := db.conn.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToTasks(rows)
-}
-
-// GetTasksCompletedToday gets tasks completed today.
-func (db *Database) GetTasksCompletedToday(ctx context.Context) ([]*models.Task, error) {
-	now := time.Now().UTC()
-	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-	todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, time.UTC)
-
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT "+taskColumns+" FROM tasks WHERE completed_at BETWEEN $1 AND $2",
-		todayStart, todayEnd)
 	if err != nil {
 		return nil, err
 	}
