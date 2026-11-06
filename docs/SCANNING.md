@@ -503,17 +503,18 @@ Stated rather than left for rediscovery:
   The binary version is pinned; the rules are not, so a registry-side rule
   addition can turn CI red with no commit to blame — named here so a mystery
   red Semgrep run has a first suspect.
-- **A red scheduled scan now files an issue** (all four scheduled lanes) — a
-  cron failure has no PR to surface it, which is the rot pattern that let the
-  CodeQL toolchain break sit red for weeks. Deduped by title; re-failures
-  comment on the same issue. Mechanism differs by necessity: govulncheck and
-  grype carry an in-job step, while CodeQL and Semgrep are watched by
-  `scan-cron-alarm.yml` (a `workflow_run` watcher, which also covers the
-  `E2E canary (real model)` lane — three workflows, not two) — because a CALLED
-  workflow may not request permissions its caller did not grant, and the check
-  fires at plan time before any `if:` can skip the job. In `govulncheck` and
-  `grype` the alarm is a separate JOB rather than a step, holding `issues: write`
-  on its own so the scan itself does not run beside that scope. Learned by breaking it: an
-  `issues: write` alarm job inside the called workflows startup-failed the
-  entire calling run (on the since-retired Dev CI lane; the constraint applies
-  equally to `ci.yml`).
+- **A red scheduled scan now files an issue** — a cron failure has no PR to
+  surface it, which is the rot pattern that let the CodeQL toolchain break sit
+  red for weeks. Deduped by title; re-failures comment on the same issue. One
+  `workflow_run` watcher, `scan-cron-alarm.yml`, covers every scheduled lane:
+  CodeQL, Semgrep, the `E2E canary (real model)`, govulncheck, Grype and the
+  MCP catalog smoke. It is a watcher rather than an in-job step for two
+  reasons. A CALLED workflow (CodeQL, Semgrep) may not request permissions its
+  caller did not grant, and the check fires at plan time before any `if:` can
+  skip the job — learned by breaking it: an `issues: write` alarm job inside
+  the called workflows startup-failed the entire calling run (on the
+  since-retired Dev CI lane; the constraint applies equally to `ci.yml`). And
+  a watcher sees a run that fails to start, times out or is cancelled, which
+  an in-job `if: failure()` step never does, while keeping `issues: write` out
+  of every workflow that runs third-party code. The watcher matches workflows
+  by display `name:`, so renaming one silently disarms its alarm.

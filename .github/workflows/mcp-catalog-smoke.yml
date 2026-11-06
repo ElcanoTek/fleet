@@ -48,9 +48,9 @@ on:
         type: boolean
         default: false
 
-# `issues: write` is held by the alarm job alone (see govulncheck-scheduled.yml
-# for why it must not sit at workflow scope next to jobs that talk to ~300
-# third-party hosts).
+# No `issues: write`: these jobs talk to ~300 third-party hosts. A failed
+# scheduled run is filed as an issue by scan-cron-alarm.yml, which watches this
+# workflow by its `name:`.
 permissions:
   contents: read
 
@@ -175,41 +175,3 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$rc"
-
-  alarm:
-    # Split out so `issues: write` is the ONLY scope in play here, held by a
-    # job that checks out nothing and runs no third-party code — it only calls
-    # `gh`. Same shape as govulncheck-scheduled.yml and grype-scheduled.yml.
-    name: File an issue so a red cron cannot rot silently
-    needs: [links, smoke]
-    if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    steps:
-      - name: File an issue so a red cron cannot rot silently
-        # A scheduled failure has no PR attached, so nothing surfaces it. Files
-        # one issue per breakage (deduped by title), comments on re-failures.
-        # schedule-only: a red manual dispatch has a human watching. This step
-        # body is duplicated across the five scheduled lanes (codeql, semgrep,
-        # govulncheck, grype, mcp-catalog-smoke) — keep them in sync.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_NAME: ${{ github.workflow }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="Scheduled ${WORKFLOW_NAME} run failed"
-          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
-          if [ -n "$num" ]; then
-            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
-              --body "Still failing: $RUN_URL"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
-
-          A failing cron has no PR to make it visible, so this issue is the
-          alarm. Close it when the lane is green again."
-          fi
