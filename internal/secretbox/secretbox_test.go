@@ -3,7 +3,6 @@ package secretbox
 import (
 	"bytes"
 	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"io"
 	"testing"
@@ -127,27 +126,6 @@ func TestNilCipherFailsClosed(t *testing.T) {
 func TestNewCipherRejectsWrongLength(t *testing.T) {
 	if _, err := NewCipher(make([]byte, 16)); err == nil {
 		t.Fatal("NewCipher accepted a 16-byte key")
-	}
-}
-
-func TestKeyFromBase64(t *testing.T) {
-	key := make([]byte, KeyLen)
-	if _, err := io.ReadFull(rand.Reader, key); err != nil {
-		t.Fatalf("read key: %v", err)
-	}
-	enc := base64.StdEncoding.EncodeToString(key)
-	got, err := KeyFromBase64(enc)
-	if err != nil {
-		t.Fatalf("KeyFromBase64: %v", err)
-	}
-	if !bytes.Equal(got, key) {
-		t.Fatal("round-trip mismatch")
-	}
-	if _, err := KeyFromBase64("not!base64!"); err == nil {
-		t.Fatal("accepted invalid base64")
-	}
-	if _, err := KeyFromBase64(base64.StdEncoding.EncodeToString([]byte("short"))); err == nil {
-		t.Fatal("accepted wrong-length key")
 	}
 }
 

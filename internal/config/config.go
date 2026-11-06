@@ -547,9 +547,8 @@ var allowedEnvVars = map[string]bool{
 
 // allowedEnvPrefixes admits open-ended user/account suffixes the operator names
 // at provisioning time. A key matching one of these is treated like an exact
-// allowlist entry. A client bundle may register additional prefixes via
-// RegisterAllowedEnvPrefixes (e.g. per-user API-key prefixes for its
-// connectors).
+// allowlist entry. The list is fixed at compile time; a client bundle admits
+// its own exact names via RegisterAllowedEnvVars.
 var allowedEnvPrefixes = []string{
 	// Operator-provisioned OAuth clients for client_registration: manual
 	// directory entries (e.g. FLEET_OAUTH_CLIENT_ID_SLACK /
@@ -623,18 +622,6 @@ func nonReloadableSecretNames() []string {
 	return out
 }
 
-// RegisterAllowedEnvPrefixes admits open-ended env-var prefixes from the client
-// bundle (e.g. a per-user API-key prefix). Call once at startup, before Load.
-func RegisterAllowedEnvPrefixes(prefixes ...string) {
-	registerMu.Lock()
-	defer registerMu.Unlock()
-	for _, p := range prefixes {
-		if p = strings.TrimSpace(p); p != "" {
-			allowedEnvPrefixes = append(allowedEnvPrefixes, p)
-		}
-	}
-}
-
 // isRegisteredEnvVar reports whether k was admitted at runtime via
 // RegisterAllowedEnvVars.
 func isRegisteredEnvVar(k string) bool {
@@ -657,10 +644,7 @@ func isAllowedEnvVar(k string) bool {
 	if allowedEnvVars[k] || isRegisteredEnvVar(k) {
 		return true
 	}
-	registerMu.RLock()
-	prefixes := allowedEnvPrefixes
-	registerMu.RUnlock()
-	for _, p := range prefixes {
+	for _, p := range allowedEnvPrefixes {
 		if strings.HasPrefix(k, p) {
 			return true
 		}
@@ -2112,8 +2096,7 @@ func ModelAllowed(slug string, patterns []string) bool {
 	return false
 }
 
-// Validate checks the interactive (chat) required values. Use ValidateScheduled
-// for the one-shot scheduled (cutlass) run.
+// Validate checks the interactive (chat) required values.
 func (c *Config) Validate() error {
 	if c.OpenRouterAPIKey == "" && !c.MockMode {
 		return fmt.Errorf("OPENROUTER_API_KEY is required (or set FLEET_MOCK_MODE=1 for tests)")
@@ -2163,48 +2146,6 @@ func (c *Config) validateTLS() error {
 	default:
 		return fmt.Errorf("FLEET_TLS_MODE=%q is invalid (want off|manual|auto)", c.TLSMode)
 	}
-}
-
-// ValidateScheduled checks the one-shot scheduled (cutlass) required values and
-// returns an error describing all problems found.
-//
-// No production caller: `fleet task run` (the folded cutlass harness) validates
-// through Validate/validate_config.go instead. This is exercised only by
-// config_test.go and is kept as the scheduled-driver contract, so do not add a
-// value to any message here — see the next comment.
-func (c *Config) ValidateScheduled() error {
-	var errs []string
-
-	if c.OpenRouterAPIKey == "" {
-		errs = append(errs, "OPENROUTER_API_KEY is required")
-	} else if !strings.HasPrefix(c.OpenRouterAPIKey, "sk-or-") {
-		// Name the expected prefix, never echo the key. This previously
-		// interpolated the key's first 6 bytes into the error, which was the
-		// one place in the tree where secret material reached an error string —
-		// and validation errors are logged and surfaced to operators.
-		errs = append(errs, "OPENROUTER_API_KEY should start with 'sk-or-'")
-	}
-
-	if c.TaskDefaultMaxRetries < 0 || c.TaskDefaultMaxRetries > 10 {
-		errs = append(errs, fmt.Sprintf("TASK_DEFAULT_MAX_RETRIES must be between 0 and 10 (got %d)", c.TaskDefaultMaxRetries))
-	}
-	if c.MaxIterations < 1 || c.MaxIterations > 10000 {
-		errs = append(errs, fmt.Sprintf("MAX_ITERATIONS must be between 1 and 10000 (got %d)", c.MaxIterations))
-	}
-	if c.MaxCostUSD < 0 {
-		errs = append(errs, fmt.Sprintf("CUTLASS_MAX_COST_USD must be >= 0 (got %.2f)", c.MaxCostUSD))
-	}
-	if c.MaxTotalTokens < 0 {
-		errs = append(errs, fmt.Sprintf("CUTLASS_MAX_TOTAL_TOKENS must be >= 0 (got %d)", c.MaxTotalTokens))
-	}
-	if c.LLMMaxTokens < 256 {
-		errs = append(errs, fmt.Sprintf("LLM_MAX_TOKENS must be >= 256 (got %d)", c.LLMMaxTokens))
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("config validation failed:\n  - %s", strings.Join(errs, "\n  - "))
-	}
-	return nil
 }
 
 // buildDatabaseURL returns the Postgres DSN. chat's URL-form builder is the
@@ -2574,20 +2515,7 @@ func EnvAliases(name string) []string {
 // nil so archival falls back to gzip-only rather than crashing or silently using
 // a bad key. The decoded bytes are never logged.
 func logArchiveEncryptionKey() []byte {
-	raw := getenvFleet("LOG_ARCHIVE_ENCRYPTION_KEY")
-	if raw == "" {
-		return nil
-	}
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
-	if err != nil {
-		log.Printf("Warning: FLEET_LOG_ARCHIVE_ENCRYPTION_KEY is not valid base64; archives will be gzip-only (unencrypted)")
-		return nil
-	}
-	if len(key) != 32 {
-		log.Printf("Warning: FLEET_LOG_ARCHIVE_ENCRYPTION_KEY must decode to 32 bytes (got %d); archives will be gzip-only (unencrypted)", len(key))
-		return nil
-	}
-	return key
+	return decodeAES256KeyEnv("LOG_ARCHIVE_ENCRYPTION_KEY", "archives will be gzip-only (unencrypted)")
 }
 
 // mcpOAuthEncryptionKey decodes the optional base64 AES-256-GCM key for per-user
@@ -2596,17 +2524,25 @@ func logArchiveEncryptionKey() []byte {
 // stays OFF — fails closed) but logs loudly so the operator knows their key was
 // rejected. The decoded bytes are never logged.
 func mcpOAuthEncryptionKey() []byte {
-	raw := getenvFleet("MCP_OAUTH_ENCRYPTION_KEY")
+	return decodeAES256KeyEnv("MCP_OAUTH_ENCRYPTION_KEY", "remote-MCP OAuth stays DISABLED")
+}
+
+// decodeAES256KeyEnv reads FLEET_<name> and decodes it as a standard-base64
+// 32-byte key. Unset returns nil silently; a malformed or wrong-length value
+// logs a warning naming the variable and the consequence (never the key
+// material) and returns nil, so the dependent feature stays off.
+func decodeAES256KeyEnv(name, consequence string) []byte {
+	raw := getenvFleet(name)
 	if raw == "" {
 		return nil
 	}
 	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(raw))
 	if err != nil {
-		log.Printf("Warning: FLEET_MCP_OAUTH_ENCRYPTION_KEY is not valid base64; remote-MCP OAuth stays DISABLED")
+		log.Printf("Warning: FLEET_%s is not valid base64; %s", name, consequence)
 		return nil
 	}
 	if len(key) != 32 {
-		log.Printf("Warning: FLEET_MCP_OAUTH_ENCRYPTION_KEY must decode to 32 bytes (got %d); remote-MCP OAuth stays DISABLED", len(key))
+		log.Printf("Warning: FLEET_%s must decode to 32 bytes (got %d); %s", name, len(key), consequence)
 		return nil
 	}
 	return key

@@ -22,16 +22,6 @@ func (e *OAuthError) Error() string {
 	return fmt.Sprintf("oauth error %q (http %d)", e.Code, e.HTTPStatus)
 }
 
-// IsInvalidGrant reports whether err is an OAuthError with code invalid_grant
-// (or GitHub's spelling, bad_refresh_token) —
-// the signal that a refresh token has been revoked/expired/rotated away and the
-// connection needs the user to re-authorize. Callers mark the connection
-// needs-reauth and degrade gracefully rather than failing the whole run.
-func IsInvalidGrant(err error) bool {
-	var oe *OAuthError
-	return errors.As(err, &oe) && (oe.Code == "invalid_grant" || oe.Code == "bad_refresh_token")
-}
-
 // IsInvalidTarget reports whether err is an OAuthError with code invalid_target
 // — the authorization server rejected the RFC 8707 resource parameter. The MCP
 // spec says send resource regardless, but real IdPs (e.g. Entra v2) reject it,

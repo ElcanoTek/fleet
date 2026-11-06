@@ -31,12 +31,10 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 )
 
 // KeyLen is the required AES-256 key length in bytes.
@@ -76,20 +74,6 @@ func NewCipher(key []byte) (*Cipher, error) {
 		return nil, fmt.Errorf("secretbox: new GCM: %w", err)
 	}
 	return &Cipher{aead: aead}, nil
-}
-
-// KeyFromBase64 decodes a standard-base64 key and validates its length. Used to
-// turn the FLEET_MCP_OAUTH_ENCRYPTION_KEY env value into key bytes. The decoded
-// key is never logged by this package.
-func KeyFromBase64(s string) ([]byte, error) {
-	key, err := base64.StdEncoding.DecodeString(strings.TrimSpace(s))
-	if err != nil {
-		return nil, fmt.Errorf("secretbox: key is not valid base64: %w", err)
-	}
-	if len(key) != KeyLen {
-		return nil, fmt.Errorf("secretbox: key must decode to %d bytes (got %d)", KeyLen, len(key))
-	}
-	return key, nil
 }
 
 // Seal encrypts plaintext, authenticating aad without storing it. The result is
