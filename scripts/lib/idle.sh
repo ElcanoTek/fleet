@@ -243,7 +243,7 @@ fleet_psql_query() {
 
 # fleet_env_or_file KEY [ENV_FILE] — resolves KEY from the process environment
 # first, falling back to ENV_FILE without sourcing it. Matches
-# internal/creds.splitEnvKeyValue (tolerates an 'export ' prefix, strips
+# internal/creds.ParseEnvLine (tolerates an 'export ' prefix, strips
 # unquoted inline '#comments', and strips one layer of matching quotes).
 fleet_env_or_file() {
   local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val="" line t k v

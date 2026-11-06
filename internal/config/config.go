@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
@@ -1577,7 +1578,7 @@ func applyEnvFile(envFile string) (map[string]string, error) {
 		if !isAllowedEnvVar(k) {
 			continue
 		}
-		existing[k] = stripQuotes(kv[eq+1:])
+		existing[k] = creds.StripEnvQuotes(kv[eq+1:])
 	}
 
 	if envFile != "" {
@@ -1739,7 +1740,7 @@ func Load(envFile string) (*Config, error) {
 		},
 
 		// ── LLM (shared) ──
-		OpenRouterAPIKey:         stripQuotes(os.Getenv("OPENROUTER_API_KEY")),
+		OpenRouterAPIKey:         creds.StripEnvQuotes(os.Getenv("OPENROUTER_API_KEY")),
 		MaxIterations:            lp.getenvFleetInt("MAX_ITERATIONS", 300),
 		TaskDefaultMaxRetries:    lp.getenvFleetInt("TASK_DEFAULT_MAX_RETRIES", 1),
 		MaxCostUSD:               lp.getenvFleetFloat("MAX_COST_USD", 50.0),
@@ -1930,7 +1931,7 @@ func Load(envFile string) (*Config, error) {
 		AccountsManagedByAuth: centralAuth,
 
 		// ── observability: Sentry error tracking (#193) ──
-		SentryDSN:   stripQuotes(os.Getenv("FLEET_SENTRY_DSN")),
+		SentryDSN:   creds.StripEnvQuotes(os.Getenv("FLEET_SENTRY_DSN")),
 		Environment: getenvDefault("FLEET_ENVIRONMENT", "dev"),
 	}
 
@@ -2273,16 +2274,10 @@ func splitEmails(raw string) []string {
 // overwrites — Load snapshots/restores the pre-existing process env around
 // this call so "process env wins" holds.
 //
-// Value semantics (shared byte-for-byte with internal/creds's parser, whose
-// writer encodes values to survive this exact round-trip — #834):
-//
-//   - an `export ` prefix is tolerated;
-//   - an UNQUOTED value ends at the first ` #` or `\t#` (inline comment) — a
-//     value that must contain a literal ` #` (e.g. a password like `p@ss #1`)
-//     MUST be quoted, or it is truncated at the marker;
-//   - ONE layer of matching surrounding quotes (single or double) is stripped;
-//     the interior — including ` #`, edge whitespace, and inner quotes — is
-//     preserved verbatim.
+// Each line is parsed by creds.ParseEnvLine, the one env-file line parser,
+// which the creds writer encodes values for (#834) — see its doc for the value
+// semantics (`export ` prefix, inline comments on unquoted values, one layer
+// of quotes).
 func loadEnvFile(path string) error {
 	return loadEnvFileFiltered(path, func(string) bool { return true })
 }
@@ -2296,59 +2291,19 @@ func loadEnvFileFiltered(path string, include func(string) bool) error {
 
 	sc := bufio.NewScanner(f)
 	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		k, v, ok := creds.ParseEnvLine(sc.Text())
+		if !ok {
 			continue
 		}
-		// Tolerate `export KEY=…` for parity with internal/creds/envfile.go,
-		// whose docs promise the two parsers agree byte-for-byte.
-		line = strings.TrimPrefix(line, "export ")
-		eq := strings.IndexByte(line, '=')
-		if eq <= 0 {
-			continue
-		}
-		k := strings.TrimSpace(line[:eq])
 		if include != nil && !include(k) {
 			continue
 		}
-		v := stripInlineComment(strings.TrimSpace(line[eq+1:]))
-		v = stripQuotes(v)
 		if !isAllowedEnvVar(k) {
 			continue
 		}
 		_ = os.Setenv(k, v)
 	}
 	return sc.Err()
-}
-
-// stripInlineComment trims a trailing `# comment` off an unquoted .env value.
-// Quoted values are left intact (quote handling owns those). This is the
-// standard dotenv rule and the contract internal/creds's writer/parser rely
-// on: an unquoted value containing ` #` is DELIBERATELY truncated there —
-// quote the value to keep a literal ` #` (creds.SetEnvKey does this
-// automatically). See loadEnvFile's doc comment for the full value semantics.
-func stripInlineComment(value string) string {
-	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, `'`) {
-		return value
-	}
-	if i := strings.Index(value, " #"); i >= 0 {
-		return strings.TrimSpace(value[:i])
-	}
-	if i := strings.Index(value, "\t#"); i >= 0 {
-		return strings.TrimSpace(value[:i])
-	}
-	return value
-}
-
-// stripQuotes removes a single layer of matching surrounding quotes.
-func stripQuotes(value string) string {
-	if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
-		(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
-		if len(value) >= 2 {
-			return value[1 : len(value)-1]
-		}
-	}
-	return value
 }
 
 func hasKnownPromptExtension(name string) bool {
@@ -2419,7 +2374,7 @@ func boolKnobInEnv(key string) bool {
 
 func getenvDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {
-		return stripQuotes(v)
+		return creds.StripEnvQuotes(v)
 	}
 	return def
 }
@@ -2427,7 +2382,7 @@ func getenvDefault(key, def string) string {
 // getEnvOrDefault is cutlass's quote-stripping default helper.
 func getEnvOrDefault(key, defaultValue string) string {
 	if value := os.Getenv(key); value != "" {
-		return stripQuotes(value)
+		return creds.StripEnvQuotes(value)
 	}
 	return defaultValue
 }
@@ -2453,7 +2408,7 @@ func lookupFleet(suffix string) (string, bool) {
 
 func getenvFleet(suffix string) string {
 	if v, ok := lookupFleet(suffix); ok {
-		return stripQuotes(v)
+		return creds.StripEnvQuotes(v)
 	}
 	return ""
 }
@@ -2462,7 +2417,7 @@ func getenvFleetDefault(suffix, def string) string {
 	if v, ok := lookupFleet(suffix); ok {
 		// Strip quotes like getenvFleet does: the same quoted value must
 		// resolve identically whichever helper reads it (#1119).
-		return stripQuotes(v)
+		return creds.StripEnvQuotes(v)
 	}
 	return def
 }
@@ -2476,7 +2431,7 @@ func getenvFleetDefault(suffix, def string) string {
 // wins, matching getEnvOrDefault.
 func getenvFleetOrBare(suffix, def string) string {
 	if v, ok := lookupFleet(suffix); ok {
-		return stripQuotes(v)
+		return creds.StripEnvQuotes(v)
 	}
 	return getEnvOrDefault(suffix, def)
 }

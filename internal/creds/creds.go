@@ -76,7 +76,7 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 	overrides := 0
 	for k, v := range env {
 		if override := os.Getenv(k + suffix); override != "" {
-			out[k] = stripQuotes(override)
+			out[k] = StripEnvQuotes(override)
 			overrides++
 			continue
 		}
@@ -125,17 +125,4 @@ func AccountsFor(baseVars []string) []string {
 		}
 	}
 	return accounts
-}
-
-// stripQuotes removes a single layer of matching surrounding single or double
-// quotes from an env value, matching the env-file loading semantics used
-// across fleet so a quoted `.env.local` value is injected unquoted.
-func stripQuotes(value string) string {
-	if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
-		(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
-		if len(value) >= 2 {
-			return value[1 : len(value)-1]
-		}
-	}
-	return value
 }

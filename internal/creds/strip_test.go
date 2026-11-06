@@ -1,8 +1,30 @@
-package config
+package creds
 
 import "testing"
 
-func TestStripQuotes(t *testing.T) {
+// Moved from internal/config with the helpers they test (#1939): the env-file
+// line parser and its quote/comment stripping now live only here.
+
+func TestStripEnvInlineComment(t *testing.T) {
+	cases := map[string]string{
+		"60067 # Elcano default":   "60067",
+		"50751\t# tab-then-hash":   "50751",
+		"plain-value":              "plain-value",
+		"value-with-#-mid":         "value-with-#-mid",
+		`"60067 # quoted"`:         `"60067 # quoted"`,
+		`'50751 # also quoted'`:    `'50751 # also quoted'`,
+		"":                         "",
+		"60067    # padded spaces": "60067",
+	}
+	for input, want := range cases {
+		got := stripEnvInlineComment(input)
+		if got != want {
+			t.Errorf("stripEnvInlineComment(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
+func TestStripEnvQuotes(t *testing.T) {
 	tests := []struct {
 		name     string
 		input    string
@@ -21,9 +43,9 @@ func TestStripQuotes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := stripQuotes(tt.input)
+			result := StripEnvQuotes(tt.input)
 			if result != tt.expected {
-				t.Errorf("stripQuotes(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("StripEnvQuotes(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
