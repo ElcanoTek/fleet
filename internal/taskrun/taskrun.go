@@ -13,6 +13,13 @@
 // credentials are still brokered host-side. Only the orchestrator's
 // persistence/dispatch is swapped for a CLI front-end.
 //
+// The bundle's runtime policy — agent tool-behavior policy, pricing overrides
+// and lifecycle hooks — is installed through the same clientconfig projections
+// fleet serve uses, so the two cannot drift. PII redaction and the content
+// guardrail are NOT installed here: they are operator settings (env plus the
+// admin panel's database overrides) wired through fleet serve's settings
+// service, which this database-free harness does not run.
+//
 // The task YAML is a thin mirror of the scheduled-task create shape:
 //
 //	prompt: "Summarize today's news and email it to me."
@@ -118,13 +125,13 @@ func run(argv []string, progName string) error {
 	cfg.A2APeers = bundle.A2APeerConfigs()
 	applyBundleSandbox(cfg, bundle.Sandbox())
 
-	// Install the bundle's agent tool-behavior policy before any turn runs.
-	agentcore.ConfigureAgentPolicy(taskRunAgentPolicy(bundle.AgentPolicy()))
-
-	// Install the bundle's custom model-pricing overrides (#297) before any turn
-	// runs. The generic bundle ships none, so cost accounting stays on the
-	// OpenRouter-returned price.
-	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+	// Install the bundle's runtime policy before any turn runs — the SAME
+	// projections fleet serve installs (#1934): agent tool-behavior policy,
+	// custom model pricing (#297) and governed lifecycle hooks (#788). The
+	// generic bundle ships none of these, so each is a no-op by default.
+	agentcore.ConfigureAgentPolicy(bundle.AgentcorePolicy())
+	agentcore.ConfigurePricing(bundle.AgentcorePricing())
+	agentcore.ConfigureLifecycleHooks(bundle.AgentcoreHooks())
 
 	// A task YAML without a model runs on the task tier, the same as on the
 	// server. There is no settings service here, so seed the tier holders from
@@ -241,25 +248,6 @@ func applyBundleSandbox(cfg *config.Config, sb clientconfig.Sandbox) {
 	cfg.SandboxNetworkAllowlist = append([]string(nil), sb.NetworkAllowlist...)
 }
 
-// taskRunAgentPolicy translates the bundle's agent policy for a one-shot run.
-// It carries every field that governs a SCHEDULED run — the critical-tool
-// audit set and the unattended built-in removals included — so `fleet task
-// run` is never looser than the scheduler for the same bundle. (Chat-only
-// fields such as approval-card options have no effect here.)
-func taskRunAgentPolicy(bp clientconfig.AgentPolicy) agentcore.AgentPolicy {
-	return agentcore.AgentPolicy{
-		ParallelSafeTools:            bp.ParallelSafeTools,
-		CriticalToolSuffixes:         bp.CriticalToolSuffixes,
-		CriticalToolSubstitutes:      bp.CriticalToolSubstitutes,
-		CriticalToolAliases:          bp.CriticalToolAliases,
-		EmailLastToolSuffixes:        bp.EmailLastTools,
-		SettleableCreateToolSuffixes: bp.SettleableCreateTools,
-		BatchSecondsPerDeal:          bp.BatchSecondsPerDeal,
-		ApprovedCallTimeoutSeconds:   bp.ApprovedCallTimeoutSeconds,
-		UnattendedDisabledTools:      bp.UnattendedDisabledTools,
-	}
-}
-
 // loadTaskYAML parses the task file into a models.Task ready for the runner.
 func loadTaskYAML(path string) (*models.Task, error) {
 	raw, err := os.ReadFile(path) //nolint:gosec // G304: operator-supplied task file path — reading it is the whole point of the CLI.
@@ -356,25 +344,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// toAgentcorePricing translates the bundle's pricing config into the
-// agentcore.PricingConfig the accounting path consumes (#297). Mirrors the
-// fleet-server helper; the harness installs the same overrides so a one-shot run
-// accounts cost (and enforces its ceiling) at the operator's negotiated rates.
-func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
-	out := agentcore.PricingConfig{Fallback: agentcore.PricingFallback(p.Fallback)}
-	if len(p.Overrides) > 0 {
-		out.Overrides = make([]agentcore.PricingOverride, 0, len(p.Overrides))
-		for _, o := range p.Overrides {
-			out.Overrides = append(out.Overrides, agentcore.PricingOverride{
-				Model:                          o.Model,
-				InputCostPerMillionTokens:      o.InputCostPerMillionTokens,
-				OutputCostPerMillionTokens:     o.OutputCostPerMillionTokens,
-				CacheReadCostPerMillionTokens:  o.CacheReadCostPerMillionTokens,
-				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
-			})
-		}
-	}
-	return out
 }

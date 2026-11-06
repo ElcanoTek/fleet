@@ -404,31 +404,7 @@ func run() error {
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
 	// agentcore stays on its base generic critical suffixes. Must run before any
 	// turn starts.
-	bundlePolicy := bundle.AgentPolicy()
-	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
-		ParallelSafeTools:             bundlePolicy.ParallelSafeTools,
-		CriticalToolSuffixes:          bundlePolicy.CriticalToolSuffixes,
-		CriticalToolSubstitutes:       bundlePolicy.CriticalToolSubstitutes,
-		CriticalToolTimeouts:          bundlePolicy.CriticalToolTimeouts,
-		CriticalToolModes:             bundlePolicy.CriticalToolModes,
-		CriticalToolUndoHints:         bundlePolicy.CriticalToolUndoHints,
-		CriticalToolAliases:           bundlePolicy.CriticalToolAliases,
-		EmailLastToolSuffixes:         bundlePolicy.EmailLastTools,
-		SettleableCreateToolSuffixes:  bundlePolicy.SettleableCreateTools,
-		BatchSecondsPerDeal:           bundlePolicy.BatchSecondsPerDeal,
-		ApprovedCallTimeoutSeconds:    bundlePolicy.ApprovedCallTimeoutSeconds,
-		CriticalToolNoSessionApproval: bundlePolicy.CriticalToolNoSessionApproval,
-		CriticalToolCardDescribers:    bundlePolicy.CriticalToolCardDescribers,
-		CriticalToolResume:            bundlePolicy.CriticalToolResume,
-		CriticalToolResumeMaxPerHour:  bundlePolicy.CriticalToolResumeMaxPerHour,
-		CriticalToolGroupApproval:     bundlePolicy.CriticalToolGroupApproval,
-		CriticalToolProgress:          bundlePolicy.CriticalToolProgress,
-		CriticalToolResultCards:       bundlePolicy.CriticalToolResultCards,
-		CriticalToolNarrowableArgs:    bundlePolicy.NarrowableArgNames(),
-		CriticalToolStop:              bundlePolicy.CriticalToolStop,
-		InteractiveHiddenTools:        bundlePolicy.InteractiveHiddenTools,
-		UnattendedDisabledTools:       bundlePolicy.UnattendedDisabledTools,
-	})
+	agentcore.ConfigureAgentPolicy(bundle.AgentcorePolicy())
 
 	// Connector credentials cross exactly one process boundary at boot: the child
 	// inherits the current environment, proves liveness + public discovery, then
@@ -443,12 +419,12 @@ func run() error {
 	// Governed lifecycle hooks (#788): translate the bundle's declared hooks into
 	// the agentcore form and install them process-wide. The generic bundle ships
 	// none, so this is a no-op by default. Must run before any turn starts.
-	agentcore.ConfigureLifecycleHooks(toAgentcoreHooks(bundle.Hooks()))
+	agentcore.ConfigureLifecycleHooks(bundle.AgentcoreHooks())
 
 	// Install the bundle's custom model-pricing overrides (#297). The generic
 	// bundle ships none, so cost accounting stays on the OpenRouter-returned
 	// price (the pre-#297 default). Must run before any turn starts.
-	agentcore.ConfigurePricing(toAgentcorePricing(bundle.Pricing()))
+	agentcore.ConfigurePricing(bundle.AgentcorePricing())
 
 	// Optional PII redaction (#450): install the process-wide redactor when
 	// FLEET_PII_REDACTION_ENABLED is set. Default off = nil redactor = the tool-
@@ -2058,49 +2034,6 @@ func schedRateLimits() (schedRateLimitWindows, error) {
 		*w.dst = v
 	}
 	return rl, nil
-}
-
-// toAgentcorePricing translates the bundle's pricing config (a low-level
-// clientconfig data struct) into the agentcore.PricingConfig the accounting path
-// consumes (#297). A blank fallback is left blank so agentcore applies its
-// OpenRouter default; the manifest loader already validated the fallback value
-// and the override rates.
-func toAgentcorePricing(p clientconfig.PricingConfig) agentcore.PricingConfig {
-	out := agentcore.PricingConfig{Fallback: agentcore.PricingFallback(p.Fallback)}
-	if len(p.Overrides) > 0 {
-		out.Overrides = make([]agentcore.PricingOverride, 0, len(p.Overrides))
-		for _, o := range p.Overrides {
-			out.Overrides = append(out.Overrides, agentcore.PricingOverride{
-				Model:                          o.Model,
-				InputCostPerMillionTokens:      o.InputCostPerMillionTokens,
-				OutputCostPerMillionTokens:     o.OutputCostPerMillionTokens,
-				CacheReadCostPerMillionTokens:  o.CacheReadCostPerMillionTokens,
-				CacheWriteCostPerMillionTokens: o.CacheWriteCostPerMillionTokens,
-			})
-		}
-	}
-	return out
-}
-
-// toAgentcoreHooks translates the bundle's declared lifecycle hooks (#788) into
-// the agentcore form. Returns nil when the bundle declares none (the generic
-// default), which ConfigureLifecycleHooks treats as "no hooks".
-func toAgentcoreHooks(hooks []clientconfig.HookDef) []agentcore.LifecycleHook {
-	if len(hooks) == 0 {
-		return nil
-	}
-	out := make([]agentcore.LifecycleHook, 0, len(hooks))
-	for _, h := range hooks {
-		out = append(out, agentcore.LifecycleHook{
-			ID:      h.ID,
-			Event:   agentcore.HookEvent(h.Event),
-			Matcher: h.Matcher,
-			Command: h.Command,
-			Timeout: time.Duration(h.EffectiveTimeoutSeconds()) * time.Second,
-			Enforce: h.Enforce,
-		})
-	}
-	return out
 }
 
 // listBundlePersonas returns the persona names (basenames of personas/*.yaml,

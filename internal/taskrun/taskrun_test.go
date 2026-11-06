@@ -257,7 +257,8 @@ func TestLoadTaskYAMLAllowNetwork(t *testing.T) {
 // so `fleet task run` honors agent_policy.unattended_disabled_tools exactly as
 // the server's scheduled runs do.
 func TestTaskRunAgentPolicyCarriesUnattendedDisabledTools(t *testing.T) {
-	p := taskRunAgentPolicy(clientconfig.AgentPolicy{UnattendedDisabledTools: []string{"create_task", "web_fetch"}})
+	b := &clientconfig.Bundle{AgentPolicyConfig: clientconfig.AgentPolicy{UnattendedDisabledTools: []string{"create_task", "web_fetch"}}}
+	p := b.AgentcorePolicy()
 	if len(p.UnattendedDisabledTools) != 2 || p.UnattendedDisabledTools[0] != "create_task" || p.UnattendedDisabledTools[1] != "web_fetch" {
 		t.Fatalf("UnattendedDisabledTools = %v, want [create_task web_fetch]", p.UnattendedDisabledTools)
 	}
