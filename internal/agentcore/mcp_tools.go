@@ -260,8 +260,6 @@ type toolBuildConfig struct {
 	readWorkspaceFile   tools.WorkspaceFileReadFunc
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
-	// remediationHints configures the fast.io inline-upload guard hint.
-	remediationHints RemediationHints
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
 	// so the persona allowlist is applied to the deferrable MCP set BEFORE the
 	// disclosure decision (#570) — the roster-level resolvePersonaTools pass in

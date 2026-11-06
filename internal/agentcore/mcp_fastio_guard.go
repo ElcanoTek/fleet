@@ -3,19 +3,16 @@ package agentcore
 import (
 	"fmt"
 	"strings"
-
-	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
 // fast.io inline-upload guard (merged from chat + cutlass mcp_fastio_guard.go).
 //
-// The two repos' guards were identical except for the remediation hint text:
-// chat pointed the agent at the blob upload flow (create-session → POST /blob →
-// chunk → finalize); cutlass pointed at its native `fastio_upload_file` tool
-// (and the chunked blob flow for files past that tool's cap). Per the migration
-// ledger this merge parameterizes the hint via RemediationHints so BOTH
-// remediation paths are exposed; the produced hint names the native tool AND
-// walks the blob flow, so either front-end's expectations are satisfied.
+// The guard's remediation hint walks the agent through the chunked blob upload
+// flow (create-session → POST /blob → chunk → finalize), the one remediation
+// fleet can name without knowing what a bundle installs. (cutlass also pointed
+// at its native path-taking upload tool; that tooling moved to the client
+// bundle, and no deployment ever configured a replacement, so the hint names
+// only the blob flow.)
 
 const fastIOUploadToolName = "mcp_fast_io_upload"
 const fastIOStreamUploadAction = "stream-upload"
@@ -31,46 +28,6 @@ const (
 // text" boundary; a typical .docx/.xlsx/PDF lands at 15–50 KB.
 const fastIOInlineUploadByteCap = 10 * 1024
 
-// RemediationHints parameterizes the remediation guidance the guard emits when
-// it rejects an oversized inline upload. Both fields are optional; when both are
-// set the produced hint exposes both paths (native tool first, then the chunked
-// blob flow). DefaultRemediationHints reproduces the union of the chat blob-flow
-// hint and the cutlass native-tool hint.
-type RemediationHints struct {
-	// NativeUploadTool, when non-empty, advertises a path-taking upload tool that
-	// reads the file from disk and base64-encodes it off the model's context.
-	// Empty omits that line, leaving the blob flow as the only remediation.
-	//
-	// fleet no longer ships one: the fast.io tooling moved to the client bundle,
-	// which is where a vendor- and client-specific convention belongs. A bundle
-	// names its own replacement here rather than fleet hardcoding a tool it does
-	// not own.
-	NativeUploadTool string
-	// IncludeBlobFlow, when true, includes the chunked blob upload flow
-	// (create-session → POST /blob → chunk → finalize) that both products use
-	// for files past the native tool's cap (chat: the only remediation path).
-	IncludeBlobFlow bool
-}
-
-// DefaultRemediationHints points at the chunked blob flow, the one remediation
-// fleet can name without knowing what a bundle installs. The native-tool line is
-// empty now that the fast.io tools live in the bundle; a deployment whose bundle
-// ships a path-taking upload sets NativeUploadTool to it.
-var DefaultRemediationHints = RemediationHints{
-	IncludeBlobFlow: true,
-}
-
-// fastIOServerEnabled reports whether the fast_io MCP server is wired up for
-// this run. Probed by name (not token presence) so it works in tests.
-func fastIOServerEnabled(serverTools []mcp.ServerTool) bool {
-	for _, st := range serverTools {
-		if st.ServerName == mcpServerFastIO {
-			return true
-		}
-	}
-	return false
-}
-
 // rejectFastIOInlineBase64Upload returns ok=false plus a hint string when args
 // describe an `mcp_fast_io_upload` call carrying an inline content_base64 (or
 // content) payload over the cap. Callers short-circuit the dispatch with the
@@ -80,13 +37,10 @@ func fastIOServerEnabled(serverTools []mcp.ServerTool) bool {
 // Returns ok=true (no rejection) for: any other tool name; calls routing bytes
 // through blob_id/blob_ref; calls under the cap; nil args.
 //
-// The hints parameter exposes the remediation path(s); DefaultRemediationHints
-// exposes both the native tool and the blob flow.
-//
 // Every caller reaches this through the localMCPBroker (issue #167): the
 // in-process loop and an out-of-process broker share one implementation, so the
 // guard runs identically without a separate exported entry point.
-func rejectFastIOInlineBase64Upload(toolName string, args map[string]any, hints RemediationHints) (ok bool, hint string) {
+func rejectFastIOInlineBase64Upload(toolName string, args map[string]any) (ok bool, hint string) {
 	if toolName != fastIOUploadToolName {
 		return true, ""
 	}
@@ -115,26 +69,13 @@ func rejectFastIOInlineBase64Upload(toolName string, args map[string]any, hints 
 			"round-trips).",
 		action, size, field, fastIOInlineUploadByteCap)
 
-	if hints.NativeUploadTool != "" {
-		fmt.Fprintf(&b,
-			" Use the native tool instead — it reads the file from disk, base64-encodes it in Go, and keeps the bytes "+
-				"out of your context entirely:\n  %s\n",
-			hints.NativeUploadTool)
-	}
-
-	if hints.IncludeBlobFlow {
-		if hints.NativeUploadTool != "" {
-			b.WriteString("For files past the native tool's 5 MB cap, drive the chunked blob upload flow yourself:\n")
-		} else {
-			b.WriteString(" Use the blob upload flow instead — it keeps the bytes out of the model's context entirely:\n")
-		}
-		fmt.Fprintf(&b,
-			"  1. mcp_fast_io_upload action=create-session profile_type=workspace profile_id=<id> "+
-				"parent_node_id=<folder_id> filename=<name>\n"+
-				"  2. POST the file bytes to the blob endpoint in the response, capture the returned `blob_id`.\n"+
-				"  3. mcp_fast_io_upload action=chunk session_id=<id> blob_id=<blob_id>\n"+
-				"  4. mcp_fast_io_upload action=finalize session_id=<id>\n")
-	}
+	b.WriteString(" Use the blob upload flow instead — it keeps the bytes out of the model's context entirely:\n")
+	fmt.Fprintf(&b,
+		"  1. mcp_fast_io_upload action=create-session profile_type=workspace profile_id=<id> "+
+			"parent_node_id=<folder_id> filename=<name>\n"+
+			"  2. POST the file bytes to the blob endpoint in the response, capture the returned `blob_id`.\n"+
+			"  3. mcp_fast_io_upload action=chunk session_id=<id> blob_id=<blob_id>\n"+
+			"  4. mcp_fast_io_upload action=finalize session_id=<id>\n")
 
 	fmt.Fprintf(&b,
 		"See protocols/fastio-mcp.md for the full pattern. Do NOT retry the same `%s` call with the same inline "+

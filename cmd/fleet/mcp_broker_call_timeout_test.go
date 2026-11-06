@@ -50,7 +50,7 @@ func TestBrokerScope_CallBudgetCrossesTheWire(t *testing.T) {
 	}
 	client := mcp.NewClient()
 	b := &brokerBackend{
-		MCPBroker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		MCPBroker: agentcore.NewLocalMCPBroker(client),
 		client:    client,
 		bases: map[string]agentcore.MCPServerBase{
 			"pacer": {Command: "python3", Args: []string{"-u", "-c", brokerSlowServerScript}},

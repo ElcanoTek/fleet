@@ -97,9 +97,6 @@ type RunConfig struct {
 	// the policy gate. Like PersonaPolicy it only SUBTRACTS. Driver-supplied
 	// data, not a Mode branch (see TestSeamPurity). nil = no narrowing.
 	HiddenToolSuffixes []string
-	// RemediationHints configures the fast.io guard (defaults to
-	// DefaultRemediationHints, which exposes both remediation paths).
-	RemediationHints RemediationHints
 	// IncludeConfirmAudit appends the scheduled confirm_audit tool.
 	IncludeConfirmAudit bool
 	// RequireCompactionOptIn gates proactive context compaction (#209) behind the
@@ -489,11 +486,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	eng.maxCompletionTokens = int(maxTokens)
 
 	optIn := cfg.Selection.OptInSet()
-	hints := runRemediationHints(cfg)
 	toolCfg := toolBuildConfig{
 		includeConfirmAudit: cfg.IncludeConfirmAudit,
 		loaderTools:         cfg.LoaderTools,
-		remediationHints:    hints,
 		// Gate-4 (#294) rides into the tool build itself so the persona
 		// allowlist also governs the deferrable MCP set BEFORE the disclosure
 		// decision (#570) — the roster-level pass in buildTools below cannot see
@@ -520,7 +515,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// takes over calls without changing the loop.
 	broker := deps.MCPBroker
 	if broker == nil {
-		broker = NewLocalMCPBroker(mcpClient, hints)
+		broker = NewLocalMCPBroker(mcpClient)
 	}
 	// Gate-3 (#184): scope MCP calls to the task's permitted (server, account)
 	// pairs. nil allowlist = inherit global (no-op wrap). Applied at the broker
@@ -1036,15 +1031,6 @@ func runMaxCompletionTokens(cfg RunConfig) int64 {
 		return int64(cfg.MaxCompletionTokens)
 	}
 	return int64(DefaultMaxCompletionTokens)
-}
-
-// runRemediationHints resolves the fast.io guard hints: the configured value,
-// or DefaultRemediationHints (both remediation paths) when unset.
-func runRemediationHints(cfg RunConfig) RemediationHints {
-	if cfg.RemediationHints == (RemediationHints{}) {
-		return DefaultRemediationHints
-	}
-	return cfg.RemediationHints
 }
 
 func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {

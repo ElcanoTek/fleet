@@ -1215,7 +1215,7 @@ func (o *RemoteMCPOverlay) ComposeWith(baseBroker agentcore.MCPBroker, baseCatal
 		return o.CallBroker(), merged
 	}
 	return &compositeBroker{
-		overlay:        o.callBroker(agentcore.DefaultRemediationHints),
+		overlay:        o.CallBroker(),
 		overlayServers: o.Servers,
 		base:           baseBroker,
 	}, merged
@@ -1224,7 +1224,10 @@ func (o *RemoteMCPOverlay) ComposeWith(baseBroker agentcore.MCPBroker, baseCatal
 // CallBroker is the overlay's own call seam (a broker-owned scope, or the
 // in-process compatibility client wrapped as a local broker).
 func (o *RemoteMCPOverlay) CallBroker() agentcore.MCPBroker {
-	return o.callBroker(agentcore.DefaultRemediationHints)
+	if o.Broker != nil {
+		return o.Broker
+	}
+	return agentcore.NewLocalMCPBroker(o.Client)
 }
 
 // ApplyMCPOverlayWithBase composes a per-user remote overlay with either the
@@ -1241,31 +1244,23 @@ func ApplyMCPOverlayWithBase(
 	if deps == nil || !overlay.Active() {
 		return
 	}
-	hints := agentcore.DefaultRemediationHints
 	if baseBroker == nil {
 		if baseClient == nil {
 			return
 		}
-		baseBroker = agentcore.NewLocalMCPBroker(baseClient, hints)
+		baseBroker = agentcore.NewLocalMCPBroker(baseClient)
 	}
 	if baseCatalog == nil && baseClient != nil {
 		baseCatalog = baseClient.GetAllTools()
 	}
 	deps.MCPBroker = &compositeBroker{
-		overlay:        overlay.callBroker(hints),
+		overlay:        overlay.CallBroker(),
 		overlayServers: overlay.Servers,
 		base:           baseBroker,
 	}
 	merged := append([]mcp.ServerTool(nil), baseCatalog...)
 	merged = append(merged, overlay.Catalog...)
 	deps.MCPCatalog = merged
-}
-
-func (o *RemoteMCPOverlay) callBroker(hints agentcore.RemediationHints) agentcore.MCPBroker {
-	if o.Broker != nil {
-		return o.Broker
-	}
-	return agentcore.NewLocalMCPBroker(o.Client, hints)
 }
 
 // compositeBroker routes an MCP call to the per-user overlay broker when the
