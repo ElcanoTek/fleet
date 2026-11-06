@@ -214,3 +214,24 @@ func TestSeriesCapDropsAndCounts(t *testing.T) {
 		t.Errorf("dropped series not counted:\n%s", out)
 	}
 }
+
+// TestRender_ChatRateLimitAndSSEReconnect pins the two chat-surface counters
+// that replaced httpapi's in-memory tallies (#1951), so the families and their
+// fixed label names stay what dashboards query.
+func TestRender_ChatRateLimitAndSSEReconnect(t *testing.T) {
+	RecordChatRateLimited("rpm")
+	RecordChatRateLimited("rpm")
+	RecordSSEReconnect("buffer_expired")
+
+	out := Render()
+	for _, want := range []string{
+		"# TYPE fleet_chat_rate_limited_total counter",
+		`fleet_chat_rate_limited_total{reason="rpm"} 2`,
+		"# TYPE fleet_sse_reconnects_total counter",
+		`fleet_sse_reconnects_total{outcome="buffer_expired"} 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Render() missing %q:\n%s", want, out)
+		}
+	}
+}

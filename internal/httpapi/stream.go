@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -63,7 +64,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// If the client is asking about a different (older) turn than the one
 	// we currently have buffered, fall through to the DB lookup below.
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
-		s.sseReconnects.inc("within_buffer")
+		metrics.RecordSSEReconnect("within_buffer")
 		if err := entry.buf.AttachForViewerChecked(r.Context(), lastEventID, w, caps, user, conv.UserEmail, allowCheck); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("stream Attach (user=%q conv=%q): %v", user, convID, err) //nolint:gosec // identifiers are %q-quoted
 		}
@@ -73,7 +74,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	// DB fallback. Needs an explicit turn_id so we know which row to
 	// look up — without one, the client should just reload history.
 	if requestedTurnID == "" {
-		s.sseReconnects.inc("no_content")
+		metrics.RecordSSEReconnect("no_content")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -89,7 +90,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 		return
 	}
 	if turn == nil || turn.ConversationID != convID {
-		s.sseReconnects.inc("no_content")
+		metrics.RecordSSEReconnect("no_content")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -107,7 +108,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	if turn.FinishedAt.Valid {
 		outcome = "buffer_expired"
 	}
-	s.sseReconnects.inc(outcome)
+	metrics.RecordSSEReconnect(outcome)
 	if err := replayEventsFromDB(w, events, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("DB replay (user=%q conv=%q turn=%q): %v", user, convID, requestedTurnID, err) //nolint:gosec // identifiers are %q-quoted
 		return

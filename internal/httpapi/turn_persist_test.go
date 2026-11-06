@@ -278,6 +278,7 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 // the handler knows which row to read.
 func TestStreamEndpoint_DBFallback(t *testing.T) {
 	s := serverFixture(t)
+	expiredBefore := metricValue(`fleet_sse_reconnects_total{outcome="buffer_expired"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -329,8 +330,8 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 	// had already finished, so the DB holds the complete event log including the
 	// terminal frame. The distinction drives the UI's inline "turn completed"
 	// notice, so pin it rather than just the replayed bytes.
-	if counts := s.SSEReconnectCounts(); counts["buffer_expired"] != 1 {
-		t.Errorf("reconnect outcomes = %v, want buffer_expired=1", counts)
+	if got := metricValue(`fleet_sse_reconnects_total{outcome="buffer_expired"}`) - expiredBefore; got != 1 {
+		t.Errorf("buffer_expired reconnects rose by %v, want 1", got)
 	}
 }
 
@@ -341,6 +342,7 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 // outcome would otherwise go unnoticed.
 func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
 	s := serverFixture(t)
+	noContentBefore := metricValue(`fleet_sse_reconnects_total{outcome="no_content"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
@@ -356,8 +358,8 @@ func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("stream: status %d, want 204; body=%s", w.Code, w.Body.String())
 	}
-	if counts := s.SSEReconnectCounts(); counts["no_content"] != 1 {
-		t.Errorf("reconnect outcomes = %v, want no_content=1", counts)
+	if got := metricValue(`fleet_sse_reconnects_total{outcome="no_content"}`) - noContentBefore; got != 1 {
+		t.Errorf("no_content reconnects rose by %v, want 1", got)
 	}
 }
 
