@@ -243,6 +243,7 @@ above fails otherwise.
 - [`CHAT-ORDER.md`](CHAT-ORDER.md) — your own order for pinned chats and for each project's chats, and the Temporary sort (Reorder mode; `GET`/`PUT /api/conversations/order`)
 - [`PATROL-LAUNCHPAD.md`](PATROL-LAUNCHPAD.md) — Patrols in the rail and the Patrol Launchpad wizard (Chat · Patrols · Background tasks; `GET /api/patrols`, `POST /api/patrol-draft`)
 - [`CHAT-STREAM-RECOVERY.md`](CHAT-STREAM-RECOVERY.md) — Chat stream recovery — losing the socket is not losing the turn
+- [`CHAT-SURFACE-METRICS.md`](CHAT-SURFACE-METRICS.md) — Chat-surface metrics: rate-limit 429s and stream reattaches (`/metrics`)
 - [`CHAT-WORKING-STATUS.md`](CHAT-WORKING-STATUS.md) — The chat view while the agent works
 - [`CODEQL.md`](CODEQL.md) — CodeQL: advanced setup, and the Go analysis that had stopped working
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
