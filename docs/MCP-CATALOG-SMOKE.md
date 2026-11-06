@@ -14,14 +14,13 @@ account per vendor — is [`MCP-CATALOG-STATUS.md`](MCP-CATALOG-STATUS.md).
 
 `.github/workflows/mcp-catalog-smoke.yml` runs daily at 06:30 UTC and on
 manual dispatch. It is **never a PR gate**: nothing in `CI gate` depends on
-it, and a red run files an issue (the same alarm the other scheduled lanes
-use) instead of blocking a merge. Three jobs:
+it, and a red scheduled run files an issue (via `scan-cron-alarm.yml`, the
+watcher every scheduled lane uses) instead of blocking a merge. Two jobs:
 
 | job | what it does | fails when |
 |---|---|---|
 | `links` | `scripts/mcp-catalog-lint.sh` fetches every entry's `docs_url` (other link fields on dispatch) | a link answers 404/410 or its host does not resolve |
 | `smoke` | `go test -run TestCatalogLive ./internal/remotemcp/` with `FLEET_CATALOG_LIVE=1` | an `open` entry fails fleet's handshake or lists no tools; an armed api_key fixture fails — but a vendor outage only warns (see [Outages warn, rot fails](#outages-warn-rot-fails)) |
-| `alarm` | files or comments on "Scheduled Nightly MCP catalog smoke run failed" | only on a scheduled failure of either job |
 
 Both checks are read-only against the vendors and carry no credential unless
 a fixture secret is configured. The smoke runs the same handshake a user's

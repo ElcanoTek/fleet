@@ -36,14 +36,11 @@ on:
     - cron: '0 8 * * *'
   workflow_dispatch:  # Manual trigger (e.g. to confirm a fix cleared an advisory)
 
-# NOTE: `issues: write` deliberately does NOT live at workflow scope. These
-# lanes have one long job that runs third-party code with a full,
+# NOTE: no `issues: write` here. This lane runs third-party code with a full,
 # default-branch token — `govulncheck@latest` resolved at run time, and a
-# `podman build` pulling ~400 RPMs from Fedora mirrors. A workflow-level scope
-# is live for every step of that job, so the scan ran next to a token that
-# could open issues and write code-scanning alerts. The alarm needs no source
-# tree and no scan output, so it is its own job holding `issues: write` alone —
-# the same shape scan-cron-alarm.yml already uses for CodeQL and Semgrep.
+# `podman build` pulling ~400 RPMs from Fedora mirrors — so it must not run next
+# to a token that can open issues. A failed scheduled run is filed as an issue
+# by scan-cron-alarm.yml, which watches this workflow by its `name:`.
 permissions:
   contents: read
   security-events: write  # required to upload SARIF to the Security tab
@@ -114,44 +111,3 @@ jobs:
           # missing configuration when the same tool also reports on PRs (which
           # is why grype-scheduled.yml shares ci.yml's category, #1502).
           category: 'govulncheck-scheduled'
-
-
-  alarm:
-    # Split out of the scan job above so `issues: write` is the ONLY scope in
-    # play here, and it is held by a job that checks out nothing and runs no
-    # third-party code — it only calls `gh`.
-    name: File an issue so a red cron cannot rot silently
-    needs: [govulncheck-scheduled]
-    if: ${{ failure() && github.event_name == 'schedule' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    steps:
-      - name: File an issue so a red cron cannot rot silently
-        # A scheduled failure has no PR attached, so nothing surfaces it — the
-        # exact rot pattern that let the CodeQL toolchain break sit red for
-        # weeks. Files one issue per breakage (deduped by title), comments on
-        # re-failures. schedule-only: a red manual dispatch has a human watching.
-        # This step body is duplicated across the five scheduled lanes
-        # (codeql, semgrep, govulncheck, grype, mcp-catalog-smoke) — keep them
-        # in sync.
-        env:
-          GH_TOKEN: ${{ github.token }}
-          WORKFLOW_NAME: ${{ github.workflow }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          set -euo pipefail
-          title="Scheduled ${WORKFLOW_NAME} run failed"
-          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
-          if [ -n "$num" ]; then
-            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" \
-              --body "Still failing: $RUN_URL"
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" \
-              --body "The scheduled $WORKFLOW_NAME lane went red: $RUN_URL
-
-          A failing cron has no PR to make it visible, so this issue is the
-          alarm. Close it when the lane is green again."
-          fi

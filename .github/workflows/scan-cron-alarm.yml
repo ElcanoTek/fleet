@@ -1,4 +1,6 @@
-# Scan cron alarm — files an issue when a SCHEDULED CodeQL or Semgrep run fails.
+# Scan cron alarm — files an issue when a SCHEDULED run of a watched lane fails
+# (CodeQL, Semgrep, the real-model E2E canary, govulncheck, Grype and the MCP
+# catalog smoke).
 #
 # WHY THIS IS ITS OWN WORKFLOW rather than a job inside codeql.yml/semgrep.yml:
 # those two are REUSABLE workflows called by ci.yml, and a called
@@ -10,9 +12,11 @@
 # at all. A `workflow_run` watcher has no caller, so
 # it can hold `issues: write` without widening any gate's token.
 #
-# govulncheck-scheduled.yml and grype-scheduled.yml keep their in-job alarm
-# steps: they are standalone workflows with no callers, so the constraint above
-# does not apply to them.
+# The standalone scheduled lanes (govulncheck, Grype, MCP catalog smoke) are
+# watched here too rather than carrying an in-job alarm. A watcher also fires
+# when a run fails to start, times out or is cancelled — outcomes an in-job
+# `if: failure()` step can never see — and it keeps `issues: write` out of
+# every workflow that runs third-party code.
 #
 # Why an alarm exists at all: a scheduled failure has no PR attached, so nothing
 # surfaces it — the exact rot pattern that let the CodeQL toolchain break sit
@@ -27,9 +31,16 @@ name: Scan cron alarm
 on:
   workflow_run:
     # Matched by workflow DISPLAY NAME (the `name:` in each file), not by path —
-    # renaming `name:` in codeql.yml, semgrep.yml or e2e-canary.yml silently
-    # disarms this alarm with no error anywhere. Keep those three in sync.
-    workflows: [CodeQL, Semgrep, "E2E canary (real model)"]
+    # renaming `name:` in codeql.yml, semgrep.yml, e2e-canary.yml,
+    # govulncheck-scheduled.yml, grype-scheduled.yml or mcp-catalog-smoke.yml
+    # silently disarms this alarm with no error anywhere. Keep all six in sync.
+    workflows:
+      - CodeQL
+      - Semgrep
+      - "E2E canary (real model)"
+      - "Daily Go vulnerability scan"
+      - "Weekly container vulnerability scan"
+      - "Nightly MCP catalog smoke"
     types: [completed]
 
 permissions:
@@ -59,11 +70,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: File or update the alarm issue
-        # Body mirrors the in-job alarm steps in govulncheck-scheduled.yml and
-        # grype-scheduled.yml — keep the three in sync. Those two still carry
-        # their own in-job step because they can request `issues: write`
-        # directly; CodeQL and Semgrep cannot, because a called workflow may not
-        # request a permission its caller did not grant (see the header).
+        # The only copy of this step: every scheduled lane is watched here.
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
