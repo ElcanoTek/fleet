@@ -852,10 +852,20 @@ func containsJSONBase64Key(s string) bool {
 				v++
 			}
 			if v < len(s) && s[v] == '"' {
-				payloadStart := v + 1
+				pos := v + 1
 				n := 0
-				for payloadStart+n < len(s) && n < minPayload && isBase64Byte(s[payloadStart+n]) {
-					n++
+				for pos < len(s) && n < minPayload {
+					if isBase64Byte(s[pos]) {
+						pos++
+						n++
+						continue
+					}
+					if s[pos] == '\\' && pos+1 < len(s) && s[pos+1] == '/' {
+						pos += 2
+						n++
+						continue
+					}
+					break
 				}
 				if n >= minPayload {
 					return true

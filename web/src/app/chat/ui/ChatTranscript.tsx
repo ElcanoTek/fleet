@@ -1053,7 +1053,7 @@ export function ChatTranscript({
                                       <>
                                         <button
                                           type="button"
-                                          disabled={isSummarizing}
+                                          disabled={isStreaming || isSummarizing}
                                           className="font-medium underline hover:text-[var(--color-text-primary)] disabled:opacity-50"
                                           onClick={() => setConfirmSummarize(true)}
                                         >

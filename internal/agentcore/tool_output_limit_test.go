@@ -378,4 +378,7 @@ func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholde
 	if !containsEncodedBinary(`{"next_cursor":"` + strings.Repeat(pageMarker, 5) + `"}`) {
 		t.Fatal("oversized >1024-byte base64 blob under next_cursor should still be classified as encoded binary")
 	}
+	if !containsEncodedBinary(`{"name":"photo.jpg","content_base64":"\/9j\/4AAQSkZJRgABAQ=="}`) {
+		t.Fatal("JSON base64 payload with escaped slashes should still be classified as encoded binary")
+	}
 }
