@@ -2,6 +2,7 @@ package admincli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -81,10 +82,9 @@ func adminAdd(argv []string) int {
 
 	created := false
 	if _, err := st.CreateUser(ctx, email, password); err != nil {
-		// CreateUser reports "user <email> already exists" on a duplicate; treat
-		// that as an update (reset password) rather than an error, so add is
-		// idempotent.
-		if strings.Contains(err.Error(), "already exists") {
+		// A duplicate is an update (reset password) rather than an error, so
+		// add is idempotent.
+		if errors.Is(err, store.ErrUserExists) {
 			if err := st.UpdatePassword(ctx, email, password); err != nil {
 				return errf(5, "update chat password: %v", err)
 			}

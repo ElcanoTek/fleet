@@ -114,10 +114,9 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
 	if err != nil {
 		switch {
-		case strings.Contains(err.Error(), "already exists"):
+		case errors.Is(err, store.ErrUserExists):
 			http.Error(w, err.Error(), http.StatusConflict)
-		case strings.Contains(err.Error(), "at least 8 characters"),
-			strings.Contains(err.Error(), "email required"):
+		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -214,7 +213,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		switch {
 		case errors.Is(err, store.ErrUserNotFound):
 			http.Error(w, "user not found", http.StatusNotFound)
-		case strings.Contains(err.Error(), "at least 8 characters"):
+		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)

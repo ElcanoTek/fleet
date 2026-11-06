@@ -347,9 +347,9 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	u, err := s.store.SetUserRoleTeam(r.Context(), email, body.Role, body.TeamID)
 	if err != nil {
 		switch {
-		case strings.Contains(err.Error(), "invalid role"), store.IsInputError(err):
+		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
-		case err.Error() == "user not found":
+		case errors.Is(err, store.ErrUserNotFound):
 			http.Error(w, "user not found", http.StatusNotFound)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)

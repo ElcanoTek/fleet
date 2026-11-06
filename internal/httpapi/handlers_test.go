@@ -95,7 +95,7 @@ func (s *Server) concreteStore(t *testing.T) *store.Store {
 func seedUser(t *testing.T, st *store.Store, email string) {
 	t.Helper()
 	if _, err := st.CreateUser(context.Background(), email, "test-password-123"); err != nil &&
-		!strings.Contains(err.Error(), "already exists") {
+		!errors.Is(err, store.ErrUserExists) {
 		t.Fatalf("seed user %s: %v", email, err)
 	}
 }

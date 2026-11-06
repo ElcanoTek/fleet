@@ -254,8 +254,7 @@ func httpErrorForLLMProvider(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrLLMProviderNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case strings.Contains(err.Error(), "already exists"),
-		strings.Contains(err.Error(), "invalid provider"):
+	case errors.Is(err, store.ErrLLMProviderExists), store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -430,7 +430,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 			http.Error(w, store.ErrNotAProjectMember.Error(), http.StatusBadRequest)
 			return
 		}
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "required") {
+		if store.IsInputError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

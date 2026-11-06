@@ -38,6 +38,10 @@ const aadPurposeLLMKey = "fleet:llm-provider-api-key:v1"
 // ErrLLMProviderNotFound is returned when an id matches no row.
 var ErrLLMProviderNotFound = errors.New("llm provider not found")
 
+// ErrLLMProviderExists is wrapped when a provider name is taken. Its text is
+// the tail of the message ("a provider named %q already exists").
+var ErrLLMProviderExists = errors.New("already exists")
+
 // llmProviderNameRE — the name doubles as the "<name>/<model>" routing prefix,
 // so it must be a clean slug with no "/" or whitespace.
 var llmProviderNameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
@@ -90,7 +94,7 @@ func (in *LLMProviderInput) normalize() error {
 	in.BaseURL = strings.TrimSpace(in.BaseURL)
 	in.Region = strings.TrimSpace(in.Region)
 	if !llmProviderNameRE.MatchString(in.Name) {
-		return fmt.Errorf("invalid provider name %q (lowercase slug, no slashes)", in.Name)
+		return errInputf("invalid provider name %q (lowercase slug, no slashes)", in.Name)
 	}
 	// The type table is agentcore's, the one the bundle loader and the
 	// resolver check too. Only the shape rules apply here: whether a key is in
@@ -98,39 +102,39 @@ func (in *LLMProviderInput) normalize() error {
 	// validateLLMProviderRow), since a row can be saved disabled before its key.
 	spec, ok := agentcore.LookupProviderType(in.Type)
 	if !ok {
-		return fmt.Errorf("invalid provider type %q (want %s)", in.Type, agentcore.ProviderTypeChoices())
+		return errInputf("invalid provider type %q (want %s)", in.Type, agentcore.ProviderTypeChoices())
 	}
 	if spec.BaseURLRequired && in.BaseURL == "" {
-		return fmt.Errorf("invalid provider %q: type %s requires a base_url", in.Name, in.Type)
+		return errInputf("invalid provider %q: type %s requires a base_url", in.Name, in.Type)
 	}
 	if err := agentcore.CheckProviderFields(spec, in.BaseURL, in.Region); err != nil {
-		return fmt.Errorf("invalid provider %q: %w", in.Name, err)
+		return errInputf("invalid provider %q: %w", in.Name, err)
 	}
 	// The column is a Postgres INTEGER; out-of-range values are refused here
 	// as a bad request rather than reaching SQL as a server error.
 	if in.ContextWindowTokens < 0 {
-		return fmt.Errorf("invalid provider %q: context_window_tokens must be 0 (not declared) or a positive token count", in.Name)
+		return errInputf("invalid provider %q: context_window_tokens must be 0 (not declared) or a positive token count", in.Name)
 	}
 	if in.ContextWindowTokens > math.MaxInt32 {
-		return fmt.Errorf("invalid provider %q: context_window_tokens must be at most %d", in.Name, math.MaxInt32)
+		return errInputf("invalid provider %q: context_window_tokens must be at most %d", in.Name, math.MaxInt32)
 	}
 	if in.BaseURL != "" {
 		// http/https only (no file:, unix:, …), a host, and no embedded
 		// credentials. localhost/private hosts stay allowed — Ollama and
 		// self-hosted gateways are the point of base_url.
-		// Each error starts "invalid provider", which the API maps to 400.
+		// Each error is an InputError, which the API maps to 400.
 		u, err := url.Parse(in.BaseURL)
 		if err != nil {
-			return fmt.Errorf("invalid provider %q: invalid base_url: %w", in.Name, err)
+			return errInputf("invalid provider %q: invalid base_url: %w", in.Name, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return fmt.Errorf("invalid provider %q: base_url must use http or https (got %q)", in.Name, u.Scheme)
+			return errInputf("invalid provider %q: base_url must use http or https (got %q)", in.Name, u.Scheme)
 		}
 		if u.Host == "" {
-			return fmt.Errorf("invalid provider %q: base_url must include a host", in.Name)
+			return errInputf("invalid provider %q: base_url must include a host", in.Name)
 		}
 		if u.User != nil {
-			return fmt.Errorf("invalid provider %q: base_url must not embed credentials", in.Name)
+			return errInputf("invalid provider %q: base_url must not embed credentials", in.Name)
 		}
 	}
 	models := make([]string, 0, len(in.Models))
@@ -282,7 +286,7 @@ func (s *Store) CreateLLMProvider(ctx context.Context, in LLMProviderInput) (*LL
 		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
-			return nil, fmt.Errorf("a provider named %q already exists", in.Name)
+			return nil, fmt.Errorf("a provider named %q %w", in.Name, ErrLLMProviderExists)
 		}
 		return nil, err
 	}
@@ -317,7 +321,7 @@ func (s *Store) UpdateLLMProvider(ctx context.Context, id string, in LLMProvider
 			id, in.Name, in.Type, in.BaseURL, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 		if err != nil {
 			if pgUniqueViolation(err) {
-				return nil, fmt.Errorf("a provider named %q already exists", in.Name)
+				return nil, fmt.Errorf("a provider named %q %w", in.Name, ErrLLMProviderExists)
 			}
 			return nil, err
 		}
@@ -336,7 +340,7 @@ func (s *Store) UpdateLLMProvider(ctx context.Context, id string, in LLMProvider
 		id, in.Name, in.Type, in.BaseURL, sealed, modelsJSON, in.Enabled, in.ContextWindowTokens, in.Region, now)
 	if err != nil {
 		if pgUniqueViolation(err) {
-			return nil, fmt.Errorf("a provider named %q already exists", in.Name)
+			return nil, fmt.Errorf("a provider named %q %w", in.Name, ErrLLMProviderExists)
 		}
 		return nil, err
 	}
