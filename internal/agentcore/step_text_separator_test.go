@@ -119,7 +119,6 @@ func TestRunStreamsStepTextAsSeparateParagraphs(t *testing.T) {
 	}}
 	obs := &streamEventObserver{}
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{tool},
 	}, Deps{
 		Input:    stubInput{system: "sys", user: "check deal 42", label: "step-paragraphs"},

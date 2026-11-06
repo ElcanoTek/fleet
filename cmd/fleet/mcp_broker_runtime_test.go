@@ -244,7 +244,7 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 		"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS",
 		// Legacy spellings the parent resolves lazily after broker boot: the
 		// shared server auth secret plus the per-run lookups through the
-		// alias machinery (config.lookupFleet, agentcore.EnvPrefix).
+		// alias machinery (config.lookupFleet, agentcore.fleetEnv).
 		"CUTLASS_SERVER_TOKEN",
 		"CUTLASS_OPENROUTER_BASE_URL", "CUTLASS_MODEL_CACHE_TTL_MINUTES",
 		"CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD", "CUTLASS_CONTEXT_COMPACTION_THRESHOLD",

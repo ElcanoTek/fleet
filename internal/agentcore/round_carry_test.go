@@ -132,7 +132,7 @@ func (m *textCapturingModel) call(i int) []fantasy.Message {
 func TestRun_EnforcementRoundCarriesTranscript(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "carry-test-model", replies: []string{"round one analysis", "confirmed"}}
-	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "carry"},
 		Policy:     newRoundsPolicy(session, 1), // round 0 blocked with a nudge, round 1 finishes
 		Executor:   &stubExecutor{},
@@ -216,7 +216,7 @@ func TestRun_LiveStreamRetractsPreAuditDraft(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "stream-replace-test", replies: []string{"round one analysis", "confirmed"}}
 	obs := &streamEventObserver{}
-	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do the task")}, label: "stream-replace"},
 		Policy:     newRoundsPolicy(session, 1),
 		Executor:   &stubExecutor{},
@@ -256,7 +256,7 @@ func TestRun_FinalRoundOnlyWhenProviderOmitsCompletedText(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "delta-only", replies: []string{"superseded draft", "final streamed answer"}, omitTextEnd: true}
 	observer := &streamEventObserver{}
-	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("finish after audit")}, label: "delta-only"},
 		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, Observer: observer, LogSession: session,
 	})
@@ -279,7 +279,7 @@ func TestRun_FinalRoundOnlyWhenProviderOmitsCompletedText(t *testing.T) {
 func TestRunPreservesAllCompletedTextBlocks(t *testing.T) {
 	session := NewLogSession()
 	observer := &streamEventObserver{}
-	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("answer")}, label: "multi-block"},
 		Policy: newRoundsPolicy(session, 0), Executor: &stubExecutor{},
 		Model:    &textCapturingModel{slug: "multi-block", replies: []string{"first "}, secondBlock: "second"},
@@ -300,7 +300,7 @@ func TestRunPreservesAllCompletedTextBlocks(t *testing.T) {
 
 func TestRunRetractsFinalizeObserverDraftWhenFinalAnswerIsEmpty(t *testing.T) {
 	observer := &streamEventObserver{}
-	result, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input: stubInput{system: "s", user: "answer", label: "empty-finalize"}, Policy: passPolicy{},
 		Model: &textCapturingModel{slug: "empty-main", replies: []string{""}}, Observer: observer,
 		Finalize: func(_ context.Context, in FinalizeInput) (string, error) {
@@ -321,7 +321,7 @@ func TestRunRetractsFinalizeObserverDraftWhenFinalAnswerIsEmpty(t *testing.T) {
 func TestScheduledResultOmitsPreAuditDraft(t *testing.T) {
 	session := NewLogSession()
 	model := &textCapturingModel{slug: "scheduled-final-test", replies: []string{"FUTURE_PASS_391", "Audit complete. FUTURE_PASS_391"}}
-	result, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	result, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:  historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("compute and audit")}, label: "scheduled-final"},
 		Policy: newRoundsPolicy(session, 1), Executor: &stubExecutor{}, Model: model, LogSession: session,
 	})
@@ -346,7 +346,6 @@ func TestRunFinalizeInputCarriesRoundTranscriptAndToolEvents(t *testing.T) {
 		})
 	var got FinalizeInput
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{probe},
 	}, Deps{
 		Input:    stubInput{system: "sys", user: "pull the report", label: "finalize-carry"},
@@ -547,7 +546,6 @@ func TestRun_ScheduledLengthCutoffDoesNotTriggerPrematureSelfAudit(t *testing.T)
 	}
 
 	res, err := Run(context.Background(), ModeScheduled, RunConfig{
-		EnvPrefix:           CanonicalEnvPrefix,
 		IncludeConfirmAudit: true,
 		NativeTools:         []fantasy.AgentTool{tracker},
 	}, Deps{

@@ -132,7 +132,7 @@ func (sr *sizedRun) run(t *testing.T, slug string) (*payloadObserver, *LogSessio
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	res, err := Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
 			Input:                historyInput{system: "s", msgs: fillerMessages(1, cmp.Or(sr.headChars, 400)), label: "refresh"},
 			Observer:             obs,
@@ -322,7 +322,6 @@ func TestRun_ResendCheckpoint_SmallPrefixKeepsThePlainBudget(t *testing.T) {
 func TestResendBudgetCheckpoint_NeedsHistoryToSummarize(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	e := newMockEngine(t, &namedMockModel{name: "cp-history"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	overStep := fantasy.StepResult{
 		Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 50_000}},
@@ -363,7 +362,6 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	recordContextMax("cp-floor-rule", 10_000_000) // a large window: the floor rule is not capped
 	scheduled := func() *engine {
 		e := newMockEngine(t, &namedMockModel{name: "cp-floor-rule"})
-		e.envPrefix = CanonicalEnvPrefix
 		e.requireCompactionOptIn = true
 		return e
 	}
@@ -404,7 +402,6 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	// and never drops below the plain budget.
 	recordContextMax("cp-floor-128k", 128_000)
 	narrow := newMockEngine(t, &namedMockModel{name: "cp-floor-128k"})
-	narrow.envPrefix = CanonicalEnvPrefix
 	narrow.requireCompactionOptIn = true
 	narrow.noteResendFloor(usage(50_000, 0))
 	// The cap is the lower of the pressure point and the input allowance the
@@ -417,7 +414,6 @@ func TestEffectiveResendBudget_FloorRule(t *testing.T) {
 	}
 	recordContextMax("cp-floor-64k", 64_000)
 	tiny := newMockEngine(t, &namedMockModel{name: "cp-floor-64k"})
-	tiny.envPrefix = CanonicalEnvPrefix
 	tiny.requireCompactionOptIn = true
 	tiny.noteResendFloor(usage(50_000, 0))
 	if got := tiny.effectiveResendBudget(budget); got != budget {
@@ -452,7 +448,6 @@ func TestCheckContextPressure_ResendBudgetFollowsTheFloorRule(t *testing.T) {
 	recordContextMax(slug, 10_000_000)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.noteResendFloor(fantasy.Usage{InputTokens: 140_000})
 	msgs := fillerMessages(8, 400)

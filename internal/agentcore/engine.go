@@ -93,9 +93,6 @@ type engine struct {
 	// summarized away.
 	consecutiveCompactions int
 
-	// envPrefix selects the env-var family (resilience config, kill-switches).
-	envPrefix EnvPrefix
-
 	// requireCompactionOptIn, when set by the driver, gates proactive context
 	// compaction (#209) behind the FLEET_SCHEDULED_AUTO_COMPACT env var. It is
 	// driver-supplied data (scheduled sets it true), never a trunk Mode branch.
@@ -934,12 +931,12 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 
 	switch {
 	case used >= compactAt:
-		if e.requireCompactionOptIn && !e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT") {
+		if e.requireCompactionOptIn && !fleetEnv.lookupBool("SCHEDULED_AUTO_COMPACT") {
 			if !out.warned {
 				sink.emit(evtContextPressure, pressure)
 				e.logSession.AddMessage(roleUser, fmt.Sprintf(
 					"[context_pressure] used=%d window=%d pct=%.2f — set %s_SCHEDULED_AUTO_COMPACT=1 to enable proactive compaction",
-					used, window, pct, e.envPrefix.normalize()), nil, nil)
+					used, window, pct, CanonicalEnvPrefix), nil, nil)
 				out.warned = true
 			}
 			return out
@@ -1276,12 +1273,12 @@ func budgetGuardedStep(orch *orchestrationState, inner fantasy.PrepareStepFuncti
 // persisted history, the carried round transcript, or the compaction input.
 // A one-shot fleet.budget_winddown event marks the crossing for operators.
 // nil-safe on orch (direct-engine tests) and sink.
-func budgetWindDownStep(envPrefix EnvPrefix, orch *orchestrationState, sink *streamSink) fantasy.PrepareStepFunction {
+func budgetWindDownStep(orch *orchestrationState, sink *streamSink) fantasy.PrepareStepFunction {
 	if orch == nil {
 		return nil
 	}
 	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-		st := orch.checkBudgetWindDown(budgetWindDownFraction(envPrefix))
+		st := orch.checkBudgetWindDown(budgetWindDownFraction())
 		if !st.active {
 			return ctx, fantasy.PrepareStepResult{}, nil
 		}
@@ -1359,7 +1356,7 @@ func (e *engine) windowCheckpointActive() bool {
 	if !e.resendBudgetEnabled() {
 		return true
 	}
-	return contextResendBudgetTokens(e.envPrefix) <= 0 && (!e.requireCompactionOptIn || e.envPrefix.lookupBool("SCHEDULED_AUTO_COMPACT"))
+	return contextResendBudgetTokens() <= 0 && (!e.requireCompactionOptIn || fleetEnv.lookupBool("SCHEDULED_AUTO_COMPACT"))
 }
 
 // compactionCheckpoint returns the StopCondition that pauses a round's tool
@@ -1455,7 +1452,7 @@ const (
 // the budget it had. A 1M window alone would be no bound, which is why the
 // raise is a multiple of the budget.
 func (e *engine) resendBudget() int {
-	budget := contextResendBudgetTokens(e.envPrefix)
+	budget := contextResendBudgetTokens()
 	if (!e.elisionStopped && !e.summaryRerun) || budget <= 0 {
 		return budget
 	}
@@ -1544,7 +1541,7 @@ func (e *engine) effectiveResendBudget(budget int) int {
 	if !e.resendFloorCrowdsBudget() {
 		return budget
 	}
-	configured := contextResendBudgetTokens(e.envPrefix)
+	configured := contextResendBudgetTokens()
 	limit := e.resendWindowLimit()
 	threshold := e.resendFloor + min(budget, configured)
 	if limit > 0 && threshold > limit {
@@ -1602,8 +1599,8 @@ func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 // defaultInteractiveContextCompactionMaxTokens (350K) for interactive engines
 // unless the operator explicitly set FLEET_CONTEXT_COMPACTION_THRESHOLD.
 func (e *engine) windowCompactionTokens(window int) int {
-	limit := int(float64(window) * contextCompactionThreshold(e.envPrefix))
-	if !e.resendBudgetEnabled() && !e.envPrefix.hasExplicitFraction("CONTEXT_COMPACTION_THRESHOLD") && limit > defaultInteractiveContextCompactionMaxTokens {
+	limit := int(float64(window) * contextCompactionThreshold())
+	if !e.resendBudgetEnabled() && !fleetEnv.hasExplicitFraction("CONTEXT_COMPACTION_THRESHOLD") && limit > defaultInteractiveContextCompactionMaxTokens {
 		return defaultInteractiveContextCompactionMaxTokens
 	}
 	return limit
@@ -1617,10 +1614,10 @@ func (e *engine) atWindowPressureWarn(used, window int) bool {
 	if window <= 0 {
 		return false
 	}
-	if !e.resendBudgetEnabled() && !e.envPrefix.hasExplicitFraction("CONTEXT_PRESSURE_WARN_THRESHOLD") && used >= defaultInteractiveContextPressureWarnMaxTokens {
+	if !e.resendBudgetEnabled() && !fleetEnv.hasExplicitFraction("CONTEXT_PRESSURE_WARN_THRESHOLD") && used >= defaultInteractiveContextPressureWarnMaxTokens {
 		return true
 	}
-	return float64(used)/float64(window) >= contextPressureWarnThreshold(e.envPrefix)
+	return float64(used)/float64(window) >= contextPressureWarnThreshold()
 }
 
 // resendFloorCrowdsBudget reports whether the floor rule applies: the stable
@@ -1632,7 +1629,7 @@ func (e *engine) atWindowPressureWarn(used, window int) bool {
 // run under the floor rule could leave it for a plain threshold below the one
 // it had, and a raise must never lower the point a run pauses at.
 func (e *engine) resendFloorCrowdsBudget() bool {
-	budget := contextResendBudgetTokens(e.envPrefix)
+	budget := contextResendBudgetTokens()
 	return budget > 0 && e.resendPrefix > 0 && 2*e.resendPrefix > budget
 }
 
@@ -1659,14 +1656,14 @@ func (e *engine) noteResendFloor(usage fantasy.Usage) {
 	if e.resendPrefix == 0 || resent < e.resendPrefix {
 		e.resendPrefix = resent
 	}
-	budget := contextResendBudgetTokens(e.envPrefix)
+	budget := contextResendBudgetTokens()
 	if e.resendFloorNoted || !e.resendFloorCrowdsBudget() {
 		return
 	}
 	e.resendFloorNoted = true
 	e.logSession.AddMessage(roleUser, fmt.Sprintf(
 		"[context_checkpoint_floor] floor=%d budget=%d effective_budget=%d — what this run resends before any history (system prompt, tool schemas, task prompt) takes more than half of %s_CONTEXT_RESEND_BUDGET_TOKENS, so summarizing cannot bring a call under the budget; the resend-budget checkpoint now fires once the history has grown by a full budget over the floor, re-measured after each compaction",
-		e.resendFloor, budget, e.effectiveResendBudget(e.resendBudget()), e.envPrefix.normalize()), nil, nil)
+		e.resendFloor, budget, e.effectiveResendBudget(e.resendBudget()), CanonicalEnvPrefix), nil, nil)
 }
 
 // withResendFloorFields adds the floor rule's fields to a resend-budget event
@@ -1694,8 +1691,8 @@ func (e *engine) resendFloorCrumb(budget int) string {
 // or the raised budget once a re-run of an elided or summarized call raised it
 // (resendBudget).
 func (e *engine) resendBudgetName() string {
-	name := e.envPrefix.normalize() + "_CONTEXT_RESEND_BUDGET_TOKENS"
-	if raised := e.resendBudget(); raised > contextResendBudgetTokens(e.envPrefix) {
+	name := CanonicalEnvPrefix + "_CONTEXT_RESEND_BUDGET_TOKENS"
+	if raised := e.resendBudget(); raised > contextResendBudgetTokens() {
 		return fmt.Sprintf("the run's resend budget (%d, raised from %s after it re-ran %s call)", raised, name, cmp.Or(e.raisedBy, rerunElided))
 	}
 	return name
@@ -1825,7 +1822,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	// back to the session's last step size or estimateRequestTokens(messages) so
 	// a 300K–400K-token conversation is not held to the 0-token 75 s base.
 	promptTokens := r.estimatePromptTokens(messages)
-	firstChunkTimeout := firstChunkTimeoutFor(r.engine.envPrefix, promptTokens)
+	firstChunkTimeout := firstChunkTimeoutFor(promptTokens)
 	watchdog := newFirstChunkWatchdog(firstChunkTimeout, cancelStream)
 	defer watchdog.stop()
 	markFirst := watchdog.markFirst
@@ -1974,7 +1971,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// reducers + cache markers, which must see the final slice. The
 			// hard ceiling in budgetGuardedStep above still blocks first once
 			// the budget is fully spent.
-			budgetWindDownStep(r.engine.envPrefix, r.orch, sink),
+			budgetWindDownStep(r.orch, sink),
 			// Tool-call inputs that are not JSON objects are normalized before
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.
@@ -1987,7 +1984,6 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// history. opts.Model makes fallback swaps use their own window.
 			modelContextBudgetStep(r.engine.modelContextPrefix, int(maxOutputTokens), sink),
 			promptCachingStep(modelSlug,
-				WithCacheEnvPrefix(r.engine.envPrefix),
 				// The shared loop is where compaction summaries live (the engine's
 				// compaction paths insert them into this history), so the optional
 				// 4th breakpoint anchors the summary as a stable boundary between

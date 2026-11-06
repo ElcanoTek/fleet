@@ -94,7 +94,7 @@ func TestRun_UserPromptSubmitBlocks(t *testing.T) {
 	session := NewLogSession()
 	engineWith(t, &scriptExecutor{out: `{"decision":"block","reason":"prompt rejected"}`}, nil,
 		LifecycleHook{ID: "ingress", Event: HookUserPromptSubmit, Command: "c"})
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("do it")}, label: "block"},
 		Policy:     newRoundsPolicy(session, 0),
 		Executor:   &scriptExecutor{out: `{"decision":"block","reason":"prompt rejected"}`},
@@ -111,7 +111,7 @@ func TestRun_UserPromptSubmitAddsContext(t *testing.T) {
 	engineWith(t, &scriptExecutor{out: `{"decision":"continue","additional_context":"REMINDER: cite sources"}`}, nil,
 		LifecycleHook{ID: "ctx", Event: HookUserPromptSubmit, Command: "c"})
 	model := &capturingModel{slug: "hook-ctx-model", inputByCall: []int{10}}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("question")}, label: "ctx"},
 		Policy:     newRoundsPolicy(session, 0),
 		Executor:   &scriptExecutor{out: `{"decision":"continue","additional_context":"REMINDER: cite sources"}`},
@@ -138,7 +138,7 @@ func TestRun_TurnEndFiresOnNormalCompletion(t *testing.T) {
 	obs := &recordObserver{}
 	engineWith(t, &scriptExecutor{out: `{"decision":"continue"}`}, obs,
 		LifecycleHook{ID: "done", Event: HookTurnEnd, Command: "c"})
-	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("go")}, label: "te"},
 		Policy:     newRoundsPolicy(session, 0),
 		Executor:   &scriptExecutor{out: `{"decision":"continue"}`},

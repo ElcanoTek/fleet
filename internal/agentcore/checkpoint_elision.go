@@ -365,7 +365,7 @@ type elisionOutcome struct {
 // consecutive-compaction count, and the next step re-measures the
 // resend-checkpoint floor (#1600).
 func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measured bool, threshold, budget int) (elisionOutcome, bool) {
-	if !e.requireCompactionOptIn || budget <= 0 || !contextElideBeforeSummary(e.envPrefix) || e.elisionHeld() {
+	if !e.requireCompactionOptIn || budget <= 0 || !contextElideBeforeSummary() || e.elisionHeld() {
 		return elisionOutcome{}, false
 	}
 	rate := e.historyTokenRate(messages, used, measured)
@@ -486,7 +486,7 @@ func (e *engine) noteReruns(messages []fantasy.Message) {
 // the one it has from now on. A run with no resend budget, or on a window
 // too small for any raise, keeps its budget and gets no breadcrumb.
 func (e *engine) noteRerunStop(tool, kind string, raise bool) {
-	budget, raised := contextResendBudgetTokens(e.envPrefix), e.resendBudget()
+	budget, raised := contextResendBudgetTokens(), e.resendBudget()
 	how, lost, stops := "elided", "an elision had replaced with a preview", "it stops eliding, and "
 	if kind == rerunSummarized {
 		how, lost, stops = "summarized away", "a summary had dropped", ""

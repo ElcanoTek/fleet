@@ -51,7 +51,7 @@ func TestCompactionSummarizerSpend_FlowsIntoRunUsage(t *testing.T) {
 	}
 
 	summarized := false
-	res, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    manyMessagesInput{n: 30},
 		Observer: &captureObserver{},
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
@@ -230,7 +230,6 @@ func TestMetadataToolModelCallSpend_FlowsIntoRunUsage(t *testing.T) {
 	}
 
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{tools.NewSuggestBranchNameTool(staticResolver{model: metadataModel}, "fake/metadata")},
 	}, Deps{
 		Input:    stubInput{system: "sys", user: "name my branch", label: "t"},

@@ -184,7 +184,7 @@ func ExpandWorkspaceRootEnv(env map[string]string) map[string]string {
 // (internal/tools.WorkspaceDirForConversation), kept as an inlined lookup so
 // agentcore stays dependency-free of the driver tool package.
 func mcpWorkspaceRoot() string {
-	if root := EnvPrefix("").lookup("WORKSPACE_ROOT"); root != "" {
+	if root := fleetEnv.lookup("WORKSPACE_ROOT"); root != "" {
 		return root
 	}
 	return "workspace"

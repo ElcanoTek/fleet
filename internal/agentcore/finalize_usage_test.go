@@ -20,7 +20,7 @@ func TestFinalizeHook_RecordUsageFlowsIntoRunUsage(t *testing.T) {
 		},
 	}
 	var sawSink bool
-	res, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    stubInput{system: "sys", user: "hi", label: "t"},
 		Observer: &captureObserver{},
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),

@@ -87,7 +87,7 @@ func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
 			}, nil
 		},
 	}
-	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:    stubInput{system: "sys", user: "go", label: "sched"},
 		Observer: &captureObserver{},
 		Policy:   policy,
@@ -137,7 +137,7 @@ func TestCeiling_BudgetStopReasonNamesCostCeiling(t *testing.T) {
 			}, nil
 		},
 	}
-	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:    stubInput{system: "sys", user: "go", label: "sched"},
 		Observer: &captureObserver{},
 		Policy:   policy,
@@ -173,7 +173,7 @@ func TestStructuredCeilingStopCannotBypassTerminalContract(t *testing.T) {
 		}, nil
 	}
 	res, err := Run(t.Context(), ModeScheduled, RunConfig{
-		EnvPrefix: CanonicalEnvPrefix, OutputSchema: json.RawMessage(terminalTestSchema),
+		OutputSchema: json.RawMessage(terminalTestSchema),
 	}, Deps{
 		Input: stubInput{system: "sys", user: "go", label: "structured"}, Observer: &captureObserver{},
 		Policy: policy, Executor: &stubExecutor{}, Model: model,

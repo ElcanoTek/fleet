@@ -151,7 +151,6 @@ func TestRun_ModelContextBudgetGuardsEverySuccessiveInnerToolStep(t *testing.T) 
 		})
 	model := &successiveToolBudgetModel{slug: modelSlug, toolName: toolName, toolSteps: toolSteps}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{tool},
 	}, Deps{
 		Input:    historyInput{system: systemPrompt, msgs: []fantasy.Message{fantasy.NewUserMessage("collect every page")}, label: "inner-budget"},

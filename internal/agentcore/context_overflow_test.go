@@ -146,7 +146,7 @@ func TestRun_RelayedContextOverflow_CompactsAndResumes(t *testing.T) {
 	}
 	obs := &payloadObserver{}
 	res, err := Run(context.Background(), ModeInteractive,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
 			Input:    historyInput{system: "s", msgs: fillerMessages(compactionKeepTail+6, 200), label: "overflow"},
 			Observer: obs,
@@ -198,7 +198,7 @@ func TestRun_WindowCheckpoint_InteractivePausesCompactsAndResumes(t *testing.T) 
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	res, err := Run(context.Background(), ModeInteractive,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
 			Input:      historyInput{system: "s", msgs: fillerMessages(8, 200), label: "window"},
 			Observer:   obs,
@@ -244,7 +244,6 @@ func TestCheckpointThreshold(t *testing.T) {
 	model := newStopModel("ctx-checkpoint-threshold")
 
 	interactive := newMockEngine(t, model)
-	interactive.envPrefix = CanonicalEnvPrefix
 	// The lower of 0.90 × window and the in-round guard's input allowance
 	// (window − completion − provider reserves): on a 100K window the
 	// allowance is the binding one, so the checkpoint pauses where the guard
@@ -265,7 +264,6 @@ func TestCheckpointThreshold(t *testing.T) {
 	}
 
 	scheduled := newMockEngine(t, model)
-	scheduled.envPrefix = CanonicalEnvPrefix
 	scheduled.requireCompactionOptIn = true
 	if got := scheduled.checkpointThreshold(model); got != 1000 {
 		t.Errorf("scheduled threshold = %d, want the 1000-token resend budget", got)

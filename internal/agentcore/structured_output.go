@@ -123,10 +123,6 @@ func (e *engine) generateTerminalStructuredOutput(
 	lastDetail := "no structured output was returned"
 	native := supportsNativeStrictStructuredOutput(model)
 	downgraded := false
-	var envPrefix EnvPrefix
-	if e != nil {
-		envPrefix = e.envPrefix
-	}
 	for attempt := 0; attempt <= StructuredOutputCorrectionAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
@@ -143,7 +139,6 @@ func (e *engine) generateTerminalStructuredOutput(
 		}
 		cacheStep := promptCachingStep(
 			model.Model(),
-			WithCacheEnvPrefix(envPrefix),
 			WithCompactionSummaryBreakpoint(nil),
 			WithStablePrefixTokens(terminalToolTokens),
 		)

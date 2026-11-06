@@ -505,7 +505,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or
 		// re-applies the first group (internal/config/reload.go); the second
 		// group is read lazily per run (config.lookupFleet,
-		// agentcore.EnvPrefix).
+		// agentcore.fleetEnv).
 		"FLEET_SERVER_ADDR", "FLEET_MAX_CONCURRENT_AGENTS",
 		"FLEET_TEMPERATURE", "FLEET_MAX_COST_USD", "FLEET_MAX_TOTAL_TOKENS", "FLEET_MAX_ITERATIONS",
 		"FLEET_LOG_FILE", "FLEET_WORKSPACE_ROOT", "FLEET_RETRY_MAX_ATTEMPTS",
