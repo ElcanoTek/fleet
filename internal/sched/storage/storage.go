@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
@@ -343,15 +342,17 @@ func (s *Storage) EnqueueTaskAs(ctx context.Context, tc models.TaskCreate, creat
 	loc := s.resolveTaskTimezone(&tc)
 
 	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
-		schedule, err := cron.ParseStandard(tc.Recurrence)
-		if err != nil {
-			return uuid.Nil, "", time.Time{}, fmt.Errorf("recurrence must be a standard 5-field cron expression")
-		}
 		// With no explicit one-time run, wait for the next cron trigger (evaluated
 		// in the task's timezone) rather than running immediately. Always stored
 		// as an absolute UTC instant, matching the handler's create path.
+		next, err := NextRun(tc.Recurrence, loc, time.Now())
+		if errors.Is(err, ErrRecurrenceNeverFires) {
+			return uuid.Nil, "", time.Time{}, fmt.Errorf("recurrence %q never fires", tc.Recurrence)
+		}
+		if err != nil {
+			return uuid.Nil, "", time.Time{}, fmt.Errorf("recurrence must be a standard 5-field cron expression")
+		}
 		if tc.ScheduledFor == nil {
-			next := schedule.Next(time.Now().In(loc)).UTC()
 			tc.ScheduledFor = &next
 		}
 	}
@@ -2130,30 +2131,23 @@ func (s *Storage) scheduleNextRecurrence(ctx context.Context, task *models.Task)
 		return false
 	}
 
-	schedule, err := cron.ParseStandard(current.Recurrence)
+	// Evaluate the cron expression in the task's own timezone so a "9am" task
+	// fires at 9am local, not 9am UTC, falling back to the server-global
+	// location if the stored name is somehow unloadable. The resulting instant
+	// is stored in UTC — scheduled_for is always an absolute UTC instant.
+	loc, ok := TaskLocation(current.Timezone, s.location)
+	if !ok {
+		log.Printf("Task %s has invalid timezone %q; using server timezone", current.ID, safe.LogSafe(current.Timezone))
+	}
+	nextTime, err := NextRun(current.Recurrence, loc, time.Now())
 	if err != nil {
-		log.Printf("Error parsing recurrence for task %s: %s; settling the chain — a parse error is permanent, so retrying the spawn cannot fix it", current.ID, safe.LogSafe(err.Error()))
+		log.Printf("Error computing the next run for task %s: %s; settling the chain — a parse error or a recurrence that never fires is permanent, so retrying the spawn cannot fix it", current.ID, safe.LogSafe(err.Error()))
 		if cerr := tx.Commit(); cerr != nil {
 			log.Printf("Error creating next recurring task for %s: %v (the reconciliation sweep will retry)", current.ID, cerr)
 			return false
 		}
 		return false
 	}
-
-	// Evaluate the cron expression in the task's own timezone so a "9am" task
-	// fires at 9am local, not 9am UTC. Fall back to the server-global location
-	// (then UTC) if the stored name is somehow unloadable. The resulting instant
-	// is stored in UTC — scheduled_for is always an absolute UTC instant.
-	loc := s.location
-	if current.Timezone != "" {
-		if l, lerr := time.LoadLocation(current.Timezone); lerr == nil {
-			loc = l
-		} else {
-			log.Printf("Task %s has invalid timezone %q; using server timezone: %s", current.ID, safe.LogSafe(current.Timezone), safe.LogSafe(lerr.Error()))
-		}
-	}
-	now := time.Now().In(loc)
-	nextTime := schedule.Next(now).UTC()
 
 	// Recurrence end conditions: an end date means no occurrence may fire past
 	// it, and a remaining-runs counter of 1 means the completing occurrence was
@@ -2457,17 +2451,8 @@ const recurrenceReconcileBatch = 50
 // the next cron tick. It mirrors scheduleNextRecurrence's tz math but does NOT
 // spawn a new task row (the skip path reuses the SAME occurrence row).
 func (s *Storage) ComputeNextRun(task *models.Task) (time.Time, error) {
-	schedule, err := cron.ParseStandard(task.Recurrence)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("parse recurrence: %w", err)
-	}
-	loc := s.location
-	if task.Timezone != "" {
-		if l, lerr := time.LoadLocation(task.Timezone); lerr == nil {
-			loc = l
-		}
-	}
-	return schedule.Next(time.Now().In(loc)).UTC(), nil
+	loc, _ := TaskLocation(task.Timezone, s.location)
+	return NextRun(task.Recurrence, loc, time.Now())
 }
 
 // RecordSkip records a pre-run-gate skip on a still-scheduled task (#269): it

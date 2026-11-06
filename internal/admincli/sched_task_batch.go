@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -143,18 +142,17 @@ func validateBatchTaskCreate(tc *models.TaskCreate) error {
 		return fmt.Errorf("invalid timezone %q: %w", tc.Timezone, err)
 	}
 	if tc.Recurrence = strings.TrimSpace(tc.Recurrence); tc.Recurrence != "" {
-		schedule, err := cron.ParseStandard(tc.Recurrence)
-		if err != nil {
-			return fmt.Errorf("invalid recurrence %q: %w", tc.Recurrence, err)
-		}
 		// NewTask derives dispatch state from ScheduledFor, not Recurrence.
 		// Resolve the first cron fire before constructing the task or a daily
 		// recipe will run immediately when submitted through the CLI.
+		next, err := storage.NextRun(tc.Recurrence, loc, time.Now())
+		if errors.Is(err, storage.ErrRecurrenceNeverFires) {
+			return fmt.Errorf("recurrence %q has no next run", tc.Recurrence)
+		}
+		if err != nil {
+			return fmt.Errorf("invalid recurrence %q: %w", tc.Recurrence, err)
+		}
 		if tc.ScheduledFor == nil {
-			next := schedule.Next(time.Now().In(loc)).UTC()
-			if next.IsZero() {
-				return fmt.Errorf("recurrence %q has no next run", tc.Recurrence)
-			}
 			tc.ScheduledFor = &next
 		}
 	}

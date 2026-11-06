@@ -52,7 +52,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
-	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
@@ -2827,17 +2826,14 @@ func applyTaskMutation(ctx context.Context, schedStorage *storage.Storage, t *sc
 		// fire from it (in the task's zone); an unparseable cron stored as-is
 		// would leave the row wedged as scheduled with a schedule the
 		// scheduler cannot evaluate.
-		schedule, err := cron.ParseStandard(req.Cron)
+		loc, _ := storage.TaskLocation(t.Timezone, schedStorage.Location())
+		next, err := storage.NextRun(req.Cron, loc, time.Now())
+		if errors.Is(err, storage.ErrRecurrenceNeverFires) {
+			return "", fmt.Errorf("%q never fires", req.Cron)
+		}
 		if err != nil {
 			return "", fmt.Errorf("%q is not a standard 5-field cron expression", req.Cron)
 		}
-		loc := schedStorage.Location()
-		if t.Timezone != "" {
-			if tzLoc, lerr := time.LoadLocation(t.Timezone); lerr == nil {
-				loc = tzLoc
-			}
-		}
-		next := schedule.Next(time.Now().In(loc)).UTC()
 		edit.Recurrence = req.Cron
 		edit.ScheduledFor = &next
 		changed = append(changed, "schedule "+req.Cron)

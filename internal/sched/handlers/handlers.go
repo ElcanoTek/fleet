@@ -30,7 +30,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
-	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -1083,15 +1082,14 @@ func (h *Handlers) validateTaskCreate(tc *models.TaskCreate) error { //nolint:go
 		if tc.Recurrence == "" {
 			tc.Recurrence = ""
 		} else {
-			schedule, err := cron.ParseStandard(tc.Recurrence)
-			if err != nil {
-				return fmt.Errorf("recurrence must be a standard 5-field cron expression")
-			}
 			// If no explicit scheduled_for was provided, set it to the next
 			// cron trigger time so the task waits instead of running immediately.
 			// scheduled_for is always stored as an absolute UTC instant.
+			next, err := storage.NextRun(tc.Recurrence, loc, time.Now())
+			if err != nil {
+				return recurrenceError(tc.Recurrence, err)
+			}
 			if tc.ScheduledFor == nil {
-				next := schedule.Next(time.Now().In(loc)).UTC()
 				tc.ScheduledFor = &next
 			}
 		}
@@ -1954,19 +1952,24 @@ func refreshEditedRecurrenceSchedule(fallbackLoc *time.Location, task *models.Ta
 	if !shouldRecalculate {
 		return nil
 	}
-	schedule, err := cron.ParseStandard(tc.Recurrence)
-	if err != nil {
-		return fmt.Errorf("recurrence must be a standard 5-field cron expression")
-	}
 	// Evaluate the cron expression in the task's own timezone (validated
 	// above). scheduled_for is always stored as an absolute UTC instant.
-	loc, lerr := time.LoadLocation(tc.Timezone)
-	if lerr != nil {
-		loc = fallbackLoc
+	loc, _ := storage.TaskLocation(tc.Timezone, fallbackLoc)
+	nextUTC, err := storage.NextRun(tc.Recurrence, loc, time.Now())
+	if err != nil {
+		return recurrenceError(tc.Recurrence, err)
 	}
-	nextUTC := schedule.Next(time.Now().In(loc)).UTC()
 	tc.ScheduledFor = &nextUTC
 	return nil
+}
+
+// recurrenceError is the client-facing message for a recurrence storage.NextRun
+// refused: one that never fires, or one that does not parse.
+func recurrenceError(recurrence string, err error) error {
+	if errors.Is(err, storage.ErrRecurrenceNeverFires) {
+		return fmt.Errorf("recurrence %q never fires", recurrence)
+	}
+	return fmt.Errorf("recurrence must be a standard 5-field cron expression")
 }
 
 // UpdateTask handles PUT /tasks/{task_id}
@@ -2529,18 +2532,11 @@ func buildRerunTaskCreate(source *models.Task, keepRecurrence bool, o taskRerunO
 	// chain clears Name for exactly this reason; the copy paths must match.
 	tc.Name = ""
 	if keepRecurrence && strings.TrimSpace(tc.Recurrence) != "" {
-		schedule, perr := cron.ParseStandard(tc.Recurrence)
+		loc, _ := storage.TaskLocation(tc.Timezone, fallbackLoc)
+		next, perr := storage.NextRun(tc.Recurrence, loc, time.Now())
 		if perr != nil {
 			return tc, fmt.Errorf("source task has an invalid recurrence")
 		}
-		loc := fallbackLoc
-		if l, lerr := time.LoadLocation(tc.Timezone); lerr == nil && l != nil {
-			loc = l
-		}
-		if loc == nil {
-			loc = time.UTC
-		}
-		next := schedule.Next(time.Now().In(loc)).UTC()
 		tc.ScheduledFor = &next
 	} else {
 		tc.ScheduledFor = nil // immediate run-now
