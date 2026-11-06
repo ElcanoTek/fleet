@@ -62,10 +62,10 @@ func TestReload_AddRemoveRestartUnchanged(t *testing.T) {
 
 	c := NewClient()
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.AddHTTPServer(ctx, "A", srvA.URL); err != nil {
+	if err := c.AddHTTPServerWithOptions(ctx, "A", srvA.URL, HTTPServerOptions{}); err != nil {
 		t.Fatalf("add A: %v", err)
 	}
-	if err := c.AddHTTPServer(ctx, "B", srvB.URL); err != nil {
+	if err := c.AddHTTPServerWithOptions(ctx, "B", srvB.URL, HTTPServerOptions{}); err != nil {
 		t.Fatalf("add B: %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestReload_BuildFailureLeavesRegistryUnchanged(t *testing.T) {
 	srvA := mcpHTTPTestServer(t, "tool_a")
 	c := NewClient()
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.AddHTTPServer(ctx, "A", srvA.URL); err != nil {
+	if err := c.AddHTTPServerWithOptions(ctx, "A", srvA.URL, HTTPServerOptions{}); err != nil {
 		t.Fatalf("add A: %v", err)
 	}
 	// B has neither Command nor URL → buildServer fails.
@@ -197,7 +197,7 @@ func TestReload_RetiredServerRefusesCall(t *testing.T) {
 	srv := mcpHTTPTestServer(t, "tool_x")
 	c := NewClient()
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.AddHTTPServer(ctx, "X", srv.URL); err != nil {
+	if err := c.AddHTTPServerWithOptions(ctx, "X", srv.URL, HTTPServerOptions{}); err != nil {
 		t.Fatalf("add X: %v", err)
 	}
 	// Capture the *Server the way CallToolOn does, before the reload.
@@ -230,7 +230,7 @@ func TestReload_CompletesWhileStdinWedged(t *testing.T) {
 
 	// A child that never reads stdin: a request past the 64 KiB kernel pipe
 	// buffer blocks the writer.
-	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	tr, err := NewStdioTransportInDir("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil, "")
 	if err != nil {
 		t.Fatalf("start non-reading child: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestReload_CompletesWhileStdinWedged(t *testing.T) {
 	}
 }
 
-// TestReload_Concurrent hammers CallToolOn / GetAllTools / CallToolPrefixed from
+// TestReload_Concurrent hammers CallToolOn / GetAllTools from
 // many goroutines while Reload repeatedly flips the server set. Run under -race,
 // it exercises the Client.mu / Server.mu / map-swap interplay for data races and
 // deadlocks.
@@ -294,7 +294,7 @@ func TestReload_Concurrent(t *testing.T) {
 
 	c := NewClient()
 	t.Cleanup(func() { _ = c.Close() })
-	if err := c.AddHTTPServer(ctx, "s1", srv1.URL); err != nil {
+	if err := c.AddHTTPServerWithOptions(ctx, "s1", srv1.URL, HTTPServerOptions{}); err != nil {
 		t.Fatalf("add s1: %v", err)
 	}
 
@@ -314,7 +314,7 @@ func TestReload_Concurrent(t *testing.T) {
 				}
 				_, _ = c.CallToolOn(ctx, "s1", "t1", nil)
 				_ = c.GetAllTools()
-				_, _ = c.CallToolPrefixed(ctx, "mcp_s2_t2", nil)
+				_, _ = c.CallToolOn(ctx, "s2", "t2", nil)
 			}
 		}()
 	}

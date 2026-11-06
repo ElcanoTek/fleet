@@ -458,21 +458,11 @@ func (c *Client) AddStdioServer(ctx context.Context, name, command string, args 
 	return nil
 }
 
-// AddHTTPServer adds an HTTP-based MCP server
-func (c *Client) AddHTTPServer(ctx context.Context, name, url string) error {
-	return c.AddHTTPServerWithHeaders(ctx, name, url, nil)
-}
-
-// AddHTTPServerWithHeaders adds an HTTP-based MCP server with custom headers for authentication
-func (c *Client) AddHTTPServerWithHeaders(ctx context.Context, name, url string, headers map[string]string) error {
-	return c.AddHTTPServerWithOptions(ctx, name, url, HTTPServerOptions{Headers: headers})
-}
-
 // HTTPServerOptions configures an HTTP MCP server registration. It exists for
 // the per-user remote-MCP path (#443): those servers are user-supplied, so they
 // must dial through an SSRF-safe HTTP client (HTTPClient) and carry a per-user
-// bearer (Headers). The bundle's operator-configured HTTP servers keep using
-// AddHTTPServerWithHeaders (default client), unchanged.
+// bearer (Headers). The bundle's operator-configured HTTP servers pass only
+// Headers (and TLS), keeping the default client.
 type HTTPServerOptions struct {
 	// Headers are sent with every request (e.g. Authorization: Bearer <token>).
 	Headers map[string]string
@@ -538,9 +528,6 @@ type ServerTool struct {
 }
 
 // HasServer reports whether a server is registered with the given name.
-// Used by the multi-tenant loader to make repeat AddStdioServer calls
-// idempotent — re-loading the same client variant in a single session
-// must not spawn a second subprocess.
 func (c *Client) HasServer(name string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -576,40 +563,6 @@ func (c *Client) GetAllTools() []ServerTool {
 	return allTools
 }
 
-// CallTool calls a tool by bare name, searching servers in sorted-name
-// order so a name collision resolves deterministically. Prefer
-// CallToolOn when the caller knows which server it wants — several
-// servers export overlapping names (sendgrid and mailbux both have
-// send_email), and "first server that has it" is the wrong answer for
-// those.
-func (c *Client) CallTool(ctx context.Context, toolName string, arguments map[string]interface{}) (*ToolResult, error) {
-	c.mu.RLock()
-	names := make([]string, 0, len(c.servers))
-	for name := range c.servers {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	var target *Server
-	for _, name := range names {
-		server := c.servers[name]
-		for _, tool := range server.toolsSnapshot() {
-			if tool.Name == toolName {
-				target = server
-				break
-			}
-		}
-		if target != nil {
-			break
-		}
-	}
-	c.mu.RUnlock()
-
-	if target == nil {
-		return nil, fmt.Errorf("tool not found: %s", toolName)
-	}
-	return target.callTool(ctx, toolName, arguments)
-}
-
 // CallToolOn calls toolName on the named server. This is the
 // collision-proof routing path: the agent layer registers tools as
 // mcp_<server>_<tool> precisely because bare names overlap across
@@ -622,51 +575,6 @@ func (c *Client) CallToolOn(ctx context.Context, serverName, toolName string, ar
 		return nil, fmt.Errorf("MCP server not found: %s", serverName)
 	}
 	return server.callTool(ctx, toolName, arguments)
-}
-
-// CallToolPrefixed routes an mcp_<server>_<tool> name to the matching
-// connected server. Server names may themselves contain underscores, so
-// the split is resolved against the live server list: among servers
-// whose name is a prefix of the trimmed string, prefer one that
-// actually advertises the remainder as a tool, then the longest name.
-func (c *Client) CallToolPrefixed(ctx context.Context, fullName string, arguments map[string]interface{}) (*ToolResult, error) {
-	const prefix = "mcp_"
-	if !strings.HasPrefix(fullName, prefix) {
-		return nil, fmt.Errorf("not an MCP tool name: %s", fullName)
-	}
-	trimmed := strings.TrimPrefix(fullName, prefix)
-
-	c.mu.RLock()
-	var (
-		best     *Server
-		bestTool string
-		bestHas  bool
-	)
-	for name, server := range c.servers {
-		rest, ok := strings.CutPrefix(trimmed, name+"_")
-		if !ok || rest == "" {
-			continue
-		}
-		has := false
-		for _, tool := range server.toolsSnapshot() {
-			if tool.Name == rest {
-				has = true
-				break
-			}
-		}
-		better := best == nil ||
-			(has && !bestHas) ||
-			(has == bestHas && len(name) > len(best.name))
-		if better {
-			best, bestTool, bestHas = server, rest, has
-		}
-	}
-	c.mu.RUnlock()
-
-	if best == nil {
-		return nil, fmt.Errorf("no connected MCP server matches %s", fullName)
-	}
-	return best.callTool(ctx, bestTool, arguments)
 }
 
 // Close closes all server connections. Each server is retired under its own
@@ -1082,15 +990,8 @@ type StdioTransport struct {
 	broken bool
 }
 
-// NewStdioTransport spawns an MCP server subprocess in the caller's current
-// working directory. Most callers want NewStdioTransportInDir to pin the cwd to
-// the client-config bundle root so relative `mcp/*.py` args resolve correctly.
-func NewStdioTransport(command string, args []string, env map[string]string) (*StdioTransport, error) {
-	return NewStdioTransportInDir(command, args, env, "")
-}
-
-// NewStdioTransportInDir is NewStdioTransport with an explicit working directory.
-// When dir != "" the subprocess is launched with cmd.Dir = dir, so relative
+// NewStdioTransportInDir spawns an MCP server subprocess. When dir != "" the
+// subprocess is launched with cmd.Dir = dir, so relative
 // command args (e.g. a bundle's `mcp/foo.py`) resolve against the bundle root
 // rather than the fleet process cwd (which under systemd is /opt/fleet, NOT the
 // /opt/fleet/client bundle checkout — see internal/clientconfig).
@@ -1475,10 +1376,6 @@ type HTTPTransport struct {
 	nextID               int
 	mu                   sync.Mutex
 	sessionID            string // MCP session ID captured from initialize response
-}
-
-func NewHTTPTransport(url string) *HTTPTransport {
-	return NewHTTPTransportWithHeaders(url, nil)
 }
 
 func NewHTTPTransportWithHeaders(url string, headers map[string]string) *HTTPTransport {

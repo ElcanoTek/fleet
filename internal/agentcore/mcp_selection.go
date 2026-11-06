@@ -478,7 +478,7 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 		return nil
 	}
 
-	// NewStdioTransport sets the env on cmd.Env — credentials are never on
+	// NewStdioTransportInDir sets the env on cmd.Env — credentials are never on
 	// argv and never enter the sandbox container. The subprocess launches in
 	// this scope's workspace when it has one (StdioCwd), else base.Dir;
 	// script args are absolutized at bundle load, so neither choice affects

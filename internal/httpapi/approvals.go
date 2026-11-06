@@ -934,8 +934,8 @@ func (a *approvalStager) prevalidateEmail(sourceToolName, rawInput string) error
 
 // resolveEmailValidationServer keeps an MCP send's validation on its source
 // server. Native preview_email/send_email calls have no server prefix, so they
-// preserve mcp.Client.CallTool's historical deterministic behavior by choosing
-// the lexicographically first server that advertises validate_email_content.
+// keep the historical deterministic behavior of choosing the
+// lexicographically first server that advertises validate_email_content.
 func resolveEmailValidationServer(catalog []mcp.ServerTool, sourceToolName string) (string, error) {
 	if strings.HasPrefix(sourceToolName, "mcp_") {
 		server, _, err := resolveMCPTool(catalog, sourceToolName)
@@ -3046,8 +3046,8 @@ func approvalSeatLabel(approval *store.Approval) string {
 
 // resolveMCPTool maps the model-visible mcp_<server>_<tool> identity back to a
 // catalog entry. Complete-name comparison avoids speculative underscore splits;
-// if two catalog identities flatten to the same name, the longest server match
-// preserves mcp.Client.CallToolPrefixed's established routing rule.
+// if two catalog identities flatten to the same name, the longest server name
+// wins.
 func resolveMCPTool(catalog []mcp.ServerTool, fullName string) (string, string, error) {
 	if !strings.HasPrefix(fullName, "mcp_") {
 		return "", "", fmt.Errorf("not an MCP tool name: %s", fullName)

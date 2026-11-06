@@ -8,8 +8,8 @@ package mcp
 // Exactly like inline http_tools, the peers are registered onto the
 // credentialed *mcp.Client as ONE synthetic server (A2AToolServerName,
 // "_a2a") so the tools flow through the same host-side seam every MCP tool
-// funnels through — discovery via GetAllTools, dispatch via CallToolOn /
-// CallToolPrefixed, and the agentcore MCPBroker (policy gate, output
+// funnels through — discovery via GetAllTools, dispatch via CallToolOn,
+// and the agentcore MCPBroker (policy gate, output
 // redaction + guardrail screening, isError mapping, critical-tool gate,
 // output byte cap). No new governance path, no new loop: the agent calls a
 // tool, the tool speaks A2A.

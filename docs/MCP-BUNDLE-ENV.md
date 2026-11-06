@@ -316,7 +316,7 @@ per-tool timeout chain. Exemptions keep single ownership: outbound-email tools
 stay with the email gate; bash/preview_email/schedule_task/
 suggest_advanced_model keep their dedicated gates. Inert without an approval
 sink (mirrors the risky-bash gate). Approval resolution already dispatches any
-`mcp_<server>_<tool>` name (`CallToolPrefixed`), so no UI/API change was
+`mcp_<server>_<tool>` name (`resolveMCPTool`), so no UI/API change was
 needed.
 
 ### 5. Bundle-load vs `.env` ordering + unresolved-`${VAR}` fail-loud (fleet#1123)

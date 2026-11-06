@@ -311,11 +311,6 @@ func TestHTTPToolSecretsNotExposedToModel(t *testing.T) {
 	if !sawSecretOnWire {
 		t.Error("auth header did not reach the upstream server; host-side credential application broke")
 	}
-
-	// 4. CallToolPrefixed (the mcp_<server>_<tool> path) also routes correctly.
-	if _, err := c.CallToolPrefixed(context.Background(), "mcp__http_secret_tool", map[string]interface{}{}); err != nil {
-		t.Errorf("CallToolPrefixed: %v", err)
-	}
 }
 
 // TestAddHTTPToolsIdempotentAppend asserts repeated registration appends to the

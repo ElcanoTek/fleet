@@ -170,7 +170,7 @@ func TestHTTPTransport_StopPostsCancelledDuringTheCall(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	tr := NewHTTPTransport(srv.URL)
+	tr := NewHTTPTransportWithHeaders(srv.URL, nil)
 	tr.sessionID = "sess-1"
 	// Stop is pressed as soon as the server has the call (a stop pressed
 	// before the call is sent sends nothing; see
@@ -232,7 +232,7 @@ func TestHTTPTransport_StopReachesAPlainJSONServerMidCall(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	tr := NewHTTPTransport(srv.URL)
+	tr := NewHTTPTransportWithHeaders(srv.URL, nil)
 	stop := make(chan struct{})
 	ctx, cancel := context.WithTimeout(WithStop(context.Background(), stop), 10*time.Second)
 	defer cancel()
@@ -273,7 +273,7 @@ func TestTransports_DoNotSendACallStoppedBeforeSend(t *testing.T) {
 		w.WriteHeader(http.StatusAccepted)
 	}))
 	defer srv.Close()
-	if _, err := NewHTTPTransport(srv.URL).Call(WithStop(context.Background(), stop), "tools/call", map[string]any{}); !errors.Is(err, ErrStoppedBeforeSend) || hits != 0 {
+	if _, err := NewHTTPTransportWithHeaders(srv.URL, nil).Call(WithStop(context.Background(), stop), "tools/call", map[string]any{}); !errors.Is(err, ErrStoppedBeforeSend) || hits != 0 {
 		t.Fatalf("http: err = %v, requests = %d; want ErrStoppedBeforeSend and none sent", err, hits)
 	}
 }

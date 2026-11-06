@@ -357,7 +357,7 @@ func TestNotifyRefusalCarriesItsHTTPStatus(t *testing.T) {
 	} {
 		t.Run(http.StatusText(c.status), func(t *testing.T) {
 			srv, _ := notifyFlakyMCPServer(t, 1, c.status)
-			err := NewHTTPTransport(srv.URL).Notify(context.Background(), "notifications/initialized", map[string]any{})
+			err := NewHTTPTransportWithHeaders(srv.URL, nil).Notify(context.Background(), "notifications/initialized", map[string]any{})
 			var statusErr *HTTPStatusError
 			if !errors.As(err, &statusErr) || statusErr.StatusCode != c.status {
 				t.Fatalf("err = %v, want an HTTPStatusError %d", err, c.status)
@@ -408,7 +408,7 @@ func TestHTTPStatusRPCErrorKeepsItsStatus(t *testing.T) {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"Internal error"}}`))
 		}))
-		_, err := NewHTTPTransport(srv.URL).Call(context.Background(), "initialize", map[string]any{})
+		_, err := NewHTTPTransportWithHeaders(srv.URL, nil).Call(context.Background(), "initialize", map[string]any{})
 		srv.Close()
 		var rpcErr *RPCError
 		if !errors.As(err, &rpcErr) || rpcErr.Code != -32603 {
@@ -429,7 +429,7 @@ func TestHTTPStatusRPCErrorKeepsItsStatus(t *testing.T) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error"}}`))
 	}))
 	defer srv.Close()
-	_, err := NewHTTPTransport(srv.URL).Call(context.Background(), "initialize", map[string]any{})
+	_, err := NewHTTPTransportWithHeaders(srv.URL, nil).Call(context.Background(), "initialize", map[string]any{})
 	var unattributed *UnattributedResponseError
 	if !errors.As(err, &unattributed) || unattributed.HTTPStatus != http.StatusServiceUnavailable {
 		t.Fatalf("id:null on a 503: err = %#v, want an UnattributedResponseError with HTTPStatus 503", err)
