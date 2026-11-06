@@ -207,7 +207,8 @@ the same stop-condition mechanism, at a different threshold:
 - **Where it pauses** (`engine.checkpointThreshold`): after a tool step whose
   real prompt size (fresh + cache-read input) reached the lower of the window
   compaction threshold (`FLEET_CONTEXT_COMPACTION_THRESHOLD`, default 0.90 of
-  the active model's window) and the input allowance the in-round guard
+  the active model's window, capped at 350,000 tokens for interactive runs when
+  unset) and the input allowance the in-round guard
   (`modelContextBudgetStep`) enforces (`windowCheckpointLimit`). On a window
   below roughly 320K tokens the allowance is the lower one: a 200K window leaves
   about 173K after the completion and provider reserves, so waiting for 180K

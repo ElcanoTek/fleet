@@ -925,7 +925,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 	// a smaller window the in-round guard's input allowance sits below the
 	// plain threshold, and a pause that found nothing to compact would only
 	// pause again on the next step.
-	compactAt := int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	compactAt := e.windowCompactionTokens(window)
 	if e.windowCheckpointActive() {
 		if limit := e.windowCheckpointLimit(activeModel); limit > 0 && limit < compactAt {
 			compactAt = limit
@@ -980,7 +980,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 				out.warned = true
 			}
 		}
-	case pct >= contextPressureWarnThreshold(e.envPrefix):
+	case e.atWindowPressureWarn(used, window):
 		if !out.warned {
 			sink.emit(evtContextPressure, pressure)
 			out.warned = true
@@ -1585,7 +1585,7 @@ func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 	if window <= 0 {
 		return 0
 	}
-	limit := int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	limit := e.windowCompactionTokens(window)
 	completion := int64(e.maxCompletionTokens)
 	if active != nil {
 		completion = completionTokensForModel(active.Model(), completion)
@@ -1595,6 +1595,32 @@ func (e *engine) windowCheckpointLimit(active fantasy.LanguageModel) int {
 		limit = allowance
 	}
 	return limit
+}
+
+// windowCompactionTokens returns the window-compaction point for a model with
+// the given context window: window × contextCompactionThreshold, capped at
+// defaultInteractiveContextCompactionMaxTokens (350K) for interactive engines
+// unless the operator explicitly set FLEET_CONTEXT_COMPACTION_THRESHOLD.
+func (e *engine) windowCompactionTokens(window int) int {
+	limit := int(float64(window) * contextCompactionThreshold(e.envPrefix))
+	if !e.resendBudgetEnabled() && !e.envPrefix.hasExplicitFraction("CONTEXT_COMPACTION_THRESHOLD") && limit > defaultInteractiveContextCompactionMaxTokens {
+		return defaultInteractiveContextCompactionMaxTokens
+	}
+	return limit
+}
+
+// atWindowPressureWarn reports whether used tokens reached the context-pressure
+// warning threshold for window: window × contextPressureWarnThreshold, or
+// defaultInteractiveContextPressureWarnMaxTokens (250K) on interactive engines
+// when FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD is not explicitly overridden.
+func (e *engine) atWindowPressureWarn(used, window int) bool {
+	if window <= 0 {
+		return false
+	}
+	if !e.resendBudgetEnabled() && !e.envPrefix.hasExplicitFraction("CONTEXT_PRESSURE_WARN_THRESHOLD") && used >= defaultInteractiveContextPressureWarnMaxTokens {
+		return true
+	}
+	return float64(used)/float64(window) >= contextPressureWarnThreshold(e.envPrefix)
 }
 
 // resendFloorCrowdsBudget reports whether the floor rule applies: the stable
