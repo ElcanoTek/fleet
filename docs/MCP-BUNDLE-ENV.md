@@ -419,8 +419,9 @@ for a `url:`-referenced var survives the `.env` allowlist.
 
 ## Cross-references
 
-- Env interpolation semantics: `internal/clientconfig/clientconfig.go`
-  (`interpolateManifest`, `resolveEnvMap`, `reservedWorkspaceVar`).
+- Env interpolation semantics: `internal/clientconfig/interpolate.go`
+  (`interpolateManifest`, `reservedWorkspaceVar`) and `resolveEnvMap` in
+  `internal/clientconfig/clientconfig.go`.
 - Load-order + unresolved-reference check (fleet#1123):
   `internal/clientconfig/manifest_env.go` (`applyBootEnvFile`,
   `scanManifestEnvRefs`, `unresolvedManifestRefs`) +
