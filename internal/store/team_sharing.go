@@ -379,29 +379,6 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 	return list, nil
 }
 
-// UnshareTeamVisibleChatsInTeam clears team_visible on every conversation
-// ownerEmail has shared into a project belonging to teamID. Called when the
-// owner leaves that team: the projects stop being visible to them, so a chat
-// they shared there would otherwise stay readable by a group they are no
-// longer part of, with no surface on their side to revoke it. Returns the
-// number of chats unshared so the caller can report it.
-func (s *Store) UnshareTeamVisibleChatsInTeam(ctx context.Context, ownerEmail, teamID string) (int, error) {
-	teamID = strings.TrimSpace(teamID)
-	if teamID == "" {
-		return 0, nil
-	}
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
-		WHERE user_email = $2 AND (team_visible = TRUE OR multiplayer = TRUE) AND team_shared_with = $3`,
-		time.Now().Unix(), normalizeEmail(ownerEmail), teamID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	n, _ := res.RowsAffected()
-	return int(n), nil
-}
-
 // LeaveTeamImpact is what a user loses by leaving their team — the numbers the
 // Leave confirm states instead of acting first and reporting afterwards.
 type LeaveTeamImpact struct {
@@ -520,31 +497,17 @@ type ProjectRef struct {
 	Name string `json:"name"`
 }
 
-// TeamSharedProjectsOwnedBy lists the team-shared projects the user owns —
-// what a delete would destroy, and what an admin must transfer first.
-// Personal projects are excluded: nobody else can see them, so they belong
-// with the account.
-func (s *Store) TeamSharedProjectsOwnedBy(ctx context.Context, email string) ([]ProjectRef, error) {
-	return teamSharedProjectsOwnedBy(ctx, s.db, normalizeEmail(email), "")
-}
-
-// teamSharedProjectsOwnedByTx is the same read taken INSIDE a transaction with
-// the matching rows locked — what DeleteUser's fail-closed guard needs so a
-// concurrent "share this project" cannot slip past the check and be deleted by
-// the very statement the check was protecting against.
+// teamSharedProjectsOwnedByTx lists the team-shared projects the user owns —
+// what a delete would destroy, and what an admin must transfer first. Personal
+// projects are excluded: nobody else can see them, so they belong with the
+// account. It reads INSIDE a transaction with the matching rows locked — what
+// DeleteUser's fail-closed guard needs so a concurrent "share this project"
+// cannot slip past the check and be deleted by the very statement the check
+// was protecting against.
 func teamSharedProjectsOwnedByTx(ctx context.Context, tx *sql.Tx, email string) ([]ProjectRef, error) {
-	return teamSharedProjectsOwnedBy(ctx, tx, normalizeEmail(email), " FOR UPDATE")
-}
-
-// queryer is the subset of *sql.DB / *sql.Tx the shared read needs.
-type queryer interface {
-	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-func teamSharedProjectsOwnedBy(ctx context.Context, q queryer, email, lock string) ([]ProjectRef, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT id, name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name`+lock,
-		email)
+	rows, err := tx.QueryContext(ctx,
+		`SELECT id, name FROM projects WHERE owner_email = $1 AND team_id <> '' ORDER BY name FOR UPDATE`,
+		normalizeEmail(email))
 	if err != nil {
 		return nil, err
 	}

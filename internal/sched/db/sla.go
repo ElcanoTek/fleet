@@ -13,7 +13,7 @@ import (
 
 // GetRunningTasksWithSLA returns the in-flight tasks that carry an SLA
 // (expected_duration_minutes IS NOT NULL) for the SLA monitor goroutine (#274).
-// "In-flight" mirrors GetRunningTasks: leased / running — the
+// "In-flight" means leased / running — the
 // statuses where StartedAt is set and the task has not yet reached a terminal
 // state. The partial index idx_tasks_sla does NOT cover this query (it is
 // keyed on completed_at), but the in-flight set is small (one host, capped

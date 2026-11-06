@@ -443,29 +443,6 @@ func (s *Store) UpdateCustomConnector(ctx context.Context, id string, in RemoteM
 	return s.GetRemoteMCPServer(ctx, email, id)
 }
 
-// UpdateRemoteMCPCustomTools updates the declarative tool definitions for a
-// custom HTTP ("http_tools") or Playwright ("playwright") connector.
-func (s *Store) UpdateRemoteMCPCustomTools(ctx context.Context, userEmail, id string, tools []CustomConnectorTool) error {
-	raw := []byte("[]")
-	if len(tools) > 0 {
-		var err error
-		raw, err = json.Marshal(tools)
-		if err != nil {
-			return fmt.Errorf("encode custom tools: %w", err)
-		}
-	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE remote_mcp_servers SET custom_tools = $3::jsonb, updated_at = $4 WHERE user_email = $1 AND id = $2`,
-		normalizeEmail(userEmail), id, string(raw), time.Now().Unix())
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrRemoteMCPNotFound
-	}
-	return nil
-}
-
 // GetRemoteMCPServer fetches one server scoped to the user.
 func (s *Store) GetRemoteMCPServer(ctx context.Context, userEmail, id string) (*RemoteMCPServer, error) {
 	row := s.db.QueryRowContext(ctx,

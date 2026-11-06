@@ -82,7 +82,7 @@ func TestTaskOperations(t *testing.T) {
 		t.Fatalf("Failed to update task: %v", err)
 	}
 
-	running, err := db.GetRunningTasks(ctx)
+	running, err := db.GetTasksByStatus(ctx, models.TaskStatusRunning)
 	if err != nil {
 		t.Fatalf("Failed to get running tasks: %v", err)
 	}
@@ -273,37 +273,6 @@ func TestTaskCreatedByKeyIDRoundTrip(t *testing.T) {
 	}
 	if gotNoKey.CreatedByKeyID != nil {
 		t.Errorf("CreatedByKeyID = %v, want nil", *gotNoKey.CreatedByKeyID)
-	}
-}
-
-func TestGetTasksCompletedToday(t *testing.T) {
-	db := setupTestDB(t)
-	defer db.Close()
-	ctx := context.Background()
-
-	now := time.Now().UTC()
-	taskToday := &models.Task{ID: uuid.New(), Prompt: "task completed today", Status: models.TaskStatusSuccess, Priority: 10, CreatedAt: now.Add(-2 * time.Hour), StartedAt: timePtr(now.Add(-1 * time.Hour)), CompletedAt: timePtr(now)}
-	if err := db.AddTask(ctx, taskToday); err != nil {
-		t.Fatalf("Failed to add taskToday: %v", err)
-	}
-	taskYesterday := &models.Task{ID: uuid.New(), Prompt: "task completed yesterday", Status: models.TaskStatusSuccess, Priority: 10, CreatedAt: now.AddDate(0, 0, -1).Add(-2 * time.Hour), StartedAt: timePtr(now.AddDate(0, 0, -1).Add(-1 * time.Hour)), CompletedAt: timePtr(now.AddDate(0, 0, -1))}
-	if err := db.AddTask(ctx, taskYesterday); err != nil {
-		t.Fatalf("Failed to add taskYesterday: %v", err)
-	}
-	taskPending := &models.Task{ID: uuid.New(), Prompt: "task pending", Status: models.TaskStatusPending, Priority: 10, CreatedAt: now}
-	if err := db.AddTask(ctx, taskPending); err != nil {
-		t.Fatalf("Failed to add taskPending: %v", err)
-	}
-
-	tasks, err := db.GetTasksCompletedToday(ctx)
-	if err != nil {
-		t.Fatalf("GetTasksCompletedToday failed: %v", err)
-	}
-	if len(tasks) != 1 {
-		t.Fatalf("Expected 1 task completed today, got %d", len(tasks))
-	}
-	if tasks[0].ID != taskToday.ID {
-		t.Errorf("Expected task ID %s, got %s", taskToday.ID, tasks[0].ID)
 	}
 }
 

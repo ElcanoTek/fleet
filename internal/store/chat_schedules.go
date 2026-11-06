@@ -342,23 +342,6 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 	return &sched, nil
 }
 
-// GetChatSchedule returns a single schedule scoped by owner and conversation.
-func (s *Store) GetChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*ChatSchedule, error) {
-	sched, err := scanChatSchedule(s.db.QueryRowContext(ctx,
-		`SELECT `+chatScheduleSelectCols+`
-		   FROM chat_schedules
-		  WHERE id = $1 AND conversation_id = $2 AND user_email = $3`,
-		scheduleID, convID, userEmail,
-	))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &sched, nil
-}
-
 // ListChatSchedules lists schedules for a conversation owned by userEmail.
 // When includeTerminal is false, only active and paused schedules are returned.
 func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]ChatSchedule, error) {

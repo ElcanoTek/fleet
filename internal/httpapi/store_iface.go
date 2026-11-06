@@ -409,7 +409,6 @@ type chatStore interface {
 	// In-chat patrols and timers (migration 086): recurring cron patrols and
 	// one-shot timers bound directly to a conversation.
 	CreateChatSchedule(ctx context.Context, in store.ChatScheduleInput) (*store.ChatSchedule, error)
-	GetChatSchedule(ctx context.Context, userEmail, convID, scheduleID string) (*store.ChatSchedule, error)
 	ListChatSchedules(ctx context.Context, userEmail, convID string, includeTerminal bool) ([]store.ChatSchedule, error)
 	ListUserPatrols(ctx context.Context, userEmail string, limit, offset int) ([]store.UserPatrol, error)
 	ChatOrders(ctx context.Context, userEmail string) (map[string][]string, error)

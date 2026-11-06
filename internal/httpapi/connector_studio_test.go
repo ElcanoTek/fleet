@@ -234,12 +234,6 @@ func (m *memRemoteMCPStore) UpdateCustomConnector(_ context.Context, id string, 
 	cp := *r
 	return &cp, nil
 }
-func (m *memRemoteMCPStore) UpdateRemoteMCPCustomTools(_ context.Context, _, id string, customTools []store.CustomConnectorTool) error {
-	if r, ok := m.servers[id]; ok {
-		r.CustomTools = customTools
-	}
-	return nil
-}
 
 func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 	var gotAuthHeader string

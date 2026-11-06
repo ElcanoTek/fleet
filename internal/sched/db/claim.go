@@ -14,7 +14,7 @@ import (
 
 // taskActiveStatuses are the statuses that HOLD a serialization key (#709): the
 // task is (about to be) executing, so a same-key pending task must not start.
-// Mirrors GetRunningTasks' definition of "in flight". paused_awaiting_input is
+// "In flight" means leased or running. paused_awaiting_input is
 // deliberately NOT active: a paused run has stopped executing (its lease is
 // released), and a resume re-queues the task as pending, which re-passes this
 // gate before it can run again.
