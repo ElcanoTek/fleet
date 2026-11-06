@@ -1043,12 +1043,28 @@ export function ChatTranscript({
 
                               {message.contextPressure ? (
                                 <div
-                                  className="flex items-center gap-2 rounded-[0.75rem] border border-[var(--color-warning-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]"
+                                  className="flex flex-wrap items-center gap-2 rounded-[0.75rem] border border-[var(--color-warning-border)] bg-[var(--color-overlay-soft)] px-3 py-2 text-[0.75rem] text-[var(--color-text-secondary)]"
                                   title={`${message.contextPressure.usedTokens.toLocaleString()} of ${message.contextPressure.windowSize.toLocaleString()} tokens`}
                                 >
                                   <span className="inline-block size-1.5 shrink-0 rounded-full bg-[var(--color-warning)]" />
-                                  Conversation is {Math.round(message.contextPressure.pct * 100)}% full — consider
-                                  starting a new session for complex tasks.
+                                  <span>
+                                    Conversation is {Math.round(message.contextPressure.pct * 100)}% full —{" "}
+                                    {isConversationOwner ? (
+                                      <>
+                                        <button
+                                          type="button"
+                                          disabled={isStreaming || isSummarizing}
+                                          className="font-medium underline hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                                          onClick={() => setConfirmSummarize(true)}
+                                        >
+                                          summarize earlier messages
+                                        </button>{" "}
+                                        or start a new session for complex tasks.
+                                      </>
+                                    ) : (
+                                      "consider starting a new session for complex tasks."
+                                    )}
+                                  </span>
                                 </div>
                               ) : null}
 

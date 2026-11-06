@@ -538,3 +538,36 @@ func TestWatchdogAfterProviderErrorFailsOverWithTheProviderStatus(t *testing.T) 
 			primaryHealth.LastError, "HTTP 429", health)
 	}
 }
+
+// On step 0 of a turn, r.orch has no prior step yet (lastStepInputTokens() == 0),
+// even when messages carries a large multi-turn chat history (e.g. ~400K tokens
+// on an approval-resume turn). r.stream must fall back to estimateRequestTokens
+// so the first-chunk watchdog scales with the replayed history instead of
+// clamping to the 0-token base.
+func TestRoundStreamStepZeroEstimatesPromptTokensFromMessages(t *testing.T) {
+	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "")
+	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "")
+
+	silent := &namedMockModel{
+		mockModel: mockModel{streamFunc: streamStop()},
+		name:      "silent-model",
+	}
+	e := newMockEngine(t, silent)
+	// Simulate a ~400K-token replayed conversation history on step 0 of a turn
+	// where r.orch has not yet recorded any step usage.
+	e.modelContextPrefix = modelContextPrefixBudget{systemTokens: 400_000}
+	r := &roundState{
+		engine:    e,
+		orch:      newOrchestrationState(e.logSession, 10),
+		sink:      newStreamSink(nil),
+		maxTokens: 1000,
+	}
+	msgs := []fantasy.Message{fantasy.NewUserMessage("resume after card")}
+	tokens := r.estimatePromptTokens(msgs)
+	if tokens < 400_000 {
+		t.Fatalf("expected >=400K estimated request tokens on step 0, got %d", tokens)
+	}
+	if got := firstChunkTimeoutFor(e.envPrefix, tokens); got != 155*time.Second {
+		t.Fatalf("expected 400K step-0 prompt to scale timeout to 155s (75s + 40×2s), got %s", got)
+	}
+}

@@ -1746,6 +1746,28 @@ func (e *engine) roundStopConditions(stepLimit int, input []fantasy.Message, act
 	return stops
 }
 
+// estimatePromptTokens returns the best available prompt-token estimate for
+// scaling the round's first-chunk watchdog: the previous step's provider-
+// reported input size when available, or estimateRequestTokens(messages) on
+// step 0 of a turn when no step has completed yet.
+func (r *roundState) estimatePromptTokens(messages []fantasy.Message) int {
+	if r == nil {
+		return 0
+	}
+	promptTokens := 0
+	if r.orch != nil {
+		promptTokens = r.orch.lastStepInputTokens()
+	}
+	if promptTokens <= 0 && r.engine != nil {
+		if r.engine.logSession != nil && r.engine.logSession.LastStepPromptTokens > 0 {
+			promptTokens = r.engine.logSession.LastStepPromptTokens
+		} else {
+			promptTokens = r.engine.estimateRequestTokens(messages)
+		}
+	}
+	return promptTokens
+}
+
 // stream drives one fantasy stream call for the round, wiring the resilience
 // retry budget, usage accounting, the prompt-cache prepare step, AND the full
 // streaming bridge: text / reasoning / tool-call / tool-result callbacks forward
@@ -1771,8 +1793,12 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 	defer cancelStream()
 	streamCtx = withToolTiming(streamCtx, sink)
 	// The deadline scales with the prompt (#1537): the previous step's input
-	// token count is the best available estimate of this call's prompt size.
-	promptTokens := r.orch.lastStepInputTokens()
+	// token count is the best available estimate of this call's prompt size; on
+	// step 0 of a turn (no prior step in r.orch yet, including multi-turn chat
+	// history replay and post-approval resume turns), estimatePromptTokens falls
+	// back to the session's last step size or estimateRequestTokens(messages) so
+	// a 300K–400K-token conversation is not held to the 0-token 75 s base.
+	promptTokens := r.estimatePromptTokens(messages)
 	firstChunkTimeout := firstChunkTimeoutFor(r.engine.envPrefix, promptTokens)
 	watchdog := newFirstChunkWatchdog(firstChunkTimeout, cancelStream)
 	defer watchdog.stop()
