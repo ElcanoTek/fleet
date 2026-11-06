@@ -1415,7 +1415,6 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 
 	cfg := agentcore.RunConfig{
 		TaskID:              taskID,
-		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         temp,
 		MaxCompletionTokens: maxTokens,
 		MaxIterations:       a.maxIterations,

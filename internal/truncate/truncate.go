@@ -28,3 +28,39 @@ func Clamp(s string, maxBytes int, marker string) string {
 	}
 	return s[:cut] + marker
 }
+
+// Runes returns s unchanged when it has at most n runes; otherwise it keeps the
+// first n runes and appends marker. Use it where the budget is a count of
+// characters a person reads (a card line, a progress preview) rather than
+// bytes.
+func Runes(s string, n int, marker string) string {
+	if n < 0 {
+		n = 0
+	}
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	i := 0
+	for count := 0; count < n; count++ {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return s[:i] + marker
+}
+
+// Tail returns the last at most maxBytes bytes of s, starting on a rune
+// boundary — the tail half of a head-and-tail clamp (pair it with Clamp for
+// the head). Like Clamp it never makes a string less valid than it was.
+func Tail(s string, maxBytes int) string {
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := len(s) - maxBytes
+	for steps := 0; steps < utf8.UTFMax-1 && cut < len(s) && !utf8.RuneStart(s[cut]); steps++ {
+		cut++
+	}
+	return s[cut:]
+}

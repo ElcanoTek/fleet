@@ -223,7 +223,7 @@ func TestRun_InjectsRuntimeToday(t *testing.T) {
 
 	session := NewLogSession()
 	model := &capturingModel{slug: "date-window-model", inputByCall: []int{10}}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("check again for the latest report")}, label: "date"},
 		Policy:     newRoundsPolicy(session, 0),
 		Model:      model,
@@ -316,7 +316,7 @@ func TestRun_RuntimeDateInInputAddsNoTail(t *testing.T) {
 	input := []fantasy.Message{fantasy.NewUserMessage("check again for the latest report"), note}
 	session := NewLogSession()
 	model := &capturingModel{slug: "date-window-model", inputByCall: []int{10}}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix, RuntimeDateInInput: true}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{RuntimeDateInInput: true}, Deps{
 		Input:      historyInput{system: "s", msgs: input, label: "date"},
 		Policy:     newRoundsPolicy(session, 0),
 		Model:      model,

@@ -9,12 +9,12 @@ import (
 	"maps"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 const (
@@ -123,10 +123,6 @@ func (e *engine) generateTerminalStructuredOutput(
 	lastDetail := "no structured output was returned"
 	native := supportsNativeStrictStructuredOutput(model)
 	downgraded := false
-	var envPrefix EnvPrefix
-	if e != nil {
-		envPrefix = e.envPrefix
-	}
 	for attempt := 0; attempt <= StructuredOutputCorrectionAttempts; attempt++ {
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("%w: context cancelled: %w", ErrStructuredOutputGeneration, ctx.Err())
@@ -143,7 +139,6 @@ func (e *engine) generateTerminalStructuredOutput(
 		}
 		cacheStep := promptCachingStep(
 			model.Model(),
-			WithCacheEnvPrefix(envPrefix),
 			WithCompactionSummaryBreakpoint(nil),
 			WithStablePrefixTokens(terminalToolTokens),
 		)
@@ -564,9 +559,5 @@ func clampCorrectionDetail(s string) string {
 		return s
 	}
 	const truncationMarker = "..."
-	cut := maxStructuredCorrectionDetailBytes - len(truncationMarker)
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + truncationMarker
+	return trunc.Clamp(s, maxStructuredCorrectionDetailBytes-len(truncationMarker), truncationMarker)
 }

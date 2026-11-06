@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/cron"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
 
 // UpcomingRun is one projected future execution.
@@ -91,7 +92,7 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	runs := make([]UpcomingRun, 0, len(tasks))
 	for _, t := range tasks {
-		runs = append(runs, projectRuns(t, now, horizon)...)
+		runs = append(runs, projectRuns(t, now, horizon, h.storage.Location())...)
 	}
 	sort.Slice(runs, func(a, b int) bool { return runs[a].NextRun.Before(runs[b].NextRun) })
 	if len(runs) > limit {
@@ -106,7 +107,7 @@ func (h *Handlers) GetUpcomingRuns(w http.ResponseWriter, r *http.Request) {
 // task's own end conditions always apply: nothing past recurrence_until is
 // projected, and a recurrence_remaining budget caps the number of occurrences
 // (the scheduled row itself is the first of the remaining runs).
-func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun {
+func projectRuns(t *models.Task, now time.Time, horizon time.Time, serverLoc *time.Location) []UpcomingRun {
 	base := UpcomingRun{TaskID: t.ID.String(), Name: t.Name, Title: t.Title, Prompt: t.Prompt, Recurrence: t.Recurrence}
 	if t.Recurrence != "" {
 		schedule, err := cron.ParseStandard(t.Recurrence)
@@ -120,7 +121,9 @@ func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun
 		if t.RecurrenceRemaining != nil && *t.RecurrenceRemaining < maxOcc {
 			maxOcc = *t.RecurrenceRemaining
 		}
-		loc := taskLocation(t.Timezone)
+		// The same zone the scheduler fires in (#1947): the task's own, else the
+		// server location — so the timeline matches the real fires.
+		loc, _ := storage.TaskLocation(t.Timezone, serverLoc)
 		next := now.In(loc)
 		// The row's scheduled_for is the authoritative next fire — the scheduler
 		// promotes on it, not on a fresh cron walk from now — so a recurring
@@ -160,17 +163,4 @@ func projectRuns(t *models.Task, now time.Time, horizon time.Time) []UpcomingRun
 		return []UpcomingRun{r}
 	}
 	return nil
-}
-
-// taskLocation resolves a task's timezone to a *time.Location (UTC on empty or
-// unparseable), so cron occurrences honor the task's zone (matching how the
-// scheduler evaluates recurrence).
-func taskLocation(tz string) *time.Location {
-	if tz == "" {
-		return time.UTC
-	}
-	if loc, err := time.LoadLocation(tz); err == nil {
-		return loc
-	}
-	return time.UTC
 }

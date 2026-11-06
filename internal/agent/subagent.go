@@ -20,6 +20,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Governed sub-agents / agent delegation (#175 part b, completed by #264).
@@ -605,7 +606,7 @@ func spawnFailureNote(runErr error, timedOut bool, answer string) string {
 	case timedOut:
 		return "timed out"
 	case runErr != nil:
-		return truncateRunes(collapseWhitespace(runErr.Error()), subagentDetailChars)
+		return trunc.Runes(collapseWhitespace(runErr.Error()), subagentDetailChars, "…")
 	case answer == "":
 		return "no final answer"
 	default:

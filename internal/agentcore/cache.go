@@ -125,7 +125,6 @@ func cacheControlOptions() fantasy.ProviderOptions {
 // cacheOption configures promptCachingStep. Divergent behaviour between the two
 // front-ends is expressed as options rather than forked functions.
 type cacheOption struct {
-	envPrefix          EnvPrefix
 	compactionSummary  bool
 	compactionPrefixFn func(fantasy.Message) bool
 	stablePrefixTokens int
@@ -134,11 +133,6 @@ type cacheOption struct {
 
 // CacheOption mutates the cache step configuration.
 type CacheOption func(*cacheOption)
-
-// WithCacheEnvPrefix selects the env-var family for the kill-switch.
-func WithCacheEnvPrefix(p EnvPrefix) CacheOption {
-	return func(c *cacheOption) { c.envPrefix = p }
-}
 
 // WithStablePrefixTokens adds tokens the provider caches with the marked
 // prefix but that are not in the messages, the tool definitions, to the prefix
@@ -193,7 +187,7 @@ func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFun
 		cfg.compactionPrefixFn = isCompactionSummaryMessage
 	}
 	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
-		if !supportsExplicitBreakpoints(model) || cfg.envPrefix.lookupBool("DISABLE_PROMPT_CACHE") {
+		if !supportsExplicitBreakpoints(model) || fleetEnv.lookupBool("DISABLE_PROMPT_CACHE") {
 			return ctx, fantasy.PrepareStepResult{}, nil
 		}
 

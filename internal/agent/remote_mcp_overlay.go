@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 	"unicode"
-	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/playwrightrunner"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Per-user remote (hosted) MCP overlay (#443), shared by BOTH the interactive
@@ -626,7 +626,7 @@ func connectFailureReason(credential string, err error) string {
 	}, raw)
 	s := redactBoth(strings.Join(strings.Fields(raw), " "))
 	if len(s) > maxReason {
-		s = truncateAtRune(s, maxReason) + "…"
+		s = trunc.Clamp(s, maxReason, "") + "…"
 	}
 	return s
 }
@@ -661,18 +661,18 @@ func connectFailureReason(credential string, err error) string {
 // scanning the whole response.
 func maskCredential(text, credential string, bound int) string {
 	if credential == "" {
-		return truncateAtRune(text, bound)
+		return trunc.Clamp(text, bound, "")
 	}
 	forms := credentialWireForms(credential)
 	longest := 0
 	for _, f := range forms {
 		longest = max(longest, len(f))
 	}
-	window := truncateAtRune(text, bound+longest)
+	window := trunc.Clamp(text, bound+longest, "")
 	for _, form := range forms {
 		window = strings.ReplaceAll(window, form, "[REDACTED]")
 	}
-	window = truncateAtRune(window, bound)
+	window = trunc.Clamp(window, bound, "")
 	// Drop a trailing proper prefix of any form (see above). Longest first,
 	// so "abc" is removed as one piece rather than leaving "ab".
 	for _, form := range forms {
@@ -728,17 +728,6 @@ func credentialWireForms(credential string) []string {
 // literal is among them.
 func redactBoth(text string) string {
 	return mcpbroker.RedactSecrets(agentcore.RedactSecrets(text))
-}
-
-// truncateAtRune cuts s to at most n bytes without splitting a multibyte rune.
-func truncateAtRune(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	for n > 0 && !utf8.RuneStart(s[n]) {
-		n--
-	}
-	return s[:n]
 }
 
 // skippedNames is a nil-safe read of Skipped for error text.

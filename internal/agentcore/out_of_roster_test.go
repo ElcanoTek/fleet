@@ -136,7 +136,6 @@ func (o *oorEvents) Observe(eventType string, payload map[string]any) {
 
 func runOOR(t *testing.T, cfg RunConfig, deps Deps) {
 	t.Helper()
-	cfg.EnvPrefix = CanonicalEnvPrefix
 	if deps.Input == nil {
 		deps.Input = historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("go")}, label: "oor"}
 	}

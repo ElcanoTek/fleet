@@ -354,7 +354,6 @@ func TestToolErrorMethodPanicBecomesPairedIncident(t *testing.T) {
 			return fantasy.ToolResponse{}, panickingError{}
 		})
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:      CanonicalEnvPrefix,
 		ConversationID: "conv-error-method",
 		NativeTools:    []fantasy.AgentTool{tool},
 	}, Deps{
@@ -539,7 +538,6 @@ func TestObserverPanic_IsDisabledAndReturnedAsOrdinaryRunError(t *testing.T) {
 	model := scriptedToolModel([]scriptedToolCall{{id: "observer-call", name: "observer_tool"}})
 
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:      CanonicalEnvPrefix,
 		ConversationID: "conv-observer",
 		NativeTools:    []fantasy.AgentTool{tool},
 	}, Deps{
@@ -572,7 +570,7 @@ func TestObserverPanicOnFinalReplacementFailsBeforeCompletionHook(t *testing.T) 
 	collector := capturePanicEvents(t)
 	executor := &scriptExecutor{out: `{"decision":"continue"}`}
 	engineWith(t, executor, nil, LifecycleHook{ID: "done", Event: HookTurnEnd, Command: "should-not-run"})
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input: stubInput{system: "s", user: "reply", label: "replace-panic"}, Policy: passPolicy{}, Executor: executor,
 		Model: &textCapturingModel{slug: "replace-panic", replies: []string{"final"}}, Observer: &panicOnEventObserver{event: evtTextReplace},
 	})
@@ -675,7 +673,6 @@ func TestFantasyStream_SequentialToolPanicProducesOnePairedResult(t *testing.T) 
 	collector := capturePanicEvents(t)
 	tool := newPanickingTool("sequential_panic", "sequential raw panic")
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:      CanonicalEnvPrefix,
 		ConversationID: "conv-sequential",
 		NativeTools:    []fantasy.AgentTool{tool},
 	}, Deps{
@@ -709,7 +706,6 @@ func TestFantasyStream_RedactorPanicStillProducesOnePairedResult(t *testing.T) {
 			return fantasy.NewTextResponse("untrusted output"), nil
 		})
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:      CanonicalEnvPrefix,
 		ConversationID: "conv-redactor-panic",
 		NativeTools:    []fantasy.AgentTool{tool},
 	}, Deps{
@@ -755,7 +751,6 @@ func TestFantasyStream_ParallelPanicSettlesWithSuccessfulSibling(t *testing.T) {
 		})
 
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		TaskID:      "task-parallel",
 		NativeTools: []fantasy.AgentTool{panicTool, sibling},
 	}, Deps{
@@ -803,7 +798,6 @@ func TestFantasyStream_PanickedCallSuppressesInRoundProviderRecovery(t *testing.
 	}}
 
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{newPanickingTool("committed_panic", "committed raw panic")},
 	}, Deps{
 		Input:  stubInput{system: "sys", user: "call", label: "commit"},
@@ -825,8 +819,7 @@ func (canFinishPanicPolicy) CanFinish(int) (bool, []string) { panic("finish raw 
 func TestPolicyCanFinishPanic_IsContainedAsRunError(t *testing.T) {
 	collector := capturePanicEvents(t)
 	_, err := Run(context.Background(), ModeScheduled, RunConfig{
-		EnvPrefix: CanonicalEnvPrefix,
-		TaskID:    "task-finish",
+		TaskID: "task-finish",
 	}, Deps{
 		Input:  stubInput{system: "sys", user: "finish", label: "finish"},
 		Policy: canFinishPanicPolicy{},
@@ -852,8 +845,7 @@ func (roundTextPanicPolicy) SetRoundFinalText(string) { panic("round text raw pa
 func TestPolicyRoundTextPanic_IsContainedAsRunError(t *testing.T) {
 	collector := capturePanicEvents(t)
 	_, err := Run(context.Background(), ModeScheduled, RunConfig{
-		EnvPrefix: CanonicalEnvPrefix,
-		TaskID:    "task-round-text",
+		TaskID: "task-round-text",
 	}, Deps{
 		Input:  stubInput{system: "sys", user: "roundtext", label: "roundtext"},
 		Policy: roundTextPanicPolicy{},
@@ -909,7 +901,7 @@ func TestRunBackstop_ContainsSynchronousToolMethodsAndFinalize(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			collector := capturePanicEvents(t)
-			cfg := RunConfig{EnvPrefix: CanonicalEnvPrefix, ConversationID: "conv-run-backstop"}
+			cfg := RunConfig{ConversationID: "conv-run-backstop"}
 			if test.tool != nil {
 				cfg.NativeTools = []fantasy.AgentTool{test.tool}
 			}

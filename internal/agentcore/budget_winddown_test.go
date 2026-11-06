@@ -63,7 +63,7 @@ func TestBudgetWindDownStepAppendsRequestLocalNotice(t *testing.T) {
 	orch.setCeilings(10.0, 0)
 	orch.CostUSD = 9.0
 
-	step := budgetWindDownStep(EnvPrefix("FLEET"), orch, nil)
+	step := budgetWindDownStep(orch, nil)
 	in := []fantasy.Message{fantasy.NewUserMessage("do the work")}
 	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: in})
 	if err != nil {
@@ -80,7 +80,7 @@ func TestBudgetWindDownStepAppendsRequestLocalNotice(t *testing.T) {
 	calm := newOrchestrationState(nil, 0)
 	calm.setCeilings(10.0, 0)
 	calm.CostUSD = 1.0
-	step = budgetWindDownStep(EnvPrefix("FLEET"), calm, nil)
+	step = budgetWindDownStep(calm, nil)
 	_, res, err = step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: in})
 	if err != nil {
 		t.Fatalf("step error: %v", err)

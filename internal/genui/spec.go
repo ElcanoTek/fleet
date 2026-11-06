@@ -36,6 +36,8 @@ import (
 	"time"
 	"unicode/utf16"
 	"unicode/utf8"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Protocol limits. They bound what one card can make the browser do and what
@@ -2577,29 +2579,29 @@ func (v *validator) resolveExprs() {
 	for _, e := range v.exprs {
 		refs, paths, err := parseExprPaths(e.src)
 		if err != nil {
-			v.addf(e.path, "expression %q: %v", truncateRunes(e.src, 120), err)
+			v.addf(e.path, "expression %q: %v", truncate.Runes(e.src, 120, "…"), err)
 			continue
 		}
 		for _, r := range refs {
 			if r == "index" {
 				if e.repeater == "" {
-					v.addf(e.path, "expression %q: index is only defined inside a repeater's fields", truncateRunes(e.src, 120))
+					v.addf(e.path, "expression %q: index is only defined inside a repeater's fields", truncate.Runes(e.src, 120, "…"))
 				}
 				continue
 			}
 			f, ok := v.fields[r]
 			if !ok {
-				v.addf(e.path, "expression %q reads %q, which is not an input id on this card (inputs: %s)", truncateRunes(e.src, 120), r, v.inputNames())
+				v.addf(e.path, "expression %q reads %q, which is not an input id on this card (inputs: %s)", truncate.Runes(e.src, 120, "…"), r, v.inputNames())
 				continue
 			}
 			if f.repeater != "" && f.repeater != e.repeater {
-				v.addf(e.path, "expression %q reads %q, a field of repeater %q; outside that repeater use %s.%s (an array) with sum/count/join", truncateRunes(e.src, 120), r, f.repeater, f.repeater, r)
+				v.addf(e.path, "expression %q reads %q, a field of repeater %q; outside that repeater use %s.%s (an array) with sum/count/join", truncate.Runes(e.src, 120, "…"), r, f.repeater, f.repeater, r)
 			}
 		}
 		for _, mp := range paths {
 			if f, ok := v.fields[mp[0]]; ok && len(mp) > 1 {
 				if msg := v.memberError(f, mp[1:]); msg != "" {
-					v.addf(e.path, "expression %q reads %s: %s", truncateRunes(e.src, 120), strings.Join(mp, "."), msg)
+					v.addf(e.path, "expression %q reads %s: %s", truncate.Runes(e.src, 120, "…"), strings.Join(mp, "."), msg)
 				}
 			}
 		}
@@ -2707,17 +2709,6 @@ func sortedCompKeys(m map[string]map[string]any) []string {
 }
 
 func sortStrings(s []string) { sort.Strings(s) }
-
-// TruncateRunes cuts s to n runes, marking the cut with "…".
-func TruncateRunes(s string, n int) string { return truncateRunes(s, n) }
-
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
 
 // componentProps checks one component's own properties, recursing into
 // children and tabs.

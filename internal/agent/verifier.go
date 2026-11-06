@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // End-of-run verifier (scheduled-only; ported from cutlass verifier.go).
@@ -224,7 +225,7 @@ func truncateTaskForVerifier(task string) string {
 	}
 	// Keep the closing branch/stop rules as well as the opening task identity.
 	half := verifierMaxTaskChars / 2
-	return trimmed[:half] + "\n…[middle truncated for verifier]\n" + trimmed[len(trimmed)-half:]
+	return trunc.Clamp(trimmed, half, "\n…[middle truncated for verifier]\n") + trunc.Tail(trimmed, half)
 }
 
 // truncateFinalResponseForVerifier bounds the agent's closing message for the
@@ -240,7 +241,7 @@ func truncateFinalResponseForVerifier(finalResponse string) string {
 		return trimmed
 	}
 	half := verifierMaxFinalResponseChars / 2
-	return trimmed[:half] + "\n…[middle truncated for verifier]\n" + trimmed[len(trimmed)-half:]
+	return trunc.Clamp(trimmed, half, "\n…[middle truncated for verifier]\n") + trunc.Tail(trimmed, half)
 }
 
 // endOfRunVerifierEnabled reports whether the end-of-run verifier runs at all.

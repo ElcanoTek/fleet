@@ -371,7 +371,6 @@ func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 	model := &namedMockModel{name: "elide-not-enough"}
 	recordContextMax(model.name, 10_000_000)
 	e := newMockEngine(t, model)
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	var droppable []fantasy.Message
 	e.compactionSummarizer = func(_ context.Context, in CompactionSummarizeInput) fantasy.Message {
@@ -419,7 +418,6 @@ func TestCheckContextPressure_ElisionJustUnderTheBudgetStillSummarizes(t *testin
 		model := &namedMockModel{name: "elide-headroom"}
 		recordContextMax(model.name, 10_000_000)
 		e := newMockEngine(t, model)
-		e.envPrefix = CanonicalEnvPrefix
 		e.requireCompactionOptIn = true
 		e.logSession.LastStepPromptTokens = used
 		obs := &payloadObserver{}
@@ -459,7 +457,6 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 		model := &namedMockModel{name: "elide-chat"}
 		recordContextMax(model.name, 200_000)
 		e := newMockEngine(t, model)
-		e.envPrefix = CanonicalEnvPrefix
 		e.logSession.LastStepPromptTokens = 190_000
 		obs := &payloadObserver{}
 		res := e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
@@ -474,7 +471,6 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 		model := &namedMockModel{name: "elide-knob-off"}
 		recordContextMax(model.name, 10_000_000)
 		e := newMockEngine(t, model)
-		e.envPrefix = CanonicalEnvPrefix
 		e.requireCompactionOptIn = true
 		e.logSession.LastStepPromptTokens = 150_000
 		obs := &payloadObserver{}
@@ -494,7 +490,7 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 		want  bool
 	}{{"", true}, {"1", true}, {"true", true}, {"0", false}, {"false", false}, {"FALSE", false}, {"not-a-bool", true}} {
 		t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", tc.value)
-		if got := contextElideBeforeSummary(CanonicalEnvPrefix); got != tc.want {
+		if got := contextElideBeforeSummary(); got != tc.want {
 			t.Errorf("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=%q: %t, want %t", tc.value, got, tc.want)
 		}
 	}
@@ -511,7 +507,6 @@ func TestCheckContextPressure_ScheduledWindowCompactionElidesFirst(t *testing.T)
 	model := &namedMockModel{name: "elide-window"}
 	recordContextMax(model.name, 200_000)
 	e := newMockEngine(t, model)
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.windowCompactionStalled = true
 	e.consecutiveCompactions = 2
@@ -611,7 +606,6 @@ func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
 	const budget = 100_000
 	elide := func(history []fantasy.Message) (int, bool) {
 		e := newMockEngine(t, &namedMockModel{name: "elide-tiny"})
-		e.envPrefix = CanonicalEnvPrefix
 		e.requireCompactionOptIn = true
 		saved := elideStaleToolResults(history, int(budget*elisionRecentFraction)).savedTokens
 		_, ok := e.elideBeforeSummary(history, budget, true, budget, budget)
@@ -638,7 +632,6 @@ func TestElideBeforeSummary_SkipsATinySaving(t *testing.T) {
 func TestElideBeforeSummary_NeverBelowTheDirectEstimate(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
 	e := newMockEngine(t, &namedMockModel{name: "elide-direct"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	history := elisionHistory(10, 40_000)
 	el, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000)
@@ -659,7 +652,6 @@ func TestCheckContextPressure_ElisionFromAnEstimateAddsNothingUnseen(t *testing.
 	model := &namedMockModel{name: "elide-estimated"}
 	recordContextMax(model.name, 10_000_000)
 	e := newMockEngine(t, model)
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	msgs := elisionHistory(14, 40_000)
 	obs := &payloadObserver{}
@@ -788,7 +780,6 @@ func TestElideBeforeSummary_MinimumSavingAtTheRunsRate(t *testing.T) {
 		t.Fatal("fixture: no history saves 1-2% of the budget")
 	}
 	e := newMockEngine(t, &namedMockModel{name: "elide-min-rate"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.resendPrefix = 10_000
 	seen := wireTokens(history[1 : len(history)-2])
@@ -806,7 +797,6 @@ func TestElideBeforeSummary_EstimatesTheSentHistory(t *testing.T) {
 	image := elisionExchange("image", `{}`, fantasy.ToolResultOutputContentMedia{Data: strings.Repeat("i", 256_000), MediaType: "image/png"})
 	history := append(append(elisionHistory(0, 0), image...), elisionHistory(10, 40_000)[2:]...)
 	e := newMockEngine(t, &namedMockModel{name: "elide-sent"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.resendPrefix = 10_000
 	used := 10_000 + 2*wireTokens(history[1:len(history)-2])
@@ -893,7 +883,6 @@ func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
 	t.Helper()
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
 	e := newMockEngine(t, &namedMockModel{name: name})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.bindRunUsage(orch)
 	return e

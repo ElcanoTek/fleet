@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/safe"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Governed lifecycle hooks (#788).
@@ -467,11 +468,7 @@ func parseHookDecision(out string) (hookDecision, bool) {
 }
 
 func capString(s string, n int) string {
-	s = strings.TrimSpace(s)
-	if len(s) > n {
-		return s[:n]
-	}
-	return s
+	return trunc.Clamp(strings.TrimSpace(s), n, "")
 }
 
 // shellSingleQuote wraps s in single quotes, escaping embedded single quotes as

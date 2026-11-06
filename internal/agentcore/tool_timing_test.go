@@ -35,7 +35,6 @@ func TestToolResultCarriesDispatchDuration(t *testing.T) {
 		})
 	obs := &toolResultObserver{}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:      CanonicalEnvPrefix,
 		ConversationID: "conv-timing",
 		NativeTools:    []fantasy.AgentTool{tool},
 	}, Deps{

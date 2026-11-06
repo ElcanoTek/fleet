@@ -77,7 +77,6 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	model := &namedMockModel{name: "cp-gate"}
 	interactive := newMockEngine(t, model)
-	interactive.envPrefix = CanonicalEnvPrefix
 	if interactive.resendBudgetCheckpoint(nil) != nil {
 		t.Error("an interactive engine must not get a resend checkpoint: a chat's history is the user's to keep")
 	}
@@ -85,7 +84,6 @@ func TestResendBudgetCheckpoint_ScheduledOnlyAndBudgetGated(t *testing.T) {
 		t.Errorf("interactive round stop conditions = %d, want 0", got)
 	}
 	scheduled := newMockEngine(t, model)
-	scheduled.envPrefix = CanonicalEnvPrefix
 	scheduled.requireCompactionOptIn = true
 	if scheduled.resendBudgetCheckpoint(nil) == nil {
 		t.Fatal("a scheduled engine with a resend budget must get the checkpoint")
@@ -130,7 +128,7 @@ func TestRun_ResendCheckpoint_ScheduledPausesCompactsAndResumes(t *testing.T) {
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	res, err := Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
 			Input:      historyInput{system: "s", msgs: fillerMessages(2, 200), label: "sched"},
 			Observer:   obs,
@@ -199,7 +197,7 @@ func TestRun_ResendCheckpoint_CapDoesNotStrandTheRun(t *testing.T) {
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	res, err := Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{Input: historyInput{system: "s", msgs: fillerMessages(1, 50), label: "sched"}, Observer: obs, Policy: finishableScheduledPolicy(session), Model: model, LogSession: session})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -241,7 +239,7 @@ func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	_, _ = Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, MaxIterations: 4, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, MaxIterations: 4, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{Input: historyInput{system: "s", msgs: fillerMessages(1, 50), label: "sched"}, Observer: obs, Policy: finishableScheduledPolicy(session), Model: model, LogSession: session})
 	checkpoints := 0
 	for _, e := range obs.events {
@@ -260,7 +258,6 @@ func TestRun_ResendCheckpoint_StepCapHoldsAcrossCheckpoints(t *testing.T) {
 func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	e := newMockEngine(t, &namedMockModel{name: "cp-tie"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.maxIterations = 3
 	over := func(n int) *fantasy.AgentResult {
@@ -295,7 +292,6 @@ func TestConsumeResendCheckpoint_CapTieRefusesAndAccountingResets(t *testing.T) 
 func TestConsumeResendCheckpoint_CountsResilienceResumedSteps(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	e := newMockEngine(t, &namedMockModel{name: "cp-resumed"})
-	e.envPrefix = CanonicalEnvPrefix
 	e.requireCompactionOptIn = true
 	e.maxIterations = 100
 	tail := &fantasy.AgentResult{Steps: []fantasy.StepResult{{Response: fantasy.Response{FinishReason: fantasy.FinishReasonToolCalls, Usage: fantasy.Usage{InputTokens: 1500}}}}}
@@ -392,7 +388,7 @@ func TestRun_ResendCheckpoint_ObserverFailureStopsBeforeResuming(t *testing.T) {
 	obs := &checkpointPanicObserver{}
 	session := NewLogSession()
 	_, err := Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{Input: historyInput{system: "s", msgs: fillerMessages(1, 50), label: "sched"}, Observer: obs, Policy: finishableScheduledPolicy(session), Model: model, LogSession: session})
 	if err == nil {
 		t.Fatal("expected the run to fail once the observer failed on the checkpoint frame")

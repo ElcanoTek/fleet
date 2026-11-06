@@ -44,7 +44,7 @@ func TestRun_ResendBudget_ScheduledCompactsWithoutOptIn(t *testing.T) {
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	// ~6K estimated tokens: far below any window threshold, above the budget.
-	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true}, Deps{
+	_, err := Run(context.Background(), ModeScheduled, RunConfig{RequireCompactionOptIn: true}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(6, 4_000), label: "sched"},
 		Observer:   obs,
 		Policy:     finishableScheduledPolicy(session),
@@ -127,26 +127,25 @@ func TestCheckContextPressure_WindowCompactionNamesTrigger(t *testing.T) {
 }
 
 func TestContextResendBudgetTokensKnob(t *testing.T) {
-	p := EnvPrefix(CanonicalEnvPrefix)
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "")
-	if got := contextResendBudgetTokens(p); got != defaultContextResendBudgetTokens {
+	if got := contextResendBudgetTokens(); got != defaultContextResendBudgetTokens {
 		t.Fatalf("default = %d, want %d", got, defaultContextResendBudgetTokens)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
-	if got := contextResendBudgetTokens(p); got != 0 {
+	if got := contextResendBudgetTokens(); got != 0 {
 		t.Fatalf("0 must disable, got %d", got)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "-5")
-	if got := contextResendBudgetTokens(p); got != defaultContextResendBudgetTokens {
+	if got := contextResendBudgetTokens(); got != defaultContextResendBudgetTokens {
 		t.Fatalf("negative must fall back to the default, got %d", got)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "lots")
-	if got := contextResendBudgetTokens(p); got != defaultContextResendBudgetTokens {
+	if got := contextResendBudgetTokens(); got != defaultContextResendBudgetTokens {
 		t.Fatalf("unparseable must fall back to the default, got %d", got)
 	}
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "")
 	t.Setenv("CHAT_CONTEXT_RESEND_BUDGET_TOKENS", "12345")
-	if got := contextResendBudgetTokens(p); got != 12345 {
+	if got := contextResendBudgetTokens(); got != 12345 {
 		t.Fatalf("legacy alias must be honoured, got %d", got)
 	}
 }

@@ -156,7 +156,7 @@ func TestRun_MCPRosterNarrowing(t *testing.T) {
 	broker := &fakeBroker{}
 	session := NewLogSession()
 	_, err := Run(context.Background(), ModeInteractive,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, Allowlist: pagesNarrowed, MCPRosterNarrowing: "required_tools_only"},
+		RunConfig{Allowlist: pagesNarrowed, MCPRosterNarrowing: "required_tools_only"},
 		Deps{
 			Input:      historyInput{system: "s", msgs: []fantasy.Message{fantasy.NewUserMessage("refresh")}, label: "narrow"},
 			Policy:     NewInteractivePolicy(0, 0, nil, nil),
@@ -272,7 +272,7 @@ func TestRun_NarrowedRosterRefusesAuditOfUnregisteredTool(t *testing.T) {
 	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{
-			EnvPrefix: CanonicalEnvPrefix, IncludeConfirmAudit: true, MCPRosterNarrowing: "required_tools_only",
+			IncludeConfirmAudit: true, MCPRosterNarrowing: "required_tools_only",
 			Allowlist: mcpAllowlist{"dsp": {"create_deal"}},
 		},
 		Deps{

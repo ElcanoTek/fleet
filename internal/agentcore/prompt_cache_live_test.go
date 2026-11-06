@@ -428,7 +428,6 @@ func runPromptCacheLive(t *testing.T, key, slug string) {
 		history = append(history, fantasy.NewUserMessage(u), note)
 		session := NewLogSession()
 		res, err := Run(ctx, ModeInteractive, RunConfig{
-			EnvPrefix:          CanonicalEnvPrefix,
 			NativeTools:        tools,
 			RuntimeDateInInput: true,
 		}, Deps{
@@ -647,7 +646,6 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 
 	session1 := NewLogSession()
 	res1, err := Run(ctx, ModeInteractive, RunConfig{
-		EnvPrefix:          CanonicalEnvPrefix,
 		NativeTools:        []fantasy.AgentTool{fetchPage},
 		RuntimeDateInInput: true,
 	}, Deps{
@@ -673,7 +671,6 @@ func TestPromptCacheLive_LongToolChainCrossTurn(t *testing.T) {
 	)
 	session2 := NewLogSession()
 	if _, err := Run(ctx, ModeInteractive, RunConfig{
-		EnvPrefix:          CanonicalEnvPrefix,
 		NativeTools:        []fantasy.AgentTool{fetchPage},
 		RuntimeDateInInput: true,
 	}, Deps{

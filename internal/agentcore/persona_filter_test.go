@@ -260,7 +260,6 @@ func TestRun_PersonaPolicyFiltersToolsBeforeLLM(t *testing.T) {
 	denyPolicy := PersonaToolPermissions{Deny: []string{"send_email", "generate_image"}}
 
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix: CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{
 			namedTool("bash"),
 			namedTool("run_python"),
@@ -305,7 +304,6 @@ func TestRun_NoPersonaPolicyUnchanged(t *testing.T) {
 		},
 	}
 	_, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix: CanonicalEnvPrefix,
 		NativeTools: []fantasy.AgentTool{
 			namedTool("bash"),
 			namedTool("send_email"),

@@ -33,9 +33,8 @@ import (
 // chat's cases (cancel, context-too-large, retry-exhausted, fatal) are all
 // covered by the cutlass classifier below.
 //
-// The env var is parameterized: <PREFIX>_RETRY_MAX_ATTEMPTS, with CHAT_/CUTLASS_
-// back-compat aliases (see env.go); the lifted cutlass test sets
-// CUTLASS_RETRY_MAX_ATTEMPTS via the retryMaxAttemptsEnv constant.
+// The env var is FLEET_RETRY_MAX_ATTEMPTS, with CHAT_/CUTLASS_ back-compat
+// aliases (see env.go).
 
 // Transient-failure sentinels. When a run exhausts the in-run recovery budget
 // (the per-step retries + fallback swap above) on a TRANSIENT failure, the error
@@ -66,10 +65,6 @@ const (
 	// defaultRetryMaxAttempts is the retry count (not counting the original
 	// attempt) passed to fantasy's inner retry loop.
 	defaultRetryMaxAttempts = 5
-	// retryMaxAttemptsEnv is the env-var SUFFIX (read via EnvPrefix). The legacy
-	// full name CUTLASS_RETRY_MAX_ATTEMPTS resolves through the back-compat
-	// aliases, so the lifted test's t.Setenv keeps working.
-	retryMaxAttemptsEnv = "CUTLASS_RETRY_MAX_ATTEMPTS"
 	// maxInnerEscalations caps how many outer-loop recoveries per round.
 	maxInnerEscalations = 3
 
@@ -114,12 +109,12 @@ const (
 // firstChunkTimeoutFor resolves the watchdog deadline for a provider call
 // whose prompt is roughly promptTokens long (the previous step's input token
 // count; 0 when unknown, which yields the base).
-func firstChunkTimeoutFor(p EnvPrefix, promptTokens int) time.Duration {
-	base := secondsKnob(p, firstChunkTimeoutBaseEnv, defaultFirstChunkTimeout)
+func firstChunkTimeoutFor(promptTokens int) time.Duration {
+	base := secondsKnob(firstChunkTimeoutBaseEnv, defaultFirstChunkTimeout)
 	if base < minFirstChunkTimeout {
 		base = minFirstChunkTimeout
 	}
-	maxTimeout := secondsKnob(p, firstChunkTimeoutMaxEnv, defaultFirstChunkTimeoutMax)
+	maxTimeout := secondsKnob(firstChunkTimeoutMaxEnv, defaultFirstChunkTimeoutMax)
 	if maxTimeout < base {
 		maxTimeout = base
 	}
@@ -137,8 +132,8 @@ func firstChunkTimeoutFor(p EnvPrefix, promptTokens int) time.Duration {
 // prefix aliases; unset or unparseable yields def (the registry in
 // internal/config refuses a malformed value at boot, this is the lenient
 // embedder fallback).
-func secondsKnob(p EnvPrefix, suffix string, def time.Duration) time.Duration {
-	secs := p.lookupFloatDefault(suffix, def.Seconds())
+func secondsKnob(suffix string, def time.Duration) time.Duration {
+	secs := fleetEnv.lookupFloatDefault(suffix, def.Seconds())
 	if secs <= 0 {
 		return def
 	}
@@ -252,31 +247,20 @@ type resilienceConfig struct {
 	maxAttempts int
 }
 
-// loadResilienceConfig reads the retry budget from the environment. It accepts
-// the legacy CUTLASS_RETRY_MAX_ATTEMPTS name directly (so the lifted test's
-// t.Setenv(retryMaxAttemptsEnv, …) works unchanged) and also the canonical
-// FLEET_RETRY_MAX_ATTEMPTS via EnvPrefix.
+// loadResilienceConfig reads the retry budget from FLEET_RETRY_MAX_ATTEMPTS
+// (or its CHAT_/CUTLASS_ alias, via fleetEnv).
 //
 // The knob is a scopeExternal row in the config package's env-knob registry
 // (#1273), so a malformed value refuses the boot; the warn-and-default branch
 // below remains for the engine-construction paths that run without a
 // config.Load (tests, embedders) rather than as the operator-facing behavior.
 func loadResilienceConfig() resilienceConfig {
-	return loadResilienceConfigFor("")
-}
-
-func loadResilienceConfigFor(prefix EnvPrefix) resilienceConfig {
 	attempts := defaultRetryMaxAttempts
-	raw := strings.TrimSpace(prefix.lookup("RETRY_MAX_ATTEMPTS"))
-	if raw == "" {
-		// retryMaxAttemptsEnv is the legacy full name; lookup the suffix too.
-		raw = strings.TrimSpace(prefix.lookup(strings.TrimPrefix(retryMaxAttemptsEnv, "CUTLASS_")))
-	}
-	if raw != "" {
+	if raw := strings.TrimSpace(fleetEnv.lookup("RETRY_MAX_ATTEMPTS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			attempts = n
 		} else {
-			log.Printf("Warning: ignoring invalid %s=%q (using default %d)", retryMaxAttemptsEnv, raw, defaultRetryMaxAttempts)
+			log.Printf("Warning: ignoring invalid FLEET_RETRY_MAX_ATTEMPTS=%q (using default %d)", raw, defaultRetryMaxAttempts)
 		}
 	}
 	return resilienceConfig{maxAttempts: attempts}

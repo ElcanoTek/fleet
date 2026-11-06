@@ -51,7 +51,6 @@ func runModeCleanPass(t *testing.T, mode Mode) (Result, *captureObserver, *round
 	policy := &roundCountingPolicy{inner: inner}
 	obs := &captureObserver{}
 	res, err := Run(context.Background(), mode, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		Temperature: 0.2,
 	}, Deps{
 		Input:    stubInput{system: "sys", user: "hi", label: "turn-" + mode.String()},
@@ -122,7 +121,7 @@ func TestModeParity_Divergence(t *testing.T) {
 			return streamStop()(nil, call)
 		},
 	}
-	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:    stubInput{system: "sys", user: "do it", label: "sched"},
 		Observer: &captureObserver{},
 		Policy:   sp,
@@ -207,7 +206,6 @@ func TestRoundFinalTextReceiver_PinnedToRoundBoundary(t *testing.T) {
 	}
 	policy := &roundTextRecordingPolicy{inner: NewInteractivePolicy(0, 0, nil, nil)}
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		Temperature: 0.2,
 	}, Deps{
 		Input:    stubInput{system: "sys", user: "report and verify", label: "round-text"},
@@ -277,7 +275,7 @@ func TestRunAnswerProvider_ComposedAnswerIsTheResult(t *testing.T) {
 	}
 	policy := &answerComposingPolicy{roundTextRecordingPolicy: roundTextRecordingPolicy{inner: NewInteractivePolicy(0, 0, nil, nil)}}
 	observer := &replaceRecordingObserver{}
-	res, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    stubInput{system: "sys", user: "report", label: "run-answer"},
 		Observer: observer,
 		Policy:   policy,

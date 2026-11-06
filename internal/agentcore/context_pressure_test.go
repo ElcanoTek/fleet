@@ -203,22 +203,22 @@ func TestProactiveCompact_UsesSummarizerWhenSet(t *testing.T) {
 // ── thresholds ──
 
 func TestContextThresholds_Defaults(t *testing.T) {
-	if got := contextPressureWarnThreshold(CanonicalEnvPrefix); got != defaultContextPressureWarnThreshold {
+	if got := contextPressureWarnThreshold(); got != defaultContextPressureWarnThreshold {
 		t.Errorf("warn default = %v, want %v", got, defaultContextPressureWarnThreshold)
 	}
-	if got := contextCompactionThreshold(CanonicalEnvPrefix); got != defaultContextCompactionThreshold {
+	if got := contextCompactionThreshold(); got != defaultContextCompactionThreshold {
 		t.Errorf("compaction default = %v, want %v", got, defaultContextCompactionThreshold)
 	}
 }
 
 func TestContextThresholds_OverrideAndAlias(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", "0.6")
-	if got := contextPressureWarnThreshold(CanonicalEnvPrefix); got != 0.6 {
+	if got := contextPressureWarnThreshold(); got != 0.6 {
 		t.Errorf("warn override = %v, want 0.6", got)
 	}
 	// Legacy CHAT_ alias resolves when the canonical var is unset.
 	t.Setenv("CHAT_CONTEXT_COMPACTION_THRESHOLD", "0.8")
-	if got := contextCompactionThreshold(CanonicalEnvPrefix); got != 0.8 {
+	if got := contextCompactionThreshold(); got != 0.8 {
 		t.Errorf("compaction via CHAT_ alias = %v, want 0.8", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestContextThresholds_OverrideAndAlias(t *testing.T) {
 func TestContextThresholds_ClampsOutOfRange(t *testing.T) {
 	for _, bad := range []string{"0", "-0.2", "1.5", "nonsense"} {
 		t.Setenv("FLEET_CONTEXT_COMPACTION_THRESHOLD", bad)
-		if got := contextCompactionThreshold(CanonicalEnvPrefix); got != defaultContextCompactionThreshold {
+		if got := contextCompactionThreshold(); got != defaultContextCompactionThreshold {
 			t.Errorf("threshold %q = %v, want fallback %v", bad, got, defaultContextCompactionThreshold)
 		}
 	}
@@ -295,7 +295,7 @@ func TestRun_ContextPressure_InteractiveWarns(t *testing.T) {
 	obs := &captureObserver{}
 	// 6 × 52K chars = 6 × 13K = 78K tokens → 0.78: warn band
 	// [0.75,0.90), and just below the reserved inner-call target.
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    historyInput{system: "s", msgs: fillerMessages(6, 52_000), label: "warn"},
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
@@ -319,7 +319,7 @@ func TestRun_ContextPressure_InteractiveCompacts(t *testing.T) {
 	model := newStopModel("ctx209-inter-compact")
 	obs := &captureObserver{}
 	// 6 × 64K chars = 96K tokens → 0.96: compaction band.
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "compact"},
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
@@ -357,7 +357,7 @@ func TestRun_ContextPressure_ScheduledWarnsOnlyWithoutFlag(t *testing.T) {
 	model := newStopModel("ctx209-sched-warn")
 	obs := &captureObserver{}
 	session := NewLogSession()
-	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true}, Deps{
+	_, err := Run(context.Background(), ModeScheduled, RunConfig{RequireCompactionOptIn: true}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "sched"},
 		Observer:   obs,
 		Policy:     finishableScheduledPolicy(session),
@@ -391,7 +391,7 @@ func TestRun_ContextPressure_ScheduledCompactsWithFlag(t *testing.T) {
 	model := newStopModel("ctx209-sched-compact")
 	obs := &captureObserver{}
 	session := NewLogSession()
-	_, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true}, Deps{
+	_, err := Run(context.Background(), ModeScheduled, RunConfig{RequireCompactionOptIn: true}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(6, 64_000), label: "sched"},
 		Observer:   obs,
 		Policy:     finishableScheduledPolicy(session),
@@ -450,7 +450,7 @@ func TestRun_ContextPressure_MultiRoundCompactsFromGroundTruthAndFeedsForward(t 
 	session := NewLogSession()
 	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 95_000}}
 	obs := &captureObserver{}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(10, 20), label: "mr"}, // ~0.05 estimate at round 0
 		Observer:   obs,
 		Policy:     newRoundsPolicy(session, 1), // round 0 cannot finish, round 1 can → exactly 2 rounds
@@ -493,7 +493,7 @@ func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 	session := NewLogSession()
 	model := &capturingModel{slug: slug, inputByCall: []int{95_000, 77_000, 77_000}}
 	obs := &captureObserver{}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:      historyInput{system: "s", msgs: fillerMessages(8, 38_000), label: "warn"}, // 76K tokens → 0.76 estimate, inside the reserved target
 		Observer:   obs,
 		Policy:     newRoundsPolicy(session, 2), // rounds 0, 1, 2
@@ -525,7 +525,7 @@ func TestRun_ContextPressure_MultiRoundWarnDedupAndReset(t *testing.T) {
 func TestRun_ContextPressure_UnsplittableHistoryStillWarns(t *testing.T) {
 	model := newStopModel("ctx209-unsplittable")
 	obs := &captureObserver{}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:    historyInput{system: "s", msgs: fillerMessages(1, 800_000), label: "huge"}, // 200K tokens vs 100K window
 		Observer: obs,
 		Policy:   NewInteractivePolicy(0, 0, nil, nil),
@@ -550,7 +550,6 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 	model := &capturingModel{slug: slug, inputByCall: []int{40_000}}
 	obs := &captureObserver{}
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:          CanonicalEnvPrefix,
 		RuntimeDateInInput: true,
 	}, Deps{
 		Input:    historyInput{system: "s", msgs: initialMsgs, label: "seed"},
@@ -624,7 +623,6 @@ func TestCheckContextPressure_LargeWindowInteractiveDefaultCapsAndOverrides(t *t
 	recordContextMax(slug, 1_000_000)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
-	e.envPrefix = CanonicalEnvPrefix
 	msgs := fillerMessages(8, 200)
 
 	if got := e.windowCheckpointLimit(model); got != defaultInteractiveContextCompactionMaxTokens {

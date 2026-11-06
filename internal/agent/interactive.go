@@ -234,7 +234,6 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 
 	cfg := agentcore.RunConfig{
 		ConversationID:      tc.ConversationID,
-		EnvPrefix:           agentcore.CanonicalEnvPrefix,
 		Temperature:         tc.Temperature,
 		MaxCompletionTokens: tc.MaxTokens,
 		MaxIterations:       tc.MaxIterations,

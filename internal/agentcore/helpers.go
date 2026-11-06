@@ -12,6 +12,8 @@ import (
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
+
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Shared orchestration helpers extracted from chat + cutlass orchestration.go.
@@ -365,9 +367,10 @@ func summarizeForLog(text string, maxLen int) string {
 	if headLen+tailLen >= len(text) {
 		return text
 	}
-	omitted := len(text) - (headLen + tailLen)
+	head, tail := trunc.Clamp(text, headLen, ""), trunc.Tail(text, tailLen)
+	omitted := len(text) - len(head) - len(tail)
 	return fmt.Sprintf("%s ... [truncated %d bytes for log readability] ... %s",
-		text[:headLen], omitted, text[len(text)-tailLen:])
+		head, omitted, tail)
 }
 
 // summarizeForConsole clamps text to a single-line preview (200 bytes) for
@@ -381,7 +384,7 @@ func summarizeForConsole(text string) string {
 	if len(text) <= maxLen {
 		return text
 	}
-	return text[:maxLen-3] + "..."
+	return trunc.Clamp(text, maxLen-3, "...")
 }
 
 // truncate clamps a string for SSE / log payloads (chat's helper).
@@ -390,9 +393,9 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	if maxLen < 4 {
-		return s[:maxLen]
+		return trunc.Clamp(s, maxLen, "")
 	}
-	return s[:maxLen-3] + "..."
+	return trunc.Clamp(s, maxLen-3, "...")
 }
 
 // taskTrackerSnapshot is the parsed state of the scheduled-mode task tracker,

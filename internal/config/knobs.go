@@ -126,7 +126,7 @@ type envKnob struct {
 	// alias chain (lookupFleet on the suffix after "FLEET_"). A non-fleet
 	// knob reads exactly key from the process env. Set it ONLY when the
 	// consumer honors the aliases too (the loader always does; an external
-	// consumer does when it reads through agentcore's EnvPrefix machinery,
+	// consumer does when it reads through agentcore's fleetEnv reader,
 	// and does NOT when it calls os.Getenv("FLEET_…") directly) — otherwise
 	// boot would refuse over a spelling nothing ever reads.
 	fleet bool
@@ -354,7 +354,7 @@ var envKnobs = []envKnob{
 		scope: scopeExternal, readBy: "internal/sandbox (kataOverheadMB)"},
 
 	// ── agent runtime (internal/agentcore) ── the fleet:true rows here resolve
-	// through the EnvPrefix machinery, which honors the CHAT_/CUTLASS_ aliases;
+	// through agentcore's fleetEnv reader, which honors the CHAT_/CUTLASS_ aliases;
 	// the two fleet:false rows are read with a plain os.Getenv on the canonical
 	// name, so the registry must not accept an alias spelling nothing reads.
 	{key: "FLEET_TOOL_DISCLOSURE_THRESHOLD", kind: kindInt, min: bound(1),

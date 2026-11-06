@@ -37,8 +37,6 @@ type RunConfig struct {
 	// model, tool arguments, or sandbox.
 	TaskID         string
 	ConversationID string
-	// EnvPrefix selects the env-var family (kill-switches, retry budget).
-	EnvPrefix EnvPrefix
 	// Temperature for the model calls.
 	Temperature float64
 	// MaxCompletionTokens caps a single completion's output (defaults to
@@ -1052,11 +1050,10 @@ func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	eng := &engine{
 		model:                  deps.Model,
 		fallbackModels:         fallbackModels,
-		resilience:             loadResilienceConfigFor(cfg.EnvPrefix),
+		resilience:             loadResilienceConfig(),
 		logSession:             logSession,
 		onRetry:                newRetryLogger(logSession),
 		temperature:            cfg.Temperature,
-		envPrefix:              cfg.EnvPrefix,
 		compactionSummarizer:   deps.CompactionSummarizer,
 		usageReporter:          deps.UsageReporter,
 		steerSource:            deps.SteerSource,

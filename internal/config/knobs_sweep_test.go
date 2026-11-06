@@ -24,7 +24,7 @@ import (
 // an ad-hoc typed env read actually takes:
 //
 //  1. A function that both reads a LITERAL env key (os.Getenv / os.LookupEnv,
-//     or agentcore's EnvPrefix.lookup) and calls a typed parser
+//     or agentcore's fleetEnv.lookup) and calls a typed parser
 //     (strconv.Atoi/ParseInt/ParseFloat/ParseBool/ParseUint, time.ParseDuration).
 //  2. A package-local env-parse HELPER — a func that reads one of its own string
 //     parameters from the env and parses it (httpapi's envInt/envDuration,
@@ -49,7 +49,7 @@ var sweepParseFuncs = map[string]map[string]bool{
 }
 
 // sweepEnvReadFuncs are the env-reading calls whose literal argument is a key.
-// os.Getenv/os.LookupEnv take a verbatim key; the EnvPrefix machinery's lookup
+// os.Getenv/os.LookupEnv take a verbatim key; agentcore's fleetEnv.lookup
 // takes a SUFFIX under the FLEET_ chain.
 var sweepEnvReadFuncs = map[string]struct{ pkg, sel string }{
 	"os.Getenv":    {"os", "Getenv"},
@@ -89,7 +89,7 @@ type sweepFinding struct {
 	key  string
 	file string
 	// kind is how the read spelled the name: "key" (a verbatim os.Getenv on the
-	// canonical name) or "suffix" (through agentcore's EnvPrefix, which also
+	// canonical name) or "suffix" (through agentcore's fleetEnv, which also
 	// honors the CHAT_/CUTLASS_ aliases). It must match the row's fleet flag —
 	// see TestExternalKnobAliasFlagMatchesItsReader.
 	kind string
@@ -121,7 +121,7 @@ func envReadKind(call *ast.CallExpr) string {
 			return "key"
 		}
 	}
-	// agentcore's EnvPrefix.lookup(suffix) — matched on the method name, since
+	// agentcore's fleetEnv.lookup(suffix) — matched on the method name, since
 	// the receiver is a local variable.
 	if sel.Sel.Name == "lookup" {
 		return "suffix"
@@ -487,7 +487,7 @@ func TestEnvKnobRegistryCoversAdHocReadsAcrossTheRepo(t *testing.T) {
 	// The registry's `fleet` flag must match HOW the consumer spells the read:
 	// a row marked fleet resolves the CHAT_/CUTLASS_ aliases too, so marking it
 	// on a knob read with a plain os.Getenv("FLEET_…") would refuse boot over an
-	// alias spelling nothing ever reads — and NOT marking it on an EnvPrefix
+	// alias spelling nothing ever reads — and NOT marking it on a fleetEnv
 	// read would leave the alias spelling unvalidated.
 	for _, f := range findings {
 		k := envKnobByKey[f.key]

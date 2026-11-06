@@ -273,21 +273,21 @@ const (
 )
 
 // contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD
-// (with the CHAT_/CUTLASS_ aliases the EnvPrefix machinery already honors),
+// (with the CHAT_/CUTLASS_ aliases fleetEnv already honors),
 // clamped to (0,1]. An unset, unparseable, or out-of-range value falls back to
 // the default.
-func contextPressureWarnThreshold(p EnvPrefix) float64 {
+func contextPressureWarnThreshold() float64 {
 	return clampFraction(
-		p.lookupFloatDefault("CONTEXT_PRESSURE_WARN_THRESHOLD", defaultContextPressureWarnThreshold),
+		fleetEnv.lookupFloatDefault("CONTEXT_PRESSURE_WARN_THRESHOLD", defaultContextPressureWarnThreshold),
 		defaultContextPressureWarnThreshold,
 	)
 }
 
 // contextCompactionThreshold resolves FLEET_CONTEXT_COMPACTION_THRESHOLD the
 // same way, clamped to (0,1].
-func contextCompactionThreshold(p EnvPrefix) float64 {
+func contextCompactionThreshold() float64 {
 	return clampFraction(
-		p.lookupFloatDefault("CONTEXT_COMPACTION_THRESHOLD", defaultContextCompactionThreshold),
+		fleetEnv.lookupFloatDefault("CONTEXT_COMPACTION_THRESHOLD", defaultContextCompactionThreshold),
 		defaultContextCompactionThreshold,
 	)
 }
@@ -302,9 +302,9 @@ const defaultBudgetWindDownFraction = 0.8
 // budgetWindDownFraction resolves FLEET_BUDGET_WINDDOWN_FRACTION, clamped to
 // (0,1] like the context thresholds. Setting it to 1 disables the notice in
 // practice: at 100% the hard ceiling (budgetGuardedStep) fires first.
-func budgetWindDownFraction(p EnvPrefix) float64 {
+func budgetWindDownFraction() float64 {
 	return clampFraction(
-		p.lookupFloatDefault("BUDGET_WINDDOWN_FRACTION", defaultBudgetWindDownFraction),
+		fleetEnv.lookupFloatDefault("BUDGET_WINDDOWN_FRACTION", defaultBudgetWindDownFraction),
 		defaultBudgetWindDownFraction,
 	)
 }
@@ -321,8 +321,8 @@ const defaultContextResendBudgetTokens = 80_000
 // contextResendBudgetTokens resolves FLEET_CONTEXT_RESEND_BUDGET_TOKENS (with
 // the CHAT_/CUTLASS_ aliases): 0 disables, a negative or unparseable value
 // falls back to the default.
-func contextResendBudgetTokens(p EnvPrefix) int {
-	v := p.lookupFloatDefault("CONTEXT_RESEND_BUDGET_TOKENS", float64(defaultContextResendBudgetTokens))
+func contextResendBudgetTokens() int {
+	v := fleetEnv.lookupFloatDefault("CONTEXT_RESEND_BUDGET_TOKENS", float64(defaultContextResendBudgetTokens))
 	if v < 0 {
 		return defaultContextResendBudgetTokens
 	}
@@ -333,8 +333,8 @@ func contextResendBudgetTokens(p EnvPrefix) int {
 // (#1742): on unless set to a false value. When on, a scheduled run's
 // compaction first replaces stale bulky tool results with stubs and buys the
 // LLM summary only if that did not free enough (see elideBeforeSummary).
-func contextElideBeforeSummary(p EnvPrefix) bool {
-	return p.lookupBoolDefault("CONTEXT_ELIDE_BEFORE_SUMMARY", true)
+func contextElideBeforeSummary() bool {
+	return fleetEnv.lookupBoolDefault("CONTEXT_ELIDE_BEFORE_SUMMARY", true)
 }
 
 // clampFraction returns v when it lies in (0,1]; otherwise def. A misconfigured

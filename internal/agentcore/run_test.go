@@ -85,7 +85,6 @@ func TestInteractivePolicy_CanFinish_AlwaysRound1(t *testing.T) {
 	exec := &stubExecutor{}
 
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		Temperature: 0.2,
 	}, Deps{
 		Input:    stubInput{system: "you are a test agent", user: "hello", label: "interactive-turn"},
@@ -123,7 +122,7 @@ func (orchlessPolicy) CanFinish(int) (bool, []string)                       { re
 // cost/token ceilings never firing.
 func TestRun_RejectsPolicyWithoutOrchestration(t *testing.T) {
 	model := &mockModel{}
-	_, err := Run(context.Background(), ModeInteractive, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	_, err := Run(context.Background(), ModeInteractive, RunConfig{}, Deps{
 		Input:  stubInput{system: "sys", user: "hello", label: "turn"},
 		Policy: orchlessPolicy{},
 		Model:  model,
@@ -163,7 +162,7 @@ func TestRun_RoundCapReturnsAccumulatedUsageAndEntries(t *testing.T) {
 		},
 	}
 
-	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:  stubInput{system: "sched", user: "do the task", label: "task-cap"},
 		Policy: policy,
 		Model:  model,
@@ -214,7 +213,7 @@ func TestScheduledPolicy_LoopsUntilAuditClears(t *testing.T) {
 		},
 	}
 
-	res, err := Run(context.Background(), ModeScheduled, RunConfig{EnvPrefix: CanonicalEnvPrefix}, Deps{
+	res, err := Run(context.Background(), ModeScheduled, RunConfig{}, Deps{
 		Input:  stubInput{system: "sched", user: "do the task", label: "task-1"},
 		Policy: policy,
 		Model:  model,
@@ -267,7 +266,6 @@ func TestInteractivePolicy_RecoversFromFinishReasonLength(t *testing.T) {
 	exec := &stubExecutor{}
 
 	res, err := Run(context.Background(), ModeInteractive, RunConfig{
-		EnvPrefix:   CanonicalEnvPrefix,
 		Temperature: 0.2,
 	}, Deps{
 		Input:    stubInput{system: "you are a test agent", user: "build the slide deck", label: "interactive-turn"},

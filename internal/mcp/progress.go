@@ -8,7 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-	"unicode/utf8"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // MCP progress notifications (docs/APPROVAL-PROGRESS.md).
@@ -104,7 +105,7 @@ func deliverProgress(ctx context.Context, method string, params json.RawMessage)
 	if json.Unmarshal(p.ProgressToken, &got) != nil || got != token {
 		return
 	}
-	u := ProgressUpdate{Progress: *p.Progress, Message: truncateRunes(p.Message, MaxProgressMessageRunes)}
+	u := ProgressUpdate{Progress: *p.Progress, Message: truncate.Runes(p.Message, MaxProgressMessageRunes, "…")}
 	if p.Total != nil {
 		u.Total = *p.Total
 	}
@@ -132,14 +133,6 @@ func deliverProgressJSON(ctx context.Context, data []byte) {
 
 func finiteNonNegative(f float64) bool {
 	return !math.IsNaN(f) && !math.IsInf(f, 0) && f >= 0
-}
-
-func truncateRunes(s string, n int) string {
-	if utf8.RuneCountInString(s) <= n {
-		return s
-	}
-	r := []rune(s)
-	return string(r[:n]) + "…"
 }
 
 // ThrottleProgress wraps fn so it receives at most one update per interval.

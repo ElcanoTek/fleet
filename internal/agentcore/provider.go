@@ -57,7 +57,7 @@ func openRouterBaseURLOverride() string {
 	if v := strings.TrimSpace(os.Getenv(openRouterBaseURLOverrideEnv)); v != "" {
 		return v
 	}
-	return EnvPrefix("").lookup(openRouterBaseURLOverrideEnv)
+	return fleetEnv.lookup(openRouterBaseURLOverrideEnv)
 }
 
 // newOpenRouterProvider builds the fantasy OpenRouter provider with the given

@@ -24,48 +24,47 @@ import (
 // past 30 s before its first visible token, on a route that streams no
 // reasoning to prove the model is alive.
 func TestFirstChunkTimeoutScalesWithPromptAndClamps(t *testing.T) {
-	p := EnvPrefix(CanonicalEnvPrefix)
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "")
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "")
 
-	if got := firstChunkTimeoutFor(p, 0); got != 75*time.Second {
+	if got := firstChunkTimeoutFor(0); got != 75*time.Second {
 		t.Fatalf("unknown prompt size must yield the 75 s base, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 9_999); got != 75*time.Second {
+	if got := firstChunkTimeoutFor(9_999); got != 75*time.Second {
 		t.Fatalf("under 10K tokens adds nothing, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 115_000); got != 97*time.Second {
+	if got := firstChunkTimeoutFor(115_000); got != 97*time.Second {
 		t.Fatalf("115K tokens = 75 s + 11×2 s = 97 s, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 2_000_000); got != 180*time.Second {
+	if got := firstChunkTimeoutFor(2_000_000); got != 180*time.Second {
 		t.Fatalf("a huge prompt must clamp to the 180 s default cap, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, -5); got != 75*time.Second {
+	if got := firstChunkTimeoutFor(-5); got != 75*time.Second {
 		t.Fatalf("a negative estimate is treated as unknown, got %s", got)
 	}
 
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "45")
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "60")
-	if got := firstChunkTimeoutFor(p, 0); got != 45*time.Second {
+	if got := firstChunkTimeoutFor(0); got != 45*time.Second {
 		t.Fatalf("base knob not honoured, got %s", got)
 	}
-	if got := firstChunkTimeoutFor(p, 200_000); got != 60*time.Second {
+	if got := firstChunkTimeoutFor(200_000); got != 60*time.Second {
 		t.Fatalf("cap knob not honoured, got %s", got)
 	}
 	// A cap below the base can never shorten the base wait.
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "10")
-	if got := firstChunkTimeoutFor(p, 500_000); got != 45*time.Second {
+	if got := firstChunkTimeoutFor(500_000); got != 45*time.Second {
 		t.Fatalf("cap below base must be lifted to the base, got %s", got)
 	}
 	// The floor protects against a knob that would make every call a blip.
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "1")
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", "")
-	if got := firstChunkTimeoutFor(p, 0); got != minFirstChunkTimeout {
+	if got := firstChunkTimeoutFor(0); got != minFirstChunkTimeout {
 		t.Fatalf("base below the floor must be lifted to %s, got %s", minFirstChunkTimeout, got)
 	}
 	// Unparseable falls back to the default rather than failing the turn.
 	t.Setenv("FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", "soon")
-	if got := firstChunkTimeoutFor(p, 0); got != 75*time.Second {
+	if got := firstChunkTimeoutFor(0); got != 75*time.Second {
 		t.Fatalf("unparseable knob must fall back to the default, got %s", got)
 	}
 }
@@ -567,7 +566,7 @@ func TestRoundStreamStepZeroEstimatesPromptTokensFromMessages(t *testing.T) {
 	if tokens < 400_000 {
 		t.Fatalf("expected >=400K estimated request tokens on step 0, got %d", tokens)
 	}
-	if got := firstChunkTimeoutFor(e.envPrefix, tokens); got != 155*time.Second {
+	if got := firstChunkTimeoutFor(tokens); got != 155*time.Second {
 		t.Fatalf("expected 400K step-0 prompt to scale timeout to 155s (75s + 40×2s), got %s", got)
 	}
 }

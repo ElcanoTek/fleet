@@ -1231,16 +1231,6 @@ func (p *Pool) failAuditAborted(task *models.Task, session *models.LogSession, r
 // enough that one run cannot make the Operations Center unreadable.
 const maxTerminalMessageRunes = 600
 
-// truncateRunes bounds by RUNES, not bytes, so a multi-byte character is never
-// cut in half into invalid UTF-8.
-func truncateRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "…"
-}
-
 // auditAbortDetail peels the sentinel off the driver's wrapped error, leaving
 // the agent's user_visible_summary. Bounded because it is model-authored text
 // landing in a column every task list renders.
@@ -1250,7 +1240,7 @@ func auditAbortDetail(runErr error) string {
 	}
 	detail := strings.TrimSpace(strings.TrimPrefix(runErr.Error(), agentcore.ErrAuditAborted.Error()))
 	detail = strings.TrimSpace(strings.TrimPrefix(detail, ":"))
-	return truncateRunes(detail, maxTerminalMessageRunes)
+	return truncate.Runes(detail, maxTerminalMessageRunes, "…")
 }
 
 // failInterrupted records the terminal state for a run the shutdown grace period
@@ -1408,7 +1398,7 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 		outcome = models.RunOutcomeConnectorUnavailable
 		var outage *agentcore.ConnectorUnavailableError
 		if errors.As(runErr, &outage) {
-			outcomeDetail = truncateRunes(outage.Connectors(), maxRunOutcomeDetailRunes)
+			outcomeDetail = truncate.Runes(outage.Connectors(), maxRunOutcomeDetailRunes, "…")
 		}
 	}
 	if task.RetryPolicy.ShouldRetryClass(class) && task.AttemptCount < task.MaxRetries {
@@ -1653,7 +1643,7 @@ func sessionRunOutcome(session *models.LogSession) (outcome, detail string) {
 	if session == nil || session.RunOutcome != models.RunOutcomeBlocked {
 		return "", ""
 	}
-	return session.RunOutcome, truncateRunes(collapseWhitespace(session.RunOutcomeDetail), maxRunOutcomeDetailRunes)
+	return session.RunOutcome, truncate.Runes(collapseWhitespace(session.RunOutcomeDetail), maxRunOutcomeDetailRunes, "…")
 }
 
 // successMessage is the agent's final answer, bounded and flattened to one
@@ -1682,7 +1672,7 @@ func successMessage(session *models.LogSession) string {
 	if outcome, _ := sessionRunOutcome(session); outcome == models.RunOutcomeBlocked {
 		summary = "[" + models.RunOutcomeBlocked + "] " + summary
 	}
-	return truncateRunes(summary, maxTerminalMessageRunes)
+	return truncate.Runes(summary, maxTerminalMessageRunes, "…")
 }
 
 // hasMessageType reports whether any session message carries messageType.

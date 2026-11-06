@@ -19,7 +19,7 @@ import (
 func TestProjectRuns_RecurringCapsAtFive(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Name: "hourly", Prompt: "p", Recurrence: "0 * * * *"}
-	runs := projectRuns(task, now, time.Time{})
+	runs := projectRuns(task, now, time.Time{}, time.UTC)
 	if len(runs) != upcomingPerTaskMax {
 		t.Fatalf("expected %d occurrences, got %d", upcomingPerTaskMax, len(runs))
 	}
@@ -40,7 +40,7 @@ func TestProjectRuns_RecurringHonorsTimezone(t *testing.T) {
 	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	// 09:00 daily in New York → not 09:00 UTC.
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *", Timezone: "America/New_York"}
-	runs := projectRuns(task, now, time.Time{})
+	runs := projectRuns(task, now, time.Time{}, time.UTC)
 	if len(runs) == 0 {
 		t.Fatal("expected occurrences")
 	}
@@ -56,7 +56,7 @@ func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
 	future := now.Add(2 * time.Hour)
 	past := now.Add(-2 * time.Hour)
 
-	fut := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &future}, now, time.Time{})
+	fut := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &future}, now, time.Time{}, time.UTC)
 	if len(fut) != 1 || fut[0].Recurring {
 		t.Fatalf("expected 1 non-recurring future run, got %+v", fut)
 	}
@@ -64,27 +64,15 @@ func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
 		t.Fatalf("expected next_run=%v, got %v", future, fut[0].NextRun)
 	}
 
-	if pastRuns := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &past}, now, time.Time{}); len(pastRuns) != 0 {
+	if pastRuns := projectRuns(&models.Task{ID: uuid.New(), ScheduledFor: &past}, now, time.Time{}, time.UTC); len(pastRuns) != 0 {
 		t.Fatalf("expected past one-shot to project no runs, got %d", len(pastRuns))
 	}
 }
 
 func TestProjectRuns_InvalidCronYieldsNothing(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
-	if runs := projectRuns(&models.Task{ID: uuid.New(), Recurrence: "not a cron"}, now, time.Time{}); len(runs) != 0 {
+	if runs := projectRuns(&models.Task{ID: uuid.New(), Recurrence: "not a cron"}, now, time.Time{}, time.UTC); len(runs) != 0 {
 		t.Fatalf("expected 0 runs for an invalid cron, got %d", len(runs))
-	}
-}
-
-func TestTaskLocation_FallsBackToUTC(t *testing.T) {
-	if loc := taskLocation(""); loc != time.UTC {
-		t.Fatalf("empty tz should be UTC, got %v", loc)
-	}
-	if loc := taskLocation("Nowhere/Bogus"); loc != time.UTC {
-		t.Fatalf("bogus tz should fall back to UTC, got %v", loc)
-	}
-	if loc := taskLocation("America/New_York"); loc == time.UTC {
-		t.Fatal("valid tz should not fall back to UTC")
 	}
 }
 
@@ -139,7 +127,7 @@ func TestProjectRuns_HorizonProjectsWholeWindow(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *"} // hourly
 	horizon := now.Add(24 * time.Hour)
-	runs := projectRuns(task, now, horizon)
+	runs := projectRuns(task, now, horizon, time.UTC)
 	if len(runs) != 24 {
 		t.Fatalf("expected 24 hourly occurrences inside the horizon, got %d", len(runs))
 	}
@@ -155,12 +143,12 @@ func TestProjectRuns_HonorsRecurrenceUntil(t *testing.T) {
 	until := now.Add(3*time.Hour + 30*time.Minute)
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceUntil: &until}
 	// Even with a week-long horizon, nothing past the task's own end date.
-	runs := projectRuns(task, now, now.Add(7*24*time.Hour))
+	runs := projectRuns(task, now, now.Add(7*24*time.Hour), time.UTC)
 	if len(runs) != 3 {
 		t.Fatalf("expected 3 occurrences up to recurrence_until, got %d", len(runs))
 	}
 	// Count-based mode honors it too.
-	if legacy := projectRuns(task, now, time.Time{}); len(legacy) != 3 {
+	if legacy := projectRuns(task, now, time.Time{}, time.UTC); len(legacy) != 3 {
 		t.Fatalf("expected 3 occurrences in count mode, got %d", len(legacy))
 	}
 }
@@ -169,10 +157,10 @@ func TestProjectRuns_HonorsRecurrenceRemaining(t *testing.T) {
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	remaining := 2
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceRemaining: &remaining}
-	if runs := projectRuns(task, now, now.Add(7*24*time.Hour)); len(runs) != 2 {
+	if runs := projectRuns(task, now, now.Add(7*24*time.Hour), time.UTC); len(runs) != 2 {
 		t.Fatalf("expected the 2-run budget to cap the horizon projection, got %d", len(runs))
 	}
-	if runs := projectRuns(task, now, time.Time{}); len(runs) != 2 {
+	if runs := projectRuns(task, now, time.Time{}, time.UTC); len(runs) != 2 {
 		t.Fatalf("expected the 2-run budget to cap the count projection, got %d", len(runs))
 	}
 }
@@ -187,7 +175,7 @@ func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
 	// July 1st and July 2nd 09:00 fires a walk from now would have invented.
 	postponed := time.Date(2026, 7, 2, 14, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *", Timezone: "UTC", ScheduledFor: &postponed}
-	runs := projectRuns(task, now, time.Time{})
+	runs := projectRuns(task, now, time.Time{}, time.UTC)
 	if len(runs) != upcomingPerTaskMax {
 		t.Fatalf("expected %d occurrences, got %d", upcomingPerTaskMax, len(runs))
 	}
@@ -202,7 +190,7 @@ func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
 	// falls back to now, as the one-shot branch does.
 	due := now.Add(-time.Hour)
 	task.ScheduledFor = &due
-	runs = projectRuns(task, now, time.Time{})
+	runs = projectRuns(task, now, time.Time{}, time.UTC)
 	if len(runs) == 0 || !runs[0].NextRun.Equal(time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)) {
 		t.Fatalf("due row should walk from now, got %+v", runs)
 	}
@@ -210,7 +198,26 @@ func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
 	// The horizon and the recurrence_until end condition apply to the seeded
 	// occurrence too.
 	task.ScheduledFor = &postponed
-	if runs := projectRuns(task, now, now.Add(24*time.Hour)); len(runs) != 0 {
+	if runs := projectRuns(task, now, now.Add(24*time.Hour), time.UTC); len(runs) != 0 {
 		t.Fatalf("scheduled_for beyond the horizon must project nothing, got %+v", runs)
+	}
+}
+
+// TestProjectRunsUsesServerLocationForEmptyTimezone pins #1947: a recurring
+// task with no timezone projects in the SERVER location — the zone the
+// scheduler actually fires it in — not UTC, so the timeline matches real fires.
+func TestProjectRunsUsesServerLocationForEmptyTimezone(t *testing.T) {
+	ny, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Skip("tzdata unavailable")
+	}
+	now := time.Date(2026, 1, 5, 12, 0, 0, 0, time.UTC)
+	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *"}
+	runs := projectRuns(task, now, time.Time{}, ny)
+	if len(runs) == 0 {
+		t.Fatal("no runs projected")
+	}
+	if got := runs[0].NextRun.In(ny); got.Hour() != 9 {
+		t.Errorf("first run %v is not 09:00 in the server location", got)
 	}
 }

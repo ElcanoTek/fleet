@@ -408,7 +408,7 @@ func TestExternalKnobsRefuseBoot(t *testing.T) {
 
 	t.Run("legacy alias spelling of a fleet-chain knob refuses", func(t *testing.T) {
 		isolateEnv(t)
-		// agentcore reads this through EnvPrefix, which honors CUTLASS_ too,
+		// agentcore reads this through fleetEnv, which honors CUTLASS_ too,
 		// so the registry must reject the alias spelling as well.
 		t.Setenv("CUTLASS_RETRY_MAX_ATTEMPTS", "many")
 		if _, err := Load(""); err == nil {

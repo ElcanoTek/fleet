@@ -34,7 +34,6 @@ func TestWindowCheckpointActive(t *testing.T) {
 			t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", tc.budget)
 			t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", tc.autoCompact)
 			e := newMockEngine(t, model)
-			e.envPrefix = CanonicalEnvPrefix
 			e.requireCompactionOptIn = tc.scheduled
 			if got := e.windowCheckpointActive(); got != tc.want {
 				t.Fatalf("windowCheckpointActive = %v, want %v", got, tc.want)
@@ -74,7 +73,7 @@ func runScheduledNearWindow(t *testing.T, autoCompact string) (ticks int32, even
 	obs := &payloadObserver{}
 	session := NewLogSession()
 	res, err := Run(context.Background(), ModeScheduled,
-		RunConfig{EnvPrefix: CanonicalEnvPrefix, RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
+		RunConfig{RequireCompactionOptIn: true, NativeTools: []fantasy.AgentTool{tick}},
 		Deps{
 			Input:      historyInput{system: "s", msgs: fillerMessages(8, 200), label: "sched-window"},
 			Observer:   obs,

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Rendering a conversation for the save-as-workflow synthesizer.
@@ -91,7 +92,7 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 			if e.Role == "assistant" {
 				label = "Assistant"
 			}
-			fmt.Fprintf(&b, "%s: %s\n\n", label, clampRunes(text, workflowTurnMaxRunes))
+			fmt.Fprintf(&b, "%s: %s\n\n", label, truncate.Runes(text, workflowTurnMaxRunes, "…"))
 		case entryTypeToolCallMD:
 			var c agent.ToolCallContent
 			if json.Unmarshal(e.Content, &c) != nil {
@@ -111,7 +112,7 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 			// Keep the FIRST input of a run: it shows how the tool was
 			// invoked, and later calls in a run are usually variations.
 			if input := strings.TrimSpace(c.Input); input != "" {
-				runInput = clampRunes(collapseWhitespace(input), workflowToolInputMaxRunes)
+				runInput = truncate.Runes(collapseWhitespace(input), workflowToolInputMaxRunes, "…")
 			}
 		case "tool_result":
 			var c agent.ToolResultContent
@@ -123,21 +124,11 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 				continue
 			}
 			flush()
-			fmt.Fprintf(&b, "[tool error: %s]\n", clampRunes(collapseWhitespace(text), workflowToolErrorMaxRunes))
+			fmt.Fprintf(&b, "[tool error: %s]\n", truncate.Runes(collapseWhitespace(text), workflowToolErrorMaxRunes, "…"))
 		}
 	}
 	flush()
 	return strings.TrimSpace(b.String())
-}
-
-// clampRunes truncates on a rune boundary, marking that it did so. Counting
-// runes (not bytes) keeps a multi-byte character from being cut in half.
-func clampRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "…"
 }
 
 // collapseWhitespace folds newlines and runs of spaces into single spaces, so

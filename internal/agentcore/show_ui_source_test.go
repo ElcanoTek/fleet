@@ -58,7 +58,6 @@ func entryFor(res Result, id string) *RunEntry {
 
 func runShowUISource(t *testing.T, cfg RunConfig, deps Deps) Result {
 	t.Helper()
-	cfg.EnvPrefix = CanonicalEnvPrefix
 	cfg.NativeTools = append(cfg.NativeTools, tools.NewShowUITool())
 	if deps.Policy == nil {
 		deps.Policy = NewInteractivePolicy(0, 0, nil, nil)

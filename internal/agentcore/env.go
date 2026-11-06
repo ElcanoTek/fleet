@@ -15,45 +15,34 @@ import (
 // or CUTLASS_RETRY_MAX_ATTEMPTS keeps working, and so the lifted parity tests
 // (which set the legacy names) stay green.
 //
-// EnvPrefix is the single divergence axis for env naming: a constructor takes
-// a prefix, and every env lookup goes through lookupEnv which tries the
-// configured prefix first and then the legacy aliases.
+// Every env lookup goes through fleetEnv, which tries the canonical FLEET_
+// name first and then the legacy aliases. The prefix never varies by run
+// (#1936), so there is no per-run configuration to carry.
 
 // CanonicalEnvPrefix is the default env-var prefix for the unified runtime.
 const CanonicalEnvPrefix = "FLEET"
 
-// legacyEnvPrefixes are the back-compat aliases tried after the configured
+// legacyEnvPrefixes are the back-compat aliases tried after the canonical
 // prefix. Order is irrelevant: the first non-empty match wins, and the two
 // front-ends never set the same suffix to conflicting values.
 var legacyEnvPrefixes = []string{"CHAT", "CUTLASS"}
 
-// EnvPrefix names the env-var family a run reads. The zero value behaves like
-// CanonicalEnvPrefix. Constructed once at Manager/engine build time and carried
-// on RunConfig so the loop's env lookups are deterministic per run.
-type EnvPrefix string
+// envReader reads agentcore's env knobs. It has no state: it exists so every
+// read is spelled fleetEnv.lookup(suffix) — the shape internal/config's knob
+// sweep (knobs_sweep_test.go) recognizes as a FLEET_-chain read.
+type envReader struct{}
 
-// normalize returns the effective prefix, defaulting to the canonical one and
-// stripping any trailing underscore the caller may have included.
-func (p EnvPrefix) normalize() string {
-	s := strings.TrimRight(strings.ToUpper(strings.TrimSpace(string(p))), "_")
-	if s == "" {
-		return CanonicalEnvPrefix
-	}
-	return s
-}
+// fleetEnv is the one envReader.
+var fleetEnv envReader
 
-// lookup returns the value of <PREFIX>_<suffix>, falling back to the legacy
-// CHAT_/CUTLASS_ aliases when the configured prefix is unset. The first
-// non-empty value wins.
-func (p EnvPrefix) lookup(suffix string) string {
+// lookup returns the value of FLEET_<suffix>, falling back to the legacy
+// CHAT_/CUTLASS_ aliases when it is unset. The first non-empty value wins.
+func (envReader) lookup(suffix string) string {
 	suffix = strings.TrimLeft(suffix, "_")
-	if v := strings.TrimSpace(os.Getenv(p.normalize() + "_" + suffix)); v != "" {
+	if v := strings.TrimSpace(os.Getenv(CanonicalEnvPrefix + "_" + suffix)); v != "" {
 		return v
 	}
 	for _, legacy := range legacyEnvPrefixes {
-		if legacy == p.normalize() {
-			continue
-		}
 		if v := strings.TrimSpace(os.Getenv(legacy + "_" + suffix)); v != "" {
 			return v
 		}
@@ -74,8 +63,8 @@ func (p EnvPrefix) lookup(suffix string) string {
 // lookupBool parses the resolved value as a bool (strconv.ParseBool rules).
 // Unset / unparseable both report false, matching the original kill-switch
 // semantics in both repos.
-func (p EnvPrefix) lookupBool(suffix string) bool {
-	v, _ := strconv.ParseBool(p.lookup(suffix))
+func (p envReader) lookupBool(suffix string) bool {
+	v, _ := strconv.ParseBool(fleetEnv.lookup(suffix))
 	return v
 }
 
@@ -84,8 +73,8 @@ func (p EnvPrefix) lookupBool(suffix string) bool {
 // So a typo such as "off" means the default, which for a default-on knob is
 // on; config.Load refuses such a value at boot (kindStrconvBool), which is
 // where an operator sees it.
-func (p EnvPrefix) lookupBoolDefault(suffix string, def bool) bool {
-	v, err := strconv.ParseBool(p.lookup(suffix))
+func (p envReader) lookupBoolDefault(suffix string, def bool) bool {
+	v, err := strconv.ParseBool(fleetEnv.lookup(suffix))
 	if err != nil {
 		return def
 	}
@@ -96,8 +85,8 @@ func (p EnvPrefix) lookupBoolDefault(suffix string, def bool) bool {
 // the var is unset or unparseable. Used for fractional thresholds (e.g. the
 // context-pressure ratios) where a bad value must fall back to a safe default
 // rather than collapse to zero.
-func (p EnvPrefix) lookupFloatDefault(suffix string, def float64) float64 {
-	raw := p.lookup(suffix)
+func (p envReader) lookupFloatDefault(suffix string, def float64) float64 {
+	raw := fleetEnv.lookup(suffix)
 	if raw == "" {
 		return def
 	}
@@ -110,8 +99,8 @@ func (p EnvPrefix) lookupFloatDefault(suffix string, def float64) float64 {
 
 // hasExplicitFraction reports whether <PREFIX>_<suffix> (or its legacy alias)
 // is explicitly set to a valid fraction in (0,1].
-func (p EnvPrefix) hasExplicitFraction(suffix string) bool {
-	raw := p.lookup(suffix)
+func (p envReader) hasExplicitFraction(suffix string) bool {
+	raw := fleetEnv.lookup(suffix)
 	if raw == "" {
 		return false
 	}

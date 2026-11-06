@@ -63,7 +63,7 @@ const modelsEndpointURL = "https://openrouter.ai/api/v1/models"
 // (set it to 1440 to restore the old 24h cadence).
 const defaultModelsCacheTTLMinutes = 60
 
-// modelsCacheTTLEnvSuffix is the env knob (read via EnvPrefix so FLEET_/CHAT_/
+// modelsCacheTTLEnvSuffix is the env knob (read via fleetEnv so FLEET_/CHAT_/
 // CUTLASS_ all resolve, matching DISABLE_OPENROUTER_MODELS) that overrides the
 // catalog TTL, in minutes. A non-positive or unparseable value falls back to
 // the default.
@@ -73,7 +73,7 @@ const modelsCacheTTLEnvSuffix = "MODEL_CACHE_TTL_MINUTES"
 const modelsFetchTimeout = 5 * time.Second
 
 // modelsCacheDisableEnvSuffix short-circuits all network fetches when set
-// truthy (read via EnvPrefix so FLEET_/CHAT_/CUTLASS_ all work; the legacy
+// truthy (read via fleetEnv so FLEET_/CHAT_/CUTLASS_ all work; the legacy
 // CUTLASS_DISABLE_OPENROUTER_MODELS resolves through the back-compat aliases).
 const modelsCacheDisableEnvSuffix = "DISABLE_OPENROUTER_MODELS"
 
@@ -177,14 +177,14 @@ func SharedModelsCache() ModelCatalog { return sharedModelsCache }
 
 // modelsCacheDisabled reports whether the live fetch is suppressed by env.
 func modelsCacheDisabled() bool {
-	return EnvPrefix("").lookupBool(modelsCacheDisableEnvSuffix)
+	return fleetEnv.lookupBool(modelsCacheDisableEnvSuffix)
 }
 
 // modelsCacheTTL resolves the catalog TTL from FLEET_MODEL_CACHE_TTL_MINUTES
-// (with the CHAT_/CUTLASS_ aliases the EnvPrefix machinery honors), falling back
+// (with the CHAT_/CUTLASS_ aliases fleetEnv honors), falling back
 // to defaultModelsCacheTTLMinutes when unset, unparseable, or non-positive.
 func modelsCacheTTL() time.Duration {
-	raw := strings.TrimSpace(EnvPrefix("").lookup(modelsCacheTTLEnvSuffix))
+	raw := strings.TrimSpace(fleetEnv.lookup(modelsCacheTTLEnvSuffix))
 	if raw != "" {
 		if mins, err := strconv.Atoi(raw); err == nil && mins > 0 {
 			return time.Duration(mins) * time.Minute
