@@ -397,7 +397,7 @@ func (a *Agent) newSpawnSubagentTool() fantasy.AgentTool {
 	description := `Delegate a scoped subtask to a CHILD agent that runs to completion in its own fresh context, then returns its final answer to you as JSON {result, cost_usd, tokens, success, role, child_session_id, workdir}.
 
 WHEN to spawn: the work is independent, parallelizable, and self-contained (research a sub-question, analyze one of N files, fetch and summarize one of N URLs, draft one section). Call this tool MULTIPLE times in a single turn to fan out: the children run concurrently and all their results come back before your next step.
-When NOT to spawn: the steps are sequential (each needs the previous result), the work is one cheap tool call you can do yourself, or you cannot write the child a complete standalone task string. Doing the work yourself is often correct — never spawn for the sake of spawning.
+When NOT to spawn: the steps are sequential (each needs the previous result), the work is one cheap tool call you can do yourself, the turn is a recurring patrol or routine inbox/calendar/status check, you are only paginating an MCP API whose outputs already spill to .fleet/tool-output/ files (call tool_call in parallel yourself and parse the saved files in run_python — older bulky tool outputs are elided automatically on subsequent steps), or you cannot write the child a complete standalone task string. Doing the work yourself is often correct — never spawn for the sake of spawning.
 
 Roles: PREFER role=explore (the default) — a read-only research child with write tools stripped. Use role=worker ONLY when the child must create or edit files. Each child works in its own isolated subdirectory (returned as workdir) inside your workspace; tell it where inputs live via the task text, and read its outputs from workdir.
 
@@ -1276,7 +1276,7 @@ const delegationPromptSection = `
 You have a spawn_subagent tool. Delegation is a choice, not a requirement — most work is done best directly, and finishing without spawning is normal.
 
 - SPAWN when the work is independent, parallelizable, and self-contained: N files to analyze, N URLs to fetch, N sections to draft. Fan out by calling spawn_subagent several times in ONE turn.
-- DO NOT spawn when steps are sequential, when the work is one cheap tool call, or when you cannot write the child a complete standalone task.
+- DO NOT spawn when steps are sequential, when the work is one cheap tool call, during a recurring patrol or routine inbox/calendar/status check, or when you are simply paginating an MCP API (issue parallel tool_call requests directly in one step and parse the saved .fleet/tool-output/ files in run_python — older bulky tool outputs are automatically elided on later steps, whereas each child pays full system-prompt overhead). Do not spawn if you cannot write the child a complete standalone task.
 - PREFER role=explore (read-only research, the default). Use role=worker only when the child must create or edit files; read its outputs from the returned workdir.
 - BUDGET: each child is capped at a fraction (default 10%) of your remaining budget. Omit max_cost_usd/max_total_tokens unless you deliberately want a smaller slice — asking for more than the cap is refused.
 - The child cannot see this conversation: put everything it needs (instructions, data, file paths) in the task string.
