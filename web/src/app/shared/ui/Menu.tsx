@@ -467,12 +467,4 @@ export function MenuSeparator() {
   return <hr className="my-1 h-px border-0 bg-[var(--color-border)]" />;
 }
 
-export function MenuSectionLabel({ children }: { children: ReactNode }) {
-  return (
-    <div className="px-2 pb-1 pt-1 text-[0.625rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
-      {children}
-    </div>
-  );
-}
-
 export default Menu;

@@ -2,107 +2,9 @@
 // assets/js/validation.js to TypeScript. Pure functions — no DOM, no DOMPurify
 // (React escapes by default, so the moc `sanitizeHtml` shim is dropped).
 
-import { isValidEmail } from "./format";
 import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";
 
 export type ValidationResult = { valid: boolean; message: string };
-
-export function validateUsername(username: unknown): ValidationResult {
-  if (!username || typeof username !== "string") {
-    return { valid: false, message: "Username is required" };
-  }
-  const trimmed = username.trim();
-  if (trimmed.length < 3) {
-    return { valid: false, message: "Username must be at least 3 characters" };
-  }
-  if (trimmed.length > 50) {
-    return { valid: false, message: "Username must be 50 characters or less" };
-  }
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-    return {
-      valid: false,
-      message: "Username can only contain letters, numbers, underscore, and hyphen",
-    };
-  }
-  return { valid: true, message: "" };
-}
-
-export type PasswordOptions = {
-  minLength?: number;
-  requireUppercase?: boolean;
-  requireLowercase?: boolean;
-  requireNumber?: boolean;
-  requireSpecial?: boolean;
-};
-
-export type PasswordResult = ValidationResult & { strength: string };
-
-export function validatePassword(password: unknown, options: PasswordOptions = {}): PasswordResult {
-  const opts = {
-    minLength: 8,
-    requireUppercase: false,
-    requireLowercase: false,
-    requireNumber: false,
-    requireSpecial: false,
-    ...options,
-  };
-
-  if (!password || typeof password !== "string") {
-    return { valid: false, message: "Password is required", strength: "none" };
-  }
-  if (password.length < opts.minLength) {
-    return {
-      valid: false,
-      message: `Password must be at least ${opts.minLength} characters`,
-      strength: "weak",
-    };
-  }
-
-  let strength = "weak";
-  let checks = 0;
-
-  if (opts.requireUppercase && !/[A-Z]/.test(password)) {
-    return { valid: false, message: "Password must contain at least one uppercase letter", strength: "weak" };
-  }
-  if (/[A-Z]/.test(password)) checks++;
-
-  if (opts.requireLowercase && !/[a-z]/.test(password)) {
-    return { valid: false, message: "Password must contain at least one lowercase letter", strength: "weak" };
-  }
-  if (/[a-z]/.test(password)) checks++;
-
-  if (opts.requireNumber && !/[0-9]/.test(password)) {
-    return { valid: false, message: "Password must contain at least one number", strength: "weak" };
-  }
-  if (/[0-9]/.test(password)) checks++;
-
-  if (opts.requireSpecial && !/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-    return { valid: false, message: "Password must contain at least one special character", strength: "weak" };
-  }
-  if (/[!@#$%^&*(),.?":{}|<>]/.test(password)) checks++;
-
-  if (password.length >= 12 && checks >= 3) {
-    strength = "strong";
-  } else if (password.length >= 8 && checks >= 2) {
-    strength = "medium";
-  }
-
-  return { valid: true, message: "", strength };
-}
-
-export function validateEmail(email: unknown): ValidationResult {
-  if (!email || typeof email !== "string") {
-    return { valid: false, message: "Email is required" };
-  }
-  const trimmed = email.trim().toLowerCase();
-  if (!isValidEmail(trimmed)) {
-    return { valid: false, message: "Invalid email format" };
-  }
-  if (trimmed.length > 254) {
-    return { valid: false, message: "Email is too long" };
-  }
-  return { valid: true, message: "" };
-}
 
 export function validateCronExpression(cron: unknown): ValidationResult {
   if (!cron || typeof cron !== "string") {
@@ -234,30 +136,6 @@ export function validateFile(file: FileLike | null | undefined, options: FileOpt
     }
   }
   return { valid: true, message: "" };
-}
-
-export type FilesResult = {
-  valid: boolean;
-  message: string;
-  results: Array<{ file: FileLike } & ValidationResult>;
-};
-
-export function validateFiles(
-  files: FileLike[],
-  options: FileOptions & { maxFiles?: number } = {},
-): FilesResult {
-  const opts = {
-    maxSize: DEFAULT_UPLOAD_MAX_BYTES,
-    maxFiles: 10,
-    allowedTypes: null as string[] | null,
-    allowedExtensions: null as string[] | null,
-    ...options,
-  };
-  if (files.length > opts.maxFiles) {
-    return { valid: false, message: `Too many files. Maximum ${opts.maxFiles} files allowed.`, results: [] };
-  }
-  const results = files.map((file) => ({ file, ...validateFile(file, opts) }));
-  return { valid: results.every((r) => r.valid), message: "", results };
 }
 
 export function validateScheduledTime(datetime: unknown): ValidationResult {

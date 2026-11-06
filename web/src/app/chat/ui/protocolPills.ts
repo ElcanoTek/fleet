@@ -117,15 +117,6 @@ export function asInputText(v: PillFieldValue | undefined): string {
   return asText(v);
 }
 
-export function asNumber(v: PillFieldValue | undefined, fallback: number): number {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string" && v.trim() !== "") {
-    const n = Number(v);
-    if (Number.isFinite(n)) return n;
-  }
-  return fallback;
-}
-
 export function asRange(v: PillFieldValue | undefined): DateRangeValue {
   if (v && typeof v === "object" && "from" in v && "to" in v) return v;
   return { from: "", to: "" };

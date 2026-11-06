@@ -34,21 +34,6 @@ export function formatTimeFirst(dateStr: string | null | undefined): string {
   return `${time} · ${d.toLocaleDateString()}`;
 }
 
-export function formatTimestamp(ts: number | null | undefined): string {
-  if (!ts) return "";
-  try {
-    return new Date(ts * 1000).toLocaleTimeString();
-  } catch {
-    return "";
-  }
-}
-
-export function formatNumber(num: number | string): string {
-  let n = typeof num === "number" ? num : Number.parseInt(num, 10);
-  if (Number.isNaN(n)) n = 0;
-  return n.toLocaleString();
-}
-
 export function truncate(str: string | null | undefined, maxLength = 60): string {
   if (!str) return "";
   return str.length > maxLength ? str.slice(0, maxLength) + "..." : str;

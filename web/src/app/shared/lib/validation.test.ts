@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  validateUsername,
-  validatePassword,
-  validateEmail,
   validateCronExpression,
   describeEmailError,
   validatePrompt,
@@ -16,51 +13,6 @@ import {
 
 // Ported from moc tests/validation.test.js, plus the target_node_name removal
 // (the task form no longer carries or validates it).
-
-describe("validateUsername", () => {
-  it("validates correct username", () => {
-    expect(validateUsername("valid_user-1").valid).toBe(true);
-  });
-  it("rejects empty or non-string", () => {
-    expect(validateUsername("").valid).toBe(false);
-    expect(validateUsername(null).valid).toBe(false);
-  });
-  it("rejects short / long / invalid chars", () => {
-    expect(validateUsername("ab").valid).toBe(false);
-    expect(validateUsername("a".repeat(51)).valid).toBe(false);
-    expect(validateUsername("user@name").valid).toBe(false);
-    expect(validateUsername("user name").valid).toBe(false);
-  });
-});
-
-describe("validatePassword", () => {
-  it("validates basic password", () => {
-    expect(validatePassword("password123").valid).toBe(true);
-  });
-  it("rejects short password", () => {
-    expect(validatePassword("short").valid).toBe(false);
-  });
-  it("enforces required classes", () => {
-    expect(validatePassword("password123", { requireUppercase: true }).valid).toBe(false);
-    expect(validatePassword("Password123", { requireUppercase: true }).valid).toBe(true);
-    expect(validatePassword("PASSWORD123", { requireLowercase: true }).valid).toBe(false);
-    expect(validatePassword("Password", { requireNumber: true }).valid).toBe(false);
-    expect(validatePassword("Password123", { requireSpecial: true }).valid).toBe(false);
-    expect(validatePassword("Password123!", { requireSpecial: true }).valid).toBe(true);
-  });
-  it("calculates strength", () => {
-    expect(validatePassword("password123").strength).toBe("medium");
-    expect(validatePassword("Password123456").strength).toBe("strong");
-  });
-});
-
-describe("validateEmail", () => {
-  it("validates and rejects", () => {
-    expect(validateEmail("test@example.com").valid).toBe(true);
-    expect(validateEmail("invalid").valid).toBe(false);
-    expect(validateEmail("a".repeat(245) + "@example.com").valid).toBe(false);
-  });
-});
 
 describe("validateCronExpression", () => {
   it("validates 5 and 6 part crons", () => {

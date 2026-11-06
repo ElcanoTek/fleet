@@ -38,7 +38,6 @@ export const ADVANCED_MODEL = "google/gemini-4-argon";
 export const ADVANCED_MODEL_LABEL = "Google: Gemini 4 Argon";
 
 export const FALLBACK_MODEL = ADVANCED_MODEL;
-export const FALLBACK_MODEL_LABEL = ADVANCED_MODEL_LABEL;
 
 // The scheduled-task FALLBACK the Operations Center create form pre-fills:
 // what a task fails over to when its primary is down. Compiled-in fallback
@@ -197,10 +196,6 @@ export function currentDefaultModel(): string {
 
 export function currentAdvancedModel(): string {
   return liveTiers.advancedModel;
-}
-
-export function currentDefaultModelLabel(): string {
-  return labelForModel(liveTiers.defaultModel);
 }
 
 export function currentAdvancedModelLabel(): string {
