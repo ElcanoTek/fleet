@@ -388,16 +388,12 @@ func run() error {
 	// the generic bundle.
 	cfg.A2APeers = bundle.A2APeerConfigs()
 
-	// Resolve the sandbox image, OCI runtime, and backend from env + bundle
-	// (env wins). Fail-closed on an unrecognized backend value (#989).
+	// Resolve the sandbox image, OCI runtime, backend (and its kubernetes
+	// settings) and egress allowlist from env + bundle (env wins). Fail-closed
+	// on an unrecognized backend value (#989).
 	if err := resolveSandboxInto(cfg, bundle); err != nil {
 		return err
 	}
-	// Sandbox egress allowlist (#211): the bundle manifest supplies the default
-	// allowed domains for allowlisted network mode (operator-authored deployment
-	// config, like the runtime + image). FLEET_DEFAULT_NETWORK_MODE selects the
-	// mode; this fills the allowlist it draws from.
-	cfg.SandboxNetworkAllowlist = bundle.Sandbox().NetworkAllowlist
 
 	// Install the bundle's agent tool-behavior policy (parallel-safe tools,
 	// critical-tool suffixes, substitute map). The generic bundle ships none, so
@@ -2335,29 +2331,6 @@ func orchestratorAddr() string {
 
 // ── graceful shutdown helpers (#278) ──
 
-// resolveSandboxRuntimeInto resolves the sandbox OCI runtime (#217) into
-// cfg.SandboxRuntime with the SAME precedence as the image: an explicit
-// FLEET_SANDBOX_RUNTIME env (already in cfg.SandboxRuntime) wins, else the
-// bundle manifest's sandbox.runtime fills it. Both the env and the bundle are
-// operator-authored deployment config — the manifest already controls the
-// sandbox image and Containerfile — so selecting the runtime is a trusted
-// operator choice, not an untrusted downgrade. The friendly name "libkrun" is
-// normalized to podman's "krun" once, here, so every downstream consumer (pool,
-// preflight, readiness probe, validate-config) keys off the same value.
-// Extracted from run() to keep it within the cyclomatic budget.
-func resolveSandboxRuntimeInto(cfg *config.Config, bundle *clientconfig.Bundle) {
-	// One shared resolver (sandbox.ResolveRuntime) so boot, validate-config, and
-	// cutlass all apply the same env-wins-else-bundle precedence + normalization.
-	resolved := sandbox.ResolveRuntime(cfg.SandboxRuntime, bundle.Sandbox().Runtime)
-	if resolved != strings.TrimSpace(cfg.SandboxRuntime) && resolved != "" {
-		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
-		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", resolved)
-	}
-	// Always write back the normalized value so cfg carries the canonical name
-	// (also collapses whitespace-padded env values the loader didn't trim).
-	cfg.SandboxRuntime = resolved
-}
-
 // pruneOrphanedSandboxes reclaims sandboxes orphaned by a PRIOR crash,
 // routed by the active backend: pods under the kubernetes backend (#989),
 // podman containers otherwise. Best-effort — log and continue. Extracted from
@@ -2383,96 +2356,34 @@ func pruneOrphanedSandboxes(pool *sandbox.Pool) {
 	}
 }
 
-// resolveSandboxInto resolves the sandbox image, OCI runtime, and backend
-// from env + bundle, in that order. Extracted from run() to keep it within
-// the cyclomatic budget.
-//
-// The image is a per-client bundle artifact: the bundle manifest's
-// sandbox.image (the opt-in prebuilt/registry path — else sandbox.tag, the
-// build-on-box default) fills it when no explicit FLEET_SANDBOX_IMAGE /
-// CHAT_SANDBOX_IMAGE env is set (config.Load already populated
-// cfg.SandboxImage from those). fleet does NOT build the image here —
-// bootstrap / scripts/build-sandbox-image.sh does; this only feeds the
-// resolved ref to the consuming sandbox pool.
+// resolveSandboxInto applies the bundle's sandbox block to cfg through the one
+// shared resolver (agent.ApplyBundleSandbox: env wins, field by field;
+// fail-closed on an unrecognized backend) and logs what the bundle decided.
+// Extracted from run() to keep it within the cyclomatic budget.
 func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := bundle.Sandbox().ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-			log.Printf("sandbox: image resolved from bundle = %s", ref)
-		}
-	}
-	resolveSandboxRuntimeInto(cfg, bundle)
-	return resolveSandboxBackendInto(cfg, bundle)
-}
-
-// resolveSandboxBackendInto resolves the sandbox backend (#989) into
-// cfg.SandboxBackend with the SAME env-wins-else-bundle precedence as the
-// image and runtime (sandbox.ResolveBackend is the one shared resolver, so
-// boot and validate-config cannot drift), then fills each kubernetes setting
-// from the bundle's sandbox.kubernetes block when the corresponding
-// FLEET_SANDBOX_K8S_* env var is empty. An unrecognized backend value is a
-// boot error, never a silent fallback to podman.
-func resolveSandboxBackendInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
-	sb := bundle.Sandbox()
-	resolved, err := sandbox.ResolveBackend(cfg.SandboxBackend, sb.Backend)
-	if err != nil {
+	envImage := strings.TrimSpace(cfg.SandboxImage)
+	envRuntime := strings.TrimSpace(cfg.SandboxRuntime)
+	if err := agent.ApplyBundleSandbox(cfg, bundle); err != nil {
 		return err
 	}
-	cfg.SandboxBackend = resolved
-	if resolved != sandbox.BackendKubernetes {
-		return nil
+	if envImage == "" && strings.TrimSpace(cfg.SandboxImage) != "" {
+		//nolint:gosec // G706: image ref is operator config (the bundle manifest's sandbox.image/tag) — not request input.
+		log.Printf("sandbox: image resolved from bundle = %s", cfg.SandboxImage)
 	}
-	fill := func(dst *string, bundleVal string) {
-		if strings.TrimSpace(*dst) == "" {
-			*dst = strings.TrimSpace(bundleVal)
-		}
+	if cfg.SandboxRuntime != envRuntime && cfg.SandboxRuntime != "" {
+		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
+		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", cfg.SandboxRuntime)
 	}
-	k := sb.Kubernetes
-	fill(&cfg.SandboxK8sNamespace, k.Namespace)
-	fill(&cfg.SandboxK8sWorkspaceClaim, k.WorkspaceClaim)
-	fill(&cfg.SandboxK8sServiceAccount, k.ServiceAccount)
-	fill(&cfg.SandboxK8sImagePullSecret, k.ImagePullSecret)
-	fill(&cfg.SandboxK8sRuntimeClass, k.RuntimeClass)
-	fill(&cfg.SandboxK8sSeccompProfile, k.SeccompProfile)
-	fill(&cfg.SandboxK8sKubeconfig, k.Kubeconfig)
-	fill(&cfg.SandboxK8sNetworkPolicy, k.NetworkPolicy)
-	// bundle_docs_in_image is a manifest bool and an env string; canonicalize
-	// to the env form so the pool build parses one source. Only a manifest
-	// TRUE needs carrying: false is already the empty-string default, and
-	// writing "false" here would make an unset env look explicitly disabled.
-	if strings.TrimSpace(cfg.SandboxK8sBundleDocsInImage) == "" && k.BundleDocsInImage {
-		cfg.SandboxK8sBundleDocsInImage = "true"
+	if cfg.SandboxBackend == sandbox.BackendKubernetes {
+		//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
+		log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
+			cfg.SandboxBackend, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	}
-	// The scheduling knobs are structured in the manifest; canonicalize them
-	// into the same string forms the env vars use so the pool build has ONE
-	// source to parse (env wins, like every other field).
-	if strings.TrimSpace(cfg.SandboxK8sNodeSelector) == "" && len(k.NodeSelector) > 0 {
-		keys := make([]string, 0, len(k.NodeSelector))
-		for key := range k.NodeSelector {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		pairs := make([]string, 0, len(keys))
-		for _, key := range keys {
-			pairs = append(pairs, key+"="+k.NodeSelector[key])
-		}
-		cfg.SandboxK8sNodeSelector = strings.Join(pairs, ",")
-	}
-	if strings.TrimSpace(cfg.SandboxK8sTolerations) == "" && len(k.Tolerations) > 0 {
-		raw, err := json.Marshal(k.Tolerations)
-		if err != nil {
-			return fmt.Errorf("encode sandbox.kubernetes.tolerations: %w", err)
-		}
-		cfg.SandboxK8sTolerations = string(raw)
-	}
-	//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
-	log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
-		resolved, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	return nil
 }
 
 // defaultString returns v, or fallback when v is empty — a log-formatting
-// helper for resolveSandboxBackendInto.
+// helper for resolveSandboxInto.
 func defaultString(v, fallback string) string {
 	if strings.TrimSpace(v) == "" {
 		return fallback

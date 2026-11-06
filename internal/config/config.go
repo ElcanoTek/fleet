@@ -1861,7 +1861,7 @@ func Load(envFile string) (*Config, error) {
 		SandboxImage:   getenvFleet("SANDBOX_IMAGE"),
 		SandboxRuntime: getenvFleet("SANDBOX_RUNTIME"),
 		// Sandbox backend (#989). Lower-cased here; validated fail-closed at
-		// boot (resolveSandboxBackend in cmd/fleet) against the bundle value.
+		// boot (agent.ApplyBundleSandbox) against the bundle value.
 		SandboxBackend:                   strings.ToLower(strings.TrimSpace(getenvFleet("SANDBOX_BACKEND"))),
 		SandboxK8sNamespace:              strings.TrimSpace(getenvFleet("SANDBOX_K8S_NAMESPACE")),
 		SandboxK8sWorkspaceClaim:         strings.TrimSpace(getenvFleet("SANDBOX_K8S_WORKSPACE_CLAIM")),

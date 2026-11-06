@@ -52,7 +52,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
-	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -123,7 +122,12 @@ func run(argv []string, progName string) error {
 	cfg.MCPServers = bundle.MCPServerConfigs()
 	cfg.HTTPTools = bundle.HTTPToolConfigs()
 	cfg.A2APeers = bundle.A2APeerConfigs()
-	applyBundleSandbox(cfg, bundle.Sandbox())
+	// The SAME sandbox resolution fleet serve applies (env wins, field by
+	// field): image, OCI runtime, backend with its kubernetes settings, and
+	// the egress allowlist.
+	if err := agent.ApplyBundleSandbox(cfg, bundle); err != nil {
+		return fmt.Errorf("resolve sandbox: %w", err)
+	}
 
 	// Install the bundle's runtime policy before any turn runs — the SAME
 	// projections fleet serve installs (#1934): agent tool-behavior policy,
@@ -225,27 +229,6 @@ func run(argv []string, progName string) error {
 		return fmt.Errorf("run task: %w", runErr)
 	}
 	return nil
-}
-
-// applyBundleSandbox fills the sandbox settings the bundle manifest supplies,
-// with the same precedence as the server boot path (cmd/fleet):
-//
-//   - the image: env FLEET_SANDBOX_IMAGE wins, else the manifest's;
-//   - the OCI runtime (#217): env FLEET_SANDBOX_RUNTIME wins, else the
-//     manifest's, so a kata/libkrun bundle gets the fail-closed KVM preflight
-//     here too (buildSandboxPool, via agent.New, runs PreflightRuntime);
-//   - the egress allowlist (#211) for FLEET_DEFAULT_NETWORK_MODE=allowlisted:
-//     the manifest's network_allowlist, exactly as the server sets it. Without
-//     it an allowlisted one-shot run got an empty list, and the egress proxy
-//     and web_fetch (ADR-0094) refused every host.
-func applyBundleSandbox(cfg *config.Config, sb clientconfig.Sandbox) {
-	if strings.TrimSpace(cfg.SandboxImage) == "" {
-		if ref := sb.ResolvedImageRef(); ref != "" {
-			cfg.SandboxImage = ref
-		}
-	}
-	cfg.SandboxRuntime = sandbox.ResolveRuntime(cfg.SandboxRuntime, sb.Runtime)
-	cfg.SandboxNetworkAllowlist = append([]string(nil), sb.NetworkAllowlist...)
 }
 
 // loadTaskYAML parses the task file into a models.Task ready for the runner.
