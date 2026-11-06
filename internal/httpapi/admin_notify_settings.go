@@ -15,7 +15,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -76,8 +75,7 @@ func (s *Server) handleAdminNotifySettings(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, view)
 	case http.MethodPut:
 		var body notifySettingsBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &body) {
 			return
 		}
 		in := store.NotifySettingsInput{
@@ -121,8 +119,7 @@ func (s *Server) handleAdminNotifySettingsTest(w http.ResponseWriter, r *http.Re
 	var body struct {
 		Channel string `json:"channel"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	result, err := s.notifySettings.Test(r.Context(), body.Channel)

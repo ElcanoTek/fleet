@@ -12,7 +12,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -71,8 +70,7 @@ func (s *Server) handleAdminSettingItem(w http.ResponseWriter, r *http.Request) 
 		var body struct {
 			Value string `json:"value"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &body) {
 			return
 		}
 		resolved, err := s.workspaceSettings.Set(r.Context(), key, body.Value, userFromCtx(r.Context()))

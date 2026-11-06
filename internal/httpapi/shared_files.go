@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -353,8 +352,7 @@ func (s *Server) downloadSharedFile(w http.ResponseWriter, r *http.Request, id s
 
 func (s *Server) patchSharedFile(w http.ResponseWriter, r *http.Request, id string) {
 	var req sharedFilePatch
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	old, err := s.store.GetSharedFile(r.Context(), id)

@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -161,15 +160,12 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 			AllMatching     bool     `json:"all_matching"`
 			Confirm         bool     `json:"confirm"`
 		}
-		if r.Body != nil {
-			// Empty body (io.EOF) is the legacy bare DELETE → DeleteAllUnpinned.
-			// Any other decode error is a client that *intended* a targeted
-			// bulk delete but sent malformed / truncated JSON — refuse with
-			// 400 rather than wipe every unpinned conversation (#1110).
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-				http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-				return
-			}
+		// Empty body (io.EOF) is the legacy bare DELETE → DeleteAllUnpinned.
+		// Any other decode error is a client that *intended* a targeted bulk
+		// delete but sent malformed / truncated JSON — refuse with 400 rather
+		// than wipe every unpinned conversation (#1110).
+		if !decodeOptionalJSONBody(w, r, &req) {
+			return
 		}
 
 		switch {
@@ -249,8 +245,7 @@ func (s *Server) listOrCreateConversations(w http.ResponseWriter, r *http.Reques
 // see docs/PATROL-LAUNCHPAD.md for that and the other known limit.
 func (s *Server) createConversation(w http.ResponseWriter, r *http.Request, user string) {
 	var req createConversationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	key := strings.TrimSpace(req.ClientRequestID)
@@ -342,8 +337,7 @@ func (s *Server) bulkPatchConversations(w http.ResponseWriter, r *http.Request) 
 			Labels []string `json:"labels"`
 		} `json:"changes"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if len(req.ConversationIDs) == 0 || len(req.ConversationIDs) > 100 {
@@ -394,8 +388,7 @@ func (s *Server) conversationOrder(w http.ResponseWriter, r *http.Request) {
 			Scope           string   `json:"scope"`
 			ConversationIDs []string `json:"conversation_ids"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		if len(req.ConversationIDs) > store.MaxChatOrder {
@@ -586,36 +579,6 @@ func writeConversationMutationError(w http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(w, err.Error(), http.StatusInternalServerError)
-}
-
-// decodeJSONBody decodes r's JSON body into dst, answering the shared
-// "bad json" 400 on failure. Reports whether decoding succeeded. Only for
-// handlers that REQUIRE a well-formed body — branches with lenient decode
-// semantics (the cancel scope, the legacy bare DELETE /conversations) keep
-// their own decode inline.
-func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-		return false
-	}
-	return true
-}
-
-// decodeOptionalJSONBody is decodeJSONBody for handlers whose body is
-// OPTIONAL: a missing or empty body (io.EOF) leaves dst at its zero value and
-// succeeds, while a present-but-malformed body is still a 400. The distinction
-// matters because the lenient `_ = Decode(...)` idiom it replaces turned a
-// client's typo into the zero value — a non-expiring share link, an un-share,
-// a "message id must be positive" — and reported success.
-func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
-	if r.Body == nil {
-		return true
-	}
-	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && !errors.Is(err, io.EOF) {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
-		return false
-	}
-	return true
 }
 
 // conversationSubroutes maps each (sub, method) pair the old conversationByID

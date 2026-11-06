@@ -22,7 +22,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
@@ -150,8 +149,7 @@ func (s *Server) handleAdminStorageCleanup(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	var req storageCleanupRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if req.OlderThanDays < 1 {

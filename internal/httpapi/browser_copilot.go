@@ -27,9 +27,7 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := playwrightrunner.DefaultSessionManager().GetSession(sessionID, userEmail, viewToken)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeJSONStatus(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -75,15 +73,11 @@ func (s *Server) handleBrowserSessions(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleBrowserSessionInput(w http.ResponseWriter, r *http.Request, sess *playwrightrunner.LiveSession) {
 	var ev playwrightrunner.InputEvent
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64*1024)).Decode(&ev); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "invalid input payload"})
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": "invalid input payload"})
 		return
 	}
 	if err := sess.SendInput(r.Context(), ev); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeJSONStatus(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	info := sess.Info(nil)
@@ -102,9 +96,7 @@ func (s *Server) serveBrowserSessionStream(w http.ResponseWriter, r *http.Reques
 	}
 	frames, unsub, err := sess.SubscribeFrames()
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeJSONStatus(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	defer unsub()

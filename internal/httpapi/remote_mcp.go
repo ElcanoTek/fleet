@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
@@ -119,8 +118,7 @@ func (s *Server) remoteMCPServers(w http.ResponseWriter, r *http.Request) {
 		})
 	case http.MethodPost:
 		var req addRemoteMCPRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		clientID := req.ClientID
@@ -186,8 +184,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case sub == "shares" && r.Method == http.MethodPost:
 		var req shareRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		if err := s.remoteMCP.ShareServer(r.Context(), user, id, req.Grantee); err != nil {
@@ -214,8 +211,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			APIKey string `json:"api_key"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		report, err := s.remoteMCP.SetAPIKey(r.Context(), user, id, req.APIKey)
@@ -241,8 +237,7 @@ func (s *Server) remoteMCPServerByID(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Account string `json:"account"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		if err := s.remoteMCP.RenameSeat(r.Context(), user, id, req.Account); err != nil {
@@ -311,8 +306,7 @@ func (s *Server) remoteMCPOAuthCallback(w http.ResponseWriter, r *http.Request) 
 	}
 	user := userFromCtx(r.Context())
 	var req oauthCallbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if req.Error != "" {

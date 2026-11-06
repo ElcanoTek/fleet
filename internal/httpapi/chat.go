@@ -383,8 +383,7 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 	user := userFromCtx(r.Context())
 
 	var req chatRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Message) == "" {

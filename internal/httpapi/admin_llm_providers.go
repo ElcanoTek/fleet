@@ -14,7 +14,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -54,8 +53,7 @@ func (s *Server) handleAdminLLMProviders(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, map[string]any{"providers": providers})
 	case http.MethodPost:
 		var body llmProviderBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &body) {
 			return
 		}
 		in := store.LLMProviderInput{
@@ -102,8 +100,7 @@ func (s *Server) handleAdminLLMProviderItem(w http.ResponseWriter, r *http.Reque
 	switch r.Method {
 	case http.MethodPut:
 		var body llmProviderBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &body) {
 			return
 		}
 		in := store.LLMProviderInput{

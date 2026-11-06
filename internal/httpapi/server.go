@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -1177,4 +1179,34 @@ func (k *keyedLocks) lock(key string) func() {
 		}
 		k.mu.Unlock()
 	}
+}
+
+// decodeJSONBody decodes r's JSON body into dst, answering the shared
+// "bad json" 400 on failure. Reports whether decoding succeeded. Only for
+// handlers that REQUIRE a well-formed body — branches with lenient decode
+// semantics (the cancel scope, the legacy bare DELETE /conversations) keep
+// their own decode inline.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// decodeOptionalJSONBody is decodeJSONBody for handlers whose body is
+// OPTIONAL: a missing or empty body (io.EOF) leaves dst at its zero value and
+// succeeds, while a present-but-malformed body is still a 400. The distinction
+// matters because the lenient `_ = Decode(...)` idiom it replaces turned a
+// client's typo into the zero value — a non-expiring share link, an un-share,
+// a "message id must be positive" — and reported success.
+func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if r.Body == nil {
+		return true
+	}
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
 }

@@ -8,7 +8,6 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
@@ -79,8 +78,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" || req.Keys.Auth == "" || req.Keys.P256dh == "" {
@@ -113,8 +111,7 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" {
@@ -146,8 +143,7 @@ func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" {
@@ -186,8 +182,7 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushRenewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.OldEndpoint) == "" || strings.TrimSpace(req.Endpoint) == "" || req.Keys.Auth == "" || req.Keys.P256dh == "" {

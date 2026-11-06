@@ -12,7 +12,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -83,8 +82,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		OpsRole  *string `json:"ops_role"`
 		TeamID   *string `json:"team_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	email := strings.TrimSpace(body.Email)
@@ -209,8 +207,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 	var body struct {
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if err := s.store.UpdatePassword(r.Context(), email, body.Password); err != nil {
@@ -304,8 +301,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		From string `json:"from"`
 		To   string `json:"to"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())

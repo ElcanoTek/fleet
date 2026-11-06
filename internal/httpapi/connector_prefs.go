@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"slices"
@@ -61,8 +60,7 @@ func (s *Server) connectorPrefs(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"prefs": out})
 	case http.MethodPut:
 		var p store.ConnectorPref
-		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &p) {
 			return
 		}
 		// A bundled seat must exist in the catalog right now; a stale or

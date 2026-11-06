@@ -20,7 +20,6 @@ package httpapi
 // so a read-only viewer can see its team but not change it.
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
@@ -115,8 +114,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TeamID *string `json:"team_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if body.TeamID == nil {
