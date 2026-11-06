@@ -733,7 +733,7 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// host-side connectors write there by pathname for the whole run. Created
 	// here for the same kubelet subPath reason, and because the podman backend
 	// silently skips a read-only mount whose source is missing.
-	mcpRunsDir, err := ensureMCPRunsDir(workspaceRoot)
+	mcpRunsDir, err := ensureMountBaseDir(agentcore.PerRunMCPWorkspaceBase(workspaceRoot), 0o750, "MCP run dir base")
 	if err != nil {
 		return nil, err
 	}
@@ -744,7 +744,8 @@ func buildSandboxPool(cfg *config.Config, personasDir, protocolsDir, systemPromp
 	// another job's in before the mount. Created here, before any sandbox
 	// exists, for the same kubelet subPath and missing-source reasons as
 	// mcp-runs/ above.
-	tasksDir, err := ensureTaskWorkspacesDir(workspaceRoot)
+	// 0o755: traversable by the rootless container user, like the root.
+	tasksDir, err := ensureMountBaseDir(filepath.Join(workspaceRoot, tools.TaskWorkspacesDirName), 0o755, "scheduled workspaces dir")
 	if err != nil {
 		return nil, err
 	}
@@ -1173,42 +1174,25 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 	return kept
 }
 
-// ensureTaskWorkspacesDir creates the per-job scheduled workspaces tree
-// (<root>/tasks, tools.TaskWorkspacesDirName) before any sandbox exists and
-// returns it for the whole-root read-only set. A symlink or non-directory on
-// the name fails boot, exactly as for ensureMCPRunsDir: mounting it would
-// overlay its target, and the scoped take refuses a symlinked component.
-func ensureTaskWorkspacesDir(workspaceRoot string) (string, error) {
-	dir := filepath.Join(workspaceRoot, tools.TaskWorkspacesDirName)
-	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) { //nolint:gosec // traversable by the rootless container user, like the workspace root
-		return "", fmt.Errorf("ensure scheduled workspaces dir %s: %w", dir, err)
+// ensureMountBaseDir creates a directory that the sandbox pool mounts
+// read-only over the workspace (the MCP run-dir base,
+// agentcore.PerRunMCPWorkspaceBase, and the per-job scheduled workspaces
+// tree, tools.TaskWorkspacesDirName) before any sandbox exists, and returns
+// it for the read-only mount set. A symlink or non-directory squatting on the
+// name (for mcp-runs, a leftover from before the overlay existed) fails boot:
+// mounting it would overlay its target, and both the per-run opener and the
+// scoped take refuse a symlinked component anyway. what names the directory
+// in errors.
+func ensureMountBaseDir(dir string, mode fs.FileMode, what string) (string, error) {
+	if err := os.Mkdir(dir, mode); err != nil && !errors.Is(err, fs.ErrExist) {
+		return "", fmt.Errorf("ensure %s %s: %w", what, dir, err)
 	}
 	info, err := os.Lstat(dir)
 	if err != nil {
-		return "", fmt.Errorf("ensure scheduled workspaces dir %s: %w", dir, err)
+		return "", fmt.Errorf("ensure %s %s: %w", what, dir, err)
 	}
 	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
-		return "", fmt.Errorf("scheduled workspaces dir %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", dir, info.Mode().Type())
-	}
-	return dir, nil
-}
-
-// ensureMCPRunsDir creates the MCP run-dir base
-// (agentcore.PerRunMCPWorkspaceBase) before any sandbox exists and returns it
-// for the read-only mount set. A symlink or non-directory squatting on the
-// name (a leftover from before the overlay existed) fails boot: mounting it
-// would overlay its target, and the per-run opener refuses it anyway.
-func ensureMCPRunsDir(workspaceRoot string) (string, error) {
-	dir := agentcore.PerRunMCPWorkspaceBase(workspaceRoot)
-	if err := os.Mkdir(dir, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
-		return "", fmt.Errorf("ensure MCP run dir base %s: %w", dir, err)
-	}
-	info, err := os.Lstat(dir)
-	if err != nil {
-		return "", fmt.Errorf("ensure MCP run dir base %s: %w", dir, err)
-	}
-	if info.Mode()&fs.ModeSymlink != 0 || !info.IsDir() {
-		return "", fmt.Errorf("MCP run dir base %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", dir, info.Mode().Type())
+		return "", fmt.Errorf("%s %s exists and is not a directory (%s); remove it so it can be recreated and mounted read-only in sandboxes", what, dir, info.Mode().Type())
 	}
 	return dir, nil
 }
@@ -1269,10 +1253,6 @@ func (m *Manager) CheckModelRoute(slug string) (agentcore.ProviderType, error) {
 
 func (m *Manager) CatalogModelSlug(slug string) string {
 	return m.modelResolver().CatalogModelSlug(slug)
-}
-
-func (m *Manager) ResolveWithFallback(ctx context.Context, slug string) (fantasy.LanguageModel, fantasy.LanguageModel, error) {
-	return m.modelResolver().ResolveWithFallback(ctx, slug)
 }
 
 func (m *Manager) ResolveWithFallbacks(ctx context.Context, slug string) (fantasy.LanguageModel, []fantasy.LanguageModel, error) {

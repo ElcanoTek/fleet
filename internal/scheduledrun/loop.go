@@ -136,7 +136,7 @@ func runLoop(
 		}
 		it.Status = models.IterationStatusFailed
 		record(it)
-		priorOutput = lastAssistantMessage(session)
+		priorOutput = scorers.LastAssistantMessage(session)
 		log.Printf("scheduled loop task %s: iteration %d/%d did not pass (%s); retrying", taskID, i, maxIter, result)
 	}
 	return lastSession, fmt.Errorf("loop exhausted %d iteration(s) without passing exit condition %q", maxIter, lc.ExitCondition)
@@ -164,7 +164,7 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	case strings.HasPrefix(cond, "shell:"):
 		return r.evalShellExit(ctx, sb, strings.TrimSpace(strings.TrimPrefix(cond, "shell:")))
 	case strings.HasPrefix(cond, "regex:"):
-		return evalRegexExit(strings.TrimPrefix(cond, "regex:"), lastAssistantMessage(session))
+		return evalRegexExit(strings.TrimPrefix(cond, "regex:"), scorers.LastAssistantMessage(session))
 	case cond == "llm":
 		return r.evalLLMExit(ctx, lc, session, fallback)
 	default:
@@ -205,7 +205,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 	if prompt == "" {
 		prompt = "Did the worker complete the task successfully?"
 	}
-	user := fmt.Sprintf("%s\n\n---\nWorker's final output:\n%s", prompt, lastAssistantMessage(session))
+	user := fmt.Sprintf("%s\n\n---\nWorker's final output:\n%s", prompt, scorers.LastAssistantMessage(session))
 
 	// The verifier is a single bounded YES/NO call per iteration. Its spend is NOT
 	// metered into the iteration cost / the across-iteration MaxCostUSD ceiling —
@@ -232,7 +232,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		return false, "llm:error"
 	}
 	recordLoopVerifierUsage(session, verifier.Model(), out)
-	if firstWordIsYes(out.Response.Content.Text()) {
+	if scorers.FirstWordIsYes(out.Response.Content.Text()) {
 		return true, "llm:YES"
 	}
 	return false, "llm:NO"
@@ -258,17 +258,4 @@ func recordLoopVerifierUsage(session *models.LogSession, modelSlug string, out *
 		CompletionTokens: rec.CompletionTokens,
 		CostUSD:          rec.CostUSD,
 	})
-}
-
-// firstWordIsYes reports whether the verifier's reply begins with YES (ignoring
-// case, leading whitespace, and a leading markdown/quote/backtick character).
-func firstWordIsYes(s string) bool {
-	return scorers.FirstWordIsYes(s)
-}
-
-// lastAssistantMessage returns the text of the worker's final assistant message,
-// which a regex: / llm exit condition judges and which is fed forward as context
-// to the next iteration.
-func lastAssistantMessage(session *models.LogSession) string {
-	return scorers.LastAssistantMessage(session)
 }

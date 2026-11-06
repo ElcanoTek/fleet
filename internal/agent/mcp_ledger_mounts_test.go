@@ -21,7 +21,7 @@ func TestEnsureMCPRunsDirMountedReadOnly(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("FLEET_WORKSPACE_ROOT", root)
 
-	dir, err := ensureMCPRunsDir(root)
+	dir, err := ensureMountBaseDir(agentcore.PerRunMCPWorkspaceBase(root), 0o750, "MCP run dir base")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestEnsureMCPRunsDirRefusesSymlink(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(root, "mcp-runs")); err != nil {
 		t.Fatal(err)
 	}
-	if dir, err := ensureMCPRunsDir(root); err == nil {
+	if dir, err := ensureMountBaseDir(agentcore.PerRunMCPWorkspaceBase(root), 0o750, "MCP run dir base"); err == nil {
 		t.Fatalf("expected a symlinked mcp-runs to be refused, got %q", dir)
 	}
 }
@@ -62,7 +62,7 @@ func TestEnsureMCPRunsDirRefusesSymlink(t *testing.T) {
 // squatting on the name fails boot rather than being mounted.
 func TestEnsureTaskWorkspacesDir(t *testing.T) {
 	root := t.TempDir()
-	dir, err := ensureTaskWorkspacesDir(root)
+	dir, err := ensureMountBaseDir(filepath.Join(root, tools.TaskWorkspacesDirName), 0o755, "scheduled workspaces dir")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestEnsureTaskWorkspacesDir(t *testing.T) {
 	if job := tools.TaskWorkspaceDir(root, "11111111-1111-1111-1111-111111111111"); filepath.Dir(job) != dir {
 		t.Fatalf("read-only mount %q does not cover job dir %q", dir, job)
 	}
-	if again, err := ensureTaskWorkspacesDir(root); err != nil || again != dir {
+	if again, err := ensureMountBaseDir(filepath.Join(root, tools.TaskWorkspacesDirName), 0o755, "scheduled workspaces dir"); err != nil || again != dir {
 		t.Fatalf("second boot: %q, %v; want %q, nil", again, err, dir)
 	}
 
@@ -80,7 +80,7 @@ func TestEnsureTaskWorkspacesDir(t *testing.T) {
 	if err := os.Symlink(t.TempDir(), filepath.Join(squatted, "tasks")); err != nil {
 		t.Fatal(err)
 	}
-	if dir, err := ensureTaskWorkspacesDir(squatted); err == nil {
+	if dir, err := ensureMountBaseDir(filepath.Join(squatted, tools.TaskWorkspacesDirName), 0o755, "scheduled workspaces dir"); err == nil {
 		t.Fatalf("expected a symlinked tasks/ to be refused, got %q", dir)
 	}
 }

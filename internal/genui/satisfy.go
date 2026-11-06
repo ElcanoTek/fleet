@@ -3,6 +3,7 @@ package genui
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -206,7 +207,7 @@ func (p *skelParser) compare(t []token) *bnode {
 		return n
 	case kindNumber, kindSlider:
 		c, ok := numberLiteral(lit)
-		if !ok || !containsStr([]string{"<", "<=", ">", ">=", "==", "!="}, op) {
+		if !ok || !slices.Contains([]string{"<", "<=", ">", ">=", "==", "!="}, op) {
 			return nil
 		}
 		return p.sk.atom(fmt.Sprintf("num:%s %s %v", field.text, op, c), &numAtom{field: field.text, op: op, c: c})
@@ -249,7 +250,7 @@ func numberLiteral(t []token) (float64, bool) {
 
 func isValueOp(s string) bool {
 	for _, lvl := range binaryLevels[2:] {
-		if containsStr(lvl, s) {
+		if slices.Contains(lvl, s) {
 			return true
 		}
 	}

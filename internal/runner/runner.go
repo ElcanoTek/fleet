@@ -45,6 +45,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/scheduledrun"
+	"github.com/ElcanoTek/fleet/internal/scorers"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/truncate"
@@ -717,7 +718,7 @@ func (p *Pool) tryClaim(ctx, taskCtx context.Context) {
 			// nothing for the call.
 			defer safe.Recover("runner.worker", func(val any) {
 				if p.stillOwns(task.ID, token) {
-					if _, err := p.reportStatusForLease(task.ID, token, models.TaskStatusError, "task panicked during execution"); err != nil {
+					if _, err := p.reportStatus(task.ID, token, models.TaskStatusError, "task panicked during execution"); err != nil {
 						log.Printf("runner: failed to mark panicked task %s errored: %v", task.ID, err)
 					}
 				}
@@ -789,7 +790,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	})
 
 	// Report running (sets StartedAt + renews lease).
-	if _, err := p.reportStatusForLease(task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
+	if _, err := p.reportStatus(task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
 		log.Printf("runner: failed to report running for task %s: %v", task.ID, err)
 	}
 	// Resumed-after-ask (#510): the run injects the pending Q&A from the
@@ -942,7 +943,7 @@ func (p *Pool) buildTaskRunContext(taskCtx context.Context, task *models.Task, t
 	// non-fatal — it only disables the after-the-fact browser for this run.
 	runCtx := agentcore.WithStreamObserver(taskCtx, buf)
 	runCtx = scheduledrun.WithWorkspaceReporter(runCtx, func(_ context.Context, path string) {
-		p.reportWorkspacePathForLease(task.ID, token, path)
+		p.reportWorkspacePath(task.ID, token, path)
 	})
 	// Collect the named artifacts the agent publishes via publish_artifact (#204);
 	// persisted on the success path (finishSuccess), before the terminal
@@ -1162,7 +1163,7 @@ func validateStructuredRunOutput(task *models.Task, session *models.LogSession) 
 	}
 	fromHandoff := strings.TrimSpace(candidate) != ""
 	if !fromHandoff {
-		candidate = finalAssistantText(session)
+		candidate = scorers.LastAssistantMessage(session)
 	}
 	if strings.TrimSpace(candidate) == "" {
 		return nil, fmt.Errorf("%w: task produced no terminal assistant output", agentcore.ErrStructuredOutputMissing)
@@ -1215,7 +1216,7 @@ func (p *Pool) failAuditAborted(task *models.Task, session *models.LogSession, r
 	}
 	p.clearPendingQA(task, leaseOwner)
 	landed := true
-	if _, err := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
+	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
 		log.Printf("runner: failed to report audit abort for task %s: %v", task.ID, err)
 	}
@@ -1251,7 +1252,7 @@ func (p *Pool) failInterrupted(task *models.Task, session *models.LogSession, le
 	msg := "Task interrupted: server shutdown (grace period expired)"
 	p.clearPendingQA(task, leaseOwner)
 	landed := true
-	if _, err := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
+	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
 		log.Printf("runner: failed to report interrupt for task %s: %v", task.ID, err)
 	}
@@ -1274,7 +1275,7 @@ func (p *Pool) failWallTimeout(task *models.Task, session *models.LogSession, le
 	msg := fmt.Sprintf("Task failed: exceeded the wall-clock timeout of %s (FLEET_TASK_WALL_TIMEOUT); the run was cancelled", p.wallTimeout)
 	p.clearPendingQA(task, leaseOwner)
 	landed := true
-	if _, err := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
+	if _, err := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, msg); err != nil {
 		landed = false
 		log.Printf("runner: failed to report wall-clock timeout for task %s: %v", task.ID, err)
 	}
@@ -1410,7 +1411,7 @@ func (p *Pool) handleRunFailure(task *models.Task, session *models.LogSession, r
 		if _, err := p.store.RequeueTaskForRetryWithContext(context.Background(), task.ID, leaseOwner, when, msg); err != nil {
 			log.Printf("runner: failed to re-queue task %s for retry: %v; marking error", task.ID, err)
 			p.clearPendingQA(task, leaseOwner)
-			if _, rerr := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+			if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
 				log.Printf("runner: failed to report error for task %s: %v", task.ID, rerr)
 			} else {
 				p.notifyTerminal(task, notify.StatusFailure, session, time.Since(start))
@@ -1497,7 +1498,7 @@ func (p *Pool) sendToDeadLetter(task *models.Task, session *models.LogSession, r
 	if err != nil {
 		log.Printf("runner: failed to dead-letter task %s: %v; falling back to error status", task.ID, err)
 		landed := true
-		if _, rerr := p.reportStatusForLease(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
+		if _, rerr := p.reportStatus(task.ID, leaseOwner, models.TaskStatusError, "Task failed: "+runErr.Error()); rerr != nil {
 			landed = false
 			log.Printf("runner: failed to report fallback error for task %s: %v", task.ID, rerr)
 		}
@@ -1584,13 +1585,9 @@ func (p *Pool) clearPendingQA(task *models.Task, leaseOwner uuid.UUID) {
 	}
 }
 
-// reportStatus writes a status update for the synthetic worker using a
-// background context (shutdown-safe).
-func (p *Pool) reportStatus(taskID uuid.UUID, status models.TaskStatus, message string) (*models.Task, error) {
-	return p.reportStatusForLease(taskID, p.leaseOwner, status, message)
-}
-
-func (p *Pool) reportStatusForLease(taskID, leaseOwner uuid.UUID, status models.TaskStatus, message string) (*models.Task, error) {
+// reportStatus writes a status update under leaseOwner using a background
+// context (shutdown-safe).
+func (p *Pool) reportStatus(taskID, leaseOwner uuid.UUID, status models.TaskStatus, message string) (*models.Task, error) {
 	var msgPtr *string
 	if message != "" {
 		msgPtr = &message
@@ -1659,7 +1656,7 @@ func sessionRunOutcome(session *models.LogSession) (outcome, detail string) {
 // and, for a structured task, its output).
 func successMessage(session *models.LogSession) string {
 	const fallback = "Task completed successfully"
-	summary := collapseWhitespace(finalAssistantText(session))
+	summary := collapseWhitespace(scorers.LastAssistantMessage(session))
 	if summary == "" || strings.HasPrefix(summary, "{") || strings.HasPrefix(summary, "[") {
 		summary = fallback
 	}
@@ -1701,11 +1698,7 @@ func collapseWhitespace(s string) string {
 // lease-checked path persists WorkspacePath without changing the lifecycle. A
 // failure is logged and swallowed — the file browser is a convenience, never a
 // reason to fail a run.
-func (p *Pool) reportWorkspacePath(taskID uuid.UUID, path string) {
-	p.reportWorkspacePathForLease(taskID, p.leaseOwner, path)
-}
-
-func (p *Pool) reportWorkspacePathForLease(taskID, leaseOwner uuid.UUID, path string) {
+func (p *Pool) reportWorkspacePath(taskID, leaseOwner uuid.UUID, path string) {
 	if strings.TrimSpace(path) == "" {
 		return
 	}
@@ -1735,20 +1728,6 @@ func (p *Pool) recordArtifactsForLease(taskID, leaseOwner uuid.UUID, manifest js
 	}); err != nil {
 		log.Printf("runner: task %s failed to persist artifacts: %v", taskID, err)
 	}
-}
-
-// finalAssistantText returns the content of the last assistant message in the
-// session — the agent's final answer — or "" when there is none.
-func finalAssistantText(session *models.LogSession) string {
-	if session == nil {
-		return ""
-	}
-	for i := len(session.Messages) - 1; i >= 0; i-- {
-		if session.Messages[i].Role == "assistant" {
-			return session.Messages[i].Content
-		}
-	}
-	return ""
 }
 
 // submitLog persists the run's session log. When the runner produced no
@@ -1836,7 +1815,7 @@ func (p *Pool) maybeReplyToEmailEvent(task *models.Task, session *models.LogSess
 	if g, ok := p.emailReplier.(interface{ ReplyEnabled() bool }); ok && !g.ReplyEnabled() {
 		return
 	}
-	body := strings.TrimSpace(finalAssistantText(session))
+	body := strings.TrimSpace(scorers.LastAssistantMessage(session))
 	if body == "" {
 		return // nothing to send back
 	}
@@ -1952,7 +1931,7 @@ func (p *Pool) renewActiveLeases() {
 	p.mu.Unlock()
 
 	for id, claim := range claims {
-		_, err := p.reportStatusForLease(id, claim.token, models.TaskStatusRunning, "")
+		_, err := p.reportStatus(id, claim.token, models.TaskStatusRunning, "")
 		if err == nil {
 			continue
 		}

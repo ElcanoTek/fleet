@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -100,7 +101,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		b.WriteString("KNOWN (do not repeat; reference by number in `replaces` ONLY for a direct contradiction):\n")
 		for i, k := range known {
 			if s := strings.TrimSpace(k); s != "" {
-				b.WriteString(itoa(i+1) + ". ")
+				b.WriteString(strconv.Itoa(i+1) + ". ")
 				b.WriteString(truncate(s, 200))
 				b.WriteString("\n")
 			}

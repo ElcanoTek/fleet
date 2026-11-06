@@ -3,6 +3,8 @@ package genui
 import (
 	"fmt"
 	"math"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -64,7 +66,7 @@ func FunctionNames() []string {
 	for k := range exprFuncs {
 		out = append(out, k)
 	}
-	sortStrings(out)
+	sort.Strings(out)
 	return out
 }
 
@@ -263,7 +265,7 @@ func (p *exprParser) binary(level int) error {
 	}
 	for {
 		t := p.peek()
-		if t.kind != tOp || !containsStr(binaryLevels[level], t.text) {
+		if t.kind != tOp || !slices.Contains(binaryLevels[level], t.text) {
 			return nil
 		}
 		p.next()

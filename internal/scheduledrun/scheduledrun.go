@@ -1248,7 +1248,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// same value in the scope policy instead (the context cannot cross stdio).
 	ctx = mcp.WithA2ADepth(ctx, task.A2ADelegationDepth)
 	runErr := a.Execute(ctx, prompt)
-	session := convertLogSession(task, a.LogSession())
+	session := convertLogSession(a.LogSession())
 	if runErr != nil {
 		return session, false, "", runErr
 	}
@@ -2024,7 +2024,7 @@ func BuildMCPBases(cfg *config.Config) map[string]agentcore.MCPServerBase {
 
 // convertLogSession maps the agentcore session log to the sched models log shape
 // the orchestrator persists + renders. Secrets are scrubbed defensively.
-func convertLogSession(_ *models.Task, ls *agent.LogSession) *models.LogSession {
+func convertLogSession(ls *agent.LogSession) *models.LogSession {
 	if ls == nil {
 		return nil
 	}
