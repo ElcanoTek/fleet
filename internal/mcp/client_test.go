@@ -25,7 +25,7 @@ import (
 
 // ===========================================================================
 // chat suite — StdioTransport per-call framing, cancel poisoning, and the
-// server-scoped (collision-proof) routing paths CallToolOn / CallToolPrefixed.
+// server-scoped (collision-proof) routing path CallToolOn.
 // ===========================================================================
 
 // fakeServerScript is a minimal line-oriented JSON-RPC responder used to
@@ -63,7 +63,7 @@ for line in sys.stdin:
 
 func newFakeTransport(t *testing.T) *StdioTransport {
 	t.Helper()
-	tr, err := NewStdioTransport("python3", []string{"-u", "-c", fakeServerScript}, nil)
+	tr, err := NewStdioTransportInDir("python3", []string{"-u", "-c", fakeServerScript}, nil, "")
 	if err != nil {
 		t.Fatalf("start fake server: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestStdioWrite_WedgedStdinHonorsCtx(t *testing.T) {
 
 	// A child that never reads stdin: the pipe fills and every later write
 	// byte blocks in the kernel.
-	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	tr, err := NewStdioTransportInDir("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil, "")
 	if err != nil {
 		t.Fatalf("start non-reading child: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestStdioNotify_WedgedStdinHonorsCtx(t *testing.T) {
 	stdioCloseGrace = 200 * time.Millisecond
 	t.Cleanup(func() { stdioCloseGrace = old })
 
-	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	tr, err := NewStdioTransportInDir("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil, "")
 	if err != nil {
 		t.Fatalf("start non-reading child: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestStdioClose_KillsHungChild(t *testing.T) {
 	t.Cleanup(func() { stdioCloseGrace = old })
 
 	// A child that ignores stdin EOF and sleeps forever.
-	tr, err := NewStdioTransport("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil)
+	tr, err := NewStdioTransportInDir("python3", []string{"-u", "-c", "import time\nwhile True: time.sleep(60)"}, nil, "")
 	if err != nil {
 		t.Fatalf("start hung child: %v", err)
 	}
@@ -365,23 +365,6 @@ func TestCallToolOn_RoutesToNamedServer(t *testing.T) {
 	}
 }
 
-func TestCallToolPrefixed_ResolvesServerFromFullName(t *testing.T) {
-	c, transports := newRoutingClient()
-	if _, err := c.CallToolPrefixed(context.Background(), "mcp_mailbux_send_email", nil); err != nil {
-		t.Fatalf("CallToolPrefixed: %v", err)
-	}
-	if len(transports["mailbux"].calls) != 1 || len(transports["sendgrid"].calls) != 0 {
-		t.Fatalf("prefixed routing hit the wrong server: sendgrid=%v mailbux=%v",
-			transports["sendgrid"].calls, transports["mailbux"].calls)
-	}
-	if _, err := c.CallToolPrefixed(context.Background(), "mcp_unknown_send_email", nil); err == nil {
-		t.Fatal("expected error for unknown prefixed server")
-	}
-	if _, err := c.CallToolPrefixed(context.Background(), "bash", nil); err == nil {
-		t.Fatal("expected error for non-MCP name")
-	}
-}
-
 // argsCaptureTransport records the exact params map of the last tools/call.
 type argsCaptureTransport struct {
 	lastParams map[string]interface{}
@@ -465,8 +448,7 @@ func TestStdioTransport(t *testing.T) {
 		t.Errorf("Expected tool name 'echo', got '%s'", tools[0].Tool.Name)
 	}
 
-	// Test CallTool
-	result, err := client.CallTool(ctx, "echo", map[string]interface{}{"message": "hello"})
+	result, err := client.CallToolOn(ctx, "dummy", "echo", map[string]interface{}{"message": "hello"})
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -570,7 +552,7 @@ func TestHTTPTransport(t *testing.T) {
 
 	ctx := context.Background()
 
-	err := client.AddHTTPServer(ctx, "remote", server.URL)
+	err := client.AddHTTPServerWithOptions(ctx, "remote", server.URL, HTTPServerOptions{})
 	if err != nil {
 		t.Fatalf("Failed to add HTTP server: %v", err)
 	}
@@ -584,7 +566,7 @@ func TestHTTPTransport(t *testing.T) {
 		t.Errorf("Expected tool name 'remote_echo', got '%s'", tools[0].Tool.Name)
 	}
 
-	result, err := client.CallTool(ctx, "remote_echo", nil)
+	result, err := client.CallToolOn(ctx, "remote", "remote_echo", nil)
 	if err != nil {
 		t.Fatalf("Failed to call tool: %v", err)
 	}
@@ -687,9 +669,9 @@ func TestClose_RetiresServers_NoPostCloseRespawn(t *testing.T) {
 
 func TestCallToolNotFound(t *testing.T) {
 	client := NewClient()
-	_, err := client.CallTool(context.Background(), "nonexistent", nil)
+	_, err := client.CallToolOn(context.Background(), "nonexistent", "tool", nil)
 	if err == nil {
-		t.Error("Expected error for nonexistent tool")
+		t.Error("Expected error for a server that is not registered")
 	}
 }
 
@@ -764,7 +746,7 @@ func TestHTTPTransportWithHeaders(t *testing.T) {
 		"Authorization":   "Bearer test-token",
 		"X-Test-Instance": "https://test.example.com",
 	}
-	err := client.AddHTTPServerWithHeaders(ctx, "remote", server.URL, headers)
+	err := client.AddHTTPServerWithOptions(ctx, "remote", server.URL, HTTPServerOptions{Headers: headers})
 	if err != nil {
 		t.Fatalf("Failed to add HTTP server with headers: %v", err)
 	}
@@ -815,7 +797,7 @@ func TestHTTPTransportAcceptHeader(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	transport := NewHTTPTransport(server.URL)
+	transport := NewHTTPTransportWithHeaders(server.URL, nil)
 	ctx := context.Background()
 
 	_, err := transport.Call(ctx, "initialize", map[string]interface{}{})
@@ -866,7 +848,7 @@ func TestHTTPTransportSessionID(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	transport := NewHTTPTransport(server.URL)
+	transport := NewHTTPTransportWithHeaders(server.URL, nil)
 	ctx := context.Background()
 
 	// First call (initialize) - should capture session ID
@@ -961,7 +943,7 @@ func TestHTTPTransportSSEResponse(t *testing.T) {
 			server := httptest.NewServer(handler)
 			defer server.Close()
 
-			transport := NewHTTPTransport(server.URL)
+			transport := NewHTTPTransportWithHeaders(server.URL, nil)
 			ctx := context.Background()
 
 			result, err := transport.Call(ctx, "initialize", map[string]interface{}{})
@@ -1293,7 +1275,7 @@ func TestJSONRPCIDInResponse(t *testing.T) {
 // TestStdioTransportEnvUTF8 verifies that stdio subprocess environment includes UTF-8 encoding variables
 func TestStdioTransportEnvUTF8(t *testing.T) {
 	// Create a transport with empty env to inspect cmd.Env
-	transport, err := NewStdioTransport("echo", []string{"hello"}, nil)
+	transport, err := NewStdioTransportInDir("echo", []string{"hello"}, nil, "")
 	if err != nil {
 		// echo will exit immediately, but we can still inspect the env that was set
 		// Before start fails, cmd.Env is already populated
@@ -1329,7 +1311,7 @@ func TestStdioTransportEnvUTF8WithCustomEnv(t *testing.T) {
 		"PUBMATIC_MCP_BASE_URL": "https://example.com",
 	}
 
-	transport, err := NewStdioTransport("echo", []string{"hello"}, customEnv)
+	transport, err := NewStdioTransportInDir("echo", []string{"hello"}, customEnv, "")
 	if err != nil {
 		t.Fatalf("Failed to create transport: %v", err)
 	}
@@ -1483,7 +1465,7 @@ func TestHTTPTransport_OversizedResponseIsPerCallError(t *testing.T) {
 	server := httptest.NewServer(handler)
 	defer server.Close()
 
-	transport := NewHTTPTransport(server.URL)
+	transport := NewHTTPTransportWithHeaders(server.URL, nil)
 	ctx := context.Background()
 
 	if _, err := transport.Call(ctx, "tools/call", map[string]any{}); err == nil || !strings.Contains(err.Error(), "exceeded") {
@@ -1513,7 +1495,7 @@ func TestHTTPTransport_RejectsMismatchedResponseID(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		transport := NewHTTPTransport(server.URL)
+		transport := NewHTTPTransportWithHeaders(server.URL, nil)
 		_, err := transport.Call(context.Background(), "initialize", map[string]any{})
 		if err == nil || !strings.Contains(err.Error(), "does not match request id") {
 			t.Fatalf("Call = %v, want an id-mismatch error", err)
@@ -1530,7 +1512,7 @@ func TestHTTPTransport_RejectsMismatchedResponseID(t *testing.T) {
 		server := httptest.NewServer(handler)
 		defer server.Close()
 
-		transport := NewHTTPTransport(server.URL)
+		transport := NewHTTPTransportWithHeaders(server.URL, nil)
 		_, err := transport.Call(context.Background(), "initialize", map[string]any{})
 		if err == nil || !strings.Contains(err.Error(), "does not match request id") {
 			t.Fatalf("Call = %v, want an id-mismatch error", err)
@@ -1634,7 +1616,7 @@ func TestStdioTransportSkipsNotificationsAndStaleResponses(t *testing.T) {
 	dir := filepath.Dir(filename)
 	scriptPath := filepath.Join(dir, "testdata", "noisy_server.py")
 
-	transport, err := NewStdioTransport("python3", []string{scriptPath}, nil)
+	transport, err := NewStdioTransportInDir("python3", []string{scriptPath}, nil, "")
 	if err != nil {
 		t.Fatalf("failed to start noisy server: %v", err)
 	}
@@ -1676,7 +1658,7 @@ func TestStdioTransportDeadAfterCancel(t *testing.T) {
 	stdioCloseGrace = 200 * time.Millisecond
 	t.Cleanup(func() { stdioCloseGrace = oldGrace })
 
-	transport, err := NewStdioTransport("python3", []string{scriptPath}, nil)
+	transport, err := NewStdioTransportInDir("python3", []string{scriptPath}, nil, "")
 	if err != nil {
 		t.Fatalf("failed to start slow server: %v", err)
 	}
@@ -1759,7 +1741,7 @@ func TestHTTPTransportErrorFormats(t *testing.T) {
 			server := httptest.NewServer(handler)
 			defer server.Close()
 
-			transport := NewHTTPTransport(server.URL)
+			transport := NewHTTPTransportWithHeaders(server.URL, nil)
 			ctx := context.Background()
 
 			result, err := transport.Call(ctx, "initialize", map[string]interface{}{})

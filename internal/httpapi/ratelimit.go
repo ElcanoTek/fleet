@@ -5,47 +5,10 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/metrics"
 )
-
-// rateHitCounter tallies rate-limit 429s by reason ("rpm"|"day"|"concurrent").
-// Held behind a pointer on Server so a Server value stays copyable. A Prometheus
-// surface is deferred to the metrics issue (#176); RateLimitHits exposes a
-// snapshot for dashboard/admin use until then.
-type rateHitCounter struct {
-	mu     sync.Mutex
-	counts map[string]int64
-}
-
-func newRateHitCounter() *rateHitCounter {
-	return &rateHitCounter{counts: map[string]int64{}}
-}
-
-func (c *rateHitCounter) inc(reason string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.counts[reason]++
-	c.mu.Unlock()
-}
-
-func (c *rateHitCounter) snapshot() map[string]int64 {
-	if c == nil {
-		return map[string]int64{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[string]int64, len(c.counts))
-	for k, v := range c.counts {
-		out[k] = v
-	}
-	return out
-}
-
-// RateLimitHits returns a snapshot of the chat rate-limit 429 tallies by reason.
-func (s *Server) RateLimitHits() map[string]int64 { return s.rateLimitHits.snapshot() }
 
 // rateLimitMiddleware guards /chat and /attachments with the shared
 // sliding-window limiter (internal/ratelimit), keyed by user email.
@@ -79,7 +42,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			if retry > time.Minute {
 				reason = "day"
 			}
-			s.rateLimitHits.inc(reason)
+			metrics.RecordChatRateLimited(reason)
 			w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
 			writeJSONStatus(w, http.StatusTooManyRequests, map[string]any{
 				"error":               "rate_limit_exceeded",
@@ -101,7 +64,7 @@ func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (releas
 		return func() {}, true
 	}
 	if !s.concurrent.Acquire(user) {
-		s.rateLimitHits.inc("concurrent")
+		metrics.RecordChatRateLimited("concurrent")
 		writeJSONStatus(w, http.StatusTooManyRequests, map[string]any{
 			"error":  "Too many concurrent turns",
 			"active": s.concurrent.Active(user),

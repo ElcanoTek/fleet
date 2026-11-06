@@ -8,11 +8,11 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
@@ -46,9 +46,9 @@ func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) boo
 	if err == nil {
 		return false
 	}
-	// The error quotes the host with %q already; logSafe is the guard the
+	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	log.Printf("push: refused a %s from %s: %s", what, logSafe(user), logSafe(err.Error()))
+	log.Printf("push: refused a %s from %s: %s", what, safe.LogSafe(user), safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }
@@ -78,8 +78,7 @@ func (s *Server) pushSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" || req.Keys.Auth == "" || req.Keys.P256dh == "" {
@@ -112,8 +111,7 @@ func (s *Server) pushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" {
@@ -145,8 +143,7 @@ func (s *Server) pushStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushSubscribeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Endpoint) == "" {
@@ -185,8 +182,7 @@ func (s *Server) pushRenew(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req pushRenewRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.OldEndpoint) == "" || strings.TrimSpace(req.Endpoint) == "" || req.Keys.Auth == "" || req.Keys.P256dh == "" {

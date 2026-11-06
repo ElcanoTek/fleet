@@ -593,14 +593,14 @@ var transferAfterChecks func()
 func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwnerEmail, actingOwner string) (*Project, error) {
 	newOwner := normalizeEmail(newOwnerEmail)
 	if newOwner == "" {
-		return nil, errors.New("new owner email required")
+		return nil, errInput("new owner email required")
 	}
 	p, err := s.GetProject(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
 	if p == nil {
-		return nil, errors.New("project not found")
+		return nil, errInput("project not found")
 	}
 	if p.OwnerEmail == newOwner {
 		return p, nil // already theirs — idempotent, not an error
@@ -646,7 +646,7 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	if err := tx.QueryRowContext(ctx,
 		`SELECT COALESCE(team_id, ''), owner_email FROM projects WHERE id = $1 FOR UPDATE`, projectID).Scan(&lockedTeam, &lockedOwner); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("project not found")
+			return nil, errInput("project not found")
 		}
 		return nil, err
 	}
@@ -676,7 +676,7 @@ func (s *Store) TransferProjectOwnership(ctx context.Context, projectID, newOwne
 	updated, err := scanProject(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("project not found")
+			return nil, errInput("project not found")
 		}
 		return nil, err
 	}

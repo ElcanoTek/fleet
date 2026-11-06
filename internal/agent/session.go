@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
 // EventSink is the callback interface the HTTP layer implements to turn
@@ -640,26 +641,26 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 			// echoed chatAttachment field and is never sanitized —
 			// sanitizeFilename runs at upload time, but /chat re-accepts the
 			// client's own JSON and re-validates only Path. %q escapes CR/LF.
-			log.Printf("loadImageAttachments: skipping %q (over %d cap)", logSafeAgent(a.Name), maxImages)
+			log.Printf("loadImageAttachments: skipping %q (over %d cap)", safe.LogSafe(a.Name), maxImages)
 			continue
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, a.Path)
 		if !ok {
-			log.Printf("loadImageAttachments: %q is outside the uploads root (skipped)", logSafeAgent(a.Path))
+			log.Printf("loadImageAttachments: %q is outside the uploads root (skipped)", safe.LogSafe(a.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			log.Printf("loadImageAttachments: stat %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
+			log.Printf("loadImageAttachments: stat %s: %s", safe.LogSafe(a.Path), safe.LogSafe(err.Error()))
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", logSafeAgent(a.Path), info.Size(), maxBytesPerFile)
+			log.Printf("loadImageAttachments: %s is %d bytes (> %d cap)", safe.LogSafe(a.Path), info.Size(), maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			log.Printf("loadImageAttachments: read %s: %s", logSafeAgent(a.Path), logSafeAgent(err.Error()))
+			log.Printf("loadImageAttachments: read %s: %s", safe.LogSafe(a.Path), safe.LogSafe(err.Error()))
 			continue
 		}
 		mt := strings.TrimSpace(a.MediaType)
@@ -696,21 +697,21 @@ func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.Fi
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, r.Path)
 		if !ok {
-			log.Printf("loadHistoryImageParts: %q is outside the uploads root (image dropped from replay)", logSafeAgent(r.Path))
+			log.Printf("loadHistoryImageParts: %q is outside the uploads root (image dropped from replay)", safe.LogSafe(r.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			log.Printf("loadHistoryImageParts: stat %s: %v (image dropped from replay)", logSafeAgent(r.Path), err)
+			log.Printf("loadHistoryImageParts: stat %s: %v (image dropped from replay)", safe.LogSafe(r.Path), err)
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			log.Printf("loadHistoryImageParts: %s is %d bytes (> %d cap)", logSafeAgent(r.Path), info.Size(), maxBytesPerFile)
+			log.Printf("loadHistoryImageParts: %s is %d bytes (> %d cap)", safe.LogSafe(r.Path), info.Size(), maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			log.Printf("loadHistoryImageParts: read %s: %v", logSafeAgent(r.Path), err)
+			log.Printf("loadHistoryImageParts: read %s: %v", safe.LogSafe(r.Path), err)
 			continue
 		}
 		mt := strings.TrimSpace(r.MediaType)

@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -222,12 +223,25 @@ var ErrMemoryProposalNotFound = errors.New("memory proposal not found")
 // Handlers use errors.As to answer 400 for these and 500 for everything else,
 // instead of the old blanket 400 that reported a Postgres outage as "Bad
 // Request" — which the UI then showed the user as their own mistake.
-type InputError struct{ msg string }
+type InputError struct {
+	msg string
+	err error // what a %w in errInputf wrapped, if anything
+}
 
 func (e *InputError) Error() string { return e.msg }
 
+// Unwrap keeps errors.Is/As working through an InputError built by errInputf.
+func (e *InputError) Unwrap() error { return e.err }
+
 // errInput builds an InputError.
 func errInput(msg string) error { return &InputError{msg: msg} }
+
+// errInputf builds an InputError from a format, keeping any %w-wrapped error
+// reachable through errors.Is/As.
+func errInputf(format string, a ...any) error {
+	err := fmt.Errorf(format, a...)
+	return &InputError{msg: err.Error(), err: errors.Unwrap(err)}
+}
 
 // IsInputError reports whether err (or anything it wraps) is an InputError.
 func IsInputError(err error) bool {

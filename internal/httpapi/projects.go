@@ -8,7 +8,6 @@ package httpapi
 import (
 	"container/heap"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -96,8 +95,7 @@ func (s *Server) projects(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"projects": list})
 	case http.MethodPost:
 		var req projectRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		p := &store.Project{OwnerEmail: user, MCPServers: req.MCPServers}
@@ -200,8 +198,7 @@ func (s *Server) projectByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, p)
 	case http.MethodPatch:
 		var req projectRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		patch := store.ProjectPatch{
@@ -407,8 +404,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 	var req struct {
 		ToEmail string `json:"to_email"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &req) {
 		return
 	}
 	// The store re-checks the owner under the project's row lock: an owner's
@@ -434,7 +430,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 			http.Error(w, store.ErrNotAProjectMember.Error(), http.StatusBadRequest)
 			return
 		}
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "required") {
+		if store.IsInputError(err) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1168,8 +1164,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 			return
 		}
 		var req memoryPatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		// The full patch, validity window included: the request type carries
@@ -1210,8 +1205,7 @@ func (s *Server) projectMemories(w http.ResponseWriter, r *http.Request, p *stor
 		writeJSON(w, map[string]any{"memories": memories})
 	case memID == "" && r.Method == http.MethodPost:
 		var req projectMemoryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		// Promotion path (Item D5): {"from_memory_id": ...} MOVES one of the

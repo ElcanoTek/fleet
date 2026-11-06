@@ -25,6 +25,8 @@ const (
 	nameTasksSkipped          = "fleet_tasks_skipped_total"
 	nameRecurrenceRepaired    = "fleet_sched_recurrences_reconciled_total"
 	nameWebhookTrig           = "fleet_webhook_triggers_total"
+	nameChatRateLimited       = "fleet_chat_rate_limited_total"
+	nameSSEReconnects         = "fleet_sse_reconnects_total"
 	nameApprovalResumes       = "fleet_approval_resumes_total"
 	nameToolOutputTruncations = "fleet_tool_output_truncations_total"
 	nameToolOutputArtifacts   = "fleet_tool_output_artifacts_total"
@@ -193,6 +195,24 @@ func RecordWebhookTrigger(slug, result string) {
 	}
 	incCounter(nameWebhookTrig, "Total inbound webhook-triggered conversation requests, by slug and result.",
 		[]string{"slug", "result"}, []string{slug, result}, 1)
+}
+
+// RecordChatRateLimited counts one chat request answered 429 by the per-user
+// limiter, by the limit that tripped: "rpm", "day" or "concurrent". A fixed
+// label set — the user is in the log line, not the metric.
+func RecordChatRateLimited(reason string) {
+	incCounter(nameChatRateLimited, "Chat requests rejected by the per-user rate limiter, by the limit that tripped.",
+		[]string{"reason"}, []string{reason}, 1)
+}
+
+// RecordSSEReconnect counts one /stream reattach by how it was served:
+// "within_buffer" (the live turn buffer), "db_fallback" (a frozen replay of a
+// still-running turn from the database), "buffer_expired" (a finished turn
+// replayed from the database) or "no_content" (nothing to replay). A fixed
+// label set.
+func RecordSSEReconnect(outcome string) {
+	incCounter(nameSSEReconnects, "Chat SSE stream reattaches, by how the reattach was served.",
+		[]string{"outcome"}, []string{outcome}, 1)
 }
 
 // RecordApprovalResume counts one resume-after-approval decision

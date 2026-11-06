@@ -581,9 +581,3 @@ func TestDependentKeyHealsAfterFix(t *testing.T) {
 		}
 	}
 }
-
-func TestLogSafeStripsCRLF(t *testing.T) {
-	if got := logSafe("a\nb\rc"); got != "abc" {
-		t.Fatalf("logSafe = %q, want CR/LF stripped", got)
-	}
-}

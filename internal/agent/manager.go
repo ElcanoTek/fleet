@@ -24,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -1164,7 +1165,7 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 			// Enforced, not just documented: a doc dir configured to sit
 			// inside the uploads tree (or a future edit that adds the tree
 			// itself) is dropped rather than quietly re-opening the hole.
-			log.Printf("sandbox: refusing to mount %q — it is inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", logSafeAgent(m))
+			log.Printf("sandbox: refusing to mount %q — it is inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", safe.LogSafe(m))
 			continue
 		}
 		kept = append(kept, m)
@@ -1248,20 +1249,6 @@ func defaultIfEmpty(s, def string) string {
 		return def
 	}
 	return s
-}
-
-// logSafeAgent strips CR/LF from a user-influenced value before it is
-// interpolated into a log line, so a hostile value cannot forge a log entry —
-// the same guard as httpapi's logSafeSlug / handlers' logSafe / the runner's
-// logSafeRunner, declared per package because none of those is importable
-// without a cycle or a widened API.
-//
-// strings.ReplaceAll rather than the NewReplacer the siblings use: CodeQL's
-// go/log-injection query models ReplaceAll of "\n"/"\r" as the sanitizer, so
-// this spelling both is the guard and is provable as one — a NewReplacer
-// version kept the alert open as a false positive.
-func logSafeAgent(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 // Resolve loads + caches the model for a slug. Exposed so the scheduled
@@ -1801,7 +1788,7 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 		// without an entry mounts its default seat (#988).
 		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
-			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", logSafeAgent(in.UserEmail), oerr)
+			log.Printf("RunTurn: remote-mcp overlay unavailable for %s: %v", safe.LogSafe(in.UserEmail), oerr)
 		} else if ov != nil {
 			overlay = ov
 			if len(ov.Skipped) > 0 {
@@ -1809,7 +1796,7 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
 				// hostile name cannot forge a log entry (log-injection guard).
 				log.Printf("RunTurn: remote MCP server(s) not mounted for %s: %s",
-					logSafeAgent(in.UserEmail), logSafeAgent(skippedWithReasons(ov)))
+					safe.LogSafe(in.UserEmail), safe.LogSafe(skippedWithReasons(ov)))
 			}
 		}
 	}
@@ -2203,7 +2190,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	// the classifier returns, but it is DERIVED from runErr, so it gets the
 	// same guard to keep the whole line provably clean.
 	log.Printf("RunTurn stream failed (reason=%s model=%q status=%d): %s",
-		logSafeAgent(string(reason)), logSafeAgent(modelSlug), status, logSafeAgent(runErr.Error()))
+		safe.LogSafe(string(reason)), safe.LogSafe(modelSlug), status, safe.LogSafe(runErr.Error()))
 	emitModelSelectionRequired(sink, reason, modelSlug, status, runErr)
 	return nil, fmt.Errorf("%w: %w", ErrModelSelectionRequired, runErr)
 }

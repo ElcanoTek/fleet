@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -64,9 +66,6 @@ type Server struct {
 	// concurrent caps simultaneous in-flight turns per user. nil disables it
 	// (rate limiting off, or FLEET_CHAT_RATE_LIMIT_CONCURRENT=0).
 	concurrent *ratelimit.ConcurrencyLimiter
-	// rateLimitHits tallies 429s by reason ("rpm"|"day"|"concurrent"). Pointer-held
-	// so a Server value stays copyable. A Prometheus surface is deferred to #176.
-	rateLimitHits *rateHitCounter
 	// shareRL throttles the public read-only share endpoint (#226), keyed by
 	// share TOKEN (not IP — the endpoint sits behind the web tier, so per-IP
 	// would see only the proxy's address). Always on, independent of the per-user
@@ -191,11 +190,6 @@ type Server struct {
 	// sessionApprovals holds per-conversation batch pre-approvals (#300): in-memory,
 	// session-scoped policies consulted by approvalStager.Stage before staging a card.
 	sessionApprovals *SessionApprovalRegistry
-
-	// sseReconnects tallies SSE reconnect outcomes (within_buffer | db_fallback |
-	// buffer_expired | no_content). Behind a pointer so a Server value stays
-	// copyable; a Prometheus surface is deferred to the metrics issue (#176).
-	sseReconnects *reconnectCounter
 
 	// shuttingDown is set by BeginShutdown when the process starts draining: new
 	// POST /chat are rejected with 503 and /healthz reports 503 so a load balancer
@@ -362,41 +356,6 @@ type TaskScheduleResult struct {
 	Status  string
 	NextRun time.Time // zero = runs as soon as a worker is free
 }
-
-// reconnectCounter is a concurrency-safe tally of SSE reconnect outcomes.
-type reconnectCounter struct {
-	mu     sync.Mutex
-	counts map[string]int64
-}
-
-func newReconnectCounter() *reconnectCounter {
-	return &reconnectCounter{counts: map[string]int64{}}
-}
-
-func (c *reconnectCounter) inc(outcome string) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	c.counts[outcome]++
-	c.mu.Unlock()
-}
-
-func (c *reconnectCounter) snapshot() map[string]int64 {
-	if c == nil {
-		return map[string]int64{}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[string]int64, len(c.counts))
-	for k, v := range c.counts {
-		out[k] = v
-	}
-	return out
-}
-
-// SSEReconnectCounts returns a snapshot of SSE reconnect outcomes by label.
-func (s *Server) SSEReconnectCounts() map[string]int64 { return s.sseReconnects.snapshot() }
 
 // ── graceful shutdown (#278) ───────────────────────────────────────────────
 
@@ -680,10 +639,8 @@ func New(cfg *config.Config, mgr turnEngine, st chatStore, opts ...Option) *Serv
 		agent:            mgr,
 		store:            st,
 		sharedToken:      cfg.SharedToken,
-		rateLimitHits:    newRateHitCounter(),
 		inflight:         make(map[string]inflightEntry),
 		sessionApprovals: NewSessionApprovalRegistry(),
-		sseReconnects:    newReconnectCounter(),
 		processStart:     time.Now(),
 		hostStats:        hoststats.New(),
 		// Per-token cap on the public /shared read endpoint (#226): generous for
@@ -1222,4 +1179,34 @@ func (k *keyedLocks) lock(key string) func() {
 		}
 		k.mu.Unlock()
 	}
+}
+
+// decodeJSONBody decodes r's JSON body into dst, answering the shared
+// "bad json" 400 on failure. Reports whether decoding succeeded. Only for
+// handlers that REQUIRE a well-formed body — branches with lenient decode
+// semantics (the cancel scope, the legacy bare DELETE /conversations) keep
+// their own decode inline.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// decodeOptionalJSONBody is decodeJSONBody for handlers whose body is
+// OPTIONAL: a missing or empty body (io.EOF) leaves dst at its zero value and
+// succeeds, while a present-but-malformed body is still a 400. The distinction
+// matters because the lenient `_ = Decode(...)` idiom it replaces turned a
+// client's typo into the zero value — a non-expiring share link, an un-share,
+// a "message id must be positive" — and reported success.
+func decodeOptionalJSONBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if r.Body == nil {
+		return true
+	}
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		return false
+	}
+	return true
 }

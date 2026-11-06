@@ -30,6 +30,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -219,7 +220,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 		}
 		ok, err := stager.StageHostSuggestion(source, reason)
 		if err != nil {
-			log.Printf("escalation: stage %s suggestion (conv=%s): %s", source, logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("escalation: stage %s suggestion (conv=%s): %s", source, safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 		staged = ok
 		return ok
@@ -238,7 +239,7 @@ func (s *Server) escalateAfterTurn(ctx context.Context, buf *turnBuffer, conv *s
 			Suggested:      suggested,
 		})
 		if err != nil {
-			log.Printf("escalation: record event (conv=%s): %s", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("escalation: record event (conv=%s): %s", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 	}
 
@@ -351,7 +352,7 @@ func countClassifierCheck(c *struggleCheck) (agentcore.StruggleVerdict, bool) {
 	switch {
 	case err != nil:
 		metrics.RecordEscalationClassifierCheck(c.mode, "error")
-		log.Printf("escalation: classifier: %s", logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the error text.
+		log.Printf("escalation: classifier: %s", safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the error text.
 		return v, false
 	case v.Probability >= c.threshold:
 		metrics.RecordEscalationClassifierCheck(c.mode, "pushback")

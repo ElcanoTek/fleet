@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
@@ -106,8 +107,8 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 	if triggerSlugShape.MatchString(slug) {
 		t, lookupErr := h.storage.GetTriggerBySlug(r.Context(), slug)
 		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
-			//nolint:gosec // G706: slug is sanitized via logSafe (CR/LF stripped) before interpolation.
-			log.Printf("webhook trigger lookup error for slug %q: %v", logSafe(slug), lookupErr)
+			//nolint:gosec // G706: slug is sanitized via safe.LogSafe (CR/LF stripped) before interpolation.
+			log.Printf("webhook trigger lookup error for slug %q: %v", safe.LogSafe(slug), lookupErr)
 			writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
@@ -139,8 +140,8 @@ func (h *Handlers) HandleWebhookTrigger(w http.ResponseWriter, r *http.Request) 
 
 	runID, err := h.storage.SpawnWebhookRun(r.Context(), trig, prompt)
 	if err != nil {
-		//nolint:gosec // G706: slug is sanitized via logSafe (CR/LF stripped) before interpolation.
-		log.Printf("webhook trigger %q enqueue error: %v", logSafe(slug), err)
+		//nolint:gosec // G706: slug is sanitized via safe.LogSafe (CR/LF stripped) before interpolation.
+		log.Printf("webhook trigger %q enqueue error: %v", safe.LogSafe(slug), err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}

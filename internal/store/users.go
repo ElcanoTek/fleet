@@ -111,6 +111,11 @@ func ValidRole(r string) bool {
 // wrong password so enumeration attacks can't probe the allowlist.
 var ErrUserNotFound = errors.New("user not found")
 
+// ErrUserExists is wrapped by CreateUser when the email is taken. Its text is
+// the tail of the message ("user <email> already exists"), so callers match it
+// with errors.Is and the message reads as it always did.
+var ErrUserExists = errors.New("already exists")
+
 // ErrBadPassword is returned by VerifyUser when the hash check fails.
 var ErrBadPassword = errors.New("bad password")
 
@@ -133,10 +138,10 @@ func pgUniqueViolation(err error) bool {
 func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*User, error) {
 	email = normalizeEmail(email)
 	if email == "" {
-		return nil, errors.New("email required")
+		return nil, errInput("email required")
 	}
 	if len(plainPassword) < 8 {
-		return nil, errors.New("password must be at least 8 characters")
+		return nil, errInput("password must be at least 8 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), passwordHashCost)
 	if err != nil {
@@ -149,7 +154,7 @@ func (s *Store) CreateUser(ctx context.Context, email, plainPassword string) (*U
 	)
 	if err != nil {
 		if pgUniqueViolation(err) {
-			return nil, fmt.Errorf("user %s already exists", email)
+			return nil, fmt.Errorf("user %s %w", email, ErrUserExists)
 		}
 		return nil, err
 	}
@@ -668,7 +673,7 @@ func retireUnheldTeamNameTx(ctx context.Context, tx *sql.Tx, name string, now in
 func (s *Store) SetUserRoleTeam(ctx context.Context, email string, role, teamID *string) (*User, error) {
 	email = normalizeEmail(email)
 	if role != nil && !ValidRole(*role) {
-		return nil, fmt.Errorf("invalid role %q (want member|viewer|admin)", *role)
+		return nil, errInputf("invalid role %q (want member|viewer|admin)", *role)
 	}
 	if teamID != nil {
 		if err := ValidateTeamName(*teamID); err != nil {
@@ -804,7 +809,7 @@ func (s *Store) IsUser(ctx context.Context, email string) (bool, error) {
 func (s *Store) UpdatePassword(ctx context.Context, email, plainPassword string) error {
 	email = normalizeEmail(email)
 	if len(plainPassword) < 8 {
-		return errors.New("password must be at least 8 characters")
+		return errInput("password must be at least 8 characters")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(plainPassword), passwordHashCost)
 	if err != nil {

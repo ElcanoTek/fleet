@@ -32,6 +32,7 @@ func attachReq(user string) *http.Request {
 func TestChatRateLimitMiddleware_HeadersAnd429(t *testing.T) {
 	s := New(&config.Config{RateLimitEnabled: true, RatePerMinute: 2}, nil, nil)
 	mw := s.rateLimitMiddleware(okNext())
+	rpmBefore := metricValue(`fleet_chat_rate_limited_total{reason="rpm"}`)
 
 	for i := 0; i < 2; i++ {
 		w := httptest.NewRecorder()
@@ -62,8 +63,8 @@ func TestChatRateLimitMiddleware_HeadersAnd429(t *testing.T) {
 	if body["error"] != "rate_limit_exceeded" || body["reason"] != "rpm" {
 		t.Errorf("429 body = %v, want rate_limit_exceeded/rpm", body)
 	}
-	if s.RateLimitHits()["rpm"] != 1 {
-		t.Errorf("hits[rpm] = %d, want 1", s.RateLimitHits()["rpm"])
+	if got := metricValue(`fleet_chat_rate_limited_total{reason="rpm"}`) - rpmBefore; got != 1 {
+		t.Errorf("fleet_chat_rate_limited_total{reason=\"rpm\"} rose by %v, want 1", got)
 	}
 }
 

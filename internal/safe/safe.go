@@ -150,14 +150,14 @@ func EmitPanicWithMetadata(meta PanicMetadata, v any, _ []byte) PanicEvent {
 	class := PanicClass(v)
 	event := PanicEvent{PanicMetadata: meta, Class: class}
 	panicLogger.Error("panic recovered",
-		"incident_id", logSafe(meta.IncidentID),
-		"goroutine", logSafe(meta.Location),
-		"boundary", logSafe(meta.Boundary),
-		"tool_name", logSafe(meta.ToolName),
-		"tool_call_id", logSafe(meta.ToolCallID),
-		"run_mode", logSafe(meta.RunMode),
-		"task_id", logSafe(meta.TaskID),
-		"conversation_id", logSafe(meta.ConversationID),
+		"incident_id", LogSafe(meta.IncidentID),
+		"goroutine", LogSafe(meta.Location),
+		"boundary", LogSafe(meta.Boundary),
+		"tool_name", LogSafe(meta.ToolName),
+		"tool_call_id", LogSafe(meta.ToolCallID),
+		"run_mode", LogSafe(meta.RunMode),
+		"task_id", LogSafe(meta.TaskID),
+		"conversation_id", LogSafe(meta.ConversationID),
 		"panic_class", class,
 	)
 
@@ -252,9 +252,11 @@ func goWithDone(name string, fn func()) <-chan struct{} {
 	return done
 }
 
-// logSafe strips CR/LF from a value before it is interpolated into a log
-// line. strings.ReplaceAll is the spelling CodeQL's go/log-injection query
-// models as a sanitizer.
-func logSafe(s string) string {
+// LogSafe strips CR/LF from a value before it is interpolated into a log line,
+// so a value carrying a newline cannot forge a second log entry. It is the
+// one copy every package uses (#1944). strings.ReplaceAll is the spelling
+// CodeQL's go/log-injection query models as a sanitizer — strings.NewReplacer
+// kept the same alerts open — so do not "simplify" the body.
+func LogSafe(s string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }

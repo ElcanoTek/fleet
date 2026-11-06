@@ -580,8 +580,8 @@ func run() error {
 			Class:          event.Class,
 		}
 		if err := chatStore.RecordPanicEvent(ctx, record); err != nil {
-			//nolint:gosec // G706: logSafe strips CR/LF from location, incident id, and the store error; gosec cannot see through the helper.
-			log.Printf("panic event persist failed (location=%s incident=%s): %s", logSafe(event.Location), logSafe(event.IncidentID), logSafe(err.Error()))
+			//nolint:gosec // G706: safe.LogSafe strips CR/LF from location, incident id, and the store error; gosec cannot see through the helper.
+			log.Printf("panic event persist failed (location=%s incident=%s): %s", safe.LogSafe(event.Location), safe.LogSafe(event.IncidentID), safe.LogSafe(err.Error()))
 		}
 	}
 
@@ -3764,13 +3764,6 @@ func dropApprovalResumesAtBoot(chatStore *store.Store) (int, error) {
 		}
 	}
 	return 0, err
-}
-
-// logSafe strips CR/LF from a value before it is interpolated into a log
-// line. strings.ReplaceAll is the spelling CodeQL's go/log-injection query
-// models as a sanitizer.
-func logSafe(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
 }
 
 // warnUncategorizedConnectors logs the bundle connectors with no Tools-picker

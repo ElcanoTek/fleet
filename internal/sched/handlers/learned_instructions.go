@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -98,7 +99,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 		defer cancel()
 		signals, err := h.storage.UnconsumedFeedback(ctx, task.ID)
 		if err != nil {
-			log.Printf("self-improve: load feedback for task %s: %v", logSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and logSafe strips CR/LF.
+			log.Printf("self-improve: load feedback for task %s: %v", safe.LogSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and safe.LogSafe strips CR/LF.
 			return
 		}
 		var critiques []string
@@ -128,7 +129,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 			return // nothing worth proposing; leave signals unconsumed for next time
 		}
 		if _, err := h.storage.ProposeLearnedInstruction(ctx, task.ID, content, evidence, time.Now().Unix()); err != nil {
-			log.Printf("self-improve: propose instruction for task %s: %v", logSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and logSafe strips CR/LF.
+			log.Printf("self-improve: propose instruction for task %s: %v", safe.LogSafe(task.ID.String()), err) //nolint:gosec // G706 false positive: task.ID is a uuid.UUID and safe.LogSafe strips CR/LF.
 		}
 	}()
 }

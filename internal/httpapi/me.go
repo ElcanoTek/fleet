@@ -20,11 +20,9 @@ package httpapi
 // so a read-only viewer can see its team but not change it.
 
 import (
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -115,8 +113,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		TeamID *string `json:"team_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if body.TeamID == nil {
@@ -150,7 +147,7 @@ func (s *Server) writeUserLookupError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, store.ErrUserNotFound):
 		http.Error(w, "user not found", http.StatusNotFound)
-	case store.IsInputError(err), strings.Contains(err.Error(), "too long"):
+	case store.IsInputError(err):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)

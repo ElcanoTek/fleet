@@ -23,7 +23,7 @@ import (
 // (issue #261). They are registered onto this credentialed *mcp.Client as a single
 // SYNTHETIC server (HTTPToolServerName, "_http") so they flow through the SAME
 // host-side seam every MCP tool funnels through: discovery via GetAllTools, dispatch
-// via CallToolOn/CallToolPrefixed, and the agentcore MCPBroker (policy gate, output
+// via CallToolOn, and the agentcore MCPBroker (policy gate, output
 // redaction, isError mapping, critical-tool gate). No new governance path is forked.
 //
 // SECURITY — the credential boundary is identical to an HTTP MCP server's: the

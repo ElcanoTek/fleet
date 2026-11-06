@@ -59,10 +59,6 @@ func serverFixture(t *testing.T) *Server {
 		store:       st,
 		sharedToken: cfg.SharedToken,
 		inflight:    make(map[string]inflightEntry),
-		// New() wires this; the struct literal must too, or every /stream
-		// reattach tallies into a nil counter (inc is nil-safe, so the miss is
-		// silent) and reconnect-outcome assertions see an empty map.
-		sseReconnects: newReconnectCounter(),
 		// Handler tests aren't about the scoped-tier gate — admit every
 		// authenticated user so fixtures needn't provision each email.
 		// Cross-user isolation is still exercised at the handler level
@@ -99,7 +95,7 @@ func (s *Server) concreteStore(t *testing.T) *store.Store {
 func seedUser(t *testing.T, st *store.Store, email string) {
 	t.Helper()
 	if _, err := st.CreateUser(context.Background(), email, "test-password-123"); err != nil &&
-		!strings.Contains(err.Error(), "already exists") {
+		!errors.Is(err, store.ErrUserExists) {
 		t.Fatalf("seed user %s: %v", email, err)
 	}
 }

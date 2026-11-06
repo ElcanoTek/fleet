@@ -12,12 +12,12 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log"
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -82,8 +82,7 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 		OpsRole  *string `json:"ops_role"`
 		TeamID   *string `json:"team_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	email := strings.TrimSpace(body.Email)
@@ -115,10 +114,9 @@ func (s *Server) handleAdminUserCreate(w http.ResponseWriter, r *http.Request) {
 	u, err := s.store.CreateUser(r.Context(), email, body.Password)
 	if err != nil {
 		switch {
-		case strings.Contains(err.Error(), "already exists"):
+		case errors.Is(err, store.ErrUserExists):
 			http.Error(w, err.Error(), http.StatusConflict)
-		case strings.Contains(err.Error(), "at least 8 characters"),
-			strings.Contains(err.Error(), "email required"):
+		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -208,15 +206,14 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 	var body struct {
 		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	if err := s.store.UpdatePassword(r.Context(), email, body.Password); err != nil {
 		switch {
 		case errors.Is(err, store.ErrUserNotFound):
 			http.Error(w, "user not found", http.StatusNotFound)
-		case strings.Contains(err.Error(), "at least 8 characters"):
+		case store.IsInputError(err):
 			http.Error(w, err.Error(), http.StatusBadRequest)
 		default:
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -224,7 +221,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: password reset for %q by %q", logSafe(email), logSafe(userFromCtx(r.Context())))
+	log.Printf("admin users: password reset for %q by %q", safe.LogSafe(email), safe.LogSafe(userFromCtx(r.Context())))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -237,7 +234,7 @@ func (s *Server) setOpsRole(r *http.Request, email, role string) {
 	}
 	if err := s.opsAdmins.SetRole(r.Context(), email, role); err != nil {
 		//nolint:gosec // G706: %q escapes CR/LF; role is validated before this call.
-		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", logSafe(role), logSafe(email), logSafe(err.Error()))
+		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", safe.LogSafe(role), safe.LogSafe(email), safe.LogSafe(err.Error()))
 	}
 }
 
@@ -303,8 +300,7 @@ func (s *Server) handleAdminTeamRename(w http.ResponseWriter, r *http.Request) {
 		From string `json:"from"`
 		To   string `json:"to"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+	if !decodeJSONBody(w, r, &body) {
 		return
 	}
 	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())

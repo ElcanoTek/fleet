@@ -5,9 +5,7 @@
 package httpapi
 
 import (
-	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"strings"
 
@@ -83,8 +81,7 @@ func (s *Server) memories(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"memories": memories})
 	case http.MethodPost:
 		var req memoryRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		memory, err := s.store.CreateMemory(r.Context(), user, req.Content, "manual", req.Kind)
@@ -124,16 +121,13 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 		var dest struct {
 			ProjectID string `json:"project_id"`
 		}
-		if r.Body != nil {
-			// A MALFORMED body is refused, not ignored. Swallowing the error
-			// fell through to the personal-memory accept and answered 200 —
-			// so a client that meant "save this to the team" was told it
-			// succeeded while the memory went somewhere else. io.EOF is the
-			// legitimate empty body (the personal path) and is not an error.
-			if derr := json.NewDecoder(r.Body).Decode(&dest); derr != nil && !errors.Is(derr, io.EOF) {
-				http.Error(w, "bad json: "+derr.Error(), http.StatusBadRequest)
-				return
-			}
+		// A MALFORMED body is refused, not ignored. Swallowing the error fell
+		// through to the personal-memory accept and answered 200 — so a client
+		// that meant "save this to the team" was told it succeeded while the
+		// memory went somewhere else. An empty body (the personal path) is
+		// legitimate and is not an error.
+		if !decodeOptionalJSONBody(w, r, &dest) {
+			return
 		}
 		if projectID := strings.TrimSpace(dest.ProjectID); projectID != "" {
 			p := s.projectForMember(w, r, user, projectID)
@@ -171,8 +165,7 @@ func (s *Server) memoryByID(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPatch:
 		var req memoryPatchRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, "bad json: "+err.Error(), http.StatusBadRequest)
+		if !decodeJSONBody(w, r, &req) {
 			return
 		}
 		memory, err := s.store.UpdateMemory(r.Context(), user, id, store.MemoryPatch{

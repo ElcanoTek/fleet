@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -197,7 +198,7 @@ func (s *Server) writeApprovalProgress(user, approvalID string, u mcp.ProgressUp
 	ctx, cancel := context.WithTimeout(context.Background(), approvalProgressWriteTimeout)
 	defer cancel()
 	if _, err := s.store.SetApprovalProgress(ctx, user, approvalID, string(raw)); err != nil {
-		log.Printf("approval progress: store %s: %s", logSafe(approvalID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the server-minted id and the error text.
+		log.Printf("approval progress: store %s: %s", safe.LogSafe(approvalID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the server-minted id and the error text.
 	}
 }
 
@@ -228,7 +229,7 @@ func (s *Server) notifyApprovalFinished(user, convID string, approval *store.App
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalFinished(ctx, user, convID, label, failed); err != nil {
-			log.Printf("push: approval finished (conv=%s): %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("push: approval finished (conv=%s): %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 	})
 }
@@ -244,7 +245,7 @@ func (s *Server) notifyResumeSkipped(owner, convID string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyResumeSkipped(ctx, owner, convID); err != nil {
-			log.Printf("push: resume skipped (conv=%s): %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("push: resume skipped (conv=%s): %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 	})
 }
