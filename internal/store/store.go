@@ -1574,7 +1574,7 @@ func (s *Store) SetArchived(ctx context.Context, userEmail, convID string, archi
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE conversations SET archived_at = $1, pinned = $2, updated_at = $3,
-			team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL
+			`+unshareConversationSet+`
 		 WHERE id = $4 AND user_email = $5 AND deleted_at IS NULL`,
 		archivedAt, pinned, now, convID, userEmail,
 	)
@@ -2258,7 +2258,7 @@ func (s *Store) SetConversationTeamVisibleWithOptions(ctx context.Context, owner
 	now := time.Now().Unix()
 	if !visible {
 		res, err := s.db.ExecContext(ctx,
-			`UPDATE conversations SET team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL, updated_at = $1
+			`UPDATE conversations SET `+unshareConversationSet+`, updated_at = $1
 			 WHERE id = $2 AND user_email = $3 AND deleted_at IS NULL`,
 			now, convID, ownerEmail)
 		if err != nil {

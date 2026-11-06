@@ -379,6 +379,17 @@ func (s *Store) ListProjectTeamConversations(ctx context.Context, callerEmail, p
 	return list, nil
 }
 
+// unshareConversationSet is the SET clause that takes a conversation out of
+// every shared audience: the team share, multiplayer, and the stamped team
+// label and id. EVERY revocation path (archive, unshare, leave or retire a
+// team, a project unshared, transferred or deleted, an account deleted) splices
+// this one constant into its UPDATE, so a future share column is added here
+// once — a path that hand-wrote the clause and missed the new column would
+// leave a chat readable by an audience that was supposed to lose it.
+// TestUnshareClauseIsSpelledOnce fails if a statement in this package
+// hand-writes it again.
+const unshareConversationSet = "team_visible = FALSE, multiplayer = FALSE, team_shared_with = NULL, team_shared_with_id = NULL"
+
 // LeaveTeamImpact is what a user loses by leaving their team — the numbers the
 // Leave confirm states instead of acting first and reporting afterwards.
 type LeaveTeamImpact struct {
