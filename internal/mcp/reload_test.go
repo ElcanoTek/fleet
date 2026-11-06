@@ -235,10 +235,9 @@ func TestReload_CompletesWhileStdinWedged(t *testing.T) {
 		t.Fatalf("start non-reading child: %v", err)
 	}
 	srv := &Server{
-		name:         "wedged",
-		transport:    tr,
-		def:          ServerDef{Name: "wedged", Command: "python3"},
-		stdioCommand: "python3",
+		name:      "wedged",
+		transport: tr,
+		def:       ServerDef{Name: "wedged", Command: "python3"},
 	}
 	c := NewClient()
 	c.servers["wedged"] = srv

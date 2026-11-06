@@ -620,8 +620,7 @@ func TestClose_RetiresServers_NoPostCloseRespawn(t *testing.T) {
 		transport: bt,
 		// A real, restartable stdio command: without the retire fix the
 		// dead-transport path respawns this as a live post-Close subprocess.
-		stdioCommand: "python3",
-		stdioArgs:    []string{"-u", "-c", fakeServerScript},
+		def: ServerDef{Name: "racy", Command: "python3", Args: []string{"-u", "-c", fakeServerScript}},
 	}
 	c.servers["racy"] = srv
 
