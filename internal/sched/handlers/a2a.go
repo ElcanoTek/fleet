@@ -47,6 +47,7 @@ import (
 
 	a2abridge "github.com/ElcanoTek/fleet/internal/a2a"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
@@ -437,7 +438,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		a2aWrite(w, a2aCreateError(req.ID, err))
 		return
 	}
-	log.Printf("Task created via A2A: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
+	log.Printf("Task created via A2A: %s (prompt: %.50s...)", task.ID, safe.LogSafe(task.Prompt))
 
 	// Inline push registration binds to the task this send just created (its
 	// URL was validated before the create, so a failure here is storage).
@@ -825,9 +826,9 @@ func (h *Handlers) a2aCancelTask(w http.ResponseWriter, _ *http.Request, p princ
 	}
 	// Interrupt a live in-process run, exactly like DELETE /tasks/{id} (#508).
 	if h.taskStopper != nil && h.taskStopper(task.ID, who) {
-		log.Printf("Task cancelled via A2A: %s (live run interrupted, stopped by %s)", task.ID, logSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes logSafe.
+		log.Printf("Task cancelled via A2A: %s (live run interrupted, stopped by %s)", task.ID, safe.LogSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes safe.LogSafe.
 	} else {
-		log.Printf("Task cancelled via A2A: %s (stopped by %s)", task.ID, logSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes logSafe.
+		log.Printf("Task cancelled via A2A: %s (stopped by %s)", task.ID, safe.LogSafe(who)) //nolint:gosec // G706: task.ID is a parsed uuid.UUID; who passes safe.LogSafe.
 	}
 	a2aWrite(w, a2abridge.NewResponse(req.ID, a2abridge.BuildTask(cancelled, h.a2a.PublicBaseURL, true)))
 }

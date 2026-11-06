@@ -19,6 +19,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/mcpoauth"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -383,14 +384,14 @@ func (s *Server) remoteSeatCatalog(ctx context.Context, user string) map[string]
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+		log.Printf("mcp seats: remote server lookup failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 	}
 	if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 		for _, srv := range shared {
 			add(srv)
 		}
 	} else {
-		log.Printf("mcp seats: shared remote server lookup failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+		log.Printf("mcp seats: shared remote server lookup failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 	}
 	return out
 }
@@ -475,14 +476,14 @@ func (s *Server) optionalServerWhitelist(ctx context.Context, user string) map[s
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("mcp opt-in: remote server lookup failed for %s: %v", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 		if shared, err := s.remoteMCP.SharedWithMe(ctx, user); err == nil {
 			for _, srv := range shared {
 				valid[strings.ToLower(srv.Name)] = true
 			}
 		} else {
-			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("mcp opt-in: shared remote server lookup failed for %s: %v", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 	}
 	return valid

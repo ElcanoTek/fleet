@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
@@ -126,7 +127,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// The template is operator-authored; log the detail host-side but return a
 		// generic message so a rendering error can't leak template internals.
-		log.Printf("webhook trigger %q template render error: %v", logSafeSlug(trig.Slug), err)
+		log.Printf("webhook trigger %q template render error: %v", safe.LogSafe(trig.Slug), err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "template render error", http.StatusInternalServerError)
 		return
@@ -321,19 +322,4 @@ func renderWebhookPrompt(tmpl string, payload map[string]any, raw []byte) (strin
 		return "", err
 	}
 	return sb.String(), nil
-}
-
-// logSafe strips CR/LF from a value before it is interpolated into a log
-// line (log-injection guard). strings.ReplaceAll is the spelling CodeQL's
-// go/log-injection query models as a sanitizer — a NewReplacer version
-// kept the same alerts open as false positives.
-func logSafe(s string) string {
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
-}
-
-// logSafeSlug strips CR/LF from a slug before it is interpolated into a log line
-// (log-injection guard). Configured slugs are already shape-constrained, but the
-// guard keeps the call site safe regardless.
-func logSafeSlug(slug string) string {
-	return logSafe(slug)
 }

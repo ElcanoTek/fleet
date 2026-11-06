@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -192,13 +193,13 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	var outsTruncated, discoveryFailed bool
 	if err != nil {
 		discoveryFailed = true
-		log.Printf("branch files: history of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
+		log.Printf("branch files: history of %s: %v", safe.LogSafe(src.ID), safe.LogSafe(err.Error()))
 	} else {
 		var outs []outputFile
 		outs, outsTruncated, err = s.outputsFromHistory(copyCtx, src.ID, history)
 		if err != nil {
 			discoveryFailed = true
-			log.Printf("branch files: outputs of %s: %v", logSafeSlug(src.ID), logSafe(err.Error()))
+			log.Printf("branch files: outputs of %s: %v", safe.LogSafe(src.ID), safe.LogSafe(err.Error()))
 		} else {
 			// Re-checked before every file: the copy can take a while, and
 			// an owner who stops sharing (or archives) mid-copy has closed
@@ -216,14 +217,14 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 					}
 				}
 				if gerr != nil {
-					log.Printf("branch files: re-check %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+					log.Printf("branch files: re-check %s: %v", safe.LogSafe(src.ID), safe.LogSafe(gerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 				}
 				if gerr != nil || !ok {
 					return branchCopyClosed
 				}
 				excluded, gerr := s.store.ListOutputExclusions(copyCtx, src.ID)
 				if gerr != nil {
-					log.Printf("branch files: re-check exclusions of %s: %v", logSafeSlug(src.ID), logSafe(gerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+					log.Printf("branch files: re-check exclusions of %s: %v", safe.LogSafe(src.ID), safe.LogSafe(gerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 					return branchCopyClosed
 				}
 				if excluded[p] {
@@ -242,7 +243,7 @@ func (s *Server) carrySharedFilesIntoBranch(ctx context.Context, src *store.Team
 	recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), branchOriginRecordTimeout)
 	defer cancel()
 	if err := s.store.RecordBranchOrigin(recordCtx, branch.ID, origin); err != nil {
-		log.Printf("branch files: record origin of %s: %v", logSafeSlug(branch.ID), logSafe(err.Error()))
+		log.Printf("branch files: record origin of %s: %v", safe.LogSafe(branch.ID), safe.LogSafe(err.Error()))
 	}
 	return &origin
 }

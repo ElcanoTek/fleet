@@ -18,6 +18,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -224,7 +225,7 @@ func (s *Server) handleAdminUserPassword(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	//nolint:gosec // G706: %q escapes CR/LF, so the path-supplied email cannot forge a log line.
-	log.Printf("admin users: password reset for %q by %q", logSafe(email), logSafe(userFromCtx(r.Context())))
+	log.Printf("admin users: password reset for %q by %q", safe.LogSafe(email), safe.LogSafe(userFromCtx(r.Context())))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -237,7 +238,7 @@ func (s *Server) setOpsRole(r *http.Request, email, role string) {
 	}
 	if err := s.opsAdmins.SetRole(r.Context(), email, role); err != nil {
 		//nolint:gosec // G706: %q escapes CR/LF; role is validated before this call.
-		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", logSafe(role), logSafe(email), logSafe(err.Error()))
+		log.Printf("WARNING: admin users: set ops role %q for %q failed: %s", safe.LogSafe(role), safe.LogSafe(email), safe.LogSafe(err.Error()))
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -184,7 +185,7 @@ func (s *Server) handleExternalTeamRename(w http.ResponseWriter, r *http.Request
 	}
 	if applied {
 		// The version is recorded in external_team_renames, not logged.
-		log.Printf("central auth: renamed team %q -> %q (%d accounts)", logSafe(body.From), logSafe(body.To), users)
+		log.Printf("central auth: renamed team %q -> %q (%d accounts)", safe.LogSafe(body.From), safe.LogSafe(body.To), users)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

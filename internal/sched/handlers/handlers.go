@@ -496,18 +496,6 @@ func writeError(w http.ResponseWriter, status int, detail string) {
 	writeJSON(w, status, models.ErrorResponse{Detail: detail})
 }
 
-// logSafe strips CR/LF from a value before it is interpolated into a log
-// line, so attacker-controlled strings (e.g. a key_id taken straight from
-// the URL path, or an uploaded filename) cannot forge or split log entries.
-// gosec flags these as G706 (log injection via taint analysis); this is the
-// real mitigation for the ones that carry untrusted text. strings.ReplaceAll
-// is the spelling CodeQL's go/log-injection query models as a sanitizer.
-func logSafe(s string) string {
-	// strings.ReplaceAll is the spelling CodeQL's go/log-injection query
-	// models as a sanitizer; NewReplacer kept the same alerts open.
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
-}
-
 func readJSON(r *http.Request, v interface{}) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
@@ -607,7 +595,7 @@ func (h *Handlers) CreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, logSafe(task.Prompt))
+	log.Printf("Task created: %s (prompt: %.50s...)", task.ID, safe.LogSafe(task.Prompt))
 	localizeTask(task)
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1785,7 +1773,7 @@ func (h *Handlers) BulkSetTaskModel(w http.ResponseWriter, r *http.Request) {
 			fbLog = *fallback
 		}
 	}
-	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", logSafe(req.Model), logSafe(fbLog), logSafe(req.FromModel), updated)
+	log.Printf("Bulk re-assigned model=%q fallback=%s from=%q on %d scheduled task(s)", safe.LogSafe(req.Model), safe.LogSafe(fbLog), safe.LogSafe(req.FromModel), updated)
 	writeJSON(w, http.StatusOK, models.BulkModelUpdateResult{DryRun: false, UpdatedCount: updated})
 }
 
@@ -1839,9 +1827,9 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// running nowhere (pending) or in a prior process's orphaned lease simply
 	// stays cancelled in the DB, exactly as before.
 	if h.taskStopper != nil && h.taskStopper(taskID, who) {
-		log.Printf("Task cancelled: %s (live run interrupted, stopped by %s)", taskID, logSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes logSafe.
+		log.Printf("Task cancelled: %s (live run interrupted, stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
 	} else {
-		log.Printf("Task cancelled: %s (stopped by %s)", taskID, logSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes logSafe.
+		log.Printf("Task cancelled: %s (stopped by %s)", taskID, safe.LogSafe(who)) //nolint:gosec // G706: taskID is a parsed uuid.UUID; who passes safe.LogSafe.
 	}
 	writeJSON(w, http.StatusOK, task)
 }
@@ -1905,7 +1893,7 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
-	log.Printf("Task deleted: %s (by %s)", taskID, logSafe(p.stopLabel())) //nolint:gosec // G706: taskID is a parsed uuid.UUID; the label passes logSafe.
+	log.Printf("Task deleted: %s (by %s)", taskID, safe.LogSafe(p.stopLabel())) //nolint:gosec // G706: taskID is a parsed uuid.UUID; the label passes safe.LogSafe.
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": true, "id": taskID.String()})
 }
 
@@ -2163,8 +2151,8 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: untrusted fields are sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
-	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, logSafe(updated.Prompt))
+	//nolint:gosec // G706: untrusted fields are sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper. updated.ID is a uuid.UUID.
+	log.Printf("Task updated: %s (prompt: %.50s...)", updated.ID, safe.LogSafe(updated.Prompt))
 	localizeTask(updated)
 	writeJSON(w, http.StatusOK, updated)
 }
@@ -2867,7 +2855,7 @@ func (h *Handlers) CreateAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("Created API key: %s (%s)", key.KeyID, logSafe(key.Name))
+	log.Printf("Created API key: %s (%s)", key.KeyID, safe.LogSafe(key.Name))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyCreated{
@@ -2967,8 +2955,8 @@ func (h *Handlers) RotateAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Rotated API key: %s", logSafe(keyID))
+	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Rotated API key: %s", safe.LogSafe(keyID))
 
 	resp := key.ToResponse()
 	writeJSON(w, http.StatusOK, models.APIKeyRotated{
@@ -2986,8 +2974,8 @@ func (h *Handlers) RevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Revoked API key: %s", logSafe(keyID))
+	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Revoked API key: %s", safe.LogSafe(keyID))
 
 	key := h.apiKeys.GetKey(keyID)
 	if key == nil {
@@ -3006,8 +2994,8 @@ func (h *Handlers) DeleteAPIKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	//nolint:gosec // G706: keyID is sanitized via logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
-	log.Printf("Deleted API key: %s", logSafe(keyID))
+	//nolint:gosec // G706: keyID is sanitized via safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+	log.Printf("Deleted API key: %s", safe.LogSafe(keyID))
 	writeJSON(w, http.StatusOK, models.DeleteKeyResponse{
 		Deleted: true,
 		KeyID:   keyID,

@@ -21,6 +21,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -193,7 +194,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		var oerr error
 		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
 		if oerr != nil {
-			log.Printf("conversation get: branch origin of %s: %v", logSafeSlug(id), logSafe(oerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			log.Printf("conversation get: branch origin of %s: %v", safe.LogSafe(id), safe.LogSafe(oerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 			origin = nil
 		}
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -40,7 +41,7 @@ func (s *Server) availableOptionalConnectorsForUser(ctx context.Context, user st
 	if s.store != nil && user != "" {
 		list, err := s.store.ListConnectorPrefs(ctx, user)
 		if err != nil {
-			log.Printf("availableOptionalConnectorsForUser: load connector prefs failed for %s: %s", logSafe(user), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("availableOptionalConnectorsForUser: load connector prefs failed for %s: %s", safe.LogSafe(user), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 			return []agent.OptionalServerInfo{}
 		}
 		prefs = list

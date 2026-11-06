@@ -1019,7 +1019,7 @@ func (p *Pool) parkForQuestion(task *models.Task, session *models.LogSession, pa
 func (p *Pool) finishStopped(task *models.Task, session *models.LogSession, stoppedBy string, start time.Time) {
 	msg := "Task stopped by " + stoppedBy
 	p.submitLog(task, session, msg)
-	log.Printf("runner: task %s stopped by %s after %v", task.ID, logSafeRunner(stoppedBy), time.Since(start).Round(time.Second))
+	log.Printf("runner: task %s stopped by %s after %v", task.ID, safe.LogSafe(stoppedBy), time.Since(start).Round(time.Second))
 }
 
 // finishLeaseLost records the honest outcome of a run cancelled by lease loss
@@ -1298,14 +1298,6 @@ func (p *Pool) failWallTimeout(task *models.Task, session *models.LogSession, le
 	}
 }
 
-// logSafeRunner strips CR/LF from operator-supplied text before it lands in a
-// log line (the handlers' logSafe pattern).
-func logSafeRunner(s string) string {
-	// strings.ReplaceAll is the spelling CodeQL's go/log-injection query
-	// models as a sanitizer; NewReplacer kept the same alerts open.
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", ""), "\r", "")
-}
-
 // transientAgentFailure reports whether err carries one of agentcore's
 // transient-infra sentinels: the run failed on provider/transport weather, not
 // on anything deterministic. These classify FailureTransient (the whole-task
@@ -1576,7 +1568,7 @@ func (p *Pool) parkForWake(task *models.Task, session *models.LogSession, spec t
 	} else if !ok {
 		log.Printf("runner: task %s wake park did not apply (lease lost or not running)", task.ID)
 	}
-	log.Printf("runner: task %s sleeping %s after %v", task.ID, logSafeRunner(what), time.Since(start).Round(time.Second))
+	log.Printf("runner: task %s sleeping %s after %v", task.ID, safe.LogSafe(what), time.Since(start).Round(time.Second))
 }
 
 // clearPendingQA nulls a resumed task's pending question/answer columns (#510)

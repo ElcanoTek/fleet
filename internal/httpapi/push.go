@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webpush"
 )
 
@@ -46,9 +47,9 @@ func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) boo
 	if err == nil {
 		return false
 	}
-	// The error quotes the host with %q already; logSafe is the guard the
+	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	log.Printf("push: refused a %s from %s: %s", what, logSafe(user), logSafe(err.Error()))
+	log.Printf("push: refused a %s from %s: %s", what, safe.LogSafe(user), safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }

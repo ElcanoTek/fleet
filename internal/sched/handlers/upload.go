@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -154,7 +155,7 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 	size, checksum, err := writeUploadFile(path, file)
 	if err != nil {
-		log.Printf("Failed to save upload %s: %v", logSafe(filename), err)
+		log.Printf("Failed to save upload %s: %v", safe.LogSafe(filename), err)
 		writeError(w, http.StatusInternalServerError, "Failed to save file")
 		return
 	}
@@ -163,10 +164,10 @@ func (h *Handlers) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	checksumPath := filepath.Join(tempDir, ".checksums", filename+".sha256")
 	if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil {
 		// Non-critical error, just log it
-		log.Printf("Failed to save checksum sidecar for %s: %v", logSafe(filename), err)
+		log.Printf("Failed to save checksum sidecar for %s: %v", safe.LogSafe(filename), err)
 	}
 
-	log.Printf("File uploaded: %s (size: %d, checksum: %s)", logSafe(filename), size, checksum)
+	log.Printf("File uploaded: %s (size: %d, checksum: %s)", safe.LogSafe(filename), size, checksum)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"filename":      filename,
@@ -342,8 +343,8 @@ func getFileChecksum(dataDir, filename string) (string, error) {
 	if err := os.MkdirAll(checksumDir, 0700); err == nil {
 		// Cache the result for next time
 		if err := os.WriteFile(checksumPath, []byte(checksum), 0600); err != nil { //nolint:gosec // G703: checksumPath is asserted within checksumDir via withinDir/filepath.Rel above.
-			//nolint:gosec // G706: filename is sanitized via logSafe (strips CR/LF) and already passed sanitizeFilename; gosec's taint tracker cannot see through the helper.
-			log.Printf("Failed to save checksum sidecar for %s: %v", logSafe(filename), err)
+			//nolint:gosec // G706: filename is sanitized via safe.LogSafe (strips CR/LF) and already passed sanitizeFilename; gosec's taint tracker cannot see through the helper.
+			log.Printf("Failed to save checksum sidecar for %s: %v", safe.LogSafe(filename), err)
 		}
 	}
 

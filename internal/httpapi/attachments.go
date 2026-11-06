@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
@@ -132,7 +133,7 @@ func (s *Server) postAttachments(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range files {
 		att, err := saveUpload(baseDir, fh)
 		if err != nil {
-			log.Printf("saveUpload %q: %s", logSafe(fh.Filename), logSafe(err.Error())) //nolint:gosec // G706: both values pass logSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
+			log.Printf("saveUpload %q: %s", safe.LogSafe(fh.Filename), safe.LogSafe(err.Error())) //nolint:gosec // G706: both values pass safe.LogSafe (strips CR/LF); gosec's taint tracker cannot see through the helper.
 			http.Error(w, "save upload: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
@@ -467,7 +468,7 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 	root = filepath.Clean(root)
 	convDir, err := tools.EnsureWorkspaceDir(convID)
 	if err != nil {
-		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", logSafeSlug(convID), err)
+		log.Printf("attachment staging: workspace dir for %q: %v (attachments keep uploads paths)", safe.LogSafe(convID), err)
 		return atts
 	}
 	// The sandbox can replace any child of its workspace with a symlink.
@@ -491,13 +492,13 @@ func stageAttachmentsIntoWorkspace(uploadsRoot, convID string, atts []chatAttach
 		if !ok {
 			// %q + CR/LF strip: on this branch Path is by definition a value
 			// that failed containment, so treat it as hostile in the log too.
-			log.Printf("attachment staging: %q is outside the uploads root (kept unstaged)", logSafeSlug(a.Path))
+			log.Printf("attachment staging: %q is outside the uploads root (kept unstaged)", safe.LogSafe(a.Path))
 			out = append(out, a)
 			continue
 		}
 		dst, err := stageOneAttachment(workspace, dir, root, src, a)
 		if err != nil {
-			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", logSafeSlug(a.Name), err)
+			log.Printf("attachment staging: %q: %v (this attachment keeps its uploads path)", safe.LogSafe(a.Name), err)
 			out = append(out, a)
 			continue
 		}

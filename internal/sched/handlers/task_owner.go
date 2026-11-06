@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -138,8 +139,8 @@ func (h *Handlers) SetTaskOwner(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	//nolint:gosec // G706: taskID is a parsed uuid.UUID; the names pass logSafe.
-	log.Printf("Task %s owner set to %s by %s (%d row(s) of its chain)", taskID, logSafe(owner.Username), logSafe(p.stopLabel()), len(updated))
+	//nolint:gosec // G706: taskID is a parsed uuid.UUID; the names pass safe.LogSafe.
+	log.Printf("Task %s owner set to %s by %s (%d row(s) of its chain)", taskID, safe.LogSafe(owner.Username), safe.LogSafe(p.stopLabel()), len(updated))
 
 	task, err = h.storage.GetTask(taskID)
 	if err != nil || task == nil {

@@ -43,6 +43,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/metrics"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -162,7 +163,7 @@ func (s *Server) decideApprovalResume(convID string, attempt int) {
 		defer s.approvalResumeObserver(convID, res, err)
 	}
 	if err != nil {
-		log.Printf("approval resume (conv=%s): claim failed: %s", logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF; convID is a server-generated UUID.
+		log.Printf("approval resume (conv=%s): claim failed: %s", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF; convID is a server-generated UUID.
 		if attempt < approvalResumeRetries {
 			s.scheduleApprovalResume(convID, approvalResumeRetryDelay, attempt+1)
 		}
@@ -281,7 +282,7 @@ func (s *Server) noteDroppedResume(convID, rowID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.AppendApprovalResumeDroppedNotice(ctx, convID); err != nil {
-		log.Printf("approval resume (conv=%s): note the dropped resume %s: %v", logSafe(convID), logSafe(rowID), err) //nolint:gosec // G706: logSafe strips CR/LF; both ids are server-generated.
+		log.Printf("approval resume (conv=%s): note the dropped resume %s: %v", safe.LogSafe(convID), safe.LogSafe(rowID), err) //nolint:gosec // G706: safe.LogSafe strips CR/LF; both ids are server-generated.
 	}
 	//nolint:gosec // G706: every value is %q-quoted (CR/LF escaped) and server-generated.
 	log.Printf("audit: approval resume %q in conversation %q predates this process; cancelled, not run", rowID, convID)

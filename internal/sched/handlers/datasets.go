@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/datasets"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -158,8 +159,8 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request, perm 
 		}
 		//nolint:gosec // G706 false positive: id is a uuid.UUID already parsed
 		// from the path (its String() is hex + dashes), and it is passed
-		// through logSafe as well — it cannot carry CR/LF to forge a log line.
-		log.Printf("dataset %s: load: %v", logSafe(id.String()), err)
+		// through safe.LogSafe as well — it cannot carry CR/LF to forge a log line.
+		log.Printf("dataset %s: load: %v", safe.LogSafe(id.String()), err)
 		writeError(w, http.StatusInternalServerError, "Failed to load dataset")
 		return nil, false
 	}
@@ -463,7 +464,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 	for offset := 0; ; offset += page {
 		rows, err := h.storage.ListDatasetRows(r.Context(), d.ID, "", page, offset)
 		if err != nil {
-			log.Printf("dataset export %s: %v", logSafe(d.ID.String()), err)
+			log.Printf("dataset export %s: %v", safe.LogSafe(d.ID.String()), err)
 			panic(http.ErrAbortHandler)
 		}
 		for _, row := range rows {
@@ -478,7 +479,7 @@ func (h *Handlers) ExportDataset(w http.ResponseWriter, r *http.Request) {
 		}
 		writer.Flush()
 		if err := writer.Error(); err != nil {
-			log.Printf("dataset export %s: write: %v", logSafe(d.ID.String()), err)
+			log.Printf("dataset export %s: write: %v", safe.LogSafe(d.ID.String()), err)
 			panic(http.ErrAbortHandler)
 		}
 		if len(rows) < page {

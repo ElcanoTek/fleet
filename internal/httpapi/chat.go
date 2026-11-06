@@ -240,7 +240,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		// delisted still migrates on the launch path
 		// (reconcileLockdownModelCtx) rather than 400ing at its owner.
 		next := s.lockdownCorrectedModel(conv)
-		log.Printf("lockdown: conversation %s refused a disallowed model %q from the client and offered %q instead", logSafe(conv.ID), logSafe(reqModel), logSafe(next))
+		log.Printf("lockdown: conversation %s refused a disallowed model %q from the client and offered %q instead", safe.LogSafe(conv.ID), safe.LogSafe(reqModel), safe.LogSafe(next))
 		writeLockdownModelRefusal(w, next)
 		return false
 	}
@@ -364,7 +364,7 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 	if err := s.store.SetModel(ctx, convOwnerEmail(conv, user), conv.ID, next); err != nil {
 		return err
 	}
-	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", logSafe(conv.ID), logSafe(conv.Model), logSafe(next)) //nolint:gosec // G706: logSafe strips CR/LF from the conversation id and both slugs.
+	log.Printf("lockdown: conversation %s moved from model %q (no longer allow-listed) to the lockdown default %q", safe.LogSafe(conv.ID), safe.LogSafe(conv.Model), safe.LogSafe(next)) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the conversation id and both slugs.
 	conv.Model = next
 	return nil
 }
@@ -1292,7 +1292,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// 400s until reload. A failed write here is logged and the turn goes on
 	// with the stored model; the manager's own guard then decides.
 	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
-		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+		log.Printf("lockdown: conversation %s: model migration write failed, running with the stored model: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 	}
 
 	// If this conversation was materialized before its first message (for
@@ -1818,11 +1818,11 @@ func (s *Server) runTurnAsync(
 			// error. A Stop is confirmed only by turn.cancelled, so a
 			// turn.error here would read as a failure of the turn's own —
 			// and so would an "error" log line, which is what operators grep.
-			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
+			log.Printf("RunTurn cancelled before it finished (user=%s conv=%s): %s", safe.LogSafe(user), safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from email, conv id, and the error text.
 			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}
-		log.Printf("RunTurn error (user=%s conv=%s): %s", logSafe(user), logSafe(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from email, conv id, and the error text.
+		log.Printf("RunTurn error (user=%s conv=%s): %s", safe.LogSafe(user), safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from email, conv id, and the error text.
 		if !errors.Is(err, ErrModelSelectionRequired) {
 			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})
 		}

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -176,7 +177,7 @@ func (s *Server) handleAdminDecisionModels(w http.ResponseWriter, r *http.Reques
 	}
 	models, err := listDecisionModels(r.Context())
 	if err != nil {
-		log.Printf("admin decision models: %s", logSafe(err.Error()))
+		log.Printf("admin decision models: %s", safe.LogSafe(err.Error()))
 		writeJSON(w, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
 		return
 	}
@@ -372,7 +373,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 			}
 		}
 		//nolint:gosec // G706: %q escapes CR/LF, so request-supplied values cannot forge a log line; role is store-validated.
-		log.Printf("admin users: set role of %q to %s by %q", logSafe(u.Email), logSafe(u.Role), logSafe(userFromCtx(r.Context())))
+		log.Printf("admin users: set role of %q to %s by %q", safe.LogSafe(u.Email), safe.LogSafe(u.Role), safe.LogSafe(userFromCtx(r.Context())))
 	}
 	// Same precedence as POST /admin/users: Chat Admin is the unified grant
 	// and wins over any narrower ops_role in the same request, so
@@ -381,7 +382,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	if body.OpsRole != nil && (body.Role == nil || *body.Role != store.RoleAdmin) {
 		s.setOpsRole(r, u.Email, *body.OpsRole)
 		//nolint:gosec // G706: %q escapes CR/LF; ops_role is validated above.
-		log.Printf("admin users: set ops role of %q to %s by %q", logSafe(u.Email), logSafe(*body.OpsRole), logSafe(userFromCtx(r.Context())))
+		log.Printf("admin users: set ops role of %q to %s by %q", safe.LogSafe(u.Email), safe.LogSafe(*body.OpsRole), safe.LogSafe(userFromCtx(r.Context())))
 	}
 	writeJSON(w, s.toAdminUserAnnotated(r, *u))
 }

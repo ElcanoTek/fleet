@@ -24,6 +24,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -232,8 +233,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		outs, _, cerr = s.ownerOutputs(countCtx, convID)
 		cancel()
 		if cerr != nil {
-			log.Printf("share-with-team: count after unsharing %s: %v", logSafeSlug(convID), logSafe(cerr.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
-			outs = nil                                                                                              // the chat IS unshared; only the count is unknown
+			log.Printf("share-with-team: count after unsharing %s: %v", safe.LogSafe(convID), safe.LogSafe(cerr.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
+			outs = nil                                                                                                    // the chat IS unshared; only the count is unknown
 		}
 	}
 	sharedFiles := countShared(outs)
@@ -241,7 +242,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		// Retires this person's getting-started card in the project. Display
 		// state: a failure is logged, never a failed share.
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, user); err != nil {
-			log.Printf("share-with-team: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			log.Printf("share-with-team: record has_shared_chat for %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 		}
 	} else if !conv.TeamVisible {
 		// Unsharing a chat that was not shared stops nothing.
@@ -274,21 +275,21 @@ func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user 
 		stored, err := s.store.SetConversationTeamVisibleWithOptions(ctx, user, conv.ID, true, true)
 		if err != nil {
 			if !errors.Is(err, store.ErrNoTeamToShareWith) && !errors.Is(err, store.ErrNoTeamShareHome) && !errors.Is(err, store.ErrArchivedNotShareable) {
-				log.Printf("auto-share: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+				log.Printf("auto-share: conversation %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 			}
 			return
 		}
 		if stored {
 			conv.TeamVisible = true
 			if err := s.store.MarkProjectSharedChat(ctx, conv.ID, user); err != nil {
-				log.Printf("auto-share: record has_shared_chat for %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+				log.Printf("auto-share: record has_shared_chat for %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 			}
 		}
 	}
 	updated, err := s.store.SetConversationMultiplayer(ctx, user, conv.ID, true, nil, nil)
 	if err != nil {
 		if !errors.Is(err, store.ErrArchivedNotShareable) && !errors.Is(err, store.ErrConversationNotFound) {
-			log.Printf("auto-multiplayer: conversation %s: %v", logSafeSlug(conv.ID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			log.Printf("auto-multiplayer: conversation %s: %v", safe.LogSafe(conv.ID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 		}
 		return
 	}
@@ -421,7 +422,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	}
 	if updated.TeamVisible && updated.ProjectID != "" {
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
-			log.Printf("multiplayer: record has_shared_chat for %s: %v", logSafeSlug(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF from the id and the error text.
+			log.Printf("multiplayer: record has_shared_chat for %s: %v", safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF from the id and the error text.
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)

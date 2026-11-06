@@ -633,7 +633,7 @@ func (a *approvalStager) firePushNotification(toolName string) {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := push.NotifyApprovalRequired(ctx, email, convID, toolName); err != nil {
-			log.Printf("push: approval notification (tool=%s conv=%s): %s", logSafe(toolName), logSafe(convID), logSafe(err.Error())) //nolint:gosec // G706: logSafe strips CR/LF.
+			log.Printf("push: approval notification (tool=%s conv=%s): %s", safe.LogSafe(toolName), safe.LogSafe(convID), safe.LogSafe(err.Error())) //nolint:gosec // G706: safe.LogSafe strips CR/LF.
 		}
 	}
 	if a.bg != nil {
