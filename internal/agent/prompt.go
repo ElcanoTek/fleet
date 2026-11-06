@@ -306,6 +306,73 @@ type MCPServerSpec struct {
 	DataSources []string
 }
 
+// BuildMCPBases maps the configured catalog to the credential-bearing spawn
+// definitions consumed by agentcore.BindMCPSelection; only enabled servers are
+// included. Account overlays are applied by the binder via
+// creds.ApplyClientSuffix; this only supplies the default-seat env. It is
+// shared by the interactive load-on-demand path, the scheduled runner and the
+// out-of-process broker so in-process binding and broker scopes cannot drift
+// in account overlay, identity refusal, TLS, or required-server behavior.
+func BuildMCPBases(cfg *config.Config) map[string]agentcore.MCPServerBase {
+	bases := map[string]agentcore.MCPServerBase{}
+	if cfg == nil {
+		return bases
+	}
+	for name, sc := range cfg.MCPServers {
+		if !sc.Enabled {
+			continue
+		}
+		base := agentcore.MCPServerBase{
+			BaseEnv:     sc.Env,
+			Command:     sc.Command,
+			Args:        sc.Args,
+			Dir:         sc.Dir,
+			DirPinned:   sc.DirPinned,
+			HTTPHeaders: sc.Headers,
+			IdentityEnv: sc.IdentityEnv,
+		}
+		if sc.Type == "http" {
+			base.HTTPURL = sc.URL
+			base.HTTPTLS = sc.TLS
+		}
+		bases[name] = base
+	}
+	return bases
+}
+
+// BuildMCPSpecs converts config.MCPServers into the MCPServerSpec map the
+// interactive Manager connects at construction. Shared by cmd/fleet (the
+// interactive engine) and `fleet task run` (the one-shot harness) so all callers
+// resolve identical MCP specs.
+func BuildMCPSpecs(cfg *config.Config) map[string]MCPServerSpec {
+	out := make(map[string]MCPServerSpec, len(cfg.MCPServers))
+	for name, sc := range cfg.MCPServers {
+		out[name] = MCPServerSpec{
+			Enabled:       sc.Enabled,
+			Command:       sc.Command,
+			Args:          sc.Args,
+			Env:           sc.Env,
+			Dir:           sc.Dir,
+			DirPinned:     sc.DirPinned,
+			URL:           sc.URL,
+			Headers:       sc.Headers,
+			TLS:           sc.TLS,
+			ToolAllowlist: sc.ToolAllowlist,
+			AccountVars:   sc.AccountVars,
+			// Optional-server metadata — without these the chat Manager's
+			// optional-set is empty, Gate-1 never skips, and every connector's
+			// tools register on every turn (the 128-tool ceiling overflow).
+			Optional:         sc.Optional,
+			DisplayName:      sc.DisplayName,
+			Description:      sc.Description,
+			Beta:             sc.Beta,
+			EnabledByDefault: sc.EnabledByDefault,
+			DataSources:      append([]string(nil), sc.DataSources...),
+		}
+	}
+	return out
+}
+
 // fastIOEnabledForTurn reports whether the fast.io MCP server has any
 // tools wired up for this turn. Drives conditional system-prompt
 // content: when fast.io is off (FAST_IO_MCP_TOKEN unset on the

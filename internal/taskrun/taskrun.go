@@ -186,7 +186,7 @@ func run(argv []string, progName string) error {
 
 	mgr, err := agent.New(agent.ManagerOptions{
 		Config:               cfg,
-		ServerSpecs:          scheduledrun.BuildMCPSpecs(cfg),
+		ServerSpecs:          agent.BuildMCPSpecs(cfg),
 		PersonasDir:          bundle.PersonasDir,
 		ProtocolsDir:         bundle.ProtocolsDir,
 		SkillsDir:            skillsDir,

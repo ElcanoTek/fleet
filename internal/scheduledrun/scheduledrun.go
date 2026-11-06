@@ -1717,7 +1717,7 @@ func (r *Runner) selectionUsesMCPRunDir(selection agentcore.MCPSelection) bool {
 		}
 		return false
 	}
-	bases := r.mcpBases()
+	bases := agent.BuildMCPBases(r.cfg)
 	for _, choice := range selection {
 		if base, ok := bases[choice.Server]; ok && agentcore.EnvReferencesWorkspace(base.BaseEnv) {
 			return true
@@ -1843,7 +1843,7 @@ func (r *Runner) bindTaskMCP(ctx context.Context, task *models.Task, denyAll boo
 	// occurrence re-mounts — cutlass-parity managed-run semantics (cross-attempt
 	// ledger, managed-run detection). Minted lazily: a catalog that
 	// never uses the token creates nothing on disk.
-	bases := r.mcpBases()
+	bases := agent.BuildMCPBases(r.cfg)
 	for name, base := range bases {
 		// ${FLEET_TASK_ID}: stamped, substituted at spawn by agentcore.SpawnEnv
 		// (after the user token, in the one shared order).
@@ -1983,45 +1983,6 @@ const (
 	inputsStagePrefix = "inputs.stage-"
 )
 
-// mcpBases maps each configured server name to the spawn spec + base env the
-// binder needs. Account overlays are applied by agentcore.BindMCPSelection via
-// creds.ApplyClientSuffix; this only supplies the default-seat env. Mirrors the
-// interactive agent's mcpBases so both paths resolve identical specs.
-func (r *Runner) mcpBases() map[string]agentcore.MCPServerBase {
-	return BuildMCPBases(r.cfg)
-}
-
-// BuildMCPBases maps the configured catalog to the credential-bearing spawn
-// definitions consumed by agentcore.BindMCPSelection. It is shared with the
-// out-of-process broker so scheduled in-process binding and broker scopes cannot
-// drift in account overlay, identity refusal, TLS, or required-server behavior.
-func BuildMCPBases(cfg *config.Config) map[string]agentcore.MCPServerBase {
-	bases := map[string]agentcore.MCPServerBase{}
-	if cfg == nil {
-		return bases
-	}
-	for name, sc := range cfg.MCPServers {
-		if !sc.Enabled {
-			continue
-		}
-		base := agentcore.MCPServerBase{
-			BaseEnv:     sc.Env,
-			Command:     sc.Command,
-			Args:        sc.Args,
-			Dir:         sc.Dir,
-			DirPinned:   sc.DirPinned,
-			HTTPHeaders: sc.Headers,
-			IdentityEnv: sc.IdentityEnv,
-		}
-		if sc.Type == "http" {
-			base.HTTPURL = sc.URL
-			base.HTTPTLS = sc.TLS
-		}
-		bases[name] = base
-	}
-	return bases
-}
-
 // convertLogSession maps the agentcore session log to the sched models log shape
 // the orchestrator persists + renders. Secrets are scrubbed defensively.
 func convertLogSession(ls *agent.LogSession) *models.LogSession {
@@ -2086,39 +2047,6 @@ func convertLogSession(ls *agent.LogSession) *models.LogSession {
 			})
 		}
 		out.Messages = append(out.Messages, mm)
-	}
-	return out
-}
-
-// BuildMCPSpecs converts config.MCPServers into the agent.MCPServerSpec map the
-// interactive Manager connects at construction. Shared by cmd/fleet (the
-// interactive engine) and `fleet task run` (the one-shot harness) so all callers
-// resolve identical MCP specs.
-func BuildMCPSpecs(cfg *config.Config) map[string]agent.MCPServerSpec {
-	out := make(map[string]agent.MCPServerSpec, len(cfg.MCPServers))
-	for name, sc := range cfg.MCPServers {
-		out[name] = agent.MCPServerSpec{
-			Enabled:       sc.Enabled,
-			Command:       sc.Command,
-			Args:          sc.Args,
-			Env:           sc.Env,
-			Dir:           sc.Dir,
-			DirPinned:     sc.DirPinned,
-			URL:           sc.URL,
-			Headers:       sc.Headers,
-			TLS:           sc.TLS,
-			ToolAllowlist: sc.ToolAllowlist,
-			AccountVars:   sc.AccountVars,
-			// Optional-server metadata — without these the chat Manager's
-			// optional-set is empty, Gate-1 never skips, and every connector's
-			// tools register on every turn (the 128-tool ceiling overflow).
-			Optional:         sc.Optional,
-			DisplayName:      sc.DisplayName,
-			Description:      sc.Description,
-			Beta:             sc.Beta,
-			EnabledByDefault: sc.EnabledByDefault,
-			DataSources:      append([]string(nil), sc.DataSources...),
-		}
 	}
 	return out
 }

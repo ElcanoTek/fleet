@@ -97,7 +97,7 @@ func startProductionMCPRuntime(bundle *clientconfig.Bundle, cfg *config.Config, 
 		return nil, nil, err
 	}
 
-	resolvedSpecs := scheduledrun.BuildMCPSpecs(cfg)
+	resolvedSpecs := agent.BuildMCPSpecs(cfg)
 	publicSpecs := publicMCPServerSpecs(resolvedSpecs)
 	client, stop, err := mcpbroker.SpawnClient(cmd)
 	if err != nil {
