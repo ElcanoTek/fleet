@@ -130,7 +130,7 @@ func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
 			t.Fatalf("event[%d].EventID = %d, want %d (non-contiguous → lost event)", i, e.EventID, i+1)
 		}
 	}
-	rec, err := s.store.LookupTurn(t.Context(), turnID)
+	rec, err := s.concreteStore(t).LookupTurn(t.Context(), turnID)
 	if err != nil {
 		t.Fatalf("LookupTurn: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 
 	s.finishTurn(conv.ID, tok)
 
-	rec, err := s.store.LookupTurn(t.Context(), turnID)
+	rec, err := s.concreteStore(t).LookupTurn(t.Context(), turnID)
 	if err != nil {
 		t.Fatalf("LookupTurn: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 		}
 	}
 
-	rec, err := s.store.LookupTurn(t.Context(), turnID)
+	rec, err := s.concreteStore(t).LookupTurn(t.Context(), turnID)
 	if err != nil {
 		t.Fatalf("LookupTurn: %v", err)
 	}
@@ -395,13 +395,13 @@ func TestSweepRetention_PrunesAgedTurnLedger(t *testing.T) {
 
 	s.sweepRetention(t.Context())
 
-	if rec, _ := s.store.LookupTurn(t.Context(), "aged-turn"); rec != nil {
+	if rec, _ := s.concreteStore(t).LookupTurn(t.Context(), "aged-turn"); rec != nil {
 		t.Errorf("aged turn survived the retention sweep: %+v", rec)
 	}
 	if events, _ := s.store.LoadTurnEvents(t.Context(), "aged-turn", 0); len(events) != 0 {
 		t.Errorf("aged turn's events survived the retention sweep: %d", len(events))
 	}
-	if rec, _ := s.store.LookupTurn(t.Context(), "fresh-turn"); rec == nil {
+	if rec, _ := s.concreteStore(t).LookupTurn(t.Context(), "fresh-turn"); rec == nil {
 		t.Error("fresh turn was swept; retention must only reclaim aged-out turns")
 	}
 }

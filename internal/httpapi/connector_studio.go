@@ -416,19 +416,14 @@ func registerUISecretLiteral(scope, val string) {
 	agentcore.RegisterSecretLiterals(scope, true, val)
 }
 
-// passwordFieldIDsFromHistory extracts all field IDs declared with
-// `format: "password"` in any `show_ui` tool call in the conversation history,
-// walking nested layout components (`section`, `columns`, `tabs`, `repeater`).
-func passwordFieldIDsFromHistory(history []agent.HistoryEntry) map[string]bool {
-	return passwordFieldIDsFromHistoryForCard(history, "")
-}
-
-func passwordFieldIDsFromHistoryForCard(history []agent.HistoryEntry, cardID string) map[string]bool {
-	out, _ := passwordFieldIDsFromHistoryForCardWithMatch(history, cardID)
-	return out
-}
-
-func passwordFieldIDsFromHistoryForCardWithMatch(history []agent.HistoryEntry, cardID string) (map[string]bool, bool) {
+// passwordFieldIDsFromHistory extracts the field IDs declared with
+// `format: "password"` in `show_ui` cards in the conversation history, walking
+// nested layout components (`section`, `columns`, `tabs`, `repeater`).
+//
+// With a cardID it reads only the latest card with that ID and reports
+// whether one was found; it never merges fields from unrelated earlier cards.
+// With cardID == "" it collects password fields from every card in history.
+func passwordFieldIDsFromHistory(history []agent.HistoryEntry, cardID string) (map[string]bool, bool) {
 	out := make(map[string]bool)
 	cardID = strings.TrimSpace(cardID)
 	if cardID != "" {
@@ -671,7 +666,7 @@ func (s *Server) vaultUISubmissionSecretsWithHistoryAndOwner(userEmail, convOwne
 		return message
 	}
 
-	pwFields, cardFound := passwordFieldIDsFromHistoryForCardWithMatch(history, submissionCardID(message))
+	pwFields, cardFound := passwordFieldIDsFromHistory(history, submissionCardID(message))
 	mutated, vaultedKeys, cardOrigins := s.vaultSubmissionMap(userEmail, convID, "", data, pwFields, cardFound)
 	if mutated || len(cardOrigins) > 0 {
 		s.uiSecrets.bindSubmissionOrigins(userEmail, convID, vaultedKeys, cardOrigins)

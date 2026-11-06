@@ -13,15 +13,15 @@ import (
 // layer can render the no-access page instead of a login redirect loop.
 //
 // Unlike the handler-logic tests (which override Server.isMember to allow
-// all), these point isMember back at the real store.IsUser and provision
+// all), these clear isMember so the real store.GetUser gate runs, and provision
 // specific users so the gate is exercised end to end.
 
-// memberFixture is a serverFixture wired to the REAL store.IsUser gate, with
+// memberFixture is a serverFixture wired to the REAL store.GetUser gate, with
 // `members` provisioned. Any other email is a non-member.
 func memberFixture(t *testing.T, members ...string) *Server {
 	t.Helper()
 	s := serverFixture(t)
-	s.isMember = nil // fall back to store.IsUser
+	s.isMember = nil // fall back to the real store.GetUser gate
 	for _, m := range members {
 		seedUser(t, s.concreteStore(t), m)
 	}

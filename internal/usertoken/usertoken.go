@@ -81,10 +81,10 @@ func Find(s string) []Spelling {
 	return out
 }
 
-// Locate returns the [start, end) byte range of every spelling in s, in order
-// — for a caller that must know which part of an assembled string a spelling
+// locate returns the [start, end) byte range of every spelling in s, in order
+// — AssembledFrom uses it to know which part of an assembled string a spelling
 // came from.
-func Locate(s string) [][]int {
+func locate(s string) [][]int {
 	if !strings.Contains(s, "FLEET_USER_") {
 		return nil
 	}
@@ -98,7 +98,7 @@ func AssembledFrom(s string, ranges [][2]int) bool {
 	if len(ranges) == 0 {
 		return false
 	}
-	for _, m := range Locate(s) {
+	for _, m := range locate(s) {
 		for _, r := range ranges {
 			if m[0] < r[1] && r[0] < m[1] {
 				return true

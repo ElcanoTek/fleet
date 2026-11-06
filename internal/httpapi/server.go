@@ -100,10 +100,11 @@ type Server struct {
 	guardrailProbe func(ctx context.Context) GuardrailProbeResult
 
 	// isMember reports whether an email may use chat — the scoped-tier
-	// gate consulted by membershipMiddleware. nil in production, where it
-	// falls back to store.IsUser. Tests whose subject isn't membership
-	// override it to allow-all so fixtures needn't provision every email;
-	// membership_test points it back at the real store.IsUser.
+	// gate consulted by membershipMiddleware. nil in production, where the
+	// middleware's store.GetUser lookup both admits and enriches the request.
+	// Tests whose subject isn't membership override it to allow-all so
+	// fixtures needn't provision every email; membership_test sets it back to
+	// nil to exercise the real GetUser gate.
 	isMember func(ctx context.Context, email string) (bool, error)
 
 	// inflight tracks the currently-running turn for each conversation.

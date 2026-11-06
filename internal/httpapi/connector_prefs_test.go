@@ -169,16 +169,6 @@ func TestBundledPrefResolution(t *testing.T) {
 	if avail, on, _ := bundledPrefFor(disabledAuto, info); avail || on {
 		t.Errorf("disabled pref: avail=%v on=%v, want false,false", avail, on)
 	}
-
-	if !remoteEnabledFor(none, "srv-1") {
-		t.Error("remote defaults to enabled")
-	}
-	roff := map[string]store.ConnectorPref{
-		store.ConnectorPrefKey(store.ConnectorKindRemote, "srv-1"): {Kind: store.ConnectorKindRemote, ConnectorID: "srv-1", Enabled: false},
-	}
-	if remoteEnabledFor(roff, "srv-1") {
-		t.Error("explicit remote disable ignored")
-	}
 }
 
 // POST /conversations (used by Settings → Personas "Start patrol" and

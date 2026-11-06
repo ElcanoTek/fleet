@@ -220,6 +220,8 @@ func (g *Gateway) resolveSigningKeys(issuer, kid string, now time.Time) []string
 
 var errInvalidToken = errors.New("invalid token")
 
+// jsLen is a string's length in UTF-16 code units — JavaScript's
+// String.prototype.length, which the browser-side limits are written against.
 func jsLen(s string) int { return len(utf16.Encode([]rune(s))) }
 
 func isInteger(v any) (float64, bool) {

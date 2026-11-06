@@ -131,15 +131,6 @@ func bundledPrefFor(prefs map[string]store.ConnectorPref, info agent.OptionalSer
 	return p.Enabled, p.Enabled && p.AutoEnable, seat
 }
 
-// remoteEnabledFor resolves a user's effective "enabled for me" state for a
-// remote connection (own or shared): explicit pref, else enabled.
-func remoteEnabledFor(prefs map[string]store.ConnectorPref, serverID string) bool {
-	if p, ok := prefs[store.ConnectorPrefKey(store.ConnectorKindRemote, serverID)]; ok {
-		return p.Enabled
-	}
-	return true
-}
-
 // applyConnectorPrefs filters a conversation's opted-in bundled servers by the
 // user's availability prefs and resolves each connector's credential-account
 // seat for the turn: the conversation's own override (#988) when it names a
