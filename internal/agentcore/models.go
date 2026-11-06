@@ -257,6 +257,19 @@ const (
 	// defaultContextCompactionThreshold is the fraction at which the run loop
 	// proactively compacts the oldest history and emits fleet.context_compacted.
 	defaultContextCompactionThreshold = 0.90
+
+	// defaultInteractiveContextPressureWarnMaxTokens and
+	// defaultInteractiveContextCompactionMaxTokens cap the default warning and
+	// proactive-compaction token thresholds for interactive runs on large-window
+	// models when the operator has not explicitly set
+	// FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD or FLEET_CONTEXT_COMPACTION_THRESHOLD.
+	// On a 1M-token window, 75% (750K tokens) and 90% (900K tokens) let a chat
+	// accumulate hundreds of thousands of tokens of tool output before warning
+	// or compacting, causing 30-90s prefill latency and degraded mid-context
+	// reasoning while resending the entire transcript on every step. Models with
+	// <=200K windows still warn at 75% (<=150K) and compact at 90% (<=180K).
+	defaultInteractiveContextPressureWarnMaxTokens = 250_000
+	defaultInteractiveContextCompactionMaxTokens   = 350_000
 )
 
 // contextPressureWarnThreshold resolves FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD

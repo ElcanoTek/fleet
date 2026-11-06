@@ -491,8 +491,8 @@ after a `context_length_exceeded` error:
 
 | Env var | Default | Behavior at/above the fraction |
 |---|---|---|
-| `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner). |
-| `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
+| `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | `0.75` (capped at `250000` tokens for interactive runs when unset) | Emit a `fleet.context_pressure` SSE event (the chat UI shows a non-blocking "conversation is N% full" banner with an inline `summarize earlier messages` button). |
+| `FLEET_CONTEXT_COMPACTION_THRESHOLD` | `0.90` (capped at `350000` tokens for interactive runs when unset) | Proactively summarize the **oldest half** of the history (pinned head + recent half kept verbatim) and emit `fleet.context_compacted`. |
 | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | `80000` | **Scheduled runs only** (#1534). Compact the same way once the prompt resent on every call exceeds this many tokens, whatever the model's window; `0` disables. When the prompt floor (system prompt + tool schemas + task prompt) takes more than half of it, it applies to the history on top of the floor instead (#1600). |
 | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | on | **Scheduled runs only** (#1742). When either compaction above fires, first replace bulky tool results older than the recent window with short previews, and summarize only if that did not free enough; `0` (or `false`) turns it off. |
 

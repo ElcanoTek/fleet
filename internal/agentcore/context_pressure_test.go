@@ -618,3 +618,51 @@ func TestRun_CompactionRecordsReplayIdenticallyAndExcludePlanReannounce(t *testi
 		}
 	}
 }
+
+func TestCheckContextPressure_LargeWindowInteractiveDefaultCapsAndOverrides(t *testing.T) {
+	const slug = "ctx-1m-interactive-defaults"
+	recordContextMax(slug, 1_000_000)
+	model := &namedMockModel{name: slug}
+	e := newMockEngine(t, model)
+	e.envPrefix = CanonicalEnvPrefix
+	msgs := fillerMessages(8, 200)
+
+	if got := e.windowCheckpointLimit(model); got != defaultInteractiveContextCompactionMaxTokens {
+		t.Fatalf("interactive 1M windowCheckpointLimit = %d, want %d", got, defaultInteractiveContextCompactionMaxTokens)
+	}
+
+	// Below 250K tokens on a 1M model: no warning or compaction.
+	obs := &captureObserver{}
+	e.logSession.LastStepPromptTokens = 240_000
+	if res := e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false); res.warned || len(obs.events) != 0 {
+		t.Fatalf("240K on 1M window must stay silent, events=%v warned=%v", obs.events, res.warned)
+	}
+
+	// At 260K tokens on a 1M model: emits fleet.context_pressure without compacting.
+	obs = &captureObserver{}
+	e.logSession.LastStepPromptTokens = 260_000
+	res := e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	if !res.warned || !hasEvent(obs.events, evtContextPressure) || hasEvent(obs.events, evtContextCompacted) {
+		t.Fatalf("260K on 1M window must warn without compacting, events=%v warned=%v", obs.events, res.warned)
+	}
+
+	// At 360K tokens on a 1M model: proactively compacts.
+	obs = &captureObserver{}
+	e.logSession.LastStepPromptTokens = 360_000
+	res = e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false)
+	if !hasEvent(obs.events, evtContextCompacted) || len(res.messages) >= len(msgs) {
+		t.Fatalf("360K on 1M window must compact, events=%v len=%d", obs.events, len(res.messages))
+	}
+
+	// Explicit fractional env vars override the default interactive token caps.
+	t.Setenv("FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", "0.60")
+	t.Setenv("FLEET_CONTEXT_COMPACTION_THRESHOLD", "0.80")
+	if got := e.windowCheckpointLimit(model); got != 800_000 {
+		t.Fatalf("explicit 0.80 override on 1M windowCheckpointLimit = %d, want 800000", got)
+	}
+	obs = &captureObserver{}
+	e.logSession.LastStepPromptTokens = 400_000
+	if res := e.checkContextPressure(context.Background(), msgs, model, newStreamSink(obs), false); res.warned || len(obs.events) != 0 {
+		t.Fatalf("400K with explicit 0.60/0.80 thresholds on 1M window must stay silent, events=%v", obs.events)
+	}
+}

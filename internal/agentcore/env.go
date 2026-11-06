@@ -107,3 +107,14 @@ func (p EnvPrefix) lookupFloatDefault(suffix string, def float64) float64 {
 	}
 	return v
 }
+
+// hasExplicitFraction reports whether <PREFIX>_<suffix> (or its legacy alias)
+// is explicitly set to a valid fraction in (0,1].
+func (p EnvPrefix) hasExplicitFraction(suffix string) bool {
+	raw := p.lookup(suffix)
+	if raw == "" {
+		return false
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	return err == nil && v > 0 && v <= 1
+}
