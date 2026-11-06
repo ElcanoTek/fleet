@@ -829,6 +829,7 @@ func containsDataURIBase64(s string) bool {
 }
 
 func containsJSONBase64Key(s string) bool {
+	const minPayload = 12
 	for i := 0; i < len(s); i++ {
 		if s[i] != '"' {
 			continue
@@ -846,7 +847,20 @@ func containsJSONBase64Key(s string) bool {
 			k++
 		}
 		if k < len(s) && s[k] == ':' && containsFoldASCIIKey(s[start:j], "base64") {
-			return true
+			v := k + 1
+			for v < len(s) && (s[v] == ' ' || s[v] == '\t' || s[v] == '\r' || s[v] == '\n') {
+				v++
+			}
+			if v < len(s) && s[v] == '"' {
+				payloadStart := v + 1
+				n := 0
+				for payloadStart+n < len(s) && n < minPayload && isBase64Byte(s[payloadStart+n]) {
+					n++
+				}
+				if n >= minPayload {
+					return true
+				}
+			}
 		}
 		i = j
 	}

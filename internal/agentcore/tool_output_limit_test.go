@@ -353,6 +353,8 @@ func TestContainsEncodedBinary_DoesNotSuppressURLsCursorsDividersOrDocPlaceholde
 		"wss signed debugger url":         `{"wsUrl":"wss://connect.browserbase.com/debug/sess/devtools/page/1?q=` + clickParam + `"}`,
 		"fastio markdown next_cursor":     "# pagination\n- **has_more:** true\n- **next_cursor:** " + pageMarker + "\n- **page_size:** 100\n",
 		"json nextPageToken":              `{"next_cursor":"` + pageMarker + `"}`,
+		"tool_describe base64 schema key": `{"name":"mcp_pages_append_page_upload","parameters":{"properties":{"chunk_base64":{"anyOf":[{"type":"string"},{"type":"object","properties":{"workspace_file":{"type":"string"}}}]}}}}`,
+		"workspace_file ref under base64": `{"chunk_base64":{"workspace_file":"page.html","offset":0,"length":4096}}`,
 	}
 	for name, sample := range benign {
 		t.Run(name, func(t *testing.T) {
