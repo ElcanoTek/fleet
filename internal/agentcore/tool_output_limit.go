@@ -78,28 +78,6 @@ func normalizeToolOutputLimit(n int) int {
 	return n
 }
 
-// applyOutputCeiling is the pure text-only form used by low-level tests and
-// callers that do not have a ToolResponse/context. Production AgentTool routes
-// use boundModelVisibleToolResponse so they also get structured JSON handling,
-// artifact recovery, and media suppression. A non-positive limit selects the
-// safe default; it never disables truncation.
-func applyOutputCeiling(content string, limit int) (string, bool) {
-	limit = normalizeToolOutputLimit(limit)
-	encodedBinary := containsEncodedBinary(content)
-	if len(content) <= limit && !encodedBinary {
-		return content, false
-	}
-	env := toolOutputEnvelope{
-		Tool:             "tool",
-		OriginalBytes:    len(content),
-		Truncated:        true,
-		Format:           "text",
-		BinarySuppressed: encodedBinary,
-		RecoveryAction:   "Re-run the tool with narrower output.",
-	}
-	return renderTextEnvelope(env, content, limit), true
-}
-
 func envMaxToolOutputBytes() int {
 	maxToolOutputBytesOnce.Do(func() {
 		maxToolOutputBytesOnce.v = defaultMaxToolOutputBytes
@@ -238,17 +216,12 @@ func BoundModelOutputTools(in []fantasy.AgentTool) []fantasy.AgentTool {
 	return out
 }
 
-// GovernAndBoundModelVisibleToolText applies the same post-execution boundary
-// to one-shot tool paths that intentionally run outside Fantasy's agent loop,
-// notably human-approved actions. The returned text is safe to persist/replay;
-// blocked governance decisions are reflected in the returned error flag.
-func GovernAndBoundModelVisibleToolText(ctx context.Context, toolName, toolCallID, content string, isError bool) (string, bool) {
-	bounded, isErr, _ := GovernAndBoundModelVisibleToolTextFull(ctx, toolName, toolCallID, content, isError)
-	return bounded, isErr
-}
-
-// GovernAndBoundModelVisibleToolTextFull is GovernAndBoundModelVisibleToolText
-// that also returns the governed text before the size bound: redaction, PII
+// GovernAndBoundModelVisibleToolTextFull applies the same post-execution
+// boundary to one-shot tool paths that intentionally run outside Fantasy's
+// agent loop, notably human-approved actions. The returned bounded text is
+// safe to persist/replay; blocked governance decisions are reflected in the
+// returned error flag. It also returns the governed text before the size
+// bound: redaction, PII
 // and guardrail screening applied, a long result not yet cut to the
 // model-visible ceiling. It is the text a display-only reader of the whole
 // result may use (an approval's result card, docs/APPROVAL-RESULT-CARDS.md),

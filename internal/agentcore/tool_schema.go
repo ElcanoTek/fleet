@@ -35,7 +35,7 @@ import (
 //     accepts. The MCP TypeScript SDK emits draft-07, where a zod tuple becomes
 //     `items: [...]` (Pages, 2026-09-30).
 //  2. toolInputSchemaProblem validates the final schema against the 2020-12
-//     metaschema, so buildFantasyToolsWithRoster can skip a tool that is still
+//     metaschema, so buildFantasyTools can skip a tool that is still
 //     invalid instead of letting it take every other tool down with it.
 
 // Keywords whose value is a schema, an array of schemas, or a map of name ->
@@ -1463,11 +1463,4 @@ func ToolSchemaIssues() []ToolSchemaIssue {
 		return out[i].Tool < out[j].Tool
 	})
 	return out
-}
-
-// resetToolSchemaRecordForTest empties the process-wide record.
-func resetToolSchemaRecordForTest() {
-	toolSchemaRecord.Lock()
-	toolSchemaRecord.issues = map[string]ToolSchemaIssue{}
-	toolSchemaRecord.Unlock()
 }

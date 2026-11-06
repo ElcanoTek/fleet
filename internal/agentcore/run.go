@@ -542,7 +542,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		if catalog == nil {
 			catalog = mcpClient.GetAllTools()
 		}
-		tools, roster, err := buildFantasyToolsWithRoster(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		tools, roster, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
 			return nil, toolRoster{}, err
 		}

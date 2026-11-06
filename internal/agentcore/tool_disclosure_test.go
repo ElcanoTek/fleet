@@ -81,7 +81,7 @@ func toolNamesOf(ts []fantasy.AgentTool) map[string]bool {
 // tool directly, no bridges (#506 "small catalogs unchanged").
 func TestDisclosureBelowThresholdUnchanged(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
-	got, err := buildFantasyTools(discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	got, _, err := buildFantasyTools(discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestDisclosureBelowThresholdUnchanged(t *testing.T) {
 // deferring MCP tools behind the 3 bridges; core stays direct.
 func TestDisclosureAboveThresholdDefers(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "20")
-	got, err := buildFantasyTools(discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	got, _, err := buildFantasyTools(discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("a 200-tool catalog must not error: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestDisclosure_PersonaDenyGovernsDeferredTools(t *testing.T) {
 	broker := &fakeBroker{}
 	obs := &recordingObserver{}
 	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/stripe_refund_charge_2"}}
-	got, err := buildFantasyTools(discNative(3), discMCPTools(20), broker, nil, nil, nil, nil,
+	got, _, err := buildFantasyTools(discNative(3), discMCPTools(20), broker, nil, nil, nil, nil,
 		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: obs})
 	if err != nil {
 		t.Fatal(err)
@@ -433,7 +433,7 @@ func TestDisclosure_PersonaDenyGovernsDeferredTools(t *testing.T) {
 func TestDisclosure_PersonaDenyAllMCPSkipsBridges(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "5")
 	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/*"}}
-	got, err := buildFantasyTools(discNative(4), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
+	got, _, err := buildFantasyTools(discNative(4), discMCPTools(20), &fakeBroker{}, nil, nil, nil, nil,
 		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: &recordingObserver{}})
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +453,7 @@ func TestDisclosure_PersonaDenyAllMCPSkipsBridges(t *testing.T) {
 func TestDisclosure_PersonaFilterBelowThresholdUnchanged(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "128")
 	policy := PersonaToolPermissions{Deny: []string{"mcp:srv/stripe_refund_charge_2"}}
-	got, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil,
+	got, _, err := buildFantasyTools(discNative(2), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil,
 		toolBuildConfig{personaName: "p", personaPolicy: &policy, observer: &recordingObserver{}})
 	if err != nil {
 		t.Fatal(err)

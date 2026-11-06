@@ -509,13 +509,6 @@ func hasPrecisionFloor(modelSlug string) bool {
 	return ok
 }
 
-// pinServesOfficialWeightsOnly reports whether the exact slug (alias marker
-// stripped) is listed in officialPoolSlugs.
-func pinServesOfficialWeightsOnly(modelSlug string) bool {
-	_, ok := officialPoolSlugs[strings.TrimPrefix(modelSlug, "~")]
-	return ok
-}
-
 // upstreamPinFor returns the OpenRouter provider routing policy for a model
 // slug, or nil if the family has no canonical upstream. A leading `~` (floating
 // alias) is stripped before prefix-matching so the alias inherits the lab's pin

@@ -39,7 +39,7 @@ The interactive driver reads the installed list at the start of each turn
 
 | Path the model could use | What happens |
 | --- | --- |
-| The tool list sent to the model | The tool is not in it. It is dropped in `buildFantasyToolsWithRoster` before the disclosure decision, as the last gate: after the opt-in, allowlist, persona and schema gates. |
+| The tool list sent to the model | The tool is not in it. It is dropped in `buildFantasyTools` before the disclosure decision, as the last gate: after the opt-in, allowlist, persona and schema gates. |
 | `tool_search` / `tool_describe` | The tool never enters the deferred registry, so search does not find it. `tool_describe` answers with the explanation below, not "no tool named". |
 | `tool_call {name: …}` | Refused with the explanation below. The broker is never reached. |
 | A direct call to the hidden name | The out-of-roster recovery (#1744) records the gate as `interactive_hidden` and answers with the same explanation. The metric's `reason` label is `interactive_hidden`. |

@@ -27,7 +27,7 @@ import (
 //
 // Enforcement points, all reading the same suffix list:
 //
-//  1. Registration — buildFantasyToolsWithRoster drops a hidden tool BEFORE
+//  1. Registration — buildFantasyTools drops a hidden tool BEFORE
 //     the disclosure decision, so it is neither in the direct tool list nor in
 //     the deferred registry behind tool_search / tool_describe / tool_call.
 //  2. The call gate — every mcpTool built for a run carries the list and

@@ -165,7 +165,7 @@ compactions the pause point settles near prefix + 2 × (budget + summary). What
 the rule buys is pauses: a handful per run instead of 40. The cost is more
 resent tokens, most of them cache reads, where every pause was a summarizer call
 and a cold cache. A simulation of an 81-step run (80K budget, 3K summaries, 30
-seeded runs per cell, the same compaction split as `proactiveCompact`) shows the
+seeded runs per cell, the same compaction split as `proactiveCompactKeeping`) shows the
 shape. It is a model, not a measurement:
 
 | prefix | results 1–4K tokens: pauses before → after | results 2–12K tokens: pauses before → after | identical runs |

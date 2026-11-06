@@ -301,29 +301,8 @@ type toolBuildConfig struct {
 	exclusiveAllowlist bool
 }
 
-// buildFantasyTools combines native tools with discovered MCP tools into the
-// single slice the fantasy agent wants, applying the Gate-1 opt-in and the
-// per-server allowlist. Every tool is wrapped in a policy-guarded wrapper so
-// cost/audit/repeat enforcement runs before each call.
-//
-// optionalServers may be nil/empty. optIn is the per-run enabled set (server
-// names). policy is the seam both modes feed.
-func buildFantasyTools(
-	nativeTools []fantasy.AgentTool,
-	mcpServerTools []mcp.ServerTool,
-	broker MCPBroker,
-	allow mcpAllowlist,
-	policy Policy,
-	optionalServers mcpOptionalSet,
-	optIn map[string]bool,
-	cfg toolBuildConfig,
-) ([]fantasy.AgentTool, error) {
-	tools, _, err := buildFantasyToolsWithRoster(nativeTools, mcpServerTools, broker, allow, policy, optionalServers, optIn, cfg)
-	return tools, err
-}
-
-// toolRoster is what buildFantasyToolsWithRoster actually registered, in the
-// terms the system prompt's live-registry section needs (live_registry.go):
+// toolRoster is what buildFantasyTools actually registered, in the terms the
+// system prompt's live-registry section needs (live_registry.go):
 // which MCP tools the model can call by name, or — above the disclosure
 // threshold — how many are hidden behind tool_search/tool_describe/tool_call
 // and for which connectors. It is derived from the SAME loop that builds the
@@ -377,9 +356,17 @@ func (r *toolRoster) noteRemoved(name, gate string) {
 	}
 }
 
-// buildFantasyToolsWithRoster is buildFantasyTools plus the roster summary the
-// run loop appends to the system prompt after the tools exist.
-func buildFantasyToolsWithRoster(
+// buildFantasyTools combines native tools with discovered MCP tools into the
+// single slice the fantasy agent wants, applying the Gate-1 opt-in and the
+// per-server allowlist. Every tool is wrapped in a policy-guarded wrapper so
+// cost/audit/repeat enforcement runs before each call.
+//
+// optionalServers may be nil/empty. optIn is the per-run enabled set (server
+// names). policy is the seam both modes feed.
+//
+// It also returns the roster summary the run loop appends to the system prompt
+// after the tools exist.
+func buildFantasyTools(
 	nativeTools []fantasy.AgentTool,
 	mcpServerTools []mcp.ServerTool,
 	broker MCPBroker,

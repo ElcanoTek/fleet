@@ -328,7 +328,7 @@ func TestOutOfRoster_RosterRecordsTheGate(t *testing.T) {
 		{"narrowed", true, map[string]string{"mcp_opt_a": gateOptIn, "mcp_srv_unlisted": gateNarrowed, "mcp_srv_denied": gatePersona, "mcp_srv_broken": gateSchema}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, roster, err := buildFantasyToolsWithRoster(nil, catalog, &fakeBroker{}, allow, nil, mcpOptionalSet{"opt": true}, nil,
+			_, roster, err := buildFantasyTools(nil, catalog, &fakeBroker{}, allow, nil, mcpOptionalSet{"opt": true}, nil,
 				toolBuildConfig{exclusiveAllowlist: tc.exclusive, personaPolicy: persona, observer: &recordingObserver{}})
 			if err != nil {
 				t.Fatal(err)

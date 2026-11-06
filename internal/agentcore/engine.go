@@ -646,8 +646,8 @@ func firstPart(m fantasy.Message) fantasy.MessagePart {
 	return m.Content[0]
 }
 
-// proactiveCompactResult reports what proactiveCompact did, so the run loop can
-// emit a fleet.context_compacted event with the right metadata.
+// proactiveCompactResult reports what proactiveCompactKeeping did, so the run
+// loop can emit a fleet.context_compacted event with the right metadata.
 type proactiveCompactResult struct {
 	messages      []fantasy.Message
 	removedTurns  int               // how many old messages were summarized away
@@ -657,9 +657,9 @@ type proactiveCompactResult struct {
 	dropped       []fantasy.Message // the messages summarized away
 }
 
-// proactiveCompact summarizes the OLDEST HALF of the conversation history BEFORE
-// the provider rejects an oversized prompt (#209), preserving the pinned head
-// and the recent half verbatim. It mirrors forceCompactMessageHistory's
+// proactiveCompactKeeping summarizes the OLDEST HALF of the conversation
+// history BEFORE the provider rejects an oversized prompt (#209), preserving
+// the pinned head and the recent half verbatim. It mirrors forceCompactMessageHistory's
 // head + summary + kept structure but, instead of reacting to a rejection with a
 // fixed 20-message tail, it drops the oldest 50% of the messages after the head.
 //
@@ -668,13 +668,10 @@ type proactiveCompactResult struct {
 // identically to a reactive summary). A clean proactive compaction RESETS
 // consecutiveCompactions: it is not a reactive resilience compaction and must not
 // count toward the ErrContextBudgetExhausted cap.
-func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Message) proactiveCompactResult {
-	return e.proactiveCompactKeeping(ctx, messages, messages)
-}
-
-// proactiveCompactKeeping is proactiveCompact that summarizes source but keeps
-// kept's copy of the head and the recent half. The two are the same history
-// message for message, kept with its stale tool results elided (#1742): the
+//
+// It summarizes source but keeps kept's copy of the head and the recent half.
+// The two are the same history message for message, kept with its stale tool
+// results elided (#1742): the
 // summary is written from the full results, whose identifiers a stub's
 // preview may have cut, while the stubs carry on in what is kept.
 func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fantasy.Message) proactiveCompactResult {
@@ -967,7 +964,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			})
 		} else {
 			// Nothing compactible (e.g. one enormous message: head + a single
-			// active turn — proactiveCompact's documented no-op). Stop pausing
+			// active turn — proactiveCompactKeeping's documented no-op). Stop pausing
 			// the tool loop for a compaction that cannot happen, and still
 			// surface the pressure so the worst case isn't silent; the reactive
 			// overflow path is the only backstop left.
@@ -1475,7 +1472,7 @@ func raisedThresholdCap(configured, limit int) int {
 
 // minResendCheckpointHistory is the fewest non-head messages a checkpoint
 // needs (#1600). Below it the compaction the pause exists for has next to
-// nothing to summarize — proactiveCompact would trade one exchange for a
+// nothing to summarize — proactiveCompactKeeping would trade one exchange for a
 // summarizer call and a cold cache — so the loop runs on instead.
 const minResendCheckpointHistory = 4
 
@@ -2103,13 +2100,13 @@ func (w *firstChunkWatchdog) expire() {
 	w.settled = true
 	w.fired = true
 	// The verdict and its evidence are formed in the same critical section,
-	// so no concurrent noteProviderError can slip a different record between
+	// so no concurrent publishProviderErr can slip a different record between
 	// them.
 	if rec := w.providerErr; rec != nil && rec.from <= at && at < rec.until {
 		w.expiredProviderErr = rec
 	}
 	w.mu.Unlock()
-	// Outside the lock: onExpire cancels the request, and noteProviderError
+	// Outside the lock: onExpire cancels the request, and publishProviderErr
 	// must never block behind it.
 	w.onExpire()
 }
@@ -2149,21 +2146,6 @@ func (w *firstChunkWatchdog) publishProviderErr(rec *providerErrRecord) {
 	w.mu.Unlock()
 }
 
-// noteProviderError records a provider error seen NOW whose window is exactly
-// the backoff it bought. Idempotent in effect; the last status wins.
-func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError, delay time.Duration) {
-	if delay < 0 {
-		delay = 0
-	}
-	now := w.now()
-	w.publishProviderErr(&providerErrRecord{
-		from:             now.UnixNano(),
-		until:            now.Add(delay + providerErrorGrace).UnixNano(),
-		status:           reportableProviderStatus(providerErr),
-		creditsExhausted: isCreditsExhausted(providerErr),
-	})
-}
-
 func (w *firstChunkWatchdog) noteProviderErrorSeen(providerErr *fantasy.ProviderError) {
 	w.publishProviderErr(&providerErrRecord{
 		from:             w.now().UnixNano(),
@@ -2189,26 +2171,6 @@ func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 		status:           w.providerErr.status,
 		creditsExhausted: w.providerErr.creditsExhausted,
 	}
-}
-
-// providerErrorLive reports whether a provider error is the explanation for
-// the silence AT THIS MOMENT — i.e. the retry loop is inside the backoff that
-// error bought. Once the next attempt has begun, silence is the model's own.
-// Only expire() consults it; everyone else wants the snapshot below, taken
-// when the verdict was formed.
-func (w *firstChunkWatchdog) providerErrorLive() bool {
-	now := w.now().UnixNano()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	rec := w.providerErr
-	return rec != nil && rec.from <= now && now < rec.until
-}
-
-// providerErrorAtExpiry reports the provider-error state as it stood when the
-// watchdog fired, and the status that went with it. One read, one instant.
-func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
-	seen, status, _ = w.providerErrorStateAtExpiry()
-	return seen, status
 }
 
 func (w *firstChunkWatchdog) providerErrorStateAtExpiry() (seen bool, status int, creditsExhausted bool) {

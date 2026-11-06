@@ -27,7 +27,7 @@ func TestGate2AllowlistGovernsAccountVariantSeats(t *testing.T) {
 		variantTool("srv_clienta", "purge"),
 	}
 	allow := mcpAllowlist{"srv": {"read"}}
-	registered, err := buildFantasyTools(nil, catalog, &fakeBroker{}, allow, passPolicy{}, nil, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, allow, passPolicy{}, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
