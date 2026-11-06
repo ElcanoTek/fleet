@@ -263,7 +263,7 @@ func TestScheduledAbortedAuditDropsTheAnswerBeforeIt(t *testing.T) {
 func TestScheduledEveryAuditRefusedRoundComposes(t *testing.T) {
 	a := newTestScheduledAgent(t, &itMockModel{})
 	p := &scheduledPolicy{
-		inner:  agentcore.NewScheduledPolicy(a.logSession, 50, 0, 0),
+		inner:  agentcore.NewScheduledPolicy(a.logSession, 0, 0),
 		agent:  a,
 		task:   seedTask,
 		runCtx: context.Background(),
@@ -297,7 +297,7 @@ func TestScheduledStructuredAnswerBeforeAuditIsReplaced(t *testing.T) {
 	a := newTestScheduledAgent(t, &itMockModel{})
 	a.outputSchema = json.RawMessage(`{"type":"object"}`)
 	p := &scheduledPolicy{
-		inner:  agentcore.NewScheduledPolicy(a.logSession, 50, 0, 0),
+		inner:  agentcore.NewScheduledPolicy(a.logSession, 0, 0),
 		agent:  a,
 		task:   "Answer with one JSON object.",
 		runCtx: context.Background(),

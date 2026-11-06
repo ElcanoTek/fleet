@@ -87,7 +87,7 @@ func TestSanitizeToolCallInputs_NoChangeReturnsSameSlice(t *testing.T) {
 }
 
 func TestToolCallInputSanitizeStep(t *testing.T) {
-	step := toolCallInputSanitizeStep()
+	step := ToolCallInputSanitizeStep()
 	msgs := []fantasy.Message{{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{
 		fantasy.ToolCallPart{ToolCallID: "c1", ToolName: "bash", Input: `null`},
 	}}}

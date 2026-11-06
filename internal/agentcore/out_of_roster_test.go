@@ -957,7 +957,7 @@ func TestOutOfRoster_RecoveryCheckpointHoldsTheExplanation(t *testing.T) {
 	e := newMockEngine(t, model)
 	e.outOfRoster = newOutOfRoster("", nil, mcpGates{})
 	e.outOfRoster.setRoster(toolRoster{removed: map[string]string{"secret_tool": gatePersona}})
-	round := newRoundState(e, newOrchestrationState(e.logSession, 50), 1000)
+	round := newRoundState(e, newOrchestrationState(e.logSession), 1000)
 	round.sink = newStreamSink(nil)
 	round.sink.outOfRoster = e.outOfRoster
 	if _, err := round.stream(context.Background(), fantasy.NewAgent(model), model, []fantasy.Message{fantasy.NewUserMessage("go")}); err != nil {

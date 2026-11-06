@@ -32,7 +32,7 @@ func TestStreamRoundResetsConsecutiveCompactionsOnCleanSuccess(t *testing.T) {
 	// Two earlier rounds force-compacted (still below the cap of 3).
 	e.consecutiveCompactions = 2
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
@@ -74,7 +74,7 @@ func TestStreamRound_ConsecutiveForceCompactionsTripCap(t *testing.T) {
 		return streamStop()(nil, call)
 	}
 	e := newMockEngine(t, model) // fallback shares the slug → no swap path interferes
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}

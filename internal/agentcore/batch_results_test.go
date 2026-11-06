@@ -135,7 +135,7 @@ func TestLargeBatchResultReachesPolicyRaw(t *testing.T) {
 		t.Fatalf("fixture result %d bytes must exceed the %d-byte model-visible ceiling", len(result), maxToolOutputBytes())
 	}
 
-	policy := NewScheduledPolicy(&LogSession{}, 100, 0, 0)
+	policy := NewScheduledPolicy(&LogSession{}, 0, 0)
 	o := policy.orch
 	registerTyped(t, o, criticalActionStruct{Tool: canaryMergeTool, DealIDs: ids, ValuesDigest: canaryDigest})
 	args := batchArgs(canaryDigest, ids...)

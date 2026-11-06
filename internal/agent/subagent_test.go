@@ -21,7 +21,7 @@ import (
 
 // budgetMockModel is a fantasy.LanguageModel whose every stream step reports a
 // fixed token + cost spend, so a child run's spend is deterministic. costUSD is
-// attached via OpenRouter provider metadata (the only path openrouterCost reads).
+// attached via OpenRouter provider metadata (the only path OpenRouterCost reads).
 type budgetMockModel struct {
 	name      string
 	inTokens  int64
@@ -98,7 +98,7 @@ func newParentForSpawn(t *testing.T, child fantasy.LanguageModel, maxCostUSD flo
 		},
 	})
 	// Install a live policy carrying the budget the spawn tool reads + charges.
-	a.runtimePolicy = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTokens)
+	a.runtimePolicy = agentcore.NewScheduledPolicy(a.logSession, maxCostUSD, maxTokens)
 	// Default these hard-wall / fan-out tests to a 100% per-child budget fraction so
 	// a request up to the parent's full remaining budget is permitted — they exercise
 	// the atomic reservation / avail cap, NOT the #264 per-child fraction cap (which

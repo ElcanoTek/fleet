@@ -37,7 +37,7 @@ func TestBudgetState_RemainingAndUnlimited(t *testing.T) {
 // the linchpin that makes the parent ceiling un-breachable by sub-agent spend.
 func TestChargeChildUsage_FoldsIntoParentCeiling(t *testing.T) {
 	// Parent policy with a 1000-uncached-token ceiling, nothing spent yet.
-	p := NewScheduledPolicy(NewLogSession(), 50, 0, 1000)
+	p := NewScheduledPolicy(NewLogSession(), 0, 1000)
 
 	// Under budget: a benign tool is allowed.
 	if blocked, _ := p.BeforeToolCall("read_file", "c1", "{}"); blocked {
@@ -65,7 +65,7 @@ func TestChargeChildUsage_FoldsIntoParentCeiling(t *testing.T) {
 
 // TestChargeChildUsage_CostAccumulates pins the cost axis of the charge-back.
 func TestChargeChildUsage_CostAccumulates(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50, 0.10, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0.10, 0)
 	p.ChargeChildUsage(RunUsage{CostUSD: 0.04})
 	p.ChargeChildUsage(RunUsage{CostUSD: 0.04})
 	if b := p.Budget(); b.SpentCostUSD < 0.08-1e-9 || b.SpentCostUSD > 0.08+1e-9 {

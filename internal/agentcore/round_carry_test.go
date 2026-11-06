@@ -444,7 +444,7 @@ func TestCarryRoundMessages_DropsOrphanedToolCalls(t *testing.T) {
 // transcript, and hold the self-audit request until the tasks are marked done.
 func TestRun_ScheduledLengthCutoffDoesNotTriggerPrematureSelfAudit(t *testing.T) {
 	session := NewLogSession()
-	pol := NewScheduledPolicy(session, 100, 0, 0)
+	pol := NewScheduledPolicy(session, 0, 0)
 	tracker := tools.NewTaskTrackerTool()
 
 	var (

@@ -28,7 +28,7 @@ func (passPolicy) CanFinish(int) (bool, []string)                       { return
 // orchestration satisfies Run's fail-loud accounting assertion (#1125). A
 // fresh state per call is fine here: Run resolves it exactly once, and this
 // double never reads usage back.
-func (passPolicy) orchestration() *orchestrationState { return newOrchestrationState(nil, 0) }
+func (passPolicy) orchestration() *orchestrationState { return newOrchestrationState(nil) }
 
 type recordedPolicyResult struct {
 	name      string

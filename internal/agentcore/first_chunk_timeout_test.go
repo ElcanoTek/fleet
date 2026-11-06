@@ -487,7 +487,7 @@ func TestWatchdogAfterProviderErrorFailsOverWithTheProviderStatus(t *testing.T) 
 	}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("task")}, buildAgent(primary), primary, false, buildAgent,
 	)
 	if err != nil {
@@ -557,7 +557,7 @@ func TestRoundStreamStepZeroEstimatesPromptTokensFromMessages(t *testing.T) {
 	e.modelContextPrefix = modelContextPrefixBudget{systemTokens: 400_000}
 	r := &roundState{
 		engine:    e,
-		orch:      newOrchestrationState(e.logSession, 10),
+		orch:      newOrchestrationState(e.logSession),
 		sink:      newStreamSink(nil),
 		maxTokens: 1000,
 	}

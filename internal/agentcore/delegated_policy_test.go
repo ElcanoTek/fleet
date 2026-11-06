@@ -13,12 +13,12 @@ import "testing"
 // not. Before this, every spawned child spent rounds being told to "read
 // protocols/self-audit.md" before it was allowed to answer its parent.
 func TestDelegatedPolicy_FinishesWithoutSelfAuditRitual(t *testing.T) {
-	root := NewScheduledPolicy(nil, 10, 0, 0)
+	root := NewScheduledPolicy(nil, 0, 0)
 	if ok, msgs := root.CanFinish(0); ok {
 		t.Fatalf("a ROOT scheduled run must still be gated on the self-audit ritual; got ok=%v msgs=%v", ok, msgs)
 	}
 
-	child := NewDelegatedPolicy(nil, 10, 0, 0)
+	child := NewDelegatedPolicy(nil, 0, 0)
 	ok, msgs := child.CanFinish(0)
 	if !ok {
 		t.Fatalf("a delegated (sub-agent) run must finish without the self-audit ritual; got msgs=%v", msgs)
@@ -32,7 +32,7 @@ func TestDelegatedPolicy_FinishesWithoutSelfAuditRitual(t *testing.T) {
 // relaxation: a child with pending task-tracker work is still refused a finish,
 // exactly like a root run. Only the audit RITUAL is skipped.
 func TestDelegatedPolicy_KeepsEveryOtherFinishGate(t *testing.T) {
-	child := NewDelegatedPolicy(nil, 10, 0, 0)
+	child := NewDelegatedPolicy(nil, 0, 0)
 	child.orchestration().latestTaskTracker = taskTrackerSnapshot{Seen: true, Todo: 2}
 
 	if ok, msgs := child.CanFinish(0); ok {
@@ -49,7 +49,7 @@ func TestDelegatedPolicy_KeepsEveryOtherFinishGate(t *testing.T) {
 // the same governed bundle — same type, same BeforeToolCall chain — so a child's
 // ceilings and critical-tool gating are not a second, weaker path.
 func TestDelegatedPolicy_SharesTheScheduledGateChain(t *testing.T) {
-	child := NewDelegatedPolicy(nil, 10, 0.10, 0)
+	child := NewDelegatedPolicy(nil, 0.10, 0)
 	// Ceiling gate: charge past the cost ceiling, then the next tool call is
 	// blocked exactly as it would be in a root run.
 	child.ChargeChildUsage(RunUsage{CostUSD: 0.20})

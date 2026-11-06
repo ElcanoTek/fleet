@@ -893,7 +893,7 @@ func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
 // re-reads the evidence elision would stub. Before the audit is asked for,
 // and once it is accepted, elision works as before.
 func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	e := heldEngine(t, "elide-audit", orch)
 	history := elisionHistory(10, 40_000)
 	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
@@ -920,7 +920,7 @@ func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
 // one resend_budget compaction, no elision event or breadcrumb.
 func TestCheckContextPressure_PendingAuditSummarizesWithoutEliding(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	e := heldEngine(t, "elide-audit-pressure", orch)
 	recordContextMaxForModel(&namedMockModel{name: "elide-audit-pressure"}, 10_000_000)
@@ -1497,7 +1497,7 @@ func TestRun_Summary_RerunRaisesTheBudget(t *testing.T) {
 func TestCheckContextPressure_PendingAuditHoldsTheWindowElision(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	e := heldEngine(t, "elide-window-audit", orch)
 	recordContextMaxForModel(&namedMockModel{name: "elide-window-audit"}, 200_000)

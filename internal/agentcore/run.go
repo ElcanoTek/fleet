@@ -154,8 +154,10 @@ type Deps struct {
 	Observer Observer
 	// Policy gates tool calls + finishing.
 	Policy Policy
-	// Executor runs sandboxed code (passed through to NativeTools by the driver;
-	// held here so the loop can surface it to the finalize hook).
+	// Executor runs sandboxed commands: the lifecycle hook engine runs each
+	// bundle hook command through it, inside the run's sandbox (hooks.go). The
+	// native bash/run_python tools are built over the sandbox by the driver,
+	// not through this seam.
 	Executor Executor
 	// ReadWorkspaceFile binds MCP binary argument references to the active sandbox.
 	ReadWorkspaceFile tools.WorkspaceFileReadFunc

@@ -547,7 +547,7 @@ func TestScheduledVerifierRepairReplacesStructuredAnswer(t *testing.T) {
 	a.verifierModel = verifier
 	a.outputSchema = json.RawMessage(`{"type":"object"}`)
 	p := &scheduledPolicy{
-		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 0, 0),
 		agent:  a,
 		task:   "Deep audit; answer with one JSON object.",
 		runCtx: context.Background(),
@@ -596,7 +596,7 @@ func TestScheduledVerifierRepairAppendsProseAnswerOnSchemaTask(t *testing.T) {
 	a.verifierModel = verifier
 	a.outputSchema = json.RawMessage(`{"type":"object"}`)
 	p := &scheduledPolicy{
-		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 0, 0),
 		agent:  a,
 		task:   "Refresh the page and report the coverage window.",
 		runCtx: context.Background(),

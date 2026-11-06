@@ -54,7 +54,7 @@ func installBundlePolicy(t *testing.T, manifest string) {
 // declaring two creates and the summary email.
 func auditedBatch(t *testing.T) *agentcore.ScheduledPolicy {
 	t.Helper()
-	p := agentcore.NewScheduledPolicy(&agentcore.LogSession{}, 100, 0, 0)
+	p := agentcore.NewScheduledPolicy(&agentcore.LogSession{}, 0, 0)
 	raw := `{"success":true,"reasoning":"checked","artifacts_checked":["brief.csv"],` +
 		`"workflow_sections_checked":["build"],"send_contract_checked":true,"attachments_checked":[],` +
 		`"remaining_risks":[],"critical_actions":[` +

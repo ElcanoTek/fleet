@@ -11,21 +11,19 @@ import (
 )
 
 // sandboxExecutor implements agentcore.Executor over the SINGLE sandbox backend
-// (P3a's *sandbox.Sandbox). Both modes drive their bash/run_python through the
-// same Sandbox; this adapter is the agentcore.Executor seam over that backend,
-// held on Deps so the loop / finalize hook can surface sandboxed execution.
+// (*sandbox.Sandbox). It is held on Deps so the loop's lifecycle hook engine
+// runs hook commands inside the run's sandbox.
 //
 // The native bash/run_python TOOLS the drivers register are built directly with
 // tools.NewBashTool(sb) / tools.NewRunPythonTool(sb) over the same *Sandbox —
-// this adapter exposes the same execution surface behind the agentcore.Executor
-// interface for the loop and any policy/finalize code that needs it without the
-// fantasy tool wrapper.
+// this adapter exposes bash execution behind the agentcore.Executor interface
+// without the fantasy tool wrapper.
 type sandboxExecutor struct {
 	sb *sandbox.Sandbox
 }
 
 // NewSandboxExecutor wraps a per-run *sandbox.Sandbox as an agentcore.Executor.
-// A nil sandbox is permitted at construction; RunBash/RunPython then return an
+// A nil sandbox is permitted at construction; RunBash then returns an
 // error (there is no host-mode escape hatch — the sandbox boundary is the
 // point).
 func NewSandboxExecutor(sb *sandbox.Sandbox) agentcore.Executor {
@@ -56,41 +54,6 @@ func (e *sandboxExecutor) RunBash(ctx context.Context, command string) (string, 
 		return out, fmt.Errorf("bash exited with code %d", res.ExitCode)
 	}
 	return out, nil
-}
-
-// RunPython executes a Python snippet in the run's sandbox kernel and returns
-// the combined output (stdout then stderr, then the bridge's formatted output).
-func (e *sandboxExecutor) RunPython(ctx context.Context, code string) (string, error) {
-	if e.sb == nil {
-		return "", fmt.Errorf("executor requires a sandbox; pool.Take returned nil or was bypassed")
-	}
-	res, err := e.sb.RunPython(ctx, sandbox.PythonRequest{
-		Code:    code,
-		Timeout: executorDefaultTimeout,
-	})
-	if err != nil {
-		return "", err
-	}
-	var sb strings.Builder
-	if res.Stdout != "" {
-		sb.WriteString(res.Stdout)
-	}
-	if res.Stderr != "" {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(res.Stderr)
-	}
-	if res.Output != "" && res.Output != res.Stdout {
-		if sb.Len() > 0 {
-			sb.WriteString("\n")
-		}
-		sb.WriteString(res.Output)
-	}
-	if res.Error != "" {
-		return sb.String(), fmt.Errorf("python error: %s", res.Error)
-	}
-	return sb.String(), nil
 }
 
 func (e *sandboxExecutor) combine(stdout, stderr []byte) string {

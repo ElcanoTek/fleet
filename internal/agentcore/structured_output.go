@@ -137,7 +137,7 @@ func (e *engine) generateTerminalStructuredOutput(
 		if !native {
 			terminalToolTokens = estimatedTokensForBytes(len(schemaRaw))
 		}
-		cacheStep := promptCachingStep(
+		cacheStep := PromptCachingStep(
 			model.Model(),
 			WithCompactionSummaryBreakpoint(nil),
 			WithStablePrefixTokens(terminalToolTokens),

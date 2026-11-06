@@ -122,7 +122,7 @@ func cacheControlOptions() fantasy.ProviderOptions {
 	}
 }
 
-// cacheOption configures promptCachingStep. Divergent behaviour between the two
+// cacheOption configures PromptCachingStep. Divergent behaviour between the two
 // front-ends is expressed as options rather than forked functions.
 type cacheOption struct {
 	compactionSummary  bool
@@ -163,8 +163,10 @@ func WithCompactionSummaryBreakpoint(isSummary func(fantasy.Message) bool) Cache
 	}
 }
 
-// promptCachingStep returns a fantasy PrepareStepFunction that installs cache
-// breakpoints on messages just before each step is sent. It is a no-op for
+// PromptCachingStep returns a fantasy PrepareStepFunction that installs cache
+// breakpoints on messages just before each step is sent. The shared loop uses
+// it, and the DRIVERS attach it to their follow-up streams (interactive
+// finalize / compaction calls) so those get the same per-message breakpoints. It is a no-op for
 // models that don't support explicit breakpoints, and also a no-op when the
 // kill-switch env var is set.
 //
@@ -178,7 +180,7 @@ func WithCompactionSummaryBreakpoint(isSummary func(fantasy.Message) bool) Cache
 //
 // Gemini drops 1 and 2 as well once the rest of the prompt is estimated larger
 // than the prefix they mark (tailOutgrowsMarkedPrefix).
-func promptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFunction {
+func PromptCachingStep(model string, opts ...CacheOption) fantasy.PrepareStepFunction {
 	cfg := cacheOption{}
 	for _, o := range opts {
 		o(&cfg)
@@ -347,13 +349,6 @@ func isMediaPart(part fantasy.MessagePart) bool {
 		return isMedia
 	}
 	return false
-}
-
-// PromptCachingStep is the exported prompt-caching PrepareStep the DRIVERS
-// attach to their follow-up streams (interactive finalize / compaction calls).
-// It installs the same per-message cache breakpoints the shared loop uses.
-func PromptCachingStep(modelSlug string, opts ...CacheOption) fantasy.PrepareStepFunction {
-	return promptCachingStep(modelSlug, opts...)
 }
 
 // compactionSummaryPrefix is the exact leading substring every compaction

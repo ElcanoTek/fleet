@@ -156,7 +156,7 @@ func NewAuxUsageRecord(label, modelSlug string, res *fantasy.AgentResult) AuxUsa
 	}
 	rec.PromptTokens = int(res.TotalUsage.InputTokens + res.TotalUsage.CacheReadTokens)
 	rec.CompletionTokens = int(res.TotalUsage.OutputTokens)
-	rec.CostUSD = ResolveStepCost(modelSlug, res.TotalUsage, openrouterCost(res.Response.ProviderMetadata))
+	rec.CostUSD = ResolveStepCost(modelSlug, res.TotalUsage, OpenRouterCost(res.Response.ProviderMetadata))
 	return rec
 }
 

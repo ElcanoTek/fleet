@@ -25,7 +25,7 @@ import (
 // TestUpdateUsage_CacheTokensCountedOnceAcrossSignals feeds one cached-heavy
 // step through updateUsage and checks every derived signal.
 func TestUpdateUsage_CacheTokensCountedOnceAcrossSignals(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 50)
+	o := newOrchestrationState(NewLogSession())
 	// OpenRouter-shaped: prompt_tokens=1000, cached_tokens=800 → fantasy delivers
 	// InputTokens=200 (uncached) + CacheReadTokens=800.
 	o.updateUsage("test/cached-model",
@@ -69,7 +69,7 @@ func TestUpdateUsage_CacheTokensCountedOnceAcrossSignals(t *testing.T) {
 func TestCheckCeilings_TokenCeilingFiresOnUncachedSpend(t *testing.T) {
 	usage := fantasy.Usage{InputTokens: 200, OutputTokens: 50, CacheReadTokens: 800}
 
-	at := newOrchestrationState(NewLogSession(), 50)
+	at := newOrchestrationState(NewLogSession())
 	at.maxTotalTokens = 250 // == uncached spend → ceiling met
 	at.updateUsage("test/cached-model", usage, fantasy.ProviderMetadata{})
 	blocked, msg := at.checkCeilings()
@@ -80,7 +80,7 @@ func TestCheckCeilings_TokenCeilingFiresOnUncachedSpend(t *testing.T) {
 		t.Fatalf("expected TOKEN_CEILING_REACHED, got: %s", msg)
 	}
 
-	under := newOrchestrationState(NewLogSession(), 50)
+	under := newOrchestrationState(NewLogSession())
 	under.maxTotalTokens = 251 // one above the uncached spend → not met
 	under.updateUsage("test/cached-model", usage, fantasy.ProviderMetadata{})
 	if blocked, msg := under.checkCeilings(); blocked {
@@ -101,7 +101,7 @@ func TestCheckContextPressure_TrueUsageFractionWithHotCache(t *testing.T) {
 	e := newMockEngine(t, model)
 	obs := &captureObserver{}
 	sink := newStreamSink(obs)
-	orch := newOrchestrationState(e.logSession, 0)
+	orch := newOrchestrationState(e.logSession)
 
 	// True prompt: 500 of 1000 (0.50) — 400 of it cache reads. Double-counting
 	// the cache would report 900 (0.90 ≥ the compaction threshold).

@@ -119,10 +119,12 @@ func sanitizedToolCallPart(part fantasy.MessagePart) (fantasy.MessagePart, bool)
 	return tc, true
 }
 
-// toolCallInputSanitizeStep normalizes tool-call inputs in the history before
+// ToolCallInputSanitizeStep normalizes tool-call inputs in the history before
 // every provider request. It belongs before the context-budget reducer and the
-// prompt-cache markers, which must see the final message slice.
-func toolCallInputSanitizeStep() fantasy.PrepareStepFunction {
+// prompt-cache markers, which must see the final message slice. Exported for
+// the prepare-step chains built outside agentcore (the interactive finalize
+// retries).
+func ToolCallInputSanitizeStep() fantasy.PrepareStepFunction {
 	return func(ctx context.Context, opts fantasy.PrepareStepFunctionOptions) (context.Context, fantasy.PrepareStepResult, error) {
 		msgs, fixed := SanitizeToolCallInputs(opts.Messages)
 		if fixed == 0 {
@@ -130,10 +132,4 @@ func toolCallInputSanitizeStep() fantasy.PrepareStepFunction {
 		}
 		return ctx, fantasy.PrepareStepResult{Messages: msgs}, nil
 	}
-}
-
-// ToolCallInputSanitizeStep is toolCallInputSanitizeStep for the prepare-step
-// chains built outside agentcore (the interactive finalize retries).
-func ToolCallInputSanitizeStep() fantasy.PrepareStepFunction {
-	return toolCallInputSanitizeStep()
 }

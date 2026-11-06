@@ -19,7 +19,7 @@ func TestPendingCriticalDischargedByCorrectedArguments(t *testing.T) {
 	const rejected = `{"to_email":["roman@elcanotek.com"],"subject":"s","content":"<html>1</html>"}`
 	const accepted = `{"to_email":"roman@elcanotek.com","subject":"s","content":"<html>1</html>"}`
 
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 
 	// 1. Pre-audit call is blocked and recorded as an outstanding commitment.
 	if isBlocked, _ := o.checkCriticalTool(tool, "", blocked); !isBlocked {
@@ -60,7 +60,7 @@ func TestPendingCriticalPrefersExactArgsMatch(t *testing.T) {
 	const first = `{"to_email":"a@example.com","subject":"one"}`
 	const second = `{"to_email":"b@example.com","subject":"two"}`
 
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	for _, args := range []string{first, second} {
 		if isBlocked, _ := o.checkCriticalTool(tool, "", args); !isBlocked {
 			t.Fatal("expected pre-audit block")
@@ -97,7 +97,7 @@ func TestPendingCriticalDoesNotCrossTools(t *testing.T) {
 	const email = "mcp_sendgrid_send_email"
 	const template = "mcp_sendgrid_send_template_email"
 
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	if isBlocked, _ := o.checkCriticalTool(email, "", `{"to_email":"a@example.com"}`); !isBlocked {
 		t.Fatal("expected pre-audit block")
 	}
@@ -124,7 +124,7 @@ func TestPendingCriticalDoesNotCrossTools(t *testing.T) {
 // saw three times.
 func TestCanFinishStopsDemandingAfterCorrectedSend(t *testing.T) {
 	const tool = "mcp_sendgrid_send_email"
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 
 	if isBlocked, _ := o.checkCriticalTool(tool, "", `{"to":["roman@elcanotek.com"]}`); !isBlocked {
 		t.Fatal("expected pre-audit block")

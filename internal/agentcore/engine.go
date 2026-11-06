@@ -1972,7 +1972,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// Tool-call inputs that are not JSON objects are normalized before
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.
-			toolCallInputSanitizeStep(),
+			ToolCallInputSanitizeStep(),
 			// After the recovery checkpoint, so a resume keeps the signatures
 			// for a Gemini model even when this one is not.
 			geminiSignatureStep,
@@ -1980,7 +1980,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.
 			modelContextBudgetStep(r.engine.modelContextPrefix, int(maxOutputTokens), sink),
-			promptCachingStep(modelSlug,
+			PromptCachingStep(modelSlug,
 				// The shared loop is where compaction summaries live (the engine's
 				// compaction paths insert them into this history), so the optional
 				// 4th breakpoint anchors the summary as a stable boundary between

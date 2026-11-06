@@ -456,7 +456,7 @@ func imageGenUsage(body []byte) fantasy.Usage {
 }
 
 // imageGenProviderMetadata wraps OpenRouter's returned cost in the provider
-// metadata shape agentcore's cost accounting reads (openrouterCost). A missing
+// metadata shape agentcore's cost accounting reads (OpenRouterCost). A missing
 // or non-numeric cost yields no metadata, so pricing falls back to the
 // per-model table like any other step without a provider figure.
 func imageGenProviderMetadata(cost any) fantasy.ProviderMetadata {

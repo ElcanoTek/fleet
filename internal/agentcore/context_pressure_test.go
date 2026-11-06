@@ -20,7 +20,7 @@ type roundsPolicy struct {
 }
 
 func newRoundsPolicy(session *LogSession, finishAt int) *roundsPolicy {
-	return &roundsPolicy{orch: newOrchestrationState(session, 0), finishAt: finishAt}
+	return &roundsPolicy{orch: newOrchestrationState(session), finishAt: finishAt}
 }
 
 func (p *roundsPolicy) BeforeToolCall(string, string, string) (bool, string) { return false, "" }
@@ -337,7 +337,7 @@ func TestRun_ContextPressure_InteractiveCompacts(t *testing.T) {
 // finishableScheduledPolicy returns a scheduled policy whose audit gate is
 // pre-satisfied so the loop terminates in one round.
 func finishableScheduledPolicy(session *LogSession) *ScheduledPolicy {
-	p := NewScheduledPolicy(session, 50, 0, 0)
+	p := NewScheduledPolicy(session, 0, 0)
 	p.orch.mu.Lock()
 	p.orch.selfAuditRequested = true
 	p.orch.selfAuditConfirmedOnce = true

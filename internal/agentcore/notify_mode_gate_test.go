@@ -39,7 +39,7 @@ func TestNotifyModeRunsAndRecords(t *testing.T) {
 		CriticalToolUndoHints: map[string]string{"deploy_page": "Undo with rollback_page."},
 	})
 	sink := &recordingStager{stageID: "appr-1"}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sink)
 
 	blocked, _ := o.checkCriticalToolApproval("mcp_pages_deploy_page", "call-1", `{"slug":"x"}`)
@@ -66,7 +66,7 @@ func TestNotifyFallsBackToBlockingWhenItCannotRecord(t *testing.T) {
 
 	// A sink that records but fails.
 	failing := &recordingStager{stageID: "appr-2", recordErr: errors.New("db down")}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(failing)
 	blocked, msg := o.checkCriticalToolApproval("mcp_pages_deploy_page", "call-1", `{"slug":"x"}`)
 	if !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
@@ -75,7 +75,7 @@ func TestNotifyFallsBackToBlockingWhenItCannotRecord(t *testing.T) {
 
 	// A sink that cannot record at all (no ActionRecorder).
 	plain := sentinelStager{ret: "appr-3"}
-	o2 := newOrchestrationState(NewLogSession(), 100)
+	o2 := newOrchestrationState(NewLogSession())
 	o2.setApprovalSink(plain)
 	blocked, msg = o2.checkCriticalToolApproval("mcp_pages_deploy_page", "call-1", `{"slug":"x"}`)
 	if !blocked || !strings.Contains(msg, "approval_id=appr-3") {
@@ -92,7 +92,7 @@ func TestUndeclaredCriticalToolStillBlocks(t *testing.T) {
 		CriticalToolModes:    map[string]string{"deploy_page": ApprovalModeNotify},
 	})
 	sink := &recordingStager{stageID: "appr-4"}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sink)
 	blocked, msg := o.checkCriticalToolApproval("mcp_ssp_create_deal", "call-1", `{}`)
 	if !blocked || !strings.Contains(msg, "APPROVAL_REQUIRED") {
@@ -126,7 +126,7 @@ func TestNotifyRecordIsHandedItsCallsResult(t *testing.T) {
 		CriticalToolResultCards: []string{"next_campaign_id"},
 	})
 	sink := &resultRecordingStager{}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sink)
 
 	for _, call := range [][2]string{{"mcp_deal_sheet_next_campaign_id", "call-1"}, {"mcp_pages_deploy_page", "call-2"}} {
@@ -155,7 +155,7 @@ func TestNotifyRecordWithoutResultCardsIsNotHandedAResult(t *testing.T) {
 		CriticalToolModes:    map[string]string{"next_campaign_id": ApprovalModeNotify},
 	})
 	sink := &resultRecordingStager{}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sink)
 	if blocked, _ := o.checkCriticalToolApproval("mcp_deal_sheet_next_campaign_id", "call-1", `{}`); blocked {
 		t.Fatal("notify must not block")
@@ -177,7 +177,7 @@ func TestNotifyRecordWithAnAmbiguousResultIsNotHandedOne(t *testing.T) {
 		CriticalToolResultCards: []string{"next_campaign_id"},
 	})
 	sink := &resultRecordingStager{}
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sink)
 	for _, id := range []string{"call-1", "call-2"} {
 		if blocked, _ := o.checkCriticalToolApproval("mcp_deal_sheet_next_campaign_id", id, `{"k":"v"}`); blocked {

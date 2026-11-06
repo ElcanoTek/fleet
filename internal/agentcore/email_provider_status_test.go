@@ -12,7 +12,7 @@ func TestEmailProviderRejectionDoesNotDischargeCommitment(t *testing.T) {
 		for _, rejected := range []string{`{"status_code":500}`, `{"status_code":400,"body":"bad template"}`} {
 			t.Run(tool+"/"+rejected, func(t *testing.T) {
 				const args = `{"to_email":"trader@example.com","subject":"batch summary","content":"<p>done</p>"}`
-				o := newOrchestrationState(nil, 0)
+				o := newOrchestrationState(nil)
 				if isBlocked, _ := o.checkCriticalTool(tool, "", args); !isBlocked {
 					t.Fatal("a critical tool before confirm_audit must be blocked")
 				}

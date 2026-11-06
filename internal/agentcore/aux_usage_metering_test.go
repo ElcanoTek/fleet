@@ -98,7 +98,7 @@ func TestCompactionSummarizeInput_CapabilitiesBindToRunState(t *testing.T) {
 		t.Fatal("unbound engine must hand out a zero-capability CompactionSummarizeInput")
 	}
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	orch.setCeilings(0.05, 0)
 	e.bindRunUsage(orch)
 	in := e.compactionSummarizeInput(nil)
@@ -131,7 +131,7 @@ func TestCompactionSummarizeInput_CapabilitiesBindToRunState(t *testing.T) {
 // as the conversation's window fill.
 func TestUpdateAuxUsage_DoesNotClobberLastStepSignals(t *testing.T) {
 	session := NewLogSession()
-	orch := newOrchestrationState(session, 0)
+	orch := newOrchestrationState(session)
 
 	// A main-loop step establishes the per-call input-size signals.
 	orch.updateUsage("main-model", fantasy.Usage{InputTokens: 100, OutputTokens: 20}, fantasy.ProviderMetadata{})

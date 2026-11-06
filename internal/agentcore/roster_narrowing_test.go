@@ -269,7 +269,7 @@ func TestRun_NarrowedRosterRefusesAuditOfUnregisteredTool(t *testing.T) {
 		return streamTextThenFinish("done"), nil
 	}}}
 	broker := &fakeBroker{}
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	policy := NewScheduledPolicy(NewLogSession(), 0, 0)
 	res, err := Run(context.Background(), ModeScheduled,
 		RunConfig{
 			IncludeConfirmAudit: true, MCPRosterNarrowing: "required_tools_only",

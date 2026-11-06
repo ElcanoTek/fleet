@@ -36,8 +36,8 @@ func TestOptionalServerForKeyingRule(t *testing.T) {
 		// Loop: Go randomizes map range order on every pass, so a regression to
 		// first-match (rather than longest-match) fails within a few iterations.
 		for i := 0; i < 64; i++ {
-			if got := optionalServerFor(tc.registered, optional); got != tc.want {
-				t.Fatalf("optionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)
+			if got := OptionalServerFor(tc.registered, optional); got != tc.want {
+				t.Fatalf("OptionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)
 			}
 			if got := OptionalServerFor(tc.registered, optional); got != tc.want {
 				t.Fatalf("OptionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)

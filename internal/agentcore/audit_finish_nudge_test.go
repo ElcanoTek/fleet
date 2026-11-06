@@ -63,7 +63,7 @@ func TestFinishNudgeLegacyDeclarationKeepsSuffixList(t *testing.T) {
 // closing text of such rounds as the answer given before the audit (#1826),
 // and a length cutoff's truncated text must never be that answer.
 func TestFinishRefusedForAudit(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0, 0)
 	orch := p.orchestration()
 	step := func(want bool, label string) {
 		t.Helper()

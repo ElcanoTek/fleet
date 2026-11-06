@@ -474,9 +474,9 @@ func TestBedrockRequestsCarryCacheMarkers(t *testing.T) {
 		t.Fatalf("LanguageModel: %v", err)
 	}
 	msgs := []fantasy.Message{fantasy.NewSystemMessage("You are a test."), fantasy.NewUserMessage("ping")}
-	_, prepared, err := promptCachingStep(model)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	_, prepared, err := PromptCachingStep(model)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
-		t.Fatalf("promptCachingStep: %v", err)
+		t.Fatalf("PromptCachingStep: %v", err)
 	}
 	for _, prompt := range []fantasy.Prompt{msgs, prepared.Messages} {
 		if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: prompt}); err != nil {

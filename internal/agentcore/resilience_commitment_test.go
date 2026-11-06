@@ -86,7 +86,7 @@ func TestStreamRoundRetriesBlipAfterTextOnlyOutput(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestStreamRoundFallsBackAfterTextOnlyBlipPersists(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err != nil {
@@ -203,7 +203,7 @@ func TestStreamRoundSuppressesRecoveryAfterToolExecution(t *testing.T) {
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	_, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err == nil {
@@ -268,7 +268,7 @@ func TestStreamRoundSuppressesContextTooLargeRecoveryAfterToolExecution(t *testi
 	messages := []fantasy.Message{fantasy.NewUserMessage("test task")}
 
 	_, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		messages, buildAgent(e.model), e.model, false, buildAgent,
 	)
 	if err == nil {

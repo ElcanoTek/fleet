@@ -50,19 +50,15 @@ func openrouterMetadata(metadata fantasy.ProviderMetadata) *openrouter.ProviderM
 	return nil
 }
 
-// openrouterCost extracts the USD cost from OpenRouter's provider metadata.
-func openrouterCost(metadata fantasy.ProviderMetadata) *float64 {
+// OpenRouterCost extracts the USD cost from OpenRouter's provider metadata.
+// Exported for callers outside agentcore that price a Generate result
+// themselves (the conversation summarizer).
+func OpenRouterCost(metadata fantasy.ProviderMetadata) *float64 {
 	opts := openrouterMetadata(metadata)
 	if opts == nil {
 		return nil
 	}
 	return &opts.Usage.Cost
-}
-
-// OpenRouterCost is openrouterCost for callers outside agentcore that price a
-// Generate result themselves (the conversation summarizer).
-func OpenRouterCost(metadata fantasy.ProviderMetadata) *float64 {
-	return openrouterCost(metadata)
 }
 
 // openrouterServedProvider extracts the upstream that ACTUALLY served a step

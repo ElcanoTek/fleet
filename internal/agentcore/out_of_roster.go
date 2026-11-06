@@ -101,7 +101,7 @@ func (g mcpGates) gateFor(name string, catalogServers map[string]bool) (string, 
 	if server == "" {
 		return "", ""
 	}
-	if key := optionalServerFor(server, g.optional); key != "" && !g.optIn[key] {
+	if key := OptionalServerFor(server, g.optional); key != "" && !g.optIn[key] {
 		return gateOptIn, key
 	}
 	if list := g.allow.gateEntry(server, g.exclusive); (len(list) > 0 || g.exclusive) && !slices.Contains(list, tool) {
@@ -280,7 +280,7 @@ func (o *outOfRoster) classify(call fantasy.ToolCallContent, available []fantasy
 			return outOfRosterOutcome{reason: outOfRosterDeferred, repaired: &repaired}
 		}
 		// The note does not describe the arguments: the replayed call shows
-		// them normalized (toolCallInputSanitizeStep), often as {}.
+		// them normalized (ToolCallInputSanitizeStep), often as {}.
 		return outOfRosterOutcome{reason: outOfRosterDeferred, note: fmt.Sprintf(
 			"%s was not called: it is reachable only through tool_call. "+
 				"Call tool_call with {\"name\": %q, \"arguments\": {...}}, with the arguments as a JSON object.", call.ToolName, call.ToolName)}

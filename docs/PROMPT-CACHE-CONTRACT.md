@@ -127,7 +127,7 @@ the contract is enforced by review + the no-volatile-tokens rule above.
 
 ## Where the breakpoints are placed
 
-`internal/agentcore/cache.go` (`promptCachingStep`) installs explicit
+`internal/agentcore/cache.go` (`PromptCachingStep`) installs explicit
 `cache_control: {type: "ephemeral"}` breakpoints, but **only for slugs that route
 to a provider honoring explicit breakpoints** — OpenRouter-form `anthropic/` and
 `google/`, plus the provider-local `claude-`/`gemini-` forms a native provider
@@ -344,7 +344,7 @@ into `fantasy.Usage.CacheCreationTokens`).
 ## Kill switch & observability
 
 - **Kill switch:** `FLEET_DISABLE_PROMPT_CACHE` (with `CHAT_`/`CUTLASS_` back-compat
-  aliases) makes `promptCachingStep` a no-op.
+  aliases) makes `PromptCachingStep` a no-op.
 - **Observability:** cached-token counts are tracked (`CachedTokens`) and surfaced
   in the admin stats / cost accounting, so an operator can watch the cache-hit
   ratio and notice a regression the guard test didn't catch (e.g. a system-prompt

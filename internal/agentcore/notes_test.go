@@ -26,7 +26,7 @@ func (f *fakeNoteProposer) Propose(slug, title, body, reason string) (string, er
 // is intercepted (blocked=true), routed through the NoteProposer, and reports
 // the proposal id with a "not live yet" notice. Mirrors checkMemoryProposal.
 func TestCheckNoteProposal_StagesPending(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	fp := &fakeNoteProposer{id: "prop-123"}
 	o.setNoteProposer(fp)
 
@@ -52,7 +52,7 @@ func TestCheckNoteProposal_StagesPending(t *testing.T) {
 // TestCheckNoteProposal_NotProposeNotePassesThrough verifies a non-propose_note
 // tool name is NOT intercepted.
 func TestCheckNoteProposal_NotProposeNotePassesThrough(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	o.setNoteProposer(&fakeNoteProposer{id: "x"})
 	if blocked, _ := o.checkNoteProposal("bash", `{}`); blocked {
 		t.Fatal("non-propose_note tool must not be intercepted")
@@ -62,7 +62,7 @@ func TestCheckNoteProposal_NotProposeNotePassesThrough(t *testing.T) {
 // TestCheckNoteProposal_NilProposerGuard verifies the nil-proposer path returns
 // an HONEST capability message (not the old "This is a bug") instead of panicking.
 func TestCheckNoteProposal_NilProposerGuard(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	blocked, msg := o.checkNoteProposal("propose_note", `{"slug":"s","title":"t","body":"b"}`)
 	if !blocked {
 		t.Fatal("expected blocked=true even with nil proposer")
@@ -78,7 +78,7 @@ func TestCheckNoteProposal_NilProposerGuard(t *testing.T) {
 // TestCheckMemoryProposal_NilProposerGuard mirrors the note guard: nil memory
 // proposer → blocked with honest UNAVAILABLE text, no panic, no "This is a bug".
 func TestCheckMemoryProposal_NilProposerGuard(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	blocked, msg := o.checkMemoryProposal("propose_memory", `{"content":"x"}`)
 	if !blocked {
 		t.Fatal("expected blocked=true even with nil proposer")
@@ -91,7 +91,7 @@ func TestCheckMemoryProposal_NilProposerGuard(t *testing.T) {
 // TestCheckNoteProposal_InvalidArgs verifies malformed JSON is reported, not
 // forwarded to the proposer.
 func TestCheckNoteProposal_InvalidArgs(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	fp := &fakeNoteProposer{id: "x"}
 	o.setNoteProposer(fp)
 	blocked, msg := o.checkNoteProposal("propose_note", `{not json`)
@@ -110,7 +110,7 @@ func TestCheckNoteProposal_InvalidArgs(t *testing.T) {
 // is wired into the scheduled Policy's BeforeToolCall chain (BOTH modes), via
 // SetNoteProposer.
 func TestScheduledPolicyInterceptsProposeNote(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0, 0)
 	fp := &fakeNoteProposer{id: "sp-1"}
 	p.SetNoteProposer(fp)
 	blocked, msg := p.BeforeToolCall("propose_note", "call-1", `{"slug":"s","title":"t","body":"b"}`)

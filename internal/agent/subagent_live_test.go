@@ -181,7 +181,7 @@ func TestLive_ExploreChildUsesToolsAndReportsTrail(t *testing.T) {
 			Enabled: true, MaxDepth: 1, MaxChildren: 5, BudgetFraction: 1.0, Resolver: resolver,
 		},
 	})
-	parent.runtimePolicy = agentcore.NewScheduledPolicy(parent.logSession, parent.maxIterations, 1.0, 0)
+	parent.runtimePolicy = agentcore.NewScheduledPolicy(parent.logSession, 1.0, 0)
 	parent.subagent.budgetFraction = 1.0
 	parent.spawnObserver = obs
 

@@ -381,7 +381,7 @@ func TestVerifierOutageNeedsThisPolicysAuditToFailOpen(t *testing.T) {
 	a := newTestScheduledAgent(t, &itMockModel{})
 	a.verifierModel = verifier
 	p := &scheduledPolicy{
-		inner:  agentcore.NewDelegatedPolicy(a.logSession, 50, 0, 0),
+		inner:  agentcore.NewDelegatedPolicy(a.logSession, 0, 0),
 		agent:  a,
 		task:   "delegated work",
 		runCtx: context.Background(),

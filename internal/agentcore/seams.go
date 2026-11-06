@@ -202,14 +202,13 @@ type SkillProposer interface {
 	Propose(name, description, body, reason string) (proposalID string, err error)
 }
 
-// Executor runs sandboxed code. The real per-turn / per-exec-burst container
-// backend is P3's sandbox.Pool; here the interface is defined and a test double
-// lives in the _test files. Both modes use the SAME Executor behind this seam.
+// Executor runs sandboxed commands. The production implementation
+// (internal/agent's sandboxExecutor) runs them in the run's per-turn
+// *sandbox.Sandbox; a test double lives in the _test files. Both modes use the
+// SAME Executor behind this seam. The loop's only consumer is the lifecycle
+// hook engine (hooks.go), which runs each hook command through RunBash.
 type Executor interface {
 	// RunBash executes a bash command in the run's workspace and returns stdout
 	// (combined output) or an error.
 	RunBash(ctx context.Context, command string) (output string, err error)
-	// RunPython executes a Python snippet in the run's workspace and returns
-	// stdout (combined output) or an error.
-	RunPython(ctx context.Context, code string) (output string, err error)
 }

@@ -23,7 +23,7 @@ type InteractivePolicy struct {
 // are the per-turn ceilings (0 = unlimited); approvalSink/memoryProposer may be
 // nil. The loop-guard noun is set to the interactive wording.
 func NewInteractivePolicy(maxCostUSD float64, maxTotalTokens int, approvalSink ApprovalStager, memoryProposer MemoryProposer) *InteractivePolicy {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	o.setRepeatGuardNoun(repeatGuardNounReplyToUser)
 	o.setCeilings(maxCostUSD, maxTotalTokens)
 	if approvalSink != nil {
@@ -133,13 +133,13 @@ type ScheduledPolicy struct {
 	orch *orchestrationState
 }
 
-// NewScheduledPolicy builds the scheduled bundle over a session log. maxIterations
-// is informational; the loop owns the real round cap. maxCostUSD/maxTotalTokens
-// are the per-run ceilings (0 = unlimited) — enforced for unattended scheduled /
-// one-shot runs exactly as the interactive policy enforces them, so a runaway
-// agent is bounded by the configured budget rather than the invoice.
-func NewScheduledPolicy(logSession *LogSession, maxIterations int, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
-	o := newOrchestrationState(logSession, maxIterations)
+// NewScheduledPolicy builds the scheduled bundle over a session log (the loop
+// owns the round cap). maxCostUSD/maxTotalTokens are the per-run ceilings
+// (0 = unlimited) — enforced for unattended scheduled / one-shot runs exactly
+// as the interactive policy enforces them, so a runaway agent is bounded by the
+// configured budget rather than the invoice.
+func NewScheduledPolicy(logSession *LogSession, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
+	o := newOrchestrationState(logSession)
 	o.setRepeatGuardNoun(repeatGuardNounFinishTask)
 	o.setCeilings(maxCostUSD, maxTotalTokens)
 	return &ScheduledPolicy{orch: o}
@@ -154,8 +154,8 @@ func NewScheduledPolicy(logSession *LogSession, maxIterations int, maxCostUSD fl
 // a second policy path: a child that unlocks a critical action through
 // confirm_audit is still held to its commitments, and the PARENT still has to
 // pass its own audit over the delegated work.
-func NewDelegatedPolicy(logSession *LogSession, maxIterations int, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
-	p := NewScheduledPolicy(logSession, maxIterations, maxCostUSD, maxTotalTokens)
+func NewDelegatedPolicy(logSession *LogSession, maxCostUSD float64, maxTotalTokens int) *ScheduledPolicy {
+	p := NewScheduledPolicy(logSession, maxCostUSD, maxTotalTokens)
 	p.orch.setDelegatedFinish(true)
 	return p
 }

@@ -17,7 +17,7 @@ import (
 )
 
 func newOrchStateForTest() *orchestrationState {
-	return newOrchestrationState(&LogSession{}, 100)
+	return newOrchestrationState(&LogSession{})
 }
 
 func TestBatchAudit_MultipleSameSuffixDeals(t *testing.T) {
@@ -525,7 +525,7 @@ func TestRepeatedCallGuard_ResetsOnChange(t *testing.T) {
 // ── orchestration sub-tests lifted from cutlass execute_test.go ──
 
 func TestOrchestrationCheckCriticalToolBlocksWithoutAudit(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 
 	blocked, msg := orch.checkCriticalTool("send_email", "call-1", `{"to":"test@test.com"}`)
 	if !blocked {
@@ -542,7 +542,7 @@ func TestOrchestrationCheckCriticalToolBlocksWithoutAudit(t *testing.T) {
 }
 
 func TestOrchestrationCheckCriticalToolAllowsAfterAudit(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.auditConfirmed = true
 
 	blocked, _ := orch.checkCriticalTool("send_email", "call-1", `{"to":"test@test.com"}`)
@@ -552,7 +552,7 @@ func TestOrchestrationCheckCriticalToolAllowsAfterAudit(t *testing.T) {
 }
 
 func TestOrchestrationEmailRateLimit(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.auditConfirmed = true
 	orch.sendEmailSuccessCount = maxSendEmailCallsPerTask
 
@@ -566,7 +566,7 @@ func TestOrchestrationEmailRateLimit(t *testing.T) {
 }
 
 func TestOrchestrationEmailDedup(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.auditConfirmed = true
 
 	payload := `{"to":"test@test.com","subject":"Hello"}`
@@ -592,7 +592,7 @@ func TestOrchestrationEmailDedup(t *testing.T) {
 }
 
 func TestOrchestrationRecordToolResultTracksCriticalActions(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 
 	orch.checkCriticalTool("send_email", "call-1", `{"to":"x"}`)
 	if len(orch.pendingCriticalActions) != 1 {
@@ -612,7 +612,7 @@ func TestOrchestrationRecordToolResultTracksCriticalActions(t *testing.T) {
 }
 
 func TestOrchestrationFinishEnforcement(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 
 	canFinish, msgs := orch.checkFinishEnforcement()
 	if canFinish {
@@ -638,7 +638,7 @@ func TestOrchestrationFinishEnforcement(t *testing.T) {
 }
 
 func TestOrchestrationFinishEnforcementTaskTracker(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	orch.selfAuditConfirmedOnce = true
 	orch.taskTrackerUsed = true
@@ -654,7 +654,7 @@ func TestOrchestrationFinishEnforcementTaskTracker(t *testing.T) {
 }
 
 func TestOrchestrationTerminalAuditFailure(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	orch.selfAuditConfirmedOnce = true
 	orch.auditTerminalFailure = true
@@ -671,7 +671,7 @@ func TestOrchestrationTerminalAuditFailure(t *testing.T) {
 }
 
 func TestOrchestrationFinishEnforcementLengthTruncation(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 100)
+	orch := newOrchestrationState(NewLogSession())
 	orch.taskTrackerUsed = true
 	orch.latestTaskTracker = taskTrackerSnapshot{Seen: true, Total: 4, Todo: 1, InProgress: 1, Done: 2}
 	orch.latestTaskTrackerRendered = "Task List:\n  [~] 3. Build HTML email\n  [ ] 4. Send email"

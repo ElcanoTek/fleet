@@ -68,7 +68,7 @@ func newRosterParentForSpawn(t *testing.T, capModel fantasy.LanguageModel) *Agen
 		NativeTools:   tools.DefaultTools(),
 		Subagent:      SubagentOptions{Enabled: true, MaxDepth: 1, MaxChildren: 5},
 	})
-	a.runtimePolicy = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, 1.0, 0)
+	a.runtimePolicy = agentcore.NewScheduledPolicy(a.logSession, 1.0, 0)
 	a.subagent.budgetFraction = 1.0
 	return a
 }

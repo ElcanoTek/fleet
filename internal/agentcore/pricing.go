@@ -195,7 +195,7 @@ func ForecastCost(model string, systemToks, toolToks, promptToks, maxIterations 
 // Custom model pricing overrides (#297).
 //
 // Cost accounting normally trusts the USD figure OpenRouter returns in the
-// per-step provider metadata (openrouterCost). Operators on negotiated /
+// per-step provider metadata (OpenRouterCost). Operators on negotiated /
 // enterprise rates or a private model endpoint pay a different price than the
 // published OpenRouter rate, so the provider-returned cost over- or under-counts
 // their real spend — which in turn makes the cost ceiling (maxCostUSD) and the

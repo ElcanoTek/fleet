@@ -22,7 +22,7 @@ func (f *fakeSkillProposer) Propose(name, description, body, reason string) (str
 // SkillProposer, and reports the proposal id with a "not active yet" notice —
 // mirrors checkNoteProposal.
 func TestCheckSkillProposal_StagesPending(t *testing.T) {
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	fp := &fakeSkillProposer{id: "skill-123"}
 	o.setSkillProposer(fp)
 
@@ -45,7 +45,7 @@ func TestCheckSkillProposal_StagesPending(t *testing.T) {
 	if blocked, _ := o.checkSkillProposal("bash", `{}`); blocked {
 		t.Fatal("non-propose_skill tool must not be intercepted")
 	}
-	bare := newOrchestrationState(nil, 0)
+	bare := newOrchestrationState(nil)
 	blocked, msg = bare.checkSkillProposal("propose_skill", raw)
 	if !blocked || !strings.Contains(msg, "SKILL_PROPOSAL_UNAVAILABLE") {
 		t.Fatalf("unwired proposer should answer unavailable: %v %q", blocked, msg)
