@@ -181,7 +181,7 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 			"tool":   name,
 			"step":   p.stepCount(),
 			"is_err": isErr,
-			"detail": trunc.Runes(collapseWhitespace(text), subagentDetailChars, "…"),
+			"detail": trunc.Runes(trunc.OneLine(text), subagentDetailChars, "…"),
 		})
 	case "text.delta":
 		if t, _ := payload["text"].(string); t != "" {
@@ -192,7 +192,7 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 		// so even short/empty final answers retract the previous draft.
 		p.flushText()
 		text, _ := payload["text"].(string)
-		p.emit(subagentPhaseText, map[string]any{"detail": tailRunes(collapseWhitespace(text), subagentPreviewChars)})
+		p.emit(subagentPhaseText, map[string]any{"detail": trunc.Ends(trunc.OneLine(text), 0, subagentPreviewChars, "…")})
 	case "reasoning.delta", "reasoning.start":
 		if t, _ := payload["text"].(string); t != "" {
 			p.appendText(t, subagentPhaseThinking)
@@ -201,7 +201,7 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 		if msg, _ := payload["message"].(string); msg != "" {
 			p.flushText()
 			p.emit(subagentPhaseNote, map[string]any{
-				"detail": trunc.Runes(collapseWhitespace(msg), subagentDetailChars, "…"),
+				"detail": trunc.Runes(trunc.OneLine(msg), subagentDetailChars, "…"),
 			})
 		}
 	}
@@ -258,7 +258,7 @@ func (p *childProgress) appendText(text, phase string) {
 		return
 	}
 	p.lastEmit = time.Now()
-	preview := tailRunes(collapseWhitespace(p.text.String()), subagentPreviewChars)
+	preview := trunc.Ends(trunc.OneLine(p.text.String()), 0, subagentPreviewChars, "…")
 	p.text.Reset()
 	p.mu.Unlock()
 	if preview != "" {
@@ -289,7 +289,7 @@ func summarizeToolInput(raw string) string {
 	}
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
-		return trunc.Runes(collapseWhitespace(raw), subagentDetailChars, "…")
+		return trunc.Runes(trunc.OneLine(raw), subagentDetailChars, "…")
 	}
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
@@ -300,7 +300,7 @@ func summarizeToolInput(raw string) string {
 	slices.Sort(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+trunc.Runes(collapseWhitespace(scalarString(obj[k])), 60, "…"))
+		parts = append(parts, k+"="+trunc.Runes(trunc.OneLine(scalarString(obj[k])), 60, "…"))
 	}
 	return trunc.Runes(strings.Join(parts, ", "), subagentDetailChars, "…")
 }
@@ -319,20 +319,4 @@ func scalarString(v any) string {
 		}
 		return string(b)
 	}
-}
-
-// collapseWhitespace flattens a multi-line blob to one line so a preview stays
-// one line in the UI.
-func collapseWhitespace(s string) string {
-	return strings.Join(strings.Fields(s), " ")
-}
-
-// tailRunes keeps the LAST limit runes — the live edge of what the child is
-// writing.
-func tailRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return "…" + string(r[len(r)-limit:])
 }

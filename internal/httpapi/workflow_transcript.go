@@ -112,7 +112,7 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 			// Keep the FIRST input of a run: it shows how the tool was
 			// invoked, and later calls in a run are usually variations.
 			if input := strings.TrimSpace(c.Input); input != "" {
-				runInput = truncate.Runes(collapseWhitespace(input), workflowToolInputMaxRunes, "…")
+				runInput = truncate.Runes(truncate.OneLine(input), workflowToolInputMaxRunes, "…")
 			}
 		case "tool_result":
 			var c agent.ToolResultContent
@@ -124,15 +124,9 @@ func workflowTranscriptFromHistory(history []agent.HistoryEntry) string {
 				continue
 			}
 			flush()
-			fmt.Fprintf(&b, "[tool error: %s]\n", truncate.Runes(collapseWhitespace(text), workflowToolErrorMaxRunes, "…"))
+			fmt.Fprintf(&b, "[tool error: %s]\n", truncate.Runes(truncate.OneLine(text), workflowToolErrorMaxRunes, "…"))
 		}
 	}
 	flush()
 	return strings.TrimSpace(b.String())
-}
-
-// collapseWhitespace folds newlines and runs of spaces into single spaces, so
-// a pretty-printed JSON tool input renders as one line instead of thirty.
-func collapseWhitespace(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }

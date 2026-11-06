@@ -1640,7 +1640,7 @@ func sessionRunOutcome(session *models.LogSession) (outcome, detail string) {
 	if session == nil || session.RunOutcome != models.RunOutcomeBlocked {
 		return "", ""
 	}
-	return session.RunOutcome, truncate.Runes(collapseWhitespace(session.RunOutcomeDetail), maxRunOutcomeDetailRunes, "…")
+	return session.RunOutcome, truncate.Runes(truncate.OneLine(session.RunOutcomeDetail), maxRunOutcomeDetailRunes, "…")
 }
 
 // successMessage is the agent's final answer, bounded and flattened to one
@@ -1656,7 +1656,10 @@ func sessionRunOutcome(session *models.LogSession) (outcome, detail string) {
 // and, for a structured task, its output).
 func successMessage(session *models.LogSession) string {
 	const fallback = "Task completed successfully"
-	summary := collapseWhitespace(scorers.LastAssistantMessage(session))
+	// Flattened to one line: a task list renders `result` on one line, and a
+	// well-structured multi-paragraph summary would otherwise read as a wall
+	// of run-together words.
+	summary := truncate.OneLine(scorers.LastAssistantMessage(session))
 	if summary == "" || strings.HasPrefix(summary, "{") || strings.HasPrefix(summary, "[") {
 		summary = fallback
 	}
@@ -1683,13 +1686,6 @@ func hasMessageType(session *models.LogSession, messageType string) bool {
 		}
 	}
 	return false
-}
-
-// collapseWhitespace folds newlines and runs of spaces into single spaces. A
-// task list renders `result` on one line; without this, a well-structured
-// multi-paragraph summary reads as a wall of run-together words.
-func collapseWhitespace(s string) string {
-	return strings.Join(strings.Fields(s), " ")
 }
 
 // reportWorkspacePath persists the per-run workspace path (#287) on the task row

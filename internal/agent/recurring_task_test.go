@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // TestRecurringTaskSchema locks the #455 synthesizer's output contract: the
@@ -32,11 +33,11 @@ func TestRecurringTaskSchema(t *testing.T) {
 // TestKeepRecentTranscript verifies truncation keeps the TAIL (recent turns),
 // which is where the refined result lives — not the exploratory opening.
 func TestKeepRecentTranscript(t *testing.T) {
-	if got := keepRecentTranscript("short", 100); got != "short" {
+	if got := trunc.Ends("short", 0, 100, recurringTranscriptOmitted); got != "short" {
 		t.Errorf("under-limit input should pass through, got %q", got)
 	}
 	long := strings.Repeat("a", 50) + "FINAL_RESULT"
-	got := keepRecentTranscript(long, 20)
+	got := trunc.Ends(long, 0, 20, recurringTranscriptOmitted)
 	if !strings.HasSuffix(got, "FINAL_RESULT") {
 		t.Errorf("truncation must keep the recent tail; got %q", got)
 	}

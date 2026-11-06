@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // LibraryPromptInput is everything the synthesizer needs to turn a chat into
@@ -115,13 +116,13 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 		fmt.Fprintf(&b, "- Connectors enabled: %s\n", strings.Join(names, ", "))
 	}
 	b.WriteString("\nCONVERSATION TRANSCRIPT:\n")
-	// Keep BOTH ENDS when truncating. keepRecentTranscript (the recurring-task
-	// path) keeps only the tail, which is right when you want the final
+	// Keep BOTH ENDS when truncating. The recurring-task path
+	// (recurring_task.go) keeps only the tail, which is right when you want the final
 	// refined ask — but a workflow's opening turns are where the objective and
 	// the inputs are stated, and losing them costs the template its first two
 	// sections. The middle of a long run is the most repetitive part and the
 	// cheapest to drop.
-	b.WriteString(keepTranscriptEnds(in.Transcript, libraryTranscriptMaxRunes))
+	b.WriteString(trunc.Ends(in.Transcript, libraryTranscriptHeadRunes, libraryTranscriptTailRunes, libraryTranscriptOmitted))
 
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(sys),
@@ -180,20 +181,16 @@ const libraryPromptMaxOutputTokens = 3000
 // tool sequence as well as the text turns — that sequence IS the workflow.
 const libraryTranscriptMaxRunes = 24000
 
-// keepTranscriptEnds trims the MIDDLE out of an over-long transcript, keeping
-// the opening (objective, inputs, initial framing) and the close (the refined
-// method and the delivered result). A third of the budget goes to the head and
-// the rest to the tail: the tail is where corrections and the final shape
-// live, but a workflow whose first turns are missing loses what it is FOR.
-func keepTranscriptEnds(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	head := maxRunes / 3
-	tail := maxRunes - head
-	return string(r[:head]) + "\n\n…[middle of the conversation omitted]…\n\n" + string(r[len(r)-tail:])
-}
+// An over-long transcript loses its MIDDLE, keeping the opening (objective,
+// inputs, initial framing) and the close (the refined method and the delivered
+// result). A third of the budget goes to the head and the rest to the tail:
+// the tail is where corrections and the final shape live, but a workflow whose
+// first turns are missing loses what it is FOR.
+const (
+	libraryTranscriptHeadRunes = libraryTranscriptMaxRunes / 3
+	libraryTranscriptTailRunes = libraryTranscriptMaxRunes - libraryTranscriptHeadRunes
+	libraryTranscriptOmitted   = "\n\n…[middle of the conversation omitted]…\n\n"
+)
 
 // trimmedNames drops blanks and bounds each entry, so a malformed catalog
 // cannot pad the prompt.

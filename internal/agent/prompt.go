@@ -16,6 +16,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // appendAgentNotes concatenates the admin-curated knowledge base after the
@@ -820,21 +821,6 @@ const (
 	maxOptionalConnectorDescRunes  = 200
 )
 
-func clampPromptRunes(s string, maxRunes int) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	s = strings.ReplaceAll(s, "\r\n", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > maxRunes {
-		return string(r[:maxRunes]) + "…"
-	}
-	return s
-}
-
 func (m *Manager) appendAvailableOptionalConnectors(sb *strings.Builder, persona string, enabledOptIns []string, hosted hostedMCPRoster, hidden []string) {
 	if agentcore.InteractiveHiddenIn(hidden, tools.EnableMCPConnectorsToolName) {
 		return
@@ -857,8 +843,8 @@ func writeAvailableOptionalConnectorsSection(sb *strings.Builder, available []Op
 	for _, srv := range available {
 		var label, desc string
 		if !srv.Remote {
-			label = clampPromptRunes(srv.DisplayName, maxOptionalConnectorLabelRunes)
-			desc = clampPromptRunes(srv.Description, maxOptionalConnectorDescRunes)
+			label = trunc.Runes(trunc.OneLine(srv.DisplayName), maxOptionalConnectorLabelRunes, "…")
+			desc = trunc.Runes(trunc.OneLine(srv.Description), maxOptionalConnectorDescRunes, "…")
 		}
 		var metaParts []string
 		if label != "" && !strings.EqualFold(label, srv.Name) {

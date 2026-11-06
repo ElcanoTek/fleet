@@ -130,3 +130,64 @@ func TestTail(t *testing.T) {
 		}
 	}
 }
+
+func TestTailRunes(t *testing.T) {
+	cases := []struct {
+		s    string
+		n    int
+		want string
+	}{
+		{"", 3, ""},
+		{"abc", 3, "abc"},
+		{"abcdef", 3, "def"},
+		{"héllo 世界", 2, "世界"},
+		{"🚀🚀x", 2, "🚀x"},
+		{"abc", 0, ""},
+		{"abc", -1, ""},
+	}
+	for _, tc := range cases {
+		if got := TailRunes(tc.s, tc.n); got != tc.want {
+			t.Errorf("TailRunes(%q, %d) = %q, want %q", tc.s, tc.n, got, tc.want)
+		}
+		if !utf8.ValidString(TailRunes(tc.s, tc.n)) {
+			t.Errorf("TailRunes(%q, %d) is not valid UTF-8", tc.s, tc.n)
+		}
+	}
+}
+
+func TestEnds(t *testing.T) {
+	cases := []struct {
+		s          string
+		head, tail int
+		marker     string
+		want       string
+	}{
+		{"", 2, 2, "…", ""},
+		{"abcd", 2, 2, "…", "abcd"},       // exactly fits: unchanged, no marker
+		{"abcde", 2, 2, "…", "ab…de"},     // one over: middle dropped
+		{"abcdef", 0, 3, "…", "…def"},     // head 0: marker-led tail
+		{"abcdef", 3, 0, "…", "abc…"},     // tail 0: head plus marker
+		{"世界世界世界", 1, 2, " … ", "世 … 世界"}, // rune-based, not byte-based
+		{"abcdef", -1, 2, "|", "|ef"},
+	}
+	for _, tc := range cases {
+		if got := Ends(tc.s, tc.head, tc.tail, tc.marker); got != tc.want {
+			t.Errorf("Ends(%q, %d, %d, %q) = %q, want %q", tc.s, tc.head, tc.tail, tc.marker, got, tc.want)
+		}
+	}
+}
+
+func TestOneLine(t *testing.T) {
+	cases := []struct{ s, want string }{
+		{"", ""},
+		{"   ", ""},
+		{"one", "one"},
+		{"  a\n\n b\t\tc\r\n", "a b c"},
+		{"keep  single\u00a0spaced", "keep single spaced"},
+	}
+	for _, tc := range cases {
+		if got := OneLine(tc.s); got != tc.want {
+			t.Errorf("OneLine(%q) = %q, want %q", tc.s, got, tc.want)
+		}
+	}
+}

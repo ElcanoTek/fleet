@@ -86,7 +86,7 @@ workflow that depends on a connector says so in its Notes rather than failing
 for the next person.
 
 When the transcript exceeds its budget, **both ends are kept** and the middle
-is dropped (`keepTranscriptEnds`). The recurring-task path keeps only the tail,
+is dropped (`truncate.Ends`). The recurring-task path keeps only the tail,
 because the refined ask lives at the end of an exploration; a workflow's
 opening turns carry its objective and inputs, so losing them costs the template
 its first two sections. The middle of a long run is its most repetitive part.

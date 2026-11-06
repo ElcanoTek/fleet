@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // RecurringTaskProposal is a synthesized suggestion for turning a chat
@@ -83,7 +84,7 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	b.WriteString("CONVERSATION TRANSCRIPT:\n")
 	// Keep the MOST RECENT turns when truncating: the refined result the user
 	// wants to make recurring is at the END of a long exploration, not the start.
-	b.WriteString(keepRecentTranscript(transcript, recurringTranscriptMaxRunes))
+	b.WriteString(trunc.Ends(transcript, 0, recurringTranscriptMaxRunes, recurringTranscriptOmitted))
 
 	ag := fantasy.NewAgent(model,
 		fantasy.WithSystemPrompt(sys),
@@ -138,13 +139,6 @@ const recurringTaskMaxOutputTokens = 1200
 // recurringTranscriptMaxRunes bounds the transcript fed to the synthesizer.
 const recurringTranscriptMaxRunes = 12000
 
-// keepRecentTranscript returns the last maxRunes of s (rune-safe), so a long
-// conversation is synthesized from its refined tail rather than its exploratory
-// opening. A marker flags that earlier turns were dropped.
-func keepRecentTranscript(s string, maxRunes int) string {
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return "…[earlier turns omitted]…\n" + string(r[len(r)-maxRunes:])
-}
+// recurringTranscriptOmitted leads an over-long transcript cut to its last
+// recurringTranscriptMaxRunes runes, flagging that earlier turns were dropped.
+const recurringTranscriptOmitted = "…[earlier turns omitted]…\n"
