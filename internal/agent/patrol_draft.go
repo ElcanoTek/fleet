@@ -12,6 +12,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // PatrolDraftInput is what the Patrol Launchpad (docs/PATROL-LAUNCHPAD.md)
@@ -141,7 +142,7 @@ func parsePatrolDraft(raw string) (*PatrolDraft, error) {
 	if err := json.Unmarshal(validated, &d); err != nil {
 		return nil, fmt.Errorf("patrol-draft synthesis: parse: %w", err)
 	}
-	d.Title = truncateAtRune(strings.TrimSpace(d.Title), 80)
+	d.Title = trunc.Clamp(strings.TrimSpace(d.Title), 80, "")
 	d.Summary = strings.TrimSpace(d.Summary)
 	d.Prompt = strings.TrimSpace(d.Prompt)
 	if d.Prompt == "" {

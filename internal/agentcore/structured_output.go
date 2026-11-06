@@ -9,12 +9,12 @@ import (
 	"maps"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 const (
@@ -559,9 +559,5 @@ func clampCorrectionDetail(s string) string {
 		return s
 	}
 	const truncationMarker = "..."
-	cut := maxStructuredCorrectionDetailBytes - len(truncationMarker)
-	for cut > 0 && !utf8.RuneStart(s[cut]) {
-		cut--
-	}
-	return s[:cut] + truncationMarker
+	return trunc.Clamp(s, maxStructuredCorrectionDetailBytes-len(truncationMarker), truncationMarker)
 }

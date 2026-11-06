@@ -11,6 +11,7 @@ import (
 	"unicode"
 
 	"github.com/ElcanoTek/fleet/internal/croncount"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // frozenApprovalReview is the last thing a terminal user sees before a
@@ -218,14 +219,14 @@ func formatApprovalSummary(tool string, summary any) string {
 		}
 		line := fmt.Sprintf("%q — %s", name, when)
 		if preview := strField(m, "prompt_preview"); preview != "" {
-			line += " — " + truncateRunes(preview, 80)
+			line += " — " + truncate.Runes(preview, 80, "…")
 		}
 		return line
 	case "manage_tasks":
 		action := strField(m, "action")
 		match := strField(m, "match")
 		if action != "" {
-			return truncateRunes(strings.TrimSpace(action+" "+match), 140)
+			return truncate.Runes(strings.TrimSpace(action+" "+match), 140, "…")
 		}
 	case "send_email", "preview_email":
 		to := displayValue(m["to"])
@@ -233,10 +234,10 @@ func formatApprovalSummary(tool string, summary any) string {
 		if to == "null" && subject == "" {
 			return genericSummaryLine(m)
 		}
-		return fmt.Sprintf("to %s — %q", to, truncateRunes(subject, 80))
+		return fmt.Sprintf("to %s — %q", to, truncate.Runes(subject, 80, "…"))
 	case "bash":
 		if cmd := strField(m, "command"); cmd != "" {
-			return truncateRunes(cmd, 120)
+			return truncate.Runes(cmd, 120, "…")
 		}
 	case "suggest_advanced_model":
 		if slug := strField(m, "recommend_model"); slug != "" {
@@ -276,7 +277,7 @@ func genericSummaryLine(m map[string]any) string {
 	for _, k := range keys {
 		parts = append(parts, k+"="+displayValue(m[k]))
 	}
-	return truncateRunes(strings.Join(parts, " "), 160)
+	return truncate.Runes(strings.Join(parts, " "), 160, "…")
 }
 
 func displayValue(v any) string {
@@ -301,14 +302,6 @@ func strField(m map[string]any, key string) string {
 		return strings.TrimSpace(s)
 	}
 	return ""
-}
-
-func truncateRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "…"
 }
 
 // sanitizeTerminal keeps one-liners from driving the terminal: C0/C1/DEL and

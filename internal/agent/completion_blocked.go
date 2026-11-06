@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // CompletionBlockedWhen is the task's completion.blocked_when rule (EXECUTION
@@ -122,7 +123,7 @@ func (r *completionBlockedRule) match(session *LogSession, completion map[string
 	detail := r.argument + "=" + value
 	if r.detailArgument != "" {
 		if text, _ := args[r.detailArgument].(string); strings.TrimSpace(text) != "" {
-			detail += ": " + truncateRunes(collapseWhitespace(text), maxBlockedDetailRunes)
+			detail += ": " + trunc.Runes(collapseWhitespace(text), maxBlockedDetailRunes, "…")
 		}
 	}
 	return agentcore.RedactSecrets(detail), true

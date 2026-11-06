@@ -9,6 +9,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/genui"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // ShowUIToolName is the canonical tool name. Exported so the web contract
@@ -186,7 +187,7 @@ func ShowUIResult(callID string, input []byte) fantasy.ToolResponse {
 	// The acknowledgement stays small whatever the card holds: a result over
 	// the tool-output ceiling is replaced by an envelope, and the browser
 	// draws a card only when its result starts with UI_DISPLAYED.
-	fmt.Fprintf(&b, "UI_DISPLAYED card_id=%s: the user can now see the card %q.", callID, genui.TruncateRunes(card.Title, 120))
+	fmt.Fprintf(&b, "UI_DISPLAYED card_id=%s: the user can now see the card %q.", callID, truncate.Runes(card.Title, 120, "…"))
 	if card.Replaces != "" {
 		fmt.Fprintf(&b, " It replaces card %s, which is now collapsed.", card.Replaces)
 	}

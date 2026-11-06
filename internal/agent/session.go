@@ -13,6 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // EventSink is the callback interface the HTTP layer implements to turn
@@ -737,8 +738,5 @@ func mustEntry(role, typ string, content any) HistoryEntry {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…[truncated]"
+	return trunc.Clamp(s, n, "…[truncated]")
 }

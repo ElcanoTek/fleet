@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // Sub-agent progress streaming (#1043 follow-up).
@@ -130,7 +131,7 @@ func (p *childProgress) emit(phase string, fields map[string]any) {
 // the spawn chip from "queued" to a live card the moment the run begins.
 func (p *childProgress) started(task, workdir, model string) {
 	p.emit(subagentPhaseStarted, map[string]any{
-		"task":    truncateRunes(task, subagentTaskPreviewCh),
+		"task":    trunc.Runes(task, subagentTaskPreviewCh, "…"),
 		"workdir": workdir,
 		"model":   model,
 	})
@@ -180,7 +181,7 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 			"tool":   name,
 			"step":   p.stepCount(),
 			"is_err": isErr,
-			"detail": truncateRunes(collapseWhitespace(text), subagentDetailChars),
+			"detail": trunc.Runes(collapseWhitespace(text), subagentDetailChars, "…"),
 		})
 	case "text.delta":
 		if t, _ := payload["text"].(string); t != "" {
@@ -200,7 +201,7 @@ func (p *childProgress) Observe(eventType string, payload map[string]any) {
 		if msg, _ := payload["message"].(string); msg != "" {
 			p.flushText()
 			p.emit(subagentPhaseNote, map[string]any{
-				"detail": truncateRunes(collapseWhitespace(msg), subagentDetailChars),
+				"detail": trunc.Runes(collapseWhitespace(msg), subagentDetailChars, "…"),
 			})
 		}
 	}
@@ -288,7 +289,7 @@ func summarizeToolInput(raw string) string {
 	}
 	var obj map[string]any
 	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
-		return truncateRunes(collapseWhitespace(raw), subagentDetailChars)
+		return trunc.Runes(collapseWhitespace(raw), subagentDetailChars, "…")
 	}
 	keys := make([]string, 0, len(obj))
 	for k := range obj {
@@ -299,9 +300,9 @@ func summarizeToolInput(raw string) string {
 	slices.Sort(keys)
 	parts := make([]string, 0, len(keys))
 	for _, k := range keys {
-		parts = append(parts, k+"="+truncateRunes(collapseWhitespace(scalarString(obj[k])), 60))
+		parts = append(parts, k+"="+trunc.Runes(collapseWhitespace(scalarString(obj[k])), 60, "…"))
 	}
-	return truncateRunes(strings.Join(parts, ", "), subagentDetailChars)
+	return trunc.Runes(strings.Join(parts, ", "), subagentDetailChars, "…")
 }
 
 // scalarString renders a JSON value compactly for the argument summary.
@@ -324,16 +325,6 @@ func scalarString(v any) string {
 // one line in the UI.
 func collapseWhitespace(s string) string {
 	return strings.Join(strings.Fields(s), " ")
-}
-
-// truncateRunes bounds a preview by RUNES (not bytes) so a multi-byte character
-// is never split into invalid UTF-8 on its way into a JSON event payload.
-func truncateRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "…"
 }
 
 // tailRunes keeps the LAST limit runes — the live edge of what the child is

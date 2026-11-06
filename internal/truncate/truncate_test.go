@@ -81,3 +81,52 @@ func TestClamp_NonPositiveBudget(t *testing.T) {
 		t.Errorf("Clamp(-1) = %q, want marker only", got)
 	}
 }
+
+func TestRunes(t *testing.T) {
+	cases := []struct {
+		in   string
+		n    int
+		want string
+	}{
+		{"hello", 10, "hello"},
+		{"hello", 5, "hello"},
+		{"hello", 3, "hel…"},
+		{"héllo wörld", 4, "héll…"},
+		{"日本語のテキスト", 3, "日本語…"},
+		{"🙂🙂🙂", 1, "🙂…"},
+		{"abc", 0, "…"},
+		{"", 0, ""},
+	}
+	for _, tc := range cases {
+		if got := Runes(tc.in, tc.n, "…"); got != tc.want {
+			t.Errorf("Runes(%q, %d) = %q, want %q", tc.in, tc.n, got, tc.want)
+		}
+		if !utf8.ValidString(Runes(tc.in, tc.n, "")) {
+			t.Errorf("Runes(%q, %d) produced invalid UTF-8", tc.in, tc.n)
+		}
+	}
+}
+
+func TestTail(t *testing.T) {
+	cases := []struct {
+		in   string
+		max  int
+		want string
+	}{
+		{"hello", 10, "hello"},
+		{"hello", 3, "llo"},
+		{"日本語", 4, "語"}, // 9 bytes; the last 4 would start mid-rune
+		{"ab🙂", 3, ""},  // the emoji is 4 bytes and does not fit
+		{"ab🙂", 4, "🙂"},
+		{"abc", 0, ""},
+	}
+	for _, tc := range cases {
+		got := Tail(tc.in, tc.max)
+		if got != tc.want {
+			t.Errorf("Tail(%q, %d) = %q, want %q", tc.in, tc.max, got, tc.want)
+		}
+		if !utf8.ValidString(got) || len(got) > tc.max && len(tc.in) > tc.max {
+			t.Errorf("Tail(%q, %d) = %q is invalid or over budget", tc.in, tc.max, got)
+		}
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // "Phone a friend" super-LLM review (scheduled-only; part of #175).
@@ -70,11 +71,7 @@ type reviewResult struct {
 }
 
 func truncateForReviewer(s string, maxChars int) string {
-	trimmed := strings.TrimSpace(s)
-	if len(trimmed) <= maxChars {
-		return trimmed
-	}
-	return trimmed[:maxChars] + "\n…[truncated for reviewer]"
+	return trunc.Clamp(strings.TrimSpace(s), maxChars, "\n…[truncated for reviewer]")
 }
 
 // latestAssistantText returns the most recent non-empty assistant message text

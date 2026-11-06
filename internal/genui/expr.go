@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // The card expression language. A generated card is data, never code, but a
@@ -111,7 +113,7 @@ func lex(src string) ([]token, error) {
 			// A literal too large for a float64 would be Infinity in the
 			// browser: refused on both sides (expr.ts lex).
 			if f, err := strconv.ParseFloat(lit, 64); err != nil || math.IsInf(f, 0) {
-				return nil, fmt.Errorf("number %s at %d is too large", truncateRunes(lit, 20), start)
+				return nil, fmt.Errorf("number %s at %d is too large", truncate.Runes(lit, 20, "…"), start)
 			}
 			toks = append(toks, token{tNum, lit, start})
 		case c == '\'' || c == '"':
@@ -433,7 +435,7 @@ func TemplateExprs(s string) ([]string, error) {
 		}
 		j := strings.Index(rest[i+2:], "}}")
 		if j < 0 {
-			return nil, fmt.Errorf("unclosed {{ in %q", truncateRunes(s, 80))
+			return nil, fmt.Errorf("unclosed {{ in %q", truncate.Runes(s, 80, "…"))
 		}
 		out = append(out, rest[i+2:i+2+j])
 		rest = rest[i+2+j+2:]
