@@ -434,7 +434,7 @@ for a `url:`-referenced var survives the `.env` allowlist.
   `internal/clientconfig/user_tokens.go`.
 - Where the signed-in user comes from and how it crosses the broker:
   `internal/httpapi/chat.go` (`runTurnAsync`'s `mcpUser`),
-  `internal/httpapi/approvals.go` (`approvalMCPScope`),
+  `internal/httpapi/approval_execute.go` (`approvalMCPScope`),
   `internal/mcpbroker/protocol.go` (`ScopeSpec.User`) +
   `server.go` (`validateScopeSpec`), `cmd/fleet/mcp_broker.go` (`OpenScope`).
 - Variant guard + marker: `internal/agentcore/mcp_selection.go`.

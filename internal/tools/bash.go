@@ -204,7 +204,7 @@ For long-running commands (servers, watch tasks), set timeout_seconds.`
 // handler — same safety checks and audit logging apply as the agent-side
 // path.
 //
-// The caller (httpapi/approvals.go) MUST Take() a sandbox from the
+// The caller (httpapi/approval_execute.go) MUST Take() a sandbox from the
 // manager's warm pool and pass it here, then Close it after the call.
 // nil is a programmer error and returns an error rather than silently
 // running on the host.

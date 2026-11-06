@@ -9,7 +9,7 @@ agent loop's `deal_ids` scaling, #1712) to the approval path, and
 ## Why
 
 An approved card runs its call outside the agent loop, in
-`internal/httpapi/approvals.go` `runStagedTool`, after the click. That path
+`internal/httpapi/approval_execute.go` `runStagedTool`, after the click. That path
 was written for SendGrid ("usually <1s") and ran the whole thing (reopening
 the staged seat's scope and the call itself) under one flat
 `context.WithTimeout(ctx, 60*time.Second)`. It never consulted the loop's
