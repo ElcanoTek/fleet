@@ -746,7 +746,7 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 	enabled := make(map[string]bool, len(enabledOptIns))
 	safeOwners := make(map[string]map[string]bool, len(source)+len(enabledOptIns))
 	noteSafeOwner := func(raw string) {
-		safe := promptSafeName(raw)
+		safe := agentcore.PromptSafeName(raw)
 		if safe == "" {
 			return
 		}
@@ -777,7 +777,7 @@ func (m *Manager) availableOptionalForPrompt(persona string, enabledOptIns []str
 		if rawName == "" || rawName == OptionalNativeImageGenName || srv.Remote || len(srv.Tools) == 0 || enabled[rawName] {
 			continue
 		}
-		safeName := promptSafeName(rawName)
+		safeName := agentcore.PromptSafeName(rawName)
 		if safeName == "" || enabled[safeName] || seen[safeName] || len(safeOwners[safeName]) > 1 {
 			continue
 		}

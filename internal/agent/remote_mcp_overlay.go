@@ -796,7 +796,7 @@ func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
 	}
 	var r hostedMCPRoster
 	for _, name := range o.Skipped {
-		r.skipped = append(r.skipped, skippedConnector{name: promptSafeName(name), reason: o.SkipReason(name)})
+		r.skipped = append(r.skipped, skippedConnector{name: agentcore.PromptSafeName(name), reason: o.SkipReason(name)})
 	}
 	// Stable, and keyed on the reason too: two raw names that reduce to the
 	// same prompt-safe name must not swap between builds (prompt-cache bytes).
@@ -808,13 +808,6 @@ func hostedRosterFromOverlay(o *RemoteMCPOverlay) hostedMCPRoster {
 	})
 	return r
 }
-
-// promptSafeName reduces a hosted registration or tool name to the identifier
-// grammar model APIs accept for tool names — ASCII letters, digits, `_`, `-`
-// and `.`, at most 64 bytes — replacing anything else with `_`. A name that
-// already fits comes back unchanged; one that does not could never have been
-// a callable tool anyway, and must not reach the system prompt as written.
-func promptSafeName(name string) string { return agentcore.PromptSafeName(name) }
 
 // Validate checks the ownership contract an injected opener must satisfy. A
 // broker-backed overlay always represents a per-run scope and therefore needs

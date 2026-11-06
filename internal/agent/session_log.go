@@ -41,11 +41,6 @@ const (
 	roleAssistant = "assistant"
 )
 
-// secretPattern + redactSecrets mirror agentcore's redaction so the scheduled
-// log writer scrubs recoverable secrets before persisting. agentcore exposes
-// the redaction via RedactSecrets.
-func redactSecrets(text string) string { return agentcore.RedactSecrets(text) }
-
 // session-log file sizing (cutlass values).
 const (
 	maxSessionLogFileSize      = 10 * 1024 * 1024
@@ -94,7 +89,7 @@ func redactLogSession(session *LogSession) *LogSession {
 	msgs := session.SnapshotMessages()
 	redacted := &LogSession{
 		ID:                  session.ID,
-		Title:               redactSecrets(session.Title),
+		Title:               agentcore.RedactSecrets(session.Title),
 		ParentTaskID:        session.ParentTaskID,
 		PromptTokens:        session.PromptTokens,
 		CompletionTokens:    session.CompletionTokens,
@@ -110,12 +105,12 @@ func redactLogSession(session *LogSession) *LogSession {
 	}
 	for i, msg := range msgs {
 		msgCopy := msg
-		msgCopy.Content = redactSecrets(msgCopy.Content)
-		msgCopy.Reasoning = redactSecrets(msgCopy.Reasoning)
+		msgCopy.Content = agentcore.RedactSecrets(msgCopy.Content)
+		msgCopy.Reasoning = agentcore.RedactSecrets(msgCopy.Reasoning)
 		if len(msgCopy.ToolCalls) > 0 {
 			msgCopy.ToolCalls = append([]LogToolCall(nil), msgCopy.ToolCalls...)
 			for j := range msgCopy.ToolCalls {
-				msgCopy.ToolCalls[j].Arguments = redactSecrets(msgCopy.ToolCalls[j].Arguments)
+				msgCopy.ToolCalls[j].Arguments = agentcore.RedactSecrets(msgCopy.ToolCalls[j].Arguments)
 			}
 		}
 		redacted.Messages[i] = msgCopy

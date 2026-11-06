@@ -397,7 +397,7 @@ func NewAgent(opts Options) *Agent {
 		fallbackModels:       append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
 		mcpClient:            opts.MCPClient,
 		mcpBroker:            opts.MCPBroker,
-		mcpCatalog:           cloneScheduledMCPCatalog(opts.MCPCatalog),
+		mcpCatalog:           cloneMCPCatalog(opts.MCPCatalog),
 		mcpToolAllowlist:     opts.MCPToolAllowlist,
 		optionalServers:      opts.OptionalServers,
 		mcpRosterNarrowing:   opts.MCPRosterNarrowing,
@@ -444,15 +444,6 @@ func NewAgent(opts Options) *Agent {
 		a.subagent.parentTaskID = opts.TaskID.String()
 	}
 	return a
-}
-
-func cloneScheduledMCPCatalog(src []mcp.ServerTool) []mcp.ServerTool {
-	if src == nil {
-		return nil
-	}
-	dst := make([]mcp.ServerTool, len(src))
-	copy(dst, src)
-	return dst
 }
 
 // LogSession exposes the run's session log.
