@@ -35,6 +35,7 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { invalidateMe } from "@/app/shared/lib/account";
+import { redirectToLogin } from "@/app/settings/lib/getGated";
 
 export type Me = {
   email: string;
@@ -72,7 +73,7 @@ export default function TeamSettingsPage() {
     try {
       const res = await fetch("/api/me/team", { cache: "no-store" });
       if (res.status === 401) {
-        window.location.href = "/login";
+        redirectToLogin();
         return;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Request failed"));
@@ -111,7 +112,7 @@ export default function TeamSettingsPage() {
         // The session lapsed between the read and the write: the load path
         // redirects, so this one does too rather than rendering "Save failed
         // (401)" over a form that can no longer save anything.
-        window.location.href = "/login";
+        redirectToLogin();
         return;
       }
       if (res.status === 409) {

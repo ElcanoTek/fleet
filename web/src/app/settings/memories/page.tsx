@@ -19,6 +19,7 @@ import {
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { fetchMe } from "@/app/shared/lib/account";
+import { redirectToLogin } from "@/app/settings/lib/getGated";
 
 type UserMemory = {
   id: string;
@@ -76,7 +77,7 @@ export default function MemoriesPage() {
     try {
       const res = await fetch("/api/memories", { cache: "no-store" });
       if (res.status === 401) {
-        window.location.href = "/login";
+        redirectToLogin();
         return;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load memories"));

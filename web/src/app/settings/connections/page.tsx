@@ -62,6 +62,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { responseErrorText } from "@/app/lib/responseError";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson } from "@/app/settings/lib/getGated";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -222,20 +223,12 @@ function provenanceVariant(provenance: string): BadgeVariant {
 }
 
 async function fetchServers(): Promise<ListResponse | null> {
-  const res = await fetch("/api/remote-mcp-servers", { cache: "no-store" });
-  if (res.status === 401) {
-    window.location.href = "/login";
-    return null;
-  }
-  if (res.status === 503) {
-    throw new Error(
-      "Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL).",
-    );
-  }
-  if (!res.ok) {
-    throw new Error(`Failed to load connections: ${res.status}`);
-  }
-  return (await res.json()) as ListResponse;
+  return getGatedJson<ListResponse>("/api/remote-mcp-servers", {
+    label: "Connections",
+    statusText: {
+      503: "Remote MCP OAuth is not configured on this server (set FLEET_MCP_OAUTH_ENCRYPTION_KEY and FLEET_PUBLIC_BASE_URL).",
+    },
+  });
 }
 
 // granteeLabel renders the everyone wildcard readably.

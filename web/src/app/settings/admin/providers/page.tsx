@@ -36,6 +36,7 @@ import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson } from "@/app/settings/lib/getGated";
 
 export type LLMProvider = {
   id: string;
@@ -325,19 +326,11 @@ function contextWindowFor(d: Draft): number {
 }
 
 async function fetchProviders(): Promise<LLMProvider[] | null> {
-  const response = await fetch("/api/admin/llm-providers", { cache: "no-store" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return null;
-  }
-  if (response.status === 403) {
-    throw new Error("You are not an admin.");
-  }
-  if (!response.ok) {
-    throw new Error(`Providers request failed: ${response.status}`);
-  }
-  const data = (await response.json()) as { providers?: LLMProvider[] };
-  return data.providers ?? [];
+  const data = await getGatedJson<{ providers?: LLMProvider[] }>("/api/admin/llm-providers", {
+    label: "Providers",
+    statusText: { 403: "You are not an admin." },
+  });
+  return data ? (data.providers ?? []) : null;
 }
 
 // A finished test-connection probe for one row, as the backend reports it.

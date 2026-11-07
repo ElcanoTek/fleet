@@ -37,6 +37,7 @@ import {
 import { useIsAdmin } from "../useIsAdmin";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson, redirectToLogin } from "@/app/settings/lib/getGated";
 
 type SharedFile = {
   id: string;
@@ -60,17 +61,8 @@ type Library = {
 };
 
 async function fetchLibrary(): Promise<Library | null> {
-  const response = await fetch("/api/shared-files", { cache: "no-store" });
-  if (response.status === 401) {
-    // Same navigation-as-a-call shape the features page uses.
-    window.location.assign("/login");
-    return null;
-  }
-  if (!response.ok) {
-    const text = (await response.text()).trim();
-    throw new Error(text || `Shared files request failed: ${response.status}`);
-  }
-  const data = (await response.json()) as Partial<Library>;
+  const data = await getGatedJson<Partial<Library>>("/api/shared-files", { label: "Shared files" });
+  if (!data) return null;
   return {
     files: data.files ?? [],
     total_bytes: data.total_bytes ?? 0,
@@ -138,7 +130,7 @@ export default function SharedFilesPage() {
         method: "DELETE",
       });
       if (res.status === 401) {
-        window.location.assign("/login");
+        redirectToLogin();
         return;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
@@ -173,7 +165,7 @@ export default function SharedFilesPage() {
         body: JSON.stringify(patch),
       });
       if (res.status === 401) {
-        window.location.assign("/login");
+        redirectToLogin();
         return;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
@@ -477,7 +469,7 @@ function UploadPanel({
       if (desc) form.append("description", desc);
       const res = await fetch("/api/shared-files", { method: "POST", body: form });
       if (res.status === 401) {
-        window.location.assign("/login");
+        redirectToLogin();
         return;
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Upload failed"));

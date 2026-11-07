@@ -36,6 +36,7 @@ import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { getGatedJson } from "@/app/settings/lib/getGated";
 
 export type AdminUser = {
   email: string;
@@ -356,19 +357,11 @@ function generatePassword(): string {
 }
 
 async function fetchUsers(): Promise<AdminUser[] | null> {
-  const response = await fetch("/api/admin/users", { cache: "no-store" });
-  if (response.status === 401) {
-    window.location.href = "/login";
-    return null;
-  }
-  if (response.status === 403) {
-    throw new Error("You are not an admin.");
-  }
-  if (!response.ok) {
-    throw new Error(`Users request failed: ${response.status}`);
-  }
-  const data = (await response.json()) as { users?: AdminUser[] };
-  return data.users ?? [];
+  const data = await getGatedJson<{ users?: AdminUser[] }>("/api/admin/users", {
+    label: "Users",
+    statusText: { 403: "You are not an admin." },
+  });
+  return data ? (data.users ?? []) : null;
 }
 
 // One table row: the union of a provisioned account and its usage stats,
