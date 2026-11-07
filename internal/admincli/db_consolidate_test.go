@@ -83,6 +83,9 @@ func healthyFake() *fakePG {
 		fakeRule{frag: "pg_database_size", rows: [][]string{{"1048576", "/var/lib/pgsql/data"}}},
 		fakeRule{frag: "pg_get_userbyid(owner) <>", rows: nil},
 		fakeRule{frag: "public_objects", rows: [][]string{{"0"}}},
+		fakeRule{frag: "store_objects", rows: [][]string{{"0"}}},
+		fakeRule{frag: "pg_postmaster_start_time", rows: [][]string{{"1793000000.5 port 5432 cluster 16/main"}}},
+		fakeRule{frag: "pg_control_system", rows: [][]string{{"7701435355509418483"}}},
 	)
 	f.rules = append(f.rules, inv("chat")...)
 	f.rules = append(f.rules, inv("sched")...)
@@ -103,8 +106,11 @@ func testDeps(f *fakePG, out *bytes.Buffer) consolidateDeps {
 		unitState:    func(string) string { return "inactive" },
 		freeBytes:    func(string) (uint64, error) { return 1 << 40, nil },
 		verifyStores: func(context.Context, string, string) error { return nil },
-		now:          func() time.Time { return time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC) },
-		out:          out,
+		// The DSN side of the instance check answers from the same rules as
+		// the superuser side: one cluster.
+		dsnQuery: func(ctx context.Context, _ string, q string) ([][]string, error) { return f.Query(ctx, "postgres", q) },
+		now:      func() time.Time { return time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC) },
+		out:      out,
 	}
 }
 
@@ -197,7 +203,7 @@ func TestConsolidatePreflightRefusals(t *testing.T) {
 		{"target half filled", func(f *fakePG, _ *consolidateDeps) {
 			f.prepend(
 				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}, {"fleet", "sched", "t"}}},
-				fakeRule{db: "fleet", frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"12", "f", "0"}}},
+				fakeRule{db: "fleet", frag: "store_objects", rows: [][]string{{"12"}}},
 			)
 		}, nil, "--force-clean"},
 		{"target owned by someone else", func(f *fakePG, _ *consolidateDeps) {
@@ -206,9 +212,9 @@ func TestConsolidatePreflightRefusals(t *testing.T) {
 		{"target holds a legacy store", func(f *fakePG, _ *consolidateDeps) {
 			f.prepend(
 				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}, {"fleet", "sched", "t"}}},
-				fakeRule{db: "fleet", frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"0", "t", "40"}}},
+				fakeRule{db: "fleet", frag: "public_objects", rows: [][]string{{"40"}}},
 			)
-		}, nil, "has tables in public"},
+		}, nil, "has 40 object(s) in public"},
 		{"no disk", func(_ *fakePG, d *consolidateDeps) {
 			d.freeBytes = func(string) (uint64, error) { return 1024, nil }
 		}, nil, "need about"},

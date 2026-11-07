@@ -47,4 +47,11 @@ func TestStatusLayoutFollowsOverrides(t *testing.T) {
 	if got := run("", ""); !strings.Contains(got, "one database") {
 		t.Errorf("no overrides on a one-database box reported %q", got)
 	}
+
+	// #2055 review: schemas chat and sched in two DIFFERENT databases are not
+	// "one database".
+	probePublicStore = func(string) (bool, error) { return false, nil }
+	if got := run("postgres://u@a/fleet", "postgres://u@b/fleet"); strings.Contains(got, "one database") || !strings.Contains(got, "two different databases") {
+		t.Errorf("schemas in two databases reported %q", got)
+	}
 }

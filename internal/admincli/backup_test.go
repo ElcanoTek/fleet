@@ -35,6 +35,20 @@ func TestParsePGConn(t *testing.T) {
 		t.Fatalf("defaults wrong: %+v", c2)
 	}
 
+	// #2055 review: query parameters the server's driver honours reach
+	// pg_dump too — a socket directory, port, user, password, passfile — so
+	// a backup never targets another cluster than the store's.
+	c3, err := parsePGConn("postgres:///sched?host=%2Frun%2Fpg&port=5444&user=svc&password=placeholder-not-a-secret&passfile=%2Fetc%2Fpgpass")
+	if err != nil {
+		t.Fatalf("parsePGConn (query parts): %v", err)
+	}
+	if c3.host != "/run/pg" || c3.port != "5444" || c3.user != "svc" || c3.password != "placeholder-not-a-secret" || c3.passfile != "/etc/pgpass" || c3.dbname != "sched" {
+		t.Fatalf("query parts ignored: %+v", c3)
+	}
+	if c4, err := parsePGConn("postgres://h/?dbname=fromquery"); err != nil || c4.dbname != "fromquery" {
+		t.Fatalf("dbname from the query: %+v, %v", c4, err)
+	}
+
 	for _, bad := range []string{
 		"mysql://x/y",           // wrong scheme
 		"postgres://localhost",  // no dbname

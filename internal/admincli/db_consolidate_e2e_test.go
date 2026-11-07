@@ -174,8 +174,10 @@ func TestConsolidateEndToEndRunuser(t *testing.T) {
 // run as the test role (consolidateServer); otherwise pgFor builds the runner
 // from the plan, as in production.
 func runConsolidateE2E(t *testing.T, pgFor func(*consolidatePlan) pgSuper) {
-	clearDSNEnv(t)
+	// The server comes from the environment first: clearing the DSN keys
+	// before reading it skipped the test whenever only DATABASE_URL named it.
 	base, pg, admin := consolidateServer(t)
+	clearDSNEnv(t)
 	ctx := t.Context()
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
@@ -211,6 +213,7 @@ func runConsolidateE2E(t *testing.T, pgFor func(*consolidatePlan) pgSuper) {
 			unitState:    func(string) string { return "" },
 			freeBytes:    freeBytesAt,
 			verifyStores: verifyStoresOpen,
+			dsnQuery:     queryDSN,
 			now:          time.Now,
 			out:          out,
 		}

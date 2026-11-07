@@ -44,6 +44,7 @@ type pgConn struct {
 	password string
 	dbname   string
 	sslmode  string
+	passfile string
 }
 
 // parsePGConn parses a postgres:// DSN into its connection parts. dbname is
@@ -56,18 +57,39 @@ func parsePGConn(dsn string) (pgConn, error) {
 	if u.Scheme != "postgres" && u.Scheme != "postgresql" {
 		return pgConn{}, fmt.Errorf("DSN scheme %q is not postgres", u.Scheme)
 	}
+	q := u.Query()
+	// The same connection the server makes from this DSN: a socket directory,
+	// port, database, user or password given as a query parameter counts
+	// when the URL's own part is empty (pgx and libpq both read them), so
+	// pg_dump never reaches another cluster or database than the store's.
 	c := pgConn{
-		host:    u.Hostname(),
-		port:    u.Port(),
-		dbname:  strings.TrimPrefix(u.Path, "/"),
-		sslmode: u.Query().Get("sslmode"),
+		host:     u.Hostname(),
+		port:     u.Port(),
+		dbname:   strings.TrimPrefix(u.Path, "/"),
+		sslmode:  q.Get("sslmode"),
+		passfile: q.Get("passfile"),
+	}
+	if c.host == "" {
+		c.host = q.Get("host")
+	}
+	if c.port == "" {
+		c.port = q.Get("port")
 	}
 	if c.port == "" {
 		c.port = "5432"
 	}
+	if c.dbname == "" {
+		c.dbname = q.Get("dbname")
+	}
 	if u.User != nil {
 		c.user = u.User.Username()
 		c.password, _ = u.User.Password()
+	}
+	if c.user == "" {
+		c.user = q.Get("user")
+	}
+	if c.password == "" {
+		c.password = q.Get("password")
 	}
 	if c.dbname == "" {
 		return pgConn{}, fmt.Errorf("DSN has no database name")
@@ -90,6 +112,9 @@ func (c pgConn) env() []string {
 	}
 	if c.sslmode != "" {
 		e = append(e, "PGSSLMODE="+c.sslmode)
+	}
+	if c.passfile != "" {
+		e = append(e, "PGPASSFILE="+c.passfile)
 	}
 	return e
 }

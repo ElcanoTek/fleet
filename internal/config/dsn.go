@@ -470,6 +470,77 @@ func stripSchemaOption(dsn string) string {
 // withRawQuery applies edit to a URL DSN's raw query text, leaving every
 // other byte of the DSN as written (a fragment is kept after the query).
 func withRawQuery(dsn string, edit func(string) string) string {
+	return withRawQueryImpl(dsn, edit)
+}
+
+// secretDSNParams are the connection parameters that carry a credential or
+// point at one, in a URL query or a key=value DSN.
+var secretDSNParams = map[string]bool{"password": true, "sslpassword": true, "passfile": true}
+
+// SecretDSNParam reports whether a connection parameter name carries (or
+// points at) a credential: password, sslpassword, passfile.
+func SecretDSNParam(name string) bool { return secretDSNParams[name] }
+
+// RedactDSN is the ONE redaction for a DSN shown to a person: a URL's userinfo
+// becomes "***" and every secret parameter (SecretDSNParam) in its query —
+// raw key matched, as libpq and pgx read it — becomes key=***; a key=value
+// DSN's secret pairs become key=*** in place. Everything else is kept, so a
+// host, port, database and options stay visible. A string that is neither
+// form is returned unchanged unless it mentions "password", which then hides
+// it whole.
+func RedactDSN(dsn string) string {
+	trimmed := strings.TrimSpace(dsn)
+	if trimmed == "" {
+		return dsn
+	}
+	if u, err := url.Parse(trimmed); err == nil && isPostgresScheme(u.Scheme) {
+		out := trimmed
+		if i := strings.Index(out, "://"); i >= 0 {
+			rest := out[i+3:]
+			end := len(rest)
+			if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+				end = j
+			}
+			if at := strings.LastIndex(rest[:end], "@"); at >= 0 {
+				out = out[:i+3] + "***@" + rest[at+1:]
+			}
+		}
+		return withRawQuery(out, func(q string) string {
+			if q == "" {
+				return q
+			}
+			pairs := strings.Split(q, "&")
+			for i, p := range pairs {
+				if k, _, _ := strings.Cut(p, "="); secretDSNParams[k] {
+					pairs[i] = k + "=***"
+				}
+			}
+			return strings.Join(pairs, "&")
+		})
+	}
+	if kv, ok := parseKeywordDSN(trimmed); ok {
+		var b strings.Builder
+		last := 0
+		for i, k := range kv.keys {
+			start, end := kv.spans[i][0], kv.spans[i][1]
+			b.WriteString(trimmed[last:start])
+			if secretDSNParams[k] {
+				b.WriteString(k + "=***")
+			} else {
+				b.WriteString(trimmed[start:end])
+			}
+			last = end
+		}
+		b.WriteString(trimmed[last:])
+		return b.String()
+	}
+	if strings.Contains(strings.ToLower(trimmed), "password") {
+		return "[REDACTED]"
+	}
+	return dsn
+}
+
+func withRawQueryImpl(dsn string, edit func(string) string) string {
 	base, frag, hasFrag := strings.Cut(dsn, "#")
 	base, q, _ := strings.Cut(base, "?")
 	out := base

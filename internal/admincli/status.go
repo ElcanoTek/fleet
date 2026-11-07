@@ -149,9 +149,13 @@ func checkLayout(r *report, chatFlag, schedFlag string) {
 		return
 	}
 	cs, ss := config.DSNSchema(c), config.DSNSchema(s)
+	ci, si := config.DSNIdentity(c), config.DSNIdentity(s)
+	oneDB := ci != "" && ci == si
 	switch {
-	case cs == config.ChatSchema && ss == config.SchedSchema:
+	case cs == config.ChatSchema && ss == config.SchedSchema && oneDB:
 		r.pass("database layout", "one database, schemas chat + sched")
+	case cs == config.ChatSchema && ss == config.SchedSchema:
+		r.warnLine("database layout", "unusual: the chat and sched schemas are in two different databases ("+ci+", "+si+")")
 	case cs == "" && ss == "": // LEGACY-DB-LAYOUT: remove after consolidation
 		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
 	default:
@@ -463,14 +467,8 @@ func firstLine(s string) string {
 	return s
 }
 
-// redactDSN strips userinfo (user:password@) from a DSN so the status report
-// never echoes a password.
-func redactDSN(dsn string) string {
-	if i := strings.Index(dsn, "://"); i >= 0 {
-		rest := dsn[i+3:]
-		if at := strings.IndexByte(rest, '@'); at >= 0 {
-			return dsn[:i+3] + "***@" + rest[at+1:]
-		}
-	}
-	return dsn
-}
+// redactDSN hides every credential a DSN can carry — userinfo, and the
+// password / sslpassword / passfile parameters of a URL query or a key=value
+// DSN — so no report, error or plan echoes one (config.RedactDSN, the one
+// implementation).
+func redactDSN(dsn string) string { return config.RedactDSN(dsn) }

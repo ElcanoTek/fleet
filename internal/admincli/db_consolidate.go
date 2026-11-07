@@ -155,8 +155,12 @@ type consolidateDeps struct {
 	// verifyStores opens both stores through the real code against the
 	// target and reads from each.
 	verifyStores func(ctx context.Context, chatDSN, schedDSN string) error
-	now          func() time.Time
-	out          io.Writer
+	// dsnQuery runs one read-only query over a connection made with dsn AS
+	// WRITTEN (its own role, host, port, socket) — how the instance check
+	// sees what the service would reach.
+	dsnQuery func(ctx context.Context, dsn, query string) ([][]string, error)
+	now      func() time.Time
+	out      io.Writer
 }
 
 func cmdDBConsolidate(argv []string) int {
@@ -187,6 +191,7 @@ func cmdDBConsolidate(argv []string) int {
 		},
 		freeBytes:    freeBytesAt,
 		verifyStores: verifyStoresOpen,
+		dsnQuery:     queryDSN,
 		now:          time.Now,
 		out:          os.Stdout,
 	}
@@ -428,10 +433,25 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 	if err != nil {
 		return nil, 1, err
 	}
+	// Every secret the DSNs carry, wherever they carry it: userinfo, and the
+	// password / sslpassword query parameters (config.SecretDSNParam).
 	for _, s := range []string{chat.dsn, sched.dsn} {
-		if u, err := url.Parse(s); err == nil && u.User != nil {
+		u, err := url.Parse(s)
+		if err != nil {
+			continue
+		}
+		if u.User != nil {
 			if pw, ok := u.User.Password(); ok && pw != "" {
 				p.passwords = append(p.passwords, pw)
+			}
+		}
+		for k, vs := range u.Query() {
+			if config.SecretDSNParam(k) && k != "passfile" {
+				for _, v := range vs {
+					if v != "" {
+						p.passwords = append(p.passwords, v)
+					}
+				}
 			}
 		}
 	}
@@ -520,8 +540,10 @@ func (p *consolidatePlan) redact(s string) string {
 		for _, enc := range []string{pw, url.QueryEscape(pw), url.PathEscape(pw), url.UserPassword("u", pw).String()[2:]} {
 			s = strings.ReplaceAll(s, ":"+enc+"@", ":<password>@")
 		}
-		s = strings.ReplaceAll(s, "password="+pw, "password=<password>")
-		s = strings.ReplaceAll(s, "password='"+pw+"'", "password=<password>")
+		for _, enc := range []string{pw, url.QueryEscape(pw), "'" + pw + "'"} {
+			// password=, sslpassword= (query or key=value), raw or encoded.
+			s = strings.ReplaceAll(s, "password="+enc, "password=<password>")
+		}
 		if len(pw) >= redactMinBare && !names[pw] {
 			s = strings.ReplaceAll(s, pw, "<password>")
 		}
@@ -568,13 +590,117 @@ func (f *preflighter) q1(db, sql string, cols int) ([]string, error) {
 func preflight(ctx context.Context, o consolidateOptions, d consolidateDeps, p *consolidatePlan) []check {
 	f := &preflighter{ctx: ctx, o: o, d: d, p: p}
 	f.units()
-	if f.tools() && f.databases() {
+	if f.tools() && f.instance() && f.databases() {
 		f.connections()
 		f.sources()
 		f.target()
 		f.diskAndInventory()
 	}
 	return f.cs
+}
+
+// instance: the cluster the superuser tools reach (a Unix socket, for peer
+// authentication) must be the very cluster each source DSN reaches as
+// written (its role, host, port) — a loopback TCP DSN and the default socket
+// can lead to two clusters on one port. Compared by serverIdentity.
+func (f *preflighter) instance() bool {
+	super, err := serverIdentity(func(q string) ([][]string, error) { return f.d.pg.Query(f.ctx, "postgres", q) })
+	if err != nil {
+		f.add(false, "sources are on the superuser's cluster", "read the superuser connection's cluster identity: "+err.Error())
+		return false
+	}
+	ok := true
+	for _, s := range []pgSource{f.p.chat, f.p.sched} {
+		mine, err := serverIdentity(func(q string) ([][]string, error) { return f.d.dsnQuery(f.ctx, s.dsn, q) })
+		switch {
+		case err != nil:
+			f.add(false, s.label+" source is on the superuser's cluster", fmt.Sprintf("connect with the %s DSN (%s): %v", s.label, s.from, err))
+			ok = false
+		case !super.same(mine):
+			f.add(false, s.label+" source is on the superuser's cluster", fmt.Sprintf("the %s DSN reaches cluster %s, but the superuser tools (%s) reach %s — two clusters answer here; point the DSNs at one", s.label, mine, serverLabel(f.p.socketDir, f.p.port), super))
+			ok = false
+		default:
+			f.add(true, s.label+" source is on the superuser's cluster", mine.String())
+		}
+	}
+	return ok
+}
+
+// clusterIdentity names one running Postgres cluster: its system identifier
+// (pg_control_system(), unique per initdb) when readable, and always a
+// fallback any role can read — postmaster start time (epoch, so no time zone
+// enters), port and cluster_name.
+type clusterIdentity struct{ sysid, fallback string }
+
+func (c clusterIdentity) same(o clusterIdentity) bool {
+	if c.sysid != "" && o.sysid != "" {
+		return c.sysid == o.sysid
+	}
+	return c.fallback == o.fallback
+}
+
+func (c clusterIdentity) String() string {
+	if c.sysid != "" {
+		return "system identifier " + c.sysid
+	}
+	return c.fallback
+}
+
+// serverIdentity reads a clusterIdentity through q — the superuser runner or
+// a DSN connection: the SAME queries on both sides.
+func serverIdentity(q func(string) ([][]string, error)) (clusterIdentity, error) {
+	var id clusterIdentity
+	rows, err := q(`SELECT extract(epoch FROM pg_postmaster_start_time())::text || ' port ' || current_setting('port') || ' cluster ' || current_setting('cluster_name')`)
+	if err != nil {
+		return id, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 || rows[0][0] == "" {
+		return id, errors.New("unexpected cluster identity result")
+	}
+	id.fallback = "postmaster started " + rows[0][0]
+	if rows, err := q(`SELECT system_identifier::text FROM pg_control_system()`); err == nil && len(rows) == 1 && len(rows[0]) == 1 {
+		id.sysid = rows[0][0]
+	}
+	return id, nil
+}
+
+// queryDSN is the production consolidateDeps.dsnQuery: one short-lived
+// connection with dsn as written.
+func queryDSN(ctx context.Context, dsn, query string) ([][]string, error) {
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	qctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	rows, err := db.QueryContext(qctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var out [][]string
+	for rows.Next() {
+		vals := make([]sql.NullString, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		row := make([]string, len(cols))
+		for i, v := range vals {
+			row[i] = v.String
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 // units: fleet and the units that touch the databases must be stopped.
@@ -684,10 +810,7 @@ func (f *preflighter) databases() bool {
 // for up to connWait before it refuses.
 func (f *preflighter) connections() {
 	p := f.p
-	query := `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
-		WHERE datname IN (` + sqlList([]string{p.chat.database, p.sched.database, p.target}) + `)
-		  AND backend_type = 'client backend' AND pid <> pg_backend_pid()
-		GROUP BY 1, 2, 3 ORDER BY 1`
+	query := clientSessionsSQL([]string{p.chat.database, p.sched.database, p.target})
 	deadline := time.Now().Add(f.d.connWait)
 	rows, err := f.q("postgres", query)
 	for err == nil && len(rows) > 0 && time.Now().Before(deadline) {
@@ -757,22 +880,22 @@ func (f *preflighter) target() {
 		f.add(false, "target database is usable", fmt.Sprintf("%q exists but is owned by %q, not %q", p.target, owner, p.owner))
 	default:
 		p.targetExists = true
-		row, err := f.q1(p.target, `SELECT
-			(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('chat', 'sched'))
-			  + (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')),
-			to_regclass('public.schema_migrations') IS NOT NULL,
-			(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p'))`, 3)
+		// The same predicates verifyCopy applies after the copy.
+		public, perr := targetPublicObjects(f.ctx, f.d.pg, p.target)
+		stores, serr := targetStoreObjects(f.ctx, f.d.pg, p.target)
 		switch {
-		case err != nil:
-			f.add(false, label, err.Error())
-		case row[1] == "t" || row[2] != "0":
-			f.add(false, label, fmt.Sprintf("%q has tables in public (a fleet store or something else); choose another --target-db", p.target))
-		case row[0] != "0" && !f.o.forceClean:
+		case perr != nil:
+			f.add(false, label, perr.Error())
+		case serr != nil:
+			f.add(false, label, serr.Error())
+		case public != 0:
+			f.add(false, label, fmt.Sprintf("%q has %d object(s) in public (a fleet store or something else); choose another --target-db", p.target, public))
+		case stores != 0 && !f.o.forceClean:
 			p.targetNonEmpty = true
-			f.add(false, label, fmt.Sprintf("%q already has chat/sched schemas (%s objects) — a partly filled target from an earlier run? Re-run with --force-clean to drop those two schemas (the env file still names the sources, so nothing uses them)", p.target, row[0]))
-		case row[0] != "0":
+			f.add(false, label, fmt.Sprintf("%q already has chat/sched schemas (%d objects) — a partly filled target from an earlier run? Re-run with --force-clean to drop those two schemas (the env file still names the sources, so nothing uses them)", p.target, stores))
+		case stores != 0:
 			p.targetNonEmpty = true
-			f.warn(label, fmt.Sprintf("%q has chat/sched schemas (%s objects); --force-clean will drop those two schemas first", p.target, row[0]))
+			f.warn(label, fmt.Sprintf("%q has chat/sched schemas (%d objects); --force-clean will drop those two schemas first", p.target, stores))
 		default:
 			f.add(true, label, fmt.Sprintf("%q exists, owned by %q, empty", p.target, p.owner))
 		}
@@ -821,6 +944,35 @@ func (f *preflighter) diskAndInventory() {
 		}
 		p.inv[s.label] = inv
 	}
+}
+
+// targetPublicObjects counts every relation (of any kind) in the target's
+// public schema: the target must hold nothing there, before the copy
+// (preflight) and after it (verifyCopy) — ONE predicate for both.
+func targetPublicObjects(ctx context.Context, pg pgSuper, db string) (int, error) {
+	return countQuery(ctx, pg, db, `SELECT count(*) AS public_objects FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'`)
+}
+
+// targetStoreObjects counts the chat/sched schemas and every relation in
+// them: a non-zero target is a partly filled one from an earlier run.
+func targetStoreObjects(ctx context.Context, pg pgSuper, db string) (int, error) {
+	return countQuery(ctx, pg, db, `SELECT (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('chat', 'sched'))
+		+ (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')) AS store_objects`)
+}
+
+func countQuery(ctx context.Context, pg pgSuper, db, q string) (int, error) {
+	rows, err := pg.Query(ctx, db, q)
+	if err != nil {
+		return 0, err
+	}
+	if len(rows) != 1 || len(rows[0]) != 1 {
+		return 0, fmt.Errorf("unexpected result from %s", db)
+	}
+	n, err := strconv.Atoi(rows[0][0])
+	if err != nil {
+		return 0, fmt.Errorf("unexpected count from %s: %q", db, rows[0][0])
+	}
+	return n, nil
 }
 
 func stripStates(units []string) []string {
@@ -1135,6 +1287,18 @@ func reopenSQL(db string) string {
 // slipped in between the preflight and the close — and the sources must then
 // be free of client backends within connWait. A superuser session is not
 // terminated (it may be an operator's); it makes the move refuse instead.
+// clientSessionsSQL lists the client sessions on dbs — not autovacuum or
+// parallel workers, not this session — as datname, usename,
+// application_name, count. The preflight's connection check and the apply's
+// wait for closed sources both use it, so they cannot disagree on what a
+// session is.
+func clientSessionsSQL(dbs []string) string {
+	return `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
+		WHERE datname IN (` + sqlList(dbs) + `)
+		  AND backend_type = 'client backend' AND pid <> pg_backend_pid()
+		GROUP BY 1, 2, 3 ORDER BY 1`
+}
+
 func clearSourceConnections(ctx context.Context, d consolidateDeps, p *consolidatePlan) error {
 	dbs := sqlList([]string{p.chat.database, p.sched.database})
 	if _, err := d.pg.Query(ctx, "postgres", `SELECT pg_terminate_backend(a.pid) FROM pg_stat_activity a
@@ -1143,9 +1307,8 @@ func clearSourceConnections(ctx context.Context, d consolidateDeps, p *consolida
 		  AND a.pid <> pg_backend_pid() AND NOT r.rolsuper`); err != nil {
 		return fmt.Errorf("end sessions on the sources: %w", err)
 	}
-	query := `SELECT datname, usename, count(*) FROM pg_stat_activity
-		WHERE datname IN (` + dbs + `) AND backend_type = 'client backend' AND pid <> pg_backend_pid()
-		GROUP BY 1, 2 ORDER BY 1`
+	// The same session count the preflight's connection check uses.
+	query := clientSessionsSQL([]string{p.chat.database, p.sched.database})
 	deadline := time.Now().Add(d.connWait)
 	for {
 		rows, err := d.pg.Query(ctx, "postgres", query)
@@ -1158,8 +1321,8 @@ func clearSourceConnections(ctx context.Context, d consolidateDeps, p *consolida
 		if !time.Now().Before(deadline) {
 			var who []string
 			for _, r := range rows {
-				if len(r) == 3 {
-					who = append(who, fmt.Sprintf("%s: %s session(s) as %s", r[0], r[2], r[1]))
+				if len(r) == 4 {
+					who = append(who, fmt.Sprintf("%s: %s session(s) as %s (%s)", r[0], r[3], r[1], r[2]))
 				}
 			}
 			return fmt.Errorf("sessions are still open on the sources (superuser sessions are not ended for you): %s", strings.Join(who, "; "))
@@ -1241,12 +1404,13 @@ func verifyCopy(ctx context.Context, d consolidateDeps, p *consolidatePlan) erro
 	for _, r := range rows {
 		diffs = append(diffs, r[0]+" is not owned by "+p.owner)
 	}
-	rows, err = d.pg.Query(ctx, p.target, `SELECT count(*) AS public_objects FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public'`)
+	// The predicate the preflight's target check applied.
+	public, err := targetPublicObjects(ctx, d.pg, p.target)
 	if err != nil {
 		return fmt.Errorf("check public: %w", err)
 	}
-	if len(rows) != 1 || rows[0][0] != "0" {
-		diffs = append(diffs, "the target's public schema is not empty")
+	if public != 0 {
+		diffs = append(diffs, fmt.Sprintf("the target's public schema holds %d object(s)", public))
 	}
 	if len(diffs) > 0 {
 		return fmt.Errorf("verification failed:\n  %s", strings.Join(diffs, "\n  "))

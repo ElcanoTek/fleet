@@ -92,7 +92,7 @@ func TestConsolidateClosesTheSources(t *testing.T) {
 
 	t.Run("a lingering superuser session refuses and re-opens", func(t *testing.T) {
 		f := healthyFake()
-		f.prepend(fakeRule{frag: "GROUP BY 1, 2 ORDER BY 1", rows: [][]string{{"chat", "postgres", "1"}}})
+		f.prepend(fakeRule{frag: "IN ('chat', 'sched')\n", rows: [][]string{{"chat", "postgres", "psql", "1"}}})
 		var out bytes.Buffer
 		if code := runConsolidate(t.Context(), consolidateOptions{envFile: writeLegacyEnv(t, ""), targetDB: "fleet", apply: true}, testDeps(f, &out)); code != 5 {
 			t.Fatalf("exit %d:\n%s", code, out.String())
