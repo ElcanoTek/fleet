@@ -2111,6 +2111,26 @@ func lockConversationForAppend(ctx context.Context, tx *sql.Tx, convID string, n
 	return err
 }
 
+// SummarySnapshot fingerprints the history a summary was generated from:
+// ThroughID is the highest messages.id in it, Messages the number of its
+// non-summary entries. ReplaceSummary compares it with the live history.
+type SummarySnapshot struct {
+	ThroughID int64
+	Messages  int
+}
+
+// SummarySnapshotOf fingerprints a history as LoadHistory returned it.
+func SummarySnapshotOf(history []agent.HistoryEntry) SummarySnapshot {
+	var snap SummarySnapshot
+	for _, e := range history {
+		snap.ThroughID = max(snap.ThroughID, e.ID)
+		if e.Type != "summary" {
+			snap.Messages++
+		}
+	}
+	return snap
+}
+
 // ReplaceSummary deletes any prior `summary` messages on the conversation
 // and inserts the new one in a single transaction. Replace semantics keep
 // the user-initiated "summarize and continue" flow from chaining
@@ -2120,19 +2140,24 @@ func lockConversationForAppend(ctx context.Context, tx *sql.Tx, convID string, n
 // Scoped by user_email: a foreign-owned conversation returns an error
 // instead of mutating someone else's chat.
 //
-// coveredThroughID is the highest messages.id in the history the summary was
-// generated from. The summary row gets a fresh (larger) id, and replayHistory
-// discards everything before the latest summary — so a message committed
-// while the 30-60 s summary call was running would sit *before* the summary
-// and silently drop out of the model's context (#2044). ReplaceSummary
-// therefore refuses with ErrSummaryStale when any non-summary message newer
-// than coveredThroughID exists. The check and the insert are atomic with
-// respect to every history writer: the conversation row is locked FOR UPDATE
-// first, and the append paths (appendHistoryTx, appendHistoryProvenanceTx)
-// take that row's lock before they allocate message ids, so a writer is
-// either fully committed and visible to the check, or it waits and its rows
-// land after the summary.
-func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry, coveredThroughID int64) error {
+// snap describes the history the summary was generated from (see
+// SummarySnapshot). The summary row gets a fresh (larger) id, and
+// replayHistory discards everything before the latest summary — so a message
+// committed while the 30-60 s summary call was running would sit *before* the
+// summary and silently drop out of the model's context (#2044), and a message
+// removed meanwhile (TruncateAfter, the retry/regenerate clip) would live on
+// inside the summary text. ReplaceSummary therefore refuses with
+// ErrSummaryStale unless the conversation's non-summary history is still
+// exactly the snapshot: nothing newer than snap.ThroughID, and still
+// snap.Messages rows at or below it. Ids are never reused, so an append
+// shows up as a newer id and a deletion as a lower count.
+//
+// The check and the insert are atomic with respect to every history writer:
+// the conversation row is locked FOR UPDATE first, and the append paths
+// (appendHistoryTx, appendHistoryProvenanceTx) and TruncateAfter take that
+// row's lock before they touch messages, so a writer is either fully
+// committed and visible to the check, or it waits until the summary commits.
+func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry, snap SummarySnapshot) error {
 	if entry.Type != "summary" {
 		return fmt.Errorf("ReplaceSummary: entry type must be \"summary\", got %q", entry.Type)
 	}
@@ -2163,14 +2188,16 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 		return fmt.Errorf("lock conversation: %w", err)
 	}
 	var newer bool
+	var covered int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (SELECT 1 FROM messages
-		                 WHERE conversation_id = $1 AND id > $2 AND type <> 'summary')`,
-		convID, coveredThroughID,
-	).Scan(&newer); err != nil {
-		return fmt.Errorf("check for newer messages: %w", err)
+		`SELECT COALESCE(bool_or(id > $2), FALSE), count(*) FILTER (WHERE id <= $2)
+		   FROM messages
+		  WHERE conversation_id = $1 AND type <> 'summary'`,
+		convID, snap.ThroughID,
+	).Scan(&newer, &covered); err != nil {
+		return fmt.Errorf("check the summarized history: %w", err)
 	}
-	if newer {
+	if newer || covered != snap.Messages {
 		return ErrSummaryStale
 	}
 
@@ -2199,7 +2226,9 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 
 // TruncateAfter deletes every message in a conversation whose id is strictly
 // greater than afterMessageID. Used by the retry + regenerate flows to clip
-// off a cancelled/failed assistant tail before re-running the turn.
+// off a cancelled/failed assistant tail before re-running the turn. It takes
+// the conversation row lock first, like every history writer, so it is
+// serialized against ReplaceSummary's check of the summarized history.
 //
 // Scoped by user_email: if the conversation belongs to someone else we
 // return a 0-row error so the handler surfaces a 404.
@@ -2212,19 +2241,23 @@ func (s *Store) TruncateAfter(ctx context.Context, userEmail, convID string, aft
 	if owned == nil {
 		return ErrConversationNotFound
 	}
-	_, err = s.db.ExecContext(ctx,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	// Bump updated_at (so the sidebar reflects the change) first: it is the
+	// conversation row lock (lockConversationForAppend).
+	if err := lockConversationForAppend(ctx, tx, convID, time.Now().Unix()); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id = $1 AND id > $2`,
 		convID, afterMessageID,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("truncate: %w", err)
 	}
-	// Bump updated_at so the sidebar reflects the change.
-	_, err = s.db.ExecContext(ctx,
-		`UPDATE conversations SET updated_at = $1 WHERE id = $2`,
-		time.Now().Unix(), convID,
-	)
-	return err
+	return tx.Commit()
 }
 
 // MaxMessageIDForRole returns the DB row id of the latest message for this

@@ -58,9 +58,10 @@ type summarizeResponse struct {
 //     (deletes any prior summary in the same tx). The in-flight check in
 //     step 1 is only a snapshot: a turn can start and commit during the
 //     model call. ReplaceSummary refuses (store.ErrSummaryStale →
-//     summary.error) when any message newer than the summarized history
-//     exists, because the summary's fresh id would otherwise sit after it
-//     and replayHistory would drop it from the model's context (#2044).
+//     summary.error) when the history changed since it was read — a newer
+//     message (the summary's fresh id would sit after it and replayHistory
+//     would drop it from the model's context) or a removed one (the summary
+//     would keep it) (#2044).
 //  6. Emit a final `summary.completed` event with usage + cost.
 //
 // Wire shape — text/event-stream with these events:
@@ -144,14 +145,12 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The newest message id the summary covers, read BEFORE redaction: a
-	// message committed after this point (a turn finishing in another tab, a
-	// resolved approval) makes ReplaceSummary refuse instead of persisting a
-	// summary that would hide it from the model (#2044).
-	var coveredThroughID int64
-	for _, e := range history {
-		coveredThroughID = max(coveredThroughID, e.ID)
-	}
+	// Fingerprint the history the summary covers, BEFORE redaction: a message
+	// committed after this point (a turn finishing in another tab, a resolved
+	// approval) or removed meanwhile (a retry's truncate) makes ReplaceSummary
+	// refuse instead of persisting a summary that would hide the new message
+	// from the model or keep the removed one (#2044).
+	snapshot := store.SummarySnapshotOf(history)
 	history = redactHistoryForSender(history, user, conv.UserEmail)
 	if len(history) == 0 {
 		http.Error(w, "conversation has no history to summarize", http.StatusBadRequest)
@@ -209,7 +208,7 @@ func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, c
 		CompletionTokens: result.CompletionTokens,
 		CostUSD:          result.CostUSD,
 	})
-	if err := s.store.ReplaceSummary(r.Context(), user, convID, entry, coveredThroughID); err != nil {
+	if err := s.store.ReplaceSummary(r.Context(), user, convID, entry, snapshot); err != nil {
 		msg := err.Error()
 		if errors.Is(err, store.ErrSummaryStale) {
 			msg = summaryStaleMessage
