@@ -4,6 +4,7 @@ import { Link } from "@/app/lib/Link";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -105,7 +106,7 @@ export function ProjectsModal({
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/projects", { cache: "no-store" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load projects"));
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
     } catch (err) {
@@ -126,7 +127,7 @@ export function ProjectsModal({
   const loadMemories = useCallback(async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}/memories`, { cache: "no-store" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load memories"));
       const data = (await res.json()) as { memories?: ProjectMemory[] };
       setMemories(data.memories ?? []);
     } catch {
@@ -201,7 +202,7 @@ export function ProjectsModal({
             headers: { "Content-Type": "application/json" },
             body,
           });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to save project"));
       const p = (await res.json()) as Project;
       setEditing(false);
       setSelectedId(p.id);
@@ -216,7 +217,7 @@ export function ProjectsModal({
   const remove = async (id: string) => {
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to delete project"));
       setSelectedId(null);
       await load();
     } catch (err) {
@@ -233,7 +234,7 @@ export function ProjectsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to add memory"));
       setMemoryDraft("");
       await loadMemories(selectedId);
     } catch (err) {
@@ -245,7 +246,7 @@ export function ProjectsModal({
     if (!selectedId) return;
     try {
       const res = await fetch(`/api/projects/${encodeURIComponent(selectedId)}/memories/${encodeURIComponent(memID)}`, { method: "DELETE" });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to remove memory"));
       await loadMemories(selectedId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to remove memory.");

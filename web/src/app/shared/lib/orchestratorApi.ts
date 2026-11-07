@@ -650,15 +650,11 @@ class OrchestratorError extends Error {
   }
 }
 
-function requestHeaders(extra?: Record<string, string>): Record<string, string> {
-  return { ...(extra ?? {}) };
-}
-
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`/api/orchestrator${path}`, {
     ...init,
     credentials: "same-origin",
-    headers: requestHeaders(init?.headers as Record<string, string> | undefined),
+    headers: { ...(init?.headers as Record<string, string> | undefined) },
     cache: "no-store",
   });
   if (!res.ok) {
@@ -801,7 +797,7 @@ export const orchestratorApi = {
     signal: AbortSignal,
     lastEventID?: string,
   ): Promise<void> => {
-    const headers = requestHeaders({ Accept: "text/event-stream" });
+    const headers: Record<string, string> = { Accept: "text/event-stream" };
     if (lastEventID) headers["Last-Event-ID"] = lastEventID;
     const res = await fetch(`/api/orchestrator/tasks/${encodeURIComponent(taskId)}/stream`, {
       headers,
@@ -941,7 +937,6 @@ export const orchestratorApi = {
     const res = await fetch("/api/orchestrator/upload", {
       method: "POST",
       credentials: "same-origin",
-      headers: requestHeaders(),
       body: form,
     });
     if (!res.ok) throw new OrchestratorError(`Upload failed (${res.status})`, res.status);

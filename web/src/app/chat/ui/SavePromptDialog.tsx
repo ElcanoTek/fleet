@@ -8,6 +8,7 @@ import {
   type PromptLibraryWrite,
 } from "@/app/shared/lib/orchestratorApi";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // SavePromptDialog — "Save as workflow…". It asks the server to turn the
 // WHOLE conversation into a reusable workflow template (a host-side model
@@ -93,7 +94,7 @@ export function SavePromptDialog({
         });
         if (!response.ok) {
           throw new Error(
-            (await response.text()) || `distill failed (${response.status})`,
+            await responseErrorText(response, "distill failed"),
           );
         }
         const body = (await response.json()) as {
@@ -147,7 +148,7 @@ export function SavePromptDialog({
         });
         if (!res.ok) {
           throw new Error(
-            (await res.text()) || `Could not save skill (${res.status})`,
+            await responseErrorText(res, "Could not save skill"),
           );
         }
         setSkillName(cleanSlug);

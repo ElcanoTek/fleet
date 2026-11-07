@@ -16,6 +16,7 @@ import {
   ConnRows,
   SetSection,
 } from "../ui/panels";
+import { responseErrorText } from "@/app/lib/responseError";
 
 type UserMemory = {
   id: string;
@@ -54,11 +55,6 @@ const ROW_HEAD = "flex flex-wrap items-center justify-between gap-2";
 const LOADING =
   "m-0 py-3 text-center text-[0.79rem] text-[var(--color-text-muted)]";
 
-async function failText(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text()).trim();
-  return text || `${fallback} (${res.status})`;
-}
-
 export default function MemoriesPage() {
   const [memories, setMemories] = useState<UserMemory[] | null>(null);
   const [teamProjects, setTeamProjects] = useState<ProjectSummary[]>([]);
@@ -81,7 +77,7 @@ export default function MemoriesPage() {
         window.location.href = "/login";
         return;
       }
-      if (!res.ok) throw new Error(await failText(res, "Unable to load memories"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load memories"));
       const data = (await res.json()) as { memories?: UserMemory[] };
       setMemories(data.memories ?? []);
     } catch (err) {
@@ -139,7 +135,7 @@ export default function MemoriesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, kind: kindDraft }),
       });
-      if (!res.ok) throw new Error(await failText(res, "Unable to save memory"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to save memory"));
       const wasEditing = editingId !== null;
       setDraft("");
       setKindDraft("fact");
@@ -165,7 +161,7 @@ export default function MemoriesPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      if (!res.ok) throw new Error(await failText(res, "Unable to update memory"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to update memory"));
       await loadMemories();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to update memory.");
@@ -179,7 +175,7 @@ export default function MemoriesPage() {
       const res = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      if (!res.ok) throw new Error(await failText(res, "Unable to delete memory"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to delete memory"));
       setMemories((cur) => (cur ? cur.filter((m) => m.id !== id) : cur));
       if (editingId === id) {
         setEditingId(null);
@@ -205,7 +201,7 @@ export default function MemoriesPage() {
       );
       if (!res.ok)
         throw new Error(
-          await failText(res, "Unable to move memory to team learnings"),
+          await responseErrorText(res, "Unable to move memory to team learnings"),
         );
       setPromoteId(null);
       setNotice("Moved to project team learnings.");

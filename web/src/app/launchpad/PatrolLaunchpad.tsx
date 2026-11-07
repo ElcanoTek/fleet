@@ -38,6 +38,7 @@ import {
   type LaunchpadConnector,
   type PatrolMode,
 } from "./launchpadModel";
+import { responseErrorText } from "@/app/lib/responseError";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -163,11 +164,6 @@ function loadSaved(): Saved {
   }
 }
 
-async function failText(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text().catch(() => "")).trim();
-  return text ? `${fallback}: ${text}` : fallback;
-}
-
 type LaunchPhase = "conversation" | "tools" | "schedule" | "first-run";
 type LaunchState = {
   phase: LaunchPhase | "done";
@@ -213,7 +209,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     const gen = ++connectorsGen.current;
     try {
       const res = await fetch("/api/mcp-servers", { cache: "no-store" });
-      if (!res.ok) throw new Error(await failText(res, "Could not load your connectors"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Could not load your connectors"));
       const data = (await res.json()) as { servers?: LaunchpadConnector[] };
       if (gen !== connectorsGen.current) return;
       setConnectors(data.servers ?? []);
@@ -377,7 +373,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       body: JSON.stringify(body),
     }).catch(() => null);
     if (!res) return "";
-    if (!res.ok) throw new Error(await failText(res, "Could not create the patrol chat"));
+    if (!res.ok) throw new Error(await responseErrorText(res, "Could not create the patrol chat"));
     return res
       .json()
       .then((d: { id?: string }) => (typeof d?.id === "string" ? d.id : ""))
@@ -507,7 +503,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled_optional: optionalSelection(toolsCatalog, toolsSelection), accounts: {} }),
         });
-        if (!toolsRes.ok) throw new Error(await failText(toolsRes, "Could not switch on the patrol's tools"));
+        if (!toolsRes.ok) throw new Error(await responseErrorText(toolsRes, "Could not switch on the patrol's tools"));
       }
 
       setPhase("schedule");
@@ -522,7 +518,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           auto_approve: state.mode === "act",
         }),
       });
-      if (!schedRes.ok) throw new Error(await failText(schedRes, "Could not arm the patrol"));
+      if (!schedRes.ok) throw new Error(await responseErrorText(schedRes, "Could not arm the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
       const scheduleId = sched.schedule?.id ?? "";
       setCreated({ ...created.current, scheduleId });
@@ -1336,7 +1332,7 @@ function RulesStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text, kind: "constraint" }),
       }).catch(() => null);
-      if (res && !res.ok) throw new Error(await failText(res, "Could not save that"));
+      if (res && !res.ok) throw new Error(await responseErrorText(res, "Could not save that"));
       let savedId = res ? await res.json().then((d: { id?: string }) => d?.id ?? "").catch(() => "") : "";
       // No reply (or an unreadable one): the save may still have committed.
       // Look before inviting a retry, so it is never saved twice.
@@ -1762,7 +1758,7 @@ function LaunchStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draftRequest),
       });
-      if (!res.ok) throw new Error(await failText(res, "The assistant could not draft this patrol"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "The assistant could not draft this patrol"));
       const d = (await res.json()) as { title?: string; prompt?: string; summary?: string };
       if (!d.prompt?.trim()) throw new Error("The assistant returned an empty draft.");
       onDrafted({ title: d.title?.trim() || title, prompt: d.prompt.trim(), summary: d.summary?.trim() ?? "" });

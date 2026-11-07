@@ -164,6 +164,7 @@ import {
   writeDashboardView,
 } from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -2422,7 +2423,7 @@ export function ChatExperience({
     setMemoryError(null);
     try {
       const response = await fetch("/api/memories", { cache: "no-store" });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to load memories"));
       const data = (await response.json()) as { memories?: UserMemory[] };
       setMemories(data.memories ?? []);
     } catch (err) {
@@ -2459,7 +2460,7 @@ export function ChatExperience({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, kind: memoryKindDraft }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to save memory"));
       setMemoryDraft("");
       setMemoryKindDraft("fact");
       setEditingMemoryId(null);
@@ -2492,7 +2493,7 @@ export function ChatExperience({
           body: JSON.stringify({ from_memory_id: id }),
         },
       );
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to move that memory to team learnings"));
       setPromoteMemoryId(null);
       await loadMemories();
     } catch (err) {
@@ -2510,7 +2511,7 @@ export function ChatExperience({
       const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to delete memory"));
       setMemories((prev) => prev.filter((m) => m.id !== id));
       if (editingMemoryId === id) {
         setEditingMemoryId(null);
@@ -2539,7 +2540,7 @@ export function ChatExperience({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to update memory"));
       await loadMemories();
     } catch (err) {
       setMemoryError(

@@ -32,6 +32,7 @@ import { btnClass, SETTINGS_INPUT } from "../ui/atoms";
 import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
+import { responseErrorText } from "@/app/lib/responseError";
 
 export type Me = {
   email: string;
@@ -72,7 +73,7 @@ export default function TeamSettingsPage() {
         window.location.href = "/login";
         return;
       }
-      if (!res.ok) throw new Error(await readError(res, `Request failed (${res.status}).`));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Request failed"));
       setMe((await res.json()) as Me);
       setError(null);
     } catch (err) {
@@ -120,7 +121,7 @@ export default function TeamSettingsPage() {
           "That name is already in use. An admin can add you to the team in Settings → Admin → Users.",
         );
       }
-      if (!res.ok) throw new Error(await readError(res, `Save failed (${res.status}).`));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
       const updated = (await res.json()) as Me;
       setMe(updated);
       setDraft("");
@@ -367,9 +368,4 @@ function LeaveTeamConfirm({
       </div>
     </DialogShell>
   );
-}
-
-async function readError(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text()).trim();
-  return text.length > 0 && text.length <= 300 ? text : fallback;
 }

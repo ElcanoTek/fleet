@@ -22,6 +22,7 @@ import {
   withPushLock,
 } from "@/app/shared/pushKey";
 import { SetRow, SetSwitch } from "./ui/atoms";
+import { responseErrorText } from "@/app/lib/responseError";
 
 type PushState =
   | "loading" // probing support + current subscription
@@ -221,7 +222,7 @@ export function BrowserNotificationsRow() {
         return;
       }
       if (!res.ok && res.status !== 204) {
-        throw new Error((await res.text()) || `Subscribe failed: ${res.status}`);
+        throw new Error(await responseErrorText(res, "Subscribe failed"));
       }
       // Another tab's Settings may have let this browser's subscription go
       // while it was being stored (it reads "not yours" until the store lands).
