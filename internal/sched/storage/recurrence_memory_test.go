@@ -46,9 +46,9 @@ func TestRecurringTaskCarriesMemoryForward(t *testing.T) {
 	}
 
 	// Find the next occurrence.
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var next *models.Task
 	for _, tk := range all {

@@ -444,7 +444,7 @@ func TestLogOperations(t *testing.T) {
 	if retrieved.ID != session.ID {
 		t.Errorf("Expected session ID %s, got %s", session.ID, retrieved.ID)
 	}
-	logs, err := db.GetAllLogs(ctx)
+	logs, err := collectLogs(ctx, db)
 	if err != nil {
 		t.Fatalf("Failed to get all logs: %v", err)
 	}
@@ -567,6 +567,16 @@ func TestRunLogHistoryPrunedWithTask(t *testing.T) {
 	}
 }
 
+// collectLogs gathers every stored log session through ForEachLog, keyed by task.
+func collectLogs(ctx context.Context, db *Database) (map[uuid.UUID]*models.LogSession, error) {
+	logs := make(map[uuid.UUID]*models.LogSession)
+	err := db.ForEachLog(ctx, func(id uuid.UUID, session *models.LogSession) error {
+		logs[id] = session
+		return nil
+	})
+	return logs, err
+}
+
 func timePtr(t time.Time) *time.Time { return &t }
 
 // bigSession builds a log session whose JSON is large and repetitive so gzip
@@ -681,16 +691,16 @@ func TestArchiveOldLogsRoundtripAndAgeThreshold(t *testing.T) {
 		t.Fatal("archived message content mismatch after inflate")
 	}
 
-	// GetAllLogs also inflates transparently and still returns all three.
-	all, err := db.GetAllLogs(ctx)
+	// ForEachLog also inflates transparently and still visits all three.
+	all, err := collectLogs(ctx, db)
 	if err != nil {
-		t.Fatalf("GetAllLogs: %v", err)
+		t.Fatalf("ForEachLog: %v", err)
 	}
 	if len(all) != 3 {
-		t.Fatalf("GetAllLogs returned %d, want 3", len(all))
+		t.Fatalf("ForEachLog visited %d, want 3", len(all))
 	}
 	if all[oldTask.ID].ID != oldSession.ID {
-		t.Fatal("GetAllLogs did not inflate the archived row correctly")
+		t.Fatal("ForEachLog did not inflate the archived row correctly")
 	}
 
 	// Idempotent: a second sweep archives nothing (already-archived skipped).

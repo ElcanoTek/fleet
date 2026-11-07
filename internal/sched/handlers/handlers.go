@@ -1306,7 +1306,6 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 
 	// Parse filter parameters
 	var filter db.TaskFilter
-	hasFilters := false
 
 	// Own-rows visibility (#1082): a principal without the fleet-wide grant
 	// (admin / view_all_logs) lists only tasks it created — filtered in SQL so
@@ -1320,27 +1319,22 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 		case p.apiKey != nil:
 			filter.VisibleToKeyID = &p.apiKey.KeyID
 		}
-		hasFilters = true
 	}
 
 	if status := r.URL.Query().Get("status"); status != "" {
 		filter.Status = &status
-		hasFilters = true
 	}
 
 	if q := r.URL.Query().Get("q"); q != "" {
 		filter.Query = &q
-		hasFilters = true
 	}
 
 	if scheduledOnly := r.URL.Query().Get("scheduled_only"); scheduledOnly == "true" {
 		filter.ScheduledOnly = true
-		hasFilters = true
 	}
 
 	if hasDescription := r.URL.Query().Get("has_description"); hasDescription == "true" {
 		filter.HasDescription = true
-		hasFilters = true
 	}
 
 	// Tag filter (#212): ?tag=a&tag=b → tasks carrying ALL of a,b. Query tags are
@@ -1350,9 +1344,6 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 			if t = strings.ToLower(strings.TrimSpace(t)); t != "" {
 				filter.Tags = append(filter.Tags, t)
 			}
-		}
-		if len(filter.Tags) > 0 {
-			hasFilters = true
 		}
 	}
 
@@ -1364,12 +1355,10 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		filter.SourceTaskID = &sid
-		hasFilters = true
 	}
 
 	if completedToday := r.URL.Query().Get("completed_today"); completedToday == "true" {
 		filter.CompletedToday = true
-		hasFilters = true
 
 		if completedStatus := r.URL.Query().Get("completed_status"); completedStatus != "" {
 			statuses, err := parseCompletedStatuses(completedStatus)
@@ -1390,7 +1379,6 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			filter.CreatedBy = &user.ID
-			hasFilters = true
 		} else {
 			// Try to parse as UUID
 			createdByID, err := uuid.Parse(createdByStr)
@@ -1399,20 +1387,12 @@ func (h *Handlers) ListTasks(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			filter.CreatedBy = &createdByID
-			hasFilters = true
 		}
 	}
 
-	var tasks []*models.Task
-	var total int
-	var err error
-
-	if hasFilters {
-		tasks, total, err = h.storage.GetTasksFiltered(filter, limit, offset)
-	} else {
-		tasks, total, err = h.storage.GetAllTasksPaginated(limit, offset)
-	}
-
+	// An empty filter builds the plain unfiltered listing (no WHERE clause),
+	// so there is no separate "no filters" query to choose between.
+	tasks, total, err := h.storage.GetTasksFiltered(filter, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to list tasks")
 		return

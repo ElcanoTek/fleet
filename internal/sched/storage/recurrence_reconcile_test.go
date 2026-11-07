@@ -69,9 +69,9 @@ func seedTerminalRecurring(t *testing.T, store *Storage, status models.TaskStatu
 // successorsOf returns every task row other than the given ids.
 func successorsOf(t *testing.T, store *Storage, exclude map[uuid.UUID]bool) []*models.Task {
 	t.Helper()
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var out []*models.Task
 	for _, tk := range all {

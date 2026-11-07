@@ -77,9 +77,9 @@ func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
 	cancel()
 	<-done
 
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	if len(all) != 2 {
 		t.Fatalf("tasks = %d, want exactly 2 (the dead-lettered occurrence + the one successor it spawned)", len(all))

@@ -405,16 +405,6 @@ func (s *Storage) ListTaskIterations(ctx context.Context, taskID uuid.UUID) ([]*
 	return s.db.ListTaskIterations(ctx, taskID)
 }
 
-// GetAllTasks gets all tasks.
-func (s *Storage) GetAllTasks() ([]*models.Task, error) {
-	return s.db.GetAllTasks(context.Background())
-}
-
-// GetAllTasksPaginated gets tasks with pagination.
-func (s *Storage) GetAllTasksPaginated(limit, offset int) ([]*models.Task, int, error) {
-	return s.db.GetAllTasksPaginated(context.Background(), limit, offset)
-}
-
 // GetTasksFiltered gets tasks with optional filters and pagination.
 func (s *Storage) GetTasksFiltered(filter db.TaskFilter, limit, offset int) ([]*models.Task, int, error) {
 	return s.db.GetTasksFiltered(context.Background(), filter, limit, offset)
@@ -653,11 +643,6 @@ func (s *Storage) ListRunLogHistory(ctx context.Context, taskID uuid.UUID) ([]mo
 // history. See db.GetRunLogEntry.
 func (s *Storage) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryID int64) (*models.LogSession, error) {
 	return s.db.GetRunLogEntry(ctx, taskID, entryID)
-}
-
-// GetAllLogs gets all stored log sessions.
-func (s *Storage) GetAllLogs() (map[uuid.UUID]*models.LogSession, error) {
-	return s.db.GetAllLogs(context.Background())
 }
 
 // ForEachLog visits every stored log session in keyset pages so callers

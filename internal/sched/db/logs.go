@@ -183,28 +183,14 @@ func (db *Database) GetRunLogEntry(ctx context.Context, taskID uuid.UUID, entryI
 	return &session, nil
 }
 
-// logScanChunk is the keyset page size for ForEachLog / GetAllLogs.
+// logScanChunk is the keyset page size for ForEachLog.
 // One page of decoded sessions is the peak payload memory (#1122).
 const logScanChunk = 64
-
-// GetAllLogs gets all stored log sessions, transparently inflating archived
-// payloads (#272). Implemented via ForEachLog so the scan itself is
-// keyset-paginated; the returned map still holds every session (test /
-// runner callers have small tables). Admin pipeline-metrics uses
-// ForEachLog directly so it never materializes the full set (#1122).
-func (db *Database) GetAllLogs(ctx context.Context) (map[uuid.UUID]*models.LogSession, error) {
-	logs := make(map[uuid.UUID]*models.LogSession)
-	err := db.ForEachLog(ctx, func(taskID uuid.UUID, session *models.LogSession) error {
-		logs[taskID] = session
-		return nil
-	})
-	return logs, err
-}
 
 // ForEachLog visits every stored log session in task_id order, inflating
 // archived payloads. Sessions are fetched in keyset pages of logScanChunk
 // so peak memory is one page + the callback's own working set (#1122).
-// A decode/unmarshal failure skips that row (same as GetAllLogs).
+// A decode/unmarshal failure skips that row.
 func (db *Database) ForEachLog(ctx context.Context, fn func(uuid.UUID, *models.LogSession) error) error {
 	var after uuid.UUID
 	haveAfter := false

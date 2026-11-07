@@ -19,6 +19,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
+	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -78,12 +79,12 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	if !errors.As(err, &exceeded) {
 		t.Fatalf("want ExceededError from the chat path, got %v", err)
 	}
-	tasks, err := store.GetAllTasks()
+	_, total, err := store.GetTasksFiltered(scheddb.TaskFilter{}, 1, 0)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("GetTasksFiltered: %v", err)
 	}
-	if len(tasks) != 1 { // only the seeded task
-		t.Errorf("refused schedule_task must not create a task (have %d rows)", len(tasks))
+	if total != 1 { // only the seeded task
+		t.Errorf("refused schedule_task must not create a task (have %d rows)", total)
 	}
 
 	// A different user (no budget) schedules fine — behavior unchanged.

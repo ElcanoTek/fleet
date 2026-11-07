@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -28,6 +29,13 @@ func acquireTestLock(t *testing.T, db *db.Database) {
 		}
 		conn.Close()
 	})
+}
+
+// listAllTasks returns every task row through the production listing query
+// (an empty filter), for tests that assert on the whole table.
+func listAllTasks(s *Storage) ([]*models.Task, error) {
+	tasks, _, err := s.GetTasksFiltered(db.TaskFilter{}, math.MaxInt32, 0)
+	return tasks, err
 }
 
 func newTestStore(t *testing.T) (*Storage, *db.Database) {
@@ -112,7 +120,7 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 		t.Errorf("Expected status Success, got %s", completedTask.Status)
 	}
 
-	allTasks, err := store.GetAllTasks()
+	allTasks, err := listAllTasks(store)
 	if err != nil {
 		t.Fatalf("Failed to get all tasks: %v", err)
 	}
@@ -171,7 +179,7 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 	if err := database.Conn().QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&taskCount); err != nil {
 		t.Fatalf("Failed to count tasks: %v", err)
 	}
-	allTasks, err = store.GetAllTasks()
+	allTasks, err = listAllTasks(store)
 	if err != nil {
 		t.Fatalf("Failed to get all tasks: %v", err)
 	}
@@ -203,9 +211,9 @@ func TestRecurringTaskPreservesTimezone(t *testing.T) {
 		t.Fatalf("UpdateTaskStatusAtomic: %v", err)
 	}
 
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var next *models.Task
 	for _, tk := range all {

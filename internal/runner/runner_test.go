@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"math"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +13,23 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
+
+// listAllTasks returns every task row through the production listing query
+// (an empty filter), for tests that assert on the whole table.
+func listAllTasks(s *storage.Storage) ([]*models.Task, error) {
+	tasks, _, err := s.GetTasksFiltered(db.TaskFilter{}, math.MaxInt32, 0)
+	return tasks, err
+}
+
+// allLogs collects every stored log session through ForEachLog, keyed by task.
+func allLogs(s *storage.Storage) (map[uuid.UUID]*models.LogSession, error) {
+	logs := make(map[uuid.UUID]*models.LogSession)
+	err := s.ForEachLog(context.Background(), func(id uuid.UUID, session *models.LogSession) error {
+		logs[id] = session
+		return nil
+	})
+	return logs, err
+}
 
 // newTestStore initializes a sched storage against DATABASE_URL, serialized on
 // the shared advisory lock so it never races the storage/db package tests.
@@ -93,7 +111,7 @@ func TestPoolClaimsAndCompletes(t *testing.T) {
 	if len(success) != 1 {
 		t.Fatalf("Expected 1 success task, got %d", len(success))
 	}
-	logs, _ := store.GetAllLogs()
+	logs, _ := allLogs(store)
 	if len(logs) != 1 {
 		t.Fatalf("Expected 1 log, got %d", len(logs))
 	}

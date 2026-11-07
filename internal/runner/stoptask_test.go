@@ -59,7 +59,7 @@ func TestStopTaskInterruptsAndAttributes(t *testing.T) {
 
 	// The run unblocks on ctx cancel; the pool persists the log and returns.
 	waitFor(t, 2*time.Second, func() bool {
-		logs, _ := store.GetAllLogs()
+		logs, _ := allLogs(store)
 		return len(logs) == 1
 	})
 
@@ -76,7 +76,7 @@ func TestStopTaskInterruptsAndAttributes(t *testing.T) {
 	if task.AttemptCount != 0 && task.Status == models.TaskStatusPending {
 		t.Fatal("a stopped task must not be re-queued for retry")
 	}
-	logs, _ := store.GetAllLogs()
+	logs, _ := allLogs(store)
 	if len(logs) != 1 || len(logs[taskID].Messages) == 0 {
 		t.Fatalf("partial transcript must persist: %+v", logs)
 	}
@@ -172,7 +172,7 @@ func TestAskPausesTaskAndReleasesLease(t *testing.T) {
 		t.Fatal("ask-pause must not error the task")
 	}
 	// Partial transcript persisted.
-	if logs, _ := store.GetAllLogs(); len(logs) != 1 {
+	if logs, _ := allLogs(store); len(logs) != 1 {
 		t.Fatalf("partial transcript must persist: %d logs", len(logs))
 	}
 }

@@ -80,9 +80,9 @@ func TestExpirePausedTasks_PreservesRecurrenceChain(t *testing.T) {
 	}
 
 	// A successor occurrence was spawned (new row, same recurrence, not terminal).
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var next *models.Task
 	for _, tk := range all {
@@ -118,9 +118,9 @@ func TestExpirePausedTasks_NonRecurringSpawnsNothing(t *testing.T) {
 		t.Fatalf("expired %d, want 1", n)
 	}
 
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	if len(all) != 1 || all[0].ID != orig.ID {
 		t.Fatalf("expected only the original one-shot task, got %d tasks", len(all))

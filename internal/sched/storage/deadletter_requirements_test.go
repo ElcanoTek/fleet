@@ -45,9 +45,9 @@ func TestDeadLetterBreakerParksMalformedRequirementsOnFirstDeadLetter(t *testing
 	// store, so "every other row" would count the earlier cases' rows too.
 	successors := func(t *testing.T, id uuid.UUID) int {
 		t.Helper()
-		all, err := store.GetAllTasks()
+		all, err := listAllTasks(store)
 		if err != nil {
-			t.Fatalf("GetAllTasks: %v", err)
+			t.Fatalf("listAllTasks: %v", err)
 		}
 		n := 0
 		for _, tk := range all {
