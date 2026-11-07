@@ -1,7 +1,9 @@
 package clientconfig
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -21,21 +23,24 @@ import (
 // (a manifest-only bundle is valid); callers that read a specific file surface
 // their own not-found errors.
 func (b *Bundle) validate() error {
-	// Sandbox: only a DECLARED sandbox block enforces the invariant (a minimal
-	// bundle that never opted into the contract gets the conventional defaults
-	// without being forced to ship a Containerfile). When no prebuilt Image
-	// override is set the on-box build is the only way to materialize the image,
-	// so the Containerfile MUST exist. When an Image override is present the
-	// Containerfile is irrelevant (the process pulls/uses the prebuilt ref).
+	// Sandbox: a Containerfile the manifest NAMES (sandbox.containerfile) must
+	// exist — a bundle pointing at a missing file is broken, and the generic
+	// image is never used in its place. A bundle that names none may ship one
+	// at the conventional sandbox/Containerfile (then it must be a file) or
+	// ship none at all: it customizes nothing, so its sandbox is the release's
+	// signed generic image, and an on-box build uses fleet's config/default
+	// Containerfile (scripts/build-sandbox-image.sh, docs/RELEASE-ARTIFACTS.md).
+	// With a prebuilt sandbox.image override the Containerfile is irrelevant.
 	if b.sandboxDeclared && b.SandboxConfig.Image == "" {
 		cf := b.SandboxConfig.ContainerfileAbsPath
-		if cf == "" {
-			return fmt.Errorf("sandbox: containerfile is required when sandbox.image is empty")
-		}
-		if info, err := os.Stat(cf); err != nil {
-			return fmt.Errorf("sandbox: containerfile %s: %w (set sandbox.image to use a prebuilt image instead)", cf, err)
-		} else if info.IsDir() {
+		info, err := os.Stat(cf)
+		switch {
+		case err == nil && info.IsDir():
 			return fmt.Errorf("sandbox: containerfile %s is a directory", cf)
+		case err != nil && b.sandboxContainerfileNamed:
+			return fmt.Errorf("sandbox: containerfile %s: %w (set sandbox.image to use a prebuilt image instead)", cf, err)
+		case err != nil && !errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("sandbox: containerfile %s: %w", cf, err)
 		}
 	}
 

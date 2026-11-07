@@ -233,6 +233,7 @@ func Load(dir string) (*Bundle, error) {
 		PricingConfig:                  m.Pricing,
 		SandboxConfig:                  resolveSandbox(m.Sandbox, abs),
 		sandboxDeclared:                m.Sandbox != nil,
+		sandboxContainerfileNamed:      m.Sandbox != nil && strings.TrimSpace(m.Sandbox.Containerfile) != "",
 		SystemPromptsDir:               filepath.Join(abs, "system_prompts"),
 		PersonasDir:                    filepath.Join(abs, "personas"),
 		ProtocolsDir:                   filepath.Join(abs, "protocols"),
