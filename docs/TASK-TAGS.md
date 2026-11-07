@@ -33,7 +33,7 @@ screen", and a sentence that awkward is usually a defect wearing prose.
   them. Without that the only way back to the full board was a page reload.
 - **`/api/orchestrator/tasks/tags`**, a thin proxy to the existing catalogue
   endpoint. The static `tags` segment wins over the sibling `[taskId]` route,
-  so it does not shadow `GET /tasks/{id}` — the same ordering `cmd/fleet/main.go`
+  so it does not shadow `GET /tasks/{id}` — the same ordering `cmd/fleet/orchestrator_mux.go`
   spells out explicitly for the Go router. `/tasks/tags` requires `view_tasks`
   and is scoped by the same #1082 own-rows rule as the task list, verified by
   `TestTagCatalogueScope` (storage) and `TestTagCatalogueAuthz` (handlers).
