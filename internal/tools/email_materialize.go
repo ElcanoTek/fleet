@@ -260,6 +260,51 @@ func (b attachmentBases) lexical(file string) string {
 	return path
 }
 
+// checkStagingDir refuses an attachment staging directory (dir, which exists)
+// that lies inside the workspace root, the run's working directory or the
+// shared library. Each is compared both as written and with symlinks
+// resolved on both sides, so a staging parent that is (or sits under) a link
+// into a workspace is refused too. A path that cannot be resolved is refused,
+// except a base that does not exist, which can hold nothing.
+func (b attachmentBases) checkStagingDir(dir string) error {
+	refuse := func(cause error) error {
+		if cause != nil {
+			return fmt.Errorf("attachment staging directory must be outside the workspace root: %w", cause)
+		}
+		return errors.New("attachment staging directory must be outside the workspace root")
+	}
+	dirAbs, err := filepath.Abs(dir)
+	if err != nil {
+		return refuse(err)
+	}
+	dirReal, err := filepath.EvalSymlinks(dirAbs)
+	if err != nil {
+		return refuse(err)
+	}
+	if dirReal, err = filepath.Abs(dirReal); err != nil {
+		return refuse(err)
+	}
+	for _, base := range []string{b.root, b.conv, b.shared} {
+		if within(base, dirAbs) || within(base, dirReal) {
+			return refuse(nil)
+		}
+		baseReal, err := filepath.EvalSymlinks(base)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return refuse(err)
+		}
+		if baseReal, err = filepath.Abs(baseReal); err != nil {
+			return refuse(err)
+		}
+		if within(baseReal, dirReal) {
+			return refuse(nil)
+		}
+	}
+	return nil
+}
+
 // within reports whether path is dir or lies under it (both cleaned, absolute).
 func within(dir, path string) bool {
 	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
@@ -404,9 +449,9 @@ func snapshotAttachments(bases attachmentBases, args map[string]any, stagingPare
 	}
 	cleanup = func() { _ = os.RemoveAll(dir) }
 	// The staging directory must not be somewhere a sandbox can see.
-	if dirAbs, aerr := filepath.Abs(dir); aerr != nil || within(bases.root, dirAbs) || within(bases.conv, dirAbs) || within(bases.shared, dirAbs) {
+	if err := bases.checkStagingDir(dir); err != nil {
 		cleanup()
-		return nil, errors.New("attachment staging directory must be outside the workspace root")
+		return nil, err
 	}
 	var total int64
 	n := 0

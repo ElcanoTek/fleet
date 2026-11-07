@@ -482,6 +482,50 @@ func TestSnapshotEmailAttachmentsRechecksBeforeSending(t *testing.T) {
 	}
 }
 
+// An attachment directory that is a symlink into a workspace is compared by
+// where it resolves, not how it is written: the copies would otherwise land
+// somewhere a sandbox mounts.
+func TestSnapshotEmailAttachmentsRefusesStagingLinkedIntoWorkspace(t *testing.T) {
+	root, _ := attachmentWorkspace(t)
+	for name, target := range map[string]string{
+		"workspace root":         root,
+		"conversation workspace": filepath.Join(root, "conv-a"),
+		"other conversation":     filepath.Join(root, "conv-b"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			link := filepath.Join(t.TempDir(), "attachments")
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			args := map[string]any{"attachments": []any{map[string]any{"path": "report.csv"}}}
+			cleanup, err := SnapshotEmailAttachments("conv-a", args, OutboundAttachmentStagingDir(link))
+			if err == nil {
+				cleanup()
+				t.Fatal("a staging directory that resolves into the workspace must be refused")
+			}
+			if !strings.Contains(err.Error(), "outside the workspace root") {
+				t.Fatalf("error = %v, want the staging refusal", err)
+			}
+			entries, _ := os.ReadDir(filepath.Join(target, "outbound"))
+			if len(entries) != 0 {
+				t.Fatalf("refused staging left %d entries behind", len(entries))
+			}
+		})
+	}
+	// A linked attachment directory that resolves outside every workspace
+	// is still accepted.
+	link := filepath.Join(t.TempDir(), "attachments")
+	if err := os.Symlink(t.TempDir(), link); err != nil {
+		t.Fatal(err)
+	}
+	args := map[string]any{"attachments": []any{map[string]any{"path": "report.csv"}}}
+	cleanup, err := SnapshotEmailAttachments("conv-a", args, OutboundAttachmentStagingDir(link))
+	if err != nil {
+		t.Fatalf("a linked staging directory outside the workspace was refused: %v", err)
+	}
+	cleanup()
+}
+
 func TestSnapshotEmailAttachmentsRefusesNonRegularFiles(t *testing.T) {
 	root, _ := attachmentWorkspace(t)
 	if err := syscall.Mkfifo(filepath.Join(root, "conv-a", "pipe"), 0o644); err != nil {
