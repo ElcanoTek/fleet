@@ -31,6 +31,22 @@ describe("responseErrorText", () => {
     expect(await responseErrorText(res(exact), "Save failed")).toBe(exact);
   });
 
+  it("falls back on a proxy's HTML error page", async () => {
+    const page = "<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>";
+    expect(await responseErrorText(res(page, 502), "Save failed")).toBe("Save failed (502)");
+    const fragment = new Response("<h1>Bad Gateway</h1>", {
+      status: 502,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+    expect(await responseErrorText(fragment, "Save failed")).toBe("Save failed (502)");
+  });
+
+  it("keeps a plain-text reason that merely mentions a tag", async () => {
+    expect(await responseErrorText(res("name must not contain <script>", 400), "Save failed")).toBe(
+      "name must not contain <script>",
+    );
+  });
+
   it("never throws when reading the body fails", async () => {
     const broken = {
       status: 503,
