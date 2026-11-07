@@ -366,7 +366,7 @@ func (a *Agent) runEndOfRunVerifierWith(ctx context.Context, model fantasy.Langu
 	// cost money even when the verdict turns out unparseable.
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageEndOfRunVerifier, model.Model(), out)
 	a.logSession.AddAuxUsage(rec)
-	logAuxUsage(rec)
+	logAuxUsage(ctx, rec)
 	raw := strings.TrimSpace(out.Response.Content.Text())
 	if raw == "" {
 		// An empty reply is an answer without a verdict, not an outage: a

@@ -3,7 +3,6 @@ package scheduledrun
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -232,7 +231,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		logging.From(ctx).Error("scheduled loop: llm verifier call failed", "err", err)
 		return false, "llm:error"
 	}
-	recordLoopVerifierUsage(session, verifier.Model(), out)
+	recordLoopVerifierUsage(ctx, session, verifier.Model(), out)
 	if scorers.FirstWordIsYes(out.Response.Content.Text()) {
 		return true, "llm:YES"
 	}
@@ -245,9 +244,9 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 // travels with the transcript; a nil session (defensive) still leaves the log
 // line. Pricing rides agentcore's shared policy so a per-model override (#297)
 // applies here too.
-func recordLoopVerifierUsage(session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
+func recordLoopVerifierUsage(ctx context.Context, session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageLoopExitVerifier, modelSlug, out)
-	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
+	logging.From(ctx).Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
 	if session == nil {
 		return
 	}

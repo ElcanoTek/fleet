@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -29,7 +30,7 @@ func TestShowUICard_PersistedNotReplayed(t *testing.T) {
 		t.Fatalf("a plain result row gained a card key: %s", entries[3].Content)
 	}
 
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatal(err)
 	}

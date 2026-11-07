@@ -1715,12 +1715,12 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 // entry of the turn; the run loop's accumulated entries follow. Persisting the
 // day is what lets the next turn replay the note in place
 // (agentcore.RuntimeDateMessage), so this request is a prefix of the next.
-func assembleTurnMessages(in TurnInput, now time.Time) ([]fantasy.Message, HistoryEntry, error) {
-	history, err := replayHistory(in.History, in.UploadsRoot)
+func assembleTurnMessages(ctx context.Context, in TurnInput, now time.Time) ([]fantasy.Message, HistoryEntry, error) {
+	history, err := replayHistory(ctx, in.History, in.UploadsRoot)
 	if err != nil {
 		return nil, HistoryEntry{}, fmt.Errorf("replay history: %w", err)
 	}
-	imageParts, imageRefs := loadImageAttachments(in.ImageAttachments, in.UploadsRoot)
+	imageParts, imageRefs := loadImageAttachments(ctx, in.ImageAttachments, in.UploadsRoot)
 	messages := make([]fantasy.Message, 0, len(history)+2)
 	messages = append(messages, history...)
 	// The model gets both halves, joined here and nowhere else; the persisted
@@ -1915,7 +1915,7 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		return nil, err
 	}
 
-	messages, userEntry, err := assembleTurnMessages(in, startedAt)
+	messages, userEntry, err := assembleTurnMessages(ctx, in, startedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -2063,13 +2063,13 @@ func hasToolEntries(entries []agentcore.RunEntry) bool {
 	return false
 }
 
-func commitPartialSideEffects(runErr error, res agentcore.Result, senderEmail string, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
+func commitPartialSideEffects(ctx context.Context, runErr error, res agentcore.Result, senderEmail string, summary TurnSummaryContent, commit func([]HistoryEntry, bool) error) {
 	if (!errors.Is(runErr, agentcore.ErrCommittedSideEffects) && !hasToolEntries(res.Entries)) || len(res.Entries) == 0 || commit == nil {
 		return
 	}
 	entries := append(mapRunEntriesWithSender(res.Entries, senderEmail), mustEntry("assistant", "turn_summary", summary))
 	if cerr := commit(entries, false); cerr != nil {
-		slog.Error("RunTurn: committing partial side-effect transcript failed", "err", cerr)
+		logging.From(ctx).Error("RunTurn: committing partial side-effect transcript failed", "err", cerr)
 	}
 }
 
@@ -2151,7 +2151,7 @@ func (m *Manager) failedTurnResult(ctx context.Context, runErr error, res agentc
 	reason, status, _ := agentcore.ClassifyStreamErrorReason(runErr)
 	failure := turnFailureFor(reason, modelSlug, status, runErr)
 	usage := res.Usage
-	commitPartialSideEffects(runErr, res, resolveTurnSender(userEntry, senderEmail), TurnSummaryContent{
+	commitPartialSideEffects(ctx, runErr, res, resolveTurnSender(userEntry, senderEmail), TurnSummaryContent{
 		CostUSD:              usage.CostUSD,
 		PromptTokens:         usage.PromptTokens,
 		PromptTokensLastStep: usage.LastStepInputTokens,

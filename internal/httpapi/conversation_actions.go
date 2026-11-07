@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -931,7 +930,7 @@ const stopInputAttempts = 3
 func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, turn turnStop) (res inputStop, ok, settled, retry bool) {
 	row, err := s.store.LookupInput(qctx, convID, key)
 	if err != nil {
-		slog.Error("cancel input lookup failed", "conv_id", convID, "err", err)
+		logging.From(qctx).Error("cancel input lookup failed", "conv_id", convID, "err", err)
 		return inputStopped, false, false, false
 	}
 	if row == nil {
@@ -942,7 +941,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: key,
 		})
 		if err != nil {
-			slog.Error("cancel input key failed", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input key failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if created {
@@ -953,7 +952,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 	if row != nil && row.Mode != store.InputModeDirect && row.State == store.InputStateQueued {
 		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)
 		if err != nil {
-			slog.Error("cancel input withdraw failed", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input withdraw failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if removed {
@@ -963,7 +962,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// It left the queue between the lookup and the withdrawal: a drained
 		// row is covered by the mark, an injected steer is handled below.
 		if row, err = s.store.LookupInput(qctx, convID, key); err != nil {
-			slog.Error("cancel input lookup failed", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input lookup failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 	}
@@ -975,7 +974,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// above already cancelled that turn.
 		cancelled, err := s.store.CancelUnlaunchedInput(qctx, row.ID)
 		if err != nil {
-			slog.Error("cancel unlaunched input failed", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel unlaunched input failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if cancelled && row.Mode != store.InputModeDirect {
@@ -1003,7 +1002,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			// settlement never re-queues.)
 			cancelled, err := s.store.CancelStoppedDrain(qctx, row.ID, row.TurnID)
 			if err != nil {
-				slog.Error("cancel stopped drain failed", "conv_id", convID, "err", err)
+				logging.From(qctx).Error("cancel stopped drain failed", "conv_id", convID, "err", err)
 				return inputStopped, false, false, false
 			}
 			if cancelled {
@@ -1039,7 +1038,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// already recorded it completed (it ran) is never overwritten. A
 		// re-queued copy a drain claims first is refused by the key's mark.
 		if _, err := s.store.CancelStoppedSteer(qctx, row.ID); err != nil {
-			slog.Error("cancel injected input failed", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel injected input failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		s.emitQueueUpdate(qctx, user, convID)

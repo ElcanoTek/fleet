@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -550,10 +549,10 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 }
 
 // attachTurnPersister attaches the turn_events persister.
-func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
+func (s *Server) attachTurnPersister(ctx context.Context, buf *turnBuffer, user, convID string) {
 	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		slog.Error("attachPersister failed", "user", user, "conv_id", convID, "err", err)
+		logging.From(ctx).Error("attachPersister failed", "user", user, "conv_id", convID, "err", err)
 	}
 	persistCancelAttach()
 }
@@ -765,7 +764,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// Wire incremental persistence so a crash mid-turn leaves a
 	// recoverable ledger in turn_events. Non-fatal — if the DB is
 	// flaky, live streaming still works; crash recovery just won't.
-	s.attachTurnPersister(buf, user, conv.ID)
+	s.attachTurnPersister(turnCtx, buf, user, conv.ID)
 
 	// Attachment metadata (if any) is re-validated server-side, then split
 	// by kind. Images flow into the model as multimodal vision input via
@@ -775,7 +774,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// below so the agent sees what arrived.
 	// Validated against the CALLER's own uploads subtree: naming another
 	// user's upload path is a rejection, not a read (ADR-0058).
-	validAttachments := s.validateAttachments(user, req.Attachments)
+	validAttachments := s.validateAttachments(turnCtx, user, req.Attachments)
 	imageAttachments, otherAttachments := splitAttachmentsByKind(validAttachments)
 	// Copy non-image attachments into THIS conversation's workspace and
 	// advertise those paths (ADR-0058). The uploads root is control-plane
@@ -784,7 +783,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// workspace is not a path another conversation's turn was ever handed.
 	// Images are exempt: their bytes reach the model host-side as vision
 	// input, never through a sandbox read.
-	otherAttachments = stageAttachmentsIntoWorkspace(
+	otherAttachments = stageAttachmentsIntoWorkspace(turnCtx,
 		userUploadsRoot(s.cfg.EmailAttachmentDir, user), conv.ID, otherAttachments)
 	// Everything appended from here on is SERVER-INJECTED context, not
 	// something the user typed: it is accumulated separately, persisted in its

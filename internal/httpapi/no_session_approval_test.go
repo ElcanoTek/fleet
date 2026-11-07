@@ -84,11 +84,11 @@ func TestHandleApproval_NoSessionRefusalKeepsSettledOutcome(t *testing.T) {
 func TestMaybeRegisterSessionPolicy_SkipsNoSessionTool(t *testing.T) {
 	noSessionPolicy(t)
 	s := New(&config.Config{}, &fakeEngine{}, nil)
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_deals_create_deal", approvalRequest{Approved: true, Scope: "session"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_deals_create_deal", approvalRequest{Approved: true, Scope: "session"})
 	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_deals_create_deal", `{}`); ok {
 		t.Fatal("a session policy was registered for a no-session tool")
 	}
-	s.maybeRegisterSessionPolicy("c1", "u@e.com", "mcp_pages_deploy_page", approvalRequest{Approved: true, Scope: "session"})
+	s.maybeRegisterSessionPolicy(context.Background(), "c1", "u@e.com", "mcp_pages_deploy_page", approvalRequest{Approved: true, Scope: "session"})
 	if _, ok := s.sessionApprovals.MatchForUser("c1", "u@e.com", "mcp_pages_deploy_page", `{}`); !ok {
 		t.Fatal("apply-all must keep working for a tool without the rule")
 	}

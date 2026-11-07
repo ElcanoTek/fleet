@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -68,7 +69,7 @@ func TestReplayHistoryRecomposesInjectedContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs, err := replayHistory([]HistoryEntry{
+	msgs, err := replayHistory(context.Background(), []HistoryEntry{
 		{Role: "user", Type: "text", Content: raw, InjectedContext: injectedAttachmentBlock},
 	}, "")
 	if err != nil {
@@ -92,7 +93,7 @@ func TestReplayHistoryRecomposesInjectedContext(t *testing.T) {
 // injected suffix beside them — while the model message is composed. This is
 // the write that makes a branch copy clean.
 func TestAssembleTurnMessagesSplitsThePersistedEntry(t *testing.T) {
-	msgs, entry, err := assembleTurnMessages(TurnInput{
+	msgs, entry, err := assembleTurnMessages(context.Background(), TurnInput{
 		UserMessage:     "what is the CPM?",
 		InjectedContext: injectedAttachmentBlock,
 	}, time.Now())

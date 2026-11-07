@@ -691,7 +691,7 @@ func governToolOutput(ctx context.Context, toolName, text string) (string, bool)
 	setToolPanicPhase(ctx, panicPhaseOutputRedact)
 	text = toolRedactor().Redact(text)
 	var piiBlocked bool
-	text, piiBlocked = redactPII(toolName, text)
+	text, piiBlocked = redactPII(ctx, toolName, text)
 	setToolPanicPhase(ctx, panicPhaseOutputGuardrail)
 	var guardrailBlocked bool
 	text, guardrailBlocked = screenToolOutput(ctx, toolName, text)

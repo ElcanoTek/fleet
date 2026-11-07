@@ -18,7 +18,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -318,14 +317,14 @@ func (r *Runner) composeSystemPrompt(personaFile string) string {
 // for a task (#221). With no per-task persona it returns the pre-baked base
 // prompt + global persona; with a valid override it rebuilds the prompt with
 // that persona; an unknown override logs and falls back to the global default.
-func (r *Runner) taskPromptAndPersona(task *models.Task) (systemPrompt, persona string) {
+func (r *Runner) taskPromptAndPersona(ctx context.Context, task *models.Task) (systemPrompt, persona string) {
 	override := strings.TrimSpace(task.Persona)
 	if override == "" {
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	personaFile := filepath.Base(override) + ".yaml"
 	if _, err := os.Stat(filepath.Join(r.personasDir, personaFile)); err != nil {
-		slog.Warn("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "persona", override)
+		logging.From(ctx).Warn("scheduled task: persona not found in bundle; using global default", "task_id", task.ID, "persona", override)
 		return r.baseSystemPrompt, r.cfg.Persona
 	}
 	return r.composeSystemPrompt(personaFile), personaFile
@@ -376,7 +375,7 @@ func (r *Runner) selfImproveTaskMemory(task *models.Task) tools.TaskMemoryStore 
 	return r.taskMemory
 }
 
-func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *models.Task) []fantasy.AgentTool {
+func (r *Runner) maybeAppendCreateTaskTool(ctx context.Context, base []fantasy.AgentTool, task *models.Task) []fantasy.AgentTool {
 	if r.taskEnqueuer == nil || !task.AllowTaskCreation {
 		return base
 	}
@@ -392,7 +391,7 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 			MaxCreations:     tools.DefaultMaxTaskCreations,
 			Counter:          counter,
 		}))
-	slog.Info("scheduled task: create_task tool enabled", "task_id", task.ID, "recurring", task.AllowRecurringTaskCreation)
+	logging.From(ctx).Info("scheduled task: create_task tool enabled", "task_id", task.ID, "recurring", task.AllowRecurringTaskCreation)
 	return out
 }
 
@@ -415,13 +414,13 @@ func (r *Runner) maybeAppendCreateTaskTool(base []fantasy.AgentTool, task *model
 //
 // Interactive chat never comes through here, so attended behavior is
 // unchanged.
-func applyUnattendedBuiltinPolicy(in []fantasy.AgentTool, task *models.Task, egressMode string, egressAllowlist []string) []fantasy.AgentTool {
+func applyUnattendedBuiltinPolicy(ctx context.Context, in []fantasy.AgentTool, task *models.Task, egressMode string, egressAllowlist []string) []fantasy.AgentTool {
 	networked := task.AllowNetwork && egressMode != sandbox.NetworkModeLockdown
 	out := make([]fantasy.AgentTool, 0, len(in))
 	for _, t := range in {
 		name := t.Info().Name
 		if agentcore.UnattendedToolDisabled(name) {
-			slog.Info("scheduled task: tool removed by agent_policy.unattended_disabled_tools", "task_id", task.ID, "tool", name)
+			logging.From(ctx).Info("scheduled task: tool removed by agent_policy.unattended_disabled_tools", "task_id", task.ID, "tool", name)
 			continue
 		}
 		if name == tools.WebFetchToolName {
@@ -609,7 +608,7 @@ func (r *Runner) Run(ctx context.Context, task *models.Task) (*models.LogSession
 	// one-shot) makes this a no-op.
 	effectiveWorkspace := wtPath
 	if effectiveWorkspace == "" {
-		effectiveWorkspace = r.taskWorkspaceDir(task)
+		effectiveWorkspace = r.taskWorkspaceDir(ctx, task)
 	}
 	if abs, aerr := filepath.Abs(effectiveWorkspace); aerr == nil {
 		effectiveWorkspace = abs
@@ -701,7 +700,7 @@ func (r *Runner) workspaceRoot() string {
 // per-run MCP dirs (mcp-runs/) stay where they are. FLEET_SCHEDULED_SHARED_
 // WORKSPACE=1 restores the shared root. A directory that cannot be created
 // falls back to the root with a log line rather than failing the run.
-func (r *Runner) taskWorkspaceDir(task *models.Task) string {
+func (r *Runner) taskWorkspaceDir(ctx context.Context, task *models.Task) string {
 	root := r.workspaceRoot()
 	if task == nil || (r.cfg != nil && r.cfg.ScheduledSharedWorkspace) {
 		return root
@@ -711,7 +710,7 @@ func (r *Runner) taskWorkspaceDir(task *models.Task) string {
 		return root
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		slog.Warn("scheduled task: could not create per-job workspace (falling back to the shared root)", "task_id", task.ID, "dir", dir, "err", err)
+		logging.From(ctx).Warn("scheduled task: could not create per-job workspace (falling back to the shared root)", "task_id", task.ID, "dir", dir, "err", err)
 		return root
 	}
 	return dir
@@ -971,13 +970,13 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 
 	// create_task (#277) is appended ONLY for a task that opted in. See
 	// maybeAppendCreateTaskTool for the gate rationale.
-	nativeTools := r.maybeAppendCreateTaskTool(scheduledTools, task)
+	nativeTools := r.maybeAppendCreateTaskTool(ctx, scheduledTools, task)
 
 	// Unattended built-in policy (ADR-0094, docs/UNATTENDED-BUILTINS.md):
 	// web_fetch follows the run's sandbox egress posture, and the bundle may
 	// strip create_task / web_fetch / download_url from every scheduled run.
 	egressMode, egressAllowlist := r.mgr.SandboxPool().EgressDefault()
-	nativeTools = applyUnattendedBuiltinPolicy(nativeTools, task, egressMode, egressAllowlist)
+	nativeTools = applyUnattendedBuiltinPolicy(ctx, nativeTools, task, egressMode, egressAllowlist)
 
 	// #191 git-metadata tools (suggest_branch_name / suggest_commit_message /
 	// suggest_pr_description) are wired into the SCHEDULED native set only:
@@ -1067,7 +1066,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 
 	// Per-task persona override (#221): a task may name a personas/<name>.yaml to
 	// swap in specialized domain expertise; empty uses the runner's global persona.
-	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(task)
+	taskSystemPrompt, taskPersona := r.taskPromptAndPersona(ctx, task)
 
 	// Resumed after ask (#510): this run follows a human answer to a question a
 	// prior run posed. Inject the Q&A so the agent continues with the answer in
@@ -1229,7 +1228,7 @@ func (r *Runner) runWorker(ctx context.Context, task *models.Task, extraPrompt s
 	// user to log in, so a connected remote MCP server whose token needs re-auth is
 	// skipped. Surface it in the run transcript so the owner sees the task did less
 	// than expected, and tell the agent so it doesn't silently rely on missing tools.
-	prompt = withSkippedRemoteNotice(task, remoteOverlay, prompt)
+	prompt = withSkippedRemoteNotice(ctx, task, remoteOverlay, prompt)
 	// Loop context (#179): a prior iteration's output is fed forward so the worker
 	// can improve on it. Empty on the first / only pass.
 	if strings.TrimSpace(extraPrompt) != "" {
@@ -1286,11 +1285,11 @@ func taskCredentialAllowlist(task *models.Task) agentcore.CredentialAllowlist {
 // degradation notice for hosted connectors the overlay could not mount (login
 // expired, or a pinned seat not connected — #988). Unchanged prompt when
 // nothing was skipped.
-func withSkippedRemoteNotice(task *models.Task, overlay *agent.RemoteMCPOverlay, prompt string) string {
+func withSkippedRemoteNotice(ctx context.Context, task *models.Task, overlay *agent.RemoteMCPOverlay, prompt string) string {
 	if overlay == nil || len(overlay.Skipped) == 0 {
 		return prompt
 	}
-	slog.Warn("scheduled task: skipped remote MCP servers", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
+	logging.From(ctx).Warn("scheduled task: skipped remote MCP servers", "task_id", task.ID, "skipped", agent.SkippedForLog(overlay))
 	// The reason per connector decides the advice the result should carry
 	// (F10): a dead login is fixed by the owner reconnecting, a vendor that
 	// did not answer is not.

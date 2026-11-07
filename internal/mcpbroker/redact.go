@@ -1,7 +1,7 @@
 package mcpbroker
 
 import (
-	"log/slog"
+	"context"
 	"os"
 	"sync"
 
@@ -34,27 +34,27 @@ import (
 // Credentials-never-in-logs (AGENTS.md) is therefore still honored: what lands
 // in the log is the redacted shape of the failure, which is what an operator
 // needs, and not the secret that failure may have quoted.
-func logMasked(op, detail string, err error) {
+func logMasked(ctx context.Context, op, detail string, err error) {
 	if err == nil {
 		return
 	}
 	scrubbed := brokerRedactor().Redact(err.Error())
 	if detail == "" {
-		slog.Warn("mcpbroker: call failed (masked to the caller)", "op", op, "err", scrubbed)
+		logging.From(ctx).Warn("mcpbroker: call failed (masked to the caller)", "op", op, "err", scrubbed)
 		return
 	}
-	slog.Warn("mcpbroker: call failed (masked to the caller)", "op", op, "detail", detail, "err", scrubbed)
+	logging.From(ctx).Warn("mcpbroker: call failed (masked to the caller)", "op", op, "detail", detail, "err", scrubbed)
 }
 
 // logPassed is logMasked's sibling for the classes describeCallError lets
 // cross (F8): the full redacted detail still lands here, and the line says
 // what the peer was told, so an operator can tell the two apart.
-func logPassed(op, detail string, err error, told string) {
+func logPassed(ctx context.Context, op, detail string, err error, told string) {
 	if err == nil {
 		return
 	}
 	scrubbed := brokerRedactor().Redact(err.Error())
-	slog.Warn("mcpbroker: call failed (passed to the caller with a safe message)", "op", op, "told", told, "detail", detail, "err", scrubbed)
+	logging.From(ctx).Warn("mcpbroker: call failed (passed to the caller with a safe message)", "op", op, "told", told, "detail", detail, "err", scrubbed)
 }
 
 // RegisterSecretLiteral adds a runtime-acquired secret — a per-user OAuth

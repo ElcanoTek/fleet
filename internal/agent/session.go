@@ -1,9 +1,9 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -427,7 +428,7 @@ func applyTurnSummaryCompactions(out []fantasy.Message, summaryIdx, turnStartUse
 // every entry before it is discarded, and the summary text is emitted
 // as a synthetic assistant message. Pre-summary entries remain in the
 // DB and the UI; they just stop entering the model's context.
-func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Message, error) {
+func replayHistory(ctx context.Context, entries []HistoryEntry, uploadsRoot string) ([]fantasy.Message, error) {
 	// Find the index of the most recent summary entry. Anything before
 	// it is supplanted by the summary itself.
 	startIdx := 0
@@ -526,7 +527,7 @@ func replayHistory(entries []HistoryEntry, uploadsRoot string) ([]fantasy.Messag
 				if !isSteer {
 					turnStartUserIdx = i
 				}
-				parts := loadHistoryImageParts(c.Images, uploadsRoot)
+				parts := loadHistoryImageParts(ctx, c.Images, uploadsRoot)
 				// The model sees what it saw the first time: the user's text
 				// plus that turn's injected context (rows written before
 				// migration 056 carry it inside c.Text already, and their
@@ -625,7 +626,7 @@ func confineToUploadsRoot(root, path string) (string, bool) {
 	return filepath.Join(absRoot, rel), true
 }
 
-func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy.FilePart, []ImageRefMeta) {
+func loadImageAttachments(ctx context.Context, atts []ImageAttachment, uploadsRoot string) ([]fantasy.FilePart, []ImageRefMeta) {
 	const (
 		maxImages       = 8
 		maxBytesPerFile = 8 * 1024 * 1024
@@ -642,26 +643,26 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 			// echoed chatAttachment field and is never sanitized —
 			// sanitizeFilename runs at upload time, but /chat re-accepts the
 			// client's own JSON and re-validates only Path. %q escapes CR/LF.
-			slog.Warn("loadImageAttachments: skipping attachment (over the image cap)", "name", safe.LogSafe(a.Name), "max_images", maxImages)
+			logging.From(ctx).Warn("loadImageAttachments: skipping attachment (over the image cap)", "name", safe.LogSafe(a.Name), "max_images", maxImages)
 			continue
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, a.Path)
 		if !ok {
-			slog.Warn("loadImageAttachments: attachment is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
+			logging.From(ctx).Warn("loadImageAttachments: attachment is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			slog.Error("loadImageAttachments: stat failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("loadImageAttachments: stat failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Warn("loadImageAttachments: attachment exceeds the size cap", "path", safe.LogSafe(a.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
+			logging.From(ctx).Warn("loadImageAttachments: attachment exceeds the size cap", "path", safe.LogSafe(a.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			slog.Error("loadImageAttachments: read failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("loadImageAttachments: read failed", "path", safe.LogSafe(a.Path), "err", safe.LogSafe(err.Error()))
 			continue
 		}
 		mt := strings.TrimSpace(a.MediaType)
@@ -686,7 +687,7 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 // user message so they replay as multimodal context on subsequent turns.
 // Any missing file is silently dropped — replay must never fail an entire
 // turn just because an attachment got swept (TTL) since it was uploaded.
-func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.FilePart {
+func loadHistoryImageParts(ctx context.Context, refs []ImageRefMeta, uploadsRoot string) []fantasy.FilePart {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -698,21 +699,21 @@ func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.Fi
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, r.Path)
 		if !ok {
-			slog.Warn("loadHistoryImageParts: image is outside the uploads root (dropped from replay)", "path", safe.LogSafe(r.Path))
+			logging.From(ctx).Warn("loadHistoryImageParts: image is outside the uploads root (dropped from replay)", "path", safe.LogSafe(r.Path))
 			continue
 		}
 		info, err := os.Stat(p)
 		if err != nil {
-			slog.Error("loadHistoryImageParts: stat failed (image dropped from replay)", "path", safe.LogSafe(r.Path), "err", err)
+			logging.From(ctx).Error("loadHistoryImageParts: stat failed (image dropped from replay)", "path", safe.LogSafe(r.Path), "err", err)
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Warn("loadHistoryImageParts: image exceeds the size cap", "path", safe.LogSafe(r.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
+			logging.From(ctx).Warn("loadHistoryImageParts: image exceeds the size cap", "path", safe.LogSafe(r.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
 		if err != nil {
-			slog.Error("loadHistoryImageParts: read failed", "path", safe.LogSafe(r.Path), "err", err)
+			logging.From(ctx).Error("loadHistoryImageParts: read failed", "path", safe.LogSafe(r.Path), "err", err)
 			continue
 		}
 		mt := strings.TrimSpace(r.MediaType)

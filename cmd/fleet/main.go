@@ -529,9 +529,9 @@ func run() error {
 			n, err := chatStore.BackfillSearchContent(bfCtx)
 			switch {
 			case err != nil:
-				slog.Error("search backfill: failed", "err", err, "indexed", n)
+				logging.From(bfCtx).Error("search backfill: failed", "err", err, "indexed", n)
 			case n > 0:
-				slog.Info("search backfill: indexed pre-existing messages", "indexed", n)
+				logging.From(bfCtx).Info("search backfill: indexed pre-existing messages", "indexed", n)
 			}
 		})
 	} else {
@@ -1751,16 +1751,16 @@ func pruneOrphanedSandboxes(pool *sandbox.Pool) {
 	if kb := pool.KubernetesBackend(); kb != nil {
 		// Kubernetes backend (#989): orphans are pods, not podman containers.
 		if n, err := kb.PruneOrphanedPods(pruneCtx); err != nil {
-			slog.Error("startup: prune orphaned sandbox pods failed", "err", err)
+			logging.From(pruneCtx).Error("startup: prune orphaned sandbox pods failed", "err", err)
 		} else if n > 0 {
-			slog.Info("startup: pruned orphaned sandbox pods from a prior run", "pruned", n)
+			logging.From(pruneCtx).Info("startup: pruned orphaned sandbox pods from a prior run", "pruned", n)
 		}
 		return
 	}
 	if n, err := sandbox.PruneOrphanedContainers(pruneCtx, "podman"); err != nil {
-		slog.Error("startup: prune orphaned sandbox containers failed", "err", err)
+		logging.From(pruneCtx).Error("startup: prune orphaned sandbox containers failed", "err", err)
 	} else if n > 0 {
-		slog.Info("startup: pruned orphaned sandbox containers from a prior run", "pruned", n)
+		logging.From(pruneCtx).Info("startup: pruned orphaned sandbox containers from a prior run", "pruned", n)
 	}
 }
 
@@ -2309,22 +2309,22 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
 	if err != nil {
-		slog.Error("stranded-turn recovery: failed", "err", err, "recovered", len(recovered))
+		logging.From(recCtx).Error("stranded-turn recovery: failed", "err", err, "recovered", len(recovered))
 	}
 	for _, r := range recovered {
 		level := slog.LevelInfo
 		if r.Synthesized > 0 {
 			level = slog.LevelWarn // tool calls whose outcome is unknown
 		}
-		slog.Log(context.Background(), level, "stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
+		logging.From(recCtx).Log(context.Background(), level, "stranded-turn recovery: turn recovered", "turn_id", r.TurnID, "conv_id", r.ConversationID, "projected", r.Projected, "unknown_outcome_calls", r.Synthesized)
 	}
 	// Outcomes must follow recovered calls. The store excludes conversations
 	// still containing running turns, so one failed recovery cannot strand
 	// otherwise-safe approvals in unrelated conversations.
 	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
-		slog.Error("stranded-approval recovery: failed", "err", err)
+		logging.From(recCtx).Error("stranded-approval recovery: failed", "err", err)
 	} else if count > 0 {
-		slog.Warn("stranded-approval recovery: recorded unknown outcomes", "count", count)
+		logging.From(recCtx).Warn("stranded-approval recovery: recorded unknown outcomes", "count", count)
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,
@@ -2334,9 +2334,9 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	// restart must not start unattended LLM spend).
 	requeued, completed, cancelled, qerr := chatStore.RecoverInputQueue(recCtx)
 	if qerr != nil {
-		slog.Error("input-queue recovery: failed", "err", qerr)
+		logging.From(recCtx).Error("input-queue recovery: failed", "err", qerr)
 	} else if requeued+completed+cancelled > 0 {
-		slog.Info("input-queue recovery: inputs resolved (completed and cancelled ones had post-injection side effects; not re-run)", "requeued", requeued, "completed", completed, "cancelled", cancelled)
+		logging.From(recCtx).Info("input-queue recovery: inputs resolved (completed and cancelled ones had post-injection side effects; not re-run)", "requeued", requeued, "completed", completed, "cancelled", cancelled)
 	}
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): a resume that was
 	// due but had not started when the last process stopped is DROPPED, with a
@@ -2349,18 +2349,18 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	// server also refuses to launch a 'resume' row from an earlier process.
 	noted, err := dropApprovalResumesAtBoot(chatStore)
 	if err != nil {
-		slog.Error("approval-resume recovery: failed (any stale resume row is still refused at launch)", "err", err)
+		logging.From(recCtx).Error("approval-resume recovery: failed (any stale resume row is still refused at launch)", "err", err)
 	} else if noted > 0 {
-		slog.Info("approval-resume recovery: dropped pending automatic resumes, with a note in each conversation", "conversations", noted)
+		logging.From(recCtx).Info("approval-resume recovery: dropped pending automatic resumes, with a note in each conversation", "conversations", noted)
 	}
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
 	// considered; non-terminal rows are never eligible for deletion.
 	if purged, err := chatStore.PurgeTerminalInputs(recCtx,
 		time.Duration(inputQueueRetentionDays)*24*time.Hour); err != nil {
-		slog.Error("input-queue startup purge: failed", "err", err)
+		logging.From(recCtx).Error("input-queue startup purge: failed", "err", err)
 	} else if purged > 0 {
-		slog.Info("input-queue startup purge: removed terminal rows", "purged", purged)
+		logging.From(recCtx).Info("input-queue startup purge: removed terminal rows", "purged", purged)
 	}
 }
 

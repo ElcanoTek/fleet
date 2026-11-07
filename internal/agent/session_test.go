@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -31,7 +32,7 @@ func TestReplayHistory_RoundTrip(t *testing.T) {
 		mustEntry("user", "text", TextContent{Text: "expand to last month"}),
 	}
 
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestReplayHistory_DropsReasoning(t *testing.T) {
 		mustEntry("assistant", "reasoning", ReasoningContent{Text: "internal thought"}),
 		mustEntry("assistant", "text", TextContent{Text: "hello"}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestReplayHistory_NormalizesNonObjectToolInput(t *testing.T) {
 		mustEntry("assistant", "tool_call", ToolCallContent{ID: "c2", Name: "bash", Input: `{"command":"ls"}`}),
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "c2", Name: "bash", Text: "ok"}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -136,7 +137,7 @@ func TestReplayHistory_ToolErrorPreserved(t *testing.T) {
 			IsErr: true,
 		}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -225,7 +226,7 @@ func TestReplayHistory_ApprovalResolutionOutOfOrder(t *testing.T) {
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "s1", Name: "mcp_sendgrid_send_email", Text: "APPROVAL_REQUIRED: staged", IsErr: true}),
 		mustEntry("assistant", "text", TextContent{Text: "I have staged the email."}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -256,7 +257,7 @@ func TestReplayHistory_ApprovalResolutionAppendedAfter(t *testing.T) {
 		mustEntry("assistant", "text", TextContent{Text: "Staged."}),
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "s1", Name: "mcp_sendgrid_send_email", Text: `{"status_code":202}`, IsErr: false}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -276,7 +277,7 @@ func TestReplayHistory_DanglingResultDropped(t *testing.T) {
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "ghost", Name: "bash", Text: "orphan", IsErr: false}),
 		mustEntry("assistant", "text", TextContent{Text: "ok"}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -303,7 +304,7 @@ func TestReplayHistory_SummaryReplacesPriorTurns(t *testing.T) {
 		mustEntry("user", "text", TextContent{Text: "post-summary user follow-up"}),
 	}
 
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestReplayHistory_LatestSummaryWins(t *testing.T) {
 		mustEntry("assistant", "summary", SummaryContent{Text: "new summary"}),
 		mustEntry("user", "text", TextContent{Text: "session 3 follow-up"}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -373,7 +374,7 @@ func TestReplayHistory_BlankSummaryIsNoOp(t *testing.T) {
 		mustEntry("assistant", "summary", SummaryContent{Text: "   "}),
 		mustEntry("user", "text", TextContent{Text: "after blank summary"}),
 	}
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -419,7 +420,7 @@ func TestReplayHistory_AppliesPersistedTurnCompactions(t *testing.T) {
 		mustEntry("user", "text", TextContent{Text: "turn 4 follow-up"}),
 	}
 
-	msgs, err := replayHistory(entries, "")
+	msgs, err := replayHistory(context.Background(), entries, "")
 	if err != nil {
 		t.Fatalf("replayHistory: %v", err)
 	}
@@ -464,7 +465,7 @@ func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
 		}),
 		mustEntry("tool", "tool_result", ToolResultContent{ID: "call_compacted", Name: "send_email", Text: `{"status":"sent"}`, IsErr: false}),
 	}
-	msgs, err := replayHistory(postCompactionApprovalEntries, "")
+	msgs, err := replayHistory(context.Background(), postCompactionApprovalEntries, "")
 	if err != nil {
 		t.Fatalf("replayHistory post-compaction approval: %v", err)
 	}
@@ -501,7 +502,7 @@ func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
 			},
 		}),
 	}
-	msgsOOO, err := replayHistory(oooCompactedEntries, "")
+	msgsOOO, err := replayHistory(context.Background(), oooCompactedEntries, "")
 	if err != nil {
 		t.Fatalf("replayHistory out-of-order compacted: %v", err)
 	}
@@ -535,7 +536,7 @@ func TestReplayHistory_PreservesApprovalOutcomesAcrossCompaction(t *testing.T) {
 			},
 		}),
 	}
-	msgsMid, err := replayHistory(midTurnSteerEntries, "")
+	msgsMid, err := replayHistory(context.Background(), midTurnSteerEntries, "")
 	if err != nil {
 		t.Fatalf("replayHistory mid-turn approval before steer: %v", err)
 	}

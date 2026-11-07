@@ -23,7 +23,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/url"
 	"regexp"
 	"strings"
@@ -317,12 +316,12 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	}
 	server, _, err := resolveMCPTool(catalog, toolName)
 	if err != nil {
-		slog.Error("approval card: resolve failed", "tool", toolName, "err", redactedForLog(err))
+		logging.From(a.ctx).Error("approval card: resolve failed", "tool", toolName, "err", redactedForLog(err))
 		return "", cardFallbackUnresolved
 	}
 	describer, ok := resolveDescriber(catalog, server, suffix)
 	if !ok {
-		slog.Info("approval card: no single describer found on the server", "suffix", suffix, "server", server, "tool", toolName)
+		logging.From(a.ctx).Info("approval card: no single describer found on the server", "suffix", suffix, "server", server, "tool", toolName)
 		return "", cardFallbackUnresolved
 	}
 	// Re-check the describer's identity at call time, under the one policy
@@ -335,7 +334,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 		readOnly = agentcore.IsParallelSafeTool("mcp_" + seat.Server + "_" + describer)
 	}
 	if agentcore.IsCriticalTool(full) || !readOnly {
-		slog.Info("approval card: describer is critical or not parallel-safe; not called", "describer", full)
+		logging.From(a.ctx).Info("approval card: describer is critical or not parallel-safe; not called", "describer", full)
 		return "", cardFallbackUnresolved
 	}
 	// The loop's other per-call gates apply too. A persona that does not
@@ -349,7 +348,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	persona := a.personaPolicy
 	a.mcpMu.RUnlock()
 	if !agentcore.PersonaPermitsTool(persona, full) || agentcore.PreToolUseHookMatches(full) || agentcore.InteractiveHiddenTool(full) {
-		slog.Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", full)
+		logging.From(a.ctx).Info("approval card: describer is gated by the persona, a pre_tool_use hook or interactive_hidden_tools; not called", "describer", full)
 		return "", cardFallbackGated
 	}
 	var args map[string]any

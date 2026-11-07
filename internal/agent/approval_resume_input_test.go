@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ import (
 // ordinary turn's entry is byte-for-byte what it was before (no "kind" key).
 func TestAssembleTurnMessages_InputKind(t *testing.T) {
 	const notice = "[Approval resolved] mcp_deals_update_deal approval_id=a1 outcome=approved."
-	msgs, entry, err := assembleTurnMessages(TurnInput{UserMessage: notice, InputKind: InputKindApprovalResume}, time.Now())
+	msgs, entry, err := assembleTurnMessages(context.Background(), TurnInput{UserMessage: notice, InputKind: InputKindApprovalResume}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +34,7 @@ func TestAssembleTurnMessages_InputKind(t *testing.T) {
 		t.Fatalf("the model must read the notice as the turn's user message, got %+v", last)
 	}
 
-	_, plain, err := assembleTurnMessages(TurnInput{UserMessage: "hello"}, time.Now())
+	_, plain, err := assembleTurnMessages(context.Background(), TurnInput{UserMessage: "hello"}, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +46,7 @@ func TestAssembleTurnMessages_InputKind(t *testing.T) {
 	// notice entry never reaches the model.
 	history := []HistoryEntry{entry, mustEntry("assistant", "text", TextContent{Text: "verified"}),
 		mustEntry("system", EntryTypeNotice, NoticeContent{Kind: "approval_resume_skipped", Text: "skipped"})}
-	replayed, err := replayHistory(history, "")
+	replayed, err := replayHistory(context.Background(), history, "")
 	if err != nil {
 		t.Fatal(err)
 	}
