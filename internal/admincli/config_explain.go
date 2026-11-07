@@ -1,14 +1,16 @@
 package admincli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
+	"os/exec"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 )
@@ -56,26 +58,45 @@ func configExplain(argv []string) int {
 	return 0
 }
 
-// systemdUnitDirs are where the service unit and its drop-ins are looked for.
-// A var so tests can point it at a fixture.
-var systemdUnitDirs = []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"}
+// systemdUnitDirs is the unit search path the file-parsing fallback uses
+// (systemd's own order). A var so tests can point it at a fixture.
+var systemdUnitDirs = config.SystemdUnitDirs
 
-// envFileExportedBySystemd reports whether the box's fleet unit (or a
-// drop-in) loads envFile with EnvironmentFile=. On the standard install it
-// does, and then every line of the file reaches the server — including
-// spellings fleet's own env-file loader does not admit.
+// systemctlEnvironmentFiles asks systemd for the unit's merged
+// EnvironmentFile= list (base unit + drop-ins, resets applied). ok is false
+// when systemctl is unavailable or fails (no systemd, a container), and the
+// caller falls back to parsing unit files. A var so tests can stub it.
+var systemctlEnvironmentFiles = func(unit string) (files []string, ok bool) {
+	bin, err := exec.LookPath("systemctl")
+	if err != nil {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	//nolint:gosec // G204: fixed systemctl binary; the unit name is passed as one argv element.
+	out, err := exec.CommandContext(ctx, bin, "show", "-p", "EnvironmentFiles", "--value", unit).Output()
+	if err != nil {
+		return nil, false
+	}
+	return config.ParseSystemctlEnvironmentFiles(string(out)), true
+}
+
+// envFileExportedBySystemd reports whether the box's fleet unit loads
+// envFile with EnvironmentFile=. On the standard install it does, and then
+// every line of the file reaches the server — including spellings fleet's
+// own env-file loader does not admit. systemctl's merged view is preferred;
+// without systemctl, the unit and its drop-ins are parsed in systemd's order
+// (config.UnitEnvironmentFiles).
 func envFileExportedBySystemd(envFile string) bool {
 	unit := serviceName("")
 	if !strings.HasSuffix(unit, ".service") {
 		unit += ".service"
 	}
-	var files []string
-	for _, d := range systemdUnitDirs {
-		files = append(files, filepath.Join(d, unit))
-		dropins, _ := filepath.Glob(filepath.Join(d, unit+".d", "*.conf"))
-		files = append(files, dropins...)
+	files, ok := systemctlEnvironmentFiles(unit)
+	if !ok {
+		files, _ = config.UnitEnvironmentFiles(systemdUnitDirs, unit)
 	}
-	return config.EnvFileExportedBySystemd(envFile, files)
+	return config.EnvFileIn(envFile, files)
 }
 
 // writeExplanations renders the table: KEY, VALUE, SOURCE, then any notes.

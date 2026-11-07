@@ -46,9 +46,10 @@ func withUnitDir(t *testing.T, envFile string, exported bool) {
 			t.Fatal(err)
 		}
 	}
-	orig := systemdUnitDirs
+	orig, origCtl := systemdUnitDirs, systemctlEnvironmentFiles
 	systemdUnitDirs = []string{dir}
-	t.Cleanup(func() { systemdUnitDirs = orig })
+	systemctlEnvironmentFiles = func(string) ([]string, bool) { return nil, false } // no systemctl: parse the fixture
+	t.Cleanup(func() { systemdUnitDirs, systemctlEnvironmentFiles = orig, origCtl })
 	t.Setenv("FLEET_SERVICE_NAME", "fleet")
 }
 

@@ -82,29 +82,6 @@ func TestExplainCountsLinesSystemdExports(t *testing.T) {
 	}
 }
 
-func TestEnvFileExportedBySystemd(t *testing.T) {
-	dir := t.TempDir()
-	unit := filepath.Join(dir, "fleet.service")
-	dropin := filepath.Join(dir, "override.conf")
-	writeEnv(t, unit, "[Service]\nEnvironmentFile=-/etc/fleet/fleet.env\nExecStart=/usr/local/bin/fleet serve\n")
-	writeEnv(t, dropin, "[Service]\nEnvironmentFile=/srv/other.env /etc/fleet/extra.env\n")
-	for _, tc := range []struct {
-		file  string
-		files []string
-		want  bool
-	}{
-		{"/etc/fleet/fleet.env", []string{unit}, true},
-		{"/etc/fleet/./fleet.env", []string{unit}, true},
-		{"/etc/fleet/extra.env", []string{unit, dropin}, true},
-		{".env.local", []string{unit, dropin}, false},
-		{"/etc/fleet/fleet.env", []string{filepath.Join(dir, "missing.service")}, false},
-	} {
-		if got := EnvFileExportedBySystemd(tc.file, tc.files); got != tc.want {
-			t.Errorf("EnvFileExportedBySystemd(%s, %v) = %v, want %v", tc.file, tc.files, got, tc.want)
-		}
-	}
-}
-
 // Credential sentinels: whatever value an operator puts in ANY setting,
 // explain must not print a password, token or key embedded in it, and must
 // not print a secret at all.

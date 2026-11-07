@@ -125,14 +125,42 @@ the template.
 
 ### `fleet config explain [KEY…] [--all] [--json] [--env-file F]`
 
-Resolves each setting the way the server does — process env first, then the
-env file (only for names its loader admits), across the canonical name and its
-aliases in resolution order — and prints the effective value, its source
-(`process env`, `env file`, or `default`), the spelling that supplied it, and
-`DEPRECATED` when that spelling is a legacy alias. It also notes a value in the
-env file the loader ignores, and a lower-precedence spelling that is also set.
-Secrets print as `<redacted>`. No KEY lists every setting that is set; `--all`
-lists every setting with its default. An unknown KEY is an error.
+`explain` resolves through the **same code** as `config.Load`, in
+[`internal/config/resolve.go`](../internal/config/resolve.go). Resolution
+has two steps:
+
+1. **Merge, per variable name** (`envLayers.get`). A name present in the
+   process environment wins, *even when its value is empty*. Otherwise the env
+   file's value counts, provided the name is admitted. `applyEnvFile` writes
+   exactly this merge into the process environment at boot.
+2. **Pick, across a setting's spellings** (`resolveSpellings`). The first
+   spelling with a non-empty value wins, so an empty value falls through to
+   the next spelling. `lookupFleet`, `getenvDefault` and the knob parser read
+   the merged environment this way. A reader-specific alias is not among the
+   server's spellings.
+
+`explain` prints:
+- the effective value;
+- its source (`process env`, `env file`, or `default`);
+- the spelling that supplied it;
+- `DEPRECATED` when that spelling is a legacy alias.
+
+It also adds notes for a file value masked by a process variable (even an
+empty one), a file value the loader does not admit, a lower-precedence
+spelling that is also set, and a reader-specific alias.
+
+Secrets print as `<redacted>`. With no KEY, `explain` lists every setting
+that is set **or carries a note**, so an entry whose only spelling set is
+`CHAT_TLS_MODE` still appears. `--all` lists every setting with its default.
+An unknown KEY is an error.
+
+`TestExplainMatchesLoad` pins the two against each other. For six settings,
+it applies every combination of {absent, process env, process env
+present-but-empty, env file, empty process + env file} across all their
+spellings: canonical, CHAT_/CUTLASS_, the bare `PERSONA_DEFAULT`, and the
+reader-specific `CHAT_TLS_MODE` and `DATA_DIR`. That is over 1,000 cases.
+Each case asserts that `explain`'s value and source are what `Load`
+actually produced.
 
 ### Deprecating the aliases ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md))
 
@@ -156,11 +184,26 @@ lists every setting with its default. An unknown KEY is an error.
   and reported, because renaming it would start applying it to the server.
 
 `fleet config explain` and `fleet doctor` follow the same rules. When the
-box's fleet unit (or a drop-in) loads the env file with `EnvironmentFile=`,
-every line counts as the server's environment, not only the names fleet's own
-loader admits; without such a unit an unadmitted line is reported as ignored.
-A reader-specific alias is never reported as a setting's effective value,
-only as a note.
+fleet unit loads the env file with `EnvironmentFile=`, every line counts as
+the server's environment, not only the names fleet's own loader admits;
+without such a unit an unadmitted line is reported as ignored. A
+reader-specific alias is never reported as a setting's effective value, only
+as a note.
+
+Whether the unit exports the file is asked of systemd itself (`systemctl show
+-p EnvironmentFiles --value fleet.service`, which already merges drop-ins).
+Only when `systemctl` is missing or fails (a container, no systemd) does the
+CLI parse the unit files, the way systemd resolves them
+(`config.UnitEnvironmentFiles`):
+- the base unit is the first one found in the search order `/etc/systemd/system`,
+  `/run/systemd/system`, `/usr/local/lib/systemd/system`,
+  `/usr/lib/systemd/system`, `/lib/systemd/system`;
+- drop-ins come from every directory, a higher-priority directory masking a
+  drop-in of the same name, and apply in file-name order;
+- an empty `EnvironmentFile=` resets the list;
+- only `[Service]` counts.
+
+The unit name is `$FLEET_SERVICE_NAME` or `fleet`.
 
 ### Redaction
 
@@ -265,6 +308,39 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm
   schema points them at `config.existingSecret`. Nothing refuses them in
   `config.env`.
+- **Boot applies the env file through the shared merge.** `applyEnvFile` now
+  reads the whole file, then applies each admitted name that the process env
+  does not already hold, instead of applying every line and then restoring
+  the process winners. The resulting environment is the same. The one
+  difference is the error path: if the file fails to parse partway through
+  (for example, a line over the scanner limit), nothing from it is applied,
+  and Load fails either way.
+
+### Registry defaults are checked against the code
+
+`TestRegistryDefaultsMatchCodeFallbacks` walks every non-test Go file. For
+each call to an env parse helper with a hard-coded fallback, it evaluates the
+fallback and requires the registry's `Default` to say the same. It currently
+checks 116 call sites. The helpers are Load's typed readers and string helpers,
+`EnvKnobInt`/`EnvKnobBool`, httpapi's `envDuration`/`envInt`, agentcore's
+`lookupFloatDefault`/`lookupBoolDefault`, the harnesses' `envOr`, and
+webpush's `envBoolDefaultTrue`. A fallback is evaluated when it is made of
+literals, same-package constants, time units, arithmetic or conversions.
+Prose defaults (`(derived from …)`) and non-constant fallbacks are skipped.
+
+`TestRegistryDefaultsOfHandParsedSettings` pins the settings parsed by hand
+without such a helper, each with its read site:
+- `FLEET_UPDATE_WAIT_SECONDS` (600, which had no Default until Codex round 2);
+- the runner's wall clock and concurrency;
+- notify's timeout, retries and SMTP port;
+- the sandbox stats interval and Kata overhead;
+- agentcore's tool-output cap, model-cache TTL, retry budget and first-chunk
+  deadlines;
+- the workspace download cap;
+- the scheduler rate limits;
+- the listener addresses and timezones;
+- the OIDC scopes;
+- the service name.
 
 ## Contradictions fixed on the way
 

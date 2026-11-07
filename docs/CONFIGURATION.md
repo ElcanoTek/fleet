@@ -391,7 +391,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | --- | --- | --- | --- | --- |
 | `FLEET_BACKUP_DIR` | path | — | cli | Directory `fleet backup` writes dumps to. |
 | `FLEET_BACKUP_RETENTION_DAYS` | int | `30` | cli | Age after which `fleet backup --prune` deletes dumps. *Validated at boot* (≥ 1). |
-| `FLEET_UPDATE_WAIT_SECONDS` | int | — | cli | Default of `--wait-timeout` for restart/stop/update. *Validated at boot* (≥ 0). |
+| `FLEET_UPDATE_WAIT_SECONDS` | int | `600` | cli | Default of `--wait-timeout` for restart/stop/update. *Validated at boot* (≥ 0). |
 | `FLEET_UPDATE_WAIT` | bool | — | cli | Same as `fleet update --wait`. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_FORCE` | bool | — | cli | Same as `fleet update --force`. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_ROOT` | path | — | cli | Repository checkout the CLI runs scripts/ from, when it is not the working directory. *Process env only* (fleet's env-file loader does not admit it; export it). |

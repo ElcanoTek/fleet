@@ -1140,12 +1140,26 @@ func applyEnvFile(envFile string) (map[string]string, error) {
 	}
 
 	if envFile != "" {
-		if err := loadEnvFile(envFile); err != nil && !os.IsNotExist(err) {
+		file, err := readEnvFileValues(envFile)
+		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("load env file %s: %w", envFile, err)
+		}
+		// The merge rule `fleet config explain` shares (resolve.go): a name
+		// present in the process env wins, even empty; otherwise an admitted
+		// file value is applied.
+		layers := envLayers{
+			process: func(k string) (string, bool) { v, ok := existing[k]; return v, ok },
+			file:    file,
+			admit:   isAllowedEnvVar,
+		}
+		for k := range file {
+			if v, src, _, _ := layers.get(k); src == SourceEnvFile {
+				_ = os.Setenv(k, v)
+			}
 		}
 	}
 
-	// Restore process-env winners.
+	// Restore process-env winners (quote-stripped).
 	for key, v := range existing {
 		_ = os.Setenv(key, v)
 	}
@@ -1809,18 +1823,15 @@ func splitEmails(raw string) []string {
 	return out
 }
 
-// loadEnvFile parses a KEY=VALUE env file, respecting the allowlist. Always
-// overwrites — Load snapshots/restores the pre-existing process env around
-// this call so "process env wins" holds.
+// loadEnvFileFiltered applies a KEY=VALUE env file's allowlisted keys that
+// include admits, overwriting — the hot-reload path (reload.go) restores the
+// boot winners around this call so "process env wins" holds. Boot itself
+// applies the file through applyEnvFile and the shared merge (resolve.go).
 //
 // Each line is parsed by creds.ParseEnvLine, the one env-file line parser,
 // which the creds writer encodes values for (#834) — see its doc for the value
 // semantics (`export ` prefix, inline comments on unquoted values, one layer
 // of quotes).
-func loadEnvFile(path string) error {
-	return loadEnvFileFiltered(path, func(string) bool { return true })
-}
-
 func loadEnvFileFiltered(path string, include func(string) bool) error {
 	f, err := os.Open(path) // #nosec G304 — path comes from trusted config.
 	if err != nil {
@@ -1931,12 +1942,8 @@ func getenvDefault(key, def string) string {
 // canonical FLEET_<suffix> alone).
 func lookupFleet(suffix string) (string, bool) {
 	suffix = strings.TrimLeft(suffix, "_")
-	for _, name := range envreg.ChainSpellings(canonicalPrefix + suffix) {
-		if v := os.Getenv(name); v != "" {
-			return v, true
-		}
-	}
-	return "", false
+	v, _, ok := resolveSpellings(envreg.ChainSpellings(canonicalPrefix+suffix), os.LookupEnv)
+	return v, ok
 }
 
 // getenvFleet is getenvFleetDefault with an empty default.

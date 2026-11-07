@@ -760,7 +760,7 @@ var table = []Entry{
 	{Name: "FLEET_BACKUP_RETENTION_DAYS", Group: GroupCLI, Scope: ScopeCLI, Type: TypeInt, Default: "30",
 		Knob:        &Knob{Min: b(1), ReadBy: "internal/admincli (backup prune)"},
 		Description: "Age after which `fleet backup --prune` deletes dumps."},
-	{Name: "FLEET_UPDATE_WAIT_SECONDS", Group: GroupCLI, Scope: ScopeCLI, Type: TypeInt,
+	{Name: "FLEET_UPDATE_WAIT_SECONDS", Group: GroupCLI, Scope: ScopeCLI, Type: TypeInt, Default: "600",
 		Knob:        &Knob{Min: b(0), ReadBy: "internal/admincli (restart/stop --wait-timeout default)"},
 		Description: "Default of `--wait-timeout` for restart/stop/update."},
 	{Name: "FLEET_UPDATE_WAIT", Group: GroupCLI, Scope: ScopeCLI, Type: TypeBool, ProcessOnly: true,

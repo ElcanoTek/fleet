@@ -3,25 +3,18 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
-	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
 // `fleet config explain` (#2053): for each registered setting, the effective
-// value, where it came from, and whether that spelling is deprecated — read
-// from the process environment and the deployment env file the way Load reads
-// them, without loading anything.
-
-// Value sources, as `fleet config explain` names them.
-const (
-	SourceProcessEnv = "process env"
-	SourceEnvFile    = "env file"
-	SourceDefault    = "default"
-)
+// value, where it came from, and whether that spelling is deprecated. It
+// resolves through the same two functions config.Load does (resolve.go:
+// envLayers.get for the env-file merge, resolveSpellings for the spelling
+// chain), without loading anything; TestExplainMatchesLoad pins the two
+// against each other.
 
 // Redacted replaces every secret's value in an Explanation.
 const Redacted = "<redacted>"
@@ -45,70 +38,43 @@ type Explanation struct {
 	// Secret marks a redacted setting.
 	Secret bool `json:"secret"`
 	// Notes carries anything else an operator should know: a value in the env
-	// file the loader ignores, another spelling that is also set, an alias
+	// file that does not count, another spelling that is also set, an alias
 	// only some readers honour.
 	Notes []string `json:"notes,omitempty"`
 }
 
-// envSnapshot is the two places a value can come from.
-type envSnapshot struct {
-	file map[string]string
-	// exported: the deployment's systemd unit loads the env file with
-	// EnvironmentFile=, so EVERY line of it reaches the server's process
-	// environment — not only the names fleet's own loader admits.
-	exported bool
-}
-
-// lookup resolves one spelling the way the server sees it: a process-env
-// value wins; otherwise an env-file value counts when fleet's own loader
-// admits the name, or when systemd exports the whole file. viaSystemd marks
-// a value that only systemd delivers; ignored marks one nothing delivers.
-func (s envSnapshot) lookup(name string) (value, source string, viaSystemd, ignored bool) {
-	if v, ok := os.LookupEnv(name); ok && v != "" {
-		return creds.StripEnvQuotes(v), SourceProcessEnv, false, false
+// explainLayers builds the merge explain shares with applyEnvFile. exported
+// (the box's systemd unit loads the file with EnvironmentFile=) admits every
+// name, since systemd exports every line into the server's environment.
+func explainLayers(file map[string]string, exported bool) envLayers {
+	admit := isAllowedEnvVar
+	if exported {
+		admit = func(string) bool { return true }
 	}
-	v, inFile := s.file[name]
-	if !inFile || v == "" {
-		return "", "", false, false
-	}
-	if isAllowedEnvVar(name) {
-		return v, SourceEnvFile, false, false
-	}
-	if s.exported {
-		return v, SourceEnvFile, true, false
-	}
-	return "", "", false, true
-}
-
-// present reports whether name is set (non-empty) anywhere, admitted or not.
-func (s envSnapshot) present(name string) (where string, ok bool) {
-	if v, set := os.LookupEnv(name); set && v != "" {
-		return SourceProcessEnv, true
-	}
-	if v := s.file[name]; v != "" {
-		return SourceEnvFile, true
-	}
-	return "", false
+	return envLayers{process: os.LookupEnv, file: file, admit: admit}
 }
 
 // Explain resolves the named settings (canonical names or alias spellings)
 // against the process environment and envFile. With no keys it returns every
-// setting that is set; with all, every registered setting. An unknown key is
-// an error naming it. A missing env file is not an error.
+// setting that is set or carries a note (an alias the server ignores, a file
+// value that does not count); with all, every registered setting. An unknown
+// key is an error naming it. A missing env file is not an error.
 //
 // exported says the box's systemd unit loads envFile with EnvironmentFile=
-// (EnvFileExportedBySystemd), so every line of it reaches the server even
-// when fleet's own env-file loader would not admit the name.
+// (SystemdExportsEnvFile), so every line of it reaches the server even when
+// fleet's own env-file loader would not admit the name.
 func Explain(envFile string, keys []string, all, exported bool) ([]Explanation, error) {
 	file := map[string]string{}
 	if envFile != "" {
-		vals, err := creds.ReadEnvValues(envFile)
-		if err != nil {
+		vals, err := readEnvFileValues(envFile)
+		if err != nil && !os.IsNotExist(err) {
 			return nil, fmt.Errorf("read env file %s: %w", envFile, err)
 		}
-		file = vals
+		if vals != nil {
+			file = vals
+		}
 	}
-	snap := envSnapshot{file: file, exported: exported}
+	layers := explainLayers(file, exported)
 
 	var entries []envreg.Entry
 	if len(keys) > 0 {
@@ -135,8 +101,8 @@ func Explain(envFile string, keys []string, all, exported bool) ([]Explanation, 
 
 	out := make([]Explanation, 0, len(entries))
 	for i := range entries {
-		x := explainEntry(&entries[i], snap)
-		if len(keys) == 0 && !all && !x.Set {
+		x := explainEntry(&entries[i], layers, exported)
+		if len(keys) == 0 && !all && !x.Set && len(x.Notes) == 0 {
 			continue
 		}
 		out = append(out, x)
@@ -144,41 +110,84 @@ func Explain(envFile string, keys []string, all, exported bool) ([]Explanation, 
 	return out, nil
 }
 
-func explainEntry(e *envreg.Entry, snap envSnapshot) Explanation {
+// serverSpellings are the spellings the server resolves for e, in order: all
+// of them except reader-specific aliases (Alias.ReadBy), which only one other
+// reader honours.
+func serverSpellings(e *envreg.Entry) []string {
+	out := make([]string, 0, 1+len(e.Aliases))
+	out = append(out, e.Name)
+	for _, a := range e.Aliases {
+		if a.ReadBy == "" {
+			out = append(out, a.Name)
+		}
+	}
+	return out
+}
+
+func explainEntry(e *envreg.Entry, layers envLayers, exported bool) Explanation {
 	x := Explanation{Key: e.Name, Secret: e.Secret, Source: SourceDefault, Value: e.Default}
-	for _, name := range e.Spellings() {
-		// A reader-specific alias (only one reader, never the server, honours
-		// it) is never the server's effective value: report it, skip it.
-		if a, _, isAlias := envreg.AliasOf(name); isAlias && a.ReadBy != "" {
-			if where, ok := snap.present(name); ok {
-				x.Notes = append(x.Notes, fmt.Sprintf("set as %s (%s), which only %s reads; the server ignores it", name, where, a.ReadBy))
-			}
-			continue
-		}
-		v, src, viaSystemd, ignored := snap.lookup(name)
-		if ignored {
-			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, which fleet's own loader does not admit — ignored unless the systemd unit exports the file (set it in the process environment)", name))
-			continue
-		}
-		if src == "" {
-			continue
-		}
-		if x.Set {
-			x.Notes = append(x.Notes, fmt.Sprintf("%s is also set (%s) but %s takes precedence", name, src, x.Spelling))
-			continue
-		}
-		x.Set, x.Value, x.Source, x.Spelling = true, v, src, name
-		if viaSystemd {
-			x.Notes = append(x.Notes, fmt.Sprintf("%s reaches the server only through the systemd unit's EnvironmentFile=; fleet's own env-file loader does not admit this spelling", name))
-		}
-		if a, _, isAlias := envreg.AliasOf(name); isAlias {
+
+	// The value: the shared spelling chain over the shared merge.
+	sources := map[string]string{}
+	get := func(name string) (string, bool) {
+		v, src, present, _ := layers.get(name)
+		sources[name] = src
+		return v, present
+	}
+	if v, spelling, ok := resolveSpellings(serverSpellings(e), get); ok {
+		x.Set, x.Value, x.Source, x.Spelling = true, v, sources[spelling], spelling
+		if a, _, isAlias := envreg.AliasOf(spelling); isAlias {
 			x.Deprecated = a.Deprecated
 		}
-	}
-	if x.Set {
+		if x.Source == SourceEnvFile && exported && !isAllowedEnvVar(spelling) {
+			x.Notes = append(x.Notes, fmt.Sprintf("%s reaches the server only through the systemd unit's EnvironmentFile=; fleet's own env-file loader does not admit this spelling", spelling))
+		}
 		x.Value = displayValue(e, x.Value)
 	}
+
+	// The notes: every other spelling that is set, and why it does not count.
+	for _, a := range e.Aliases {
+		if a.ReadBy == "" {
+			continue
+		}
+		if where := setSomewhere(layers, a.Name); where != "" {
+			x.Notes = append(x.Notes, fmt.Sprintf("set as %s (%s), which only %s reads; the server ignores it", a.Name, where, a.ReadBy))
+		}
+	}
+	for _, name := range serverSpellings(e) {
+		if name == x.Spelling {
+			continue
+		}
+		v, src, present, why := layers.get(name)
+		switch {
+		case why == fileMasked:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, but the process env also sets it (to %s), which wins", name, emptyOr(v)))
+		case why == fileNotAdmitted:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, which fleet's own loader does not admit — ignored unless the systemd unit exports the file (set it in the process environment)", name))
+		case present && v != "" && x.Set:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is also set (%s) but %s takes precedence", name, src, x.Spelling))
+		}
+	}
 	return x
+}
+
+// emptyOr names an empty value without printing a non-empty one.
+func emptyOr(v string) string {
+	if v == "" {
+		return "an empty value"
+	}
+	return "a value"
+}
+
+// setSomewhere names where name is set (non-empty), admitted or not.
+func setSomewhere(l envLayers, name string) string {
+	if v, ok := l.process(name); ok && v != "" {
+		return SourceProcessEnv
+	}
+	if l.file[name] != "" {
+		return SourceEnvFile
+	}
+	return ""
 }
 
 // displayValue is what explain may print for a set value: nothing of a
@@ -196,31 +205,4 @@ func displayValue(e *envreg.Entry, v string) string {
 	default:
 		return v
 	}
-}
-
-// EnvFileExportedBySystemd reports whether any of unitFiles (a unit and its
-// drop-ins) loads envFile with EnvironmentFile= — in which case systemd
-// exports every line of the file into the server's environment, whatever
-// fleet's own env-file loader admits. Unreadable files count as absent.
-func EnvFileExportedBySystemd(envFile string, unitFiles []string) bool {
-	want := filepath.Clean(envFile)
-	for _, uf := range unitFiles {
-		b, err := os.ReadFile(uf) // #nosec G304 — a systemd unit path the CLI derived
-		if err != nil {
-			continue
-		}
-		for _, ln := range strings.Split(string(b), "\n") {
-			ln = strings.TrimSpace(ln)
-			val, ok := strings.CutPrefix(ln, "EnvironmentFile=")
-			if !ok {
-				continue
-			}
-			for _, f := range strings.Fields(val) {
-				if filepath.Clean(strings.TrimPrefix(f, "-")) == want {
-					return true
-				}
-			}
-		}
-	}
-	return false
 }
