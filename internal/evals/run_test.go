@@ -50,7 +50,7 @@ func newFakeResolver(t *testing.T, fake *fakellm.Server) *agentcore.ModelResolve
 	ts := httptest.NewServer(fake.Handler())
 	t.Cleanup(ts.Close)
 	t.Setenv("OPENROUTER_BASE_URL", ts.URL+"/api/v1")
-	r, err := agentcore.NewModelResolver("test-key", agentcore.DefaultProviderHeaders)
+	r, err := agentcore.NewModelResolver("test-key")
 	if err != nil {
 		t.Fatal(err)
 	}

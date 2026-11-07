@@ -245,7 +245,6 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
 		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
-		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
 		RuntimeDateInInput:  tc.RuntimeDateInMessages,
 		EnableResendBudget:  tc.EnableResendBudget,

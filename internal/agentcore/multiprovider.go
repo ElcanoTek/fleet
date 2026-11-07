@@ -380,7 +380,7 @@ func selectProvider(providers []ProviderConfig, slug string) (ProviderConfig, st
 // newOpenRouterProvider so the OPENROUTER_BASE_URL E2E seam keeps working.
 // The type's required fields are checked against its ProviderTypeSpec first, so
 // the bundle loader, the admin store and this constructor agree on them.
-func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provider, error) {
+func buildProvider(cfg ProviderConfig) (fantasy.Provider, error) {
 	spec, ok := LookupProviderType(string(cfg.Type))
 	if !ok {
 		return nil, fmt.Errorf("unknown provider type %q (want %s)", cfg.Type, ProviderTypeChoices())
@@ -398,7 +398,7 @@ func buildProvider(cfg ProviderConfig, headers ProviderHeaders) (fantasy.Provide
 	}
 	switch cfg.Type {
 	case ProviderTypeOpenRouter:
-		return newOpenRouterProvider(cfg.APIKey, headers)
+		return newOpenRouterProvider(cfg.APIKey)
 	case ProviderTypeAnthropic:
 		opts := []anthropic.Option{anthropic.WithAPIKey(cfg.APIKey), anthropic.WithHTTPClient(anthropicHTTPClient)}
 		if base != "" {

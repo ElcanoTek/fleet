@@ -60,7 +60,7 @@ func MergeLLMProviders(base []ProviderConfig, admin []ProviderConfig, openRouter
 // reports the construction error, so admin edits are checked BEFORE they are
 // persisted — a row that cannot build must never reach the routing table (a
 // broken row would otherwise fail every future resolver rebuild).
-func ValidateProvider(cfg ProviderConfig, headers ProviderHeaders) error {
-	_, err := buildProvider(cfg, headers)
+func ValidateProvider(cfg ProviderConfig) error {
+	_, err := buildProvider(cfg)
 	return err
 }

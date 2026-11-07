@@ -22,7 +22,7 @@ func TestModelDiscoveryUsesActiveResolver(t *testing.T) {
 	}}
 	// No store at all: discovery must come from the active merged resolver,
 	// including bundle providers that never had an admin DB row.
-	resolver, err := agentcore.NewModelResolverWithProviders(base, agentcore.DefaultProviderHeaders)
+	resolver, err := agentcore.NewModelResolverWithProviders(base)
 	if err != nil {
 		t.Fatal(err)
 	}

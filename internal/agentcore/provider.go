@@ -16,23 +16,21 @@ import (
 // Provider setup + upstream pinning (merged from chat + cutlass fantasy.go).
 //
 // We route everything through OpenRouter. The provider headers (X-Title,
-// HTTP-Referer) are the one front-end-specific divergence and are parameterized
-// via ProviderHeaders. upstreamPinFor takes chat's `~`-stripping behaviour (the
+// HTTP-Referer) identify the fleet runtime (DefaultProviderHeaders); they were
+// the one front-end-specific divergence between the merged repos and are now a
+// single fixed identity. upstreamPinFor takes chat's `~`-stripping behaviour (the
 // superset: it handles OpenRouter floating-alias slugs by stripping the sigil
 // before prefix-matching, which cutlass did not). isAliasModel and
 // anthropicSupportsLongContext are identical/cutlass-superset and lifted as-is.
 
-// ProviderHeaders are the OpenRouter request headers a front-end advertises.
-// Defaults to the fleet identity; callers may override per binary.
+// ProviderHeaders are the OpenRouter request headers fleet advertises.
 type ProviderHeaders struct {
 	XTitle      string
 	HTTPReferer string
 }
 
-// DefaultProviderHeaders identify the unified fleet runtime to OpenRouter.
-// Generic by default; a deployment may override per binary (e.g. via
-// OPENROUTER_X_TITLE / OPENROUTER_HTTP_REFERER) to surface its own product
-// identity in the provider dashboard.
+// DefaultProviderHeaders identify the unified fleet runtime to OpenRouter. They
+// are fixed: agentcore reads no environment variable to override them.
 var DefaultProviderHeaders = ProviderHeaders{
 	XTitle:      "fleet",
 	HTTPReferer: "https://github.com/ElcanoTek/fleet",
@@ -61,7 +59,7 @@ func openRouterBaseURLOverride() string {
 }
 
 // newOpenRouterProvider builds the fantasy OpenRouter provider with the given
-// API key and headers. Every request runs through openRouterCacheControlTransport
+// API key and DefaultProviderHeaders. Every request runs through openRouterCacheControlTransport
 // so explicit per-message cache_control markers on user and assistant messages
 // reach OpenRouter inside content-part arrays (where OpenRouter's Anthropic and
 // Gemini translators read them) rather than top-level message fields on string
@@ -70,10 +68,7 @@ func openRouterBaseURLOverride() string {
 // SDK still builds genuine OpenRouter chat-completions requests but dispatches
 // them to the override origin — the provider boundary is the one and only thing
 // stubbed.
-func newOpenRouterProvider(apiKey string, headers ProviderHeaders) (fantasy.Provider, error) {
-	if headers.XTitle == "" {
-		headers = DefaultProviderHeaders
-	}
+func newOpenRouterProvider(apiKey string) (fantasy.Provider, error) {
 	next := http.DefaultTransport
 	if override := openRouterBaseURLOverride(); override != "" {
 		if rt, err := newBaseURLRewriteTransport(override); err == nil {
@@ -83,8 +78,8 @@ func newOpenRouterProvider(apiKey string, headers ProviderHeaders) (fantasy.Prov
 	opts := []openrouter.Option{
 		openrouter.WithAPIKey(apiKey),
 		openrouter.WithHeaders(map[string]string{
-			"X-Title":      headers.XTitle,
-			"HTTP-Referer": headers.HTTPReferer,
+			"X-Title":      DefaultProviderHeaders.XTitle,
+			"HTTP-Referer": DefaultProviderHeaders.HTTPReferer,
 		}),
 		openrouter.WithHTTPClient(&http.Client{
 			Transport: &openRouterCacheControlTransport{next: next},

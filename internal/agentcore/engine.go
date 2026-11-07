@@ -49,11 +49,6 @@ type engine struct {
 	// instead of burning attempts on a known-bad model. nil = disabled (no-op).
 	healthRegistry *ProviderHealthRegistry
 
-	// providerOptionsFn builds the per-stream OpenRouter ProviderOptions for the
-	// active model slug. Defaults to a reasoning-off pin-only build; drivers may
-	// override to add reasoning / long-context headers.
-	providerOptionsFn func(modelSlug string) fantasy.ProviderOptions
-
 	// thinkingConfig, when set and Enabled, activates Claude extended thinking
 	// (#220) by adding a `thinking` extra-body parameter to the request — but only
 	// for slugs that supportExtendedThinking. nil / disabled leaves the request
@@ -174,10 +169,6 @@ type engine struct {
 	// window cap reserves the same (#1600). 0 means the default allowance.
 	maxCompletionTokens int
 
-	// usageReporter, when set, is called after each step with the run's
-	// accumulated usage so a driver can ship it out-of-band to an external
-	// accountant. Nil for the in-process loop.
-	usageReporter func(RunUsage)
 	// steerSource is the #785 mid-turn input seam (nil = no steering); its
 	// accepted-message state lives on the engine so injections survive
 	// enforcement rounds and resilience re-drives within one run.
@@ -210,9 +201,6 @@ const (
 // signatures). The 1M-context beta header is attached when the active slug is
 // a long-context Claude.
 func (e *engine) providerOptions(modelSlug string) fantasy.ProviderOptions {
-	if e.providerOptionsFn != nil {
-		return e.providerOptionsFn(modelSlug)
-	}
 	opts := &openrouter.ProviderOptions{}
 
 	// Gated on the ACTIVE slug — same rule as thinking below — so a fallback
@@ -1938,9 +1926,6 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			sink.onStepFinish()
 			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
 			r.engine.noteResendFloor(step.Usage)
-			if r.engine.usageReporter != nil {
-				r.engine.usageReporter(usageSnapshot(r.orch))
-			}
 			return nil
 		},
 		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(

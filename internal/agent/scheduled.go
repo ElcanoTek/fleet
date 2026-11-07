@@ -1439,7 +1439,6 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		HiddenToolSuffixes: a.hiddenToolSuffixes,
 		LoaderTools:        loaderTools,
 		NativeTools:        nativeTools,
-		ProviderHeaders:    agentcore.DefaultProviderHeaders,
 		OutputSchema:       a.outputSchema,
 		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
 		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).

@@ -114,10 +114,9 @@ type RunConfig struct {
 	EnableResendBudget bool
 	// LoaderTools are extra always-registered tools (scheduled mcp_list/load).
 	LoaderTools []fantasy.AgentTool
-	// NativeTools are the mode's native tools (bash/python via Executor, etc.).
+	// NativeTools are the mode's native tools (bash/run_python over the run's
+	// sandbox, etc.).
 	NativeTools []fantasy.AgentTool
-	// ProviderHeaders identify the run to OpenRouter.
-	ProviderHeaders ProviderHeaders
 
 	// OutputSchema enables the fail-closed terminal structured-output contract.
 	// The ordinary governed agent loop runs first with its full sandboxed tool
@@ -186,12 +185,6 @@ type Deps struct {
 	// MCP servers are not double-spawned. Nil = discover from MCPClient as before.
 	MCPCatalog []mcp.ServerTool
 
-	// NotesProvider supplies the admin-curated knowledge base injected into the
-	// system prompt for BOTH modes. Nil = no notes section. The DRIVERS read it
-	// at prompt-assembly time (the run loop does not touch it); held here so the
-	// process can hand the same sched-backed provider to both drivers' Deps.
-	NotesProvider NotesProvider
-
 	// LogSession is the structured session log the scheduled Observer writes
 	// (interactive may pass a throwaway). Usage accounting flows into it.
 	LogSession *LogSession
@@ -229,13 +222,6 @@ type Deps struct {
 	// with the conversation's durable input queue; scheduled/evals leave it
 	// nil. Driver-supplied data, not a Mode branch (see TestSeamPurity).
 	SteerSource SteerSource
-
-	// UsageReporter, when set, is invoked after each LLM step with that step's
-	// accumulated run usage (the SAME counters usageSnapshot returns). A driver
-	// may wire this to ship a per-step usage event out-of-band so an external
-	// accountant tracks tokens/cost as steps complete. Nil for the in-process
-	// loop — it reads usage from the orch at the end.
-	UsageReporter func(RunUsage)
 
 	// HealthRegistry, when set, is the cross-run provider circuit-breaker (#267).
 	// The interactive Manager owns one long-lived registry and passes it on every
@@ -1043,7 +1029,6 @@ func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 		onRetry:                newRetryLogger(logSession),
 		temperature:            cfg.Temperature,
 		compactionSummarizer:   deps.CompactionSummarizer,
-		usageReporter:          deps.UsageReporter,
 		steerSource:            deps.SteerSource,
 		maxIterations:          cfg.MaxIterations,
 		healthRegistry:         deps.HealthRegistry,

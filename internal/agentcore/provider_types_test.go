@@ -38,7 +38,7 @@ func TestEveryProviderTypeBuildsAndProbes(t *testing.T) {
 			if typ == ProviderTypeBedrock {
 				cfg.BaseURL = "http://203.0.113.10" // an origin only
 			}
-			if _, err := buildProvider(cfg, DefaultProviderHeaders); err != nil {
+			if _, err := buildProvider(cfg); err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
 			if endpoint, _, _ := probeTarget(cfg); endpoint == "" {
@@ -130,7 +130,7 @@ func chatCompletionServer(t *testing.T) (*httptest.Server, func() (paths []strin
 // cfg builds, and returns the text of each.
 func callBothWays(t *testing.T, cfg ProviderConfig, model string) (generated, streamed string) {
 	t.Helper()
-	p, err := buildProvider(cfg, DefaultProviderHeaders)
+	p, err := buildProvider(cfg)
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestAzureTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 		http.Redirect(w, r, other.URL+r.URL.Path, http.StatusTemporaryRedirect)
 	}))
 	defer redirecting.Close()
-	p, err := buildProvider(ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: redirecting.URL + "/openai/v1"}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "az", Type: ProviderTypeAzure, APIKey: "az-key", BaseURL: redirecting.URL + "/openai/v1"})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestGoogleDefaultEndpointIgnoresHostBaseURL(t *testing.T) {
 	prev := googleHTTPClient.Transport
 	googleHTTPClient.Transport = rec
 	t.Cleanup(func() { googleHTTPClient.Transport = prev })
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key"}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key"})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -631,7 +631,7 @@ func TestGoogleTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 		http.Redirect(w, r, other.URL+r.URL.RequestURI(), http.StatusTemporaryRedirect)
 	}))
 	defer redirecting.Close()
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: redirecting.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "gemini-row-key", BaseURL: redirecting.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -688,7 +688,7 @@ func TestGoogleTurnsFollowRedirectsWithinTheOrigin(t *testing.T) {
 // refuses such an id before that lookup, whatever case it is written in.
 func TestGoogleRefusesClaudeModelIDs(t *testing.T) {
 	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "/nonexistent/fleet-1703-adc.json")
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: "http://203.0.113.10"}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: "http://203.0.113.10"})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -716,7 +716,7 @@ func TestGoogleReplayedCallCarriesItsSignature(t *testing.T) {
 			`"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}`)
 	}))
 	defer srv.Close()
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -805,7 +805,7 @@ func TestGoogleStructuredOutputKeepsRequired(t *testing.T) {
 			`"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1,"totalTokenCount":4}}`)
 	}))
 	defer srv.Close()
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -890,7 +890,7 @@ func TestAnthropicTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 				http.Redirect(w, r, other.URL+r.URL.RequestURI(), status)
 			}))
 			defer redirecting.Close()
-			p, err := buildProvider(ProviderConfig{Name: "claude", Type: ProviderTypeAnthropic, APIKey: "anthropic-row-key", BaseURL: redirecting.URL}, DefaultProviderHeaders)
+			p, err := buildProvider(ProviderConfig{Name: "claude", Type: ProviderTypeAnthropic, APIKey: "anthropic-row-key", BaseURL: redirecting.URL})
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}

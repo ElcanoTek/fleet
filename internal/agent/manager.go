@@ -530,9 +530,9 @@ func New(opts ManagerOptions) (*Manager, error) {
 		err      error
 	)
 	if len(opts.LLMProviders) > 0 {
-		resolver, err = agentcore.NewModelResolverWithProviders(opts.LLMProviders, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolverWithProviders(opts.LLMProviders)
 	} else {
-		resolver, err = agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolver(cfg.OpenRouterAPIKey)
 	}
 	if err != nil {
 		return nil, err
@@ -1281,9 +1281,9 @@ func (m *Manager) SetLLMProviders(providers []agentcore.ProviderConfig) error {
 		err      error
 	)
 	if len(providers) > 0 {
-		resolver, err = agentcore.NewModelResolverWithProviders(providers, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolverWithProviders(providers)
 	} else {
-		resolver, err = agentcore.NewModelResolver(m.config.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolver(m.config.OpenRouterAPIKey)
 	}
 	if err != nil {
 		return err

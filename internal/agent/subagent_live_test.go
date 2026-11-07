@@ -37,7 +37,7 @@ func liveModel(t *testing.T) (fantasy.LanguageModel, *agentcore.ModelResolver) {
 	if key == "" {
 		t.Skip("OPENROUTER_API_KEY unset")
 	}
-	resolver, err := agentcore.NewModelResolver(key, agentcore.DefaultProviderHeaders)
+	resolver, err := agentcore.NewModelResolver(key)
 	if err != nil {
 		t.Fatalf("model resolver: %v", err)
 	}

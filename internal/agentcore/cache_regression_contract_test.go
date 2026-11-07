@@ -458,7 +458,7 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 
 	t.Setenv("OPENROUTER_BASE_URL", srv.URL)
 
-	provider, err := newOpenRouterProvider("test-openrouter-key", DefaultProviderHeaders)
+	provider, err := newOpenRouterProvider("test-openrouter-key")
 	if err != nil {
 		t.Fatalf("newOpenRouterProvider: %v", err)
 	}
@@ -912,7 +912,7 @@ func TestNativeProviderCacheContract_AcrossProviderTypes(t *testing.T) {
 					APIKey:  "test-native-key",
 					BaseURL: srv.URL,
 					Region:  tc.region,
-				}, DefaultProviderHeaders)
+				})
 				if err != nil {
 					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
 				}
@@ -1011,7 +1011,7 @@ func TestNativeProviderCacheContract_AcrossProviderTypes(t *testing.T) {
 					Type:    tc.provType,
 					APIKey:  "test-native-key",
 					BaseURL: srv.URL,
-				}, DefaultProviderHeaders)
+				})
 				if err != nil {
 					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
 				}

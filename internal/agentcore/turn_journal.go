@@ -5,7 +5,7 @@ import "context"
 // TurnJournal is the OPTIONAL durable side-effect journal seam (#798). The
 // interactive driver supplies an implementation that persists to the chat
 // store; the scheduled driver leaves it nil (its session log is the durable
-// record). Like UsageReporter and Finalize this is driver-supplied DATA, not
+// record). Like Finalize this is driver-supplied DATA, not
 // a Mode branch — the trunk calls it nil-safely on every route.
 //
 // ToolIntent MUST return before the tool dispatches; a non-nil error blocks
