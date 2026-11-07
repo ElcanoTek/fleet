@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -340,5 +342,77 @@ func TestLoginClientKeyGroupsIPv6ByPrefix(t *testing.T) {
 	}
 	if got := loginClientKey(netip.MustParseAddr("203.0.113.9")); got != "203.0.113.9" {
 		t.Fatalf("IPv4 key %q", got)
+	}
+}
+
+// loginAttemptsFrom drives password sign-ins through e: n attempts with a wrong
+// password (distinct emails), then one valid sign-in, each from remote with
+// the given X-Forwarded-For (empty = none). It returns the Location of every
+// attempt.
+func loginAttemptsFrom(e *testEnv, n int, remote, xffWrong, xffValid string) []string {
+	e.chat.respond = func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/auth/verify" {
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": r.Header.Get("X-User-Email") == "bob@x.com"})
+			return
+		}
+		loginBackend(200, true, "epoch-1")(w, r)
+	}
+	var locs []string
+	do := func(form, xff string) {
+		r := loginReq(form)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		locs = append(locs, e.do(r).Header.Get("Location"))
+	}
+	for i := 0; i < n; i++ {
+		do("email=user"+strconv.Itoa(i)+"%40x.com&password=wrong", xffWrong)
+	}
+	do("email=bob%40x.com&password=right", xffValid)
+	return locs
+}
+
+// With no trusted proxy configured, requests from loopback (the usual reverse
+// proxy in front of the gateway) cannot be told apart per client, so the
+// per-address limit is not applied: 31 failed attempts from 127.0.0.1 do not
+// stop a valid sign-in from the same address.
+func TestLoginNotLimitedPerAddressBehindUntrustedLoopbackProxy(t *testing.T) {
+	e := newTestEnv(t, withOrigin(testOrigin))
+	locs := loginAttemptsFrom(e, 31, "127.0.0.1:40000", "", "")
+	for i, loc := range locs[:31] {
+		if loc != testOrigin+"/login?e=invalid" {
+			t.Fatalf("attempt %d: %q, want invalid (not throttled)", i+1, loc)
+		}
+	}
+	if last := locs[31]; last != testOrigin+"/" {
+		t.Fatalf("valid sign-in after 31 attempts: %q, want success", last)
+	}
+	// The same holds for a private-range peer (an ingress controller).
+	e = newTestEnv(t, withOrigin(testOrigin))
+	if locs := loginAttemptsFrom(e, 31, "10.2.3.4:40000", "", ""); locs[31] != testOrigin+"/" {
+		t.Fatalf("private peer: %q", locs[31])
+	}
+}
+
+// With the proxy trusted, the X-Forwarded-For client is limited per address,
+// and another client behind the same proxy is not affected. A request from
+// the proxy without the header is not limited per address.
+func TestLoginLimitedPerForwardedClientBehindTrustedProxy(t *testing.T) {
+	withProxy := func(c *Config, _ *Options) {
+		c.TrustedProxies = httpmw.NewTrustedProxies([]net.IP{net.ParseIP("127.0.0.1")})
+	}
+	e := newTestEnv(t, withOrigin(testOrigin), withProxy)
+	locs := loginAttemptsFrom(e, 11, "127.0.0.1:40000", "203.0.113.50", "198.51.100.60")
+	if locs[loginAttemptsPerClientPerMinute-1] != testOrigin+"/login?e=invalid" || locs[loginAttemptsPerClientPerMinute] != testOrigin+"/login?e=throttled" {
+		t.Fatalf("forwarded client: %v", locs)
+	}
+	if locs[11] != testOrigin+"/" {
+		t.Fatalf("another client behind the proxy: %q, want success", locs[11])
+	}
+
+	e = newTestEnv(t, withOrigin(testOrigin), withProxy)
+	if locs := loginAttemptsFrom(e, 31, "127.0.0.1:40000", "", ""); locs[30] != testOrigin+"/login?e=invalid" || locs[31] != testOrigin+"/" {
+		t.Fatalf("proxy without header: %v", locs[29:])
 	}
 }

@@ -94,3 +94,19 @@ func (t TrustedProxies) ClientIP(r *http.Request) netip.Addr {
 	}
 	return peer
 }
+
+// Trusts reports whether addr is one of t's trusted proxies.
+func (t TrustedProxies) Trusts(addr netip.Addr) bool {
+	return addr.IsValid() && inAnyPrefix(addr.Unmap(), t.prefixes)
+}
+
+// ClientAddr is ClientIP plus whether the address was read from
+// X-Forwarded-For past a trusted proxy (forwarded) rather than being the TCP
+// peer itself. A caller that needs to know whether the address names one
+// client, not a proxy several clients share, uses forwarded together with
+// Trusts.
+func (t TrustedProxies) ClientAddr(r *http.Request) (client netip.Addr, forwarded bool) {
+	client = t.ClientIP(r)
+	peer, ok := parseRemoteAddr(r.RemoteAddr)
+	return client, ok && client.IsValid() && client != peer
+}
