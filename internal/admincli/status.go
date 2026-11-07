@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -121,7 +122,7 @@ func checkEnv(r *report) {
 	}
 	// At least one DSN source must resolve; the per-DB checks below report the
 	// detail, so here we only note the env file the deployment reads.
-	if ef := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); ef != "" {
+	if ef := strings.TrimSpace(envreg.Get("FLEET_ENV_FILE")); ef != "" {
 		r.pass("env FLEET_ENV_FILE", ef)
 	} else if f := serverEnvFile(""); f != ".env.local" {
 		// The shipped unit deliberately UnsetEnvironment=FLEET_ENV_FILE and
@@ -439,7 +440,7 @@ func serviceName(flag string) string {
 	if v := strings.TrimSpace(flag); v != "" {
 		return v
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SERVICE_NAME")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SERVICE_NAME")); v != "" {
 		return v
 	}
 	return "fleet"

@@ -142,10 +142,10 @@ func TestEnvKnobRegistryCoversLoaderReads(t *testing.T) {
 	sort.Strings(mismatched)
 	sort.Strings(misscoped)
 	for _, key := range missing {
-		t.Errorf("%s is read by the loader but has no envKnobs entry — add it in knobs.go so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key)
+		t.Errorf("%s is read by the loader but has no envKnobs entry — add it in internal/config/envreg/table.go (its Knob spec) so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key)
 	}
 	for _, m := range mismatched {
-		t.Errorf("kind mismatch for %s — fix the envKnobs entry in knobs.go", m)
+		t.Errorf("kind mismatch for %s — fix the envKnobs entry in internal/config/envreg/table.go (its Knob spec)", m)
 	}
 	for _, key := range misscoped {
 		t.Errorf("%s is read by the loader but its envKnobs entry is scopeExternal — drop the scope/readBy fields (#1273)", key)
@@ -185,7 +185,7 @@ func TestEnvKnobsAreEnvFileSettable(t *testing.T) {
 	}
 	sort.Strings(missing)
 	for _, key := range missing {
-		t.Errorf("%s is in the envKnobs registry but missing from allowedEnvVars — a value set only in FLEET_ENV_FILE is silently dropped, so neither the boot gate nor `fleet validate-config` would ever see it (#1107/#1273); add it to the allowlist in config.go", key)
+		t.Errorf("%s is in the envKnobs registry but missing from allowedEnvVars — a value set only in FLEET_ENV_FILE is silently dropped, so neither the boot gate nor `fleet validate-config` would ever see it (#1107/#1273); declare it in internal/config/envreg/table.go (not ProcessOnly)", key)
 	}
 }
 

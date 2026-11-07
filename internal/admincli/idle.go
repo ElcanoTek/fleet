@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 const (
@@ -225,7 +227,7 @@ func parseServiceTimestamp(startTS string) int64 {
 // when systemd or the unit is not installed, or ("unknown", 0) when the
 // systemctl probe fails.
 func serviceRuntimeState(ctx context.Context, unit string) (string, int64) {
-	if truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
+	if truthy(envreg.Get("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		return "active", 0
 	}
 	if strings.TrimSpace(unit) == "" {
@@ -342,7 +344,7 @@ func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, app
 	if addr == "" {
 		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR"))
 	}
-	if addr == "" && (svcState == "active" || svcState == "unknown") && !truthy(os.Getenv("FLEET_ASSUME_SERVICE_ACTIVE")) {
+	if addr == "" && (svcState == "active" || svcState == "unknown") && !truthy(envreg.Get("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		addr = "127.0.0.1:8080"
 	}
 	if addr == "" {

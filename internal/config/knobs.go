@@ -50,12 +50,14 @@ package config
 //     preflights the syntax and reports it as an ADVISORY. Every lenient row
 //     must carry the rationale in why (a registry test enforces that).
 //
-// Adding a knob: add a registry entry here. For a loader knob, give Load a
-// loadParser call too — the pairing cannot drift silently, since a loader call
-// without a registry entry (or with a mismatched kind) records a load error,
-// and knobs_coverage_test.go cross-checks both directions from source. For an
-// out-of-loader knob, knobs_sweep_test.go walks the whole repo for ad-hoc
-// os.Getenv+parse reads and fails until the key has a row here.
+// Adding a knob: give its entry in the configuration registry
+// (internal/config/envreg/table.go) a Knob spec — the rows below are derived
+// from it (#2053). For a loader knob, give Load a loadParser call too — the
+// pairing cannot drift silently, since a loader call without a knob row (or
+// with a mismatched kind) records a load error, and knobs_coverage_test.go
+// cross-checks both directions from source. For an out-of-loader knob,
+// knobs_sweep_test.go walks the whole repo for ad-hoc env read+parse pairs
+// (os.Getenv or envreg.Get) and fails until the key has a Knob spec.
 
 import (
 	"fmt"
@@ -519,13 +521,13 @@ func EnvKnobBool(key string, def bool) (bool, error) {
 func externalKnob(key string, kind knobKind) (*envKnob, error) {
 	k := envKnobByKey[key]
 	if k == nil {
-		return nil, fmt.Errorf("%s: BUG — read at its point of use but not in the envKnobs registry; add a scopeExternal entry in knobs.go so boot and `fleet validate-config` validate it (#1273)", key)
+		return nil, fmt.Errorf("%s: BUG — read at its point of use but not in the envKnobs registry; add a scopeExternal entry in internal/config/envreg/table.go (its Knob spec) so boot and `fleet validate-config` validate it (#1273)", key)
 	}
 	if k.scope != scopeExternal {
 		return nil, fmt.Errorf("%s: BUG — envKnobs registry has it as a loader knob; read it off the *Config instead", key)
 	}
 	if k.kind != kind {
-		return nil, fmt.Errorf("%s: BUG — envKnobs registry kind mismatch (registry %s, caller reads %s); fix the entry in knobs.go", key, k.kind.label(), kind.label())
+		return nil, fmt.Errorf("%s: BUG — envKnobs registry kind mismatch (registry %s, caller reads %s); fix the entry in internal/config/envreg/table.go (its Knob spec)", key, k.kind.label(), kind.label())
 	}
 	return k, nil
 }
@@ -551,17 +553,17 @@ func (p *loadParser) knob(key string, kind knobKind) *envKnob {
 	k := envKnobByKey[key]
 	if k == nil {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — read by the loader but not in the envKnobs registry; add an entry in knobs.go so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key))
+			"%s: BUG — read by the loader but not in the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec) so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key))
 		return nil
 	}
 	if k.kind != kind {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — envKnobs registry kind mismatch (registry %s, loader reads %s); fix the entry in knobs.go", key, k.kind.label(), kind.label()))
+			"%s: BUG — envKnobs registry kind mismatch (registry %s, loader reads %s); fix the entry in internal/config/envreg/table.go (its Knob spec)", key, k.kind.label(), kind.label()))
 		return nil
 	}
 	if k.scope != scopeLoader {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — envKnobs registry marks it scopeExternal but the loader consumes it; drop the scope/readBy fields from its entry in knobs.go (#1273)", key))
+			"%s: BUG — envKnobs registry marks it scopeExternal but the loader consumes it; drop the scope/readBy fields from its entry in internal/config/envreg/table.go (its Knob spec) (#1273)", key))
 		return nil
 	}
 	return k

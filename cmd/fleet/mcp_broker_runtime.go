@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/redact"
@@ -566,7 +567,7 @@ func scrubParentConnectorState(bundle *clientconfig.Bundle, cfg *config.Config, 
 		// root, and as a literal it turned every run-folder path in a tool
 		// result into "[REDACTED]/mcp-runs/task-…", which the model then passed
 		// back to tools that needed the real folder.
-		if value := os.Getenv(key); redact.IsSecretEnvName(key) || !redact.IsPathListValue(value) {
+		if value := envreg.Unregistered(key); redact.IsSecretEnvName(key) || !redact.IsPathListValue(value) {
 			agentcore.RegisterSecretLiteral(value)
 		}
 		if err := os.Unsetenv(key); err != nil {

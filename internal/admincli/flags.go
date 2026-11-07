@@ -13,6 +13,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
@@ -168,7 +169,7 @@ var probePublicStore config.PublicStoreProbe = func(dsn string) (bool, error) {
 // bare os.Getenv, so no verb can contradict `fleet status` about what the
 // deployment is configured with.
 func envOrFile(key string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := envreg.Get(key); v != "" {
 		return v
 	}
 	loadEnvFile()

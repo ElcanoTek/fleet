@@ -6,9 +6,9 @@ package webui
 import (
 	"crypto/ed25519"
 	"net/url"
-	"os"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
@@ -96,19 +96,19 @@ type OIDCConfig struct {
 // ConfigFromEnv reads the browser tier's configuration from the process
 // environment.
 func ConfigFromEnv() Config {
-	get := func(k string) string { return strings.TrimSpace(os.Getenv(k)) }
+	get := func(k string) string { return strings.TrimSpace(envreg.Get(k)) }
 	c := Config{
-		SessionSecret:      os.Getenv("APP_SESSION_SECRET"),
+		SessionSecret:      envreg.Get("APP_SESSION_SECRET"),
 		ElcanoPubKeyB64:    get("AUTH_SIGNING_PUBKEY"),
 		ElcanoCookieName:   get("AUTH_COOKIE_NAME"),
 		ElcanoCookieDomain: get("AUTH_COOKIE_DOMAIN"),
 		AuthLoginURL:       get("AUTH_LOGIN_URL"),
 		CatwalkURL:         get("CATWALK_URL"),
-		ChatToken:          os.Getenv("FLEET_SERVER_TOKEN"),
+		ChatToken:          envreg.Get("FLEET_SERVER_TOKEN"),
 		DevServer:          get("FLEET_WEB_DEV_SERVER"),
 	}
-	c.OrchestratorToken = firstNonEmpty(os.Getenv("ORCHESTRATOR_SERVER_TOKEN"), c.ChatToken)
-	for _, k := range strings.Split(os.Getenv("AUTH_SIGNING_PREVIOUS_PUBKEYS"), ",") {
+	c.OrchestratorToken = firstNonEmpty(envreg.Get("ORCHESTRATOR_SERVER_TOKEN"), c.ChatToken)
+	for _, k := range strings.Split(envreg.Get("AUTH_SIGNING_PREVIOUS_PUBKEYS"), ",") {
 		if k = strings.TrimSpace(k); k != "" {
 			c.PreviousPubKeys = append(c.PreviousPubKeys, k)
 		}

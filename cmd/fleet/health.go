@@ -134,7 +134,6 @@ func k8sSandboxProbe(prober apiserverProber) func(context.Context) health.Result
 // `fleet validate-config` preflight, not in a readiness probe.
 func podmanSandboxProbe(runtimeBin string) func(context.Context) health.Result {
 	return func(ctx context.Context) health.Result {
-		//nolint:gosec // G702: runtimeBin is operator config (FLEET_SANDBOX_RUNTIME, default "podman"), not request input — the same trusted binary the sandbox already execs for every tool call.
 		out, err := exec.CommandContext(ctx, runtimeBin, "--version").Output()
 		if err != nil {
 			return health.Result{Status: health.StatusError, Detail: runtimeBin + ": " + err.Error()}

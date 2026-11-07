@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strings"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -164,7 +164,7 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 		// user. Refuse the seat rather than spawn it.
 		suffix := "_" + upperAccount(account)
 		for v := range base.BaseEnv {
-			if usertoken.Mentions(os.Getenv(v + suffix)) {
+			if usertoken.Mentions(envreg.Unregistered(v + suffix)) {
 				return "", nil, fmt.Errorf(
 					"refusing to spawn server %q under account %q: %s%s names the reserved signed-in-user token, which fleet substitutes only where the bundle manifest writes it",
 					server, account, v, suffix)
@@ -178,7 +178,7 @@ func resolveMCPVariant(server string, base MCPServerBase, account string) (name 
 			if strings.TrimSpace(base.BaseEnv[v]) == "" {
 				continue // identity var unset on the default seat: nothing to inherit
 			}
-			if strings.TrimSpace(os.Getenv(v+suffix)) != "" {
+			if strings.TrimSpace(envreg.Unregistered(v+suffix)) != "" {
 				continue // overridden for this account
 			}
 			return "", nil, fmt.Errorf(

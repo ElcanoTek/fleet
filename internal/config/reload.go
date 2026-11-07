@@ -410,11 +410,11 @@ func reloadFleetFloat(result *ReloadResult, suffix string, cur float64, set func
 	k := envKnobByKey[key]
 	// Mirror loadParser.knob's split so a registry bug names its actual shape.
 	if k == nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec)"})
 		return
 	}
 	if k.kind != kindFloat {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads float); fix the entry in knobs.go", k.kind.label())})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads float); fix the entry in internal/config/envreg/table.go (its Knob spec)", k.kind.label())})
 		return
 	}
 	nv, isSet, err := k.parseFloat(raw)
@@ -439,11 +439,11 @@ func reloadFleetInt(result *ReloadResult, suffix string, cur int, set func(int))
 	k := envKnobByKey[key]
 	// Mirror loadParser.knob's split so a registry bug names its actual shape.
 	if k == nil {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in knobs.go"})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: "BUG: reloadable knob missing from the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec)"})
 		return
 	}
 	if k.kind != kindInt {
-		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads int); fix the entry in knobs.go", k.kind.label())})
+		result.Errors = append(result.Errors, ReloadError{Key: key, Error: fmt.Sprintf("BUG: envKnobs registry kind mismatch (registry %s, reload reads int); fix the entry in internal/config/envreg/table.go (its Knob spec)", k.kind.label())})
 		return
 	}
 	nv, isSet, err := k.parseInt(raw)

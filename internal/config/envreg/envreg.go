@@ -310,8 +310,9 @@ func (t Type) IsKnobKind() bool {
 	switch t {
 	case TypeInt, TypeInt64, TypeFloat, TypeBool, TypeStrictBool, TypeDuration:
 		return true
+	default:
+		return false
 	}
-	return false
 }
 
 // All returns every entry in table order. The slice is a copy; the entries

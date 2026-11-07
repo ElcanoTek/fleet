@@ -6,6 +6,8 @@ import (
 	"log"
 	"os"
 	"sync"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // defaultSeccompProfile is the curated OCI seccomp profile applied to every
@@ -144,7 +146,7 @@ const seccompProfileTempPattern = "fleet-sandbox-seccomp-*.json"
 // that read the seccomp file at container-create time.
 func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error) {
 	noop := func() {}
-	switch override := os.Getenv(seccompProfileEnv); override {
+	switch override := envreg.Get(seccompProfileEnv); override {
 	case "":
 		// Default: write the embedded profile to a temp file.
 	case "none", "unconfined":
@@ -160,7 +162,7 @@ func resolveSeccompArg(bridgeDir string) (arg string, cleanup func(), err error)
 		// path is operator-set config (an env var on the fleet process), not
 		// agent/LLM/end-user input, so treating it as a trusted filesystem path
 		// is correct; we Stat it only to fail loudly on a typo.
-		if _, statErr := os.Stat(override); statErr != nil { //nolint:gosec // G703: override is operator-set config (FLEET_SANDBOX_SECCOMP_PROFILE), not untrusted input
+		if _, statErr := os.Stat(override); statErr != nil {
 			return "", noop, fmt.Errorf("%s=%q: %w", seccompProfileEnv, override, statErr)
 		}
 		return override, noop, nil

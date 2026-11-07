@@ -16,10 +16,10 @@ import (
 	"fmt"
 	"log"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
@@ -50,7 +50,7 @@ func Init(ctx context.Context, serviceVersion string) (shutdown func(context.Con
 		propagation.Baggage{},
 	))
 
-	endpoint := strings.TrimSpace(os.Getenv("FLEET_OTEL_ENDPOINT"))
+	endpoint := strings.TrimSpace(envreg.Get("FLEET_OTEL_ENDPOINT"))
 	if endpoint == "" {
 		// Disabled: leave the global no-op TracerProvider in place.
 		return func(context.Context) error { return nil }, nil
@@ -70,7 +70,6 @@ func Init(ctx context.Context, serviceVersion string) (shutdown func(context.Con
 		sdktrace.WithSampler(samplerFromEnv()),
 	)
 	otel.SetTracerProvider(tp)
-	//nolint:gosec // G706: endpoint is operator-set startup config, logged %q-quoted (CR/LF escaped) — not attacker-controlled request input.
 	log.Printf("otel: tracing enabled → %q", endpoint)
 	return tp.Shutdown, nil
 }
@@ -102,7 +101,7 @@ func newResource(serviceVersion string) *resource.Resource {
 // TraceIDRatioBased head sampler. Parent-based in all cases so a sampled inbound
 // trace is always continued (we never drop a child of an already-sampled trace).
 func samplerFromEnv() sdktrace.Sampler {
-	raw := strings.TrimSpace(os.Getenv("FLEET_OTEL_SAMPLE_RATIO"))
+	raw := strings.TrimSpace(envreg.Get("FLEET_OTEL_SAMPLE_RATIO"))
 	if raw == "" {
 		return sdktrace.ParentBased(sdktrace.AlwaysSample())
 	}

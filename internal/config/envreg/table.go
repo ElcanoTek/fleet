@@ -813,6 +813,10 @@ var table = []Entry{
 		Description: "Chromium binary the Playwright runner launches instead of its bundled browser."},
 	{Name: "NOTIFY_SOCKET", Group: GroupPlatform, Scope: ScopeServer, Type: TypePath, ProcessOnly: true,
 		Description: "Set by systemd (Type=notify): fleet reports readiness and stopping on it."},
+	{Name: "VISUAL", Group: GroupPlatform, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
+		Description: "Editor `fleet env edit` opens (before EDITOR)."},
+	{Name: "EDITOR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
+		Description: "Editor `fleet env edit` opens when VISUAL is unset."},
 	{Name: "NO_COLOR", Group: GroupPlatform, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
 		Description: "Any value turns colour off in `fleet motd` (no-color.org)."},
 

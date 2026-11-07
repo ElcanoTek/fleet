@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // OCI-runtime selection (#217). The mandatory rootless-Podman sandbox can run
@@ -387,11 +389,10 @@ func lookRuntimeBinary(bin string) error {
 // tuning knob that only ever ADDS memory (unlike the memory LIMIT itself,
 // which fails closed when unparseable).
 func kataOverheadMB() int {
-	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_KATA_OVERHEAD_MB")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_KATA_OVERHEAD_MB")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
-		//nolint:gosec // G706: v is operator-set env config (FLEET_SANDBOX_KATA_OVERHEAD_MB), quoted with %q — not request input.
 		log.Printf("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB=%q — using default %dMiB", v, DefaultKataOverheadMB)
 	}
 	return DefaultKataOverheadMB

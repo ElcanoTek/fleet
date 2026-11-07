@@ -25,6 +25,8 @@ linters:
     - bodyclose
     - errname
     - errorlint
+    # forbidigo: one way to read the environment (#2053, docs/CONFIG-REGISTRY.md).
+    - forbidigo
     - exhaustive
     - gocritic
     - gocyclo
@@ -62,6 +64,17 @@ linters:
     # zero is churn, so goconst is disabled for the full-clean gate.
     - goconst
   settings:
+    forbidigo:
+      # Every environment read goes through the configuration registry
+      # (internal/config/envreg): envreg.Get / envreg.Lookup for a declared
+      # setting, envreg.Unregistered for a name that comes from data (the
+      # client bundle's manifest, an account suffix, a flag). The os accessors
+      # are banned everywhere else; the exceptions are listed under
+      # exclusions.rules below.
+      analyze-types: true
+      forbid:
+        - pattern: ^os\.(Getenv|LookupEnv|Environ)$
+          msg: read the environment through internal/config/envreg (Get/Lookup for a registered setting, Unregistered for a data-named variable) — docs/CONFIG-REGISTRY.md
     exhaustive:
       # Treat a switch with a default case as exhaustive. Every enum switch in
       # this tree that exhaustive flagged already routes the remaining values
@@ -124,6 +137,29 @@ linters:
       - text: 'shadow: declaration of "err"'
         linters:
           - govet
+      # ── forbidigo exceptions: the env-read ban (#2053) ──
+      # internal/config owns the environment: the registry accessor itself
+      # (envreg), the env-file loader that snapshots and restores the process
+      # env, and the DSN resolver.
+      - path: ^internal/config/
+        linters:
+          - forbidigo
+      # Tests set and read the environment directly to stage scenarios.
+      - path: _test\.go
+        linters:
+          - forbidigo
+      # Wholesale copies of the environment, never a read of one setting:
+      #   - subprocess env plumbing: `fleet backup` (pg_dump) and `fleet
+      #     update` (update.sh) hand their whole environment to the child;
+      #   - secret redactors snapshot every VALUE as a literal to scrub
+      #     (agentcore, mcpbroker, the Browserbase live-view guard, `fleet
+      #     diagnose`), and diagnose lists the set NAMES (never values);
+      #   - the broker divests the connector env by scanning it, and creds
+      #     discovers per-account suffix variants by scanning it.
+      - path: ^(internal/admincli/(backup|update|diagnose)|internal/agentcore/redact|internal/mcpbroker/redact|internal/tools/browserbase_live_view|cmd/fleet/mcp_broker_runtime|internal/creds/creds)\.go$
+        text: os\.Environ
+        linters:
+          - forbidigo
 
 formatters:
   enable:

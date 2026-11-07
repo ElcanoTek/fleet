@@ -6,11 +6,11 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webui"
@@ -25,7 +25,7 @@ const defaultWebAddr = "127.0.0.1:3000"
 // no browser tier (an API-only deployment). Like the two backend listeners
 // it never widens to every interface by default.
 func webAddr() (addr string, enabled bool) {
-	v := strings.TrimSpace(os.Getenv("FLEET_WEB_ADDR"))
+	v := strings.TrimSpace(envreg.Get("FLEET_WEB_ADDR"))
 	switch strings.ToLower(v) {
 	case "":
 		return defaultWebAddr, true
@@ -54,7 +54,6 @@ func buildWebServer(cfg *config.Config, chat, orch http.Handler) (*http.Server, 
 	if !g.BundlePresent() {
 		log.Printf("WARNING: this fleet binary carries no web bundle — pages answer 503 until it is rebuilt with `make build` (the API still works)")
 	}
-	//nolint:gosec // G706: the build id is the embedded bundle's build-id.txt, compiled into this binary, not request input.
 	log.Printf("web: bundle %s", g.BuildID())
 	return &http.Server{
 		Addr:              addr,
@@ -102,7 +101,6 @@ func serveInBackground(name string, srv *http.Server, errCh chan<- error) {
 	}
 	go func() {
 		defer safe.Recover("cmd."+name, func(any) { errCh <- errors.New(name + ": panicked") })
-		//nolint:gosec // G706: name is a constant and Addr is operator config (a listen address), not request input; %q quotes it.
 		log.Printf("%s listening on %q", name, srv.Addr)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("%s: %w", name, err)

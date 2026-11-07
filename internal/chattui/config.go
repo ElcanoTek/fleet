@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -254,7 +255,7 @@ func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string)
 }
 
 // osEnv / osReadFile / osReadEnvValues are the production accessors.
-func osEnv(k string) string               { return os.Getenv(k) }
+func osEnv(k string) string               { return envreg.Get(k) }
 func osReadFile(p string) ([]byte, error) { return os.ReadFile(p) } //nolint:gosec // G304: p is operator-supplied --token-file (a deliberate local path), not request/LLM input.
 
 func osReadEnvValues(path string, keys ...string) (map[string]string, error) {

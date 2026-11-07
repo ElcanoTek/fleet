@@ -15,14 +15,14 @@ import (
 	"errors"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
 
 func main() {
-	addr := os.Getenv("FLEET_WEB_ADDR")
+	addr := envreg.Get("FLEET_WEB_ADDR")
 	if addr == "" {
 		addr = "127.0.0.1:3100"
 	}
@@ -35,7 +35,6 @@ func main() {
 		log.Fatalf("web-e2e-server: no web bundle embedded — run `make web` (cd web && npm run build) before building this harness")
 	}
 	srv := &http.Server{Addr: addr, Handler: g, ReadHeaderTimeout: 30 * time.Second}
-	//nolint:gosec // G706: addr is the harness's own config (a listen address), not request input; %q quotes it.
 	log.Printf("web-e2e-server: bundle %s listening on %q", g.BuildID(), addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatal(err)

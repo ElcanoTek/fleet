@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
@@ -77,7 +77,7 @@ func disclosureThreshold() int {
 // admin override) — the workspace-settings boot wiring reports it as the value
 // a reset reverts to.
 func EnvToolDisclosureThreshold() int {
-	if v := strings.TrimSpace(os.Getenv("FLEET_TOOL_DISCLOSURE_THRESHOLD")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_TOOL_DISCLOSURE_THRESHOLD")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}

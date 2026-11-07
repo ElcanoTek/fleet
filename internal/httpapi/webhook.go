@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"text/template"
@@ -18,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/store"
@@ -490,9 +490,9 @@ func (s *Server) verifyWebhookSignature(r *http.Request, body []byte, trig clien
 	header := clientconfig.DefaultHMACHeader
 	if found {
 		if trig.UsesSlack() {
-			slackSecret = os.Getenv(trig.TokenSecretEnv)
+			slackSecret = envreg.Unregistered(trig.TokenSecretEnv)
 		} else {
-			hmacSecret = os.Getenv(trig.HMACSecretEnv)
+			hmacSecret = envreg.Unregistered(trig.HMACSecretEnv)
 			header = trig.SignatureHeader()
 		}
 	}

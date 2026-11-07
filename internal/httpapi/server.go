@@ -20,6 +20,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/hoststats"
 	"github.com/ElcanoTek/fleet/internal/ratelimit"
@@ -389,14 +390,14 @@ func (s *Server) IsDraining() bool { return s.shuttingDown.Load() || UpdateDrain
 // operator CLIs, and update.sh always inspect the same file regardless of CWD.
 func UpdateDrainFile() string {
 	for _, key := range []string{"FLEET_UPDATE_DRAIN_FILE", "FLEET_DRAIN_FILE"} {
-		if p := strings.TrimSpace(os.Getenv(key)); p != "" {
+		if p := strings.TrimSpace(envreg.Get(key)); p != "" {
 			if filepath.IsAbs(p) {
 				return filepath.Clean(p)
 			}
 			return filepath.Join("/etc/fleet", p)
 		}
 	}
-	if envFile := strings.TrimSpace(os.Getenv("FLEET_ENV_FILE")); envFile != "" && filepath.IsAbs(envFile) {
+	if envFile := strings.TrimSpace(envreg.Get("FLEET_ENV_FILE")); envFile != "" && filepath.IsAbs(envFile) {
 		return filepath.Clean(envFile) + ".update.drain"
 	}
 	return filepath.Join("/etc/fleet", "fleet.env.update.drain")
@@ -718,7 +719,7 @@ var sseHeartbeatInterval = envDuration("FLEET_SSE_HEARTBEAT_INTERVAL", 15*time.S
 // envDuration reads a time.ParseDuration-formatted env var, falling back to def
 // when unset or unparseable.
 func envDuration(key string, def time.Duration) time.Duration {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+	if v := strings.TrimSpace(envreg.Get(key)); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
 		}
@@ -729,7 +730,7 @@ func envDuration(key string, def time.Duration) time.Duration {
 
 // envInt reads an integer env var, falling back to def when unset or unparseable.
 func envInt(key string, def int) int {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+	if v := strings.TrimSpace(envreg.Get(key)); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}

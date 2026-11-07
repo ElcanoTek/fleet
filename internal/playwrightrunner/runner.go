@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/netguard"
 )
 
@@ -397,7 +398,7 @@ func buildRunnerEnv() []string {
 	hasBrowsersPath := false
 	hasNodePath := false
 	for _, k := range allowKeys {
-		v := os.Getenv(k)
+		v := envreg.Get(k)
 		if v == "" {
 			continue
 		}
