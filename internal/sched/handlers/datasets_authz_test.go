@@ -24,6 +24,14 @@ import (
 // gate and the import body cap are exercised through the real middleware stack.
 func setupDatasetAuthz(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Manager) {
 	t.Helper()
+	r, store, keyMgr, _ := setupDatasetAuthzHandlers(t)
+	return r, store, keyMgr
+}
+
+// setupDatasetAuthzHandlers is setupDatasetAuthz that also returns the
+// handler set, so a test can wire the budget gate or a dataset runner.
+func setupDatasetAuthzHandlers(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Manager, *Handlers) {
+	t.Helper()
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
 	h := New(Config{DefaultTaskModel: "test/model",
@@ -46,10 +54,19 @@ func setupDatasetAuthz(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Manag
 		r.Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
 		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
 	})
-	return r, store, keyMgr
+	return r, store, keyMgr, h
 }
 
+// seedDataset inserts a dataset with no recorded creator (fleet-wide
+// principals only).
 func seedDataset(t *testing.T, store *storage.Storage) *models.Dataset {
+	t.Helper()
+	return seedOwnedDataset(t, store, nil, nil)
+}
+
+// seedOwnedDataset inserts a dataset attributed to the given creating user
+// and/or API key (either may be nil).
+func seedOwnedDataset(t *testing.T, store *storage.Storage, userID *uuid.UUID, keyID *string) *models.Dataset {
 	t.Helper()
 	ds := &models.Dataset{
 		ID:      uuid.New(),
@@ -58,6 +75,9 @@ func seedDataset(t *testing.T, store *storage.Storage) *models.Dataset {
 		Model:   "test/model",
 		Columns: []models.DatasetColumn{{Name: "in", Type: "text"}, {Name: "out", Type: "text", Output: true}},
 		Status:  models.DatasetStatusIdle,
+
+		CreatedByUserID: userID,
+		CreatedByKeyID:  keyID,
 	}
 	if err := store.CreateDataset(context.Background(), ds); err != nil {
 		t.Fatalf("CreateDataset: %v", err)
@@ -87,13 +107,16 @@ func datasetRequest(method, path, apiKey, contentType string, body string) *http
 // surface.
 func TestDatasetsRequirePermissions(t *testing.T) {
 	r, store, keyMgr := setupDatasetAuthz(t)
-	_, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
+	readonly, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
 		t.Fatalf("CreateTypedKey: %v", err)
 	}
-	clientKey := mustCreateRoleKey(t, keyMgr, "client")
-	ds := seedDataset(t, store)
+	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	// The readonly key reads its own dataset; the mutations below are refused
+	// on permission before ownership is consulted.
+	ds := seedOwnedDataset(t, store, nil, &readonly.KeyID)
 	id := ds.ID.String()
+	clientDS := seedOwnedDataset(t, store, nil, &clientKeyID)
 
 	do := func(req *http.Request) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -134,7 +157,7 @@ func TestDatasetsRequirePermissions(t *testing.T) {
 		if w := do(datasetRequest(http.MethodPost, "/datasets", clientKey, "application/json", createBody)); w.Code != http.StatusOK {
 			t.Fatalf("client POST /datasets = %d, want 200: %s", w.Code, w.Body.String())
 		}
-		if w := do(datasetRequest(http.MethodPost, "/datasets/"+id+"/rows", clientKey, "application/json", `{"rows":[{"in":"x"}]}`)); w.Code != http.StatusOK {
+		if w := do(datasetRequest(http.MethodPost, "/datasets/"+clientDS.ID.String()+"/rows", clientKey, "application/json", `{"rows":[{"in":"x"}]}`)); w.Code != http.StatusOK {
 			t.Fatalf("client import = %d, want 200: %s", w.Code, w.Body.String())
 		}
 	})
@@ -156,8 +179,8 @@ func TestDatasetsRequirePermissions(t *testing.T) {
 // narrow — POST /datasets (create) stays under the global cap.
 func TestDatasetImportBodyCapIsTheHandlers(t *testing.T) {
 	r, store, keyMgr := setupDatasetAuthz(t)
-	clientKey := mustCreateRoleKey(t, keyMgr, "client")
-	ds := seedDataset(t, store)
+	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	ds := seedOwnedDataset(t, store, nil, &clientKeyID)
 
 	// ~1.6 MiB of CSV: 4000 rows × 400 bytes, under the 5000-row cap.
 	var csv strings.Builder
@@ -187,5 +210,230 @@ func TestDatasetImportBodyCapIsTheHandlers(t *testing.T) {
 	r.ServeHTTP(w, datasetRequest(http.MethodPost, "/datasets", clientKey, "application/json", big))
 	if w.Code == http.StatusOK {
 		t.Fatalf("a >1 MiB POST /datasets must still be refused by the global body cap, got 200")
+	}
+}
+
+// stubDatasetRunner accepts every Start/Pause, so a test can tell an
+// authorized run (200) from a refused one without an agent engine.
+type stubDatasetRunner struct{}
+
+func (stubDatasetRunner) Start(context.Context, uuid.UUID) error { return nil }
+func (stubDatasetRunner) Pause(uuid.UUID) bool                   { return true }
+
+func listDatasetIDs(t *testing.T, r http.Handler, req *http.Request) map[string]bool {
+	t.Helper()
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /datasets = %d: %s", w.Code, w.Body.String())
+	}
+	var got struct {
+		Datasets []models.Dataset `json:"datasets"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, d := range got.Datasets {
+		ids[d.ID.String()] = true
+	}
+	return ids
+}
+
+// TestDatasetsAreCreatorScoped pins the own-rows model for datasets, the same
+// one tasks use: a principal reaches the datasets it created (404 for any
+// other, like an unknown id), lists only those, and admin and view_all_logs
+// principals reach every dataset, including one with no recorded creator.
+func TestDatasetsAreCreatorScoped(t *testing.T) {
+	r, store, keyMgr, h := setupDatasetAuthzHandlers(t)
+	h.SetDatasetRunner(stubDatasetRunner{})
+
+	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "alice-token")
+	addLogUser(t, store, "bob-"+uuid.NewString()[:8], "client", "bob-token")
+	addLogUser(t, store, "root-"+uuid.NewString()[:8], "admin", "root-token")
+	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	_, otherKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	_, auditorKey, err := keyMgr.CreateKey("auditor", []models.Permission{models.PermissionViewTasks, models.PermissionViewAllLogs},
+		nil, 0, nil, "fleet-wide auditor")
+	if err != nil {
+		t.Fatalf("create auditor key: %v", err)
+	}
+
+	aliceDS := seedOwnedDataset(t, store, &alice.ID, nil)
+	keyDS := seedOwnedDataset(t, store, nil, &keyID)
+	legacyDS := seedDataset(t, store)
+
+	bearer := func(method, path, token, ct, body string) *http.Request {
+		req := datasetRequest(method, path, "", ct, body)
+		req.Header.Del("X-API-Key")
+		req.Header.Set("Authorization", "Bearer "+token)
+		return req
+	}
+	do := func(req *http.Request) int {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		return w.Code
+	}
+	routes := func(id string) []struct{ method, path, ct, body string } {
+		base := "/datasets/" + id
+		return []struct{ method, path, ct, body string }{
+			{http.MethodGet, base, "", ""},
+			{http.MethodGet, base + "/rows", "", ""},
+			{http.MethodGet, base + "/export", "", ""},
+			{http.MethodPost, base + "/rows", "application/json", `{"rows":[{"in":"x"}]}`},
+			{http.MethodPost, base + "/run", "", ""},
+			{http.MethodPost, base + "/pause", "", ""},
+			{http.MethodPost, base + "/approve", "application/json", `{}`},
+			{http.MethodPost, base + "/rerun", "application/json", `{}`},
+			{http.MethodDelete, base, "", ""},
+		}
+	}
+
+	t.Run("another user gets 404 on every route", func(t *testing.T) {
+		for _, rt := range routes(aliceDS.ID.String()) {
+			if code := do(bearer(rt.method, rt.path, "bob-token", rt.ct, rt.body)); code != http.StatusNotFound {
+				t.Errorf("bob %s %s = %d, want 404", rt.method, rt.path, code)
+			}
+		}
+		if _, err := store.GetDataset(context.Background(), aliceDS.ID); err != nil {
+			t.Fatalf("dataset must survive the refused DELETE: %v", err)
+		}
+	})
+
+	t.Run("another key gets 404 on every route", func(t *testing.T) {
+		for _, rt := range routes(keyDS.ID.String()) {
+			if code := do(datasetRequest(rt.method, rt.path, otherKey, rt.ct, rt.body)); code != http.StatusNotFound {
+				t.Errorf("other key %s %s = %d, want 404", rt.method, rt.path, code)
+			}
+		}
+	})
+
+	t.Run("a dataset with no recorded creator is fleet-wide only", func(t *testing.T) {
+		if code := do(bearer(http.MethodGet, "/datasets/"+legacyDS.ID.String(), "alice-token", "", "")); code != http.StatusNotFound {
+			t.Errorf("client user GET of an ownerless dataset = %d, want 404", code)
+		}
+		if code := do(datasetRequest(http.MethodGet, "/datasets/"+legacyDS.ID.String(), key, "", "")); code != http.StatusNotFound {
+			t.Errorf("client key GET of an ownerless dataset = %d, want 404", code)
+		}
+	})
+
+	t.Run("the creator reaches its own dataset", func(t *testing.T) {
+		for _, rt := range routes(aliceDS.ID.String()) {
+			if rt.method == http.MethodDelete || strings.HasSuffix(rt.path, "/pause") {
+				continue
+			}
+			if code := do(bearer(rt.method, rt.path, "alice-token", rt.ct, rt.body)); code != http.StatusOK {
+				t.Errorf("alice %s %s = %d, want 200", rt.method, rt.path, code)
+			}
+		}
+		if code := do(datasetRequest(http.MethodGet, "/datasets/"+keyDS.ID.String()+"/export", key, "", "")); code != http.StatusOK {
+			t.Errorf("creating key export = %d, want 200", code)
+		}
+		if code := do(datasetRequest(http.MethodDelete, "/datasets/"+keyDS.ID.String(), key, "", "")); code != http.StatusNoContent {
+			t.Errorf("creating key DELETE = %d, want 204", code)
+		}
+	})
+
+	t.Run("list is filtered to own datasets", func(t *testing.T) {
+		req := bearer(http.MethodGet, "/datasets", "alice-token", "", "")
+		ids := listDatasetIDs(t, r, req)
+		if len(ids) != 1 || !ids[aliceDS.ID.String()] {
+			t.Errorf("alice lists %v, want only %s", ids, aliceDS.ID)
+		}
+		if ids := listDatasetIDs(t, r, bearer(http.MethodGet, "/datasets", "bob-token", "", "")); len(ids) != 0 {
+			t.Errorf("bob lists %v, want none", ids)
+		}
+	})
+
+	t.Run("admin and view_all_logs reach every dataset", func(t *testing.T) {
+		for _, req := range []*http.Request{
+			bearer(http.MethodGet, "/datasets", "root-token", "", ""),
+			datasetRequest(http.MethodGet, "/datasets", "test-admin-key", "", ""),
+			datasetRequest(http.MethodGet, "/datasets", auditorKey, "", ""),
+		} {
+			ids := listDatasetIDs(t, r, req)
+			if !ids[aliceDS.ID.String()] || !ids[legacyDS.ID.String()] {
+				t.Errorf("fleet-wide list %v must include %s and %s", ids, aliceDS.ID, legacyDS.ID)
+			}
+		}
+		if code := do(datasetRequest(http.MethodGet, "/datasets/"+aliceDS.ID.String()+"/export", auditorKey, "", "")); code != http.StatusOK {
+			t.Errorf("view_all_logs export = %d, want 200", code)
+		}
+		if code := do(bearer(http.MethodPost, "/datasets/"+legacyDS.ID.String()+"/run", "root-token", "", "")); code != http.StatusOK {
+			t.Errorf("admin user run of an ownerless dataset = %d, want 200", code)
+		}
+	})
+}
+
+// TestDatasetCreateRecordsCreator pins that POST /datasets records the
+// creating principal, so the creator can reach the dataset afterwards.
+func TestDatasetCreateRecordsCreator(t *testing.T) {
+	r, store, keyMgr := setupDatasetAuthz(t)
+	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "alice-token")
+	body := `{"name":"n","goal":"g","model":"test/model","columns":[{"name":"in","type":"text"},{"name":"out","type":"text","output":true}]}`
+
+	create := func(req *http.Request) *models.Dataset {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("POST /datasets = %d: %s", w.Code, w.Body.String())
+		}
+		var d models.Dataset
+		if err := json.Unmarshal(w.Body.Bytes(), &d); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		got, err := store.GetDataset(context.Background(), d.ID)
+		if err != nil {
+			t.Fatalf("GetDataset: %v", err)
+		}
+		return got
+	}
+
+	byKey := create(datasetRequest(http.MethodPost, "/datasets", key, "application/json", body))
+	if byKey.CreatedByKeyID == nil || *byKey.CreatedByKeyID != keyID || byKey.CreatedByUserID != nil {
+		t.Errorf("key-created dataset creator = (%v, %v), want key %s", byKey.CreatedByUserID, byKey.CreatedByKeyID, keyID)
+	}
+
+	req := datasetRequest(http.MethodPost, "/datasets", "", "application/json", body)
+	req.Header.Del("X-API-Key")
+	req.Header.Set("Authorization", "Bearer alice-token")
+	byUser := create(req)
+	if byUser.CreatedByUserID == nil || *byUser.CreatedByUserID != alice.ID || byUser.CreatedByKeyID != nil {
+		t.Errorf("user-created dataset creator = (%v, %v), want user %s", byUser.CreatedByUserID, byUser.CreatedByKeyID, alice.ID)
+	}
+}
+
+// TestDatasetRunHonorsBudget pins that the actions leading to row runs (run,
+// re-run, row import) go through the same per-principal budget gate as task
+// creation: an exhausted window answers 402 with Retry-After.
+func TestDatasetRunHonorsBudget(t *testing.T) {
+	r, store, keyMgr, h := setupDatasetAuthzHandlers(t)
+	h.SetDatasetRunner(stubDatasetRunner{})
+	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
+	ds := seedOwnedDataset(t, store, nil, &keyID)
+	base := "/datasets/" + ds.ID.String()
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, datasetRequest(http.MethodPost, base+"/run", key, "", ""))
+	if w.Code != http.StatusOK {
+		t.Fatalf("run without a budget gate = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	h.SetBudgetGate(refusingBudgetGate{})
+	for _, rt := range []struct{ path, ct, body string }{
+		{base + "/run", "", ""},
+		{base + "/rerun", "application/json", `{}`},
+		{base + "/rows", "application/json", `{"rows":[{"in":"x"}]}`},
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, datasetRequest(http.MethodPost, rt.path, key, rt.ct, rt.body))
+		if w.Code != http.StatusPaymentRequired {
+			t.Errorf("POST %s over budget = %d, want 402: %s", rt.path, w.Code, w.Body.String())
+		}
+		if w.Header().Get("Retry-After") == "" {
+			t.Errorf("POST %s over budget: missing Retry-After", rt.path)
+		}
 	}
 }

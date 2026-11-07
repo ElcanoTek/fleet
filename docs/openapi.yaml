@@ -169,6 +169,13 @@ components:
         concurrency: { type: integer }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        created_by_user_id:
+          type: string
+          format: uuid
+          description: The user that created the dataset, when a user created it.
+        created_by_key_id:
+          type: string
+          description: The API key that created the dataset, when a key created it.
         row_counts:
           type: object
           additionalProperties: { type: integer }
@@ -1646,7 +1653,13 @@ paths:
   /datasets:
     get:
       summary: List datasets (#514).
-      description: Every dataset (table agent) with per-status row counts, newest first.
+      description: >-
+        The caller's datasets (table agents) with per-status row counts, newest
+        first. Datasets are scoped to their creator like tasks: a principal
+        lists the datasets it created, and admin and view_all_logs principals
+        list every dataset. A dataset with no recorded creator is listed only
+        for those fleet-wide principals. Every /datasets/{datasetID} route
+        answers 404 for a dataset outside the caller's scope.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":
@@ -1794,7 +1807,10 @@ paths:
       description: >-
         Claims the dataset (idle|paused → running) and fans out its configured
         worker concurrency; each row runs through the governed loop and lands as
-        a PROPOSED write-back for review. 409 when already running.
+        a PROPOSED write-back for review. 409 when already running. Carries
+        the task-create rate limit (429) and the per-principal budget gate
+        (402 when the caller's budget window is exhausted), as do row import
+        and re-run.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
       responses:
         "200":
@@ -1805,7 +1821,10 @@ paths:
                 type: object
                 properties:
                   status: { type: string }
+        "402": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
         "503": { $ref: "#/components/responses/Error" }
   /datasets/{datasetID}/pause:
     parameters:

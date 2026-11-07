@@ -136,17 +136,19 @@ func buildOrchestratorMux(h *handlers.Handlers, notes *handlers.NotesHandlers, r
 		// Dataset / table agent (#514): typed tables whose rows the agent works
 		// in the background, proposing structured write-backs a human approves.
 		// Reads + review actions live here; run/pause drive the in-process
-		// dataset runner via the SetDatasetRunner seam.
+		// dataset runner via the SetDatasetRunner seam. Import, run and
+		// re-run lead to row runs, so they carry the task-create rate limiter
+		// (and, in-handler, the budget gate) like /tasks and /tasks/import.
 		r.Get("/datasets", h.ListDatasets)
 		r.Post("/datasets", h.CreateDataset)
 		r.Get("/datasets/{datasetID}", h.GetDataset)
 		r.Delete("/datasets/{datasetID}", h.DeleteDataset)
 		r.Get("/datasets/{datasetID}/rows", h.ListDatasetRows)
-		r.Post("/datasets/{datasetID}/rows", h.ImportDatasetRows)
-		r.Post("/datasets/{datasetID}/run", h.RunDataset)
+		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/rows", h.ImportDatasetRows)
+		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/run", h.RunDataset)
 		r.Post("/datasets/{datasetID}/pause", h.PauseDataset)
 		r.Post("/datasets/{datasetID}/approve", h.ApproveDatasetRows)
-		r.Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
+		r.With(h.SchedRateLimitMiddleware).Post("/datasets/{datasetID}/rerun", h.RerunDatasetRows)
 		r.Get("/datasets/{datasetID}/export", h.ExportDataset)
 		r.Get("/tasks", h.ListTasks)
 		// Scheduler UX 2.0 (#504): upcoming-runs timeline (computed from cron +

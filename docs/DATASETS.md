@@ -35,6 +35,23 @@ define dataset (columns + goal + pinned model)
   persist their outcome); a crash resets orphaned running state at boot so
   work resumes cleanly.
 
+## Who can see and change a dataset
+
+Datasets are scoped to their creator the same way tasks are. A dataset
+records the user or API key that created it; that principal can read it
+(`view_tasks`) and change or run it (`create_task`). Administrators and
+`view_all_logs` principals see and act on every dataset. A dataset with no
+recorded creator — created before creators were recorded, or by the admin
+API key — is reachable only by those fleet-wide principals. A dataset outside
+the caller's scope answers 404, as a task does, and `GET /datasets` lists only
+the caller's datasets.
+
+Import, run and re-run lead to row runs, so they carry the task-create rate
+limit and the per-principal budget gate: a caller whose budget window is
+exhausted gets a 402 there, as on `POST /tasks`. Row spend itself is recorded
+on the row (`cost_usd`) and is not yet counted in the budget and usage
+read models, which aggregate task and chat metering.
+
 ## Untrusted row data (the injection surface)
 
 Cell values are attacker-influenceable (imported CSVs, scraped data). The

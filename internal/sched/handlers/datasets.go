@@ -24,6 +24,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -68,11 +69,84 @@ func (h *Handlers) requireDatasetPermission(w http.ResponseWriter, r *http.Reque
 	return true
 }
 
+// datasetCreatedByPrincipal reports whether the principal created the
+// dataset: the creating user, or the creating API key. It is the dataset
+// counterpart of taskCreatedByPrincipal and matches the same pair.
+func datasetCreatedByPrincipal(p principal, d *models.Dataset) bool {
+	if d == nil {
+		return false
+	}
+	if p.user != nil && d.CreatedByUserID != nil && *d.CreatedByUserID == p.user.ID {
+		return true
+	}
+	if p.apiKey != nil && d.CreatedByKeyID != nil && p.apiKey.KeyID == *d.CreatedByKeyID {
+		return true
+	}
+	return false
+}
+
+// datasetVisibleToPrincipal reports whether the principal may read the
+// dataset. Datasets follow the task own-rows model (taskVisibleToPrincipal):
+// PermissionViewTasks (checked by the caller) admits the principal to the
+// surface, and this decides WHICH datasets — its own, or every dataset for the
+// fleet-wide grant (admin, view_all_logs). A dataset with no recorded creator
+// (created before creators were recorded, or by the admin API key) is
+// reachable only through the fleet-wide grant.
+func datasetVisibleToPrincipal(p principal, d *models.Dataset) bool {
+	if p.fleetWideTaskVisibility() {
+		return true
+	}
+	return datasetCreatedByPrincipal(p, d)
+}
+
+// datasetWritableByPrincipal reports whether the principal may change or run
+// the dataset. PermissionCreateTask (checked by the caller) admits it to the
+// surface; this decides WHICH dataset, with the same own-rows rule as the
+// read side so a write is never looser than a read of the same dataset
+// (taskWritableByPrincipal is the task equivalent).
+func datasetWritableByPrincipal(p principal, d *models.Dataset) bool {
+	if p.fleetWideTaskVisibility() {
+		return true
+	}
+	return datasetCreatedByPrincipal(p, d)
+}
+
+// datasetScopeFor is the SQL form of datasetVisibleToPrincipal for the list:
+// the zero scope for the fleet-wide grant, else the principal's own rows. A
+// principal that is neither a user nor a key without the grant cannot reach
+// here (hasPermission is false for it), but would get the zero-match key scope.
+func datasetScopeFor(p principal) db.DatasetScope {
+	if p.fleetWideTaskVisibility() {
+		return db.DatasetScope{}
+	}
+	if p.user != nil {
+		return db.DatasetScope{VisibleToUserID: &p.user.ID}
+	}
+	keyID := ""
+	if p.apiKey != nil {
+		keyID = p.apiKey.KeyID
+	}
+	return db.DatasetScope{VisibleToKeyID: &keyID}
+}
+
+// datasetBudgetAllows applies the per-principal budget gate (the one task
+// creation uses, budgetCapError) to the dataset actions that lead to row runs:
+// run, re-run and row import (rows imported into a running dataset are picked
+// up by the runner). Returns false after writing the 402/500.
+func (h *Handlers) datasetBudgetAllows(w http.ResponseWriter, r *http.Request) bool {
+	if err := h.budgetCapError(r.Context(), creatorFromPrincipal(h.principalFromRequest(r))); err != nil {
+		writeBudgetRefusal(w, err)
+		return false
+	}
+	return true
+}
+
 // CreateDataset handles POST /datasets.
 func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDatasetPermission(w, r, models.PermissionCreateTask) {
 		return
 	}
+	creator := creatorFromPrincipal(h.principalFromRequest(r))
 	var req datasetCreateRequest
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())
@@ -112,6 +186,11 @@ func (h *Handlers) CreateDataset(w http.ResponseWriter, r *http.Request) {
 		Persona:     strings.TrimSpace(req.Persona),
 		Status:      models.DatasetStatusIdle,
 		Concurrency: req.Concurrency,
+		// The same creator pair a task records (taskCreator.attribute): the
+		// creating user, or the creating key. The admin API key records
+		// neither, which leaves the dataset to fleet-wide grant holders.
+		CreatedByUserID: creator.creatorID,
+		CreatedByKeyID:  creator.creatorKey,
 	}
 	if err := h.storage.CreateDataset(r.Context(), d); err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to create dataset")
@@ -126,7 +205,9 @@ func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
 	if !h.requireDatasetPermission(w, r, models.PermissionViewTasks) {
 		return
 	}
-	out, err := h.storage.ListDatasets(r.Context())
+	// Own-rows listing, filtered in SQL: the principal's datasets, or every
+	// dataset for the fleet-wide grant.
+	out, err := h.storage.ListDatasets(r.Context(), datasetScopeFor(h.principalFromRequest(r)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "Failed to list datasets")
 		return
@@ -138,7 +219,11 @@ func (h *Handlers) ListDatasets(w http.ResponseWriter, r *http.Request) {
 }
 
 // datasetFromPath loads the {datasetID} path dataset after checking perm,
-// writing the 403/400/404/500 itself. Only a missing row is a 404: the DB
+// writing the 403/400/404/500 itself. perm also selects the row rule:
+// PermissionViewTasks reads (datasetVisibleToPrincipal), anything else
+// changes the dataset (datasetWritableByPrincipal). A dataset the principal
+// may not reach is a 404, the same answer as a missing one, matching the task
+// surface. Otherwise only a missing row is a 404: the DB
 // layer returns sql.ErrNoRows unwrapped for that case, and anything else (a
 // pool exhausted, a column decode failure) is a 500, so an outage does not
 // masquerade as "the dataset is gone" to a client that would then recreate it.
@@ -162,6 +247,15 @@ func (h *Handlers) datasetFromPath(w http.ResponseWriter, r *http.Request, perm 
 		// through safe.LogSafe as well — it cannot carry CR/LF to forge a log line.
 		log.Printf("dataset %s: load: %v", safe.LogSafe(id.String()), err)
 		writeError(w, http.StatusInternalServerError, "Failed to load dataset")
+		return nil, false
+	}
+	p := h.principalFromRequest(r)
+	allowed := datasetWritableByPrincipal(p, d)
+	if perm == models.PermissionViewTasks {
+		allowed = datasetVisibleToPrincipal(p, d)
+	}
+	if !allowed {
+		writeError(w, http.StatusNotFound, "Dataset not found")
 		return nil, false
 	}
 	return d, true
@@ -226,6 +320,9 @@ func (h *Handlers) ListDatasetRows(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) ImportDatasetRows(w http.ResponseWriter, r *http.Request) {
 	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
+		return
+	}
+	if !h.datasetBudgetAllows(w, r) {
 		return
 	}
 	// This is the operative body cap: BodySizeLimitMiddleware exempts the
@@ -360,6 +457,9 @@ func (h *Handlers) RunDataset(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if !h.datasetBudgetAllows(w, r) {
+		return
+	}
 	if h.datasetRunner == nil {
 		writeError(w, http.StatusServiceUnavailable, "dataset runner not available on this server")
 		return
@@ -422,6 +522,9 @@ func (h *Handlers) ApproveDatasetRows(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) RerunDatasetRows(w http.ResponseWriter, r *http.Request) {
 	d, ok := h.datasetFromPath(w, r, models.PermissionCreateTask)
 	if !ok {
+		return
+	}
+	if !h.datasetBudgetAllows(w, r) {
 		return
 	}
 	var req datasetRowActionRequest

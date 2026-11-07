@@ -2438,9 +2438,10 @@ func (s *Storage) GetDataset(ctx context.Context, id uuid.UUID) (*models.Dataset
 	return s.db.GetDataset(ctx, id)
 }
 
-// ListDatasets returns every dataset, newest first.
-func (s *Storage) ListDatasets(ctx context.Context) ([]*models.Dataset, error) {
-	return s.db.ListDatasets(ctx)
+// ListDatasets returns the datasets in scope (the zero scope = every
+// dataset), newest first.
+func (s *Storage) ListDatasets(ctx context.Context, scope db.DatasetScope) ([]*models.Dataset, error) {
+	return s.db.ListDatasets(ctx, scope)
 }
 
 // UpdateDatasetStatus applies a guarded status transition.

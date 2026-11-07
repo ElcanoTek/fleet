@@ -17,7 +17,7 @@ import (
 // the runner sets status='proposed' with the validated JSON; only the
 // human-driven ApproveDatasetRows merges proposed values into cells.
 
-const datasetColumns = "id, name, goal, columns, model, persona, status, concurrency, created_at, updated_at"
+const datasetColumns = "id, name, goal, columns, model, persona, status, concurrency, created_at, updated_at, created_by_user_id, created_by_key_id"
 
 // maxDatasetRowsPerInsert bounds a single AddDatasetRows batch. Each row binds 4
 // placeholders, so this stays well under Postgres's 65535-parameter statement
@@ -29,12 +29,22 @@ const maxDatasetRowsPerInsert = 16000
 
 func scanDataset(scanner interface{ Scan(...interface{}) error }) (*models.Dataset, error) {
 	var (
-		d    models.Dataset
-		cols []byte
+		d            models.Dataset
+		cols         []byte
+		createdBy    uuid.NullUUID
+		createdByKey sql.NullString
 	)
 	if err := scanner.Scan(&d.ID, &d.Name, &d.Goal, &cols, &d.Model, &d.Persona,
-		&d.Status, &d.Concurrency, &d.CreatedAt, &d.UpdatedAt); err != nil {
+		&d.Status, &d.Concurrency, &d.CreatedAt, &d.UpdatedAt, &createdBy, &createdByKey); err != nil {
 		return nil, err
+	}
+	if createdBy.Valid {
+		id := createdBy.UUID
+		d.CreatedByUserID = &id
+	}
+	if createdByKey.Valid {
+		key := createdByKey.String
+		d.CreatedByKeyID = &key
 	}
 	if err := json.Unmarshal(cols, &d.Columns); err != nil {
 		return nil, fmt.Errorf("dataset %s: decode columns: %w", d.ID, err)
@@ -69,9 +79,11 @@ func (db *Database) CreateDataset(ctx context.Context, d *models.Dataset) error 
 		return err
 	}
 	_, err = db.conn.ExecContext(ctx, `
-		INSERT INTO datasets (id, name, goal, columns, model, persona, status, concurrency)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		d.ID, d.Name, d.Goal, string(cols), d.Model, d.Persona, d.Status, d.Concurrency)
+		INSERT INTO datasets (id, name, goal, columns, model, persona, status, concurrency,
+		                      created_by_user_id, created_by_key_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		d.ID, d.Name, d.Goal, string(cols), d.Model, d.Persona, d.Status, d.Concurrency,
+		d.CreatedByUserID, d.CreatedByKeyID)
 	return err
 }
 
@@ -144,9 +156,29 @@ func (db *Database) datasetRowCountsFor(ctx context.Context, ids []uuid.UUID) (m
 	return counts, rows.Err()
 }
 
-// ListDatasets returns every dataset, newest first, with row counts.
-func (db *Database) ListDatasets(ctx context.Context) ([]*models.Dataset, error) {
-	rows, err := db.conn.QueryContext(ctx, "SELECT "+datasetColumns+" FROM datasets ORDER BY created_at DESC")
+// DatasetScope narrows ListDatasets to the datasets one principal created:
+// those whose created_by_user_id is VisibleToUserID, or whose
+// created_by_key_id is VisibleToKeyID. The zero value lists every dataset (the
+// fleet-wide view). The handler sets at most one field, mirroring
+// TaskFilter.VisibleToUserID / VisibleToKeyID.
+type DatasetScope struct {
+	VisibleToUserID *uuid.UUID
+	VisibleToKeyID  *string
+}
+
+// ListDatasets returns the datasets in scope, newest first, with row counts.
+func (db *Database) ListDatasets(ctx context.Context, scope DatasetScope) ([]*models.Dataset, error) {
+	query := "SELECT " + datasetColumns + " FROM datasets"
+	var args []any
+	switch {
+	case scope.VisibleToUserID != nil:
+		query += " WHERE created_by_user_id = $1"
+		args = append(args, *scope.VisibleToUserID)
+	case scope.VisibleToKeyID != nil:
+		query += " WHERE created_by_key_id = $1"
+		args = append(args, *scope.VisibleToKeyID)
+	}
+	rows, err := db.conn.QueryContext(ctx, query+" ORDER BY created_at DESC", args...)
 	if err != nil {
 		return nil, err
 	}
