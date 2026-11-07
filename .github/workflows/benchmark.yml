@@ -39,7 +39,8 @@ jobs:
           --health-retries 10
 
     env:
-      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
+      # The DB benchmark clones a database of its own (internal/testdb).
+      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet?sslmode=disable
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
 
     steps:
@@ -54,11 +55,6 @@ jobs:
           # Read from go.mod so the toolchain is declared once.
           go-version-file: go.mod
           check-latest: true
-
-      - name: Create test database
-        run: |
-          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
-            -c 'CREATE DATABASE fleet_sched_test;'
 
       - name: Run subsystem benchmarks
         # The tag matches the main suite so the test packages compile. -run '^$'
