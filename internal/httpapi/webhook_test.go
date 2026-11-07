@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
 
@@ -53,6 +54,42 @@ func newWebhookServer(t *testing.T, engine turnEngine, st chatStore) *Server {
 		},
 	}
 	return srv
+}
+
+// The webhook delivery claim, modelled in memory (the SQL is covered by the
+// store's own tests against Postgres).
+func (s *fakeChatStore) ClaimWebhookDelivery(_ context.Context, slug, key string) (store.WebhookClaim, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webhookDeliveries == nil {
+		s.webhookDeliveries = map[string]string{}
+	}
+	k := slug + "\x00" + key
+	if conv, ok := s.webhookDeliveries[k]; ok {
+		return store.WebhookClaim{ConversationID: conv}, nil
+	}
+	s.webhookDeliveries[k] = ""
+	return store.WebhookClaim{Claimed: true}, nil
+}
+
+func (s *fakeChatStore) SetWebhookDeliveryConversation(_ context.Context, slug, key, convID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookDeliveries[slug+"\x00"+key] = convID
+	return nil
+}
+
+func (s *fakeChatStore) ReleaseWebhookDelivery(_ context.Context, slug, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.webhookDeliveries[slug+"\x00"+key] == "" {
+		delete(s.webhookDeliveries, slug+"\x00"+key)
+	}
+	return nil
+}
+
+func (s *fakeChatStore) SweepWebhookDeliveries(context.Context, time.Duration) (int, error) {
+	return 0, nil
 }
 
 func hmacSig(secret string, body []byte) string {
@@ -246,9 +283,18 @@ func TestWebhookRateLimited(t *testing.T) {
 	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusAccepted {
 		t.Fatalf("first request status %d, want 202: %s", w.Code, w.Body.String())
 	}
-	// Second within the same minute exceeds the per-slug cap of 1.
-	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusTooManyRequests {
+	// A second, different delivery within the same minute exceeds the
+	// per-slug cap of 1. (A repeat of the first one would be answered as a
+	// duplicate instead — see TestWebhookDuplicateDelivery*.)
+	body2 := []byte(`{"title":"y"}`)
+	hdr2 := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body2)}
+	if w := postWebhook(t, srv, "gh", body2, hdr2); w.Code != http.StatusTooManyRequests {
 		t.Fatalf("second request status %d, want 429", w.Code)
+	}
+	// The throttled delivery was not accepted, so its claim was released: the
+	// sender's retry is throttled again rather than answered as a duplicate.
+	if w := postWebhook(t, srv, "gh", body2, hdr2); w.Code != http.StatusTooManyRequests {
+		t.Fatalf("retry of a throttled delivery: status %d, want 429: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -388,4 +434,141 @@ func TestWebhookSlackSignatureAndChallenge(t *testing.T) {
 		defer st.mu.Unlock()
 		return st.created == 1
 	}, "slack event did not create a conversation")
+}
+
+// webhookResult decodes a webhook response body.
+func webhookResult(t *testing.T, w *httptest.ResponseRecorder) (convID string, duplicate bool) {
+	t.Helper()
+	var resp struct {
+		ConversationID string `json:"conversation_id"`
+		Duplicate      bool   `json:"duplicate"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v (%s)", err, w.Body.String())
+	}
+	return resp.ConversationID, resp.Duplicate
+}
+
+// The same signed request delivered twice is one delivery: the repeat is
+// answered 200 with the first conversation and starts nothing.
+func TestWebhookDuplicateDeliveryStartsOneConversation(t *testing.T) {
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newWebhookServer(t, engine, st)
+
+	body := []byte(`{"title":"Fix the widget"}`)
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body)}
+	w1 := postWebhook(t, srv, "gh", body, hdr)
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("first delivery: status %d, want 202: %s", w1.Code, w1.Body.String())
+	}
+	first, _ := webhookResult(t, w1)
+
+	w2 := postWebhook(t, srv, "gh", body, hdr)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("repeat delivery: status %d, want 200: %s", w2.Code, w2.Body.String())
+	}
+	second, dup := webhookResult(t, w2)
+	if second != first || !dup {
+		t.Fatalf("repeat answered conversation %q duplicate=%v, want %q duplicate=true", second, dup, first)
+	}
+	eventually(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		return engine.turns == 1
+	}, "first delivery's turn never ran")
+	st.mu.Lock()
+	created := st.created
+	st.mu.Unlock()
+	if created != 1 {
+		t.Fatalf("CreateConversation calls = %d, want 1", created)
+	}
+	// Give a (wrongly) started second turn the chance to show up.
+	time.Sleep(50 * time.Millisecond)
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.turns != 1 {
+		t.Fatalf("turns run = %d, want 1", engine.turns)
+	}
+}
+
+// Deliveries are told apart by X-GitHub-Delivery: two deliveries of the same
+// body under different ids are two events; the same id repeated is one, even
+// though nothing else identifies it.
+func TestWebhookGitHubDeliveryIDs(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newWebhookServer(t, &fakeEngine{}, st)
+
+	body := []byte(`{"title":"same body"}`)
+	sig := hmacSig("hmac-signing-secret", body)
+	send := func(id string) *httptest.ResponseRecorder {
+		return postWebhook(t, srv, "gh", body, map[string]string{"X-Hub-Signature-256": sig, "X-GitHub-Delivery": id})
+	}
+	a := send("11111111-aaaa")
+	b := send("22222222-bbbb")
+	if a.Code != http.StatusAccepted || b.Code != http.StatusAccepted {
+		t.Fatalf("distinct delivery ids: statuses %d, %d, want 202, 202", a.Code, b.Code)
+	}
+	convA, _ := webhookResult(t, a)
+	convB, _ := webhookResult(t, b)
+	if convA == convB {
+		t.Fatalf("distinct deliveries shared conversation %q", convA)
+	}
+	again := send("11111111-aaaa")
+	if again.Code != http.StatusOK {
+		t.Fatalf("redelivery: status %d, want 200: %s", again.Code, again.Body.String())
+	}
+	if conv, dup := webhookResult(t, again); conv != convA || !dup {
+		t.Fatalf("redelivery answered %q duplicate=%v, want %q", conv, dup, convA)
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.created != 2 {
+		t.Fatalf("CreateConversation calls = %d, want 2", st.created)
+	}
+}
+
+// A Slack retry (X-Slack-Retry-Num, a fresh timestamp and signature) of an
+// accepted event is recognised by the payload's event_id; a different event
+// is a new delivery.
+func TestWebhookSlackRetryIsDuplicate(t *testing.T) {
+	st := newFakeChatStore()
+	srv := newWebhookServer(t, &fakeEngine{}, st)
+
+	send := func(body []byte, ts string, retry string) *httptest.ResponseRecorder {
+		hdr := map[string]string{
+			"X-Slack-Request-Timestamp": ts,
+			"X-Slack-Signature":         slackSign("slack-signing-secret", ts, body),
+		}
+		if retry != "" {
+			hdr["X-Slack-Retry-Num"] = retry
+			hdr["X-Slack-Retry-Reason"] = "http_timeout"
+		}
+		return postWebhook(t, srv, "slack", body, hdr)
+	}
+	now := time.Now().Unix()
+	event := []byte(`{"event_id":"Ev0001","event":{"text":"hello fleet"}}`)
+	w1 := send(event, strconv.FormatInt(now, 10), "")
+	if w1.Code != http.StatusAccepted {
+		t.Fatalf("first event: status %d, want 202: %s", w1.Code, w1.Body.String())
+	}
+	first, _ := webhookResult(t, w1)
+
+	w2 := send(event, strconv.FormatInt(now+3, 10), "1")
+	if w2.Code != http.StatusOK {
+		t.Fatalf("slack retry: status %d, want 200: %s", w2.Code, w2.Body.String())
+	}
+	if conv, dup := webhookResult(t, w2); conv != first || !dup {
+		t.Fatalf("slack retry answered %q duplicate=%v, want %q", conv, dup, first)
+	}
+
+	other := []byte(`{"event_id":"Ev0002","event":{"text":"hello fleet"}}`)
+	if w3 := send(other, strconv.FormatInt(now+4, 10), ""); w3.Code != http.StatusAccepted {
+		t.Fatalf("a different event: status %d, want 202: %s", w3.Code, w3.Body.String())
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.created != 2 {
+		t.Fatalf("CreateConversation calls = %d, want 2", st.created)
+	}
 }

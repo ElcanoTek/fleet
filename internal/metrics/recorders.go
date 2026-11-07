@@ -183,7 +183,8 @@ func RecordDeadLetterQueued(reason string) {
 }
 
 // RecordWebhookTrigger counts one inbound webhook-triggered conversation request
-// (#268), labeled by result ("ok" | "rejected" | "throttled" | "error") and by
+// (#268), labeled by result ("ok" | "duplicate" | "rejected" | "throttled" |
+// "error" | "conflict") and by
 // slug. The slug label is populated ONLY for a CONFIGURED trigger (a bounded,
 // operator-authored set); the rejected-unknown/bad-signature path passes an
 // empty slug so an attacker probing arbitrary slugs cannot inflate the

@@ -168,6 +168,9 @@ type fakeChatStore struct {
 	committedTurns map[string]bool
 	// stoppedDrainFailures makes that many CancelStoppedDrain calls fail.
 	stoppedDrainFailures int
+	// webhookDeliveries models the webhook_deliveries table: slug+"\x00"+key
+	// → conversation id ("" while claimed but unfinished).
+	webhookDeliveries map[string]string
 	// stopRequested lists MarkInputStopRequested calls (conv/key);
 	// stopRequestFailures makes that many fail first.
 	stopRequested       []string

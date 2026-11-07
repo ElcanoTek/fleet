@@ -101,7 +101,8 @@ curl -sS -X POST https://your-fleet/webhooks/github-pr-review \
 | Status | Meaning |
 |--------|---------|
 | `202` | Accepted. Body is `{"conversation_id":"…"}`; the turn runs asynchronously. |
-| `200` | Slack `url_verification` handshake echoed. |
+| `200` | Slack `url_verification` handshake echoed, **or** a repeat of an already-accepted delivery: body `{"conversation_id":"…","duplicate":true}` names the conversation the first delivery started, and nothing new runs. |
+| `409` | A repeat arrived while the first request for the same delivery was still starting its conversation. Retry later. |
 | `400` | Body was not valid JSON. |
 | `401` | Unknown slug **or** invalid/missing signature (deliberately indistinguishable — no slug enumeration). |
 | `429` | Per-slug rate limit (`FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE`, default 10) or the per-owner concurrent-turn cap. |
@@ -110,7 +111,34 @@ curl -sS -X POST https://your-fleet/webhooks/github-pr-review \
 
 The triggered conversation appears in `notify_user`'s conversation list the next
 time they open Fleet. The metric `fleet_webhook_triggers_total{slug,result}`
-counts requests (the `slug` label is populated only for configured triggers).
+counts requests (the `slug` label is populated only for configured triggers;
+`result` is `ok`, `duplicate`, `rejected`, `throttled`, `error` or `conflict`).
+
+## Delivery idempotency
+
+Senders deliver at least once: Slack retries an event it did not see answered
+in time (with `X-Slack-Retry-Num`), and GitHub's **Redeliver** re-sends a
+delivery under the same `X-GitHub-Delivery` id. Each trigger therefore remembers
+the deliveries it accepted for **24 hours** and starts at most one conversation
+per delivery. A delivery is identified, per slug, by the first of:
+
+1. the `X-GitHub-Delivery` header;
+2. for a Slack trigger, the payload's `event_id` (the same on every retry of
+   an Events API event, whose timestamp and signature change per attempt);
+3. otherwise the SHA-256 of the signature header plus the body — the same
+   signed request sent twice is one delivery.
+
+A repeat of an accepted delivery is answered `200` with the original
+`conversation_id` (see Responses) and does not count against the per-slug rate
+limit. A delivery that was **not** accepted — throttled, refused, or failed
+before its conversation was created — is not remembered, so the sender's retry
+is processed normally. Two different events with byte-identical bodies and no
+delivery id (case 3) within 24 hours are treated as one; senders that need
+otherwise should send a distinguishing field or header.
+
+The records live in the chat database (`webhook_deliveries`, migration 098), so
+they survive a restart inside a sender's retry window; the regular retention
+sweep removes records older than 24 hours.
 
 ## Security summary
 

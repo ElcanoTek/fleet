@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -93,17 +95,6 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Authenticated: throttle authenticated turn-spawns per configured slug. The
-	// limiter is consulted here (not before auth) so an attacker probing unknown
-	// slugs never creates a bucket and cannot use rate-limit behavior as a
-	// slug-existence oracle.
-	if ok, retry := s.webhookRL.Allow(trig.Slug); !ok {
-		metrics.RecordWebhookTrigger(trig.Slug, "throttled")
-		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
-		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
-	}
-
 	// Parse the JSON payload (Slack Events API + GitHub webhooks are JSON).
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
@@ -121,6 +112,50 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"challenge": challenge})
 			return
 		}
+	}
+
+	// Delivery idempotency: senders deliver at least once (Slack retries an
+	// event it did not see answered in time, with X-Slack-Retry-Num; GitHub's
+	// Redeliver re-sends the same X-GitHub-Delivery). Claim the delivery before
+	// anything else so a repeat of an accepted one answers 200 with the
+	// original conversation and starts nothing — and spends none of the slug's
+	// rate budget. Every early return below releases the claim, so a delivery
+	// that was not accepted is processed afresh when it comes again.
+	deliveryKey := webhookDeliveryKey(r, body, payload, trig)
+	claim, err := s.store.ClaimWebhookDelivery(r.Context(), trig.Slug, deliveryKey)
+	if err != nil {
+		metrics.RecordWebhookTrigger(trig.Slug, "error")
+		http.Error(w, "could not record the delivery", http.StatusInternalServerError)
+		return
+	}
+	if !claim.Claimed {
+		metrics.RecordWebhookTrigger(trig.Slug, "duplicate")
+		if claim.ConversationID == "" {
+			// The first request for this delivery is still starting its
+			// conversation. 409 rather than 200: if that request fails, the
+			// sender's next retry should be processed, not swallowed.
+			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+			return
+		}
+		writeJSONStatus(w, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
+		return
+	}
+	accepted := false
+	defer func() {
+		if !accepted {
+			s.releaseWebhookClaim(trig.Slug, deliveryKey)
+		}
+	}()
+
+	// Authenticated: throttle authenticated turn-spawns per configured slug. The
+	// limiter is consulted here (not before auth) so an attacker probing unknown
+	// slugs never creates a bucket and cannot use rate-limit behavior as a
+	// slug-existence oracle.
+	if ok, retry := s.webhookRL.Allow(trig.Slug); !ok {
+		metrics.RecordWebhookTrigger(trig.Slug, "throttled")
+		w.Header().Set("Retry-After", strconv.Itoa(int(retry.Seconds())))
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+		return
 	}
 
 	prompt, err := renderWebhookPrompt(trig.PromptTemplate, payload, body)
@@ -187,6 +222,15 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	// The conversation exists: from here on the delivery counts as accepted,
+	// and a repeat is answered with this conversation even if a later step
+	// fails (the conversation is in the owner's list either way).
+	accepted = true
+	if err := s.store.SetWebhookDeliveryConversation(r.Context(), trig.Slug, deliveryKey, conv.ID); err != nil {
+		// Not fatal: the claim then reads as unfinished and lapses after a
+		// minute, after which a repeat would start a second conversation.
+		log.Printf("webhook trigger %q: record delivery conversation: %v", safe.LogSafe(trig.Slug), err)
 	}
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 
@@ -256,6 +300,53 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
+}
+
+// releaseWebhookClaim drops the delivery claim of a request that did not
+// start a conversation, so the sender's retry is processed afresh.
+// Background-rooted: the request context may already be cancelled, and a
+// leaked claim would refuse the retry until it goes stale.
+func (s *Server) releaseWebhookClaim(slug, deliveryKey string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey); err != nil {
+		log.Printf("webhook trigger: release delivery claim: %v", err)
+	}
+}
+
+// webhookDeliveryKey names one delivery for the per-slug idempotency claim, in
+// order of preference:
+//
+//   - X-GitHub-Delivery — GitHub's per-delivery GUID, kept on redelivery;
+//   - a Slack trigger's payload event_id — the same on every retry of an
+//     Events API event (those carry X-Slack-Retry-Num; their signature and
+//     timestamp change per attempt, so the body hash below would not match);
+//   - otherwise the SHA-256 of the signature header and the body, so the same
+//     signed request delivered twice is one delivery.
+//
+// The value is hashed so a sender-chosen id has a bounded size in the table.
+func webhookDeliveryKey(r *http.Request, body []byte, payload map[string]any, trig clientconfig.WebhookTriggerDef) string {
+	hashed := func(source string, parts ...[]byte) string {
+		h := sha256.New()
+		for i, p := range parts {
+			if i > 0 {
+				h.Write([]byte{0})
+			}
+			h.Write(p)
+		}
+		return source + ":" + hex.EncodeToString(h.Sum(nil))
+	}
+	if id := strings.TrimSpace(r.Header.Get("X-GitHub-Delivery")); id != "" {
+		return hashed("github", []byte(id))
+	}
+	sigHeader := trig.SignatureHeader()
+	if trig.UsesSlack() {
+		if id, _ := payload["event_id"].(string); strings.TrimSpace(id) != "" {
+			return hashed("slack", []byte(strings.TrimSpace(id)))
+		}
+		sigHeader = "X-Slack-Signature"
+	}
+	return hashed("body", []byte(r.Header.Get(sigHeader)), body)
 }
 
 // verifyWebhookSignature reports whether the request carries a valid signature

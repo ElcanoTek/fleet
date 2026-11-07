@@ -106,6 +106,22 @@ The operator is responsible for scoping the persona and template so an
 adversarial payload cannot direct the agent somewhere it should not go. The docs
 say this plainly (`docs/WEBHOOKS.md`).
 
+### Delivery idempotency (added later)
+
+Senders deliver at least once — Slack retries unanswered events, GitHub
+redelivers on request — and each delivery used to start its own conversation
+and turn. The endpoint now claims every authenticated delivery, per slug, in a
+small `webhook_deliveries` table (migration 098) before it starts anything, and
+answers a repeat of an accepted delivery `200` with the original
+`conversation_id`. The key is `X-GitHub-Delivery`, else a Slack trigger's
+payload `event_id`, else the SHA-256 of the signature header and body; records
+are kept 24 hours and expire through the existing retention sweep. A delivery
+that was not accepted (throttled, failed before its conversation existed)
+releases its claim so the sender's retry is processed. The table, rather than
+process memory, holds the records because fleet runs as one replica that
+restarts on every release: an in-memory set would forget accepted deliveries
+across exactly the restarts a retry window can span. See `docs/WEBHOOKS.md`.
+
 ### Identity is the configured owner
 
 The turn runs as `notify_user` — a real, operator-configured account — so it uses
