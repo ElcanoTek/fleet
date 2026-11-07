@@ -252,7 +252,14 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 		return nil, err
 	}
 	defer rows.Close()
-	var out, unreadable []models.A2APushWork
+	// unreadableRow keeps the sealed bytes the scan saw, so marking it cannot
+	// consume a re-registration that resealed the row in between.
+	type unreadableRow struct {
+		work                     models.A2APushWork
+		tokenSealed, credsSealed []byte
+	}
+	var out []models.A2APushWork
+	var unreadable []unreadableRow
 	for rows.Next() {
 		var (
 			w                        models.A2APushWork
@@ -272,7 +279,11 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 			// Value-free log line: ids only — never the URL or a secret.
 			log.Printf("a2a push: skipping config %q on task %s: its secrets do not unseal (store key changed?); re-register the config to resume deliveries: %v",
 				w.Config.ID, w.Config.TaskID, err)
-			unreadable = append(unreadable, models.A2APushWork{Config: models.A2APushConfig{TaskID: w.Config.TaskID, ID: w.Config.ID}, Status: w.Status})
+			unreadable = append(unreadable, unreadableRow{
+				work:        models.A2APushWork{Config: models.A2APushConfig{TaskID: w.Config.TaskID, ID: w.Config.ID}, Status: w.Status},
+				tokenSealed: tokenSealed,
+				credsSealed: credsSealed,
+			})
 			continue
 		}
 		w.Config.Token, w.Config.AuthCredentials = token, creds
@@ -282,12 +293,32 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 		return nil, err
 	}
 	_ = rows.Close()
-	for _, w := range unreadable {
-		if _, err := db.MarkA2APushAttempted(ctx, w.Config.TaskID, w.Config.ID, w.Status); err != nil {
-			log.Printf("a2a push: could not mark unreadable config %q on task %s: %v", w.Config.ID, w.Config.TaskID, err)
+	for _, u := range unreadable {
+		if _, err := db.markUnreadableA2APush(ctx, u.work.Config.TaskID, u.work.Config.ID, u.work.Status, u.tokenSealed, u.credsSealed); err != nil {
+			log.Printf("a2a push: could not mark unreadable config %q on task %s: %v", u.work.Config.ID, u.work.Config.TaskID, err)
 		}
 	}
 	return out, nil
+}
+
+// markUnreadableA2APush marks an unreadable config attempted for status, but
+// only while the row still holds the sealed secrets the scan failed to open:
+// a re-registration between the scan and the mark resealed the row and reset
+// its marker, and that recovered config must stay due. Reports whether it
+// marked.
+func (db *Database) markUnreadableA2APush(ctx context.Context, taskID uuid.UUID, configID string, status models.TaskStatus, tokenSealed, credsSealed []byte) (bool, error) {
+	res, err := db.conn.ExecContext(ctx, `
+		UPDATE a2a_push_configs SET last_pushed_status = $3, updated_at = now()
+		WHERE task_id = $1 AND id = $2
+		  AND token_sealed IS NOT DISTINCT FROM $4
+		  AND auth_credentials_sealed IS NOT DISTINCT FROM $5
+		  AND last_pushed_status IS DISTINCT FROM $3`,
+		taskID, configID, string(status), tokenSealed, credsSealed)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
 }
 
 // MarkA2APushAttempted records that a delivery ATTEMPT for the given status

@@ -253,6 +253,42 @@ func TestA2APushWorkSkipsUnreadableRow(t *testing.T) {
 	}
 }
 
+// TestA2APushUnreadableMarkSparesReRegistration: the mark for an unreadable
+// row applies only to the sealed bytes the scan saw, so a re-registration that
+// lands between the scan and the mark keeps the recovered config due.
+func TestA2APushUnreadableMarkSparesReRegistration(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	cleanA2APush(t, db)
+	ctx := context.Background()
+	taskID := seedPushTask(t, db, models.TaskStatusRunning)
+	db.SetA2APushCipher(testPushCipher(t))
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+		TaskID: taskID, ID: "stale", URL: "https://example.com/old", Token: "not-a-real-token-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var oldToken, oldCreds []byte
+	if err := db.conn.QueryRowContext(ctx,
+		"SELECT token_sealed, auth_credentials_sealed FROM a2a_push_configs WHERE task_id=$1 AND id='stale'", taskID).Scan(&oldToken, &oldCreds); err != nil {
+		t.Fatal(err)
+	}
+	// The re-registration lands after the scan read the old bytes.
+	db.SetA2APushCipher(testPushCipher(t))
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+		TaskID: taskID, ID: "stale", URL: "https://example.com/old", Token: "not-a-real-token-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	marked, err := db.markUnreadableA2APush(ctx, taskID, "stale", models.TaskStatusRunning, oldToken, oldCreds)
+	if err != nil || marked {
+		t.Fatalf("mark against the old sealed bytes must not apply: marked=%v err=%v", marked, err)
+	}
+	if work, err := db.ListA2APushWork(ctx, 10); err != nil || len(work) != 1 || work[0].Config.ID != "stale" {
+		t.Fatalf("re-registered config must stay due: %v %+v", err, work)
+	}
+}
+
 // TestA2APushConfigPerTaskCap pins the #2040 cap: a task holds at most
 // MaxA2APushConfigsPerTask configs; updating an existing id at the cap is
 // still allowed, and another task is unaffected.

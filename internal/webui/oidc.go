@@ -59,6 +59,17 @@ type oidcClient struct {
 	mu       sync.Mutex
 	docs     map[string]*discoveryDoc
 	failures map[string]oidcDiscoveryFailure
+	// inflight coalesces concurrent discoveries of one issuer: callers that
+	// arrive while a fetch is running wait for its result instead of each
+	// starting their own (during an IdP outage that would be one hung request
+	// per login click until the first failure is cached).
+	inflight map[string]*oidcDiscoveryCall
+}
+
+type oidcDiscoveryCall struct {
+	done chan struct{}
+	doc  *discoveryDoc
+	err  error
 }
 
 type oidcDiscoveryFailure struct {
@@ -67,7 +78,12 @@ type oidcDiscoveryFailure struct {
 }
 
 func newOIDCClient(c *http.Client) *oidcClient {
-	return &oidcClient{http: c, docs: map[string]*discoveryDoc{}, failures: map[string]oidcDiscoveryFailure{}}
+	return &oidcClient{
+		http:     c,
+		docs:     map[string]*discoveryDoc{},
+		failures: map[string]oidcDiscoveryFailure{},
+		inflight: map[string]*oidcDiscoveryCall{},
+	}
 }
 
 func defaultHTTPClient() *http.Client {
@@ -84,18 +100,27 @@ func (o *oidcClient) discover(issuer string) (*discoveryDoc, error) {
 		o.mu.Unlock()
 		return nil, f.err
 	}
+	if call := o.inflight[issuer]; call != nil {
+		o.mu.Unlock()
+		<-call.done
+		return call.doc, call.err
+	}
+	call := &oidcDiscoveryCall{done: make(chan struct{})}
+	o.inflight[issuer] = call
 	o.mu.Unlock()
 
-	doc, err := o.fetchDiscovery(issuer)
+	call.doc, call.err = o.fetchDiscovery(issuer)
 	o.mu.Lock()
-	defer o.mu.Unlock()
-	if err != nil {
-		o.failures[issuer] = oidcDiscoveryFailure{err: err, at: time.Now()}
-		return nil, err
+	delete(o.inflight, issuer)
+	if call.err != nil {
+		o.failures[issuer] = oidcDiscoveryFailure{err: call.err, at: time.Now()}
+	} else {
+		delete(o.failures, issuer)
+		o.docs[issuer] = call.doc
 	}
-	delete(o.failures, issuer)
-	o.docs[issuer] = doc
-	return doc, nil
+	o.mu.Unlock()
+	close(call.done)
+	return call.doc, call.err
 }
 
 func (o *oidcClient) fetchDiscovery(issuer string) (*discoveryDoc, error) {
