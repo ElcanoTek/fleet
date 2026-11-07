@@ -40,7 +40,7 @@
 #   scripts/bootstrap.sh --enable-service            # systemctl enable --now fleet at the end
 #   scripts/bootstrap.sh --enable-service --no-backup-timer  # ...without the daily database-backup timer
 #   scripts/bootstrap.sh --enable-service --no-maintenance-timer  # ...without the daily host-maintenance timer
-#   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # build + serve the web tier (TLS via Caddy with --domain)
+#   scripts/bootstrap.sh --enable-web [--domain fleet.example.com]  # serve the web UI through Caddy (TLS with --domain)
 #
 # Explicit flags always win — each prompt is asked only when its flag was not
 # given, and non-TTY runs skip every prompt (flag/default behavior unchanged).
@@ -128,11 +128,10 @@
 #                              before use:
 #                              signature by fleet's release workflow, checksums,
 #                              tag, architecture, no host executor.
-#   --from-source              DEVELOPMENT BOXES ONLY: build fleet here with
-#                              `make build` (Go + Node on PATH; bootstrap installs
-#                              neither) instead of installing the signed release.
-#                              LEGACY-BUILD-FROM-SOURCE: remove after boxes run
-#                              artifacts.
+#                              A published release is REQUIRED: bootstrap never
+#                              builds fleet on the box (--from-source and
+#                              FLEET_BOOTSTRAP_FROM_SOURCE were removed,
+#                              ADR-0101), so with no release reachable it stops.
 #   --dry-run                  print the plan; touch nothing.
 #
 # With --enable-web --domain <fqdn>, bootstrap also names the box <fqdn> when
@@ -243,7 +242,13 @@ DB_NAME_ARG=""
 DB_USER_ARG=""
 ADOPT_DB=0
 RELEASE_TAG="${FLEET_RELEASE_TAG:-}"
-FROM_SOURCE="${FLEET_BOOTSTRAP_FROM_SOURCE:-0}"
+# The on-box build is gone (ADR-0101): refuse a request for it by name rather
+# than quietly installing a release the caller did not ask for.
+FROM_SOURCE_RETIRED="bootstrap.sh no longer builds fleet on the box: --from-source / FLEET_BOOTSTRAP_FROM_SOURCE=1 were removed (ADR-0101). Bootstrap installs a published, signed release (the newest, or --tag vYYYY.MM.DD.N). To run unreleased code, build it on a development machine with \`make build\`."
+case "${FLEET_BOOTSTRAP_FROM_SOURCE:-0}" in
+  0|"") ;;
+  *) echo "error: ${FROM_SOURCE_RETIRED}" >&2; exit 1 ;;
+esac
 # The argv as given, for the re-exec after the checkout moves to the release.
 ORIG_ARGS=("$@")
 
@@ -272,7 +277,7 @@ while [[ $# -gt 0 ]]; do
     --force-caddy)       FORCE_CADDY=1 ;;
     --tag)               shift; [[ $# -gt 0 ]] || { echo "error: --tag needs a release tag" >&2; exit 1; }; RELEASE_TAG="$1" ;;
     --tag=*)             RELEASE_TAG="${1#*=}" ;;
-    --from-source)       FROM_SOURCE=1 ;;
+    --from-source)       echo "error: ${FROM_SOURCE_RETIRED}" >&2; exit 1 ;;
     --dry-run)           DRY_RUN=1 ;;
     -h|--help)
       # Derived, not a hardcoded range: print the header comment block and stop
@@ -591,20 +596,6 @@ normalize_auth_pubkey() {
   printf '%s' "$v"
 }
 
-# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-# build_fleet_binary — `make build` for --from-source (development boxes). The
-# toolchain is whatever is on PATH; bootstrap installs neither Go nor Node any
-# more. GOTOOLCHAIN=auto lets an older distro Go fetch go.mod's toolchain.
-# `make build` ends with `fleet version --web`, so success means the binary
-# really carries the web bundle.
-build_fleet_binary() {
-  command -v go >/dev/null 2>&1 && command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 || {
-    warn "--from-source needs go, node (>= web/.nvmrc) and npm on PATH — bootstrap no longer installs them"
-    return 1
-  }
-  ( cd "$REPO_ROOT" && export GOTOOLCHAIN=auto && make build )
-}
-
 # cutover_web_tier_or_die — fleet_cutover_web_tier (scripts/lib/web-tier.sh)
 # for this box, ending the run on failure. By then the old Next.js tier is
 # restored (when it was running) and its files are intact; carrying on would
@@ -801,7 +792,7 @@ step "fleet bootstrap (postgres=${POSTGRES_MODE}, dry-run=${DRY_RUN})"
 # Fail fast on a bad --auth-pubkey BEFORE any provisioning work — the web-tier
 # write also validates (belt-and-braces, and it re-reads an @file that may have
 # changed), but a typo'd key should die here in the first second, not after a
-# multi-minute npm build.
+# multi-minute release download and sandbox pull.
 if [[ -n "$AUTH_PUBKEY_ARG" ]]; then
   _apk_raw="$AUTH_PUBKEY_ARG"
   if [[ "$_apk_raw" == @* ]]; then
@@ -821,8 +812,9 @@ fi
 # that tag, so the units, scripts and generic bundle bootstrap installs are the
 # ones the binary was released with; this script then re-runs from the moved
 # checkout (bash reads a script as it goes, so it must not keep running the
-# old copy of itself).
-if [[ "$FROM_SOURCE" != "1" && "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
+# old copy of itself). A box that cannot reach a published release stops here:
+# there is no on-box build to fall back to (ADR-0101).
+if [[ "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
   [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
     || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
   step "Release: ${RELEASE_TAG:-the newest published one}"
@@ -831,7 +823,7 @@ if [[ "$FROM_SOURCE" != "1" && "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
   else
     if [[ -z "$RELEASE_TAG" ]]; then
       RELEASE_TAG="$(fleet_release_latest_tag)" \
-        || die "could not ask GitHub which release is newest (offline? rate-limited?) — retry, or name one: --tag vYYYY.MM.DD.N"
+        || die "could not ask GitHub which release is newest (offline? rate-limited? none published yet?) — bootstrap installs only a published, signed release and cannot build fleet on the box (ADR-0101); retry once GitHub is reachable, or name one: --tag vYYYY.MM.DD.N. Nothing was installed"
     fi
     git -C "$REPO_ROOT" fetch --quiet --tags origin 2>/dev/null \
       || warn "could not fetch tags into ${REPO_ROOT}; using the tags it has"
@@ -852,7 +844,7 @@ if [[ "$FROM_SOURCE" != "1" && "${FLEET_BOOTSTRAP_ALIGNED:-0}" != "1" ]]; then
         git -C "$REPO_ROOT" checkout --quiet --detach "$_tag_sha" || die "cannot check out ${RELEASE_TAG}"
       else
         git -C "$REPO_ROOT" merge-base --is-ancestor HEAD "origin/${_branch}" 2>/dev/null \
-          || die "${REPO_ROOT} has commits that are not on origin/${_branch}; moving it to ${RELEASE_TAG} would strand them — push them, or use --from-source on a development box"
+          || die "${REPO_ROOT} has commits that are not on origin/${_branch}; moving it to ${RELEASE_TAG} would strand them — push or reset them first (bootstrap installs releases only; run unreleased code on a development machine)"
         git -C "$REPO_ROOT" checkout --quiet -B "$_branch" "$_tag_sha" || die "cannot move ${_branch} to ${RELEASE_TAG}"
       fi
       ok "checkout moved to ${RELEASE_TAG} (${_tag_sha:0:12}) — re-running bootstrap from it"
@@ -893,32 +885,27 @@ fi
 # host executor, web bundle embedded). There is no unverified fallback.
 FLEET_RELEASE_BIN=""
 RELEASE_DIR=""
-if [[ "$FROM_SOURCE" == "1" ]]; then
-  [[ -z "$RELEASE_TAG" ]] || die "--tag selects a signed release; it cannot be combined with --from-source"
-  info "--from-source: no release is downloaded; fleet is built from ${REPO_ROOT} with --enable-service (LEGACY-BUILD-FROM-SOURCE)"
+# RELEASE_TAG was resolved (and the checkout moved to it) above.
+[[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
+  || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
+step "Fetching + verifying the fleet release ${RELEASE_TAG:-(newest published)}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest published release}, and verify them before use: the pinned cosign (internal/release/cosign.lock), the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, no host executor"
 else
-  # RELEASE_TAG was resolved (and the checkout moved to it) above.
-  [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]] \
-    || die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
-  step "Fetching + verifying the fleet release ${RELEASE_TAG:-(newest published)}"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest published release}, and verify them before use: the pinned cosign (internal/release/cosign.lock), the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, no host executor"
-  else
-    # Private staging under the root-owned release cache (never under the
-    # checkout, which another user may own), the same place `fleet update`
-    # stages.
-    install -d -m 0700 "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
-    RELEASE_DIR="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release/${RELEASE_TAG}"
-    rm -rf "$RELEASE_DIR"
-    _rel_commit="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
-      || die "release ${RELEASE_TAG} is not a tag in ${REPO_ROOT}"
-    FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$_rel_commit")" \
-      || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed. (A --tag older than the newest ten releases has no downloadable assets any more.)"
-    "$FLEET_RELEASE_BIN" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
-      || die "the verified binary reports the host executor compiled in — refusing it"
-    "$FLEET_RELEASE_BIN" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
-    ok "verified ${RELEASE_TAG}: $("$FLEET_RELEASE_BIN" version)"
-  fi
+  # Private staging under the root-owned release cache (never under the
+  # checkout, which another user may own), the same place `fleet update`
+  # stages.
+  install -d -m 0700 "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
+  RELEASE_DIR="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release/${RELEASE_TAG}"
+  rm -rf "$RELEASE_DIR"
+  _rel_commit="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+    || die "release ${RELEASE_TAG} is not a tag in ${REPO_ROOT}"
+  FLEET_RELEASE_BIN="$(fleet_release_fetch "$REPO_ROOT" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$_rel_commit")" \
+    || die "release ${RELEASE_TAG} could not be downloaded and verified (above) — nothing was installed, and bootstrap has no on-box build to fall back to (ADR-0101). (A --tag older than the newest ten releases has no downloadable assets any more.)"
+  "$FLEET_RELEASE_BIN" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
+    || die "the verified binary reports the host executor compiled in — refusing it"
+  "$FLEET_RELEASE_BIN" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
+  ok "verified ${RELEASE_TAG}: $("$FLEET_RELEASE_BIN" version)"
 fi
 
 # The Vultr Fedora image ships Cockpit's root-capable web login on :9090; our boxes are administered over ssh only.
@@ -1176,7 +1163,7 @@ SANDBOX_CONTAINERFILE="$(fleet_sandbox_containerfile "$CLIENT_CONFIG_DIR")"
 SANDBOX_IMAGE_REF="$(resolve_sandbox_image "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 sandbox_published=0
-if [[ "$FROM_SOURCE" != "1" ]] && fleet_sandbox_uses_release_image "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default"; then
+if fleet_sandbox_uses_release_image "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default"; then
   sandbox_published=1
 fi
 if [[ -z "$SANDBOX_IMAGE_REF" && ! -f "$SANDBOX_CONTAINERFILE" ]] && fleet_sandbox_containerfile_named "$CLIENT_CONFIG_DIR"; then
@@ -1219,7 +1206,7 @@ else
   # that ships none and names none — the generic one, resolved by the helper
   # build-sandbox-image.sh uses too, so both build paths build the same thing.
   SANDBOX_BUILD_CF="$(fleet_sandbox_build_containerfile "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default")"
-  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$SANDBOX_BUILD_CF"; then
+  if grep -q 'FLEET_SANDBOX_BASE' "$SANDBOX_BUILD_CF"; then
     sandbox_base="$("$FLEET_RELEASE_BIN" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
       || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify (above)"
     info "the bundle layers on the release's verified sandbox image ${sandbox_base}"
@@ -1572,10 +1559,7 @@ INSTALL_DIR="${FLEET_INSTALL_DIR:-/opt/fleet}"
 if [[ "$ENABLE_SERVICE" == "1" ]]; then
   step "Installing the fleet binary, then enabling ${SERVICE_NAME}"
   if [[ "$DRY_RUN" == "1" ]]; then
-    if [[ "$FROM_SOURCE" == "1" ]]; then
-      info "[dry-run] --from-source: would run (cd ${REPO_ROOT} && make build) with the go, node and npm on PATH → fleet with the web UI embedded"
-    fi
-    info "[dry-run] would install fleet ${RELEASE_TAG:-(built from source)} → ${INSTALL_DIR} (fleet release install --no-restart: atomic rename; a different binary already there is kept as fleet.prev, the same one is left as it is)"
+    info "[dry-run] would install fleet ${RELEASE_TAG:-(the newest published release)} →${INSTALL_DIR} (fleet release install --no-restart: atomic rename; a different binary already there is kept as fleet.prev, the same one is left as it is)"
     info "[dry-run] would symlink /usr/local/bin/fleet → ${INSTALL_DIR} (operator PATH)"
     info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
     info "[dry-run] would install deploy/fleet.service → /etc/systemd/system"
@@ -1586,32 +1570,20 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
   elif ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl not found — skipping --enable-service (no systemd on this box)."
   else
-    # 1. The binary: the verified release (default), or a from-source build.
-    _new_bin="$FLEET_RELEASE_BIN"
-    if [[ "$FROM_SOURCE" == "1" ]]; then
-      # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-      { build_fleet_binary && [[ -x "$REPO_ROOT/fleet" ]]; } \
-        || die "--from-source: make build failed or produced no binary (see above)"
-      _new_bin="$REPO_ROOT/fleet"
-    fi
-    [[ -x "$_new_bin" ]] \
+    # 1. The binary: the verified release.
+    [[ -x "$FLEET_RELEASE_BIN" ]] \
       || die "no verified fleet binary to install — re-run bootstrap (it downloads and verifies the release)"
     # Atomic: stage beside the live binary, keep any existing one as
     # fleet.prev (what `fleet release rollback` restores), rename over — and
     # when the live binary already IS this release, swap nothing and leave
-    # fleet.prev alone. A release goes through the same Go install `fleet
-    # update` uses (`fleet release install --no-restart`, run from the
-    # verified binary, which re-verifies the staged files from open
-    # descriptors); the unit is enabled and started below.
-    if [[ "$FROM_SOURCE" == "1" ]]; then
-      fleet_install_built_binary "$_new_bin" "$INSTALL_DIR" \
-        || die "could not install fleet into ${INSTALL_DIR}"
-    else
-      "$FLEET_RELEASE_BIN" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
-        --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" --no-restart \
-        || die "could not install fleet ${RELEASE_TAG} into ${INSTALL_DIR} (above)"
-    fi
-    ok "installed fleet ${RELEASE_TAG:-(from source)} → ${INSTALL_DIR}"
+    # fleet.prev alone. It goes through the same Go install `fleet update`
+    # uses (`fleet release install --no-restart`, run from the verified
+    # binary, which re-verifies the staged files from open descriptors); the
+    # unit is enabled and started below.
+    "$FLEET_RELEASE_BIN" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+      --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" --no-restart \
+      || die "could not install fleet ${RELEASE_TAG} into ${INSTALL_DIR} (above)"
+    ok "installed fleet ${RELEASE_TAG} → ${INSTALL_DIR}"
     # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
     # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
     # status` / `fleet update` / `fleet chat` needs it on PATH too — that gap

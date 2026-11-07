@@ -76,7 +76,7 @@ MANIFEST="$BUNDLE_DIR/manifest.yaml"
 manifest_value() { fleet_sandbox_manifest_value "$@"; }
 # A bundle that ships no Containerfile AND names none customizes nothing: its
 # sandbox IS the generic image (fleet_sandbox_uses_release_image agrees), so a
-# build on the box — --from-source, or no release image reachable — builds the
+# by-hand run of this script (CI, release.yml, an operator rebuilding) builds the
 # generic bundle's Containerfile under the bundle's own sandbox.tag. A bundle
 # that NAMES a missing Containerfile still fails below: that is a broken bundle.
 CONTAINERFILE="$(fleet_sandbox_build_containerfile "$BUNDLE_DIR" "$REPO_ROOT/config/default")"

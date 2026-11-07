@@ -2,11 +2,12 @@
 # scripts/lib/release.sh — the shell half of fleet's signed release artifacts
 # (docs/RELEASE-ARTIFACTS.md, ADR-0100). Sourced by bootstrap.sh and update.sh.
 #
-# Its one job is the FIRST verified binary on a box: bootstrap has no fleet
-# yet, and a box upgrading from a from-source install has a fleet that
-# predates `fleet release`. Everything after that runs through the installed
+# Its jobs: the FIRST verified binary on a box (bootstrap has no fleet yet),
+# and the signed-manifest check both scripts run before moving a checkout to a
+# release tag. Every binary after the first is fetched by the installed
 # binary's `fleet release` verbs (internal/release), which implement the same
-# checks with tests. The two pin the same trust — the identity and issuer
+# checks with tests. (update.sh's shell fallback for a from-source fleet that
+# predated `fleet release` was removed with the on-box build, ADR-0101.) The two pin the same trust — the identity and issuer
 # below, and the cosign digests in internal/release/cosign.lock —
 # and scripts/check_release_artifacts_test.go keeps them equal.
 #
@@ -145,15 +146,6 @@ fleet_release_private_dir() {
   done
 }
 
-# fleet_release_older TAG VERSION — TAG (vYYYY.MM.DD.N) is older than the
-# stamped VERSION a fleet binary reports (YYYY.MM.DD.N[+…]). An unstamped
-# version (dev…) compares as nothing: not a downgrade.
-fleet_release_older() {
-  local t="${1#v}" c="${2%%[+ ]*}"
-  [[ "$c" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]+$ ]] || return 1
-  [[ "$t" != "$c" && "$(printf '%s\n%s\n' "$t" "$c" | sort -V | head -n1)" == "$t" ]]
-}
-
 # fleet_release_verify_manifest ROOT TAG COMMIT CACHE — fetch TAG's
 # SHA256SUMS (+ signature) and release.json into a private temp dir and
 # require: the signature by the release identity, release.json matching the
@@ -269,23 +261,4 @@ fleet_release_health_url() {
     \[::\]:*) addr="127.0.0.1:${addr##*:}" ;;
   esac
   printf '%s://%s/readyz' "$scheme" "$addr"
-}
-
-# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-# fleet_install_built_binary SRC INSTALL_DIR — install a --from-source build
-# the way `fleet release install --no-restart` installs a release: atomic
-# rename, the live binary kept as fleet.prev — except when the live binary
-# already IS these bytes, when nothing is swapped and fleet.prev (what `fleet
-# release rollback` restores) is left exactly as it was.
-fleet_install_built_binary() {
-  local src="$1" dir="$2"
-  install -d -m 0755 "$dir" || return 1
-  if [[ -f "$dir/fleet" ]] && cmp -s "$src" "$dir/fleet"; then
-    printf '%s already is this binary — nothing to swap; %s left as it was\n' "$dir/fleet" "$dir/fleet.prev" >&2
-    return 0
-  fi
-  if [[ -e "$dir/fleet" ]]; then
-    ln -f "$dir/fleet" "$dir/fleet.prev" || return 1
-  fi
-  install -m 0755 "$src" "$dir/.fleet.new" && mv -f "$dir/.fleet.new" "$dir/fleet"
 }

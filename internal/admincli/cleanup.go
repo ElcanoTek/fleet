@@ -19,8 +19,8 @@ import (
 //
 //   - default: `podman image prune -f` (dangling layers only — an image any
 //     tag still references is untouched) + the Go build/test caches when a Go
-//     toolchain is present (build-from-source boxes; a binary-only box just
-//     has no cache to clean).
+//     toolchain is present (a developer machine; a release box carries no Go
+//     since the on-box build was removed, ADR-0101, so it has none to clean).
 //   - --deep: additionally `podman system prune -f` (unused NAMED images,
 //     stopped containers, unused networks). While the fleet service is
 //     running, its warm sandbox containers keep the current image in use, so
