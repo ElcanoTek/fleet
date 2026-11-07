@@ -10,9 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
 // keyStore is where `fleet sched apikey …` reads and writes api_keys.json.
@@ -112,19 +112,17 @@ func unitProperty(service, prop string) string {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), systemd.ProbeTimeout)
 	defer cancel()
 	unit := service + ".service"
-	//nolint:gosec // G204: fixed "systemctl" binary; unit is the configured service name, prop a compile-time constant.
-	if err := exec.CommandContext(ctx, "systemctl", "cat", unit).Run(); err != nil {
+	if !systemd.Installed(ctx, unit) {
 		return ""
 	}
-	//nolint:gosec // G204: same fixed binary and operator-configured unit name.
-	out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", prop, "--value", unit).Output()
+	v, err := systemd.ShowProp(ctx, unit, prop)
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(out))
+	return v
 }
 
 // announce prints where the command is operating and warns when that is not

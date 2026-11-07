@@ -37,6 +37,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/diskguard"
+	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
 // Status is a check verdict. warn does not fail the box; fail does; skip
@@ -361,9 +362,8 @@ func checkUnits(ctx context.Context, service string) []Check {
 	out := make([]Check, 0, len(units))
 	for _, u := range units {
 		c := Check{Name: "unit " + strings.TrimSuffix(u.unit, ".service")}
-		uctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		//nolint:gosec // G204: fixed "systemctl" binary; unit names are compile-time constants + the configured service name.
-		if err := exec.CommandContext(uctx, "systemctl", "cat", u.unit).Run(); err != nil {
+		uctx, cancel := context.WithTimeout(ctx, systemd.ProbeTimeout)
+		if !systemd.Installed(uctx, u.unit) {
 			if u.optional {
 				c.Status, c.Detail = StatusSkip, u.unit+" not installed (optional tier)"
 			} else {
@@ -373,10 +373,9 @@ func checkUnits(ctx context.Context, service string) []Check {
 			out = append(out, c)
 			continue
 		}
-		//nolint:gosec // G204: fixed "systemctl" binary; unit names are compile-time constants + the configured service name.
-		state, _ := exec.CommandContext(uctx, "systemctl", "is-active", u.unit).Output()
+		state := systemd.ActiveState(uctx, u.unit)
 		cancel()
-		switch s := strings.TrimSpace(string(state)); s {
+		switch s := state; s {
 		case "active":
 			c.Status, c.Detail = StatusOK, u.unit+" active"
 		case "activating", "reloading":
@@ -408,8 +407,7 @@ func checkBackups(ctx context.Context) Check {
 	// Both halves must be present: a timer whose service unit is missing fires
 	// into nothing, and reporting that as "backups are configured" would be the
 	// same false comfort this check exists to remove.
-	installed := exec.CommandContext(sctx, "systemctl", "cat", backupTimerUnit).Run() == nil &&
-		exec.CommandContext(sctx, "systemctl", "cat", backupServiceUnit).Run() == nil
+	installed := systemd.Installed(sctx, backupTimerUnit) && systemd.Installed(sctx, backupServiceUnit)
 	enabled := false
 	if installed {
 		enabled = exec.CommandContext(sctx, "systemctl", "is-enabled", "--quiet", backupTimerUnit).Run() == nil
@@ -422,8 +420,7 @@ func checkBackups(ctx context.Context) Check {
 	}
 	lastResult := ""
 	if active {
-		out, _ := exec.CommandContext(sctx, "systemctl", "show", "-p", "Result", "--value", backupServiceUnit).Output()
-		lastResult = strings.TrimSpace(string(out))
+		lastResult, _ = systemd.ShowProp(sctx, backupServiceUnit, "Result")
 	}
 	return backupVerdict(installed, enabled, active, lastResult)
 }
@@ -495,9 +492,8 @@ func checkRestartChurn(ctx context.Context, service string) []Check {
 	out := make([]Check, 0, 2)
 	for _, unit := range churnUnits(service) {
 		short := strings.TrimSuffix(unit, ".service")
-		uctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		//nolint:gosec // G204: fixed "systemctl" binary; unit names are the configured service name + a compile-time constant.
-		if err := exec.CommandContext(uctx, "systemctl", "cat", unit).Run(); err != nil {
+		uctx, cancel := context.WithTimeout(ctx, systemd.ProbeTimeout)
+		if !systemd.Installed(uctx, unit) {
 			cancel()
 			out = append(out, Check{
 				Name:   "restarts: " + short,
@@ -506,12 +502,10 @@ func checkRestartChurn(ctx context.Context, service string) []Check {
 			})
 			continue
 		}
-		//nolint:gosec // G204: fixed "systemctl" binary; unit names as above.
-		nRaw, _ := exec.CommandContext(uctx, "systemctl", "show", "-p", "NRestarts", "--value", unit).Output()
-		//nolint:gosec // G204: fixed "systemctl" binary; unit names as above.
-		rRaw, _ := exec.CommandContext(uctx, "systemctl", "show", "-p", "Result", "--value", unit).Output()
+		nRestarts, _ := systemd.ShowProp(uctx, unit, "NRestarts")
+		result, _ := systemd.ShowProp(uctx, unit, "Result")
 		cancel()
-		out = append(out, restartChurnVerdict(short, strings.TrimSpace(string(nRaw)), strings.TrimSpace(string(rRaw))))
+		out = append(out, restartChurnVerdict(short, nRestarts, result))
 	}
 	return out
 }
@@ -567,10 +561,7 @@ func checkRetiredWebTier(ctx context.Context) Check {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return Check{Name: "retired web tier", Status: StatusSkip, Detail: "systemctl not on PATH (no systemd)"}
 	}
-	sctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	err := exec.CommandContext(sctx, "systemctl", "cat", "fleet-web.service").Run()
-	return retiredWebTierVerdict(err == nil)
+	return retiredWebTierVerdict(systemd.Installed(ctx, "fleet-web.service"))
 }
 
 // retiredWebTierVerdict maps "is fleet-web.service still installed" onto a

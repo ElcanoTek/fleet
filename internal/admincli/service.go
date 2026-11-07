@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
 // Day-2 service-lifecycle verbs: restart / stop / logs. These wrap the host
@@ -38,10 +40,7 @@ func logsArgs(unit string, lines int, follow bool) []string {
 // unit, so this is what turns "not installed" into an explicit error instead of a
 // silent empty result. Mirrors checkService's probe.
 func systemctlUnitInstalled(unit string) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	//nolint:gosec // G204: fixed "systemctl" binary; unit is the operator-supplied unit name.
-	return exec.CommandContext(ctx, "systemctl", "cat", unit).Run() == nil
+	return systemd.Installed(context.Background(), unit)
 }
 
 // cmdStart / cmdRestart / cmdStop run `systemctl <verb> <unit>` on the resolved unit.
