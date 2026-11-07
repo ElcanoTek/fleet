@@ -11,13 +11,15 @@
 # (buildType https://actions.github.io/buildtypes/workflow/v1), with the
 # release commit as the source:
 #
-#   resolvedDependencies[0]  git+<repo>@refs/tags/TAG at COMMIT — what was built
-#                            (the build job checks the tag resolves to it);
-#   resolvedDependencies[1]  git+<repo>@<workflow ref> at GITHUB_SHA — the
-#                            trusted default-branch code that ran the workflow.
+#   resolvedDependencies[0]  git+<repo>@<workflow ref> at GITHUB_SHA — the
+#                            trusted default-branch code that ran the workflow
+#                            (GitHub's attestation API requires [0] to match
+#                            the signing certificate, so it must come first);
+#   resolvedDependencies[1]  git+<repo>@refs/tags/TAG at COMMIT — what was built
+#                            (the build job checks the tag resolves to it).
 #
-# The publish job then verifies the attestation it made and requires
-# resolvedDependencies[0] to name COMMIT (scripts/check-attested-commit.sh).
+# The publish job then verifies the attestation it made and requires the
+# release-tag dependency to name COMMIT (scripts/check-attested-commit.sh).
 # Reads the GitHub Actions environment (GITHUB_SERVER_URL, GITHUB_REPOSITORY,
 # GITHUB_REF, GITHUB_SHA, GITHUB_WORKFLOW_REF, GITHUB_EVENT_NAME,
 # GITHUB_REPOSITORY_ID, GITHUB_REPOSITORY_OWNER_ID, RUNNER_ENVIRONMENT,

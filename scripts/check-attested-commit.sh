@@ -19,8 +19,8 @@ got="$(jq -r '
   [ .[]? | .verificationResult.statement
     | select(.predicateType == "https://slsa.dev/provenance/v1")
     | ([ .predicate.buildDefinition.resolvedDependencies[]?
-         | select((.uri // "") | test("@refs/tags/v[0-9]")) | .digest.gitCommit ]
-       | first // "none") ]
+         | select((.uri // "") | test("@refs/tags/v[0-9]")) | (.digest.gitCommit // "none") ]
+       | if length == 0 then ["none"] else . end)[] ]
   | if length == 0 then "none" else unique | join(",") end' "$report")"
 if [[ "$got" != "$commit" ]]; then
   echo "the verified provenance names source commit(s) ${got}, not the release commit ${commit}" >&2

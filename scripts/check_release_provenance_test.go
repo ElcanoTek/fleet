@@ -98,6 +98,9 @@ func TestCheckAttestedCommit(t *testing.T) {
 		{"main head instead", "[" + statement(mainHead) + "]", false},
 		{"one of two names another commit", "[" + statement(releaseCommit) + "," + statement(mainHead) + "]", false},
 		{"no provenance at all", "[]", false},
+		{"a second tag entry names another commit", "[" + strings.Replace(statement(releaseCommit), `]}}}}}`,
+			`,{"uri":"git+https://github.com/ElcanoTek/fleet@refs/tags/v2026.11.07.4","digest":{"gitCommit":"`+mainHead+`"}}]}}}}}`, 1) + "]", false},
+		{"no release-tag dependency", `[{"verificationResult":{"statement":{"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"resolvedDependencies":[{"uri":"git+https://github.com/ElcanoTek/fleet@refs/heads/main","digest":{"gitCommit":"` + releaseCommit + `"}}]}}}}}]`, false},
 		{"not provenance", `[{"verificationResult":{"statement":{"predicateType":"https://spdx.dev/Document","predicate":{}}}}]`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
