@@ -41,25 +41,10 @@ var version = "dev"
 // or "dev" for a build that was not stamped (e.g. a bare `go build`).
 func Version() string { return version }
 
-// Revision returns the short (12-hex-digit) VCS revision the binary was built
-// from, recovered from the Go toolchain's embedded build info, or "unknown" when
-// it is unavailable (e.g. building from an unpacked source tarball with no .git,
-// or with -buildvcs=false). A "+dirty" suffix marks a build from a tree with
-// uncommitted changes.
-func Revision() string {
-	rev, dirty := vcsRevision()
-	if rev == "" {
-		return "unknown"
-	}
-	if dirty {
-		rev += "+dirty"
-	}
-	return rev
-}
-
-// vcsRevision reads the short revision and the modified flag out of the
-// toolchain's embedded build info. rev is "" when the build info carries no VCS
-// record at all.
+// vcsRevision reads the short (12-hex-digit) revision and the modified flag
+// out of the toolchain's embedded build info. rev is "" when the build info
+// carries no VCS record at all (an unpacked source tarball with no .git, or
+// -buildvcs=false).
 func vcsRevision() (rev string, dirty bool) {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {

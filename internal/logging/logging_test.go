@@ -148,8 +148,8 @@ func TestBridgeNotGatedByLevel(t *testing.T) {
 	var buf bytes.Buffer
 	bridgeLogger = slog.New(newJSONHandler(&buf, slog.LevelInfo))
 
-	SetLevel("error") // raise the NATIVE slog level
-	defer SetLevel("info")
+	levelVar.Set(slog.LevelError) // raise the NATIVE slog level
+	defer levelVar.Set(slog.LevelInfo)
 	if _, err := (logBridge{}).Write([]byte("scheduler: Error recovering expired leases\n")); err != nil {
 		t.Fatalf("bridge write: %v", err)
 	}
@@ -161,20 +161,20 @@ func TestBridgeNotGatedByLevel(t *testing.T) {
 	}
 }
 
-func TestSetLevel(t *testing.T) {
+func TestLevelVarGatesJSONHandler(t *testing.T) {
 	var buf bytes.Buffer
 	lg := slog.New(newJSONHandler(&buf, levelVar))
-	SetLevel("error")
+	defer levelVar.Set(slog.LevelInfo)
+	levelVar.Set(ParseLevel("error"))
 	lg.Warn("warn-suppressed")
 	if buf.Len() != 0 {
-		t.Errorf("warn should be suppressed after SetLevel(error), got %q", buf.String())
+		t.Errorf("warn should be suppressed at level error, got %q", buf.String())
 	}
-	SetLevel("debug")
+	levelVar.Set(ParseLevel("debug"))
 	lg.Debug("debug-shown")
 	if !bytes.Contains(buf.Bytes(), []byte("debug-shown")) {
-		t.Error("debug should be emitted after SetLevel(debug)")
+		t.Error("debug should be emitted at level debug")
 	}
-	SetLevel("info")
 }
 
 // TestConfigureJSONToFile exercises the full Configure(json) wiring end-to-end:

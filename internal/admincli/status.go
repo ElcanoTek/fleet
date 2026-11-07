@@ -16,6 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
 // cmdStatus is the `fleet status` (a.k.a. doctor) health report. It runs a
@@ -290,16 +291,13 @@ func checkService(r *report, name string) {
 		r.skip("systemd unit", "systemctl not on PATH (no systemd)")
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), systemd.ProbeTimeout)
 	defer cancel()
-	//nolint:gosec // G204: fixed "systemctl" binary; name is the operator-supplied unit name.
-	if err := exec.CommandContext(ctx, "systemctl", "cat", name+".service").Run(); err != nil {
+	if !systemd.Installed(ctx, name+".service") {
 		r.skip("systemd unit", fmt.Sprintf("%s.service not installed (run scripts/bootstrap.sh --enable-service to install it)", name))
 		return
 	}
-	//nolint:gosec // G204: fixed "systemctl" binary; name is the operator-supplied unit name.
-	out, _ := exec.CommandContext(ctx, "systemctl", "is-active", name+".service").Output()
-	state := strings.TrimSpace(string(out))
+	state := systemd.ActiveState(ctx, name+".service")
 	switch state {
 	case "active":
 		r.pass("systemd unit", name+".service is active")

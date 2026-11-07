@@ -8,11 +8,11 @@ import (
 	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
+
+	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
 // stagedCopyCheck is clientBundleCheck for a bundle dir that carries (or
@@ -82,11 +82,8 @@ var expectedStagePath = func() string {
 		service = "fleet"
 	}
 	state := "fleet"
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	//nolint:gosec // G204: fixed "systemctl" binary; the unit name is operator config, never request input.
-	if out, err := exec.CommandContext(ctx, "systemctl", "show", "-p", "StateDirectory", "--value", service+".service").Output(); err == nil {
-		if f := strings.Fields(string(out)); len(f) > 0 {
+	if out, err := systemd.ShowProp(context.Background(), service+".service", "StateDirectory"); err == nil {
+		if f := strings.Fields(out); len(f) > 0 {
 			state = f[0]
 		}
 	}

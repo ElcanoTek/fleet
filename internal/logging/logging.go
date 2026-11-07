@@ -53,15 +53,9 @@ type Config struct {
 	Level string
 }
 
-// levelVar is the process-wide slog level knob. Held at package scope so a
-// config hot-reload can adjust it via SetLevel without re-plumbing the handler.
+// levelVar is the process-wide slog level knob, set once by Configure from
+// FLEET_LOG_LEVEL. The level is not reloadable at runtime (docs/CONFIG-RELOAD.md).
 var levelVar = new(slog.LevelVar)
-
-// SetLevel adjusts the live JSON-log level (debug|info|warn|error); an
-// unrecognized value is treated as info. No-op semantics are fine in text mode
-// (the level var simply isn't consulted). Safe to call concurrently — slog.LevelVar
-// is atomic. Wired for FLEET_LOG_LEVEL hot-reload (#178/#286).
-func SetLevel(s string) { levelVar.Set(ParseLevel(s)) }
 
 // ParseLevel maps a level string to an slog.Level, defaulting to info on any
 // unrecognized/empty value.
@@ -83,7 +77,7 @@ func (c Config) Enabled() bool { return c.File != "" }
 //   - "json" (default): the standard log package AND log/slog are routed through
 //     an slog JSON handler at the destination — every existing log.Printf line
 //     becomes a structured JSON object (aggregation-friendly for Loki/Datadog/
-//     journald-json), the level is FLEET_LOG_LEVEL (adjustable via SetLevel), and
+//     journald-json), the level is FLEET_LOG_LEVEL (set at boot), and
 //     secret-keyed attributes are redacted (defense-in-depth).
 //   - "text": the legacy plaintext behavior, byte-for-byte — the standard log
 //     package writes its usual lines to the destination and slog is untouched.

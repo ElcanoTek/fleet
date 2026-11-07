@@ -128,6 +128,42 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 	stops := &callStops{m: make(map[uint64]chan struct{})}
 	var wg sync.WaitGroup
 
+	// spawn runs one request's handler on its own goroutine and writes the
+	// response fn returns. It owns the bookkeeping every async arm shares:
+	// the WaitGroup the drain waits on, the panic recovery that answers with
+	// an incident response, and — when cancellable — the request's context,
+	// registered in inflight (synchronously, before the next frame is read,
+	// so a methodCancel for it always finds it) and released when fn ends.
+	// A non-cancellable request runs on Serve's ctx and ignores methodCancel.
+	spawn := func(req request, location string, cancellable bool, fn func(context.Context) response) {
+		runCtx, cancel := ctx, context.CancelFunc(func() {})
+		if cancellable {
+			runCtx, cancel = context.WithCancel(ctx)
+			mu.Lock()
+			inflight[req.ID] = cancel
+			mu.Unlock()
+		}
+		wg.Add(1)
+		go func() {
+			// wg.Done is registered FIRST so it runs LAST: deferred calls
+			// unwind LIFO, and the recovery below writes the incident
+			// response — that write must land before the drain in Serve
+			// sees the group empty, or Serve can return with the panic
+			// response still unwritten.
+			defer wg.Done()
+			defer recoverBackendPanic(location, req.ID, write)
+			defer func() {
+				if cancellable {
+					mu.Lock()
+					delete(inflight, req.ID)
+					mu.Unlock()
+				}
+				cancel()
+			}()
+			write(fn(runCtx))
+		}()
+	}
+
 	// Unblock a parked Decode when ctx is cancelled by closing the conn.
 	stop := make(chan struct{})
 	defer close(stop)
@@ -184,101 +220,18 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			stops.stop(req.ID)
 
 		case methodCall:
-			callCtx, cancel := context.WithCancel(ctx)
 			var stopCh <-chan struct{}
 			if req.Stoppable {
 				stopCh = stops.add(req.ID)
 			}
-			mu.Lock()
-			inflight[req.ID] = cancel
-			mu.Unlock()
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.call", req.ID, write)
-				defer func() {
-					mu.Lock()
-					delete(inflight, req.ID)
-					mu.Unlock()
-					stops.drop(req.ID)
-					cancel()
-				}()
-				// Args arrives nil when the peer's empty map crossed the wire
-				// (args,omitempty drops it); forward an object, not null.
-				if req.Args == nil {
-					req.Args = map[string]any{}
-				}
-				// Re-attach the parent's per-call budget (request.CallTimeoutMs):
-				// mcp.Server.callTool starts it once it holds the server mutex.
-				runCtx := mcp.WithCallTimeout(callCtx, time.Duration(req.CallTimeoutMs)*time.Millisecond)
-				// Re-attach the parent's fleet `_meta` entries (request.Meta);
-				// WithRequestMeta keeps only the fleet/ namespace.
-				runCtx = mcp.WithRequestMeta(runCtx, req.Meta)
-				// A stoppable call (request.Stoppable): a methodStop frame
-				// closes this signal, and the MCP transport then asks the
-				// server to stop (mcp.WithStop).
-				runCtx = mcp.WithStop(runCtx, stopCh)
-				// The parent listens for progress (request.Progress): forward
-				// the call's progress notifications as intermediate frames,
-				// throttled, and stop before the final frame so none follows it.
-				stopProgress := func() {}
-				if req.Progress {
-					var push func(mcp.ProgressUpdate)
-					push, stopProgress = mcp.ThrottleProgress(progressForwardInterval, func(u mcp.ProgressUpdate) {
-						write(response{ID: req.ID, Progress: &u})
-					})
-					runCtx = mcp.WithProgress(runCtx, push)
-				}
-				var text string
-				var isErr bool
-				var err error
-				if req.Scope == "" {
-					text, isErr, err = s.backend.CallMCP(runCtx, req.Server, req.Tool, req.Args)
-				} else if scoped, ok := s.backend.(ScopedBackend); ok {
-					text, isErr, err = scoped.CallMCPInScope(runCtx, req.Scope, req.Server, req.Tool, req.Args)
-				} else {
-					stopProgress()
-					write(response{ID: req.ID, Err: "mcpbroker: backend does not support scoped sessions"})
-					return
-				}
-				stopProgress()
-				resp := response{ID: req.ID}
-				if err != nil {
-					// Operational errors can embed connector stderr, URLs, headers,
-					// or provider detail. Discard both the error and any partial text;
-					// only successful tool output — and, since F8, a vendor's own
-					// bounded, scrubbed 4xx or JSON-RPC answer (describeCallError) —
-					// may cross the credential boundary. The full detail is logged
-					// host-side first (redacted) so the failure is diagnosable here
-					// instead of nowhere — see logMasked.
-					resp.Err = describeCallError(err)
-					if resp.Err == errBrokerCallFailed {
-						logMasked("tool call", req.Server+"."+req.Tool, err)
-					} else {
-						logPassed("tool call", req.Server+"."+req.Tool, err, resp.Err)
-					}
-				} else {
-					resp.Text = text
-					resp.IsError = isErr
-				}
-				write(resp)
-			}(req)
+			spawn(req, "mcpbroker.call", true, func(callCtx context.Context) response {
+				defer stops.drop(req.ID)
+				return s.call(callCtx, req, stopCh, write)
+			})
 
 		case methodListTools:
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.list_tools", req.ID, write)
+			// Discovery runs on Serve's ctx and is not cancellable by frame.
+			spawn(req, "mcpbroker.list_tools", false, func(ctx context.Context) response {
 				tools, err := s.backend.ListTools(ctx)
 				resp := response{ID: req.ID}
 				if err != nil {
@@ -287,19 +240,11 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				} else {
 					resp.Tools = tools
 				}
-				write(resp)
-			}(req)
+				return resp
+			})
 
 		case methodListAccounts:
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.list_accounts", req.ID, write)
+			spawn(req, "mcpbroker.list_accounts", false, func(ctx context.Context) response {
 				accounts, err := s.backend.ListAccounts(ctx, req.Server, req.BaseVars)
 				resp := response{ID: req.ID}
 				if err != nil {
@@ -308,64 +253,27 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				} else {
 					resp.Accounts = accounts
 				}
-				write(resp)
-			}(req)
+				return resp
+			})
 
 		case methodOpenScope:
-			callCtx, cancel := context.WithCancel(ctx)
-			mu.Lock()
-			inflight[req.ID] = cancel
-			mu.Unlock()
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.scope_open", req.ID, write)
-				defer func() {
-					mu.Lock()
-					delete(inflight, req.ID)
-					mu.Unlock()
-					cancel()
-				}()
+			spawn(req, "mcpbroker.scope_open", true, func(callCtx context.Context) response {
 				resp := response{ID: req.ID}
 				scoped, ok := s.backend.(ScopedBackend)
 				if !ok {
 					resp.Err = "mcpbroker: backend does not support scoped sessions"
-					write(resp)
-					return
+					return resp
 				}
 				resp.Scope, resp.Tools, resp.Skipped, resp.ConnectRetrySpentMs, resp.Err = openScope(callCtx, scoped, req.ScopeSpec)
-				write(resp)
-			}(req)
+				return resp
+			})
 
 		case methodCloseScope:
 			if req.Scope == "" {
 				write(response{ID: req.ID, Err: "mcpbroker: scope_close requires a scope ID"})
 				continue
 			}
-			callCtx, cancel := context.WithCancel(ctx)
-			mu.Lock()
-			inflight[req.ID] = cancel
-			mu.Unlock()
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.scope_close", req.ID, write)
-				defer func() {
-					mu.Lock()
-					delete(inflight, req.ID)
-					mu.Unlock()
-					cancel()
-				}()
+			spawn(req, "mcpbroker.scope_close", true, func(callCtx context.Context) response {
 				resp := response{ID: req.ID}
 				if scoped, ok := s.backend.(ScopedBackend); ok {
 					if err := scoped.CloseScope(callCtx, req.Scope); err != nil {
@@ -375,29 +283,11 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				} else {
 					resp.Err = "mcpbroker: backend does not support scoped sessions"
 				}
-				write(resp)
-			}(req)
+				return resp
+			})
 
 		case methodReload:
-			callCtx, cancel := context.WithCancel(ctx)
-			mu.Lock()
-			inflight[req.ID] = cancel
-			mu.Unlock()
-			wg.Add(1)
-			go func(req request) {
-				// wg.Done is registered FIRST so it runs LAST: deferred calls
-				// unwind LIFO, and the recovery below writes the incident
-				// response — that write must land before the drain in Serve
-				// sees the group empty, or Serve can return with the panic
-				// response still unwritten.
-				defer wg.Done()
-				defer recoverBackendPanic("mcpbroker.reload", req.ID, write)
-				defer func() {
-					mu.Lock()
-					delete(inflight, req.ID)
-					mu.Unlock()
-					cancel()
-				}()
+			spawn(req, "mcpbroker.reload", true, func(callCtx context.Context) response {
 				resp := response{ID: req.ID}
 				if reloadable, ok := s.backend.(ReloadBackend); ok {
 					result, err := reloadable.Reload(callCtx)
@@ -416,13 +306,76 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				} else {
 					resp.Err = "mcpbroker: backend does not support reload"
 				}
-				write(resp)
-			}(req)
+				return resp
+			})
 
 		default:
 			write(response{ID: req.ID, Err: "mcpbroker: unknown method " + string(req.Method)})
 		}
 	}
+}
+
+// call runs one methodCall against the backend and returns its final
+// response; progress frames, when requested, are written as they arrive.
+func (s *Server) call(callCtx context.Context, req request, stopCh <-chan struct{}, write func(response)) response {
+	// Args arrives nil when the peer's empty map crossed the wire
+	// (args,omitempty drops it); forward an object, not null.
+	if req.Args == nil {
+		req.Args = map[string]any{}
+	}
+	// Re-attach the parent's per-call budget (request.CallTimeoutMs):
+	// mcp.Server.callTool starts it once it holds the server mutex.
+	runCtx := mcp.WithCallTimeout(callCtx, time.Duration(req.CallTimeoutMs)*time.Millisecond)
+	// Re-attach the parent's fleet `_meta` entries (request.Meta);
+	// WithRequestMeta keeps only the fleet/ namespace.
+	runCtx = mcp.WithRequestMeta(runCtx, req.Meta)
+	// A stoppable call (request.Stoppable): a methodStop frame
+	// closes this signal, and the MCP transport then asks the
+	// server to stop (mcp.WithStop).
+	runCtx = mcp.WithStop(runCtx, stopCh)
+	// The parent listens for progress (request.Progress): forward
+	// the call's progress notifications as intermediate frames,
+	// throttled, and stop before the final frame so none follows it.
+	stopProgress := func() {}
+	if req.Progress {
+		var push func(mcp.ProgressUpdate)
+		push, stopProgress = mcp.ThrottleProgress(progressForwardInterval, func(u mcp.ProgressUpdate) {
+			write(response{ID: req.ID, Progress: &u})
+		})
+		runCtx = mcp.WithProgress(runCtx, push)
+	}
+	var text string
+	var isErr bool
+	var err error
+	if req.Scope == "" {
+		text, isErr, err = s.backend.CallMCP(runCtx, req.Server, req.Tool, req.Args)
+	} else if scoped, ok := s.backend.(ScopedBackend); ok {
+		text, isErr, err = scoped.CallMCPInScope(runCtx, req.Scope, req.Server, req.Tool, req.Args)
+	} else {
+		stopProgress()
+		return response{ID: req.ID, Err: "mcpbroker: backend does not support scoped sessions"}
+	}
+	stopProgress()
+	resp := response{ID: req.ID}
+	if err != nil {
+		// Operational errors can embed connector stderr, URLs, headers,
+		// or provider detail. Discard both the error and any partial text;
+		// only successful tool output — and, since F8, a vendor's own
+		// bounded, scrubbed 4xx or JSON-RPC answer (describeCallError) —
+		// may cross the credential boundary. The full detail is logged
+		// host-side first (redacted) so the failure is diagnosable here
+		// instead of nowhere — see logMasked.
+		resp.Err = describeCallError(err)
+		if resp.Err == errBrokerCallFailed {
+			logMasked("tool call", req.Server+"."+req.Tool, err)
+		} else {
+			logPassed("tool call", req.Server+"."+req.Tool, err, resp.Err)
+		}
+	} else {
+		resp.Text = text
+		resp.IsError = isErr
+	}
+	return resp
 }
 
 // openScope opens one scope on the backend. A spec carrying a connect-retry

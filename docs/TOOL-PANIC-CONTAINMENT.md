@@ -32,7 +32,7 @@ have committed side effects; verify state before retrying.
 ```
 
 The raw panic and stack are discarded at the recovery telemetry seam. Fleet
-records the same incident ID in structured logs, `safe.PanicStats`, Sentry, and
+records the same incident ID in structured logs, Sentry, and
 the append-only `panic_events` ledger (migration 040), together with a
 value-free panic class, boundary phase, tool name, call ID, run mode, and the
 task or conversation ID when supplied. New rows use the existing

@@ -55,6 +55,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -64,6 +65,7 @@ import (
 	"net/http"
 	"net/smtp"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -384,8 +386,8 @@ func retry(ctx context.Context, cfg Config, fn func(context.Context) error) erro
 	return lastErr
 }
 
-// sendEmail sends the completion email over SMTP with STARTTLS (the net/smtp
-// SendMail path, which negotiates STARTTLS when the server advertises it). The
+// sendEmail sends the completion email over SMTP with STARTTLS (deliver, which
+// negotiates STARTTLS when the server advertises it, as net/smtp.SendMail does). The
 // SMTP password is read from the host config and handed to smtp.PlainAuth; it is
 // never placed in the message, the error, or any log line.
 func sendEmail(ctx context.Context, c Config, ev Event) error {
@@ -447,59 +449,146 @@ func (n *Notifier) SendDirectEmail(ctx context.Context, to, subject, textBody, h
 }
 
 // sendRaw delivers pre-rendered message bytes to the envelope recipients over
-// SMTP with STARTTLS (the net/smtp SendMail path, which negotiates STARTTLS
-// when the server advertises it). The SMTP password is read from the host
-// config and handed to smtp.PlainAuth; it is never placed in the message, the
-// error, or any log line.
+// SMTP with STARTTLS when the server advertises it (see deliver). The SMTP
+// password is read from the host config and handed to smtp.PlainAuth; it is
+// never placed in the message, the error, or any log line.
 func sendRaw(ctx context.Context, c Config, to []string, msg []byte) error {
-	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
-	var auth smtp.Auth
-	if c.SMTPUsername != "" {
-		auth = smtp.PlainAuth("", c.SMTPUsername, c.SMTPPassword, c.SMTPHost)
+	if err := deliver(ctx, c, to, msg); err != nil {
+		return fmt.Errorf("smtp send to %s: %w", net.JoinHostPort(c.SMTPHost, c.SMTPPort), err)
 	}
-	// net/smtp has no context-aware SendMail; run it on a goroutine and honor the
-	// per-attempt ctx so a hung dial still returns within cfg.Timeout. The
-	// detached SendMail finishes (or errors) on its own and is then GC'd.
-	done := make(chan error, 1)
-	go func() {
-		done <- smtp.SendMail(addr, auth, c.SMTPFrom, to, msg)
-	}()
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("smtp send to %s: %w", addr, ctx.Err())
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("smtp send to %s: %w", addr, err)
-		}
-		return nil
-	}
+	return nil
 }
 
-// sendReplyEmail sends one reply over SMTP to the single inbound sender. Mirrors
-// sendRaw's context-honoring goroutine pattern, but addresses the reply to the
-// event's sender (not the configured EmailTo list).
+// sendReplyEmail sends one reply over SMTP to the single inbound sender,
+// addressed to the event's sender (not the configured EmailTo list).
 func sendReplyEmail(ctx context.Context, c Config, to, subject, body, inReplyTo string) error {
-	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
 	msg := renderReplyEmail(c.SMTPFrom, to, subject, body, inReplyTo)
+	if err := deliver(ctx, c, []string{to}, msg); err != nil {
+		return fmt.Errorf("smtp reply to %s: %w", net.JoinHostPort(c.SMTPHost, c.SMTPPort), err)
+	}
+	return nil
+}
 
+// deliver is net/smtp.SendMail made context-aware (#2017). SendMail has no
+// dial or I/O deadline, so the old wrapper ran it on a goroutine and abandoned
+// it on timeout: a server that accepted but never answered leaked that
+// goroutine (and its socket) for as long as the server held on, and a slow
+// server could still complete the abandoned send after retry had started a
+// second one — a duplicate email. Here the one connection carries a deadline
+// taken from ctx (defaultTimeout when ctx has none) and is also closed on
+// cancellation, so every blocking read/write returns when the attempt ends
+// and nothing outlives it.
+//
+// The protocol steps mirror SendMail line by line: validate the from/to
+// lines, greet (EHLO, falling back to HELO, as "localhost"), STARTTLS when
+// advertised with tls.Config{ServerName: host}, AUTH when configured,
+// MAIL/RCPT/DATA, QUIT. smtp.PlainAuth keeps its own refusal to send the
+// password over an unencrypted connection to a non-localhost server.
+//
+// One deliberate tightening: SendMail silently skips AUTH when the server
+// answered only HELO (no extension list); deliver refuses instead, so a
+// configured credential is never dropped in favour of an unauthenticated send.
+func deliver(ctx context.Context, c Config, to []string, msg []byte) (err error) {
+	if err := validateSMTPLine(c.SMTPFrom); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := validateSMTPLine(rcpt); err != nil {
+			return err
+		}
+	}
 	var auth smtp.Auth
 	if c.SMTPUsername != "" {
 		auth = smtp.PlainAuth("", c.SMTPUsername, c.SMTPPassword, c.SMTPHost)
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- smtp.SendMail(addr, auth, c.SMTPFrom, []string{to}, msg)
-	}()
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("smtp reply to %s: %w", addr, ctx.Err())
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("smtp reply to %s: %w", addr, err)
-		}
-		return nil
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, defaultTimeout)
+		defer cancel()
 	}
+	deadline, _ := ctx.Deadline()
+
+	addr := net.JoinHostPort(c.SMTPHost, c.SMTPPort)
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return err
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	// The deadline bounds a server that stalls; this bounds an attempt the
+	// caller cancels before it. Close unblocks any read or write in flight.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	// Report the attempt's own end (deadline or cancel) rather than the
+	// i/o-timeout or closed-connection error it surfaced as. The socket
+	// deadline IS the ctx deadline, so a socket timeout can land a hair
+	// before ctx's own timer fires; it is still the attempt's deadline.
+	defer func() {
+		switch {
+		case err == nil:
+		case ctx.Err() != nil:
+			err = fmt.Errorf("%w (%w)", ctx.Err(), err)
+		case errors.Is(err, os.ErrDeadlineExceeded):
+			err = fmt.Errorf("%w (%w)", context.DeadlineExceeded, err)
+		}
+	}()
+
+	cl, err := smtp.NewClient(conn, c.SMTPHost)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer cl.Close()
+	if err := cl.Hello("localhost"); err != nil {
+		return err
+	}
+	if ok, _ := cl.Extension("STARTTLS"); ok {
+		// MinVersion pins the Go client default (TLS 1.2) explicitly; it is
+		// what smtp.SendMail negotiated, so delivery is unchanged.
+		if err := cl.StartTLS(&tls.Config{ServerName: c.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
+	}
+	if auth != nil {
+		if ok, _ := cl.Extension("AUTH"); !ok {
+			return errors.New("smtp: server doesn't support AUTH")
+		}
+		if err := cl.Auth(auth); err != nil {
+			return err
+		}
+	}
+	if err := cl.Mail(c.SMTPFrom); err != nil {
+		return err
+	}
+	for _, rcpt := range to {
+		if err := cl.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	w, err := cl.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write(msg); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return cl.Quit()
+}
+
+// validateSMTPLine is net/smtp's validateLine: an envelope address must not
+// smuggle a CR or LF into the command stream.
+func validateSMTPLine(line string) error {
+	if strings.ContainsAny(line, "\n\r") {
+		return errors.New("smtp: A line must not contain CR or LF")
+	}
+	return nil
 }
 
 // sendWebhook renders the body template and POSTs (or uses the configured

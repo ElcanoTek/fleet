@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestEmitPanic_CountsAndFansOut(t *testing.T) {
+func TestEmitPanic_FansOut(t *testing.T) {
 	const loc = "unit.emit-test"
 
 	var hookName string
@@ -22,11 +22,19 @@ func TestEmitPanic_CountsAndFansOut(t *testing.T) {
 	PanicEventWriter = func(location, message string, _ []byte) { writerLoc, writerMsg = location, message }
 	t.Cleanup(func() { SentryHook, PanicEventWriter = prevSentry, prevWriter })
 
-	before := PanicCounts()[loc]
+	prevEvent := PanicEventHook
+	var events int
+	PanicEventHook = func(event PanicEvent, _ any) {
+		if event.Location == loc {
+			events++
+		}
+	}
+	t.Cleanup(func() { PanicEventHook = prevEvent })
+
 	EmitPanic(loc, "kaboom", []byte("stack"))
 
-	if got := PanicCounts()[loc]; got != before+1 {
-		t.Errorf("PanicCounts[%s] = %d, want %d", loc, got, before+1)
+	if events != 1 {
+		t.Errorf("PanicEventHook saw %d events for %s, want 1", events, loc)
 	}
 	if hookName != loc {
 		t.Errorf("SentryHook got %q, want %q", hookName, loc)
@@ -117,10 +125,6 @@ func TestEmitPanicWithMetadata_StableOpaqueIncidentAndAttribution(t *testing.T) 
 		hooked.RunMode != meta.RunMode || hooked.TaskID != meta.TaskID ||
 		hooked.ConversationID != meta.ConversationID || hooked.Boundary != meta.Boundary {
 		t.Fatalf("hook attribution = %+v, want %+v", hooked.PanicMetadata, meta)
-	}
-	stat := PanicStats()[meta.Location]
-	if stat.Count == 0 || stat.Last.IncidentID != event.IncidentID || stat.Last.ToolName != meta.ToolName {
-		t.Fatalf("PanicStats[%q] = %+v, want latest attributed incident", meta.Location, stat)
 	}
 }
 

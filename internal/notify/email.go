@@ -11,7 +11,7 @@ import (
 // receiving client renders whichever it prefers. It contains ONLY non-secret
 // run facts (task ID/name, status, cost, duration, log link) — never any SMTP
 // credential. from/to are headers; the SMTP envelope sender/recipients are
-// passed separately to smtp.SendMail.
+// passed separately to the SMTP sender (deliver).
 func renderEmail(from string, to []string, ev Event) []byte {
 	subject := fmt.Sprintf("Fleet task %s: %s", ev.Status, ev.Name)
 

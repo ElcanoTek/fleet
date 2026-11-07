@@ -11,10 +11,17 @@ import (
 )
 
 // TestRecoverMiddleware_PanicReturnsJSON500 verifies a panicking chat handler is
-// contained as a JSON 500 (not a process crash) and counted via safe.EmitPanic (#241).
+// contained as a JSON 500 (not a process crash) and emitted via safe.EmitPanic (#241).
 func TestRecoverMiddleware_PanicReturnsJSON500(t *testing.T) {
 	const loc = "httpapi.handler GET /boom"
-	before := safe.PanicCounts()[loc]
+	prev := safe.PanicEventHook
+	var emitted int
+	safe.PanicEventHook = func(event safe.PanicEvent, _ any) {
+		if event.Location == loc {
+			emitted++
+		}
+	}
+	t.Cleanup(func() { safe.PanicEventHook = prev })
 
 	h := recoverMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("handler boom")
@@ -32,8 +39,8 @@ func TestRecoverMiddleware_PanicReturnsJSON500(t *testing.T) {
 	if body["error"] != "internal server error" {
 		t.Errorf("body = %v, want internal server error", body)
 	}
-	if got := safe.PanicCounts()[loc]; got != before+1 {
-		t.Errorf("panic counter for %q = %d, want %d", loc, got, before+1)
+	if emitted != 1 {
+		t.Errorf("panic events for %q = %d, want 1", loc, emitted)
 	}
 }
 

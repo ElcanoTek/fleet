@@ -57,60 +57,14 @@ func ExcludeInteractiveOnly(all []fantasy.AgentTool) []fantasy.AgentTool {
 	return out
 }
 
-// DefaultTools returns the stateless native-tool set, plus the
-// sandbox-bound entries bound to a nil sandbox. Those surface a
-// clear "no sandbox" error if ever invoked through this slice —
-// production turns rebuild via [NewTurnTools] with a real per-turn
-// sandbox, and that's the only path that should fire them.
-// The nil-bound entries here (bash, run_python, view/write/edit_file —
-// sandbox data-plane since #784 — and download_url, xlsx_workbook,
-// generate_image, whose file I/O moved into the sandbox FileOp seam in
-// #1083) exist so the tool *schemas* (name, description, parameters)
-// stay stable for the system prompt and prompt-prefix caching, even
-// before the agent has Take()d a sandbox for the turn. Invoked with a
-// nil sandbox they fail closed — there is no host-execution fallback.
-func DefaultTools() []fantasy.AgentTool {
+// baseTools is the one native-tool roster, with the sandbox-bound entries
+// (bash, run_python, view/write/edit_file — sandbox data-plane since #784 —
+// and download_url, xlsx_workbook, generate_image, whose file I/O moved into
+// the sandbox FileOp seam in #1083) bound to sb. With a nil sb those entries
+// keep their schemas but fail closed when invoked — there is no
+// host-execution fallback.
+func baseTools(sb *sandbox.Sandbox) []fantasy.AgentTool {
 	return []fantasy.AgentTool{
-		NewBashTool(nil),
-		NewViewFileTool(nil),
-		NewWriteFileTool(nil),
-		NewEditFileTool(nil),
-		NewTaskTrackerTool(),
-		NewWebFetchTool(),
-		NewDownloadURLTool(nil),
-		NewSmartSearchTool(),
-		NewPreviewEmailTool(),
-		NewScheduleTaskTool(),
-		NewManageTasksTool(),
-		NewSuggestAdvancedModelTool(),
-		NewXLSXTool(nil),
-		NewProposeMemoryTool(),
-		NewRunPythonTool(nil),
-		NewGenerateImageTool(nil),
-		NewShowUITool(),
-		NewChatPatrolTool(),
-		NewPersonaStudioTool(),
-		NewEnableMCPConnectorsTool(),
-		NewConnectorStudioTool(),
-		NewPlaywrightBrowserTool(),
-	}
-}
-
-// NewTurnTools constructs the per-turn tool bundle, with bash and
-// run_python both bound to the supplied sandbox. Cleanup tears down
-// the sandbox (and with it the python kernel and any in-flight bash
-// state) when the turn ends.
-//
-// The #191 git-metadata tools are deliberately NOT added here. They are wired
-// only into the scheduled native set (where code-producing agents live and the
-// per-task MCP selection is narrow), not the interactive chat turn — which runs
-// near the 128-tool ceiling once per-user MCP servers (#449) load — via
-// [MetadataTools]. See internal/scheduledrun.
-// browserbaseKey unseals the running user's Browserbase connector credential and
-// is nil unless one is genuinely reachable for this turn; a non-nil value is what
-// registers browserbase_live_view, with the host env key as the fallback.
-func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTools {
-	turn := []fantasy.AgentTool{
 		NewBashTool(sb),
 		NewViewFileTool(sb),
 		NewWriteFileTool(sb),
@@ -134,6 +88,33 @@ func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTo
 		NewConnectorStudioTool(),
 		NewPlaywrightBrowserTool(),
 	}
+}
+
+// DefaultTools returns the native roster with every sandbox-bound entry bound
+// to a nil sandbox: the same names and schemas a turn advertises, none of the
+// sandbox-bound ones runnable (they fail closed). No production path uses it —
+// turns build their tools with [NewTurnTools] — but tests here and in
+// internal/agent need the roster without a sandbox, and a cross-package test
+// helper has to be exported.
+func DefaultTools() []fantasy.AgentTool {
+	return baseTools(nil)
+}
+
+// NewTurnTools constructs the per-turn tool bundle, with bash and
+// run_python both bound to the supplied sandbox. Cleanup tears down
+// the sandbox (and with it the python kernel and any in-flight bash
+// state) when the turn ends.
+//
+// The #191 git-metadata tools are deliberately NOT added here. They are wired
+// only into the scheduled native set (where code-producing agents live and the
+// per-task MCP selection is narrow), not the interactive chat turn — which runs
+// near the 128-tool ceiling once per-user MCP servers (#449) load — via
+// [MetadataTools]. See internal/scheduledrun.
+// browserbaseKey unseals the running user's Browserbase connector credential and
+// is nil unless one is genuinely reachable for this turn; a non-nil value is what
+// registers browserbase_live_view, with the host env key as the fallback.
+func NewTurnTools(sb *sandbox.Sandbox, browserbaseKey BrowserbaseKeyFunc) TurnTools {
+	turn := baseTools(sb)
 	if t := NewBrowserbaseLiveViewTool(browserbaseKey); t != nil {
 		turn = append(turn, t)
 	}

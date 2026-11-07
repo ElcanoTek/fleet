@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/systemd"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -111,9 +112,7 @@ func motdServiceState(unit string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	//nolint:gosec // G204: fixed "systemctl" binary; unit is operator-config (FLEET_SERVICE_NAME / --service), not request input.
-	out, _ := exec.CommandContext(ctx, "systemctl", "is-active", unit).Output()
-	state := strings.TrimSpace(string(out))
+	state := systemd.ActiveState(ctx, unit)
 	if state == "" {
 		return "unknown"
 	}

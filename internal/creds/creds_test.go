@@ -3,6 +3,7 @@ package creds
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -224,7 +225,7 @@ func TestAccountsFor_NeverLeaksSecretValues(t *testing.T) {
 			continue
 		}
 		// Account names are derived suffixes (e.g. "acme"), never the value.
-		if contains(a, secret) || a == secret {
+		if strings.Contains(a, secret) || a == secret {
 			t.Fatalf("AccountsFor leaked a secret value in an account name: %q", a)
 		}
 	}
@@ -235,18 +236,4 @@ func TestAccountsFor_NeverLeaksSecretValues(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("AccountsFor = %v, want %v", got, want)
 	}
-}
-
-// contains reports whether sub is a substring of s (avoids importing strings
-// just for the guard above).
-func contains(s, sub string) bool {
-	if sub == "" {
-		return false
-	}
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
