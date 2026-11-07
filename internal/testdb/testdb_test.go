@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 var selfMigrations atomic.Int32
@@ -200,5 +201,58 @@ func TestSpecValidation(t *testing.T) {
 		if _, err := s.template(t.Context(), sp); err == nil {
 			t.Errorf("template(%+v) accepted", fmt.Sprint(sp.Name))
 		}
+	}
+}
+
+// TestBackgroundModeLeavesNothingBehind drives Run's background mode on a
+// server of its own (its own owner id): clones made ahead are handed out,
+// finished tests' databases are dropped off the critical path, and shutdown
+// drops the unused ones and waits — so nothing of that owner remains.
+func TestBackgroundModeLeavesNothingBehind(t *testing.T) {
+	main := get(t)
+	runMode.Store(true)
+	s, err := connect(main.base.String())
+	runMode.Store(false)
+	live.Store(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.admin.Close() }()
+	if !s.bg.on.Load() {
+		t.Fatal("background mode is off under Run")
+	}
+	tmpl, err := s.template(t.Context(), selfSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	ahead := 0
+	for range 6 {
+		name, ok := s.pooled(tmpl)
+		if ok {
+			ahead++
+		} else {
+			name = s.newName()
+			if err := s.createDB(t.Context(), name, tmpl); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got = append(got, name)
+		time.Sleep(300 * time.Millisecond) // let the filler work
+	}
+	if ahead == 0 {
+		t.Error("no test got a clone made ahead")
+	}
+	for _, name := range got {
+		s.dropLater(name)
+	}
+	s.shutdown()
+	var n int
+	if err := main.admin.QueryRow(`SELECT count(*) FROM pg_database WHERE starts_with(datname, $1)`,
+		clonePrefix+s.ownerHex()+"_").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("%d database(s) of the background server left behind", n)
 	}
 }

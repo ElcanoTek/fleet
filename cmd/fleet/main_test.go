@@ -3,6 +3,8 @@ package main
 import (
 	"os"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // FLEET_ENV_FILE is unset for the whole package: the first clientconfig.Load
@@ -12,5 +14,5 @@ import (
 // Tests that need one point it at a fixture via t.Setenv.
 func TestMain(m *testing.M) {
 	_ = os.Unsetenv("FLEET_ENV_FILE")
-	os.Exit(m.Run())
+	os.Exit(testdb.Run(m)) // testdb background mode: clones made ahead, dropped off the critical path
 }

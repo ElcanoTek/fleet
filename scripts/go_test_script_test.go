@@ -62,6 +62,59 @@ func TestNoTestSharesADatabase(t *testing.T) {
 	}
 }
 
+// TestDBPackagesRunInBackgroundMode: a package whose tests get databases from
+// internal/testdb has a TestMain that calls testdb.Run, so its clones are
+// made ahead and dropped off the critical path — and none outlives the run.
+// Without it the package still works (synchronous clones), just slower,
+// which is exactly the kind of regression nobody notices.
+func TestDBPackagesRunInBackgroundMode(t *testing.T) {
+	root := repoRoot(t)
+	uses, runs := map[string]bool{}, map[string]bool{}
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", "web", ".git", "node_modules":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, filepath.Dir(path))
+		rel = filepath.ToSlash(rel)
+		if rel == "internal/testdb" || rel == "scripts" {
+			return nil // testdb tests its own modes; scripts only names them
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(body)
+		if strings.Contains(text, `"github.com/ElcanoTek/fleet/internal/testdb"`) || strings.Contains(text, `"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"`) {
+			uses[rel] = true
+		}
+		if strings.Contains(text, "testdb.Run(m)") {
+			runs[rel] = true
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(uses) == 0 {
+		t.Fatal("no package uses internal/testdb — the walk is broken")
+	}
+	for dir := range uses {
+		if !runs[dir] {
+			t.Errorf("%s gets test databases from internal/testdb but has no TestMain calling testdb.Run(m)", dir)
+		}
+	}
+}
+
 // sharedDBUses returns the sharedDBPatterns text contains.
 func sharedDBUses(text string) []string {
 	var out []string

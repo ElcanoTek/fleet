@@ -152,6 +152,8 @@ type server struct {
 
 	mu    sync.Mutex      // one template build at a time in this process
 	ready map[string]bool // templates known to exist
+
+	bg background // Run's background mode (run.go)
 }
 
 var (
@@ -192,7 +194,7 @@ func connect(dsn string) (*server, error) {
 	}
 	// One connection is pinned for the owner lock; the rest serve CREATE and
 	// DROP DATABASE, which the server serializes heavily anyway.
-	admin.SetMaxOpenConns(5)
+	admin.SetMaxOpenConns(8)
 	admin.SetMaxIdleConns(2)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -201,6 +203,8 @@ func connect(dsn string) (*server, error) {
 		_ = admin.Close()
 		return nil, err
 	}
+	s.startBackground()
+	live.Store(s)
 	return s, nil
 }
 
@@ -483,10 +487,9 @@ func retryInUse(ctx context.Context, fn func() error) error {
 	return err
 }
 
-// create makes a new per-test database (a clone of template, or empty when
-// template is "") and drops it when the test ends.
-func (s *server) create(ctx context.Context, t testing.TB, template string) (string, error) {
-	name := s.reserve(t)
+// createDB creates database name as a clone of template (template0 when
+// template is "").
+func (s *server) createDB(ctx context.Context, name, template string) error {
 	src := template
 	if src == "" {
 		src = "template0"
@@ -495,23 +498,45 @@ func (s *server) create(ctx context.Context, t testing.TB, template string) (str
 	if s.strategy != "" {
 		stmt += ` STRATEGY ` + s.strategy
 	}
-	if err := retryInUse(ctx, func() error { _, err := s.admin.ExecContext(ctx, stmt); return err }); err != nil {
+	return retryInUse(ctx, func() error { _, err := s.admin.ExecContext(ctx, stmt); return err })
+}
+
+// create makes a new per-test database (a clone of template, or empty when
+// template is "") and drops it when the test ends.
+func (s *server) create(ctx context.Context, t testing.TB, template string) (string, error) {
+	name := s.reserve(t)
+	if err := s.createDB(ctx, name, template); err != nil {
 		return "", err
 	}
 	return name, nil
 }
 
+// newName allocates a per-test database name (fleet_t_<owner>_<n>).
+func (s *server) newName() string {
+	return fmt.Sprintf("%s%s_%d", clonePrefix, s.ownerHex(), s.seq.Add(1))
+}
+
 // reserve allocates a per-test database name and registers its drop.
 func (s *server) reserve(t testing.TB) string {
-	name := fmt.Sprintf("%s%s_%d", clonePrefix, s.ownerHex(), s.seq.Add(1))
+	name := s.newName()
+	s.dropAtCleanup(t, name)
+	return name
+}
+
+// dropAtCleanup drops name when the test ends: synchronously, or — under Run —
+// on a background dropper that Run waits for before the process exits.
+func (s *server) dropAtCleanup(t testing.TB, name string) {
 	t.Cleanup(func() {
+		if s.bg.on.Load() {
+			s.dropLater(name)
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
 		if err := s.drop(ctx, name); err != nil {
 			t.Errorf("testdb: %v", err)
 		}
 	})
-	return name
 }
 
 // New returns the DSN of a fresh database cloned from spec's template (built
@@ -525,6 +550,10 @@ func New(t testing.TB, spec Spec) string {
 	tmpl, err := s.template(ctx, spec)
 	if err != nil {
 		t.Fatalf("testdb: template %s: %v", spec.Name, err)
+	}
+	if name, ok := s.pooled(tmpl); ok {
+		s.dropAtCleanup(t, name)
+		return s.dsnFor(name)
 	}
 	name, err := s.create(ctx, t, tmpl)
 	if err != nil && isMissing(err) {
