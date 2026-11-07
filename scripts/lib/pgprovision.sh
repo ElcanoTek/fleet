@@ -14,6 +14,8 @@
 { set +x; } 2>/dev/null
 
 # What the plan and a redacted psql error show in place of each password.
+FLEET_DB_PW_PLACEHOLDER='<db password>'
+# LEGACY-DB-LAYOUT: remove after consolidation — the per-store placeholders.
 FLEET_CHAT_PW_PLACEHOLDER='<chat db password>'
 # Kept apart from the line above: gitleaks reads a bare next line as its value.
 FLEET_SCHED_PW_PLACEHOLDER='<sched db password>'
@@ -44,7 +46,7 @@ fleet_redact_db_passwords() {
     printf '%s\n' "(psql's error output withheld: a database password contains a line break)"
     return 0
   fi
-  LC_ALL=C awk -v chat_ph="$FLEET_CHAT_PW_PLACEHOLDER" -v sched_ph="$FLEET_SCHED_PW_PLACEHOLDER" '
+  LC_ALL=C awk -v chat_ph="${FLEET_REDACT_CHAT_PH:-$FLEET_CHAT_PW_PLACEHOLDER}" -v sched_ph="${FLEET_REDACT_SCHED_PH:-$FLEET_SCHED_PW_PLACEHOLDER}" '
     function literal(s, find, rep,    out, i) {
       if (find == "") return s
       out = ""
@@ -80,4 +82,11 @@ fleet_psql_provision() {
     printf '%s\n' "$err" | FLEET_REDACT_CHAT_PW="$1" FLEET_REDACT_SCHED_PW="$2" fleet_redact_db_passwords >&2 || true
   fi
   return "$rc"
+}
+
+# fleet_psql_provision_one PASSWORD < SQL — fleet_psql_provision for the one
+# role and database of the one-database layout: its password is shown as
+# FLEET_DB_PW_PLACEHOLDER in a redacted error.
+fleet_psql_provision_one() {
+  FLEET_REDACT_CHAT_PH="$FLEET_DB_PW_PLACEHOLDER" fleet_psql_provision "$1" ""
 }

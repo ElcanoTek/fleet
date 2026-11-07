@@ -909,12 +909,21 @@ else
   else
     fail "OPENROUTER_API_KEY unset — run: sudo fleet config set-openrouter-key"
   fi
-  if [[ -n "$(env_get FLEET_CHAT_DATABASE_URL)" && -n "$(env_get FLEET_SCHED_DATABASE_URL)" ]]; then
-    pass "chat + sched database DSNs set"
+  # One DSN, both stores in its schemas chat and sched (ADR-0098).
+  # LEGACY-DB-LAYOUT: remove after consolidation — the per-store branch.
+  if [[ -n "$(env_get FLEET_CHAT_DATABASE_URL)$(env_get FLEET_SCHED_DATABASE_URL)$(env_get SCHED_DATABASE_URL)" ]]; then
+    _layout=""
+    [[ -x "${INSTALL_DIR:-/usr/local/bin}/fleet" ]] && _layout="$("${INSTALL_DIR:-/usr/local/bin}/fleet" db layout --env-file "$ENV_FILE" 2>/dev/null || true)"
+    if [[ "$_layout" == "schemas" ]]; then
+      advise "per-store DSN keys (FLEET_CHAT_/FLEET_SCHED_DATABASE_URL) name ONE database — fleet uses its schemas chat and sched; replace them with DATABASE_URL"
+    else
+      advise "legacy two-database layout (FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL) — still supported; move it into one database with: fleet db consolidate   (dry run first; docs/ONE-DATABASE.md)"
+    fi
+    unset _layout
   elif [[ -n "$(env_get DATABASE_URL)" ]]; then
-    advise "only DATABASE_URL set — chat + sched should use SEPARATE databases (FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL)"
+    pass "DATABASE_URL set (one database: schemas chat + sched)"
   else
-    fail "no database DSNs in $ENV_FILE — rerun scripts/bootstrap.sh"
+    fail "no DATABASE_URL in $ENV_FILE — rerun scripts/bootstrap.sh"
   fi
 fi
 
