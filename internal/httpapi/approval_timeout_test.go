@@ -22,7 +22,6 @@ func intPtr(n int) *int { return &n }
 // per-tool manifest override > per-conversation override > global env default >
 // hardcoded default.
 func TestResolveTimeoutSeconds(t *testing.T) {
-	t.Parallel()
 
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
@@ -63,7 +62,6 @@ func TestResolveTimeoutSeconds(t *testing.T) {
 // who names a task tool in the bundle's critical_tool_timeouts keeps that
 // window — the day-long default only replaces the global layers.
 func TestResolveTimeoutSeconds_StagedTaskCardHonorsPerToolManifest(t *testing.T) {
-	t.Parallel()
 
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
@@ -234,7 +232,6 @@ func TestSweepExpiredApprovals_StopsOnCancelledContext(t *testing.T) {
 }
 
 func TestStage_ConversationAutoApprove(t *testing.T) {
-	t.Parallel()
 
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{

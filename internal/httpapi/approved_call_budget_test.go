@@ -138,7 +138,6 @@ func dealIDsArgs(n int) string {
 // the broker carries, and runs the scope open under its own fixed allowance.
 // A server that declared nothing keeps the flat 60 s.
 func TestRunStagedTool_ApprovedCallBudget(t *testing.T) {
-	t.Parallel()
 
 	useApprovedCallPolicy(t)
 	cases := []struct {
@@ -187,7 +186,6 @@ func TestRunStagedTool_ApprovedCallBudget(t *testing.T) {
 // as its per-call timeout (callTimeoutMs), or a server-side cut could fire
 // at a default instead.
 func TestRunStagedTool_ApprovedCallBudgetCrossesTheBroker(t *testing.T) {
-	t.Parallel()
 
 	useApprovedCallPolicy(t)
 	child := &budgetBroker{text: "created"}
@@ -458,7 +456,6 @@ func TestHandleApproval_UndeclaredServerWaitsForTheOutcome(t *testing.T) {
 // outcome: only MCP calls on a server that declared a budget, found through
 // the staged seat or, for a legacy row, the catalog.
 func TestApprovalMayAnswerEarly(t *testing.T) {
-	t.Parallel()
 
 	useApprovedCallPolicy(t)
 	s := &Server{agent: &budgetEngine{fakeEngine: &fakeEngine{}, catalog: dealsApprovalCatalog}}

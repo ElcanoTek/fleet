@@ -119,7 +119,6 @@ func SchedDB(t testing.TB) *scheddb.Database {
 	return New(t).SchedDB(t)
 }
 
-
 // DeleteRows runs `DELETE FROM <table>` for each table, in order, failing the
 // test on any error — for a test that wipes mid-run (an export → wipe →
 // import round trip). Table names come from test code, never from input.

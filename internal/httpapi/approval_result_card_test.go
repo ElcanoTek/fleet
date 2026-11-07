@@ -183,7 +183,6 @@ func TestExtractResultCard(t *testing.T) {
 // End to end through the governance the approval path applies: a secret in
 // the card is scrubbed by the redactor, and the scrubbed card is not stored.
 func TestExecuteClaimedApproval_RedactedCardIsNotStored(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	secret := strings.Replace(goodResultCard, "Verified: the deal reads back as created.", "token ghp_0123456789abcdefghijklmnopqrstuvwxyzAB", 1)
@@ -239,7 +238,6 @@ func resultCardServer(st chatStore, text string, isErr bool) *Server {
 // An approved call of an opted-in tool: its result's card is stored on the
 // row before the outcome, rides the reply, and is served on every read.
 func TestExecuteClaimedApproval_StoresTheResultCard(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel})}
@@ -269,7 +267,6 @@ func TestExecuteClaimedApproval_StoresTheResultCard(t *testing.T) {
 // A tool that did not opt in, an errored call, and a result without a card
 // all settle exactly as before: no write, no result_card key.
 func TestExecuteClaimedApproval_NoResultCardOtherwise(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	cases := []struct {
@@ -301,7 +298,6 @@ func TestExecuteClaimedApproval_NoResultCardOtherwise(t *testing.T) {
 // A failed store write never fails the approval: the outcome is recorded and
 // the reply carries no card.
 func TestExecuteClaimedApproval_ResultCardStoreErrorKeepsTheOutcome(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	st := &resultCardStore{groupStore: newGroupStore(store.Approval{ID: "ap1", ConversationID: "c1", ToolName: "mcp_deals_execute_plan", ArgsJSON: `{}`, Status: "approved", ResultText: approvalExecutingSentinel}), err: sql.ErrConnDone}
@@ -377,7 +373,6 @@ func (s *recordStageStore) SetApprovalResultCard(_ context.Context, _, id, card 
 // card. A failed call, an undeclared tool or an unknown call id changes
 // nothing.
 func TestRecordActionResult_StoresTheRecordsCard(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	allocated := `{"campaign_id": "ELC07375", "result_card": {"outcome": "done", "title": "Campaign ID ELC07375 allocated", "items": []}}`
@@ -430,7 +425,6 @@ func TestRecordActionResult_StoresTheRecordsCard(t *testing.T) {
 // "Retry failed": the retry is left out when the record stores its card, and
 // a stored record card with a retry is not served (Codex P1 on #1722).
 func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
-	t.Parallel()
 
 	useResultCardPolicy(t)
 	withRetry := `{"ok": false, "result_card": {"outcome": "partial", "title": "1 of 2 allocated", "items": [` +
