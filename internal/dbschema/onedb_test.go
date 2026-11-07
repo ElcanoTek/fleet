@@ -188,4 +188,24 @@ func TestEnsureRefusesALegacyDatabase(t *testing.T) {
 	if !dbschema.IsLegacyDatabase(err) {
 		t.Fatalf("sched Init in schema mode over a legacy database = %v, want the legacy refusal", err)
 	}
+
+	// An existing (empty or stray) store schema does not skip the probe: the
+	// refusal holds on every open, not only the one that would create it.
+	raw, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`CREATE SCHEMA chat; CREATE SCHEMA sched`); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.Close()
+	if _, err := store.Open(config.WithSchema(dsn, config.ChatSchema), store.DefaultPoolConfig()); !dbschema.IsLegacyDatabase(err) {
+		t.Fatalf("store.Open with an existing chat schema over a legacy database = %v, want the legacy refusal", err)
+	}
+	sched = &scheddb.Database{}
+	err = sched.Init(config.WithSchema(dsn, config.SchedSchema), scheddb.DefaultPoolConfig())
+	_ = sched.Close()
+	if !dbschema.IsLegacyDatabase(err) {
+		t.Fatalf("sched Init with an existing sched schema over a legacy database = %v, want the legacy refusal", err)
+	}
 }

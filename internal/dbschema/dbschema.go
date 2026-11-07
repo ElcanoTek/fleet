@@ -52,13 +52,15 @@ const lockKeyBase = "fleet.dbschema."
 // Ensure creates the connection's configured schema (Configured) when it
 // does not exist yet, and is a no-op otherwise or in the legacy layout.
 //
-// It refuses one shape: creating a store schema in a database whose public
-// schema already holds a fleet store (a schema_migrations table). That is a
+// It refuses one shape, on every open: a store schema in a database whose
+// public schema holds a fleet store (a schema_migrations table). That is a
 // legacy database someone pointed DATABASE_URL at — usually one of a
-// two-database install's pair — and creating empty chat/sched schemas next
-// to the real data would boot an apparently empty fleet over it. The fix is
-// `fleet db consolidate` (or the previous per-store DSNs), never a schema
-// silently shadowing the data.
+// two-database install's pair — and running a store in an empty (or stray)
+// chat/sched schema next to the real data would boot an apparently empty
+// fleet over it. The probe runs even when the schema already exists: an
+// earlier boot, or a hand-made schema, must not turn the refusal into a
+// one-time check. The fix is `fleet db consolidate` (or the previous
+// per-store DSNs), never a schema silently shadowing the data.
 func Ensure(ctx context.Context, db Execer) error {
 	schema, err := Configured(ctx, db)
 	if err != nil || schema == "" {
@@ -69,6 +71,13 @@ func Ensure(ctx context.Context, db Execer) error {
 		return fmt.Errorf("ensure schema %s: %w", schema, err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var legacy bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&legacy); err != nil {
+		return fmt.Errorf("ensure schema %s: probe public: %w", schema, err)
+	}
+	if legacy {
+		return LegacyDatabaseError{Schema: schema}
+	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKeyBase+schema); err != nil {
 		return fmt.Errorf("ensure schema %s: lock: %w", schema, err)
 	}
@@ -78,13 +87,6 @@ func Ensure(ctx context.Context, db Execer) error {
 	}
 	if exists {
 		return nil
-	}
-	var legacy bool
-	if err := tx.QueryRowContext(ctx, `SELECT to_regclass('public.schema_migrations') IS NOT NULL`).Scan(&legacy); err != nil {
-		return fmt.Errorf("ensure schema %s: probe public: %w", schema, err)
-	}
-	if legacy {
-		return LegacyDatabaseError{Schema: schema}
 	}
 	// schema is a plain identifier (Configured), so quoting is belt and braces.
 	if _, err := tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(schema)); err != nil {
@@ -98,7 +100,7 @@ func Ensure(ctx context.Context, db Execer) error {
 type LegacyDatabaseError struct{ Schema string }
 
 func (e LegacyDatabaseError) Error() string {
-	return fmt.Sprintf("refusing to create schema %q: this database's public schema already holds a fleet store "+
+	return fmt.Sprintf("refusing to run a store in schema %q: this database's public schema holds a fleet store "+
 		"(a legacy two-database install's database). Point the per-store DSNs back at the two databases, "+
 		"or move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)", e.Schema)
 }
