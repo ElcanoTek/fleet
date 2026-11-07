@@ -77,6 +77,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
   connection test): [`docs/API-CLIENTS.md`](API-CLIENTS.md) +
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
+- **Reading auth facts from the spec** (`x-fleet-permission` per operation,
+  `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
+  manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
 - **One database** (both stores in one Postgres database, one schema each; moving a legacy two-database install with `fleet db consolidate`): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
@@ -295,6 +298,7 @@ above fails otherwise.
 - [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md) — Admin-managed LLM providers
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
+- [`MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md) — Manifest contract: reading fleet's API facts from the OpenAPI spec
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, the signed-in user's `${FLEET_USER_EMAIL}` (ADR-0087), `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 - [`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md) — Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
