@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/testdb"
@@ -166,6 +167,29 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 	}
 	if got := strings.TrimSpace(string(out)); got != "postgres://fleet@localhost:5432/sched?sslmode=disable" {
 		t.Errorf("fleet_resolve_dsn default got %q", got)
+	}
+	// Socket-directory and IPv6 DB_HOST values build the same DSN as the Go
+	// resolver (config.ResolveDSNs), which boot and the admin CLI use.
+	for _, host := range []string{"/var/run/postgresql", "2001:db8::1"} {
+		partsEnv := filepath.Join(t.TempDir(), "parts.env")
+		if err := os.WriteFile(partsEnv, []byte("DB_HOST="+host+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, partsEnv)
+		cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
+		out, err = cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("fleet_resolve_dsn DB_HOST=%s: %v\n%s", host, err, string(out))
+		}
+		want := config.ResolveDSNs(func(k string) string {
+			if k == "DB_HOST" {
+				return host
+			}
+			return ""
+		}).Sched
+		if got := strings.TrimSpace(string(out)); got != want {
+			t.Errorf("fleet_resolve_dsn DB_HOST=%s got %q, want the Go resolver's %q", host, got, want)
+		}
 	}
 	if got := idleSchedDSN(""); got == "" {
 		t.Errorf("idleSchedDSN(\"\") = empty, want default DSN")

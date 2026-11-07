@@ -337,7 +337,16 @@ fleet_resolve_dsn() {
     if [[ -n "$pass" ]]; then
       auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
     fi
-    val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
+    if [[ "$host" == /* ]]; then
+      # A Unix-socket directory has no place in a URL authority: libpq (and
+      # the Go resolver) take it, with the port naming the socket file, as
+      # query parameters on an empty host.
+      val="postgres://${auth}@/${name}?host=$(fleet_uri_encode_userinfo "$host")&port=${port}&sslmode=${ssl}"
+    else
+      # An IPv6 literal is bracketed in the authority ("[2001:db8::1]:5432").
+      [[ "$host" == *:* && "$host" != \[* ]] && host="[${host}]"
+      val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
+    fi
   fi
   printf '%s' "$val"
 }
