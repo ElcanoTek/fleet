@@ -23,7 +23,6 @@ export type SharedSnapshot = {
   messages: RawEntry[];
 };
 
-// Deterministic UTC date so server-render and client hydration agree.
 function formatDate(unixSeconds: number): string {
   if (!unixSeconds) return "";
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);

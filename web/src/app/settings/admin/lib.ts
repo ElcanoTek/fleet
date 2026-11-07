@@ -62,6 +62,34 @@ export function formatUSD(v: number): string {
   return `$${v.toFixed(2)}`;
 }
 
+// formatBytes — the admin pages' byte formatter (Server health, Storage):
+// binary units up to TB with adaptive precision (whole numbers from 100 up,
+// one decimal from 10, two below), "—" for a missing or negative value.
+// `rate` appends "/s" for the network throughput cards.
+export function formatBytes(bytes: number, rate = false): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
+  return `${value.toFixed(digits)} ${units[unit]}${rate ? "/s" : ""}`;
+}
+
+// formatUptime — "3d 4h", "4h 12m" or "12m"; "—" when unknown.
+export function formatUptime(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
 // Pure data fetch — no React state — so callers (mount effects and refresh
 // handlers) can apply the result inside their own promise callbacks. Returns
 // the rows on success, or null when the request triggered a redirect

@@ -13,7 +13,8 @@
 import { useRef, useState } from "react";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
-import { formatBytes, screenFilesForUpload } from "@/app/lib/uploadLimits";
+import { formatBytes } from "@/app/chat/ui/formatters";
+import { screenFilesForUpload } from "@/app/lib/uploadLimits";
 import {
   btnClass,
   CodeChip,

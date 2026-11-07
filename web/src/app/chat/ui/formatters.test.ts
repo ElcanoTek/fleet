@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { stripMarkdown } from "./formatters";
+import { formatBytes, stripMarkdown } from "./formatters";
 
 // Item B3: the project home's chat previews are plain text with no markdown
 // pipeline behind them, so the server's raw last-message snippet reached the
@@ -127,5 +127,17 @@ describe("stripMarkdown", () => {
   it("keeps a lone shell pipe in prose", () => {
     // One pipe, no leading pipe: that is a command, not a table row.
     expect(stripMarkdown("run grep foo | wc -l")).toBe("run grep foo | wc -l");
+  });
+});
+
+// The one byte formatter for chat and upload screening (lib/uploadLimits
+// imports it; #1959 removed its byte-identical twin there).
+describe("formatBytes", () => {
+  const MB = 1024 * 1024;
+  it("formats each magnitude", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(2048)).toBe("2.0 KB");
+    expect(formatBytes(5 * MB)).toBe("5.0 MB");
+    expect(formatBytes(1536 * MB)).toBe("1.5 GB");
   });
 });
