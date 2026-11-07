@@ -77,6 +77,8 @@ func (h *upgradeHarness) calls(t *testing.T) string {
 // it: stopped reversibly before the restart, restarted on rollback, and its
 // unit file never deleted.
 func TestFleetUpgradeRollbackRestoresTheOldWebTier(t *testing.T) {
+	t.Parallel()
+
 	h := newUpgradeHarness(t, false, true)
 	out, err := h.run(t)
 	if err == nil {
@@ -102,6 +104,8 @@ func TestFleetUpgradeRollbackRestoresTheOldWebTier(t *testing.T) {
 
 // A passing readiness gate is what makes the retirement final.
 func TestFleetUpgradeRemovesTheOldWebTierAfterReadiness(t *testing.T) {
+	t.Parallel()
+
 	h := newUpgradeHarness(t, true, true)
 	if out, err := h.run(t); err != nil {
 		t.Fatalf("upgrade failed: %v\n%s", err, out)
@@ -116,6 +120,8 @@ func TestFleetUpgradeRemovesTheOldWebTierAfterReadiness(t *testing.T) {
 
 // --no-build must not install a binary that carries no web bundle.
 func TestFleetUpgradeNoBuildRefusesABundlelessBinary(t *testing.T) {
+	t.Parallel()
+
 	h := newUpgradeHarness(t, true, false)
 	out, err := h.run(t)
 	if err == nil || !strings.Contains(out, "carries no web bundle") {

@@ -3,10 +3,10 @@ package admincli
 import (
 	"context"
 	"database/sql"
-	"os"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestDatabaseURLOverrideProbesTheTarget: a --database-url naming a database
@@ -14,26 +14,8 @@ import (
 // from that database's data — the store's schema for a one-database install
 // or an empty database, verbatim (public) for a legacy store (#2055 review).
 func TestDatabaseURLOverrideProbesTheTarget(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set")
-	}
 	ctx := context.Background()
-	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	const name = "fleet_override_probe_test"
-	_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+name); err != nil {
-		if isPermissionError(err) {
-			t.Skipf("cannot CREATE DATABASE: %v", err)
-		}
-		t.Fatal(err)
-	}
-	defer func() { _, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)") }()
-	target := withDBName(t, base, name)
+	target := testdb.Empty(t)
 
 	// Empty (a restore target) or a one-database install: the store's schema.
 	for _, verb := range []struct {

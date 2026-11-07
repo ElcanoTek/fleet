@@ -35,6 +35,8 @@ func importEnvelope(t *testing.T, tasks ...*models.Task) *bytes.Buffer {
 // side effects (emails, MCP writes) ran a second time — the #1104
 // double-execution shape through a supported operator flow.
 func TestImportTasks_RefusesResurrectingFinishedTask(t *testing.T) {
+	t.Parallel()
+
 	id := uuid.New()
 	stale := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Microsecond)
 	envelopeTask := &models.Task{
@@ -80,6 +82,8 @@ func TestImportTasks_RefusesResurrectingFinishedTask(t *testing.T) {
 // Refused under BOTH flag settings — --replace-status is consent to rewrite a
 // status, never to null a live lease.
 func TestImportTasks_RefusesOverwritingLiveLease(t *testing.T) {
+	t.Parallel()
+
 	for _, replaceStatus := range []bool{false, true} {
 		for _, live := range models.ActiveTaskStatuses {
 			id := uuid.New()
@@ -112,6 +116,8 @@ func TestImportTasks_RefusesOverwritingLiveLease(t *testing.T) {
 // whatever the target row holds wins, so an envelope can neither fabricate a
 // lease nor clear one.
 func TestImportTasks_NeverImportsLeaseColumns(t *testing.T) {
+	t.Parallel()
+
 	id := uuid.New()
 	targetExpiry := time.Now().UTC().Add(time.Minute).Truncate(time.Microsecond)
 	target := &models.Task{
@@ -142,6 +148,8 @@ func TestImportTasks_NeverImportsLeaseColumns(t *testing.T) {
 // progressed is still a clean no-op-shaped write, and a row this box does not
 // have at all is still inserted verbatim (the cross-box migration case).
 func TestImportTasks_SameGenerationReimportIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	unchangedID, freshID := uuid.New(), uuid.New()
 	when := time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)
 	unchanged := &models.Task{ID: unchangedID, Prompt: "a", Status: models.TaskStatusScheduled, ScheduledFor: &when}
@@ -164,6 +172,8 @@ func TestImportTasks_SameGenerationReimportIsIdempotent(t *testing.T) {
 // own behavior is DB-gated (TestImportBundle_SchedRerunPreservesLiveState), so
 // this is where its policy is pinned DB-free.
 func TestImportCollisionPolicyHelpers(t *testing.T) {
+	t.Parallel()
+
 	scheduled := &models.Task{Status: models.TaskStatusScheduled}
 	success := &models.Task{Status: models.TaskStatusSuccess}
 

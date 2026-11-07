@@ -24,6 +24,8 @@ import (
 //   - 127.0.0.1 trusted: a request from that peer is keyed by its XFF
 //     client, so 21 distinct proxied clients are each within their budget.
 func TestOrchestratorClientIPHonorsTrustedProxies(t *testing.T) {
+	t.Parallel()
+
 	const host = "fleet.example.com"
 	attempts := func(trusted []net.IP, remoteAddr string) (throttled int) {
 		h := handlers.New(handlers.Config{}, nil, nil)

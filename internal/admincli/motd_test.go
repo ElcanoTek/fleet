@@ -11,6 +11,8 @@ import (
 // secret-free; this guards the no-escape-when-piped property a /etc/profile.d
 // hook relies on.
 func TestRenderMOTD(t *testing.T) {
+	t.Parallel()
+
 	out := renderMOTD("1.2.3 (abc123)", "fleet.service", "active", false)
 	for _, want := range []string{"fleet", "1.2.3 (abc123)", "fleet.service", "active", "fleet chat", "fleet update", "fleet --help"} {
 		if !strings.Contains(out, want) {

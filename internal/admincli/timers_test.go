@@ -232,6 +232,8 @@ func TestTimersInstallNoCheckout(t *testing.T) {
 // TestFindDeployDirRequiresUnits — a directory merely NAMED deploy must not
 // match; the probe keys on the shipped fleet-backup.timer being present.
 func TestFindDeployDirRequiresUnits(t *testing.T) {
+	t.Parallel()
+
 	empty := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(empty, "deploy"), 0o755); err != nil {
 		t.Fatal(err)

@@ -23,6 +23,8 @@ var dsnEnvKeys = []string{
 // two-database one (#2049). update.sh's idle gate psqls into the stores with
 // these DSNs, so a divergence would read the wrong schema.
 func TestIdleLibResolveDSNParity(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}

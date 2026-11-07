@@ -6,7 +6,6 @@ package admincli
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
@@ -14,7 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // TestImportBundle_SchedOverwriteRefusesLiveLease seeds a row that is running
@@ -23,7 +22,8 @@ import (
 // reported as an error (exit 3), and --dry-run must refuse identically because
 // the check is a read.
 func TestImportBundle_SchedOverwriteRefusesLiveLease(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -55,7 +55,7 @@ func TestImportBundle_SchedOverwriteRefusesLiveLease(t *testing.T) {
 		}}},
 	}
 	path := writeBundle(t, bundle)
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := d.SchedDSN()
 
 	for _, args := range [][]string{
 		{path, "--overwrite", "--dry-run", "--sched-database-url", dsn},

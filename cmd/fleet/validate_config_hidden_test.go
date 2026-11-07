@@ -16,6 +16,8 @@ import (
 // tools: allowlist makes "matches nothing" unknowable, so it is not reported
 // then.
 func TestCheckAgentPolicy_InteractiveHiddenTools(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()

@@ -204,6 +204,8 @@ func (e tarballEnv) assertNothingInstalled(t *testing.T) {
 }
 
 func TestNodeTarballInstallLinksTheSignedRelease(t *testing.T) {
+	t.Parallel()
+
 	arch := nodeDistArch(t)
 	g := newTestGPG(t, "node release (test) <release@example.invalid>")
 	d := newNodeDist(t)
@@ -262,6 +264,8 @@ func TestNodeTarballInstallLinksTheSignedRelease(t *testing.T) {
 }
 
 func TestNodeTarballInstallRefusesATamperedTarball(t *testing.T) {
+	t.Parallel()
+
 	arch := nodeDistArch(t)
 	g := newTestGPG(t, "node release (test) <release@example.invalid>")
 	d := newNodeDist(t)
@@ -281,6 +285,8 @@ func TestNodeTarballInstallRefusesATamperedTarball(t *testing.T) {
 }
 
 func TestNodeTarballInstallRefusesASignatureFromAnUntrustedKey(t *testing.T) {
+	t.Parallel()
+
 	arch := nodeDistArch(t)
 	trusted := newTestGPG(t, "node release (test) <release@example.invalid>")
 	attacker := newTestGPG(t, "not a node releaser <mallory@example.invalid>")
@@ -304,6 +310,8 @@ func TestNodeTarballInstallRefusesASignatureFromAnUntrustedKey(t *testing.T) {
 // line smuggled in front of the signed block names a different tarball whose
 // sha256 matches its bytes; it must not be the one installed.
 func TestNodeTarballInstallReadsOnlyTheSignedText(t *testing.T) {
+	t.Parallel()
+
 	arch := nodeDistArch(t)
 	g := newTestGPG(t, "node release (test) <release@example.invalid>")
 	d := newNodeDist(t)
@@ -334,6 +342,8 @@ func TestNodeTarballInstallReadsOnlyTheSignedText(t *testing.T) {
 // An older release is still validly signed, so a replayed or stale dist must
 // not walk an installed newer patch back: the links stay where they are.
 func TestNodeTarballInstallRefusesADowngrade(t *testing.T) {
+	t.Parallel()
+
 	arch := nodeDistArch(t)
 	g := newTestGPG(t, "node release (test) <release@example.invalid>")
 	d := newNodeDist(t)
@@ -364,6 +374,8 @@ func TestNodeTarballInstallRefusesADowngrade(t *testing.T) {
 // key in the .asc, so the two must agree exactly: an extra primary would be a
 // signer nobody reviewed. (Subkeys are part of their primary and allowed.)
 func TestVendoredNodeReleaseKeysMatchTheirList(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("gpg"); err != nil {
 		t.Skip("gpg not available")
 	}

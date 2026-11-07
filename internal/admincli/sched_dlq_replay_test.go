@@ -11,7 +11,6 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // `fleet sched dlq replay` refuses a prompt with a malformed EXECUTION
@@ -19,7 +18,7 @@ import (
 // replays the same row with a corrected prompt (ADR-0073). Gated on
 // DATABASE_URL, the sched-suite convention.
 func TestSchedDLQReplayRefusesMalformedAndTakesAPromptFile_DB(t *testing.T) {
-	database := testdb.SchedDB(t, "tasks")
+	database := fleetEnv(t).SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()

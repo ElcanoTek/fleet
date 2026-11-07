@@ -135,8 +135,10 @@ type Spec struct {
 
 var specName = regexp.MustCompile(`^[a-z]{1,12}$`)
 
-// cloneName parses a per-test database name: fleet_t_<owner hex>_<n>.
-var cloneName = regexp.MustCompile(`^fleet_t_([0-9a-f]{8})_[0-9]+$`)
+// cloneName parses a per-test database name: fleet_t_<owner hex>_<n>, plus
+// an optional suffix for databases a tool under test derives from a reserved
+// name (fleet db consolidate's <target>_consolidate_<store>).
+var cloneName = regexp.MustCompile(`^fleet_t_([0-9a-f]{8})_[0-9]+(_[a-z0-9_]+)?$`)
 
 // server is the per-process maintenance state, created on first use.
 type server struct {

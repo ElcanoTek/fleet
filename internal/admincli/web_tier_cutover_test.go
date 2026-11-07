@@ -135,6 +135,8 @@ func runEnvShellWith(t *testing.T, env []string, script string) (string, error) 
 // Now the restore ends the run: non-zero exit, the old tier running, its
 // files intact, nothing after it executed.
 func TestBootstrapRestartFailureKeepsTheOldWebTier(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, true, true)
 	out, err := b.runBootstrapCutover(t)
 	if err == nil {
@@ -156,6 +158,8 @@ func TestBootstrapRestartFailureKeepsTheOldWebTier(t *testing.T) {
 
 // A restart that succeeds is what retires the old tier — after fleet is active.
 func TestBootstrapRestartSuccessRetiresTheOldWebTier(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, true, false)
 	out, err := b.runBootstrapCutover(t)
 	if err != nil {
@@ -179,6 +183,8 @@ func TestBootstrapRestartSuccessRetiresTheOldWebTier(t *testing.T) {
 // A tier that was installed but not running is left installed (and not
 // started) when fleet fails; the run still fails.
 func TestCutoverFailureLeavesAStoppedTierAlone(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, false, true)
 	out, err := b.runBootstrapCutover(t)
 	if err == nil || !strings.Contains(out, "was left installed") {
@@ -195,6 +201,8 @@ func TestCutoverFailureLeavesAStoppedTierAlone(t *testing.T) {
 // in their post-restart success branch; fleet-upgrade.sh after its readiness
 // gate (TestFleetUpgrade* run it).
 func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(root, "scripts", name))

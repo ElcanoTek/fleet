@@ -110,6 +110,8 @@ func sourceNodeLib(t *testing.T, fixtureRoot, snippet string) (string, error) {
 // fixture is first used to prove the old behaviour still fails, so a fixture
 // that quietly stopped reproducing the layout cannot make this test vacuous.
 func TestNodeBuildPathPinsNpmToTheResolvedInterpreter(t *testing.T) {
+	t.Parallel()
+
 	root := fedoraNodeLayout(t, []string{"22", "24"}, "22", map[string]bool{"22": true, "24": true})
 	out, err := sourceNodeLib(t, root, `
 bin="$1/bin"
@@ -160,6 +162,8 @@ fleet_node_build_path_cleanup "$p" "$nb"
 // npm, which is exactly the wrong answer: its shebang pins it to the old major.
 // The refusal is what lets update/doctor name the one package that is missing.
 func TestResolveNpmCliRefusesTheDefaultStreamsNpm(t *testing.T) {
+	t.Parallel()
+
 	root := fedoraNodeLayout(t, []string{"22", "24"}, "22", map[string]bool{"22": true})
 	out, err := sourceNodeLib(t, root, `
 nb="$1/bin/node-24"
@@ -184,6 +188,8 @@ fi
 // root's PATH during a build, so its removal path has to be as narrow as its
 // creation. A first PATH entry that is not one of ours must survive.
 func TestNodeBuildPathCleanupOnlyRemovesItsOwnShim(t *testing.T) {
+	t.Parallel()
+
 	root := fedoraNodeLayout(t, []string{"24"}, "24", map[string]bool{"24": true})
 	out, err := sourceNodeLib(t, root, `
 nb="$1/bin/node-24"
@@ -216,6 +222,8 @@ rm -rf "$shim" "$foreign"
 // because the failure needs parallel node streams to reproduce, which a CI runner
 // does not have.
 func TestUpdateGatesNpmSeparatelyFromNode(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -256,6 +264,8 @@ func TestUpdateGatesNpmSeparatelyFromNode(t *testing.T) {
 // npm?": a fix that reached only update.sh would leave a fresh provision and
 // every doctor run on the old behaviour.
 func TestBootstrapAndDoctorPinNpmToo(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	for script, wants := range map[string][]string{
 		"bootstrap.sh": {

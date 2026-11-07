@@ -8,6 +8,8 @@ import "testing"
 // over-match (and, via del's ambiguity guard, silently destroy) an unrelated
 // connector's credential.
 func TestServerMatchesVar(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		varOrKey string
 		server   string

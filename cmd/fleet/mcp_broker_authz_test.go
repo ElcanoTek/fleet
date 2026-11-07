@@ -78,6 +78,8 @@ func toolNames(tools []mcpbroker.ToolDescriptor) []string {
 // production boundary scrubbed the very cfg.MCPServers the parent read its
 // gates from, and every scheduled run silently lost its allowlist.
 func TestBrokerScope_ChildRefusesToolTheParentClaimsButTheBundleDenies(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForAuthzTest(t, map[string][]string{"gated": {"safe_read"}})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -117,6 +119,8 @@ func TestBrokerScope_ChildRefusesToolTheParentClaimsButTheBundleDenies(t *testin
 // The parent may still NARROW below the bundle floor — persona/task gating that
 // the child has no source of truth for.
 func TestBrokerScope_ParentPolicyNarrowsBelowTheBundleAllowlist(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForAuthzTest(t, nil) // no bundle allowlist: every tool exported
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -141,6 +145,8 @@ func TestBrokerScope_ParentPolicyNarrowsBelowTheBundleAllowlist(t *testing.T) {
 // Gate-3 rides the same helper the in-process loop uses, so a per-task
 // credential allowlist is enforced on the credential owner's side too.
 func TestBrokerScope_EnforcesCredentialAllowlistChildSide(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForAuthzTest(t, nil)
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -167,6 +173,8 @@ func TestBrokerScope_EnforcesCredentialAllowlistChildSide(t *testing.T) {
 // A selection naming a server this credential owner does not have enabled is an
 // authorization refusal, not a spawn accident.
 func TestBrokerScope_RefusesSelectionOutsideTheChildsEnabledSet(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForAuthzTest(t, nil)
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -187,6 +195,8 @@ func TestBrokerScope_RefusesSelectionOutsideTheChildsEnabledSet(t *testing.T) {
 // server. Production agent turns no longer reach it, but what does must still
 // be bounded by the bundle allowlist.
 func TestBrokerUnscopedCall_AppliesTheBundleAllowlist(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForAuthzTest(t, map[string][]string{"gated": {"safe_read"}})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -205,6 +215,8 @@ func TestBrokerUnscopedCall_AppliesTheBundleAllowlist(t *testing.T) {
 }
 
 func TestNarrowToolAllowlist(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name           string
 		bundle, parent []string
@@ -237,6 +249,8 @@ func TestNarrowToolAllowlist(t *testing.T) {
 }
 
 func TestScopeCredentialAllowlist_DistinguishesInheritFromDenyAll(t *testing.T) {
+	t.Parallel()
+
 	if got := scopeCredentialAllowlist(nil); got != nil {
 		t.Fatalf("nil policy = %v, want nil (inherit global)", got)
 	}
@@ -253,6 +267,8 @@ func TestScopeCredentialAllowlist_DistinguishesInheritFromDenyAll(t *testing.T) 
 // policy when there is nothing to narrow, and never conflate a nil credential
 // allowlist with an empty one.
 func TestBrokerScopePolicy_SerializesEffectiveSetsOnly(t *testing.T) {
+	t.Parallel()
+
 	if got := brokerScopePolicy(agent.MCPScopePolicy{}); got != nil {
 		t.Fatalf("empty policy = %+v, want nil (no narrowing to send)", got)
 	}
@@ -303,6 +319,8 @@ func TestScopeAuthorizer_KeysOnRegisteredAccountVariantNames(t *testing.T) {
 // no other narrowing (the nil-collapse would otherwise drop it), and a
 // human-initiated run (depth 0, nothing else) still sends no policy.
 func TestBrokerScopePolicyCarriesA2ADepth(t *testing.T) {
+	t.Parallel()
+
 	if got := brokerScopePolicy(agent.MCPScopePolicy{A2ADepth: 0}); got != nil {
 		t.Fatalf("depth 0 with no other narrowing must send no policy, got %+v", got)
 	}

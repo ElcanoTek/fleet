@@ -12,6 +12,8 @@ import (
 // byte for byte, including DSNs that already carry options (#2055 review: the
 // shell used to leave a key=value DSN with an options pair without a schema).
 func TestIdleLibWithSchemaParity(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}

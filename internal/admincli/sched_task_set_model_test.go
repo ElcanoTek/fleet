@@ -12,6 +12,8 @@ import (
 )
 
 func TestOptionalFlag_OmitVsClear(t *testing.T) {
+	t.Parallel()
+
 	parse := func(args ...string) *string {
 		t.Helper()
 		fs := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -36,6 +38,8 @@ func TestOptionalFlag_OmitVsClear(t *testing.T) {
 }
 
 func TestFormatFallbackChange(t *testing.T) {
+	t.Parallel()
+
 	sp := func(s string) *string { return &s }
 	cases := []struct {
 		name    string
@@ -58,6 +62,8 @@ func TestFormatFallbackChange(t *testing.T) {
 }
 
 func TestFormatSetModelDryRun_ShowsEveryField(t *testing.T) {
+	t.Parallel()
+
 	id := uuid.MustParse("00000000-0000-0000-0000-000000000001")
 	model := "old/model"
 	fb := "fb/old"
@@ -76,6 +82,8 @@ func TestFormatSetModelDryRun_ShowsEveryField(t *testing.T) {
 }
 
 func TestSetModelConfirmPrompt(t *testing.T) {
+	t.Parallel()
+
 	got := setModelConfirmPrompt("new/model", nil, "")
 	if !strings.Contains(got, "existing fallback_model values will be kept") {
 		t.Errorf("omit should mention keep: %q", got)
@@ -91,6 +99,8 @@ func TestSetModelConfirmPrompt(t *testing.T) {
 }
 
 func TestConfirmBulkMutation_RefusesNonTTY(t *testing.T) {
+	t.Parallel()
+
 	if isTerminal(os.Stdin) {
 		t.Skip("stdin is a TTY; cannot exercise the non-interactive refuse path")
 	}

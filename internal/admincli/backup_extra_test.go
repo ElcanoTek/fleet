@@ -11,6 +11,8 @@ import (
 )
 
 func TestBackupFilePattern(t *testing.T) {
+	t.Parallel()
+
 	match := []string{"fleet-chat-20260627T080000Z.dump", "fleet-sched-20260101T000000Z.dump"}
 	noMatch := []string{"fleet-other-x.dump", "notes.txt", "fleet-chat.sql", "chat-20260627.dump"}
 	for _, n := range match {
@@ -26,6 +28,8 @@ func TestBackupFilePattern(t *testing.T) {
 }
 
 func TestPruneOldBackups(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	old := time.Now().AddDate(0, 0, -40)
 	recent := time.Now()
@@ -105,6 +109,8 @@ func TestBackupDirReadsEnvFile(t *testing.T) {
 // TestEnsureBackupDirOwnerOnly — dumps are the whole database, so the
 // directory that holds them is created 0700 (it used to be 0750).
 func TestEnsureBackupDirOwnerOnly(t *testing.T) {
+	t.Parallel()
+
 	dir := filepath.Join(t.TempDir(), "nested", "backups")
 	if err := ensureBackupDir(dir); err != nil {
 		t.Fatalf("ensureBackupDir: %v", err)
@@ -153,6 +159,8 @@ func TestRetentionDays(t *testing.T) {
 }
 
 func TestVerifyDump_RejectsCorrupt(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("pg_restore"); err != nil {
 		t.Skip("pg_restore not in PATH — skipping integrity-check test")
 	}

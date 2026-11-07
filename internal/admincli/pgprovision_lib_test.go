@@ -96,6 +96,8 @@ func (b *pgProvisionBox) requireStderrInMemory(t *testing.T) {
 // but "@", "/" and a line break, regex metacharacters and awk's "&" and "\"
 // included), and when one password contains the other.
 func TestPsqlProvisionNeverPrintsPasswords(t *testing.T) {
+	t.Parallel()
+
 	special := `p.*+?[x](y){2}|^$&\1\\'"%s`
 	for _, tc := range []struct{ name, chat, sched string }{
 		{"gen_pass", "Q7xR2mT9kLp4Vb8NcZ1wHs6J", "u3Ey8Pq1Wn5Rt0Ko2Lm7Ji4G"},
@@ -134,6 +136,8 @@ func TestPsqlProvisionNeverPrintsPasswords(t *testing.T) {
 // TestPsqlProvisionSuccessIsQuiet — a run that works prints nothing, returns
 // 0 and leaves no temp file.
 func TestPsqlProvisionSuccessIsQuiet(t *testing.T) {
+	t.Parallel()
+
 	b := newPgProvisionBox(t, 0)
 	out, err := b.command(t, "Q7xR2mT9kLp4Vb8NcZ1wHs6J", "u3Ey8Pq1Wn5Rt0Ko2Lm7Ji4G").CombinedOutput()
 	if err != nil {
@@ -149,6 +153,8 @@ func TestPsqlProvisionSuccessIsQuiet(t *testing.T) {
 // the real run pipes its SQL into fleet_psql_provision with both passwords,
 // and never into a bare psql whose stderr reaches the terminal.
 func TestBootstrapProvisionsThroughRedactingRunner(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "bootstrap.sh"))
 	if err != nil {
 		t.Fatal(err)

@@ -9,11 +9,13 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func TestBootRecoveryOrdersApprovalOutcomeAfterOriginatingTurn(t *testing.T) {
-	dsn := testdb.ChatDSN(t)
+	t.Parallel()
+
+	dsn := fleetdb.New(t).ChatDSN()
 	st, err := store.Open(dsn, store.PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1})
 	if err != nil {
 		t.Fatal(err)

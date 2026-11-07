@@ -20,12 +20,14 @@ import (
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func TestApplyTaskMutation_LockedEditPath(t *testing.T) {
+	t.Parallel()
+
 	store := storage.New()
-	store.SetDatabase(testdb.SchedDB(t, "logs", "tasks", "users"))
+	store.SetDatabase(fleetdb.SchedDB(t))
 	ctx := context.Background()
 	now := time.Now().UTC()
 

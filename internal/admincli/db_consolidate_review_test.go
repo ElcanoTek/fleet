@@ -108,6 +108,8 @@ func TestConsolidateConnectionCheck(t *testing.T) {
 // also part of database and role names ("fleet") is scrubbed only where it is
 // a credential; a long one everywhere; names are never rewritten.
 func TestConsolidateRedactionKeepsNames(t *testing.T) {
+	t.Parallel()
+
 	p := &consolidatePlan{
 		target: "cons_fleet_1", owner: "fleet",
 		chat: pgSource{database: "chat_fleet", role: "fleet"}, sched: pgSource{database: "sched", role: "fleet"},

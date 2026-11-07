@@ -38,6 +38,8 @@ func seedResidueRepo(t *testing.T) string {
 // that matters is the one found on a real box: connector output inside untracked
 // directories, including a filename git quotes because it contains spaces.
 func TestBundleResidue(t *testing.T) {
+	t.Parallel()
+
 	t.Run("a clean checkout reports nothing", func(t *testing.T) {
 		dir := seedResidueRepo(t)
 		if _, _, ok := bundleResidue(dir); ok {
@@ -131,6 +133,8 @@ func TestReportBundleResidue(t *testing.T) {
 }
 
 func TestHumanBytes(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		in   int64
 		want string

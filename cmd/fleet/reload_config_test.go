@@ -13,6 +13,8 @@ import (
 // TestReloadConfigHandler_NilCfg: a route-walking/test build passes a nil cfg, so
 // a real request must fail closed with 503 rather than panic.
 func TestReloadConfigHandler_NilCfg(t *testing.T) {
+	t.Parallel()
+
 	rec := httptest.NewRecorder()
 	reloadConfigHandler(nil)(rec, httptest.NewRequest(http.MethodPost, "/admin/reload-config", nil))
 	if rec.Code != http.StatusServiceUnavailable {
