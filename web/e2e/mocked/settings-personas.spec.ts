@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { loginViaCookie } from "./_session";
+import { mockShellBasics } from "./_mocks";
 
 // Mocked e2e for Settings → Personas (docs/USER-PERSONAS.md): the page is in
 // the settings nav, a proposed draft is approved in one click, and the page
@@ -32,13 +33,7 @@ const DRAFT = {
 };
 
 async function mockShell(page: Page, approvals: string[]) {
-  await page.route("**/api/session", (r: Route) => r.fulfill({ json: { email: "e2e@example.com" } }));
-  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
-  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
-  await page.route("**/api/push/vapid-public-key", (r: Route) =>
-    r.fulfill({ status: 501, json: { error: "not configured" } }),
-  );
-  await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ status: 403, body: "forbidden — not an admin" }));
+  await mockShellBasics(page);
   await page.route("**/api/user-personas", (r: Route) =>
     r.fulfill({
       json: {

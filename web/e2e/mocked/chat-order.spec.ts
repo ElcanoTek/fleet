@@ -95,13 +95,26 @@ async function setup(
     reads.n++;
     return r.fulfill({ json: orders() });
   });
+  // Armed before navigating so a fast answer is not missed: the role cases
+  // wait on it instead of sleeping.
+  const meAnswered = page.waitForResponse("**/api/me");
+  meAnswered.catch(() => {}); // most cases never await it
   await page.goto("/chat");
   if (opts.waitForPinned === false) {
     await page.getByRole("heading", { name: /what can i help with/i }).waitFor({ timeout: 15_000 });
   } else {
     await page.getByTestId("pinned-section").waitFor({ timeout: 15_000 });
   }
-  return Object.assign(puts, { reads });
+  return Object.assign(puts, { reads, meAnswered });
+}
+
+// settled waits for the app to finish handling a response it just received:
+// two animation frames cover the body read, the state update and React's
+// commit, so an assertion that something did NOT appear is not vacuous.
+async function settled(page: Page) {
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r()))),
+  );
 }
 
 test.beforeEach(async ({ context }) => {
@@ -150,16 +163,21 @@ test("a slow first read of the saved order does not undo a move made meanwhile",
   // Server order unknown yet: the rail shows newest first (c1, c2, c3).
   await page.getByRole("button", { name: "Move Omnicom Pacing up" }).click();
   await expect.poll(() => puts.at(-1)?.ids).toEqual(["c2", "c1", "c3"]);
+  const staleRead = page.waitForResponse(
+    (r) => r.url().endsWith("/api/conversations/order") && r.request().method() === "GET",
+  );
   release(); // the stale read now answers with the old saved order
-  await page.waitForTimeout(300);
+  await staleRead;
+  await settled(page);
   const items = page.getByTestId("chat-reorder-list").locator("li");
   await expect(items).toHaveText([/Omnicom Pacing/, /Acme Renewal/, /Deal Desk Daily/]);
 });
 
 test("Reorder waits for the account role: an unreadable role offers no mode", async ({ page }) => {
-  await setup(page, [], { meFails: true });
+  const { meAnswered } = await setup(page, [], { meFails: true });
   await expect(page.getByTestId("pinned-section")).toContainText("Acme Renewal");
-  await page.waitForTimeout(300);
+  await meAnswered;
+  await settled(page);
   await expect(page.getByTestId("pinned-reorder-toggle")).toHaveCount(0);
 });
 
@@ -176,7 +194,6 @@ test("a failed save followed by a queued move keeps the later move (no stale rec
   await list.getByRole("button", { name: "Move Deal Desk Daily up" }).click();
   release(); // move 1's save fails now; move 2's save then succeeds
   await expect.poll(() => puts.length).toBe(2);
-  await page.waitForTimeout(300);
   // The rail keeps move 2's order — the one the server now holds — and no
   // recovery read was made, since the last save succeeded.
   await expect(list.locator("li")).toHaveText([/Omnicom Pacing/, /Deal Desk Daily/, /Acme Renewal/]);
@@ -195,9 +212,10 @@ test("when the server keeps less than was sent, the rail re-reads what it kept",
 });
 
 test("a read-only viewer is not offered Reorder", async ({ page }) => {
-  await setup(page, [], { role: "viewer" });
+  const { meAnswered } = await setup(page, [], { role: "viewer" });
   await expect(page.getByTestId("pinned-section")).toContainText("Acme Renewal");
-  await page.waitForTimeout(300);
+  await meAnswered;
+  await settled(page);
   await expect(page.getByTestId("pinned-reorder-toggle")).toHaveCount(0);
 });
 

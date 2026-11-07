@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
+import { mockShellBasics } from "./_mocks";
 
 // Mocked e2e for the settings shell (fleet-unified settings redesign): every
 // /settings/* page renders inside the unified NavRail + "Settings" topbar with
@@ -9,19 +10,7 @@ import { loginViaCookie } from "./_session";
 // bounces /settings/admin/* back to /settings.
 
 async function mockShell(page: Page, opts: { admin: boolean }) {
-  await page.route("**/api/session", (r: Route) =>
-    r.fulfill({ json: { email: "e2e@example.com" } }),
-  );
-  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
-  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
-  await page.route("**/api/push/vapid-public-key", (r: Route) =>
-    r.fulfill({ status: 501, json: { error: "not configured" } }),
-  );
-  await page.route("**/api/admin/settings", (r: Route) =>
-    opts.admin
-      ? r.fulfill({ json: { settings: [] } })
-      : r.fulfill({ status: 403, body: "forbidden — not an admin" }),
-  );
+  await mockShellBasics(page, opts);
   // The admin Overview's data endpoints (visited in the admin variant).
   await page.route("**/api/admin/stats", (r: Route) => r.fulfill({ json: { users: [] } }));
   await page.route("**/api/admin/health-summary", (r: Route) =>
