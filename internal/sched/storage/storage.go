@@ -1067,25 +1067,18 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if err := models.ValidateExecutionRequirements(edit.Prompt); err != nil {
 		return nil, err
 	}
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
-	// the error paths the function already returns the underlying error, and a
-	// rollback failure in a defer can't be surfaced — so the result is
-	// intentionally ignored.
-	defer func() { _ = tx.Rollback() }()
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		if !task.IsEditable() {
+			return ErrTaskNotEditable
+		}
+		applyTaskEdit(task, edit)
+		return nil
+	})
+}
 
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
-		return nil, ErrTaskNotEditable
-	}
-
+// applyTaskEdit writes edit onto the locked row and recomputes its dispatch
+// state; UpdateEditableTask's mutation, under editTaskLocked.
+func applyTaskEdit(task *models.Task, edit TaskEdit) {
 	task.Prompt = edit.Prompt
 	task.Title = edit.Title
 	task.Description = edit.Description
@@ -1114,7 +1107,6 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	if edit.SetRunIf {
 		task.RunIf = edit.RunIf
 	}
-	priorPriority := task.Priority
 	if edit.SetPriority || edit.Priority > 0 {
 		task.Priority = models.NormalizePriority(edit.Priority)
 	}
@@ -1149,17 +1141,6 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 	// task to pending — dispatching it without the gate ever being evaluated
 	// — and flipped an inert webhook template into a one-shot pending run.
 	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
-
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
 }
 
 // ReplaceTaskDefinition overlays a full imported definition (import
@@ -1183,49 +1164,27 @@ func (s *Storage) UpdateEditableTask(ctx context.Context, taskID uuid.UUID, edit
 // GetScheduledTasks can never promote), nor flip a gated or webhook task off
 // the scheduler path.
 func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, tc models.TaskCreate) (*models.Task, error) {
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// See UpdateEditableTask for why the rollback result is ignored.
-	defer func() { _ = tx.Rollback() }()
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		if !task.IsEditable() {
+			return fmt.Errorf("%w: conflict=replace only rewrites a pending or scheduled task (status is %q) — a leased, running, or finished row keeps its execution state", ErrTaskNotEditable, task.Status)
+		}
+		if err := models.OverlayTaskDefinition(task, tc); err != nil {
+			return err
+		}
+		// Same schema check UpdateTask applies: the overlay can replace
+		// output_schema, and the CLI import path has no handler-side
+		// validateTaskCreate in front of it.
+		if err := validateStoredOutputContract(task); err != nil {
+			return err
+		}
 
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
-		return nil, fmt.Errorf("%w: conflict=replace only rewrites a pending or scheduled task (status is %q) — a leased, running, or finished row keeps its execution state", ErrTaskNotEditable, task.Status)
-	}
-
-	priorPriority := task.Priority
-	if err := models.OverlayTaskDefinition(task, tc); err != nil {
-		return nil, err
-	}
-	// Same schema check UpdateTask applies: the overlay can replace
-	// output_schema, and the CLI import path has no handler-side
-	// validateTaskCreate in front of it.
-	if err := validateStoredOutputContract(task); err != nil {
-		return nil, err
-	}
-
-	// Recompute the dispatch state with the SAME rule used at creation (see
-	// UpdateEditableTask): preserving the pre-replace status verbatim let a
-	// schedule-less record strand a one-shot as scheduled+NULL, and a scheduled
-	// record land as pending — dispatching immediately instead of waiting.
-	task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
-
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
+		// Recompute the dispatch state with the SAME rule used at creation (see
+		// UpdateEditableTask): preserving the pre-replace status verbatim let a
+		// schedule-less record strand a one-shot as scheduled+NULL, and a scheduled
+		// record land as pending — dispatching immediately instead of waiting.
+		task.Status, task.ScheduledFor = models.DeriveDispatchState(task.TriggerType, task.RunIf, task.ScheduledFor)
+		return nil
+	})
 }
 
 // UpdateTaskCredentialAllowlist replaces a task's credential allowlist (#184),
@@ -1234,56 +1193,26 @@ func (s *Storage) ReplaceTaskDefinition(ctx context.Context, taskID uuid.UUID, t
 // list enforces least-privilege scoping. Returns ErrTaskNotEditable if the task
 // has left the editable state. Only this field is touched.
 func (s *Storage) UpdateTaskCredentialAllowlist(ctx context.Context, taskID uuid.UUID, allowlist models.CredentialAllowlist) (*models.Task, error) {
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
-		return nil, ErrTaskNotEditable
-	}
-
-	task.CredentialAllowlist = allowlist
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		if !task.IsEditable() {
+			return ErrTaskNotEditable
+		}
+		task.CredentialAllowlist = allowlist
+		return nil
+	})
 }
 
 // UpdateTaskDescription sets a task's operator-documentation field (#281),
 // leaving all other fields untouched. Editable tasks only (pending/scheduled),
 // mirroring the other targeted task edits.
 func (s *Storage) UpdateTaskDescription(ctx context.Context, taskID uuid.UUID, description string) (*models.Task, error) {
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
-		return nil, ErrTaskNotEditable
-	}
-
-	task.Description = description
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		if !task.IsEditable() {
+			return ErrTaskNotEditable
+		}
+		task.Description = description
+		return nil
+	})
 }
 
 // UpdateTaskSandboxLimits sets a task's per-task sandbox cgroup override
@@ -1291,32 +1220,17 @@ func (s *Storage) UpdateTaskDescription(ctx context.Context, taskID uuid.UUID, d
 // (pending/scheduled). A nil / all-zero value clears the override so the
 // global FLEET_SANDBOX_* defaults apply.
 func (s *Storage) UpdateTaskSandboxLimits(ctx context.Context, taskID uuid.UUID, limits *models.TaskSandboxLimits) (*models.Task, error) {
-	tx, err := s.db.BeginTx(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
-	if err != nil {
-		return nil, err
-	}
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
-		return nil, ErrTaskNotEditable
-	}
-
-	if limits.IsZero() {
-		task.SandboxLimits = nil
-	} else {
-		task.SandboxLimits = limits
-	}
-	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return task, nil
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		if !task.IsEditable() {
+			return ErrTaskNotEditable
+		}
+		if limits.IsZero() {
+			task.SandboxLimits = nil
+		} else {
+			task.SandboxLimits = limits
+		}
+		return nil
+	})
 }
 
 // UpdateTaskTags atomically adds and removes tags on a task (#212), leaving all
@@ -1327,39 +1241,64 @@ func (s *Storage) UpdateTaskSandboxLimits(ctx context.Context, taskID uuid.UUID,
 // other targeted edits this is allowed in ANY status — tags are organizational
 // metadata, useful on running/completed tasks too.
 func (s *Storage) UpdateTaskTags(ctx context.Context, taskID uuid.UUID, add, remove []string) (*models.Task, error) {
+	// No IsEditable check: tags are allowed in any status (see above).
+	return s.editTaskLocked(ctx, taskID, func(task *models.Task) error {
+		removeSet := make(map[string]struct{}, len(remove))
+		for _, r := range remove {
+			removeSet[r] = struct{}{}
+		}
+		merged := make([]string, 0, len(task.Tags)+len(add))
+		for _, t := range task.Tags {
+			if _, drop := removeSet[t]; !drop {
+				merged = append(merged, t)
+			}
+		}
+		for _, a := range add {
+			if _, drop := removeSet[a]; !drop {
+				merged = append(merged, a)
+			}
+		}
+		normalized, err := models.NormalizeAndValidateTags(merged)
+		if err != nil {
+			return err
+		}
+		task.Tags = normalized
+		return nil
+	})
+}
+
+// editTaskLocked is the one transaction body behind the targeted task edits:
+// begin, lock the row (GetTaskForUpdate), run mutate on it, write it back
+// (UpdateTaskTx), sync effective_priority, and commit. The row lock is what
+// makes an edit and a concurrent claim strictly ordered (#1104): whichever
+// commits second sees the other's state. mutate owns the status check — each
+// caller words its refusal differently, and UpdateTaskTags allows any status
+// — and a mutate error aborts the edit with nothing written.
+// SyncEffectivePriorityTx is a no-op when mutate left the priority unchanged,
+// so calling it unconditionally is safe for edits that never touch it.
+func (s *Storage) editTaskLocked(ctx context.Context, taskID uuid.UUID, mutate func(*models.Task) error) (*models.Task, error) {
 	tx, err := s.db.BeginTx(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Rollback is a no-op after a successful Commit (returns sql.ErrTxDone); on
+	// the error paths the function already returns the underlying error, and a
+	// rollback failure in a defer can't be surfaced — so the result is
+	// intentionally ignored.
 	defer func() { _ = tx.Rollback() }()
 
 	task, err := s.db.GetTaskForUpdate(ctx, tx, taskID)
 	if err != nil {
 		return nil, err
 	}
-
-	removeSet := make(map[string]struct{}, len(remove))
-	for _, r := range remove {
-		removeSet[r] = struct{}{}
-	}
-	merged := make([]string, 0, len(task.Tags)+len(add))
-	for _, t := range task.Tags {
-		if _, drop := removeSet[t]; !drop {
-			merged = append(merged, t)
-		}
-	}
-	for _, a := range add {
-		if _, drop := removeSet[a]; !drop {
-			merged = append(merged, a)
-		}
-	}
-	normalized, err := models.NormalizeAndValidateTags(merged)
-	if err != nil {
+	priorPriority := task.Priority
+	if err := mutate(task); err != nil {
 		return nil, err
 	}
-	task.Tags = normalized
-
 	if err := s.db.UpdateTaskTx(ctx, tx, task); err != nil {
+		return nil, err
+	}
+	if err := s.db.SyncEffectivePriorityTx(ctx, tx, task, priorPriority); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

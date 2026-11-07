@@ -1493,6 +1493,13 @@ func (t *Task) WorkspaceLineage() uuid.UUID {
 	return t.ID
 }
 
+// IsEditable reports whether the task's definition may still be edited: only a
+// task that has not started (pending or scheduled) can be. Leased, running and
+// finished rows keep their execution state.
+func (t *Task) IsEditable() bool {
+	return t.Status == TaskStatusPending || t.Status == TaskStatusScheduled
+}
+
 func NewTask(tc TaskCreate) *Task {
 	triggerType := tc.TriggerType
 	if triggerType == "" {

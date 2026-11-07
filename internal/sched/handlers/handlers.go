@@ -1991,7 +1991,7 @@ func (h *Handlers) UpdateTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Only allow editing tasks that haven't started
-	if task.Status != models.TaskStatusPending && task.Status != models.TaskStatusScheduled {
+	if !task.IsEditable() {
 		writeError(w, http.StatusBadRequest, "Only pending or scheduled tasks can be edited")
 		return
 	}
