@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -38,8 +39,8 @@ const chatScheduleLease = 2 * time.Minute
 // chatScheduleBatch is how many due schedules one pass claims.
 const chatScheduleBatch = 25
 
-// chatScheduleWakeHorizon: a wake-up further out than this is left to the
-// regular tick, which re-arms the wake-up as the time approaches.
+// chatScheduleWakeHorizon is the least a wake-up request may be ahead of now
+// and still be kept (see chatWakeHorizon).
 const chatScheduleWakeHorizon = 5 * time.Minute
 
 // minChatScheduleWake keeps a burst of wake requests from spinning the loop.
@@ -53,10 +54,12 @@ func (s *Scheduler) SetChatScheduleDeliverer(d ChatScheduleDeliverer) {
 
 // WakeChatSchedulesAt asks the loop to run a chat schedule pass at t, instead
 // of waiting for the next tick: a timer created for 30 seconds from now fires
-// at 30 seconds. Non-blocking; a request the loop cannot take now is dropped
-// and the tick covers it.
+// at 30 seconds. Non-blocking. A request further out than the wake horizon
+// (the larger of chatScheduleWakeHorizon and the tick interval) is dropped —
+// some tick runs before it is due and re-arms it then — and so is one the
+// loop cannot take right now (the tick covers it).
 func (s *Scheduler) WakeChatSchedulesAt(t time.Time) {
-	if s == nil || t.IsZero() || time.Until(t) > chatScheduleWakeHorizon {
+	if s == nil || t.IsZero() || time.Until(t) > s.chatWakeHorizon() {
 		return
 	}
 	select {
@@ -65,10 +68,29 @@ func (s *Scheduler) WakeChatSchedulesAt(t time.Time) {
 	}
 }
 
+// chatWakeHorizon: every tick re-arms the wake-up for a schedule due before
+// the next tick, so any request within one tick interval must be kept.
+func (s *Scheduler) chatWakeHorizon() time.Duration {
+	if s.tickInterval > chatScheduleWakeHorizon {
+		return s.tickInterval
+	}
+	return chatScheduleWakeHorizon
+}
+
+// chatScheduleFireTimeout bounds one fire's delivery and settle when it runs
+// on a context detached from its caller (Run now).
+const chatScheduleFireTimeout = 30 * time.Second
+
 // RunChatScheduleNow fires one chat schedule immediately ("Run now"), whether
 // or not it is due, through the same claim → delivery → settle path as the
 // tick. It returns the delivery: queued (InputID is the new turn), coalesced
 // (InputID is the patrol turn already in flight), or gone.
+//
+// Only the claim runs on ctx. Once claimed, the fire is the scheduler's: its
+// delivery and settle run on a context detached from the caller and bounded
+// by chatScheduleFireTimeout, so an HTTP client that disconnects cannot leave
+// a delivered turn unsettled with its lease held. (Were the process to die
+// there instead, the recovery pass re-drives the same fire by its id.)
 func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error) {
 	if s.chatDeliverer == nil {
 		return models.ChatScheduleDelivery{}, errNoChatDeliverer
@@ -78,7 +100,9 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	if err != nil {
 		return models.ChatScheduleDelivery{}, err
 	}
-	return s.fireChatSchedule(ctx, fire, now)
+	fireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatScheduleFireTimeout)
+	defer cancel()
+	return s.fireChatSchedule(fireCtx, fire, now)
 }
 
 type chatSchedError string
@@ -87,51 +111,97 @@ func (e chatSchedError) Error() string { return string(e) }
 
 const errNoChatDeliverer = chatSchedError("chat schedules are not wired to a chat server")
 
-// runChatSchedules is the tick phase: claim every due schedule (a batch at a
-// time), fire each, then re-drive any patrol turn left queued, and arm the
-// wake-up for the next schedule due before the next tick.
+// maxChatScheduleFiresPerSweep is a backstop on one sweep's drain; the sweep
+// deadline (sweepTimeout) is the real bound. A backlog larger than this —
+// thousands of schedules due at once — finishes on the next pass, which the
+// wake-up arms right away.
+const maxChatScheduleFiresPerSweep = 10000
+
+// runChatSchedules is the tick phase: re-drive fires whose lease expired,
+// then claim and fire due schedules a batch at a time until none is left (or
+// the sweep's deadline), then start the drain of any patrol turn left queued
+// and arm the wake-up for the next schedule due before the next tick.
 func (s *Scheduler) runChatSchedules() {
 	if s.chatDeliverer == nil {
 		return
 	}
 	s.sweep("chat schedules", func(ctx context.Context) (int, error) {
-		fired := 0
-		for pass := 0; pass < 4; pass++ {
-			now := time.Now()
-			fires, err := s.storage.DB().ClaimDueChatSchedules(ctx, now, chatScheduleLease, chatScheduleBatch)
-			if err != nil {
-				return fired, err
-			}
-			advanced := 0
-			for _, f := range fires {
-				d, err := s.fireChatSchedule(ctx, f, now)
-				if err != nil {
-					log.Printf("scheduler: chat schedule %s fire: %v", safe.LogSafe(f.ScheduleID), err)
-					continue
-				}
-				if d.Outcome != models.ChatScheduleDeferred && d.Outcome != models.ChatScheduleStale {
-					advanced++
-				}
-			}
-			fired += advanced
-			// A short batch is everything that was due; a batch that moved
-			// nothing (all deferred) would only be claimed again.
-			if len(fires) < chatScheduleBatch || advanced == 0 {
-				break
-			}
-		}
+		fired, err := s.drainChatSchedules(ctx)
 		s.chatDeliverer.KickQueuedChatScheduleTurns(ctx)
 		s.armNextChatScheduleWake(ctx)
-		return fired, nil
+		return fired, err
 	}, nil)
 }
 
+// drainChatSchedules fires every recoverable and due schedule. Every claimed
+// row is excluded from the rest of the pass (attempted), so a batch of
+// schedules whose deliveries fail cannot be claimed again and again ahead of
+// the healthy rows behind it; a failed fire also keeps its lease for a
+// backoff, so the next passes skip it too.
+func (s *Scheduler) drainChatSchedules(ctx context.Context) (int, error) {
+	fired := 0
+	attempted := []string{}
+	fire := func(fs []models.ChatScheduleFire, now time.Time) (deferred bool) {
+		for _, f := range fs {
+			attempted = append(attempted, f.ScheduleID)
+			d, err := s.fireChatSchedule(ctx, f, now)
+			if err != nil {
+				log.Printf("scheduler: chat schedule %s fire: %v", safe.LogSafe(f.ScheduleID), err)
+				continue
+			}
+			switch d.Outcome {
+			case models.ChatScheduleDeferred:
+				deferred = true
+			case models.ChatScheduleStale:
+			default:
+				fired++
+			}
+		}
+		return deferred
+	}
+
+	for len(attempted) < maxChatScheduleFiresPerSweep && ctx.Err() == nil {
+		now := time.Now()
+		fs, err := s.storage.DB().RecoverChatScheduleFires(ctx, now, chatScheduleLease, chatScheduleBatch)
+		if err != nil {
+			return fired, err
+		}
+		if fire(fs, now) {
+			return fired, nil // the chat server is not taking turns now
+		}
+		if len(fs) < chatScheduleBatch {
+			break
+		}
+	}
+	for len(attempted) < maxChatScheduleFiresPerSweep && ctx.Err() == nil {
+		now := time.Now()
+		fs, err := s.storage.DB().ClaimDueChatSchedules(ctx, now, chatScheduleLease, chatScheduleBatch, attempted)
+		if err != nil {
+			return fired, err
+		}
+		if fire(fs, now) {
+			return fired, nil
+		}
+		if len(fs) < chatScheduleBatch {
+			break
+		}
+	}
+	if len(attempted) >= maxChatScheduleFiresPerSweep {
+		s.WakeChatSchedulesAt(time.Now())
+	}
+	return fired, ctx.Err()
+}
+
 // fireChatSchedule delivers one claimed fire and settles it. A delivery error
-// releases the lease untouched (the fire is retried on a later pass).
+// keeps the fire in flight with its lease pushed out by a backoff (the
+// recovery pass retries it then, by the same idempotency key).
 func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatScheduleFire, now time.Time) (models.ChatScheduleDelivery, error) {
 	d, derr := s.deliverChatSchedule(ctx, fire)
 	if derr != nil {
-		d = models.ChatScheduleDelivery{Outcome: models.ChatScheduleDeferred}
+		if _, backoff, err := s.storage.DB().FailChatScheduleFire(ctx, fire); err == nil && backoff > 0 {
+			return d, fmt.Errorf("%w (retrying in %s)", derr, backoff)
+		}
+		return d, derr
 	}
 	settled, err := s.storage.DB().SettleChatScheduleFire(ctx, fire, d, now)
 	if err != nil {
@@ -139,11 +209,8 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 		// happened) is idempotent.
 		return d, err
 	}
-	if derr != nil {
-		return d, derr
-	}
 	if !settled {
-		log.Printf("scheduler: chat schedule %s: lease lost before settle (a newer claim owns the row)", safe.LogSafe(fire.ScheduleID))
+		log.Printf("scheduler: chat schedule %s: fire ended before settle (re-claimed or revoked)", safe.LogSafe(fire.ScheduleID))
 		return d, nil
 	}
 	switch d.Outcome {

@@ -15,6 +15,15 @@
 -- that dies mid-fire expires and is re-claimed, and the chat side's
 -- idempotency key makes the re-delivery a no-op.
 --
+-- fire_id / fire_trigger / fire_run_number are the fire a lease is for. They
+-- survive the lease's expiry: the recovery pass re-claims the SAME fire (same
+-- id, so the same idempotency key), whatever the schedule's status or due
+-- time — a Run now on a paused schedule included — and only a settle (or a
+-- pause/cancel revoking the fire) clears them. A delivery that fails keeps
+-- its fire and lease, the lease pushed out by a backoff that grows with
+-- fire_failures, so a failing schedule waits its turn instead of being
+-- claimed again on every pass.
+--
 -- conversation_id is NOT a foreign key any more: the conversation is in
 -- another schema (and store). A fire whose conversation is gone cancels the
 -- schedule, as the chat claim always did for a soft-deleted chat.
@@ -36,8 +45,17 @@ CREATE TABLE IF NOT EXISTS chat_schedules (
     created_at       BIGINT NOT NULL,
     updated_at       BIGINT NOT NULL,
     lease_owner      TEXT,
-    lease_expires_at TIMESTAMPTZ
+    lease_expires_at TIMESTAMPTZ,
+    fire_id          TEXT,
+    fire_trigger     TEXT CHECK (fire_trigger IN ('schedule', 'manual')),
+    fire_run_number  INTEGER,
+    fire_failures    INTEGER NOT NULL DEFAULT 0
 );
+
+-- Leases whose holder may have died, for the recovery pass.
+CREATE INDEX IF NOT EXISTS idx_chat_schedules_leased
+    ON chat_schedules (lease_expires_at)
+    WHERE lease_owner IS NOT NULL;
 
 -- The engine's due scan (status, next_run_at), the per-conversation list,
 -- and the Patrols index (same predicate as chat migration 096).
