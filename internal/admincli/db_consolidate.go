@@ -212,8 +212,10 @@ func (p *consolidatePlan) connArgs() []string {
 // superuserCmd renders a client tool run as the postgres OS user against the
 // plan's instance, shell-quoted, for a command the operator copies.
 func (p *consolidatePlan) superuserCmd(tool string) string {
-	parts := []string{"runuser", "-u", "postgres", "--", tool}
-	for _, a := range p.connArgs() {
+	conn := p.connArgs()
+	parts := make([]string, 0, 5+len(conn))
+	parts = append(parts, "runuser", "-u", "postgres", "--", tool)
+	for _, a := range conn {
 		parts = append(parts, shellQuote(a))
 	}
 	return strings.Join(parts, " ")
@@ -1391,26 +1393,44 @@ func (e *execPG) DumpRestore(ctx context.Context, srcDB, schema, dstDB, role str
 	var dumpErr, restoreErr strings.Builder
 	dump.Stderr, restore.Stderr = &dumpErr, &restoreErr
 	restore.Stdout = io.Discard
-	pipe, err := dump.StdoutPipe()
+	// A plain OS pipe whose two ends this process gives away: the children
+	// hold the only copies once both have started. So when pg_restore exits
+	// early (a failed restore), nothing reads the pipe any more and pg_dump's
+	// next write fails with EPIPE instead of blocking forever on a full pipe;
+	// and when pg_dump exits, pg_restore sees end of input.
+	r, w, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	restore.Stdin = pipe
+	dump.Stdout, restore.Stdin = w, r
 	if err := dump.Start(); err != nil {
+		_ = r.Close()
+		_ = w.Close()
 		return fmt.Errorf("start pg_dump: %w", err)
 	}
 	if err := restore.Start(); err != nil {
+		_ = r.Close()
+		_ = w.Close()
 		_ = dump.Process.Kill()
 		_ = dump.Wait()
 		return fmt.Errorf("start pg_restore: %w", err)
 	}
+	_ = r.Close()
+	_ = w.Close()
 	rerr := restore.Wait()
 	derr := dump.Wait()
+	// The restore's error is the diagnostic: when it fails, pg_dump fails
+	// too, of the broken pipe, which says nothing about why.
+	if rerr != nil {
+		err := fmt.Errorf("pg_restore into %s: %w: %s", dstDB, rerr, lastLines(restoreErr.String()))
+		if derr != nil && strings.TrimSpace(dumpErr.String()) != "" {
+			// Keep pg_dump's own words too, in case it failed first.
+			err = fmt.Errorf("%w (pg_dump: %s)", err, lastLines(dumpErr.String()))
+		}
+		return err
+	}
 	if derr != nil {
 		return fmt.Errorf("pg_dump %s: %w: %s", srcDB, derr, lastLines(dumpErr.String()))
-	}
-	if rerr != nil {
-		return fmt.Errorf("pg_restore into %s: %w: %s", dstDB, rerr, lastLines(restoreErr.String()))
 	}
 	return nil
 }

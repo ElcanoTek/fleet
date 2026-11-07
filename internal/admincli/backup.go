@@ -187,6 +187,7 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 		return err
 	}
 	defer db.Close()
+	//nolint:gosec // G701: schema passed config.PlainIdentifier above ([a-z_][a-z0-9_]*), and DDL takes no bind parameters.
 	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS "`+schema+`"`); err != nil {
 		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
 	}
