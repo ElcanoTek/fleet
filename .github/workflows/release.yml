@@ -91,6 +91,7 @@ jobs:
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
       released: ${{ steps.tag.outputs.released }}
+      build: ${{ steps.state.outputs.build }}
     steps:
       # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
       #
@@ -189,6 +190,46 @@ jobs:
           exit 1
         id: tag
 
+      # RELEASES ARE IMMUTABLE. A re-run of this workflow for a tag that
+      # already published must not rebuild it: the rebuild would produce
+      # different bytes (a newer base layer, a newer RPM, another timestamp)
+      # under the SAME tag, overwriting the binaries, checksums, signatures and
+      # image digests that boxes already verified and installed. So:
+      #   * a complete release (published, with SHA256SUMS) → nothing to do;
+      #   * anything partial (a draft, a release without SHA256SUMS, or GHCR
+      #     images under the tag with no complete release) → refuse loudly; a
+      #     human decides (delete the partial publish and re-run, or let the
+      #     next green push release instead);
+      #   * nothing yet → build.
+      - name: Releases are immutable — skip a published tag, refuse a partial one
+        id: state
+        if: ${{ steps.tag.outputs.released == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if info="$(gh release view "${TAG}" --json isDraft,assets 2>/dev/null)"; then
+            draft="$(printf '%s' "${info}" | jq -r '.isDraft')"
+            sums="$(printf '%s' "${info}" | jq -r '[.assets[].name] | index("SHA256SUMS") != null')"
+            if [ "${draft}" = "false" ] && [ "${sums}" = "true" ]; then
+              echo "::notice::${TAG} is already published with its artifacts; releases are immutable, so nothing is rebuilt."
+              echo "build=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+            fi
+            echo "::error::${TAG} has a partial GitHub release (draft=${draft}, SHA256SUMS present=${sums}). Releases are immutable: refusing to rebuild over it. Delete that release (and any ghcr.io/elcanotek/fleet{,-sandbox}:${TAG}* tags) and re-run, or let the next green push release."
+            exit 1
+          fi
+          for name in fleet fleet-sandbox; do
+            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
+              if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
+                echo "::error::ghcr.io/elcanotek/${name}:${ref} already exists but ${TAG} has no release. Releases are immutable: refusing to push different bytes under that tag. Delete the partial publish and re-run, or let the next green push release."
+                exit 1
+              fi
+            done
+          done
+          echo "build=true" >> "${GITHUB_OUTPUT}"
+
   # ── build: one job per architecture, NO write permission of any kind ────────
   #
   # This is the only job that executes the released commit's code (npm ci, the
@@ -205,7 +246,7 @@ jobs:
   build:
     name: Build linux/${{ matrix.arch }}
     needs: tag
-    if: ${{ needs.tag.outputs.released == 'true' }}
+    if: ${{ needs.tag.outputs.released == 'true' && needs.tag.outputs.build == 'true' }}
     strategy:
       fail-fast: true
       matrix:
@@ -375,7 +416,7 @@ jobs:
   publish:
     name: Sign + publish the release
     needs: [tag, build]
-    if: ${{ needs.tag.outputs.released == 'true' }}
+    if: ${{ needs.tag.outputs.released == 'true' && needs.tag.outputs.build == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -439,6 +480,15 @@ jobs:
         id: images
         run: |
           set -euo pipefail
+          # Immutable tags: never push over an existing one (see the tag job).
+          for name in fleet fleet-sandbox; do
+            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
+              if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
+                echo "::error::ghcr.io/elcanotek/${name}:${ref} appeared since the tag job checked; refusing to overwrite it."
+                exit 1
+              fi
+            done
+          done
           for name in fleet fleet-sandbox; do
             repo="ghcr.io/elcanotek/${name}"
             key="${name//-/_}"
@@ -535,88 +585,84 @@ jobs:
       - name: Publish the GitHub release
         run: |
           set -euo pipefail
-          # Idempotent by construction: this job also runs on a re-run for a
-          # commit that was already tagged (see the tag job), which is what
-          # recovers a tag whose publication failed the first time. `gh release
-          # create` errors on an existing release, so ask first — and on an
-          # existing one re-upload the assets (--clobber) instead: a re-run
-          # after a publish that died mid-upload repairs the release rather
-          # than leaving it without its binaries. The prune below still runs,
-          # so a re-run after a cancelled or failed prune also restores the
-          # retention window instead of leaving it to the next release.
+          # Every tag that built publishes — including one a NEWER tag
+          # overtook while it was building (two green pushes close together):
+          # its artifacts are built, signed and pushed, and skipping it would
+          # leave signed images in GHCR with no release that names them. The
+          # Latest mark and the retention prune below are what keep the order
+          # right. A release that already exists is not touched: the tag job
+          # skips a complete one and refuses a partial one (releases are
+          # immutable), so reaching here with one means a race — fail loudly.
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "::error::release ${TAG} appeared while this run was building; releases are immutable, so this run does not overwrite it."
+            exit 1
+          fi
+
+          # The release notes are the released commit's message, then
+          # GitHub's generated list — the two-part shape openai/codex ships
+          # with (its release body is `git log -1 --format=%B` of the tagged
+          # commit).
           #
-          # A re-run for a tag that a NEWER release has since superseded must
-          # not publish either: its release object was pruned on purpose, and
-          # re-creating it — with `--latest` — would point /releases/latest at
-          # an old tag until the next successful run. The newest release tag
-          # ON THE REMOTE decides — fetched right here, because two per-SHA
-          # jobs can tag concurrently: the one that won the push never
-          # refetched, so its checkout would still name its own tag as newest
-          # after the loser retried and pushed .N+1. On a normal run the
-          # newest is the tag this workflow just pushed.
+          # Every commit on main is a squash-merged PR, and its message is
+          # the text approved in the merge dialog: GitHub prefills it from
+          # the PR title and body, and whatever is in that box is exactly
+          # what ships here, verbatim. That is the whole contract — no PR
+          # lookup, no parsing, nothing to know about any tool's footer.
+          # Want something out of the release notes? Leave it out of the
+          # commit message when you merge. CONTRIBUTING.md "Releases" says
+          # how.
+          #
+          # `--generate-notes` with a body PRE-PENDS that body to GitHub's
+          # generated notes (the merged-PR list since the previous tag,
+          # contributors, compare link). The certified SHA is present as an
+          # object (fetch-depth 0) and the tag step proved it is on main.
+          notes="$(mktemp)"
+          git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
+
+          # Latest only when this is the newest release tag ON THE REMOTE —
+          # fetched right here, because two per-SHA runs can tag
+          # concurrently and the one that won the push never refetched.
+          git fetch --quiet --tags origin
+          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+          latest_flag="--latest=false"
+          [ "${TAG}" = "${newest}" ] && latest_flag="--latest"
+
+          # With files, gh creates the release as a draft, uploads every
+          # asset and only then publishes it — so /releases/latest, which is
+          # what `fleet update` asks, never names a release whose binaries
+          # are still uploading.
+          gh release create "${TAG}" \
+            --title "fleet ${TAG#v}" \
+            --notes-file "${notes}" \
+            --generate-notes \
+            "${latest_flag}" \
+            --verify-tag \
+            dist/*
+
+          # The newest-tag check above and this create are two steps, and a
+          # concurrent run for the next commit can tag AND publish .N+1
+          # between them; a `--latest` just passed would then have moved
+          # Latest back onto this older tag. Every tag is pushed before its
+          # release is created, so a fetch AFTER the create sees any release
+          # that beat this one, and clearing this one's mark is enough: the
+          # newer release asked for Latest itself.
           git fetch --quiet --tags origin
           newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
           if [ "${TAG}" != "${newest}" ]; then
-            echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
-          elif gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::notice::release ${TAG} is already published; re-uploading its assets."
-            gh release upload "${TAG}" dist/* --clobber
-          else
-            # The release notes are the released commit's message, then
-            # GitHub's generated list — the two-part shape openai/codex ships
-            # with (its release body is `git log -1 --format=%B` of the tagged
-            # commit).
-            #
-            # Every commit on main is a squash-merged PR, and its message is
-            # the text approved in the merge dialog: GitHub prefills it from
-            # the PR title and body, and whatever is in that box is exactly
-            # what ships here, verbatim. That is the whole contract — no PR
-            # lookup, no parsing, nothing to know about any tool's footer.
-            # Want something out of the release notes? Leave it out of the
-            # commit message when you merge. CONTRIBUTING.md "Releases" says
-            # how.
-            #
-            # `--generate-notes` with a body PRE-PENDS that body to GitHub's
-            # generated notes (the merged-PR list since the previous tag,
-            # contributors, compare link). The certified SHA is present as an
-            # object (fetch-depth 0) and the tag step proved it is on main.
-            notes="$(mktemp)"
-            git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
-
-            # With files, gh creates the release as a draft, uploads every
-            # asset and only then publishes it — so /releases/latest, which is
-            # what `fleet update` asks, never names a release whose binaries
-            # are still uploading.
-            gh release create "${TAG}" \
-              --title "fleet ${TAG#v}" \
-              --notes-file "${notes}" \
-              --generate-notes \
-              --latest \
-              --verify-tag \
-              dist/*
-
-            # The newest-tag check above and this create are two steps, and
-            # a concurrent run for the next commit can tag AND publish .N+1
-            # between them; the `--latest` just passed would then have moved
-            # Latest back onto this older tag. Every tag is pushed before its
-            # release is created, so a fetch AFTER the create sees any
-            # release that beat this one, and clearing this one's mark is
-            # enough: the newer release asked for Latest itself. (The prune
-            # below removes this object anyway; this is for when it cannot.)
-            git fetch --quiet --tags origin
-            newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
-            if [ "${TAG}" != "${newest}" ]; then
+            if [ "${latest_flag}" = "--latest" ]; then
               echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
               gh release edit "${TAG}" --latest=false \
                 || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
             else
-              # :latest follows the newest release only, by digest (no
-              # re-push: --preserve-digests copies the signed index as is).
-              for name in fleet fleet-sandbox; do
-                skopeo copy --all --preserve-digests \
-                  "docker://ghcr.io/elcanotek/${name}:${TAG}" "docker://ghcr.io/elcanotek/${name}:latest"
-              done
+              echo "::notice::${TAG} published, not Latest: ${newest} is newer."
             fi
+          else
+            # :latest follows the newest release only, by digest (no
+            # re-push: --preserve-digests copies the signed index as is).
+            for name in fleet fleet-sandbox; do
+              skopeo copy --all --preserve-digests \
+                "docker://ghcr.io/elcanotek/${name}:${TAG}" "docker://ghcr.io/elcanotek/${name}:latest"
+            done
           fi
 
           # Keep the newest RETAIN release OBJECTS — the rollback window for
