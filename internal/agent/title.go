@@ -22,7 +22,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 	titleModel := m.config.TitleModel
 	model, err := m.modelResolver().Resolve(ctx, titleModel)
 	if err != nil {
-		logging.From(ctx).Error("SuggestTitle: resolve title model", "title_model", titleModel, "err", err)
+		logging.From(ctx).Error("SuggestTitle: resolve title model failed", "title_model", titleModel, "err", err)
 		return ""
 	}
 	sys := "You write concise chat titles for a sidebar. Given a short exchange between a user and an assistant, " +
@@ -40,7 +40,7 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		Timeout:     20 * time.Second,
 	})
 	if err != nil {
-		logging.From(ctx).Error("SuggestTitle", "err", err)
+		logging.From(ctx).Error("SuggestTitle: failed", "err", err)
 		return ""
 	}
 	return normalizeTitle(text)

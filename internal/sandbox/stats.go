@@ -460,7 +460,7 @@ func logMemoryBreach(containerID string, usedBytes, limitBytes uint64) {
 		return
 	}
 	pct := float64(usedBytes) / float64(limitBytes) * 100
-	slog.Info("sandbox: memory usage of limit — consider raising the sandbox memory limit", "container_id", shortID(containerID), "pct", fmt.Sprintf("%.0f", pct), "used_bytes", humanMiB(usedBytes), "limit_bytes", humanMiB(limitBytes))
+	slog.Warn("sandbox: memory usage is near the limit — consider raising the sandbox memory limit", "container_id", shortID(containerID), "pct", fmt.Sprintf("%.0f", pct), "used", humanMiB(usedBytes), "limit", humanMiB(limitBytes))
 }
 
 // humanMiB renders a byte count as "NNN MiB" for the breach warning.

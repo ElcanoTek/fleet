@@ -112,7 +112,7 @@ func (a *approvalStager) joinApprovalGroup(approval *store.Approval) {
 	}
 	ok, err := a.store.SetApprovalGroup(a.ctx, a.userEmail, approval.ID, a.groupID)
 	if err != nil || !ok {
-		slog.Error("approval group: store group", "approval_id", approval.ID, "ok", ok, "err", err)
+		slog.Error("approval group: store group failed", "approval_id", approval.ID, "ok", ok, "err", err)
 		return
 	}
 	approval.GroupID = a.groupID
@@ -261,7 +261,7 @@ func (s *Server) handleApprovalGroup(w http.ResponseWriter, r *http.Request, con
 			resume = true
 		}
 	}
-	logging.From(ctx).Info("audit decided approval group in conversation (cards)", "user", user, "group_id", groupID, "conv_id", convID, "decisions_count", len(decisions))
+	logging.From(ctx).Info("audit: approval group decided", "user", user, "group_id", groupID, "conv_id", convID, "cards", len(decisions))
 	out := map[string]any{"group_id": groupID, "results": results}
 	if resume {
 		// At least one card's settlement may start the automatic continue

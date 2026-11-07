@@ -331,7 +331,7 @@ func (s *k8sExecSession) close() {
 	select {
 	case <-s.done:
 	case <-time.After(bridgeReapTimeout):
-		slog.Info("sandbox: exec stream did not exit within of cancel — abandoning the join to keep teardown bounded", "bridge_reap_timeout", bridgeReapTimeout)
+		slog.Info("sandbox: exec stream did not exit in time after cancel — abandoning the join to keep teardown bounded", "timeout", bridgeReapTimeout)
 	}
 }
 

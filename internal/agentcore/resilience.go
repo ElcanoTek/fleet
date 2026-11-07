@@ -261,7 +261,7 @@ func loadResilienceConfig() resilienceConfig {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			attempts = n
 		} else {
-			slog.Warn("Warning: ignoring invalid (using default)", "fleet_retry_max_attempts", raw, "default_retry_max_attempts", defaultRetryMaxAttempts)
+			slog.Warn("Warning: ignoring invalid FLEET_RETRY_MAX_ATTEMPTS (using default)", "value", raw, "default", defaultRetryMaxAttempts)
 		}
 	}
 	return resilienceConfig{maxAttempts: attempts}
@@ -567,7 +567,7 @@ func newRetryLogger(session *LogSession) fantasy.OnRetryCallback {
 			title = fantasy.ErrorTitleForStatusCode(status)
 		}
 		rounded := delay.Round(10 * time.Millisecond)
-		slog.Warn("🔁 LLM retry", "status", status, "title", title, "delay", rounded, "msg", summarizeForConsole(err.Message))
+		slog.Warn("🔁 LLM retry", "status", status, "title", title, "delay", rounded, "provider_message", summarizeForConsole(err.Message))
 		if session == nil {
 			return
 		}
@@ -602,7 +602,7 @@ func (e *engine) logStreamBlipRetry(providerErr *fantasy.ProviderError, cause er
 // waitStreamBlipRetry logs a mid-stream retry and waits streamBlipRetryDelay
 // or returns a context-cancellation error.
 func (e *engine) waitStreamBlipRetry(ctx context.Context, providerErr *fantasy.ProviderError, cause error) error {
-	logging.From(ctx).Warn("🔁 Mid-stream provider error; retrying same model once after", "status", providerErrStatus(providerErr), "stream_blip_retry_delay", streamBlipRetryDelay)
+	logging.From(ctx).Warn("🔁 Mid-stream provider error; retrying same model once", "status", providerErrStatus(providerErr), "retry_in", streamBlipRetryDelay)
 	e.logStreamBlipRetry(providerErr, cause)
 	select {
 	case <-time.After(streamBlipRetryDelay):
@@ -624,7 +624,7 @@ func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.P
 		status = providerErr.StatusCode
 		body = summarizeForConsole(providerErr.Message)
 	}
-	slog.Error("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "model", e.fallbackModel.Model())
+	slog.Error("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "fallback_model", e.fallbackModel.Model())
 	if e.logSession == nil {
 		return
 	}

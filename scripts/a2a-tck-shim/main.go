@@ -72,9 +72,9 @@ func main() {
 		},
 	}
 
-	slog.Info("a2a-tck-shim (auth injection + messageId scenario markers)", "listen", *listen, "target", *target)
+	slog.Info("a2a-tck-shim: proxying (auth injection + messageId scenario markers)", "listen", *listen, "target", *target)
 	// nosemgrep: go.lang.security.audit.net.use-tls.use-tls -- loopback-only conformance-test harness (default listen 127.0.0.1, header forbids any other use); TLS on a loopback rig would add nothing and the official TCK speaks plain HTTP to it.
-	logging.Fatal(http.ListenAndServe(*listen, rp).Error()) //nolint:gosec // loopback test harness, not a served endpoint
+	logging.Fatal("a2a-tck-shim: serve failed", "err", http.ListenAndServe(*listen, rp)) //nolint:gosec // loopback test harness, not a served endpoint
 }
 
 // scenarioForMessageID maps the TCK's messageId prefixes to the fake-llm

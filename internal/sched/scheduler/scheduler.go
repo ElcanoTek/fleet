@@ -301,16 +301,16 @@ func (s *Scheduler) runLoop() {
 		cleanupC = cleanupTimer.C
 	}
 	if s.retentionDays > 0 {
-		slog.Info("scheduler: run-history retention ON (daily sweep, UTC hour)", "retention_d", s.retentionDays, "keep", s.keepPerTask, "cleanup_hour", fmt.Sprintf("%02d", s.cleanupHour))
+		slog.Info("scheduler: run-history retention ON (daily sweep)", "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.archiveAfterDays > 0 {
-		slog.Info("scheduler: log archival ON (archive after, sweep daily:00 UTC)", "archive_after_days_d", s.archiveAfterDays, "cleanup_hour", fmt.Sprintf("%02d", s.cleanupHour))
+		slog.Info("scheduler: log archival ON (daily sweep)", "archive_after_days", s.archiveAfterDays, "cleanup_hour_utc", fmt.Sprintf("%02d", s.cleanupHour))
 	}
 	if s.starvationWindowMin > 0 {
-		slog.Info("scheduler: anti-starvation promotion ON (promote pending tasks waiting > to priority)", "starvation_window_min_m", s.starvationWindowMin, "starvation_floor_priority", models.StarvationFloorPriority)
+		slog.Info("scheduler: anti-starvation promotion ON (long-waiting pending tasks are promoted)", "window_min", s.starvationWindowMin, "floor_priority", models.StarvationFloorPriority)
 	}
 	if s.pausedExpiryMin > 0 {
-		slog.Info("scheduler: paused-task expiry ON (fail tasks awaiting input >)", "paused_expiry_min_m", s.pausedExpiryMin)
+		slog.Info("scheduler: paused-task expiry ON (tasks awaiting input too long are failed)", "expiry_min", s.pausedExpiryMin)
 	}
 
 	for {
@@ -382,7 +382,7 @@ func (s *Scheduler) sweepWithin(timeout time.Duration, name string, fn func(ctx 
 	defer cancel()
 	n, err := fn(ctx)
 	if err != nil {
-		logging.From(ctx).Error("scheduler failed", "name", name, "err", err)
+		logging.From(ctx).Error("scheduler: job failed", "job", name, "err", err)
 		return
 	}
 	if n > 0 && onCount != nil {
@@ -401,7 +401,7 @@ func (s *Scheduler) runStarvationPromotion() {
 		n, err := s.storage.PromoteStarvedTasks(ctx, s.starvationWindowMin)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: promoted starving task(s) to priority (waited >)", "promoted", n, "starvation_floor_priority", models.StarvationFloorPriority, "starvation_window_min_m", s.starvationWindowMin)
+		slog.Info("scheduler: promoted starving tasks", "promoted", n, "priority", models.StarvationFloorPriority, "waited_min", s.starvationWindowMin)
 	})
 }
 
@@ -415,7 +415,7 @@ func (s *Scheduler) runPausedExpiry() {
 		n, err := s.storage.ExpirePausedTasks(ctx, s.pausedExpiryMin)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: expired paused task(s) awaiting input >", "expired", n, "paused_expiry_min_m", s.pausedExpiryMin)
+		slog.Info("scheduler: expired paused tasks awaiting input", "expired", n, "expiry_min", s.pausedExpiryMin)
 	})
 }
 
@@ -428,7 +428,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 		n, err := s.storage.ExpireStrandedWakeTasks(ctx, db.StrandedWakeGrace)
 		return int(n), err
 	}, func(n int) {
-		slog.Info("scheduler: expired task(s) parked awaiting a wake that can no longer arrive (> past the deadline)", "expired", n, "stranded_wake_grace", db.StrandedWakeGrace)
+		slog.Info("scheduler: expired tasks parked awaiting a wake that can no longer arrive", "expired", n, "grace_past_deadline", db.StrandedWakeGrace)
 	})
 }
 
@@ -438,7 +438,7 @@ func (s *Scheduler) runStrandedWakeExpiry() {
 // tasks the sweep is one cheap indexed query.
 func (s *Scheduler) runWakeSweep() {
 	s.sweep("wake sweep", s.storage.WakeDueTasks, func(n int) {
-		slog.Info("scheduler: woke task(s) whose wake deadline passed", "woke", n)
+		slog.Info("scheduler: woke tasks whose wake deadline passed", "woke", n)
 	})
 }
 
@@ -451,7 +451,7 @@ func (s *Scheduler) runWakeSweep() {
 // probe (idx_tasks_recurrence_unspawned).
 func (s *Scheduler) runRecurrenceReconciliation() {
 	s.sweep("recurrence reconciliation", s.storage.ReconcileRecurrences, func(n int) {
-		slog.Info("scheduler: reconciled recurring schedule(s) whose post-completion spawn never landed", "reconciled", n)
+		slog.Info("scheduler: reconciled recurring schedules whose post-completion spawn never landed", "reconciled", n)
 		metrics.RecordRecurrencesReconciled(n)
 	})
 }
@@ -461,7 +461,7 @@ func (s *Scheduler) runCleanup() {
 	s.sweepWithin(dailySweepTimeout, "run-history cleanup", func(ctx context.Context) (int, error) {
 		return s.storage.CleanupOldRuns(ctx, s.retentionDays, s.keepPerTask)
 	}, func(n int) {
-		slog.Info("scheduler: pruned old task run(s)", "pruned", n, "retention_d", s.retentionDays, "keep", s.keepPerTask)
+		slog.Info("scheduler: pruned old task runs", "pruned", n, "retention_days", s.retentionDays, "keep_per_task", s.keepPerTask)
 		metrics.RecordRunsPruned(n)
 	})
 }
@@ -483,7 +483,7 @@ func (s *Scheduler) runLogArchival() {
 		bytesSaved = saved
 		return n, err
 	}, func(n int) {
-		slog.Info("scheduler: archived task log(s), saved bytes (archive after)", "archived", n, "bytes_saved", bytesSaved, "archive_after_days_d", s.archiveAfterDays)
+		slog.Info("scheduler: archived task logs", "archived", n, "bytes_saved", bytesSaved, "archive_after_days", s.archiveAfterDays)
 		metrics.RecordLogsArchived("ok", n, bytesSaved)
 	})
 }
@@ -554,7 +554,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		// accumulates an enormous due set. The next tick (30s) starts over and —
 		// promotions having emptied the front of the due set — reaches the rest.
 		if rowsThisTick >= maxScheduledRowsPerTick {
-			slog.Info("ProcessScheduledTasks: handled due rows this tick, deferring the rest to the next tick", "rows_this_tick", rowsThisTick)
+			slog.Info("ProcessScheduledTasks: tick row budget reached, deferring the rest to the next tick", "rows", rowsThisTick)
 			return
 		}
 
@@ -597,7 +597,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				deferredGates++
 			}
 		}
-		slog.Info("Processing scheduled tasks (recurring, gated dispatched async, gated deferred)", "tasks_count", len(tasks), "recurring_count", recurringCount, "count", gatedCount-deferredGates, "deferred_gates", deferredGates)
+		slog.Info("Processing scheduled tasks", "tasks", len(tasks), "recurring", recurringCount, "gated_dispatched", gatedCount-deferredGates, "gated_deferred", deferredGates)
 
 		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		if err != nil {
@@ -616,7 +616,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 				}
 			}
 		} else {
-			slog.Info("Successfully promoted scheduled tasks to pending", "promoted", promoted, "promote_i_ds_count", len(promoteIDs))
+			slog.Info("Successfully promoted scheduled tasks to pending", "promoted", promoted, "total", len(promoteIDs))
 		}
 
 		// A short page means the cursor walked off the end of the due set.
@@ -816,7 +816,7 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			case cerr != nil:
 				slog.Error("Error ending recurrence for skipped task", "task_id", task.ID, "err", cerr)
 			case n > 0:
-				slog.Info("Recurrence for task ended at skip: next tick is past recurrence_until", "task_id", task.ID, "rfc3339", computed.Format(time.RFC3339), "rfc3339_2", task.RecurrenceUntil.Format(time.RFC3339))
+				slog.Info("Recurrence for task ended at skip: next tick is past recurrence_until", "task_id", task.ID, "next_tick", computed.Format(time.RFC3339), "recurrence_until", task.RecurrenceUntil.Format(time.RFC3339))
 			default:
 				slog.Info("Task changed while its run_if gate ran — stale end-of-recurrence verdict discarded", "task_id", task.ID)
 			}
@@ -859,7 +859,7 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	// or quote in it cannot split or forge a log record. The log line clamps
 	// the reason to a short prefix; the full capped text is already persisted
 	// to last_skip_reason by RecordSkip above.
-	logging.From(ctx).Info("task_skipped",
+	logging.From(ctx).Info("scheduler: task skipped",
 		"event", "task_skipped",
 		"task_id", task.ID.String(),
 		"reason", clampSkipReason(reason),

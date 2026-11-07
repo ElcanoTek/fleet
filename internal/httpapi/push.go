@@ -48,7 +48,7 @@ func refusedPushEndpoint(w http.ResponseWriter, user, what, endpoint string) boo
 	}
 	// The error quotes the host with %q already; safe.LogSafe is the guard the
 	// package's other user-derived log values carry.
-	slog.Error("push: refused a", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
+	slog.Warn("push: request refused", "what", what, "user", safe.LogSafe(user), "err", safe.LogSafe(err.Error()))
 	http.Error(w, pushServiceRefused, http.StatusBadRequest)
 	return true
 }

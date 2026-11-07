@@ -140,7 +140,7 @@ func (h *Handlers) promptItems(r *http.Request) ([]PromptLibraryItem, error) {
 	if h.promptCatalog != nil {
 		gitPrompts, problems := h.promptCatalog()
 		for _, problem := range problems {
-			logging.From(r.Context()).Info("prompt library", "problem", problem)
+			logging.From(r.Context()).Info("prompt library: problem", "problem", problem)
 		}
 		for _, gp := range gitPrompts {
 			items = append(items, promptLibraryItemFromGit(gp))

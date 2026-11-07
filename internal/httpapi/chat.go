@@ -181,7 +181,7 @@ func (s *Server) applyTurnModelOverride(w http.ResponseWriter, r *http.Request, 
 		// delisted still migrates on the launch path
 		// (reconcileLockdownModelCtx) rather than 400ing at its owner.
 		next := s.lockdownCorrectedModel(conv)
-		logging.From(r.Context()).Error("lockdown: conversation refused a disallowed model from the client and offered instead", "conv_id", safe.LogSafe(conv.ID), "req_model", safe.LogSafe(reqModel), "next", safe.LogSafe(next))
+		logging.From(r.Context()).Warn("lockdown: refused a disallowed model from the client and offered the lockdown default", "conv_id", safe.LogSafe(conv.ID), "requested", safe.LogSafe(reqModel), "offered", safe.LogSafe(next))
 		writeLockdownModelRefusal(w, next)
 		return false
 	}
@@ -305,7 +305,7 @@ func (s *Server) reconcileLockdownModelCtx(ctx context.Context, user string, con
 	if err := s.store.SetModel(ctx, convOwnerEmail(conv, user), conv.ID, next); err != nil {
 		return err
 	}
-	logging.From(ctx).Info("lockdown: conversation moved from model (no longer allow-listed) to the lockdown default", "conv_id", safe.LogSafe(conv.ID), "conv_model", safe.LogSafe(conv.Model), "next", safe.LogSafe(next))
+	logging.From(ctx).Info("lockdown: conversation moved off a model no longer allow-listed to the lockdown default", "conv_id", safe.LogSafe(conv.ID), "from", safe.LogSafe(conv.Model), "to", safe.LogSafe(next))
 	conv.Model = next
 	return nil
 }
@@ -555,7 +555,7 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
 	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		logging.From(persistCtx).Error("attachPersister", "user", user, "conv_id", convID, "err", err)
+		logging.From(persistCtx).Error("attachPersister failed", "user", user, "conv_id", convID, "err", err)
 	}
 	persistCancelAttach()
 }
@@ -625,7 +625,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			http.Error(w, err.Error(), status)
 			return
 		}
-		logging.From(reqCtx).Error("queued turn launch", "user", user, "conv_id", conv.ID, "err", err)
+		logging.From(reqCtx).Error("queued turn launch failed", "user", user, "conv_id", conv.ID, "err", err)
 		s.terminalizeQueueRow(conv.ID, queued.rowID, queued.claimTurnID, store.InputStateQueued)
 		// No turn launched, so no completion tail will re-drain: without an
 		// explicit re-kick a 202-acknowledged row stalls until the next
@@ -849,7 +849,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// 400s until reload. A failed write here is logged and the turn goes on
 	// with the stored model; the manager's own guard then decides.
 	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
-		logging.From(turnCtx).Error("lockdown: conversation: model migration write failed, running with the stored model", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+		logging.From(turnCtx).Error("lockdown: model migration write failed, running with the stored model", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 	}
 
 	// If this conversation was materialized before its first message (for
@@ -946,10 +946,10 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 			s.settleDirectInput(directInputID, turnID)
 		}
 		if serr != nil {
-			logging.From(turnCtx).Error("settle turn inputs", "turn_id", turnID, "err", serr)
+			logging.From(turnCtx).Error("settle turn inputs failed", "turn_id", turnID, "err", serr)
 		}
 		if cancelledSteers > 0 {
-			logging.From(turnCtx).Error("input queue: cancelled injected steer(s) of failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled_steers", cancelledSteers, "turn_id", turnID)
+			logging.From(turnCtx).Warn("input queue: cancelled injected steers of a failed turn — tools dispatched after injection, re-running could duplicate side effects (#823)", "cancelled", cancelledSteers, "turn_id", turnID)
 		}
 		s.emitQueueUpdate(context.Background(), user, conv.ID)
 		releaseOnce()
@@ -978,7 +978,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 		// full stream.
 		caps := parseClientCapabilities(r.Header.Get(clientCapabilitiesHeaderName))
 		if err := buf.AttachForViewer(r.Context(), 0, w, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
-			logging.From(turnCtx).Error("Attach", "user", user, "conv_id", conv.ID, "err", err)
+			logging.From(turnCtx).Error("Attach failed", "user", user, "conv_id", conv.ID, "err", err)
 		}
 	}
 	return true
@@ -1293,7 +1293,7 @@ func (s *Server) runTurnAsync(
 	// not a turn-blocking dependency.
 	if entries := deriveToolCallEntries(res.NewHistory, conv.ID, buf.turnID, user, startedAtUnix, buf.toolDurationsSnapshot()); len(entries) > 0 {
 		if err := s.store.RecordToolCalls(persistCtx, entries); err != nil {
-			logging.From(turnCtx).Error("RecordToolCalls", "user", user, "conv_id", conv.ID, "err", err)
+			logging.From(turnCtx).Error("RecordToolCalls failed", "user", user, "conv_id", conv.ID, "err", err)
 		}
 	}
 
@@ -1311,7 +1311,7 @@ func (s *Server) runTurnAsync(
 		CacheCreationTokens: res.CacheCreationTokens,
 		Cancelled:           res.Cancelled,
 	}); err != nil {
-		logging.From(turnCtx).Error("RecordTurn", "err", err)
+		logging.From(turnCtx).Error("RecordTurn failed", "err", err)
 	}
 	// Operational metrics (#176): cost + tokens by model, and a turn-timeout
 	// counter when the turn ended because its wall-clock deadline fired (as
@@ -1362,7 +1362,7 @@ func (s *Server) runTurnAsync(
 			time.Duration(s.cfg.AutoArchiveAfterDays)*24*time.Hour); err != nil {
 			logging.From(turnCtx).Error("post-turn auto-archive error", "err", err)
 		} else if n > 0 {
-			logging.From(turnCtx).Info("auto-archive conversations archived", "count", n)
+			logging.From(turnCtx).Info("auto-archive: conversations archived", "count", n)
 		}
 	}
 

@@ -60,7 +60,7 @@ func (h *Handlers) HandleTaskExport(w http.ResponseWriter, r *http.Request) {
 
 	tasks, err := h.storage.ListTasksForExport(r.Context(), ids, recurrenceOnly)
 	if err != nil {
-		logging.From(r.Context()).Error("handleTaskExport: list", "err", err)
+		logging.From(r.Context()).Error("handleTaskExport: list failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "export failed")
 		return
 	}
@@ -92,14 +92,14 @@ func (h *Handlers) HandleTaskExport(w http.ResponseWriter, r *http.Request) {
 		enc := json.NewEncoder(w)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(envelope); err != nil {
-			logging.From(r.Context()).Error("handleTaskExport: json encode", "err", err)
+			logging.From(r.Context()).Error("handleTaskExport: json encode failed", "err", err)
 		}
 	case "yaml":
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Header().Set("Content-Disposition", `attachment; filename="fleet-tasks-`+stamp+`.yaml"`)
 		w.WriteHeader(http.StatusOK)
 		if err := yaml.NewEncoder(w, yaml.Indent(2)).Encode(envelope); err != nil {
-			logging.From(r.Context()).Error("handleTaskExport: yaml encode", "err", err)
+			logging.From(r.Context()).Error("handleTaskExport: yaml encode failed", "err", err)
 		}
 	default:
 		writeError(w, http.StatusBadRequest, "unsupported format: "+format+" (want json or yaml)")
@@ -226,7 +226,7 @@ func (h *Handlers) HandleTaskImport(w http.ResponseWriter, r *http.Request) {
 	}
 	existing, err := h.storage.FindTaskIDsByName(r.Context(), names)
 	if err != nil {
-		logging.From(r.Context()).Error("handleTaskImport: find by name", "err", err)
+		logging.From(r.Context()).Error("handleTaskImport: find by name failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "import failed")
 		return
 	}

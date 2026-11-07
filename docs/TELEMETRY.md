@@ -28,14 +28,14 @@ for a warning, fallback, skip or retry, `INFO` otherwise). `log.Fatal*` became
 line:
 
 ```json
-{"time":"2026-11-07T12:00:01.2Z","level":"WARN","msg":"remote-mcp: skipping server for — token unavailable","conv_id":"9b1…","turn_id":"4f2…","user_id":"ana@example.com","request_id":"0af7…","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"b7ad6b7169203331","reg_name":"github","email":"ana@example.com"}
+{"time":"2026-11-07T12:00:01.2Z","level":"WARN","msg":"remote-mcp: skipping server — token unavailable","conv_id":"9b1…","turn_id":"4f2…","user_id":"ana@example.com","request_id":"0af7…","trace_id":"0af7651916cd43dd8448eb211c80319c","span_id":"b7ad6b7169203331","reg_name":"github","user":"ana@example.com"}
 ```
 
 `FLEET_LOG_FORMAT=text` writes the same record as logfmt, for reading
 `journalctl` by eye:
 
 ```
-time=2026-11-07T12:00:01.2Z level=WARN msg="remote-mcp: skipping server for — token unavailable" conv_id=9b1… turn_id=4f2… reg_name=github
+time=2026-11-07T12:00:01.2Z level=WARN msg="remote-mcp: skipping server — token unavailable" conv_id=9b1… turn_id=4f2… reg_name=github
 ```
 
 Both go to stderr (journald under the systemd unit) and, with `FLEET_LOG_FILE`,

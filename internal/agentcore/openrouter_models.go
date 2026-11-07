@@ -380,7 +380,7 @@ func (c *modelsCache) ensureFresh() {
 	c.contextMap = freshMap
 	c.entries = kept
 	c.fetchedAt = time.Now()
-	slog.Info("📥 OpenRouter /models refreshed entries cached", "entries_count", len(c.entries))
+	slog.Info("📥 OpenRouter /models refreshed", "entries", len(c.entries))
 }
 
 // modelsEndpointFor returns the /models listing URL, honoring the

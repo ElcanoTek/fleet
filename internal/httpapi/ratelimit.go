@@ -87,6 +87,6 @@ func writeJSONStatus(w http.ResponseWriter, status int, v any) {
 	setJSONContentType(w)
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		slog.Error("write json", "err", err)
+		slog.Error("write json failed", "err", err)
 	}
 }

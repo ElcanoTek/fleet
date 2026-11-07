@@ -140,10 +140,10 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 			// task fell through to the warn branch and logged sla-warn every
 			// tick until it finished.)
 		case elapsed >= failAt:
-			logging.From(ctx).Info("sla-breach", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
+			logging.From(ctx).Warn("sla-breach: task exceeded its expected duration", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
 			metrics.RecordSLAFail(TaskName(t))
 			if err := m.store.MarkSLABreached(ctx, t.ID); err != nil {
-				logging.From(ctx).Error("sla-monitor: mark-breached failed", "value", t.ID, "err", err)
+				logging.From(ctx).Error("sla-monitor: mark-breached failed", "task_id", t.ID, "err", err)
 			}
 		case elapsed >= warnAt:
 			// Latched for THIS attempt (same started_at) → already warned. A
@@ -152,7 +152,7 @@ func (m *SLAMonitor) Check(ctx context.Context) {
 				break
 			}
 			m.warned[t.ID] = *t.StartedAt
-			logging.From(ctx).Warn("sla-warn", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
+			logging.From(ctx).Warn("sla-warn: task is nearing its expected duration", "task_id", t.ID, "task_name", TaskName(t), "elapsed_min", fmt.Sprintf("%.1f", elapsed.Minutes()), "expected_min", *t.ExpectedDurationMinutes)
 			metrics.RecordSLAWarn(TaskName(t))
 		}
 	}

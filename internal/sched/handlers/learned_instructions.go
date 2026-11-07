@@ -99,7 +99,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 		defer cancel()
 		signals, err := h.storage.UnconsumedFeedback(ctx, task.ID)
 		if err != nil {
-			logging.From(ctx).Error("self-improve: load feedback for task", "task_id", safe.LogSafe(task.ID.String()), "err", err)
+			logging.From(ctx).Error("self-improve: load feedback for task failed", "task_id", safe.LogSafe(task.ID.String()), "err", err)
 			return
 		}
 		var critiques []string
@@ -129,7 +129,7 @@ func (h *Handlers) maybeDistill(task *models.Task) {
 			return // nothing worth proposing; leave signals unconsumed for next time
 		}
 		if _, err := h.storage.ProposeLearnedInstruction(ctx, task.ID, content, evidence, time.Now().Unix()); err != nil {
-			logging.From(ctx).Error("self-improve: propose instruction for task", "task_id", safe.LogSafe(task.ID.String()), "err", err)
+			logging.From(ctx).Error("self-improve: propose instruction for task failed", "task_id", safe.LogSafe(task.ID.String()), "err", err)
 		}
 	}()
 }

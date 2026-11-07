@@ -995,7 +995,7 @@ func (b *KubernetesBackend) scheduleReap(podName string) {
 	if _, known := b.reapPending[podName]; !known && len(b.reapPending) >= podReapMaxPending {
 		// Refusing to grow without bound is the point of a bound; say so
 		// rather than dropping the pod silently.
-		slog.Warn("sandbox: pod-delete retry queue is full — will be reclaimed by the boot-time orphan sweep instead", "pod_reap_max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
+		slog.Warn("sandbox: pod-delete retry queue is full — the pod will be reclaimed by the boot-time orphan sweep instead", "max_pending", podReapMaxPending, "pod_name", sanitizeClusterText(podName))
 		return
 	}
 	b.reapPending[podName] = 0
@@ -1033,7 +1033,7 @@ func (b *KubernetesBackend) reapLoop() {
 				b.reapMu.Lock()
 				delete(b.reapPending, name)
 				b.reapMu.Unlock()
-				logging.From(ctx).Warn("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "name", sanitizeClusterText(name))
+				logging.From(ctx).Warn("sandbox: reclaimed sandbox pod on retry (its delete had failed while the apiserver was unreachable)", "pod_name", sanitizeClusterText(name))
 				continue
 			}
 			b.reapMu.Lock()
@@ -1044,7 +1044,7 @@ func (b *KubernetesBackend) reapLoop() {
 			}
 			b.reapMu.Unlock()
 			if giveUp {
-				logging.From(ctx).Error("sandbox: gave up deleting sandbox pod after attempts — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start", "name", sanitizeClusterText(name), "pod_reap_max_attempts", podReapMaxAttempts, "err", err)
+				logging.From(ctx).Error("sandbox: gave up deleting sandbox pod — it holds its resource reservation until the boot-time orphan sweep on the next control-plane start", "pod_name", sanitizeClusterText(name), "attempts", podReapMaxAttempts, "err", err)
 			}
 		}
 

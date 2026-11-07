@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -356,11 +357,18 @@ func TestSecretsNotLogged(t *testing.T) {
 
 	var mu sync.Mutex
 	var logged strings.Builder
-	capture := func(format string, args ...any) {
+	var failureLevels []slog.Level
+	capture := func(_ context.Context, level slog.Level, msg string, args ...any) {
 		mu.Lock()
 		defer mu.Unlock()
-		fmt.Fprintf(&logged, format, args...)
+		fmt.Fprint(&logged, level, " ", msg)
+		for _, a := range args {
+			fmt.Fprint(&logged, " ", a)
+		}
 		logged.WriteByte('\n')
+		if strings.HasSuffix(msg, " failed") {
+			failureLevels = append(failureLevels, level)
+		}
 	}
 
 	cfg := Config{
@@ -382,7 +390,7 @@ func TestSecretsNotLogged(t *testing.T) {
 		RetryBackoff: time.Millisecond,
 	}
 	n := New(cfg)
-	n.logf = capture
+	n.logEvent = capture
 
 	// Both channels fail; we want their error + log paths exercised.
 	err := n.Notify(context.Background(), sampleEvent())
@@ -392,7 +400,19 @@ func TestSecretsNotLogged(t *testing.T) {
 
 	mu.Lock()
 	out := logged.String()
+	levels := append([]slog.Level(nil), failureLevels...)
 	mu.Unlock()
+
+	// A channel failure is the only report of a lost notification, so it must be
+	// logged at Warn or above (visible at FLEET_LOG_LEVEL=warn), never at Info.
+	if len(levels) != 2 {
+		t.Fatalf("logged %d channel failures, want 2 (email + webhook):\n%s", len(levels), out)
+	}
+	for _, l := range levels {
+		if l < slog.LevelWarn {
+			t.Errorf("channel failure logged at %s, want Warn or above:\n%s", l, out)
+		}
+	}
 
 	// The returned error is also surfaced to operators (logged by the runner), so
 	// scan it too.

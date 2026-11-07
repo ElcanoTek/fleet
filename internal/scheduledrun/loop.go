@@ -132,13 +132,13 @@ func runLoop(
 		if passed {
 			it.Status = models.IterationStatusPassed
 			record(it)
-			logging.From(ctx).Info("scheduled loop task: passed on iteration", "task_id", taskID, "iteration", i, "max_iter", maxIter, "detail", result)
+			logging.From(ctx).Info("scheduled loop task: passed on iteration", "task_id", taskID, "iteration", i, "max_iter", maxIter, "result", result)
 			return session, nil
 		}
 		it.Status = models.IterationStatusFailed
 		record(it)
 		priorOutput = scorers.LastAssistantMessage(session)
-		logging.From(ctx).Warn("scheduled loop task: iteration did not pass; retrying", "task_id", taskID, "iteration", i, "max_iter", maxIter, "pass", result)
+		logging.From(ctx).Warn("scheduled loop task: iteration did not pass; retrying", "task_id", taskID, "iteration", i, "max_iter", maxIter, "result", result)
 	}
 	return lastSession, fmt.Errorf("loop exhausted %d iteration(s) without passing exit condition %q", maxIter, lc.ExitCondition)
 }
@@ -151,7 +151,7 @@ func (r *Runner) recordIteration(ctx context.Context, it *models.TaskIteration) 
 		return
 	}
 	if err := r.iterationStore.AddTaskIteration(context.WithoutCancel(ctx), it); err != nil {
-		logging.From(ctx).Error("scheduled loop: failed to record iteration for task", "iteration_number", it.IterationNumber, "task_id", it.TaskID, "err", err)
+		logging.From(ctx).Error("scheduled loop: failed to record iteration", "iteration", it.IterationNumber, "task_id", it.TaskID, "err", err)
 	}
 }
 
@@ -169,7 +169,7 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	case cond == "llm":
 		return r.evalLLMExit(ctx, lc, session, fallback)
 	default:
-		logging.From(ctx).Info("scheduled loop: unknown exit_condition; treating as not-passed", "cond", cond)
+		logging.From(ctx).Info("scheduled loop: unknown exit_condition; treating as not-passed", "condition", cond)
 		return false, "unknown_exit_condition"
 	}
 }
@@ -247,7 +247,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 // applies here too.
 func recordLoopVerifierUsage(session *models.LogSession, modelSlug string, out *fantasy.AgentResult) {
 	rec := agentcore.NewAuxUsageRecord(agentcore.AuxUsageLoopExitVerifier, modelSlug, out)
-	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt", rec.PromptTokens, "completion", rec.CompletionTokens, "cost", fmt.Sprintf("%.4f", rec.CostUSD))
+	slog.Info("aux model call", "label", rec.Label, "model", rec.Model, "prompt_tokens", rec.PromptTokens, "completion_tokens", rec.CompletionTokens, "cost_usd", fmt.Sprintf("%.4f", rec.CostUSD))
 	if session == nil {
 		return
 	}

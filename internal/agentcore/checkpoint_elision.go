@@ -493,16 +493,16 @@ func (e *engine) noteRerunStop(tool, kind string, raise bool) {
 	}
 	if !raise || raised <= budget {
 		if kind == rerunElided {
-			slog.Info("context elision off for the rest of the run was re-run after its result was elided", "tool", tool)
+			slog.Info("context elision off for the rest of the run: tool was re-run after its result was elided", "tool", tool)
 		} else {
-			slog.Info("resend budget not raised was re-run after a summary dropped its result, but the window leaves no room", "tool", tool)
+			slog.Info("resend budget not raised: tool was re-run after a summary dropped its result, but the window leaves no room", "tool", tool)
 		}
 		return
 	}
 	if kind == rerunElided {
-		slog.Info("context elision off and the resend budget raised for the rest of the run was re-run after its result was", "raised", raised, "tool", tool, "how", how)
+		slog.Info("context elision off and the resend budget raised for the rest of the run: tool was re-run after its result was removed", "raised", raised, "tool", tool, "how", how)
 	} else {
-		slog.Info("resend budget raised for the rest of the run was re-run after its result was", "raised", raised, "tool", tool, "how", how)
+		slog.Info("resend budget raised for the rest of the run: tool was re-run after its result was removed", "raised", raised, "tool", tool, "how", how)
 	}
 	if e.logSession != nil {
 		e.logSession.AddMessage(roleUser, fmt.Sprintf(

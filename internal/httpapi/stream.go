@@ -61,7 +61,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	if ok && entry.buf != nil && (requestedTurnID == "" || requestedTurnID == entry.turnID) {
 		metrics.RecordSSEReconnect("within_buffer")
 		if err := entry.buf.AttachForViewerChecked(r.Context(), lastEventID, w, caps, user, conv.UserEmail, allowCheck); err != nil && !errors.Is(err, context.Canceled) {
-			logging.From(r.Context()).Error("stream Attach", "user", user, "conv_id", convID, "err", err)
+			logging.From(r.Context()).Error("stream Attach failed", "user", user, "conv_id", convID, "err", err)
 		}
 		return
 	}
@@ -105,7 +105,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID str
 	}
 	metrics.RecordSSEReconnect(outcome)
 	if err := replayEventsFromDB(w, events, caps, user, conv.UserEmail); err != nil && !errors.Is(err, context.Canceled) {
-		logging.From(r.Context()).Error("DB replay", "user", user, "conv_id", convID, "turn_id", requestedTurnID, "err", err)
+		logging.From(r.Context()).Error("DB replay failed", "user", user, "conv_id", convID, "turn_id", requestedTurnID, "err", err)
 		return
 	}
 	if outcome == "buffer_expired" {

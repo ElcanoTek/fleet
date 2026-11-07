@@ -216,7 +216,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		outs, _, cerr = s.ownerOutputs(countCtx, convID)
 		cancel()
 		if cerr != nil {
-			logging.From(r.Context()).Error("share-with-team: count after unsharing", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(cerr.Error()))
+			logging.From(r.Context()).Error("share-with-team: count after unsharing failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(cerr.Error()))
 			outs = nil // the chat IS unshared; only the count is unknown
 		}
 	}
@@ -225,7 +225,7 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 		// Retires this person's getting-started card in the project. Display
 		// state: a failure is logged, never a failed share.
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, user); err != nil {
-			logging.From(r.Context()).Error("share-with-team: record has_shared_chat", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+			logging.From(r.Context()).Error("share-with-team: record has_shared_chat failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	} else if !conv.TeamVisible {
 		// Unsharing a chat that was not shared stops nothing.
@@ -258,21 +258,21 @@ func (s *Server) autoShareNewConversationIfConfigured(ctx context.Context, user 
 		stored, err := s.store.SetConversationTeamVisibleWithOptions(ctx, user, conv.ID, true, true)
 		if err != nil {
 			if !errors.Is(err, store.ErrNoTeamToShareWith) && !errors.Is(err, store.ErrNoTeamShareHome) && !errors.Is(err, store.ErrArchivedNotShareable) {
-				logging.From(ctx).Error("auto-share: conversation", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+				logging.From(ctx).Error("auto-share: share conversation failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			}
 			return
 		}
 		if stored {
 			conv.TeamVisible = true
 			if err := s.store.MarkProjectSharedChat(ctx, conv.ID, user); err != nil {
-				logging.From(ctx).Error("auto-share: record has_shared_chat", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+				logging.From(ctx).Error("auto-share: record has_shared_chat failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			}
 		}
 	}
 	updated, err := s.store.SetConversationMultiplayer(ctx, user, conv.ID, true, nil, nil)
 	if err != nil {
 		if !errors.Is(err, store.ErrArchivedNotShareable) && !errors.Is(err, store.ErrConversationNotFound) {
-			logging.From(ctx).Error("auto-multiplayer: conversation", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(ctx).Error("auto-multiplayer: enable multiplayer failed", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		}
 		return
 	}
@@ -422,7 +422,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	}
 	if updated.TeamVisible && updated.ProjectID != "" {
 		if err := s.store.MarkProjectSharedChat(r.Context(), convID, conv.UserEmail); err != nil {
-			logging.From(r.Context()).Error("multiplayer: record has_shared_chat", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+			logging.From(r.Context()).Error("multiplayer: record has_shared_chat failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		}
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)

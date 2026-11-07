@@ -145,7 +145,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 			// Pre-login endpoint: the caller has not authenticated, so a raw
 			// store error (Postgres text names tables, columns, sometimes
 			// values) is logged here and never echoed to the login form.
-			logging.From(r.Context()).Error("auth/verify: count users", "err", err)
+			logging.From(r.Context()).Error("auth/verify: count users failed", "err", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -167,7 +167,7 @@ func (s *Server) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, verifyResponse{OK: false, Error: "invalid credentials"})
 			return
 		}
-		logging.From(r.Context()).Error("auth/verify: verify user", "err", err)
+		logging.From(r.Context()).Error("auth/verify: verify user failed", "err", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}

@@ -392,5 +392,5 @@ func recordObservedContextWindow(key observedContextKey, tokens int) {
 		return
 	}
 	observedContextWindows.m[key] = tokens
-	slog.Info("📏 Recorded ContextMaxTokens (was)", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "existing", existing)
+	slog.Info("📏 Recorded ContextMaxTokens", "provider", key.providerName, "type", key.providerType, "model", key.slug, "tokens", tokens, "previous", existing)
 }

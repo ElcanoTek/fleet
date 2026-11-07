@@ -338,7 +338,7 @@ func mergeRemoteCatalog(bundle, builtin []RemoteMCPCatalogEntry, mcpServers []Se
 	}
 	for h := range hiddenSet {
 		if !known[h] {
-			slog.Warn("clientconfig: warning: remote_mcp_catalog_hidden names, which is not a builtin catalog entry (typo?)", "names", h)
+			slog.Warn("clientconfig: warning: remote_mcp_catalog_hidden names an entry that is not in the builtin catalog (typo?)", "name", h)
 		}
 	}
 	return merged

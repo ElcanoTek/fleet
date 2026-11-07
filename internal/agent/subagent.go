@@ -520,7 +520,7 @@ func (a *Agent) spawn(ctx context.Context, in spawnSubagentInput, toolCallID str
 			"SUBAGENT_WORKDIR_UNAVAILABLE: could not create the child's isolated working directory: %v", wdErr)), nil
 	}
 
-	logging.From(ctx).Info("spawn_subagent: depth →", "depth", a.subagent.depth, "count", a.subagent.depth+1, "role", role, "model", modelDesc, "cost_ceiling", fmtCostCeiling(childCost), "token_ceiling", fmtTokenCeiling(childTokens), "timeout", fmtTimeout(in.TimeoutMinutes), "workdir", childWorkdir, "parent_task", a.subagent.parentTaskID)
+	logging.From(ctx).Info("spawn_subagent: spawning child", "depth", a.subagent.depth, "child_depth", a.subagent.depth+1, "role", role, "model", modelDesc, "cost_ceiling", fmtCostCeiling(childCost), "usage_ceiling", fmtTokenCeiling(childTokens), "timeout", fmtTimeout(in.TimeoutMinutes), "workdir", childWorkdir, "parent_task", a.subagent.parentTaskID)
 
 	// ── LIVE PROGRESS (#1043 follow-up) ─────────────────────────────────────
 	// Tee the child's own run events into this run's Observer, relabeled and

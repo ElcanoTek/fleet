@@ -59,14 +59,14 @@ func warmKeepIDImageCache() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	start := time.Now()
-	logging.From(ctx).Info("sandbox test warm-up: priming keep-id idmap …", "image", image)
+	logging.From(ctx).Info("sandbox test warm-up: priming keep-id idmap", "image", image)
 	// MUST match the invariant tests' idmap EXACTLY (keep-id:uid=1000,gid=1000),
 	// or it primes the wrong cache entry and the flake persists. No mounts/name
 	// needed — the cached layer is keyed by image + idmap, not by mounts.
 	cmd := exec.CommandContext(ctx, "podman", "run", "--rm",
 		"--userns=keep-id:uid=1000,gid=1000", image, "true")
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logging.From(ctx).Error("sandbox test warm-up: keep-id prime failed (continuing; tests will surface any real problem)", "err", err, "value", out)
+		logging.From(ctx).Error("sandbox test warm-up: keep-id prime failed (continuing; tests will surface any real problem)", "err", err, "output", out)
 		return
 	}
 	logging.From(ctx).Info("sandbox test warm-up: keep-id idmap primed", "elapsed", time.Since(start).Round(time.Second))

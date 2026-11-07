@@ -58,7 +58,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 		return // this exact image was already warmed on this store
 	}
 
-	logging.From(ctx).Info("sandbox: preparing the keep-id id-remapped copy of image — the first start after a sandbox image update can take minutes on slow disks (#1358)", "image", image)
+	logging.From(ctx).Info("sandbox: preparing the keep-id id-remapped copy of the image — the first start after a sandbox image update can take minutes on slow disks (#1358)", "image", image)
 	runCtx, cancel := context.WithTimeout(ctx, prewarmTimeout)
 	defer cancel()
 	start := time.Now()
@@ -67,7 +67,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 	// name, or runtime flag needed — the copy is runtime-independent.
 	cmd := exec.CommandContext(runCtx, podmanBinary, "run", "--rm", keepIDUserns, image, "true") //nolint:gosec // podman binary + image are operator-configured, not user input
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logging.From(ctx).Error("sandbox: keep-id pre-warm failed after (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead)", "elapsed", time.Since(start).Round(time.Second), "err", err, "value", out)
+		logging.From(ctx).Error("sandbox: keep-id pre-warm failed (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead)", "elapsed", time.Since(start).Round(time.Second), "err", err, "output", out)
 		return
 	}
 	logging.From(ctx).Info("sandbox: keep-id id-remapped image copy ready", "elapsed", time.Since(start).Round(time.Second))

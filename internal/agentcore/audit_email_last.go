@@ -257,14 +257,14 @@ func (o *orchestrationState) attemptIdentity(rawInput string) string {
 func namedCreateRefusal(toolName, dealName string, names []string) string {
 	sort.Strings(names)
 	if dealName == "" {
-		slog.Info("Enforcement: Blocking — it names no readable record, and the audit binds this tool's open create units to record names (create_deal_name_not_declared)", "tool_name", toolName, "names", names)
+		slog.Info("Enforcement: Blocking tool — it names no readable record, and the audit binds this tool's open create units to record names (create_deal_name_not_declared)", "tool", toolName, "names", names)
 		return fmt.Sprintf("BLOCKED [create_deal_name_not_declared]: '%s' names no record this gate can read — no "+
 			"name / deal_name / display_name (top level or in payload / deal / overrides), and no prepared_deal_id "+
 			"returned by a successful prepare step in this run — but this audit's open %s units are bound to these "+
 			"deal_name values: %s. Pass the record's declared name on the call (or create from the handle its "+
 			"prepare step returned); never create a declared record through a call that cannot show its name.", toolName, criticalSuffixFor(toolName), strings.Join(names, "; "))
 	}
-	slog.Info("Enforcement: Blocking creating record — the audit binds this tool's open create units to other record names (create_deal_name_not_declared)", "tool_name", toolName, "deal_name", dealName, "names", names)
+	slog.Info("Enforcement: Blocking record creation — the audit binds this tool's open create units to other record names (create_deal_name_not_declared)", "tool", toolName, "deal_name", dealName, "names", names)
 	return fmt.Sprintf("BLOCKED [create_deal_name_not_declared]: '%s' would create %q, but this audit's open %s "+
 		"units are bound to these deal_name values: %s. Create each record under its declared name exactly (case "+
 		"and spacing are ignored). If this record must be created under a new or corrected name, re-run "+
@@ -353,7 +353,7 @@ func (o *orchestrationState) settleCreateFailure(toolName, argsHash, identity st
 	if named != nil {
 		if !named.settledFailed {
 			named.settledFailed, named.failedIdentity = true, identity
-			slog.Error("Enforcement: create commitment settled-failed by a definitive failure; it no longer holds the summary email back", "describe", named.describe())
+			slog.Info("Enforcement: create commitment settled-failed by a definitive failure; it no longer holds the summary email back", "commitment", named.describe())
 		}
 		return
 	}
@@ -367,12 +367,12 @@ func (o *orchestrationState) settleCreateFailure(toolName, argsHash, identity st
 	for _, c := range cands {
 		if !c.settledFailed {
 			c.settledFailed, c.failedIdentity = true, identity
-			slog.Error("Enforcement: create commitment settled-failed by a definitive failure (record); it no longer holds the summary email back", "describe", c.describe(), "identity", identity)
+			slog.Info("Enforcement: create commitment settled-failed by a definitive failure; it no longer holds the summary email back", "commitment", c.describe(), "record", identity)
 			return
 		}
 	}
 	if identity != "" {
-		slog.Error("Enforcement: definitive create failure for record matches no open unit it may settle — it settles nothing", "identity", identity)
+		slog.Info("Enforcement: definitive create failure matches no open unit it may settle — it settles nothing", "record", identity)
 	}
 }
 
@@ -399,7 +399,7 @@ func (o *orchestrationState) retirePendingCreate(toolName, argsHash string) {
 	}
 	if idx >= 0 {
 		o.pendingCriticalActions = append(o.pendingCriticalActions[:idx], o.pendingCriticalActions[idx+1:]...)
-		slog.Error("Enforcement: retired pre-audit pending — the create was since attempted and failed definitively", "tool_name", toolName)
+		slog.Info("Enforcement: retired pre-audit pending call — the create was since attempted and failed definitively", "tool", toolName)
 	}
 }
 
@@ -413,7 +413,7 @@ func (o *orchestrationState) unsettleCreateFailure(toolName, identity string) {
 	unsettle := func(c *typedCommitment) {
 		if c.settledFailed {
 			c.settledFailed, c.failedIdentity = false, ""
-			slog.Info("Enforcement: create commitment is UNSETTLED again — the latest attempt (record) had an ambiguous outcome; it holds the summary email back until reconciled", "describe", c.describe(), "identity", identity)
+			slog.Info("Enforcement: create commitment is UNSETTLED again — the latest attempt had an ambiguous outcome; it holds the summary email back until reconciled", "commitment", c.describe(), "record", identity)
 		}
 	}
 	named, cands := o.splitCreateCommitments(toolName, identity)
@@ -557,7 +557,7 @@ func (o *orchestrationState) restateUnboundEntry(a criticalActionStruct, tool, s
 		return "", false
 	case dealName != "":
 		if o.namedBatchUnits[tool][dealName] {
-			slog.Info("Enforcement: re-audit restates named create commitment (record name) — no new obligation registered", "tool", tool, "deal_name", dealName)
+			slog.Info("Enforcement: re-audit restates named create commitment — no new obligation registered", "tool", tool, "deal_name", dealName)
 			return dealName, true
 		}
 		if o.namedBatchUnits[tool] == nil {
@@ -567,7 +567,7 @@ func (o *orchestrationState) restateUnboundEntry(a criticalActionStruct, tool, s
 	default:
 		declaredUnbound[tool]++
 		if declaredUnbound[tool] <= unnamedLimit[tool] {
-			slog.Info("Enforcement: re-audit restates unbound create commitment (this batch already holds) — no new obligation registered", "tool", tool, "declared_unbound", declaredUnbound[tool], "unnamed_limit", unnamedLimit[tool])
+			slog.Info("Enforcement: re-audit restates unbound create commitment the batch already holds — no new obligation registered", "tool", tool, "declared", declaredUnbound[tool], "limit", unnamedLimit[tool])
 			return "", true
 		}
 	}
@@ -587,7 +587,7 @@ func (o *orchestrationState) checkEmailLastOrder(toolName string) (bool, string)
 		return false, ""
 	}
 	if o.summaryEmailSent {
-		slog.Info("Enforcement: Blocking — the batch's summary email has already been sent", "tool_name", toolName)
+		slog.Info("Enforcement: Blocking tool — the batch's summary email has already been sent", "tool", toolName)
 		return true, fmt.Sprintf("BLOCKED: '%s' — the batch's summary email has already been sent, and that email "+
 			"must be the batch's LAST outward step. No create, retry or update may follow it in this run: the "+
 			"email already records each item's final outcome. Report any remaining failure in your final summary "+
@@ -647,7 +647,7 @@ func (o *orchestrationState) checkSummaryEmailOrder(toolName string) (bool, stri
 	if len(missing) == 0 {
 		return false, ""
 	}
-	slog.Info("Enforcement: Blocking — email-last work is still unsettled", "tool_name", toolName, "missing", missing)
+	slog.Info("Enforcement: Blocking tool — email-last work is still unsettled", "tool", toolName, "missing", missing)
 	return true, fmt.Sprintf("BLOCKED: '%s' — these declared actions are still unsettled: %s. The batch's summary "+
 		"email must be its LAST step so it reports FINAL outcomes (a retry after the email cannot correct it). "+
 		"Settle each one first: execute it now (retrying with corrected arguments resets the retry budget). A "+
@@ -669,7 +669,7 @@ func (o *orchestrationState) checkPreBatchDuplicate(toolName string) (bool, stri
 	if !isSummaryEmailTool(toolName) || !o.emailLastAttempted || o.summaryEmailSent {
 		return false, ""
 	}
-	slog.Info("Enforcement: Blocking — an identical payload was sent before this run's batch work; it is not the summary email", "tool_name", toolName)
+	slog.Info("Enforcement: Blocking tool — an identical payload was sent before this run's batch work; it is not the summary email", "tool", toolName)
 	return true, fmt.Sprintf("BLOCKED: '%s' — an identical payload was sent before this run's batch work began, so it "+
 		"cannot stand as the batch's summary email and does not discharge it. Send the summary email now, built "+
 		"from the batch's final outcomes (each item and its result); it is necessarily a different message from "+
@@ -694,7 +694,7 @@ func (o *orchestrationState) noteTemplateEmailResult(toolName string, succeeded 
 func (o *orchestrationState) noteSummaryEmailSent() {
 	if o.emailLastAttempted && !o.summaryEmailSent {
 		o.summaryEmailSent = true
-		slog.Error("Enforcement: the batch's summary email has been sent — further email-last calls are refused")
+		slog.Info("Enforcement: the batch's summary email has been sent — further email-last calls are refused")
 	}
 }
 
@@ -707,11 +707,11 @@ func (o *orchestrationState) abortNotifyFinishNudge() (bool, []string) {
 		return true, nil
 	}
 	if o.abortNotifyNudges >= maxAbortNotifyNudges {
-		slog.Error("Enforcement: allowing finish after a terminal abort WITHOUT the failure-summary email — nudges exhausted", "max_abort_notify_nudges", maxAbortNotifyNudges)
+		slog.Warn("Enforcement: allowing finish after a terminal abort WITHOUT the failure-summary email — nudges exhausted", "nudges", maxAbortNotifyNudges)
 		return true, nil
 	}
 	o.abortNotifyNudges++
-	slog.Info("Enforcement: terminal abort on an email-last run with NO summary email sent — rejecting finish", "abort_notify_nudges", o.abortNotifyNudges, "max_abort_notify_nudges", maxAbortNotifyNudges)
+	slog.Info("Enforcement: terminal abort on an email-last run with NO summary email sent — rejecting finish", "nudge", o.abortNotifyNudges, "max_nudges", maxAbortNotifyNudges)
 	return false, []string{fmt.Sprintf(
 		"The abort is recorded, but this run attempted batch work and its reader has received NOTHING. Even a "+
 			"fully-failed batch MUST produce its record: send the ONE summary email listing every item's outcome "+

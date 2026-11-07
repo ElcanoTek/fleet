@@ -70,7 +70,7 @@ func (h *Handlers) StreamTaskLogs(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := buf.Attach(r.Context(), lastID, w); err != nil &&
 				!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-				logging.From(r.Context()).Error("StreamTaskLogs: attach error for task", "task_id", taskID, "err", err)
+				logging.From(r.Context()).Error("StreamTaskLogs: attach error", "task_id", taskID, "err", err)
 			}
 			return
 		}

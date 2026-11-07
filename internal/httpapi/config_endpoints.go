@@ -212,7 +212,7 @@ func (s *Server) listPersonas(w http.ResponseWriter, r *http.Request) {
 	if list, err := s.store.ListUserPersonas(r.Context(), userFromCtx(r.Context())); err == nil {
 		userPersonas = activeUserPersonaSummaries(list)
 	} else {
-		logging.From(r.Context()).Error("list user personas", "err", err)
+		logging.From(r.Context()).Error("list user personas failed", "err", err)
 	}
 	writeJSON(w, personasResponse{
 		Personas:     names,

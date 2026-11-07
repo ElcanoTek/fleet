@@ -305,7 +305,7 @@ func (s *Server) approvalMCPScope(ctx context.Context, approval *store.Approval)
 		defer cancel()
 		if err := scope.Close(closeCtx); err != nil {
 			// our own row, and it is rendered with %q so any CR/LF would be escaped.
-			logging.From(ctx).Error("approval: close MCP scope", "approval_id", approval.ID, "err", err)
+			logging.From(ctx).Error("approval: close MCP scope failed", "approval_id", approval.ID, "err", err)
 		}
 	}
 	return scope.Broker, scope.Catalog, release, nil
@@ -835,7 +835,7 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 	payload, _ := json.Marshal(payloadMap)
 	entry.Content = payload
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
-		logging.From(ctx).Error("AppendHistory (approval result)", "err", err)
+		logging.From(ctx).Error("AppendHistory failed (approval result)", "err", err)
 	}
 }
 

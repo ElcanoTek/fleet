@@ -355,7 +355,7 @@ func (d *tunnelDrain) logReap(direction, host, port string, err error) {
 		// port is the fixed requirePort when one is set, and net/http rejects
 		// CR/LF in the request line before either is parsed. direction is one of
 		// two package literals.
-		slog.Info("sandbox: egress tunnel reaped idle during drain", "join_host_port", net.JoinHostPort(host, port), "direction", direction, "timeout", d.timeout)
+		slog.Info("sandbox: egress tunnel reaped while idle during drain", "target", net.JoinHostPort(host, port), "direction", direction, "idle", d.timeout)
 	}
 }
 

@@ -15,8 +15,8 @@ server's tools exactly like the owner's runs do.
   The grantee never sees the token, in the UI or the API.
 - **The vendor sees the owner.** Tool calls made through a shared connection
   authenticate as the owner at the vendor. The share panel says this plainly,
-  and the overlay logs `remote-mcp: run uses shared server owned` with
-  `email`, `reg_name` and `owner` for attribution.
+  and the overlay logs `remote-mcp: run uses a shared server` with
+  `user`, `reg_name` and `owner` for attribution.
 - **Revocation is immediate.** Grants resolve fresh per run
   (`remotemcp.Service.ConnectedServersForUser`); deleting a grant — or the
   server, via `ON DELETE CASCADE` — takes effect on the next turn.

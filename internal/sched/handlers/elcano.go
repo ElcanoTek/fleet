@@ -56,7 +56,7 @@ func (h *Handlers) lookupMember(ctx context.Context, email string) (*models.User
 func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
 	if token, ok := bearerToken(r); ok && h.storage != nil {
 		if _, err := h.storage.RevokeSessionToken(r.Context(), token); err != nil {
-			logging.From(r.Context()).Error("logout: end bearer session", "err", err)
+			logging.From(r.Context()).Error("logout: end bearer session failed", "err", err)
 		}
 	}
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")

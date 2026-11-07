@@ -54,10 +54,10 @@ func (b *Bundle) validate() error {
 		// row that looks like a broken connector. See connector_labels.go.
 		if strings.TrimSpace(s.DisplayName) == "" {
 			s.DisplayName = deriveDisplayName(s.Name)
-			slog.Warn("clientconfig: warning: mcp_servers has no display_name; the Tools picker and connections page will show the derived label. Add a display_name to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", "name", s.Name, "display_name", s.DisplayName)
+			slog.Warn("clientconfig: warning: mcp_servers entry has no display_name; the Tools picker and connections page will show the derived label. Add a display_name to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", "name", s.Name, "display_name", s.DisplayName)
 		}
 		if strings.TrimSpace(s.Description) == "" {
-			slog.Warn("clientconfig: warning: mcp_servers has no description; the Tools picker and connections page will render this connector with an empty body. Add a one-sentence description to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", "name", s.Name)
+			slog.Warn("clientconfig: warning: mcp_servers entry has no description; the Tools picker and connections page will render this connector with an empty body. Add a one-sentence description to manifest.yaml (see docs/MCP-CATALOG.md, \"Connector copy\").", "name", s.Name)
 		}
 		switch s.Type {
 		case "stdio", "":

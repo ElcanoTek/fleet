@@ -48,7 +48,7 @@ func unmarshalEmailPolicy(ns sql.NullString) *models.EmailTriggerPolicy {
 	}
 	var p models.EmailTriggerPolicy
 	if err := json.Unmarshal([]byte(ns.String), &p); err != nil {
-		slog.Warn("Warning: failed to unmarshal email_policy (input)", "err", err, "string", fmt.Sprintf("%.100s", ns.String))
+		slog.Warn("Warning: failed to unmarshal email_policy", "err", err, "input", fmt.Sprintf("%.100s", ns.String))
 		return nil
 	}
 	return &p

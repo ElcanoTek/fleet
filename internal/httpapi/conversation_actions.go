@@ -194,7 +194,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		var oerr error
 		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
 		if oerr != nil {
-			logging.From(r.Context()).Info("conversation get: branch origin", "detail", safe.LogSafe(id), "oerr", safe.LogSafe(oerr.Error()))
+			logging.From(r.Context()).Info("conversation get: branch origin lookup failed", "conv_id", safe.LogSafe(id), "err", safe.LogSafe(oerr.Error()))
 			origin = nil
 		}
 	}
@@ -813,7 +813,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 			epoch := s.store.AcceptedInputSeq()
 			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if n, err := s.store.CancelQueuedInputs(qctx, user, id, epoch); err != nil {
-				logging.From(r.Context()).Error("cancel queued inputs", "conv_id", id, "err", err)
+				logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 			} else if n > 0 {
 				cancelledQueued = n
 				s.emitQueueUpdate(qctx, user, id)
@@ -854,7 +854,7 @@ func (s *Server) handleConversationCancel(w http.ResponseWriter, r *http.Request
 		// finishing, keeps its 202 and runs on the re-kick.
 		qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if n, err := s.store.CancelQueuedInputs(qctx, "", id, epoch); err != nil {
-			logging.From(r.Context()).Error("cancel queued inputs", "conv_id", id, "err", err)
+			logging.From(r.Context()).Error("cancel queued inputs failed", "conv_id", id, "err", err)
 		} else if n > 0 {
 			s.emitQueueUpdate(qctx, "", id)
 		}
@@ -893,7 +893,7 @@ func (s *Server) stopInput(ctx context.Context, user, convID, key string) (res i
 	// this process), but the Stop cannot be reported as landed.
 	intentErr := s.store.MarkInputStopRequested(qctx, convID, key)
 	if intentErr != nil {
-		logging.From(ctx).Error("cancel input intent", "conv_id", convID, "err", intentErr)
+		logging.From(ctx).Error("cancel input intent failed", "conv_id", convID, "err", intentErr)
 	}
 	turn := s.cancelInputTurn(convID, key)
 	settled := false // the key's row is already terminal: the mark has nothing left to refuse
@@ -930,7 +930,7 @@ const stopInputAttempts = 3
 func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, turn turnStop) (res inputStop, ok, settled, retry bool) {
 	row, err := s.store.LookupInput(qctx, convID, key)
 	if err != nil {
-		logging.From(qctx).Error("cancel input lookup", "conv_id", convID, "err", err)
+		logging.From(qctx).Error("cancel input lookup failed", "conv_id", convID, "err", err)
 		return inputStopped, false, false, false
 	}
 	if row == nil {
@@ -941,7 +941,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			ID: uuid.NewString(), ConversationID: convID, UserEmail: user, ClientInputID: key,
 		})
 		if err != nil {
-			logging.From(qctx).Error("cancel input key", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input key failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if created {
@@ -952,7 +952,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 	if row != nil && row.Mode != store.InputModeDirect && row.State == store.InputStateQueued {
 		removed, err := s.store.RemoveQueuedInput(qctx, user, convID, row.ID)
 		if err != nil {
-			logging.From(qctx).Error("cancel input withdraw", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input withdraw failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if removed {
@@ -962,7 +962,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// It left the queue between the lookup and the withdrawal: a drained
 		// row is covered by the mark, an injected steer is handled below.
 		if row, err = s.store.LookupInput(qctx, convID, key); err != nil {
-			logging.From(qctx).Error("cancel input lookup", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel input lookup failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 	}
@@ -974,7 +974,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// above already cancelled that turn.
 		cancelled, err := s.store.CancelUnlaunchedInput(qctx, row.ID)
 		if err != nil {
-			logging.From(qctx).Error("cancel unlaunched input", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel unlaunched input failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		if cancelled && row.Mode != store.InputModeDirect {
@@ -1002,7 +1002,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 			// settlement never re-queues.)
 			cancelled, err := s.store.CancelStoppedDrain(qctx, row.ID, row.TurnID)
 			if err != nil {
-				logging.From(qctx).Error("cancel stopped drain", "conv_id", convID, "err", err)
+				logging.From(qctx).Error("cancel stopped drain failed", "conv_id", convID, "err", err)
 				return inputStopped, false, false, false
 			}
 			if cancelled {
@@ -1038,7 +1038,7 @@ func (s *Server) stopInputRow(qctx context.Context, user, convID, key string, tu
 		// already recorded it completed (it ran) is never overwritten. A
 		// re-queued copy a drain claims first is refused by the key's mark.
 		if _, err := s.store.CancelStoppedSteer(qctx, row.ID); err != nil {
-			logging.From(qctx).Error("cancel injected input", "conv_id", convID, "err", err)
+			logging.From(qctx).Error("cancel injected input failed", "conv_id", convID, "err", err)
 			return inputStopped, false, false, false
 		}
 		s.emitQueueUpdate(qctx, user, convID)

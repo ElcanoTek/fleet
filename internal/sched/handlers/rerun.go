@@ -105,7 +105,7 @@ func (h *Handlers) rerunOrClone(w http.ResponseWriter, r *http.Request, keepRecu
 	if keepRecurrence {
 		verb = "clone"
 	}
-	logging.From(r.Context()).Info("Task created", "new_task_id", newTask.ID, "verb", verb, "source_id", source.ID)
+	logging.From(r.Context()).Info("Task created from an existing task", "task_id", newTask.ID, "verb", verb, "source_id", source.ID)
 	localizeTask(newTask)
 	writeJSON(w, http.StatusCreated, newTask)
 }

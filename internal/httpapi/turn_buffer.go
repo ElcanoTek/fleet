@@ -218,7 +218,7 @@ func (b *turnBuffer) runPersister() {
 		// the turn can still finish.
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := b.persister.InsertTurnEvents(ctx, toStore); err != nil {
-			logging.From(ctx).Error("persist turn_events", "turn_id", b.turnID, "n", len(toStore), "err", err)
+			logging.From(ctx).Error("persist turn_events failed", "turn_id", b.turnID, "events", len(toStore), "err", err)
 			// These rows are unconfirmed; flag the turn for a full backfill on
 			// Finish rather than leaving a permanent gap.
 			b.markNeedsBackfill()
@@ -315,7 +315,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		default:
 			b.needsBackfill = true // already under b.mu
 			b.droppedOnFull++
-			slog.Info("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "id", ev.ID)
+			slog.Info("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "event_id", ev.ID)
 		}
 	}
 }
@@ -470,14 +470,14 @@ func (b *turnBuffer) Finish() {
 		b.mu.Unlock()
 		if needsBackfill {
 			if err := b.backfill(snapshot); err != nil {
-				slog.Error("persist backfill", "turn_id", b.turnID, "n", len(snapshot), "err", err)
+				slog.Error("persist backfill failed", "turn_id", b.turnID, "events", len(snapshot), "err", err)
 				lossy = true
 			}
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := b.persister.FinishTurn(ctx, b.turnID, status, b.finishedAt.Unix(), lossy); err != nil {
-			logging.From(ctx).Error("persist FinishTurn", "turn_id", b.turnID, "err", err)
+			logging.From(ctx).Error("persist FinishTurn failed", "turn_id", b.turnID, "err", err)
 		}
 		cancel()
 	}

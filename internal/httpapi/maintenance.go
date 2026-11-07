@@ -94,9 +94,9 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	// worth removing.
 	if removed, err := store.SweepAttachments(s.cfg.EmailAttachmentDir,
 		time.Duration(s.cfg.ConversationTTL)*24*time.Hour); err != nil {
-		logging.From(ctx).Error("maintenance: attachment sweep", "err", err)
+		logging.From(ctx).Error("maintenance: attachment sweep failed", "err", err)
 	} else if removed > 0 {
-		logging.From(ctx).Info("maintenance: attachment sweep removed file(s)", "removed", removed)
+		logging.From(ctx).Info("maintenance: attachment sweep removed files", "removed", removed)
 	}
 
 	// Per-conversation workspace dirs whose conversation row is gone (TTL,
@@ -108,10 +108,10 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	// only the dirs that could not be.
 	removed, err := s.store.SweepOrphanWorkspaces(ctx, tools.WorkspaceDirForConversation(""))
 	if err != nil {
-		logging.From(ctx).Error("maintenance: workspace sweep", "err", err)
+		logging.From(ctx).Error("maintenance: workspace sweep failed", "err", err)
 	}
 	if removed > 0 {
-		logging.From(ctx).Info("maintenance: workspace sweep removed orphan dir(s)", "removed", removed)
+		logging.From(ctx).Info("maintenance: workspace sweep removed orphan dirs", "removed", removed)
 	}
 	s.sweepOrphanPrivateWorkspaceStashes(ctx)
 
@@ -120,9 +120,9 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	// this, one that no later download into the same directory sweeps would
 	// sit on disk until its conversation is deleted.
 	if n, freed, err := store.SweepStaleDownloadPartials(tools.WorkspaceDirForConversation(""), store.DownloadPartialMaxAge); err != nil {
-		logging.From(ctx).Error("maintenance: download partial sweep", "err", err)
+		logging.From(ctx).Error("maintenance: download partial sweep failed", "err", err)
 	} else if n > 0 {
-		logging.From(ctx).Info("maintenance: download partial sweep removed file(s), bytes", "removed", n, "freed", freed)
+		logging.From(ctx).Info("maintenance: download partial sweep removed files", "removed", n, "freed_bytes", freed)
 	}
 
 	// Reconcile the shared file library's staged tree against its manifest
@@ -130,7 +130,7 @@ func (s *Server) RunMaintenance(ctx context.Context) {
 	// strays. This is what makes the mutating endpoints' staging "best-effort,
 	// self-healing" an honest claim rather than a hope.
 	if err := s.SyncSharedFiles(ctx); err != nil {
-		logging.From(ctx).Error("maintenance: shared files sync", "err", err)
+		logging.From(ctx).Error("maintenance: shared files sync failed", "err", err)
 	}
 }
 
@@ -193,24 +193,24 @@ func (s *Server) sweepRetention(ctx context.Context) {
 		time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
 		logging.From(ctx).Error("post-turn sweep error", "err", err)
 	} else if expired > 0 || evicted > 0 {
-		logging.From(ctx).Info("sweep expired, evicted", "expired", expired, "evicted", evicted)
+		logging.From(ctx).Info("post-turn sweep: done", "expired", expired, "evicted", evicted)
 		s.sweepOrphanPrivateWorkspaceStashes(ctx)
 	}
 	if purged, err := s.store.PurgeTerminalInputs(ctx,
 		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
 		logging.From(ctx).Error("post-turn input-queue purge error", "err", err)
 	} else if purged > 0 {
-		logging.From(ctx).Info("input-queue purge terminal row(s) removed", "purged", purged)
+		logging.From(ctx).Info("input-queue purge: terminal rows removed", "purged", purged)
 	}
 	if swept, err := s.store.SweepWebhookDeliveries(ctx, store.WebhookDeliveryTTL); err != nil {
 		logging.From(ctx).Error("post-turn webhook-delivery sweep error", "err", err)
 	} else if swept > 0 {
-		logging.From(ctx).Info("webhook-delivery sweep expired record(s) removed", "swept", swept)
+		logging.From(ctx).Info("webhook-delivery sweep: expired records removed", "swept", swept)
 	}
 	if swept, err := s.store.SweepTurnEvents(ctx,
 		time.Duration(s.cfg.TurnEventRetentionDays)*24*time.Hour); err != nil {
 		logging.From(ctx).Error("post-turn turn-ledger sweep error", "err", err)
 	} else if swept > 0 {
-		logging.From(ctx).Info("turn-ledger sweep aged-out turn(s) removed", "swept", swept)
+		logging.From(ctx).Info("turn-ledger sweep: aged-out turns removed", "swept", swept)
 	}
 }

@@ -182,7 +182,7 @@ func (s *Server) handleAdminDecisionModels(w http.ResponseWriter, r *http.Reques
 	}
 	models, err := listDecisionModels(r.Context())
 	if err != nil {
-		logging.From(r.Context()).Error("admin decision models", "err", safe.LogSafe(err.Error()))
+		logging.From(r.Context()).Error("admin decision models: failed", "err", safe.LogSafe(err.Error()))
 		writeJSON(w, map[string]any{"models": []agentcore.DecisionModel{}, "error": "could not load the decision model list from OpenRouter"})
 		return
 	}
@@ -376,7 +376,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 				s.removeOpsAdmin(r, u.Email)
 			}
 		}
-		logging.From(r.Context()).Info("admin users: set role", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "context", safe.LogSafe(userFromCtx(r.Context())))
+		logging.From(r.Context()).Info("admin users: set role", "email", safe.LogSafe(u.Email), "role", safe.LogSafe(u.Role), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	}
 	// Same precedence as POST /admin/users: Chat Admin is the unified grant
 	// and wins over any narrower ops_role in the same request, so
@@ -384,7 +384,7 @@ func (s *Server) handleAdminUserPatch(w http.ResponseWriter, r *http.Request, em
 	// instead of the PATCH quietly downgrading the grant it just made.
 	if body.OpsRole != nil && (body.Role == nil || *body.Role != store.RoleAdmin) {
 		s.setOpsRole(r, u.Email, *body.OpsRole)
-		logging.From(r.Context()).Info("admin users: set ops role", "email", safe.LogSafe(u.Email), "ops_role", safe.LogSafe(*body.OpsRole), "context", safe.LogSafe(userFromCtx(r.Context())))
+		logging.From(r.Context()).Info("admin users: set ops role", "email", safe.LogSafe(u.Email), "ops_role", safe.LogSafe(*body.OpsRole), "actor", safe.LogSafe(userFromCtx(r.Context())))
 	}
 	writeJSON(w, s.toAdminUserAnnotated(r, *u))
 }

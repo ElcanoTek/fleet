@@ -237,7 +237,7 @@ func PreflightRuntime(ctx context.Context, execCtx PodmanExec, runtime string) e
 	// Surface a containers.conf remap rather than silently preflighting a
 	// different binary than an operator reading the config would expect.
 	if guess := RuntimeBinary(runtime); guess != "" && guess != bin && filepath.Base(bin) != guess {
-		logging.From(ctx).Info("sandbox: podman resolves -- (the name suggests) — preflighting the resolved binary", "runtime", normalized, "bin", bin, "guess", guess)
+		logging.From(ctx).Info("sandbox: podman resolves the runtime name to a different binary — preflighting the resolved binary", "runtime", normalized, "bin", bin, "guess", guess)
 	}
 	switch kind {
 	case runtimeKata:
@@ -247,7 +247,7 @@ func PreflightRuntime(ctx context.Context, execCtx PodmanExec, runtime string) e
 	default:
 		// Shared-kernel runtime (runc/crun/runsc/…): resolvability is the whole
 		// check — no hypervisor posture to verify.
-		logging.From(ctx).Info("sandbox: runtime preflight OK — podman resolves it", "normalized", normalized, "bin", bin)
+		logging.From(ctx).Info("sandbox: runtime preflight OK", "runtime", normalized, "bin", bin)
 		return nil
 	}
 }
@@ -307,9 +307,9 @@ func preflightKata(ctx context.Context, execCtx PodmanExec, bin string) error {
 	defer cancel()
 	out, err := execCtx.CommandContext(checkCtx, bin, "check", "--no-network-checks").CombinedOutput()
 	if err != nil {
-		logging.From(ctx).Error("sandbox check reported issues (non-fatal — /dev/kvm is the hard gate)", "bin", bin, "err", err, "detail", strings.TrimSpace(string(out)))
+		logging.From(ctx).Warn("sandbox: runtime check reported issues (non-fatal — /dev/kvm is the hard gate)", "bin", bin, "err", err, "output", strings.TrimSpace(string(out)))
 	} else {
-		logging.From(ctx).Info("sandbox: kata preflight OK — present and /dev/kvm accessible", "bin", bin)
+		logging.From(ctx).Info("sandbox: kata preflight OK — runtime binary present and /dev/kvm accessible", "bin", bin)
 	}
 	return nil
 }
@@ -332,7 +332,7 @@ func preflightKrun(ctx context.Context, execCtx PodmanExec, bin string) error {
 	if err := verifyKrunLibkrun(ctx, execCtx, bin); err != nil {
 		return fmt.Errorf("krun preflight: %w", err)
 	}
-	logging.From(ctx).Info("sandbox: krun (libkrun) preflight OK — has +LIBKRUN and /dev/kvm accessible", "bin", bin)
+	logging.From(ctx).Info("sandbox: krun (libkrun) preflight OK — runtime binary has +LIBKRUN and /dev/kvm accessible", "bin", bin)
 	return nil
 }
 
@@ -393,7 +393,7 @@ func kataOverheadMB() int {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			return n
 		}
-		slog.Warn("sandbox: ignoring invalid — using default", "fleet_sandbox_kata_overhead_mb", v, "default_kata_overhead_mb_mib", DefaultKataOverheadMB)
+		slog.Warn("sandbox: ignoring invalid FLEET_SANDBOX_KATA_OVERHEAD_MB — using default", "value", v, "default_mib", DefaultKataOverheadMB)
 	}
 	return DefaultKataOverheadMB
 }

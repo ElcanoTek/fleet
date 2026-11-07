@@ -360,10 +360,10 @@ func RetryTransientConnect(ctx context.Context, server string, connect func(cont
 			return err
 		}
 		if delay >= budget.left() {
-			logging.From(ctx).Warn("mcp: server failed to connect; not retrying — the run's connect-retry budget is spent", "server", server, "err", ConnectErrorSummary(err), "max_connect_retry_budget", MaxConnectRetryBudget)
+			logging.From(ctx).Warn("mcp: server failed to connect; not retrying — the run's connect-retry budget is spent", "server", server, "err", ConnectErrorSummary(err), "budget", MaxConnectRetryBudget)
 			return err
 		}
-		logging.From(ctx).Warn("mcp: server failed to connect; attempt, retrying", "server", server, "err", ConnectErrorSummary(err), "attempt", i+1, "count", len(ConnectRetryDelays)+1, "delay", delay)
+		logging.From(ctx).Warn("mcp: server failed to connect; retrying", "server", server, "err", ConnectErrorSummary(err), "attempt", i+1, "max_attempts", len(ConnectRetryDelays)+1, "delay", delay)
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():

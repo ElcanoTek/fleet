@@ -299,7 +299,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		turnCancel()
 		s.finishTurn(conv.ID, turnToken)
 		releaseTurn()
-		logging.From(turnCtx).Error("webhook trigger: start turn", "conv_id", conv.ID, "err", err)
+		logging.From(turnCtx).Error("webhook trigger: start turn failed", "conv_id", conv.ID, "err", err)
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, "could not start the turn", http.StatusInternalServerError)
 		return
@@ -418,7 +418,7 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey, token); err != nil {
-		logging.From(ctx).Error("webhook trigger: release delivery claim", "err", err)
+		logging.From(ctx).Error("webhook trigger: release delivery claim failed", "err", err)
 	}
 }
 
@@ -432,7 +432,7 @@ func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, ownTurnID 
 	defer cancel()
 	completed, err = s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, ownTurnID)
 	if err != nil {
-		logging.From(ctx).Error("webhook trigger: give back delivery", "err", err)
+		logging.From(ctx).Error("webhook trigger: give back delivery failed", "err", err)
 	}
 	return completed, err
 }

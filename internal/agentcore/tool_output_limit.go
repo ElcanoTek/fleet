@@ -371,7 +371,7 @@ func boundModelVisibleToolResponseExact(ctx context.Context, toolName, toolCallI
 			metrics.RecordToolOutputArtifact("capacity")
 		default:
 			metrics.RecordToolOutputArtifact("failure")
-			logging.From(ctx).Error("agentcore: failed to stage governed output artifact", "tool_name", boundedToolName(toolName), "err", artifactErr)
+			logging.From(ctx).Error("agentcore: failed to stage governed output artifact", "tool", boundedToolName(toolName), "err", artifactErr)
 		}
 	}
 

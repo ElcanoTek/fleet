@@ -68,7 +68,7 @@ func (s *Server) maybeExtractMemoryGraph(m *store.Memory) {
 			logging.From(ctx).Error("memory-graph: persist for memory failed", "memory_id", memoryID, "err", err)
 			return
 		}
-		logging.From(ctx).Info("memory-graph: memory relation(s)", "memory_id", memoryID, "count", n)
+		logging.From(ctx).Info("memory-graph: relations extracted", "memory_id", memoryID, "relations", n)
 	})
 }
 
@@ -219,7 +219,7 @@ func (s *Server) handleMemoryExtractGraph(w http.ResponseWriter, r *http.Request
 	defer cancel()
 	g, err := s.memoryGraphExtractor(ctx, m.Content)
 	if err != nil {
-		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory", id, "err", err)
+		logging.From(ctx).Error("memory-graph: manual extraction for memory failed", "memory_id", id, "err", err)
 		http.Error(w, "graph extraction failed", http.StatusBadGateway)
 		return
 	}

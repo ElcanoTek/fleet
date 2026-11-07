@@ -84,7 +84,7 @@ out; named by `branding.house_tools_name`, default "<app_name> Tools", e.g.
 `builtin_remote_catalog.yaml` uses), and `misc` (Misc Tools) last. It is an ID,
 not free text, so "SSP" and "SSPs" can never split one group into two: an
 unknown ID **fails the load**. An entry without one shows under Misc Tools and
-boot logs one `warning: client config connector(s) have no category …` line (attribute `untagged`) naming every
+boot logs one `warning: client config: connectors have no category …` line (attribute `connectors`) naming every
 untagged connector, so it gets tagged. An Agent Plugin's fleet extension can
 set `category` too; there an unknown ID is a reported problem and the server
 lands in Misc Tools. A hosted (remote) connection takes the category of the

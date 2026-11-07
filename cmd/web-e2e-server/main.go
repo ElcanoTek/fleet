@@ -30,7 +30,7 @@ func main() {
 	cfg := webui.ConfigFromEnv()
 	g, err := webui.New(cfg, webui.Options{})
 	if err != nil {
-		logging.Fatal("web-e2e-server", "err", err)
+		logging.Fatal("web-e2e-server: failed", "err", err)
 	}
 	if !g.BundlePresent() {
 		logging.Fatal("web-e2e-server: no web bundle embedded — run `make web` (cd web && npm run build) before building this harness")
@@ -38,6 +38,6 @@ func main() {
 	srv := &http.Server{Addr: addr, Handler: g, ReadHeaderTimeout: 30 * time.Second}
 	slog.Info("web-e2e-server: bundle listening", "build_id", g.BuildID(), "addr", addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logging.Fatal(err.Error())
+		logging.Fatal("web-e2e-server: serve failed", "err", err)
 	}
 }

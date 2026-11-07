@@ -345,7 +345,7 @@ func (m *Manager) logAudit(entry AuditLogEntry) {
 	}
 	f, err := os.OpenFile(m.auditLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
-		slog.Error("apikeys: failed to open audit log", "audit_log_path", m.auditLogPath, "err", err)
+		slog.Error("apikeys: failed to open audit log", "path", m.auditLogPath, "err", err)
 		return
 	}
 	defer f.Close()
