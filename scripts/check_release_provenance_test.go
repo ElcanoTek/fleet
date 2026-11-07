@@ -60,8 +60,11 @@ func TestSLSAPredicateNamesTheReleaseCommit(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	deps := p.BuildDefinition.ResolvedDependencies
-	if len(deps) == 0 || deps[0].Digest["gitCommit"] != releaseCommit || deps[0].URI != "git+https://github.com/ElcanoTek/fleet@refs/tags/v2026.11.07.3" {
-		t.Errorf("the source dependency is not the release tag at the release commit: %+v", deps)
+	// [0] is the signing workflow source (GitHub's attestation API requires it
+	// to match the certificate); [1] is the release tag at the release commit.
+	if len(deps) != 2 || deps[0].URI != "git+https://github.com/ElcanoTek/fleet@refs/heads/main" || deps[0].Digest["gitCommit"] != mainHead ||
+		deps[1].Digest["gitCommit"] != releaseCommit || deps[1].URI != "git+https://github.com/ElcanoTek/fleet@refs/tags/v2026.11.07.3" {
+		t.Errorf("want [0] = the workflow source (main at the run commit), [1] = the release tag at the release commit: %+v", deps)
 	}
 	if p.BuildDefinition.BuildType != "https://actions.github.io/buildtypes/workflow/v1" ||
 		p.BuildDefinition.ExternalParameters.Workflow.Path != ".github/workflows/release.yml" ||
@@ -85,7 +88,7 @@ func TestCheckAttestedCommit(t *testing.T) {
 	}
 	root := repoRoot(t)
 	statement := func(commit string) string {
-		return `{"verificationResult":{"statement":{"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"resolvedDependencies":[{"uri":"x","digest":{"gitCommit":"` + commit + `"}}]}}}}}`
+		return `{"verificationResult":{"statement":{"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"resolvedDependencies":[{"uri":"git+https://github.com/ElcanoTek/fleet@refs/heads/main","digest":{"gitCommit":"` + strings.Repeat("e", 40) + `"}},{"uri":"git+https://github.com/ElcanoTek/fleet@refs/tags/v2026.11.07.3","digest":{"gitCommit":"` + commit + `"}}]}}}}}`
 	}
 	for _, c := range []struct {
 		name, report string
@@ -95,6 +98,9 @@ func TestCheckAttestedCommit(t *testing.T) {
 		{"main head instead", "[" + statement(mainHead) + "]", false},
 		{"one of two names another commit", "[" + statement(releaseCommit) + "," + statement(mainHead) + "]", false},
 		{"no provenance at all", "[]", false},
+		{"a second tag entry names another commit", "[" + strings.Replace(statement(releaseCommit), `]}}}}}`,
+			`,{"uri":"git+https://github.com/ElcanoTek/fleet@refs/tags/v2026.11.07.4","digest":{"gitCommit":"`+mainHead+`"}}]}}}}}`, 1) + "]", false},
+		{"no release-tag dependency", `[{"verificationResult":{"statement":{"predicateType":"https://slsa.dev/provenance/v1","predicate":{"buildDefinition":{"resolvedDependencies":[{"uri":"git+https://github.com/ElcanoTek/fleet@refs/heads/main","digest":{"gitCommit":"` + releaseCommit + `"}}]}}}}}]`, false},
 		{"not provenance", `[{"verificationResult":{"statement":{"predicateType":"https://spdx.dev/Document","predicate":{}}}}]`, false},
 	} {
 		t.Run(c.name, func(t *testing.T) {

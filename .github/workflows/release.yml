@@ -676,8 +676,9 @@ jobs:
       # workflow_run, the default-branch head when the release ran, which can
       # be a LATER commit than the one built — so the predicate is written
       # explicitly (scripts/slsa-predicate.sh: resolvedDependencies[0] is the
-      # release tag at HEAD_SHA, the commit the build job checked out and
-      # checked) and the attestations are verified against it below.
+      # signing workflow source, as GitHub's attestation API requires, and [1]
+      # is the release tag at HEAD_SHA, the commit the build job checked out
+      # and checked) and the attestations are verified against it below.
       - name: SLSA provenance predicate (source = the release commit)
         run: |
           set -euo pipefail
