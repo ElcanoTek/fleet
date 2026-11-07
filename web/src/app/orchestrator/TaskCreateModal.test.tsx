@@ -462,6 +462,36 @@ describe("TaskCreateModal — email chip field", () => {
     fireEvent.click(screen.getByRole("button", { name: "Remove sam@elcanotek.com" }));
     expect(screen.queryByText("sam@elcanotek.com")).not.toBeInTheDocument();
   });
+
+  // Submitting while an address is still typed in the field (no Enter, no
+  // blur — e.g. the form submitted from the keyboard) must send it: submit
+  // uses the list commit() returns, not the pre-commit state (#2034).
+  it("includes a typed but uncommitted address when the form is submitted", async () => {
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.change(input, { target: { value: "first@elcanotek.com" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.change(input, { target: { value: "Late@Elcanotek.com" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1));
+    const prompt = String(createTask.mock.calls[0][0].prompt);
+    expect(prompt).toContain("first@elcanotek.com");
+    expect(prompt).toContain("late@elcanotek.com");
+  });
+
+  it("does not submit while the typed address is invalid, and keeps focus on it", async () => {
+    createTask.mockResolvedValue({ id: "t1" });
+    renderModal();
+    fireEvent.change(screen.getByLabelText("Prompt"), { target: { value: "Do the thing" } });
+    const input = screen.getByLabelText(/Email results/);
+    fireEvent.change(input, { target: { value: "nope@" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    expect(await screen.findByTestId("error-email")).toBeInTheDocument();
+    expect(input).toHaveFocus();
+    expect(createTask).not.toHaveBeenCalled();
+  });
 });
 
 describe("TaskCreateModal — dirty-close guard", () => {
