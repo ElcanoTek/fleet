@@ -5,7 +5,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -20,6 +19,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupAuthzHandler wires a router with the real AdminOrUserAuthMiddleware so
@@ -33,14 +33,10 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 	}
 
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("database unavailable: %v", err)
-		}
 		t.Fatalf("init storage: %v", err)
 	}
-	acquireTestLock(t, store)
 
 	keyMgr, err := apikeys.NewManager(
 		filepath.Join(tmpDir, "api_keys.json"),
@@ -50,13 +46,6 @@ func setupAuthzHandler(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.M
 		store.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("key mgr: %v", err)
-	}
-
-	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup: %v", err)
-		}
 	}
 
 	h := New(Config{DefaultTaskModel: "test/model",
@@ -139,6 +128,8 @@ func addTask(t *testing.T, store *storage.Storage, prompt string) *models.Task {
 }
 
 func TestPrincipalOwnsTask(t *testing.T) {
+	t.Parallel()
+
 	aliceID, bobID := uuid.New(), uuid.New()
 	alice := principal{user: &models.User{ID: aliceID}}
 	if !alice.ownsTask(&models.Task{CreatedBy: &aliceID}) {
@@ -161,6 +152,8 @@ func TestPrincipalOwnsTask(t *testing.T) {
 // permission-based authorization assertions (a readonly key cannot mutate; a
 // client-role key can edit an editable task).
 func TestScopedAPIKeyAuthorization(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 
@@ -245,6 +238,8 @@ func TestScopedAPIKeyAuthorization(t *testing.T) {
 // rejects edits to a task that has left the editable state, instead of blindly
 // overwriting it (which previously could resurrect a leased/cancelled task).
 func TestUpdateTaskNotEditableConflict(t *testing.T) {
+	t.Parallel()
+
 	store, _, r, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 

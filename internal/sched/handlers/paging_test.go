@@ -22,6 +22,8 @@ import (
 // The pure parsing contract: absent → default, in-range → the value, anything
 // else → one 400 naming the range. No database needed.
 func TestParseLimit(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		query    string
@@ -66,6 +68,8 @@ func TestParseLimit(t *testing.T) {
 }
 
 func TestParseOffset(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		query    string
@@ -128,6 +132,8 @@ func pagingRouter(t *testing.T) (func(method, target string) *httptest.ResponseR
 // others, and a negative offset on the rows endpoint is a 400 instead of the
 // Postgres "OFFSET must not be negative" error surfacing as a 500.
 func TestListEndpoints_RejectBadPagingUniformly(t *testing.T) {
+	t.Parallel()
+
 	do, store := pagingRouter(t)
 
 	ds := &models.Dataset{
@@ -211,6 +217,8 @@ func TestListEndpoints_RejectBadPagingUniformly(t *testing.T) {
 // The paused queue and upcoming feed keep their defaults when the parameter
 // is absent — an unparameterized call is unchanged by the validation.
 func TestListEndpoints_AbsentLimitKeepsDefaults(t *testing.T) {
+	t.Parallel()
+
 	do, store := pagingRouter(t)
 
 	future := time.Now().UTC().Add(time.Hour)
@@ -241,6 +249,8 @@ func TestListEndpoints_AbsentLimitKeepsDefaults(t *testing.T) {
 // error and keep their default: absent → default, in range → the value,
 // anything else → one 400 naming the parameter and its range.
 func TestParseBoundedInt(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		query    string
@@ -284,6 +294,8 @@ func TestParseBoundedInt(t *testing.T) {
 // The three call sites: a bad value is a 400 naming the range, not a silent
 // default (or, for ?runs=, a silent clamp).
 func TestBoundedQueryParams_RejectBadValues(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	t.Cleanup(cleanup)
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, nil)

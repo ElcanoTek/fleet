@@ -32,6 +32,8 @@ func requireOverlap(t *testing.T, bundle *clientconfig.Bundle, wantName string) 
 }
 
 func TestOverlapErrorDoesNotEchoRawConfiguration(t *testing.T) {
+	t.Parallel()
+
 	const pasted = "FAKE_PASTED_CREDENTIAL"
 	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
   - name: demo

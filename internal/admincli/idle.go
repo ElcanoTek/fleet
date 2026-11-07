@@ -115,6 +115,32 @@ func createDrainFileAtomic(p string) error {
 	return nil
 }
 
+// drainLockTimeout bounds the wait for the drain sentinel's lock. Holders only
+// do a few small file operations under it, so a lock still held after this is
+// a stalled process; giving up keeps a caller such as the release install's
+// stop → clear → start handoff from blocking forever (the stale marker then
+// ages out on its own).
+var drainLockTimeout = 30 * time.Second
+
+// flockBounded takes an exclusive flock on f, polling a non-blocking attempt
+// until timeout.
+func flockBounded(f *os.File, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still held by another process after %s", timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func withDrainLock(p string, fn func() error) error {
 	if err := verifyDrainDir(p); err != nil {
 		return err
@@ -126,7 +152,7 @@ func withDrainLock(p string, fn func() error) error {
 		return fmt.Errorf("open drain lock %s: %w", lockPath, err)
 	}
 	defer func() { _ = lf.Close() }()
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockBounded(lf, drainLockTimeout); err != nil {
 		return fmt.Errorf("lock drain sentinel %s: %w", lockPath, err)
 	}
 	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) }()

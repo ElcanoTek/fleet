@@ -20,6 +20,8 @@ import (
 // at overwrite time in tryClaim, and via the snapshotted per-claim cancel in
 // renewActiveLeases.
 func TestReclaimCancelsStaleZombieRun(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 	task := tasks[0]

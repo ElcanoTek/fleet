@@ -34,8 +34,8 @@ import (
 // 1 usage.
 func cmdStatus(argv []string) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	bundleDir := fs.String("client-config", "", "client bundle dir (default FLEET_CLIENT_CONFIG_DIR / config/default)")
 	service := fs.String("service", "", "systemd unit to inspect (default FLEET_SERVICE_NAME / fleet)")
 	skipSandbox := fs.Bool("no-sandbox", false, "skip the podman sandbox run check")
@@ -135,13 +135,11 @@ func checkEnv(r *report) {
 	}
 }
 
-// checkDB pings a database with a short timeout. It opens a bare pgx connection
-// (NOT store.Open / storage.Initialize, which run migrations) so the check is
-// read-only and fast.
 // checkLayout reports the layout of the DSNs the checks above actually used —
-// the --*-database-url overrides when given (their layout decided by
-// config.DSNs.OverrideFor), else the deployment's — never the environment's
-// layout for overrides that point elsewhere.
+// the --*-database-url overrides when given (config.DSNs.OverrideFor), else
+// the deployment's: one database with a chat and a sched schema, or what is
+// unusual about the pair (an override naming its own schema can address
+// anything).
 func checkLayout(r *report, chatFlag, schedFlag string) {
 	c, cerr := chatDSN(chatFlag)
 	s, serr := schedDSN(schedFlag)
@@ -157,8 +155,6 @@ func checkLayout(r *report, chatFlag, schedFlag string) {
 		r.pass("database layout", "one database, schemas chat + sched")
 	case cs == config.ChatSchema && ss == config.SchedSchema:
 		r.warnLine("database layout", "unusual: the chat and sched schemas are in two different databases ("+ci+", "+si+")")
-	case cs == "" && ss == "": // LEGACY-DB-LAYOUT: remove after consolidation
-		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
 	default:
 		r.warnLine("database layout", fmt.Sprintf("unusual: chat in schema %q, sched in schema %q", orPublic(cs), orPublic(ss)))
 	}
@@ -171,6 +167,9 @@ func orPublic(s string) string {
 	return s
 }
 
+// checkDB pings a database with a short timeout. It opens a bare pgx connection
+// (NOT store.Open / storage.Initialize, which run migrations) so the check is
+// read-only and fast.
 func checkDB(r *report, label, flagURL string, resolve func(string) (string, error)) {
 	dsn, err := resolve(flagURL)
 	if err != nil {

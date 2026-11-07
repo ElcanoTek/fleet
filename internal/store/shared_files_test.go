@@ -12,6 +12,8 @@ import (
 )
 
 func TestSharedFilesCRUD(t *testing.T) {
+	t.Parallel()
+
 	st := newTestStore(t)
 	ctx := context.Background()
 
@@ -91,6 +93,8 @@ func TestSharedFilesCRUD(t *testing.T) {
 // iteration order — so the conflict has to be refused at write time, while
 // there is still a request to return 409 on.
 func TestSharedFilePathNamespaceConflicts(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("folder blocks a root file of the same name", func(t *testing.T) {

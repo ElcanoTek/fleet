@@ -23,6 +23,8 @@ import (
 // A second, still-owned task renews in the same pass and must NOT be touched:
 // the cancel fires only on the definite not-held verdict.
 func TestRenewalCancelsRunAfterLeaseLoss(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 2)
 

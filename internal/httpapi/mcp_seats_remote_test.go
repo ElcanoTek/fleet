@@ -14,6 +14,8 @@ import (
 // connection name with its labeled seats, and a conversation may pin a seat —
 // but only one the user actually holds.
 func TestConversationMCPServersSeats(t *testing.T) {
+	t.Parallel()
+
 	srv, st, row, user := remoteMCPFixture(t)
 	ctx := context.Background()
 

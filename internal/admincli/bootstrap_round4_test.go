@@ -32,6 +32,8 @@ func mustQueryString(t *testing.T, db *sql.DB, q string) string {
 // config.Load and the admin CLI use: the scripts must decide from the value
 // fleet will see, not from raw text (#2055 review).
 func TestEnvValueMatchesFleetsParser(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -52,7 +54,7 @@ func TestEnvValueMatchesFleetsParser(t *testing.T) {
 		`LAST=first`,
 		`LAST=second`,
 		`#COMMENTED_OUT=postgres://u@h/db`,
-		`# [fleet db consolidate 2026-11-07] FLEET_CHAT_DATABASE_URL=postgres://u@h/chat`,
+		`# [retired 2026-11-07] FLEET_CHAT_DATABASE_URL=postgres://u@h/chat`,
 		`HALFQUOTE="abc`,
 		"CRLF=value\r",
 	}, "\n") + "\n"
@@ -77,17 +79,19 @@ func TestEnvValueMatchesFleetsParser(t *testing.T) {
 	}
 }
 
-// TestBootstrapLayoutFromParsedValues (#2055 review): the layout decision
-// reads the env file as fleet does — FLEET_CHAT_DATABASE_URL="" is unset, a
-// commented-out key is absent, an `export`ed one counts.
-func TestBootstrapLayoutFromParsedValues(t *testing.T) {
+// TestBootstrapRetiredKeysFromParsedValues (#2055 review): the refusal of a
+// retired per-store key reads the env file as fleet does —
+// FLEET_CHAT_DATABASE_URL="" is unset, a commented-out key is absent, an
+// `export`ed one counts.
+func TestBootstrapRetiredKeysFromParsedValues(t *testing.T) {
+	t.Parallel()
 	const one = "DATABASE_URL=postgres://fleet:placeholder-not-a-secret@127.0.0.1:5432/fleet?sslmode=disable\n"
 	for name, tc := range map[string]struct {
-		extra  string
-		legacy bool
+		extra   string
+		refused bool
 	}{
 		"empty per-store keys":         {"FLEET_CHAT_DATABASE_URL=\"\"\nFLEET_SCHED_DATABASE_URL=\nSCHED_DATABASE_URL=''\n", false},
-		"commented-out per-store keys": {"# [fleet db consolidate 2026-11-07] FLEET_CHAT_DATABASE_URL=postgres://c:x@127.0.0.1/chat\n", false},
+		"commented-out per-store keys": {"# [retired 2026-11-07] FLEET_CHAT_DATABASE_URL=postgres://c:x@127.0.0.1/chat\n", false},
 		"an exported per-store key":    {"export FLEET_SCHED_DATABASE_URL=postgres://s:x@127.0.0.1:5432/sched\n", true},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -96,11 +100,8 @@ func TestBootstrapLayoutFromParsedValues(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local")
-			if err != nil {
-				t.Fatalf("exit: %v\n%s", err, out)
-			}
-			if got := strings.Contains(out, "legacy two-database layout"); got != tc.legacy {
-				t.Errorf("legacy = %v, want %v\n%s", got, tc.legacy, out)
+			if got := err != nil && strings.Contains(out, "is no longer supported"); got != tc.refused {
+				t.Errorf("refused = %v (err %v), want %v\n%s", got, err, tc.refused, out)
 			}
 		})
 	}
@@ -110,6 +111,8 @@ func TestBootstrapLayoutFromParsedValues(t *testing.T) {
 // port — 5432 exactly, never 54321 — from the authority and from a decoded
 // port query parameter.
 func TestDSNIsLocalDefault(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -145,6 +148,8 @@ func TestDSNIsLocalDefault(t *testing.T) {
 // TestDoctorDecidesLayoutFromParsedValues: doctor.sh's database check reads
 // the DSN keys with fleet_env_value, never raw text (#2055 review).
 func TestDoctorDecidesLayoutFromParsedValues(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "doctor.sh"))
 	if err != nil {
 		t.Fatal(err)
@@ -154,8 +159,14 @@ func TestDoctorDecidesLayoutFromParsedValues(t *testing.T) {
 		if strings.Contains(src, "env_get "+key+")") {
 			t.Errorf("doctor.sh reads %s with env_get (raw text), not fleet_env_value", key)
 		}
-		if !strings.Contains(src, `fleet_env_value "$ENV_FILE" `+key+`)`) {
-			t.Errorf("doctor.sh does not read %s with fleet_env_value", key)
+	}
+	for _, want := range []string{
+		`fleet_env_value "$ENV_FILE" DATABASE_URL)`,
+		`for _k in FLEET_CHAT_DATABASE_URL FLEET_SCHED_DATABASE_URL SCHED_DATABASE_URL; do`,
+		`fleet_env_value "$ENV_FILE" "$_k")`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Errorf("doctor.sh does not read the DSN keys with fleet_env_value: missing %q", want)
 		}
 	}
 }

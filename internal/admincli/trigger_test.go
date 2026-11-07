@@ -5,6 +5,8 @@ import (
 )
 
 func TestStringSliceFlag_String(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    stringSliceFlag
@@ -48,6 +50,8 @@ func TestStringSliceFlag_String(t *testing.T) {
 }
 
 func TestStringSliceFlag_Set(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string

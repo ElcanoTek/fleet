@@ -31,6 +31,8 @@ func listCount(t *testing.T, h http.Handler, query string) int {
 // TestLabels_EndToEnd drives the #258 surface through the mux: assign labels via
 // bulk PATCH, then filter GET /conversations by ?label= with AND semantics.
 func TestLabels_EndToEnd(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	st := s.concreteStore(t)
 	ctx := context.Background()
@@ -74,6 +76,8 @@ func TestLabels_EndToEnd(t *testing.T) {
 // TestBulkPatch_LabelValidation: the HTTP layer bounds label inputs (#258)
 // before any store write.
 func TestBulkPatch_LabelValidation(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	st := s.concreteStore(t)
 	ctx := context.Background()

@@ -7,6 +7,8 @@ import (
 )
 
 func TestEvaluateCacheRowStatus(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name                              string
 		turns, promptTokens, cachedTokens int64

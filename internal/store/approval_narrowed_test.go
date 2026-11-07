@@ -11,6 +11,8 @@ import (
 // unexpired row the user owns only; the record comes back on the reads the
 // approval path and the reload use, and the staged arguments are unchanged.
 func TestClaimApprovalNarrowed(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -81,6 +83,8 @@ func TestClaimApprovalNarrowed(t *testing.T) {
 // breadcrumb: the recorded tool call holds the whole staged list, so the
 // model must be told which values were approved and which were left out.
 func TestRecoverStrandedApprovals_KeepsTheNarrowing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -111,6 +115,8 @@ func TestRecoverStrandedApprovals_KeepsTheNarrowing(t *testing.T) {
 // The note names the smaller side exactly by position, never by value, so it
 // stays small and carries nothing model-authored.
 func TestNarrowingNote_IsExactAndBounded(t *testing.T) {
+	t.Parallel()
+
 	staged := make([]string, 0, 60)
 	for i := range 60 {
 		staged = append(staged, strings.Repeat("v", 150)+string(rune('A'+i%26))+strings.Repeat("x", i))
@@ -133,6 +139,8 @@ func TestNarrowingNote_IsExactAndBounded(t *testing.T) {
 // The narrowable argument is frozen on a pending row at staging and read back
 // by GetApproval and ListPendingApprovals; a settled row cannot take one.
 func TestSetApprovalNarrowableArg(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)

@@ -16,7 +16,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // newTestScheduler mirrors storage.newTestStore but for the scheduler package:
@@ -26,7 +26,7 @@ import (
 // storage so the test can drive ProcessScheduledTasks and inspect the rows.
 func newTestScheduler(t *testing.T) (*Scheduler, *storage.Storage) {
 	t.Helper()
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	database := fleetdb.SchedDB(t)
 	store := storage.New()
 	store.SetDatabase(database)
 	store.SetTimezone("UTC")
@@ -38,6 +38,8 @@ func newTestScheduler(t *testing.T) (*Scheduler, *storage.Storage) {
 // non-empty reason with the captured stderr. The check runs with the restricted
 // PATH so a bare `false` / `true` is reachable via /usr/bin or /bin.
 func TestEvalRunIfExitCodeIs(t *testing.T) {
+	t.Parallel()
+
 	s, _ := newTestScheduler(t)
 
 	// `true` exits 0; with ExitCodeIs=0 the task should run.
@@ -106,6 +108,8 @@ func TestEvalRunIfExitCodeIs(t *testing.T) {
 }
 
 func TestCappedRunIfStderrConsumesAfterCap(t *testing.T) {
+	t.Parallel()
+
 	var got cappedRunIfStderr
 	input := strings.Repeat("x", maxRunIfStderrBytes+100)
 	n, err := got.Write([]byte(input))
@@ -124,6 +128,8 @@ func TestCappedRunIfStderrConsumesAfterCap(t *testing.T) {
 // outlasts the gate's timeout returns a DeadlineExceeded error, which the
 // scheduler's ProcessScheduledTasks routes via the on_error policy.
 func TestEvalRunIfTimeout(t *testing.T) {
+	t.Parallel()
+
 	s, _ := newTestScheduler(t)
 	task := &models.Task{RunIf: &models.RunIf{Command: "sleep 10", ExitCodeIs: 0, TimeoutSeconds: 1}}
 	ok, _, err := s.evalRunIf(task)
@@ -192,6 +198,8 @@ func TestEvalRunIfBackgroundChildDoesNotHang(t *testing.T) {
 // before procgroup.RunAndKillSurvivors that helper was never killed, leaking
 // one host process per tick of a recurring gate.
 func TestEvalRunIfKillsDetachedGrandchild(t *testing.T) {
+	t.Parallel()
+
 	s, _ := newTestScheduler(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")
 	task := &models.Task{RunIf: &models.RunIf{
@@ -330,6 +338,8 @@ func TestHandleSkipLogLineIsJSON(t *testing.T) {
 // to pending across multiple ticks, and skip_count increments. An acceptance
 // criterion from the issue.
 func TestProcessScheduledTasksSkipsFailingGate(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -400,6 +410,8 @@ func TestProcessScheduledTasksSkipsFailingGate(t *testing.T) {
 // a gate that times out (a check error) with on_error:"run" must promote the
 // task anyway, NOT skip it. An acceptance criterion from the issue.
 func TestProcessScheduledTasksOnErrorRun(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -432,6 +444,8 @@ func TestProcessScheduledTasksOnErrorRun(t *testing.T) {
 // TestProcessScheduledTasksOnErrorSkip pins the on_error:"skip" policy (#269):
 // a gate that times out with on_error:"skip" must skip the task (not promote).
 func TestProcessScheduledTasksOnErrorSkip(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -464,6 +478,8 @@ func TestProcessScheduledTasksOnErrorSkip(t *testing.T) {
 // recorded skip, capped at 30m — so a permanently-declining one-shot gate
 // settles at ~2 host commands per hour instead of one per 30s tick forever.
 func TestGateSkipBackoff(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		skips int
 		want  time.Duration
@@ -489,6 +505,8 @@ func TestGateSkipBackoff(t *testing.T) {
 // runtime. The tick must return promptly and promote ungated tasks while the
 // gate is still running; the gated task settles asynchronously.
 func TestProcessScheduledTasksNotBlockedBySlowGate(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -537,6 +555,8 @@ func TestProcessScheduledTasksNotBlockedBySlowGate(t *testing.T) {
 // task whose gate is still running when the next tick re-fetches it (it is
 // still scheduled and due) must NOT have its gate started a second time.
 func TestGateEvalNotDoubleDispatchedWhileInFlight(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -576,6 +596,8 @@ func TestGateEvalNotDoubleDispatchedWhileInFlight(t *testing.T) {
 // rather than spawning an unbounded goroutine — and the next tick picks it up
 // once a slot frees.
 func TestGatePoolFullDefersToNextTick(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.gateSlots = make(chan struct{}, 1) // shrink the pool to one slot
 	ctx := context.Background()
@@ -617,6 +639,8 @@ func TestGatePoolFullDefersToNextTick(t *testing.T) {
 // one-shot gate must advance scheduled_for by the skip-count backoff instead
 // of staying due and re-running its host command every 30s tick forever.
 func TestDeclinedOneShotGateBacksOff(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -676,6 +700,8 @@ func TestDeclinedOneShotGateBacksOff(t *testing.T) {
 // postponed mid-evaluation (it would run tonight anyway), and a decline's
 // backoff must not overwrite the operator's new scheduled_for.
 func TestEditDuringGateEvalWins(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -742,6 +768,8 @@ func TestEditDuringGateEvalWins(t *testing.T) {
 // the drain, Stop returned immediately and this test read the task while its
 // gate goroutine was still sleeping.
 func TestStopDrainsInFlightGates(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	ctx := context.Background()
 
@@ -781,6 +809,8 @@ func TestStopDrainsInFlightGates(t *testing.T) {
 // writes — deliberately NOT via the scheduler's own mutexes, which would add
 // the very happens-before edge the test must prove exists without them.
 func TestStopDoesNotRaceRunLoopGateDispatch(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.tickInterval = 5 * time.Millisecond
 	ctx := context.Background()
@@ -827,6 +857,8 @@ func TestStopDoesNotRaceRunLoopGateDispatch(t *testing.T) {
 // defeated on_error=run for exactly the failures it exists for. It is now the
 // check-itself-errored case, like a timeout.
 func TestEvalRunIfSignalKilledIsAnError(t *testing.T) {
+	t.Parallel()
+
 	s, _ := newTestScheduler(t)
 
 	task := &models.Task{RunIf: &models.RunIf{Command: "kill -9 $$", ExitCodeIs: 0, TimeoutSeconds: 5}}

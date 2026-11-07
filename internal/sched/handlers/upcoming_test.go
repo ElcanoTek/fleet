@@ -17,6 +17,8 @@ import (
 )
 
 func TestProjectRuns_RecurringCapsAtFive(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Name: "hourly", Prompt: "p", Recurrence: "0 * * * *"}
 	runs := projectRuns(task, now, time.Time{}, time.UTC)
@@ -37,6 +39,8 @@ func TestProjectRuns_RecurringCapsAtFive(t *testing.T) {
 }
 
 func TestProjectRuns_RecurringHonorsTimezone(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
 	// 09:00 daily in New York → not 09:00 UTC.
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 9 * * *", Timezone: "America/New_York"}
@@ -52,6 +56,8 @@ func TestProjectRuns_RecurringHonorsTimezone(t *testing.T) {
 }
 
 func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	future := now.Add(2 * time.Hour)
 	past := now.Add(-2 * time.Hour)
@@ -70,6 +76,8 @@ func TestProjectRuns_OneShotFutureAndPast(t *testing.T) {
 }
 
 func TestProjectRuns_InvalidCronYieldsNothing(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	if runs := projectRuns(&models.Task{ID: uuid.New(), Recurrence: "not a cron"}, now, time.Time{}, time.UTC); len(runs) != 0 {
 		t.Fatalf("expected 0 runs for an invalid cron, got %d", len(runs))
@@ -79,6 +87,8 @@ func TestProjectRuns_InvalidCronYieldsNothing(t *testing.T) {
 // TestGetUpcomingRuns_HandlerReturnsSortedFeed seeds a recurring and a future
 // one-shot task and asserts the endpoint returns them sorted by next_run.
 func TestGetUpcomingRuns_HandlerReturnsSortedFeed(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -124,6 +134,8 @@ func TestGetUpcomingRuns_HandlerReturnsSortedFeed(t *testing.T) {
 }
 
 func TestProjectRuns_HorizonProjectsWholeWindow(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *"} // hourly
 	horizon := now.Add(24 * time.Hour)
@@ -139,6 +151,8 @@ func TestProjectRuns_HorizonProjectsWholeWindow(t *testing.T) {
 }
 
 func TestProjectRuns_HonorsRecurrenceUntil(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	until := now.Add(3*time.Hour + 30*time.Minute)
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceUntil: &until}
@@ -154,6 +168,8 @@ func TestProjectRuns_HonorsRecurrenceUntil(t *testing.T) {
 }
 
 func TestProjectRuns_HonorsRecurrenceRemaining(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	remaining := 2
 	task := &models.Task{ID: uuid.New(), Recurrence: "0 * * * *", RecurrenceRemaining: &remaining}
@@ -170,6 +186,8 @@ func TestProjectRuns_HonorsRecurrenceRemaining(t *testing.T) {
 // project THAT instant first and walk the cron from it. Seeding from now
 // showed a run the scheduler would never make.
 func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
+	t.Parallel()
+
 	now := time.Date(2026, 7, 1, 8, 0, 0, 0, time.UTC)
 	// Daily at 09:00, but the row was pushed out to July 2nd 14:00 — past the
 	// July 1st and July 2nd 09:00 fires a walk from now would have invented.
@@ -207,6 +225,8 @@ func TestProjectRuns_RecurringSeedsFromScheduledFor(t *testing.T) {
 // task with no timezone projects in the SERVER location — the zone the
 // scheduler actually fires it in — not UTC, so the timeline matches real fires.
 func TestProjectRunsUsesServerLocationForEmptyTimezone(t *testing.T) {
+	t.Parallel()
+
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("tzdata unavailable")

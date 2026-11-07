@@ -12,6 +12,8 @@ import (
 )
 
 func TestEvalRunsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

@@ -88,6 +88,8 @@ func successorsOf(t *testing.T, store *Storage, exclude map[uuid.UUID]bool) []*m
 // repaired by the reconciliation sweep — the schedule no longer dies silently.
 // The repair is idempotent: a second sweep spawns nothing further.
 func TestReconcileRecurrencesRepairsLostSpawn(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -135,6 +137,8 @@ func TestReconcileRecurrencesRepairsLostSpawn(t *testing.T) {
 // the chain). Dead-lettered rows DO spawn (ADR-0070); that path is covered by
 // the dedicated dead-letter recurrence tests, not this grace/status pin.
 func TestReconcileRecurrencesRespectsGraceAndStatus(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -159,6 +163,8 @@ func TestReconcileRecurrencesRespectsGraceAndStatus(t *testing.T) {
 // already met (run budget exhausted) is SETTLED without spawning, so the sweep
 // does not re-evaluate it forever — and it never gains a phantom successor.
 func TestReconcileRecurrencesSettlesEndedChain(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -191,6 +197,8 @@ func TestReconcileRecurrencesSettlesEndedChain(t *testing.T) {
 // would get 90 duplicate successors within two sweep ticks, each perpetuating
 // its own chain.
 func TestImportedTerminalRecurringHistoryIsInert(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -236,6 +244,8 @@ func TestImportedTerminalRecurringHistoryIsInert(t *testing.T) {
 // the first sweep insert a second successor — a duplicate chain. After the
 // backfill the sweep must leave the lineage alone.
 func TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -298,6 +308,8 @@ func TestReconcileRecurrencesDoesNotRespawnBackfilledDeadLetter(t *testing.T) {
 // recurrence_spawned TRUE, or ReconcileRecurrences would treat restored
 // history as a lost spawn.
 func TestUpsertedTerminalRecurringIsSettled(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []models.TaskStatus{models.TaskStatusDeadLettered, models.TaskStatusSuccess} {
 		t.Run(string(status), func(t *testing.T) {
 			store, _ := newTestStore(t)
@@ -352,6 +364,8 @@ func TestUpsertedTerminalRecurringIsSettled(t *testing.T) {
 // restored occurrence completes unable to claim the credit and the schedule
 // stays silently parked.
 func TestUpsertedLiveOverParkedDeadLetterReArms(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -386,6 +400,8 @@ func TestUpsertedLiveOverParkedDeadLetterReArms(t *testing.T) {
 // still hand the credit back and clear the stamp; the move INTO a live status
 // is the signal, not the status it came from.
 func TestUpsertedLiveOverCancelledParkedRowReArms(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -420,6 +436,8 @@ func TestUpsertedLiveOverCancelledParkedRowReArms(t *testing.T) {
 // its FALSE flag never meant a lost spawn — or the sweep would mint a
 // successor from imported history.
 func TestReimportedOneOffGainingRecurrenceIsSettled(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -468,6 +486,8 @@ func TestReimportedOneOffGainingRecurrenceIsSettled(t *testing.T) {
 // be replayable — stamped parked — unless a successor points at it, in
 // either insert order.
 func TestImportedDeadLetterIsParkedUnlessSuccessorExists(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -535,6 +555,8 @@ func TestImportedDeadLetterIsParkedUnlessSuccessorExists(t *testing.T) {
 // --replace-status) must not settle the flag — the crash-window row is
 // still the sweep's to repair.
 func TestReimportUnclaimedDeadLetteredKeepsCreditForSweep(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -568,6 +590,8 @@ func TestReimportUnclaimedDeadLetteredKeepsCreditForSweep(t *testing.T) {
 // replayed run completes — the spawn credit stays claimed because a successor
 // already exists.
 func TestReplayedDeadLetterContinuesChainOnce(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -640,6 +664,8 @@ func TestReplayedDeadLetterContinuesChainOnce(t *testing.T) {
 // it claims keeps the reconciliation sweep from ever double-spawning the same
 // occurrence, even once the row ages past the grace window.
 func TestTerminalSpawnSettlesCreditAgainstReconciliation(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

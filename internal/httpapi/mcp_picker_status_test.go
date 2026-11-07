@@ -154,6 +154,8 @@ func TestMCPCatalogListsNeedsSetupConnectors(t *testing.T) {
 }
 
 func TestRemoteConnectionCategoryFromDirectory(t *testing.T) {
+	t.Parallel()
+
 	srv := &Server{clientConfig: &clientconfig.Bundle{RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
 		{Name: "hubspot", URL: "https://mcp.hubspot.com/", Category: "crm-sales"},
 		{Name: "odd", URL: "https://odd.example.com/mcp", Category: "ad-tech"},

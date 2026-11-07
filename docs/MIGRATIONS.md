@@ -92,8 +92,7 @@ fleet migrate status --database-url "$DSN"   # override the DSN for both DBs
 
 DSNs resolve the same way as the rest of the CLI: `--database-url`, else
 `DATABASE_URL` (each store in its own schema of that one database; a
-`--database-url` naming it reports both schemas), else on a legacy box the
-per-store `FLEET_CHAT_DATABASE_URL` / `FLEET_SCHED_DATABASE_URL`. A store
+`--database-url` reports both schemas of the database it names). A store
 whose DSN is unset is reported as skipped, not an error.
 
 Both runners keep their bookkeeping in their own schema

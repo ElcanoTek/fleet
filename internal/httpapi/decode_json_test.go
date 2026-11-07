@@ -11,6 +11,8 @@ import (
 // now shares (#1949): a malformed body is "bad json: …" for both helpers, an
 // empty body is a 400 only when the body is required, and a valid body decodes.
 func TestDecodeJSONBodyHelpers(t *testing.T) {
+	t.Parallel()
+
 	type payload struct {
 		Name string `json:"name"`
 	}

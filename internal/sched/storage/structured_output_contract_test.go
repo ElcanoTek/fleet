@@ -21,6 +21,8 @@ const storageOutputSchema = `{
 }`
 
 func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	owner := uuid.New()
 	task := &models.Task{
@@ -81,6 +83,8 @@ func TestStructuredOutputSuccessIsAtomicAndFailClosed(t *testing.T) {
 }
 
 func TestStructuredSuccessRejectsStaleOutputAndRecoveryClearsIt(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	owner := uuid.New()
 	task := &models.Task{
@@ -137,6 +141,8 @@ func TestStructuredSuccessRejectsStaleOutputAndRecoveryClearsIt(t *testing.T) {
 }
 
 func TestStorageRejectsSchemaLimitsAtEveryEnqueueSeam(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	tooLarge := json.RawMessage(`{"type":"object","description":"` + strings.Repeat("x", structuredoutput.MaxSchemaBytes) + `"}`)
 	task := &models.Task{
@@ -162,6 +168,8 @@ func TestStorageRejectsSchemaLimitsAtEveryEnqueueSeam(t *testing.T) {
 // lease expiry requeued it (a duplicate side-effect window). The success gate
 // still refuses to promote such a candidate.
 func TestStaleInvalidOutputDoesNotBlockErrorTransition(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	owner := uuid.New()
 	task := &models.Task{

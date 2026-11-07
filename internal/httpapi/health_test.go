@@ -31,6 +31,8 @@ func (h *healthStubStore) LLMUsageSince(context.Context, int64) (int64, float64,
 }
 
 func TestHandleHealthSummary(t *testing.T) {
+	t.Parallel()
+
 	st := &healthStubStore{calls: 10, cost: 1.5}
 	s := New(&config.Config{}, &fakeEngine{}, st)
 	s.startTime = time.Now().Add(-90 * time.Second)
@@ -78,6 +80,8 @@ func TestHandleHealthSummary(t *testing.T) {
 // TestHandleHealthSummary_NilWorkerStats: without a worker provider the workers
 // section is null (allowed for unconfigured subsystems).
 func TestHandleHealthSummary_NilWorkerStats(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, &healthStubStore{})
 	rr := httptest.NewRecorder()
 	s.handleHealthSummary(rr, httptest.NewRequest(http.MethodGet, "/admin/health-summary", nil))
@@ -97,6 +101,8 @@ func TestHandleHealthSummary_NilWorkerStats(t *testing.T) {
 }
 
 func TestStartOfUTCDay(t *testing.T) {
+	t.Parallel()
+
 	ts := time.Date(2026, 6, 27, 15, 30, 45, 0, time.UTC)
 	got := startOfUTCDay(ts)
 	want := time.Date(2026, 6, 27, 0, 0, 0, 0, time.UTC).Unix()

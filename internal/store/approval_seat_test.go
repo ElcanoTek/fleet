@@ -9,6 +9,8 @@ import (
 // happens on a later HTTP request, long after the turn scope closed, and it
 // reopens the seat from this row (#167 residual 2).
 func TestCreateApproval_PersistsAndReadsBackTheStagedSeat(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

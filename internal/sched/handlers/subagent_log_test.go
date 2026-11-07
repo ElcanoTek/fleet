@@ -11,6 +11,8 @@ import (
 // subagent_spawned entry of the task's own persisted log, or the fetch is
 // refused regardless of the caller's task permissions.
 func TestSessionReferencesSubagent(t *testing.T) {
+	t.Parallel()
+
 	spawned := "subagent_spawned"
 	other := "some_other_type"
 	childID := "subagent-12345678-1234-1234-1234-123456789abc"

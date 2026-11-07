@@ -74,6 +74,8 @@ func (f teamFixture) sharedChat(t *testing.T, email, projectID, title string) *C
 // A teammate can read a chat its owner shared with the team; nobody else can,
 // and the refusal is indistinguishable from "no such chat".
 func TestGetTeamVisibleConversation_Gates(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 
@@ -124,6 +126,8 @@ func TestGetTeamVisibleConversation_Gates(t *testing.T) {
 // The ADR-0057 pairing: a team-shared chat always has a place to appear, so
 // every way of taking that place away also unshares the chat.
 func TestTeamShareRequiresATeamSharedProject(t *testing.T) {
+	t.Parallel()
+
 	t.Run("moving out of the project unshares", func(t *testing.T) {
 		f := newTeamFixture(t)
 		personal, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "alice@x.com", Name: "Mine"})
@@ -217,6 +221,8 @@ func TestTeamShareRequiresATeamSharedProject(t *testing.T) {
 // The project home's Team section lists teammates' shared chats in THIS
 // project — not the caller's own, not other projects', not unshared ones.
 func TestListProjectTeamConversations(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	other, err := f.s.CreateProject(f.ctx, &Project{
 		OwnerEmail: "alice@x.com", Name: "Elsewhere", TeamID: "quant",
@@ -285,6 +291,8 @@ func TestListProjectTeamConversations(t *testing.T) {
 // same project, owned by the brancher. The original is untouched, and survives
 // the original being unshared afterwards.
 func TestBranchFromTeamSharedConversation(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	snap, err := f.s.GetTeamVisibleConversation(f.ctx, "bob@x.com", c.ID)
@@ -331,6 +339,8 @@ func TestBranchFromTeamSharedConversation(t *testing.T) {
 
 // The counts the two destructive confirms quote.
 func TestLeaveTeamAndProjectImpactCounts(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	// A second team-shared project, owned by BOB, so alice's leave-impact can
 	// distinguish "projects I'd lose" from "projects I own".
@@ -369,6 +379,8 @@ func TestLeaveTeamAndProjectImpactCounts(t *testing.T) {
 // in it. Red/green: before the project_id filter this deleted filed chats,
 // which made the "chats in a project don't expire" promise false.
 func TestBulkDeleteSkipsProjectChats(t *testing.T) {
+	t.Parallel()
+
 	for _, soft := range []bool{false, true} {
 		name := "hard delete"
 		if soft {
@@ -425,6 +437,8 @@ func TestBulkDeleteSkipsProjectChats(t *testing.T) {
 // Team learnings: the project-scoped memory patch, the promotion of a personal
 // memory, and accepting a proposal straight into the project.
 func TestProjectMemoryManagement(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 
 	m, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "quote spreads in bps", "fact")
@@ -539,6 +553,8 @@ func TestProjectMemoryManagement(t *testing.T) {
 // while the conversations survive, detached — the two halves the delete confirm
 // promises.
 func TestDeleteProjectDropsLearningsKeepsChats(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	if _, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "a learning", "fact"); err != nil {
 		t.Fatal(err)
@@ -575,6 +591,8 @@ func TestDeleteProjectDropsLearningsKeepsChats(t *testing.T) {
 // so before this "the owner left" was terminal: the definition froze and
 // deleting the account destroyed the project and its team learnings.
 func TestTransferProjectOwnership(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	if _, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "alice@x.com", "a learning", "fact"); err != nil {
 		t.Fatal(err)
@@ -645,6 +663,8 @@ func TestTransferProjectOwnership(t *testing.T) {
 // that project and every team learning in it — for people who are still here.
 // It now fails closed and names what to transfer first.
 func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	if _, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "a learning", "fact"); err != nil {
 		t.Fatal(err)
@@ -693,6 +713,8 @@ func TestDeleteUserRefusesToTakeTeamSharedProjects(t *testing.T) {
 // A PERSONAL project still goes with the account: nobody else can see it, so
 // there is nothing to hand over and no one to lose it.
 func TestDeleteUserStillTakesPersonalProjects(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	personal, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "carol@x.com", Name: "Carol's"})
 	if err != nil {
@@ -709,6 +731,8 @@ func TestDeleteUserStillTakesPersonalProjects(t *testing.T) {
 // ProjectMemberEmails is the transfer picker's options: the team, plus the
 // owner (who is a member whether or not there is a team).
 func TestProjectMemberEmails(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	got, err := f.s.ProjectMemberEmails(f.ctx, f.project.ID)
 	if err != nil {
@@ -756,6 +780,8 @@ func TestProjectMemberEmails(t *testing.T) {
 // migration 054 both assertions below failed: a stranger in the new team could
 // list AND read the chat.
 func TestTeamShareAudienceIsStampedNotInferred(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 
@@ -807,6 +833,8 @@ func TestTeamShareAudienceIsStampedNotInferred(t *testing.T) {
 // live to the whole team, listed by ?scope=team, readable by id, and its owner
 // had no surface anywhere that could take it back.
 func TestTeamShareNeedsAnAudienceAndAHome(t *testing.T) {
+	t.Parallel()
+
 	// carol is teamless: no audience to name.
 	t.Run("no team", func(t *testing.T) {
 		f := newTeamFixture(t)
@@ -907,6 +935,8 @@ func TestTeamShareNeedsAnAudienceAndAHome(t *testing.T) {
 // so "not shared" has exactly one representation and a later re-share cannot
 // resurrect an old audience.
 func TestUnsharingClearsTheStampedAudience(t *testing.T) {
+	t.Parallel()
+
 	// Each case gets its own fixture — newTestStore truncates the tables, so a
 	// closure that captured an outer fixture would act on rows that no longer
 	// exist. The fixture is therefore a parameter, not a capture.
@@ -968,6 +998,8 @@ func TestUnsharingClearsTheStampedAudience(t *testing.T) {
 // redaction was one click away from decorative: open the chat you can only see
 // the prose of, hit Branch, read your own copy.
 func TestBranchFromATeammateCopiesOnlyWhatTeamViewShows(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	// A user turn carrying an image that lives in ALICE'S workspace. The agent
@@ -1033,6 +1065,8 @@ func TestBranchFromATeammateCopiesOnlyWhatTeamViewShows(t *testing.T) {
 // and the fork ran with normal network egress and no model restriction while
 // carrying the locked-down chat's history.
 func TestBranchFromATeammateKeepsLockdown(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Sealed", "victoria", "", true)
 	if err != nil {
@@ -1075,6 +1109,8 @@ func TestBranchFromATeammateKeepsLockdown(t *testing.T) {
 // caller's team, which is now ops), and revocable from no surface. Likewise a
 // project re-shared with a different team left the old audience reading it.
 func TestPairingComparesTheTeamNotJustThePresenceOfOne(t *testing.T) {
+	t.Parallel()
+
 	assertUnshared := func(t *testing.T, f teamFixture, id string) {
 		t.Helper()
 		var visible bool
@@ -1127,6 +1163,8 @@ func TestPairingComparesTheTeamNotJustThePresenceOfOne(t *testing.T) {
 // user took, with no window in which to pin it, while the confirm promised
 // members their chats would "expire unless pinned".
 func TestDeletingAProjectGivesMembersAFullRetentionWindow(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c, err := f.s.CreateConversation(f.ctx, "bob@x.com", "Old work", "victoria", "", false)
 	if err != nil {
@@ -1199,6 +1237,8 @@ func listedByItsOwner(t *testing.T, f teamFixture, owner, convID string) bool {
 // rail (re-ticking brought them back, which is how we know they were hidden
 // rather than deleted). Each case below unshares, and each must also unfile.
 func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
+	t.Parallel()
+
 	const (
 		alice = "alice@x.com" // owner of the fixture's team-shared project
 		bob   = "bob@x.com"   // a teammate with a chat filed in it
@@ -1332,6 +1372,8 @@ func TestRevokingProjectAccessUnfilesInsteadOfHiding(t *testing.T) {
 // project holds, and how many people they belong to — and that acting on the
 // project unfiles exactly those.
 func TestProjectImpactCountsChatsFromTeammates(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	mine := f.sharedChat(t, "alice@x.com", f.project.ID, "Mine")
 	bobs := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's")
@@ -1406,6 +1448,8 @@ func embeddedMigrationSQL(t *testing.T, version int) string {
 // the shared test database keeps its already-migrated schema — the same
 // technique TestMigration046_NormalizesLegacyPositionTies uses.
 func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	stranded := f.sharedChat(t, "bob@x.com", f.project.ID, "Bob's branch")
 	owners := f.sharedChat(t, "alice@x.com", f.project.ID, "Alice's study")
@@ -1496,6 +1540,8 @@ func TestMigration055UnfilesChatsTheirOwnersCannotSee(t *testing.T) {
 // merged into one Markdown document: an unclosed fence before the summary
 // swallowed a link after it.
 func TestSummaryBecomesAContentFreeBoundaryForReaders(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Spread study")
 	if _, err := f.s.AppendHistory(f.ctx, c.ID, []agent.HistoryEntry{
@@ -1667,6 +1713,8 @@ func TestTransferRacingTargetDeletionKeepsTheProject(t *testing.T) {
 // took the project lands after it — and is refused, not left filed in a
 // project they can no longer see (which no rail section would list).
 func TestFilingAfterATransferIsRefused(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	ops := "ops"
 	if _, err := f.s.SetUserRoleTeam(f.ctx, "alice@x.com", nil, &ops); err != nil { // alice left quant
@@ -1703,6 +1751,8 @@ func TestFilingAfterATransferIsRefused(t *testing.T) {
 // A conditional refile (the undo of Move and share) moves the chat only while
 // it is still where the caller expected; a newer move made elsewhere wins.
 func TestSetConversationProjectIfIsACompareAndSet(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c, err := f.s.CreateConversation(f.ctx, "alice@x.com", "Moving", "victoria", "", false)
 	if err != nil {
@@ -1742,6 +1792,8 @@ func TestSetConversationProjectIfIsACompareAndSet(t *testing.T) {
 // delete another member's entry — including when the transfer commits while
 // the mutation is waiting on the lock (the handler's gate read the old owner).
 func TestProjectMemoryMutationRechecksOwnerUnderLock(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	m, err := f.s.CreateProjectMemory(f.ctx, f.project.ID, "bob@x.com", "quote spreads in bps", "fact")
 	if err != nil {

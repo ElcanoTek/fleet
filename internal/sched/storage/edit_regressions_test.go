@@ -19,6 +19,8 @@ import (
 )
 
 func TestSuccessAfterRetryClearsErrorMessage(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	owner := uuid.New()
@@ -63,6 +65,8 @@ func TestSuccessAfterRetryClearsErrorMessage(t *testing.T) {
 }
 
 func TestSettleGatedTaskTerminalStampsCompletedAt(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	when := time.Now().UTC().Add(-time.Minute).Truncate(time.Microsecond)
 
@@ -106,6 +110,8 @@ func TestSettleGatedTaskTerminalStampsCompletedAt(t *testing.T) {
 }
 
 func TestPriorityEditChangesDispatchOrder(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -165,6 +171,8 @@ func TestPriorityEditChangesDispatchOrder(t *testing.T) {
 // (nil, SetMaxTotalTokens=false) preserves the task's stored values instead of
 // dropping priority to 0 or clearing max_total_tokens.
 func TestUpdateEditableTaskPreservesOmittedPriorityAndMaxTotalTokens(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -211,6 +219,8 @@ func TestUpdateEditableTaskPreservesOmittedPriorityAndMaxTotalTokens(t *testing.
 // through unchanged, and the write it feeds must refuse a task that has since
 // been claimed — the exact rewind the upsert used to perform.
 func TestTaskEditFromTaskRoundTripsAndRefusesALiveRun(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

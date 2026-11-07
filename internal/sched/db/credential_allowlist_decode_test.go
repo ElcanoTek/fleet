@@ -11,6 +11,8 @@ import (
 // empty, non-nil list — deny all — and the task fails loudly on its first
 // credentialed call instead of running with seats nobody granted it.
 func TestUnmarshalCredentialAllowlistFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	if got := unmarshalCredentialAllowlist(sql.NullString{}); got != nil {
 		t.Fatalf("NULL column must stay nil (inherit), got %#v", got)
 	}

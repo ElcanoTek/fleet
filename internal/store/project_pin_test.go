@@ -8,6 +8,8 @@ import (
 // Pinning a project is a normal owner-scoped patch: the flag round-trips,
 // and a non-owner's attempt is rejected by the owner-scoped UPDATE.
 func TestProjectPin_PatchAndOwnerScope(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	pinned := true
@@ -42,6 +44,8 @@ func TestProjectPin_PatchAndOwnerScope(t *testing.T) {
 // pop back into Pinned on a later unfile. Red/green: without the CASE in
 // SetConversationProject the flag survives filing.
 func TestSetConversationProject_UnpinsOnFile(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "u@x.com"

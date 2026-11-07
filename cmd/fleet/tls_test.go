@@ -7,6 +7,8 @@ import (
 )
 
 func TestRedirectToHTTPS(t *testing.T) {
+	t.Parallel()
+
 	req := httptest.NewRequest("GET", "http://example.com/chat?x=1", nil)
 	req.Host = "example.com:80"
 	rr := httptest.NewRecorder()
@@ -20,6 +22,8 @@ func TestRedirectToHTTPS(t *testing.T) {
 }
 
 func TestSecurityHeadersMiddleware(t *testing.T) {
+	t.Parallel()
+
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	// HSTS present when TLS is active.
@@ -47,6 +51,8 @@ func TestSecurityHeadersMiddleware(t *testing.T) {
 }
 
 func TestStripPort(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ in, want string }{
 		{"example.com:80", "example.com"},
 		{"example.com", "example.com"},

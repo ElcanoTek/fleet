@@ -112,6 +112,8 @@ func TestApprovalOutcomeFlags(t *testing.T) {
 }
 
 func TestHandleApproval_IdempotentEchoesExecutionOutcome(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name       string
 		approval   store.Approval

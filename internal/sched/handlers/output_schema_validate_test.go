@@ -13,6 +13,8 @@ import (
 // nil / valid schemas. Pins that structuredoutput.ValidateSchema is wired into
 // the create+edit validation path.
 func TestValidateTaskCreate_OutputSchema(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "produce a structured report for the team"
 

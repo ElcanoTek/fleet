@@ -40,6 +40,8 @@ func TestWallTimeoutFromEnv(t *testing.T) {
 // clear timeout error — the transient-retry policy is NOT consulted even
 // though the task has retries left, because the timeout is deterministic.
 func TestPoolWallClockTimeout(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := &models.Task{
 		ID:         uuid.New(),
@@ -98,6 +100,8 @@ func TestPoolWallClockTimeout(t *testing.T) {
 // Config.WallClockTimeout (or FLEET_TASK_WALL_TIMEOUT=0) installs no deadline,
 // so a run longer than any would-be ceiling still completes normally.
 func TestPoolWallClockTimeoutDisabled(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 

@@ -18,6 +18,8 @@ import (
 )
 
 func TestVaultUISubmissionSecrets(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	user := "admin@example.com"
 	convID := "conv-vault-1"
@@ -236,6 +238,8 @@ func (m *memRemoteMCPStore) UpdateCustomConnector(_ context.Context, id string, 
 }
 
 func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
+	t.Parallel()
+
 	var gotAuthHeader string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuthHeader = r.Header.Get("Authorization")
@@ -476,6 +480,8 @@ func TestConnectorStudioCreateAndTestCustomHTTPConnector(t *testing.T) {
 }
 
 func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswords(t *testing.T) {
+	t.Parallel()
+
 	memStore := newMemRemoteMCPStore()
 	rmcp := remotemcp.NewService(memStore, remotemcp.Config{
 		PublicBaseURL:     "https://fleet.example.com",

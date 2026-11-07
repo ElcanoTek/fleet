@@ -29,6 +29,8 @@ func getBrandMeta(t *testing.T, s *Server) (*httptest.ResponseRecorder, brandMet
 // A bundle's identity strings must actually come out of the endpoint — this is
 // the plumbing that #892/#894 showed was missing at the render layer.
 func TestBrandMeta_ServesBundleIdentity(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		clientConfig: &clientconfig.Bundle{
 			Branding: clientconfig.Branding{
@@ -79,6 +81,8 @@ func TestBrandMeta_ServesBundleIdentity(t *testing.T) {
 // SAME defaults /client-config uses, so the no-bundle and sparse-bundle
 // experiences cannot drift.
 func TestBrandMeta_NoBundleMatchesClientConfigDefaults(t *testing.T) {
+	t.Parallel()
+
 	w, got := getBrandMeta(t, &Server{})
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -105,6 +109,8 @@ func TestBrandMeta_NoBundleMatchesClientConfigDefaults(t *testing.T) {
 
 // A sparse manifest gets the same defaults, per-field.
 func TestBrandMeta_SparseBundleFallsBackPerField(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		clientConfig: &clientconfig.Bundle{
 			// Mirrors the post-load shape: a manifest with only app_name set has
@@ -136,6 +142,8 @@ func TestBrandMeta_SparseBundleFallsBackPerField(t *testing.T) {
 // web either: <meta name="theme-color"> and the PWA manifest take a bare color,
 // and one definition of "a color fleet emits" (colorValueRe) governs both.
 func TestBrandMeta_DropsUnrenderableBackgrounds(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name  string
 		value string
@@ -166,6 +174,8 @@ func TestBrandMeta_DropsUnrenderableBackgrounds(t *testing.T) {
 // bundle that themes in rgb()/hsl() is not silently downgraded to fleet's purple
 // in the browser chrome.
 func TestBrandMeta_AcceptsFunctionalColorForms(t *testing.T) {
+	t.Parallel()
+
 	for _, v := range []string{"#abc", "#0A0908", "#0A0908FF", "rgb(10, 9, 8)", "rgba(10,9,8,0.5)", "hsl(210 40% 12%)"} {
 		s := &Server{clientConfig: &clientconfig.Bundle{
 			Branding: clientconfig.Branding{Colors: clientconfig.BrandColors{
@@ -183,6 +193,8 @@ func TestBrandMeta_AcceptsFunctionalColorForms(t *testing.T) {
 // has no session), refused without the shared secret (the browser must not be
 // able to reach chat-server directly).
 func TestBrandMeta_TokenGatedIdentityLess(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{sharedToken: "topsecret"}
 	h := s.tokenOnlyMiddleware(http.HandlerFunc(s.brandMeta))
 
@@ -212,6 +224,8 @@ func TestBrandMeta_TokenGatedIdentityLess(t *testing.T) {
 }
 
 func TestBrandMeta_RejectsNonGET(t *testing.T) {
+	t.Parallel()
+
 	for _, m := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequestWithContext(context.Background(), m, "/brand/meta", nil)
 		w := httptest.NewRecorder()
@@ -225,6 +239,8 @@ func TestBrandMeta_RejectsNonGET(t *testing.T) {
 // /brand/meta must not become a second, un-gated /client-config: the empty-state
 // catalog is workspace content, not public identity.
 func TestBrandMeta_CarriesNoWorkspaceContent(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{clientConfig: &clientconfig.Bundle{
 		Branding: clientconfig.Branding{AppName: "Acme"},
 		EmptyState: clientconfig.EmptyState{

@@ -4,21 +4,23 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"net/url"
-	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestAvailableMigrations checks the embedded up-migration enumerator: strictly
 // ascending, positive versions, and names with the .up.sql suffix stripped. Pure
 // (no DB), so it always runs.
 func TestAvailableMigrations(t *testing.T) {
+	t.Parallel()
+
 	avail, err := availableMigrations()
 	if err != nil {
 		t.Fatalf("availableMigrations: %v", err)
@@ -42,6 +44,8 @@ func TestAvailableMigrations(t *testing.T) {
 // TestMigrationStatus checks the applied-vs-pending report against a freshly
 // migrated sched DB. Skips without DATABASE_URL (integration test).
 func TestMigrationStatus(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t) // Init runs every migration
 
 	rep, err := MigrationStatus(context.Background(), db.Conn())
@@ -78,6 +82,8 @@ func TestMigrationStatus(t *testing.T) {
 // would let an old and a new fleet migrate the same database at once during a
 // rolling restart.
 func TestAdvisoryLockIDMatchesGolangMigrate(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct {
 		db, schema, table string
 		want              int64
@@ -97,6 +103,8 @@ func TestAdvisoryLockIDMatchesGolangMigrate(t *testing.T) {
 // no body (golang-migrate recorded it without running anything), files that
 // do not match the pattern ignored, a duplicate version an error.
 func TestLoadMigrations(t *testing.T) {
+	t.Parallel()
+
 	fsys := fstest.MapFS{
 		"m/010_ten.up.sql":     {Data: []byte("SELECT 10;")},
 		"m/010_ten.down.sql":   {Data: []byte("SELECT -10;")},
@@ -127,6 +135,8 @@ func TestLoadMigrations(t *testing.T) {
 }
 
 func TestLineColumn(t *testing.T) {
+	t.Parallel()
+
 	for _, c := range []struct {
 		s              string
 		pos, line, col int
@@ -144,46 +154,23 @@ func TestLineColumn(t *testing.T) {
 	}
 }
 
-// migrationSchemaDB opens a pool whose every connection uses a fresh schema,
-// so the runner's tracking table, lock key and test tables are its own and the
-// shared sched test database is not touched. Skips without DATABASE_URL.
+// migrationSchemaDB opens a pool on a fresh, empty database of the test's own
+// (internal/testdb), every connection in schema migtest, so the runner's
+// tracking table, lock key and test tables are its own.
 func migrationSchemaDB(t *testing.T) (*sql.DB, string) {
 	t.Helper()
-	dsn := os.Getenv("DATABASE_URL")
-	if dsn == "" {
-		t.Skip("DATABASE_URL not set, skipping integration tests")
-	}
-	admin, err := sql.Open("pgx", dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = admin.Close() })
-	if err := admin.Ping(); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Database unavailable, skipping integration tests: %v", err)
-		}
-		t.Fatal(err)
-	}
-	// A scratch DATABASE, not just a schema in the shared one: the shared
-	// sched test database keeps its store in public, and the runner refuses
-	// any store schema next to a fleet store in public (internal/dbschema,
-	// #2055), exactly as it must in production.
-	schema := fmt.Sprintf("migtest_%d", time.Now().UnixNano())
-	if _, err := admin.Exec(`CREATE DATABASE ` + schema); err != nil {
-		t.Skipf("cannot CREATE DATABASE for an isolated migration run: %v", err)
-	}
-	t.Cleanup(func() { _, _ = admin.Exec(`DROP DATABASE IF EXISTS ` + schema + ` WITH (FORCE)`) })
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.Path = "/" + schema
-	scratch, err := sql.Open("pgx", u.String())
+	const schema = "migtest"
+	dsn := testdb.Empty(t)
+	scratch, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = scratch.Exec(`CREATE SCHEMA ` + schema)
 	_ = scratch.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := url.Parse(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,6 +209,8 @@ var testMigrations = fstest.MapFS{
 }
 
 func TestMigrateUp_FreshThenNoChange(t *testing.T) {
+	t.Parallel()
+
 	db, _ := migrationSchemaDB(t)
 	ctx := context.Background()
 	if err := migrateUp(ctx, db, testMigrations, "m"); err != nil {
@@ -242,6 +231,8 @@ func TestMigrateUp_FreshThenNoChange(t *testing.T) {
 // (its own DDL for the tracking table, one clean row) continues from the next
 // version, and the table keeps exactly that shape.
 func TestMigrateUp_ContinuesGolangMigrateState(t *testing.T) {
+	t.Parallel()
+
 	db, schema := migrationSchemaDB(t)
 	ctx := context.Background()
 	for _, q := range []string{
@@ -287,6 +278,8 @@ func TestMigrateUp_ContinuesGolangMigrateState(t *testing.T) {
 // dirty at its version; every later run refuses with DirtyError; forcing the
 // last good version lets the (fixed) set continue.
 func TestMigrateUp_FailureLeavesDirtyThenForce(t *testing.T) {
+	t.Parallel()
+
 	db, _ := migrationSchemaDB(t)
 	ctx := context.Background()
 	broken := fstest.MapFS{
@@ -330,6 +323,8 @@ func TestMigrateUp_FailureLeavesDirtyThenForce(t *testing.T) {
 }
 
 func TestMigrateUp_DatabaseAheadOfBuildRefuses(t *testing.T) {
+	t.Parallel()
+
 	db, _ := migrationSchemaDB(t)
 	ctx := context.Background()
 	if err := migrateUp(ctx, db, testMigrations, "m"); err != nil {

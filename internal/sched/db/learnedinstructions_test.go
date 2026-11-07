@@ -13,6 +13,8 @@ import (
 // #516: feedback capture → distilled proposal (evidence marked consumed) →
 // activation/revert with at-most-one-active, all lease-free and versioned.
 func TestLearnedInstructionsLifecycle(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

@@ -147,7 +147,7 @@ make build        # compile-check ./..., build the web bundle, emit ./fleet with
 make web          # the web bundle only (npm ci + vite build → internal/webui/bundle/dist)
 make dev          # fleet serve + the Vite dev server (hot reload) at http://127.0.0.1:3000
 make compile      # go build ./...   (release config — see the build tag below)
-make test         # scripts/go-test.sh (tagged; DSN-aware parallelism) — FOREGROUND
+make test         # scripts/go-test.sh (tagged; one parallel run) — FOREGROUND
 make test-race    # the same, with -race   (use when touching concurrency)
 make test-cover   # the same, with -coverprofile/-covermode=atomic (writes coverage.out)
 make lint         # golangci-lint + ruff check/format (Python) + migration DDL lint
@@ -337,8 +337,12 @@ same PR.
   holds — preserve that level of explanation when you extend it.
 - Run tests in the **foreground**. Do not background `go test`, and do not
   `pkill -f 'go test'` (it can kill the shell). Prefer `make test` (it sets
-  the host-executor tag and serializes only the packages that share a
-  Postgres DSN — see `scripts/go-test.sh`).
+  the host-executor tag — see `scripts/go-test.sh`). The DB suites need only
+  `FLEET_TEST_DATABASE_URL` (a server whose role can `CREATE DATABASE`): every
+  DB test clones a database of its own from a migrated template
+  (`internal/testdb`; `internal/testdb/fleetdb` for the stores), so never
+  share one, and call `t.Parallel()` unless the test sets env or package
+  globals — docs/TESTING-STRATEGY.md#database-tests.
 - **New task fields thread one way.** A new per-task column is one migration
   plus one row in `taskColumnRegistry`
   (`internal/sched/db/task_columns.go`, #1126) plus the `models.Task` field —

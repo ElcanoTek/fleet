@@ -42,6 +42,8 @@ func mustReplaceRelations(t *testing.T, s *Store, memoryID string, g GraphExtrac
 }
 
 func TestUpsertEntityNormalization(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "graph@x.com"
@@ -90,6 +92,8 @@ func TestUpsertEntityNormalization(t *testing.T) {
 }
 
 func TestReplaceRelationsForMemory(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "graph@x.com"
@@ -183,6 +187,8 @@ func TestReplaceRelationsForMemory(t *testing.T) {
 }
 
 func TestMemoryDeleteCascadesRelations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "graph@x.com"
@@ -215,6 +221,8 @@ func TestMemoryDeleteCascadesRelations(t *testing.T) {
 // (transaction time, incl. retirement time-travel), the valid axis, proposal
 // exclusion, and project scoping — all derived through the memories join.
 func TestGraphAsOfTwoAxes(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "graph@x.com"
@@ -355,6 +363,8 @@ func TestGraphAsOfTwoAxes(t *testing.T) {
 // TestListMemoriesAsOf pins the flat-record twin: identical two-axis
 // semantics over Memory rows.
 func TestListMemoriesAsOf(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "graph@x.com"
@@ -416,6 +426,8 @@ func TestListMemoriesAsOf(t *testing.T) {
 }
 
 func TestGetMemory(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	m := mustCreateMemory(t, s, "a fact")
@@ -435,6 +447,8 @@ func TestGetMemory(t *testing.T) {
 // an extraction larger than one multi-row INSERT chunk must store every triple
 // exactly once, with the chunk boundary invisible to readers.
 func TestReplaceRelationsForMemory_ChunkBoundary(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	m := mustCreateMemory(t, s, "Ada has a lot of preferences")

@@ -9,6 +9,8 @@ import (
 // semantics (a second Set replaces value + attribution), delete-is-reset (and
 // idempotent), and the map read returns exactly the override rows.
 func TestWorkspaceSettingsCRUD(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

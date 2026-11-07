@@ -57,6 +57,8 @@ func notifyFixture(t *testing.T) (http.Handler, *fakeNotifyService) {
 }
 
 func TestAdminNotifySettingsGateAnd501(t *testing.T) {
+	t.Parallel()
+
 	h, _ := notifyFixture(t)
 	if w := do(t, h, http.MethodGet, "/admin/notify-settings", nil, "user@x.com"); w.Code != http.StatusForbidden {
 		t.Fatalf("member GET: %d want 403", w.Code)
@@ -75,6 +77,8 @@ func TestAdminNotifySettingsGateAnd501(t *testing.T) {
 }
 
 func TestAdminNotifySettingsRoundTripWriteOnlySecrets(t *testing.T) {
+	t.Parallel()
+
 	h, svc := notifyFixture(t)
 
 	// Save with a secret: the value reaches the service, never the response.
@@ -141,6 +145,8 @@ func TestAdminNotifySettingsRoundTripWriteOnlySecrets(t *testing.T) {
 // service from the PUT body (absent hour = the default), and an hour outside
 // 0-23 is a 400.
 func TestAdminNotifySettingsOwnerDigestFields(t *testing.T) {
+	t.Parallel()
+
 	h, svc := notifyFixture(t)
 
 	w := do(t, h, http.MethodPut, "/admin/notify-settings", map[string]any{

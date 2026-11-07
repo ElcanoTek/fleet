@@ -11,6 +11,8 @@ import (
 )
 
 func TestTaskLeasing(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	owner := uuid.New()
@@ -115,6 +117,8 @@ func TestTaskLeasing(t *testing.T) {
 // glob-routing setup is removed (the synthetic worker claims tasks directly),
 // but the lease-ownership rejection contract is identical.
 func TestRecoveredTaskRejectsOldNode(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	ownerA := uuid.New()
@@ -201,6 +205,8 @@ func TestRecoveredTaskRejectsOldNode(t *testing.T) {
 // recovered count for a single expired task; this isolates the negative cases in
 // one mixed pending set.
 func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
+	t.Parallel()
+
 	past := time.Now().UTC().Add(-time.Minute)
 	future := time.Now().UTC().Add(LeaseDuration)
 
@@ -278,6 +284,8 @@ func TestRecoverExpiredLeasesSelectivity(t *testing.T) {
 }
 
 func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	owner := uuid.New()
@@ -325,6 +333,8 @@ func TestTaskLeasingUsesFixedLeaseWindow(t *testing.T) {
 // Each writer is driven with an owner that holds no lease on the row — the one
 // precondition all three guards agree on structurally.
 func TestLeaseGuardedWritersReturnLeaseSentinel(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

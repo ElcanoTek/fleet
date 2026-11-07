@@ -14,6 +14,8 @@ import (
 // (#180): nil (shared-workspace task) and a populated config must round-trip
 // without corruption, and an edit must be able to both set and clear it.
 func TestWorktreeConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -58,6 +60,8 @@ func TestWorktreeConfigRoundTrip(t *testing.T) {
 // TestWorktreeConfigEdit exercises the TaskEdit set/clear flag: an edit replaces
 // the config (including replacing it with nil to disable isolation).
 func TestWorktreeConfigEdit(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

@@ -15,6 +15,8 @@ import (
 // active lifecycle, and a terminal transition releases it. The blocked task is
 // skipped — it stays pending for a later claim pass, never failed.
 func TestSerializationKeyMutualExclusion(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	owner := uuid.New()
@@ -90,6 +92,8 @@ func TestSerializationKeyMutualExclusion(t *testing.T) {
 // the claim's single LIMIT-1 candidate slot — a different eligible task behind
 // it is claimed instead (#709).
 func TestSerializationKeyBlockedTaskDoesNotStarveQueue(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	owner := uuid.New()
@@ -133,6 +137,8 @@ func TestSerializationKeyBlockedTaskDoesNotStarveQueue(t *testing.T) {
 // TestSerializationKeyNilUnaffected verifies tasks without a key (including
 // keys normalized away as empty/whitespace) never gate each other.
 func TestSerializationKeyNilUnaffected(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	owner := uuid.New()
@@ -167,6 +173,8 @@ func TestSerializationKeyNilUnaffected(t *testing.T) {
 // clone recipe scheduleNextRecurrence uses, so successive occurrences must stay
 // mutually exclusive with same-key tasks.
 func TestSerializationKeyCarriedByRecurrence(t *testing.T) {
+	t.Parallel()
+
 	task := models.NewTask(models.TaskCreate{
 		Prompt:           "recurring serialized",
 		Recurrence:       "0 9 * * *",

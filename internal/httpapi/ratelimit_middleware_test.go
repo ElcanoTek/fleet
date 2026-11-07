@@ -30,6 +30,8 @@ func attachReq(user string) *http.Request {
 // over-limit request with a JSON 429 + Retry-After, and that every response
 // carries advisory X-RateLimit-* headers.
 func TestChatRateLimitMiddleware_HeadersAnd429(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{RateLimitEnabled: true, RatePerMinute: 2}, nil, nil)
 	mw := s.rateLimitMiddleware(okNext())
 	rpmBefore := metricValue(`fleet_chat_rate_limited_total{reason="rpm"}`)
@@ -71,6 +73,8 @@ func TestChatRateLimitMiddleware_HeadersAnd429(t *testing.T) {
 // TestChatRateLimitMiddleware_AdminExempt verifies ADMIN_EMAILS users bypass the
 // RPM window entirely.
 func TestChatRateLimitMiddleware_AdminExempt(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{RateLimitEnabled: true, RatePerMinute: 1, AdminEmails: []string{"admin@x.com"}}, nil, nil)
 	mw := s.rateLimitMiddleware(okNext())
 	for i := 0; i < 10; i++ {
@@ -85,6 +89,8 @@ func TestChatRateLimitMiddleware_AdminExempt(t *testing.T) {
 // TestChatRateLimitMiddleware_Disabled verifies the master switch off => no
 // limiting and no rate-limit headers.
 func TestChatRateLimitMiddleware_Disabled(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{RateLimitEnabled: false, RatePerMinute: 1}, nil, nil)
 	mw := s.rateLimitMiddleware(okNext())
 	for i := 0; i < 5; i++ {
@@ -99,6 +105,8 @@ func TestChatRateLimitMiddleware_Disabled(t *testing.T) {
 // TestAttachmentsRateLimitMiddleware_429: /attachments shares the /chat
 // sliding window (#1112) so a member cannot loop multi-GB uploads.
 func TestAttachmentsRateLimitMiddleware_429(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{RateLimitEnabled: true, RatePerMinute: 1}, nil, nil)
 	mw := s.rateLimitMiddleware(okNext())
 

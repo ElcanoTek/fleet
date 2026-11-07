@@ -6,10 +6,6 @@ fleet keeps **two stores in one Postgres database**, each in its own schema
 - **chat** (schema `chat`) — conversations, turn events, chat users (the `internal/store` pool).
 - **sched** (schema `sched`) — scheduled tasks, API keys, orchestrator users (the `internal/sched/db` pool).
 
-(A legacy install that has not run `fleet db consolidate` yet keeps each store
-in its own database's `public` schema; everything below works the same there,
-store for store.)
-
 Losing the chat store loses every conversation; losing the sched store loses
 every scheduled task. There is no other copy. Back both up.
 
@@ -30,17 +26,34 @@ custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 `fleet` binary; the `fleet-admin` spelling was removed with the shim —
 [ADR-0060](adr/0060-remove-the-fleet-admin-shim.md).)
 Each store is dumped to its **own** file — its schema (`pg_dump -n chat` /
-`-n sched`), or on a legacy box its database — so you can restore one store
-without touching the other. `fleet restore` reads the dump's table of contents
-first and establishes its schemas from its SCHEMA and TABLE entries; it refuses a
-dump that does not contain the schema the target store uses (the other store's
-dump, or a legacy `public` dump restored into the one database: restore that on
-a legacy box, then run `fleet db consolidate`) or whose schemas cannot be
-determined. It then restores with `pg_restore -n <schema>`, so only the store's
-schema is restored (other schemas in the archive are left out) and `--clean` can
-drop only the target store's objects — never the other store's, which shares
-the database. On a legacy box the store's schema is `public`, and `fleet backup`
-dumps only that (`-n public`), whatever other schemas the database holds.
+`-n sched`) — so you can restore one store without touching the other.
+`fleet restore` reads the dump's table of contents first and establishes its
+schemas from its SCHEMA and TABLE entries; it refuses a dump that does not
+contain the schema the target store uses (the other store's dump, or an old
+dump of the removed two-database layout — see below) or whose schemas cannot
+be determined. It then restores with `pg_restore -n <schema>`, so only the
+store's schema is restored (other schemas in the archive are left out) and
+`--clean` can drop only the target store's objects — never the other store's,
+which shares the database.
+
+**Dumps from before the move to one database.** A dump taken on a box that
+still had two databases (#2049; every box has since moved) holds its store in
+schema `public`. `fleet restore` refuses it with a message saying so: restore
+a dump taken since the box moved to one database instead. If an old dump is
+all there is, import it by hand — restore it into a scratch database, rename
+its schema, and dump that schema:
+
+```sh
+createdb fleet_import
+pg_restore --no-owner --no-acl -d fleet_import fleet-chat-<stamp>.dump
+psql -d fleet_import -c 'ALTER SCHEMA public RENAME TO chat'
+pg_dump -Fc --no-owner --no-acl -n chat -f fleet-chat-imported.dump fleet_import
+fleet restore --db=chat fleet-chat-imported.dump
+dropdb fleet_import
+```
+
+(the same with `sched` for a sched dump; run it as a role that may create a
+database, and with fleet stopped for the restore as below).
 
 ## Prerequisites
 
@@ -48,8 +61,7 @@ dumps only that (`-n public`), whatever other schemas the database holds.
   version as the server, or newer).
 - The same DSN resolution every other `fleet` operator verb uses: `DATABASE_URL`
   with the store's schema (a `--chat-database-url` / `--sched-database-url`
-  naming that database gets the schema too); on a legacy box the per-store
-  `FLEET_CHAT_DATABASE_URL` / `FLEET_SCHED_DATABASE_URL`.
+  gets the store's schema too, unless it names one itself).
 
   On a bootstrapped box these live in the env file, so the verbs need no extra
   flags when run from the fleet environment.

@@ -258,12 +258,15 @@ var nonReloadableWatched = []watchedSetting{
 		lookup: func() (string, bool) { return lookupFleet("SERVER_ADDR") }},
 	{key: "DATABASE_URL / DB_*", reason: "the Postgres connection pools are opened once at startup; restart to reconnect",
 		// Resolve the EFFECTIVE DSNs the same way boot does (ResolveDSNs), so a
-		// change to FLEET_CHAT/SCHED_DATABASE_URL or the discrete
-		// DB_HOST/DB_PORT/... vars is detected too — not just an explicit
-		// DATABASE_URL. The resolved values (which may carry a password) stay
-		// in-process; only the key + reason are ever returned.
+		// change to the discrete DB_HOST/DB_PORT/... vars is detected too —
+		// not just an explicit DATABASE_URL — and so is a retired per-store
+		// key appearing (its refusal). The resolved values (which may carry a
+		// password) stay in-process; only the key + reason are ever returned.
 		lookup: func() (string, bool) {
-			d := ResolveDSNs(ProcessEnv)
+			d, err := ResolveDSNs(ProcessEnv)
+			if err != nil {
+				return err.Error(), true
+			}
 			return d.Chat + "\n" + d.Sched, true
 		}},
 	{key: "FLEET_SERVER_TOKEN", reason: "shared-secret auth; rotating it mid-run would invalidate in-flight sessions; restart to apply",

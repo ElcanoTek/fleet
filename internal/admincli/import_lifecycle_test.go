@@ -20,6 +20,8 @@ import (
 // later admits or drops a status, this fails until the table's birth rows
 // move with it — and vice versa.
 func TestLegacyImportBirthStatusesMatchLifecycle(t *testing.T) {
+	t.Parallel()
+
 	want := importableStatusesFromLifecycle(t)
 	for _, s := range models.AllTaskStatuses {
 		if got := importableTaskStatus(s); got != want[s] {
@@ -42,6 +44,8 @@ func TestLegacyImportBirthStatusesMatchLifecycle(t *testing.T) {
 // predicate directly), so a future edit that stops consulting the gate — the
 // regression #1267 fixed — fails here.
 func TestSchedTaskImportStatusesMatchLifecycle(t *testing.T) {
+	t.Parallel()
+
 	want := importableStatusesFromLifecycle(t)
 	for _, s := range models.AllTaskStatuses {
 		task := &models.Task{ID: uuid.New(), Prompt: "do it", Status: s}

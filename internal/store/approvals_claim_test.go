@@ -14,6 +14,8 @@ import (
 // concurrent approve requests both fired the email. The claim must be
 // the atomic gate, and exactly one caller may win it.
 func TestClaimApproval_OnlyOneWinner(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -64,6 +66,8 @@ func TestClaimApproval_OnlyOneWinner(t *testing.T) {
 }
 
 func TestClaimApproval_UserScopedAndValidated(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -85,6 +89,8 @@ func TestClaimApproval_UserScopedAndValidated(t *testing.T) {
 }
 
 func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -159,6 +165,8 @@ func TestSetApprovalResult_UpdatesClaimedRow(t *testing.T) {
 // the user's) rolls the claim back — the approval is still pending and the
 // model untouched — so the same call can be retried and then wins.
 func TestClaimApprovalAndSetModel_AtomicAndRetryable(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "alice@example.com"

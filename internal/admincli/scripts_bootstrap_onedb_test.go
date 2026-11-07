@@ -11,6 +11,8 @@ import (
 // ONE database and writes DATABASE_URL only (#2049); a re-run reuses the
 // password recorded in DATABASE_URL and never prints it.
 func TestBootstrapProvisionsOneDatabase(t *testing.T) {
+	t.Parallel()
+
 	const livePassword = "placeholder-not-a-secret"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://fleet:"+livePassword+"@127.0.0.1:5432/fleet?sslmode=disable\n"), 0o600); err != nil {
@@ -33,7 +35,7 @@ func TestBootstrapProvisionsOneDatabase(t *testing.T) {
 			t.Errorf("plan missing %q\n--- output ---\n%s", want, out)
 		}
 	}
-	for _, unwanted := range []string{"CREATE DATABASE chat", "CREATE DATABASE sched", "FLEET_CHAT_DATABASE_URL=…", "FLEET_SCHED_DATABASE_URL=…", "legacy two-database layout"} {
+	for _, unwanted := range []string{"CREATE DATABASE chat", "CREATE DATABASE sched", "FLEET_CHAT_DATABASE_URL=…", "FLEET_SCHED_DATABASE_URL=…"} {
 		if strings.Contains(out, unwanted) {
 			t.Errorf("a one-database plan contains %q\n--- output ---\n%s", unwanted, out)
 		}
@@ -41,8 +43,10 @@ func TestBootstrapProvisionsOneDatabase(t *testing.T) {
 }
 
 // TestBootstrapOneDatabaseNameFlags: --db-name/--db-user override the
-// defaults; the legacy per-store flags select the legacy layout.
+// defaults; an unsafe name is refused.
 func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local", "--db-name", "fleet_prod", "--db-user", "fleet_owner")
 	if err != nil {
@@ -61,6 +65,8 @@ func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
 // the role and database from the DATABASE_URL a previous run recorded —
 // never the defaults — and refuses flags or a DSN it cannot honour.
 func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	write := func(dsn string) {
 		t.Helper()
@@ -108,6 +114,8 @@ func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
 // --db-name/--db-user would provision one name and write another into the
 // DSN.
 func TestBootstrapOneDatabaseRejectsMixedCaseNames(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	for _, args := range [][]string{{"--db-name", "Fleet"}, {"--db-user", "FleetOwner"}} {
 		out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", append([]string{"--dry-run", "--postgres=local"}, args...)...)
@@ -122,6 +130,8 @@ func TestBootstrapOneDatabaseRejectsMixedCaseNames(t *testing.T) {
 // it, and FLEET_DB_SUPERUSER_URL grants the DSN's role CREATE on the DSN's
 // own database.
 func TestBootstrapExternalOneDatabaseRerun(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://app:placeholder-not-a-secret@db.example.com:5432/appdb?sslmode=require\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -144,33 +154,28 @@ func TestBootstrapExternalOneDatabaseRerun(t *testing.T) {
 	}
 }
 
-// LEGACY-DB-LAYOUT: remove after consolidation — the test below.
-
-// TestBootstrapKeepsALegacyInstallLegacy: re-running bootstrap on a box whose
-// env file records the per-store DSNs converges the two databases as they are
-// (an upgrade alone must never move or strand data) and points at
-// `fleet db consolidate`; the one-database flags are refused there.
-func TestBootstrapKeepsALegacyInstallLegacy(t *testing.T) {
-	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	legacy := "FLEET_CHAT_DATABASE_URL=postgres://chat:pwA1@127.0.0.1:5432/chat?sslmode=disable\n" +
-		"FLEET_SCHED_DATABASE_URL=postgres://sched:pwB2@127.0.0.1:5432/sched?sslmode=disable\n"
-	if err := os.WriteFile(envFile, []byte(legacy), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local")
-	if err != nil {
-		t.Fatalf("exit: %v\n%s", err, out)
-	}
-	for _, want := range []string{"legacy two-database layout", "fleet db consolidate", "CREATE DATABASE chat OWNER chat", "would set FLEET_SCHED_DATABASE_URL=…"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("legacy re-run plan missing %q\n--- output ---\n%s", want, out)
+// TestBootstrapRefusesRetiredDSNKeys: an env file that still records the
+// per-store DSNs of the removed two-database layout is refused, naming
+// DATABASE_URL (#2049 phase 2) — fleet would refuse to boot with it — and the
+// per-store flags are gone.
+func TestBootstrapRefusesRetiredDSNKeys(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL"} {
+		envFile := filepath.Join(t.TempDir(), "fleet.env")
+		if err := os.WriteFile(envFile, []byte(key+"=postgres://chat:pwA1@127.0.0.1:5432/chat?sslmode=disable\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local")
+		if err == nil || !strings.Contains(out, key+" is no longer supported") || !strings.Contains(out, "set DATABASE_URL") {
+			t.Errorf("%s in the env file was not refused\n--- output ---\n%s", key, out)
+		}
+		if strings.Contains(out, "pwA1") {
+			t.Errorf("the refusal printed the DSN's password\n--- output ---\n%s", out)
 		}
 	}
-	if strings.Contains(out, "would set DATABASE_URL=…") {
-		t.Errorf("a legacy re-run would write DATABASE_URL\n--- output ---\n%s", out)
-	}
-	out, err = runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local", "--db-name", "fleet")
-	if err == nil || !strings.Contains(out, "fleet db consolidate") {
-		t.Errorf("--db-name on a legacy install was not refused\n--- output ---\n%s", out)
+	envFile := filepath.Join(t.TempDir(), "fleet.env")
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local", "--chat-db-name", "chat")
+	if err == nil {
+		t.Errorf("the removed --chat-db-name flag was accepted\n--- output ---\n%s", out)
 	}
 }

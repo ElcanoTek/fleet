@@ -88,6 +88,8 @@ func (f *fakeOpsAdmins) Roles(context.Context) (map[string]string, error) {
 // demote → ops revoke, delete → ops revoke, and the self-demote/self-delete
 // lockout guards.
 func TestAdminUserLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	ops := &fakeOpsAdmins{}
@@ -203,6 +205,8 @@ func TestAdminUserLifecycle(t *testing.T) {
 // TestAdminUserEndpointsRequireAdmin verifies a plain member is 403 on every
 // new mutating route (the adminMiddleware gate).
 func TestAdminUserEndpointsRequireAdmin(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com", "peon@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes()
@@ -227,6 +231,8 @@ func TestAdminUserEndpointsRequireAdmin(t *testing.T) {
 // grants client/readonly without touching the chat role; chat demote drops an
 // implied ops-admin row but leaves an explicit client grant standing.
 func TestAdminUserOpsRole(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	ops := &fakeOpsAdmins{}
@@ -313,6 +319,8 @@ func (failingRenameTeamStore) RenameTeam(context.Context, string, string) (int64
 // 500). Every store error used to come back 400 with the raw driver text, so
 // a Postgres outage read as the admin's own bad request.
 func TestAdminTeamRenameErrorSplit(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "devops")
 	h := s.Routes()

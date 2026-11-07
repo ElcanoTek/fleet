@@ -10,7 +10,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // TestToAgentcoreProviders covers the #289 bundle→resolver translation: nil/empty
@@ -90,18 +90,13 @@ func TestToAgentcoreProviders(t *testing.T) {
 // Without it every non-OpenRouter admin row ran on the resolver's fallback,
 // below a turn's fixed reserve.
 func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
-	chatDsn := testdb.ChatDSN(t)
+	chatDsn := fleetdb.New(t).ChatDSN()
 	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chat.Close() })
 	ctx := context.Background()
-	// loadDBLLMProviders decrypts every enabled row, and this store has no
-	// cipher: a keyed row left by another package's test would fail the read.
-	if err := chat.TruncateAllForTest(ctx); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
 	name := "ctxwin-" + strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))
 	row, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
 		Name: name, Type: "ollama", Models: []string{"qwen3-coder"}, Enabled: true, ContextWindowTokens: 65536,
@@ -148,17 +143,15 @@ func TestLoadDBLLMProvidersCarriesTheContextWindow(t *testing.T) {
 // TestLoadDBLLMProvidersCarriesTheRegion: a bedrock row's Region (migration
 // 092) reaches the routing table, where it picks the endpoint the row calls.
 func TestLoadDBLLMProvidersCarriesTheRegion(t *testing.T) {
-	chatDsn := testdb.ChatDSN(t)
+	t.Parallel()
+
+	chatDsn := fleetdb.New(t).ChatDSN()
 	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chat.Close() })
 	ctx := context.Background()
-	// No cipher here either, so no keyed row may be left over (see above).
-	if err := chat.TruncateAllForTest(ctx); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
 	row, err := chat.CreateLLMProvider(ctx, store.LLMProviderInput{
 		Name: "aws-region", Type: "bedrock", Models: []string{"anthropic.claude-haiku-4-5-20251001-v1:0"},
 		Enabled: true, ContextWindowTokens: 200000, Region: "ap-southeast-2",

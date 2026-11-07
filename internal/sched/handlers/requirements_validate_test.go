@@ -30,6 +30,8 @@ const wantRequirementsRejection = `execution requirements: invalid server or too
 // there, naming the identifier and the rule; a well-formed one and a prompt
 // with no declaration pass.
 func TestValidateTaskCreate_ExecutionRequirements(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	err := h.validateTaskCreate(&models.TaskCreate{Prompt: malformedRequirementsPrompt})
 	if err == nil || err.Error() != wantRequirementsRejection {
@@ -47,6 +49,8 @@ func TestValidateTaskCreate_ExecutionRequirements(t *testing.T) {
 // End to end over HTTP (DB-backed): create, edit and definition import all
 // refuse the malformed line with the same message, and nothing is written.
 func TestTaskWritesRejectMalformedExecutionRequirements(t *testing.T) {
+	t.Parallel()
+
 	store, h, cleanup := setupFullHandler(t)
 	defer cleanup()
 	r := chi.NewRouter()

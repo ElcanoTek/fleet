@@ -13,6 +13,8 @@ import (
 // with the same message as the HTTP API: sched task import, task import,
 // sched task batch, and the legacy bundle importer.
 func TestCLIWritePathsRejectMalformedExecutionRequirements(t *testing.T) {
+	t.Parallel()
+
 	bad := "Refresh the page.\n" + models.ExecutionRequirementsMarker + "\n" + `{"mcp_servers":["fast_io + fastio_helpers","pages"]}`
 	const want = `invalid server or tool identifier "fast_io + fastio_helpers"`
 	check := func(t *testing.T, path string, err error) {
@@ -41,6 +43,8 @@ func TestCLIWritePathsRejectMalformedExecutionRequirements(t *testing.T) {
 // dispatch, so it must not make a whole cross-box export unrestorable. Only a
 // live (pending/scheduled) row is refused (#1601).
 func TestImportsPreserveMalformedTerminalHistory(t *testing.T) {
+	t.Parallel()
+
 	bad := "Refresh the page.\n" + models.ExecutionRequirementsMarker + "\n" + `{"mcp_servers":["fast_io + fastio_helpers","pages"]}`
 	for _, status := range []models.TaskStatus{models.TaskStatusSuccess, models.TaskStatusError, models.TaskStatusCancelled, models.TaskStatusDeadLettered} {
 		if err := validateImportedTask(&models.Task{Prompt: bad, Status: status}); err != nil {

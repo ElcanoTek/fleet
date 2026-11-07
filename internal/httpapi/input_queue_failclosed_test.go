@@ -47,6 +47,8 @@ func (s *failClosedStore) CountPendingInputs(ctx context.Context, convID string)
 // falling through would start a fresh (billed) turn for an input that may
 // already have been accepted.
 func TestChatSubmit_LookupErrorFailsClosed_IdlePath(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := &failClosedStore{fakeChatStore: newFakeChatStore(), lookupErr: errors.New("db down")}
 	srv := newDefaultChatServer(t, engine, st)
@@ -72,6 +74,8 @@ func TestChatSubmit_LookupErrorFailsClosed_IdlePath(t *testing.T) {
 // Busy path: a depth-cap count error must refuse the submission, not waive the
 // unattended-spend cap.
 func TestQueueSubmit_CountErrorFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	eng := &gatedEngine{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
 	st := &failClosedStore{fakeChatStore: newFakeChatStore(), countErr: errors.New("db down")}
 	srv := newDefaultChatServer(t, eng, st)
@@ -101,6 +105,8 @@ func TestQueueSubmit_CountErrorFailsClosed(t *testing.T) {
 // Busy path at the cap: a replay-lookup error is a 500 (retryable, says nothing
 // about the input), not a misleading 429 "queue full" refusal.
 func TestQueueSubmit_LookupErrorAtCapIs500Not429(t *testing.T) {
+	t.Parallel()
+
 	eng := &gatedEngine{started: make(chan struct{}, 1), release: make(chan struct{}, 1)}
 	st := &failClosedStore{
 		fakeChatStore:   newFakeChatStore(),
@@ -139,6 +145,8 @@ func (s *aheadFailStore) InputsAhead(context.Context, string) (int, bool, error)
 // queued when it runs, so a failed count still answers 202 — without
 // "ahead", so a client names no place rather than a wrong one.
 func TestQueueSubmit_AheadCountErrorStillAcknowledges(t *testing.T) {
+	t.Parallel()
+
 	eng := &gatedEngine{started: make(chan struct{}, 2), release: make(chan struct{}, 2)}
 	st := &aheadFailStore{fakeChatStore: newFakeChatStore()}
 	srv := newDefaultChatServer(t, eng, st)
@@ -201,6 +209,8 @@ func (s *capReplayStore) CountPendingInputs(context.Context, string) (int, error
 // The queue-cap replay (a full queue answering a resend of an input it
 // already holds) carries the input's place in line like every other ack.
 func TestQueueSubmit_CapReplayAckCarriesPlaceInLine(t *testing.T) {
+	t.Parallel()
+
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
 	st := &capReplayStore{fakeChatStore: newFakeChatStore()}
 	srv := newDefaultChatServer(t, eng, st)
@@ -243,6 +253,8 @@ func TestQueueSubmit_CapReplayAckCarriesPlaceInLine(t *testing.T) {
 // the next claim cancels it: its ack names no place in line, and that
 // expected "not in line" is not an error.
 func TestQueueSubmit_StampedReplayAckNamesNoPlace(t *testing.T) {
+	t.Parallel()
+
 	eng := &gatedEngine{started: make(chan struct{}, 2), release: make(chan struct{}, 2)}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)

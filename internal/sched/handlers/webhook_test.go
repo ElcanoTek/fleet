@@ -32,6 +32,8 @@ func sign(secret string, body []byte) string {
 // tests exercise the sched handler that consumes it end to end.
 
 func TestRenderTriggerTemplate(t *testing.T) {
+	t.Parallel()
+
 	body := []byte(`{"action":"opened","pr":{"number":7}}`)
 	req := httptest.NewRequest(http.MethodPost, "/triggers/x", nil)
 	req.Header.Set("User-Agent", "GitHub-Hookshot/abc")
@@ -79,6 +81,8 @@ func TestRenderTriggerTemplate(t *testing.T) {
 // fires a signed webhook, and asserts a fresh pending run is spawned with the
 // rendered prompt. It also covers the indistinguishable-401 paths.
 func TestHandleWebhookTrigger_Integration(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 

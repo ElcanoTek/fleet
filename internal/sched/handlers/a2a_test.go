@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +33,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func setupA2A(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) {
@@ -54,17 +54,10 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 	tmpDir := t.TempDir()
 
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		t.Fatalf("init storage: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	acquireTestLock(t, store)
-	if err := cleanDB(store); err != nil {
-		t.Fatalf("clean db: %v", err)
-	}
 
 	keyMgr, err := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 	if err != nil {
@@ -186,6 +179,8 @@ func mintTaskKey(t *testing.T, keyMgr *apikeys.Manager, name string) (string, st
 }
 
 func TestA2ADisabledAnswers501(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{}, nil, nil)
 	for _, route := range []struct{ method, path string }{
 		{"GET", "/.well-known/agent-card.json"},
@@ -206,6 +201,8 @@ func TestA2ADisabledAnswers501(t *testing.T) {
 }
 
 func TestA2AAgentCardServing(t *testing.T) {
+	t.Parallel()
+
 	_, _, mux := setupA2A(t)
 
 	req := httptest.NewRequest("GET", "/.well-known/agent-card.json", nil)
@@ -230,6 +227,8 @@ func TestA2AAgentCardServing(t *testing.T) {
 }
 
 func TestA2AVersionAndAuthGating(t *testing.T) {
+	t.Parallel()
+
 	_, keyMgr, mux := setupA2A(t)
 	rawKey, _ := mintTaskKey(t, keyMgr, "gating")
 
@@ -256,6 +255,8 @@ func TestA2AVersionAndAuthGating(t *testing.T) {
 }
 
 func TestA2AMethodGating(t *testing.T) {
+	t.Parallel()
+
 	_, keyMgr, mux := setupA2A(t)
 	rawKey, _ := mintTaskKey(t, keyMgr, "methods")
 
@@ -280,6 +281,8 @@ func TestA2AMethodGating(t *testing.T) {
 }
 
 func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "creator")
 
@@ -364,6 +367,8 @@ func TestA2ASendMessageCreatesGovernedTask(t *testing.T) {
 // outcome — never the just-created SUBMITTED row a conformant client would
 // read as an empty delegation.
 func TestA2ASendMessageDefaultWaitsForOutcome(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawKey, _ := mintTaskKey(t, keyMgr, "blocker")
 
@@ -450,6 +455,8 @@ func TestA2ASendMessageDefaultWaitsForOutcome(t *testing.T) {
 }
 
 func TestA2AReadsAreCreatorScoped(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawA, keyA := mintTaskKey(t, keyMgr, "alice")
 	rawB, _ := mintTaskKey(t, keyMgr, "bob")
@@ -546,6 +553,8 @@ func TestA2AReadsAreCreatorScoped(t *testing.T) {
 }
 
 func TestA2AListTasksPaginationAndFilters(t *testing.T) {
+	t.Parallel()
+
 	_, keyMgr, mux := setupA2A(t)
 	rawKey, _ := mintTaskKey(t, keyMgr, "pager")
 	for i := 0; i < 3; i++ {
@@ -609,6 +618,8 @@ func TestA2AListTasksPaginationAndFilters(t *testing.T) {
 }
 
 func TestA2ACancelTask(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawA, keyA := mintTaskKey(t, keyMgr, "canceller")
 	rawB, _ := mintTaskKey(t, keyMgr, "other")
@@ -677,6 +688,8 @@ func TestA2ACancelTask(t *testing.T) {
 }
 
 func TestA2AInputRequiredRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawA, keyA := mintTaskKey(t, keyMgr, "answerer")
 
@@ -745,6 +758,8 @@ func TestA2AInputRequiredRoundTrip(t *testing.T) {
 // (no v0.3 `final` flag). Transitions are made in the DB, proving the row —
 // not the in-memory buffer — is the event source (nothing lost to eviction).
 func TestA2AStreamingLifecycle(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawA, keyA := mintTaskKey(t, keyMgr, "streamer")
 
@@ -875,6 +890,8 @@ read:
 // A streaming send or answer from a credential at its stream cap is refused
 // before the task is created or resumed: the refusal leaves nothing changed.
 func TestA2AStreamingRefusedAtCapChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux, h := setupA2AHandlers(t, false)
 	rawA, keyA := mintTaskKey(t, keyMgr, "capped")
 	streamKey := a2aStreamKey(principal{apiKey: &apikeys.APIKey{KeyID: keyA}})

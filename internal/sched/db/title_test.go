@@ -15,6 +15,8 @@ import (
 // derive from taskColumnRegistry (#1126), but each write path still gets its
 // own end-to-end proof.
 func TestTitleRoundTripsThroughEveryWritePath(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -90,6 +92,8 @@ func TestTitleRoundTripsThroughEveryWritePath(t *testing.T) {
 // number of tasks may share one. This is exactly why the display label could not
 // simply reuse the name column.
 func TestTitlesNeedNotBeUnique(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

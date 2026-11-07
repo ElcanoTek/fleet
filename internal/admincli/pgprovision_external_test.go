@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestExternalSchemaPrivilegeCheck (#2055 review): external-mode bootstrap
@@ -19,36 +20,40 @@ import (
 // fleet's schemas, and the FLEET_DB_SUPERUSER_URL SQL must fix exactly that.
 // Runs pgprovision.sh's functions against the test server.
 func TestExternalSchemaPrivilegeCheck(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	t.Parallel()
+
 	if _, err := exec.LookPath("psql"); err != nil {
 		t.Skip("psql not installed")
 	}
 	ctx := context.Background()
-	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
+	maint := testdb.MaintenanceDSN(t)
+	admin, err := sql.Open("pgx", maint)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
-	const db, role, pw = "fleet_extpriv_test", "fleet_extpriv_role", "placeholder-not-a-secret"
-	cleanup := func() {
-		_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
-		_, _ = admin.ExecContext(ctx, "DROP ROLE IF EXISTS "+role)
-	}
-	cleanup()
-	defer cleanup()
+	t.Cleanup(func() { _ = admin.Close() })
+	// A role is server-wide, so its name is fixed. It can only be dropped
+	// once the database holding its grants and schemas is gone, and testdb
+	// may drop that in the background after the test — so the test drops
+	// its database itself, then the role.
+	const role, pw = "fleet_extpriv_role", "placeholder-not-a-secret"
+	_, _ = admin.ExecContext(ctx, "DROP ROLE IF EXISTS "+role)
 	if _, err := admin.ExecContext(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD '"+pw+"'"); err != nil {
-		t.Skipf("cannot create a role: %v", err)
+		if strings.Contains(err.Error(), "42501") {
+			t.Skipf("the test role cannot CREATE ROLE (CREATEROLE is not part of the test contract): %v", err)
+		}
+		t.Fatalf("create a role: %v", err)
 	}
-	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil { // owned by the test superuser
-		t.Fatal(err)
-	}
+	dbDSN := testdb.Empty(t) // owned by the test role
+	db := strings.TrimPrefix(func() string { u, _ := url.Parse(dbDSN); return u.Path }(), "/")
+	t.Cleanup(func() {
+		_, _ = admin.ExecContext(context.Background(), `DROP DATABASE IF EXISTS "`+db+`" WITH (FORCE)`)
+		_, _ = admin.ExecContext(context.Background(), "DROP ROLE IF EXISTS "+role)
+	})
 	// A hardened database: no USAGE on public for anyone. The readiness
 	// check must still work (it reads the catalogs; to_regclass on
 	// 'public.…' would fail for the role).
-	if h, err := sql.Open("pgx", withDBName(t, base, db)); err != nil {
+	if h, err := sql.Open("pgx", dbDSN); err != nil {
 		t.Fatal(err)
 	} else {
 		_, err = h.ExecContext(ctx, "REVOKE ALL ON SCHEMA public FROM PUBLIC")
@@ -57,7 +62,7 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	u, _ := url.Parse(withDBName(t, base, db))
+	u, _ := url.Parse(dbDSN)
 	u.User = url.UserPassword(role, pw)
 	roleDSN := u.String()
 
@@ -109,7 +114,7 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	if !strings.Contains(string(out), `GRANT CONNECT, CREATE ON DATABASE "`+db+`" TO "`+role+`"`) {
 		t.Fatalf("superuser SQL:\n%s", out)
 	}
-	psql := exec.Command("psql", "-X", "-v", "ON_ERROR_STOP=1", "-q", withDBName(t, base, "postgres"))
+	psql := exec.Command("psql", "-X", "-v", "ON_ERROR_STOP=1", "-q", maint)
 	psql.Stdin = strings.NewReader(string(out))
 	if o, err := psql.CombinedOutput(); err != nil {
 		t.Fatalf("superuser SQL failed: %v\n%s", err, o)
@@ -121,7 +126,7 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		t.Fatalf("bootstrap's privilege gate refused a granted role: %v: %s", err, out)
 	}
 
-	tdb, err := sql.Open("pgx", withDBName(t, base, db))
+	tdb, err := sql.Open("pgx", dbDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,15 +165,15 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		t.Fatal("the role's own schemas were refused once the stray table was gone")
 	}
 
-	// #2055 review: a database whose public holds a fleet store is refused,
-	// pointing at consolidation, whatever the privileges.
+	// #2055 review: a database whose public holds a fleet store (the removed
+	// two-database layout) is refused, whatever the privileges.
 	if _, err := tdb.ExecContext(ctx, "CREATE TABLE public.schema_migrations (version int)"); err != nil {
 		t.Fatal(err)
 	}
 	if got := readiness(); got != 2 {
 		t.Fatalf("a legacy store in public: readiness %d, want 2", got)
 	}
-	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "fleet db consolidate") {
+	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "removed two-database layout") {
 		t.Fatalf("the gate did not refuse a legacy store in public: %v: %s", err, out)
 	}
 }
@@ -223,6 +228,8 @@ func assertReadinessParity(t *testing.T, db *sql.DB, shellCode int, shellOut str
 // TestDSNRoleDB: fleet_dsn_role_db takes the role and database only from a
 // URL DSN whose names are lower-case plain identifiers.
 func TestDSNRoleDB(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -267,6 +274,8 @@ func bootstrapFunc(t *testing.T, name string) string {
 // and external mode — run the privilege gate after SELECT 1 and before
 // reporting success.
 func TestBootstrapAdoptAndExternalCheckSchemaPrivilege(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "bootstrap.sh"))
 	if err != nil {
 		t.Fatal(err)

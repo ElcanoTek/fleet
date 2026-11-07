@@ -48,6 +48,8 @@ func epochRequest(method, path, epoch string) *http.Request {
 }
 
 func TestHeaderTrust_SessionEpoch(t *testing.T) {
+	t.Parallel()
+
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	do := func(h *Handlers, epoch string) *httptest.ResponseRecorder {
@@ -134,6 +136,8 @@ func TestHeaderTrust_SessionEpoch(t *testing.T) {
 }
 
 func TestHeaderTrust_ExternalSessionEpoch(t *testing.T) {
+	t.Parallel()
+
 	h := epochHandler(liveEpochLookup)
 	h.SetExternalSessionEpochProvider(func(_ context.Context, issuer, subject, email string) (string, error) {
 		if issuer != "https://auth.example.com" || subject != "account-123" || email != "alice@elcanotek.com" {
@@ -169,6 +173,8 @@ func TestHeaderTrust_ExternalSessionEpoch(t *testing.T) {
 // others — task create/rerun and the upload staging area are the highest-value
 // routes on this plane.
 func TestHeaderTrust_SessionEpochOnRoutesOutsideTheAuthMiddleware(t *testing.T) {
+	t.Parallel()
+
 	t.Run("authorizeTaskCreator", func(t *testing.T) {
 		h := epochHandler(liveEpochLookup)
 		rr := httptest.NewRecorder()

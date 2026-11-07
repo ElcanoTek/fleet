@@ -11,6 +11,8 @@ import (
 // on the row (the AEAD AAD binds secrets to the owner), and die with the
 // server row (cascade).
 func TestRemoteMCPShares(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const owner = "owner@elcano.com"

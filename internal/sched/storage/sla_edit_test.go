@@ -16,6 +16,8 @@ import (
 // payload values to the defaults — the same rule NewTask applies — so the
 // NOT NULL columns never persist an unusable threshold.
 func TestTaskSLAEditRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

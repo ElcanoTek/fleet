@@ -11,6 +11,8 @@ import (
 )
 
 func TestSessionTail(t *testing.T) {
+	t.Parallel()
+
 	// nil / empty → "".
 	if got := sessionTail(nil, 5, 100); got != "" {
 		t.Errorf("nil session → %q, want empty", got)
@@ -68,6 +70,8 @@ func (f *fakeAnalyzer) AnalyzeTaskFailure(_ context.Context, _, errMsg, sessionT
 // (non-retryable) failure and asserts the injected analyzer ran and its result
 // was persisted to error_analysis via the lease-free path.
 func TestMaybeAnalyzeFailure_PersistsOnTerminal(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 	taskID := tasks[0].ID
@@ -125,6 +129,8 @@ func TestMaybeAnalyzeFailure_PersistsOnTerminal(t *testing.T) {
 // TestMaybeAnalyzeFailure_SkipsOnSuccess confirms a SUCCESSFUL task never invokes
 // the analyzer (the hook is on terminal-failure branches only).
 func TestMaybeAnalyzeFailure_SkipsOnSuccess(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 	taskID := tasks[0].ID

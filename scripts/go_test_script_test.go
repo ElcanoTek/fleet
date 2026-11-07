@@ -4,91 +4,77 @@
 package scripts
 
 import (
-	"bufio"
-	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
 
-func goTestPrintGroups(t *testing.T, root string) (classified map[string]string, groupCount map[string]int) {
-	t.Helper()
-	out, err := exec.Command(filepath.Join(root, "scripts", "go-test.sh"), "--print-groups").CombinedOutput()
+// sharedDBPatterns are the ways a test used to reach a database it shared
+// with other tests: the old per-store DSN variables read directly, the
+// cross-package advisory lock, the TRUNCATE fixture, and the httpapi lane's
+// third database. Every DB test now gets a database of its own from
+// internal/testdb (#2049 M2), which is the only code allowed to read the
+// maintenance DSN; a test that reintroduces one of these would share state
+// with whatever runs beside it — and the whole tree now runs in parallel.
+var sharedDBPatterns = []string{
+	`os.Getenv("DATABASE_URL")`,
+	`envreg.Get("DATABASE_URL")`,
+	`envreg.Lookup("DATABASE_URL")`,
+	`"FLEET_TEST_DATABASE_URL"`,
+	`pg_advisory_lock(1)`,
+	`TruncateAllForTest`,
+	`HTTPAPI_TEST_DATABASE_URL`,
+}
+
+// TestNoTestSharesADatabase is the guard for the parallel suite: no _test.go
+// file outside internal/testdb reads the DSN variables or uses a shared-DB
+// device; DB tests go through internal/testdb (or internal/testdb/fleetdb).
+func TestNoTestSharesADatabase(t *testing.T) {
+	root := repoRoot(t)
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", "web", ".git", "node_modules":
+				return filepath.SkipDir
+			}
+			if rel, _ := filepath.Rel(root, path); filepath.ToSlash(rel) == "internal/testdb" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, "_test.go") || filepath.Base(path) == "go_test_script_test.go" {
+			return nil
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(root, path)
+		for _, p := range sharedDBUses(string(body)) {
+			t.Errorf("%s uses %s: get a database of the test's own from internal/testdb (docs/TESTING.md)", rel, p)
+		}
+		return nil
+	})
 	if err != nil {
-		t.Fatalf("go-test.sh --print-groups: %v\n%s", err, out)
-	}
-	classified = map[string]string{}
-	groupCount = map[string]int{}
-	sc := bufio.NewScanner(bytes.NewReader(out))
-	for sc.Scan() {
-		line := sc.Text()
-		group, pkg, ok := strings.Cut(line, "\t")
-		if !ok || group == "" || pkg == "" {
-			t.Fatalf("malformed --print-groups line %q", line)
-		}
-		if prev, dup := classified[pkg]; dup {
-			t.Errorf("package %s classified as both %s and %s", pkg, prev, group)
-		}
-		classified[pkg] = group
-		groupCount[group]++
-	}
-	if err := sc.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return classified, groupCount
 }
 
-func goListAll(t *testing.T, root string) map[string]bool {
-	t.Helper()
-	cmd := exec.Command("go", "list", "-tags", "fleet_host_executor", "./...")
-	cmd.Dir = root
-	listed, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list: %v\n%s", err, listed)
-	}
-	want := map[string]bool{}
-	for _, pkg := range strings.Split(strings.TrimSpace(string(listed)), "\n") {
-		if pkg != "" {
-			want[pkg] = true
-		}
-	}
-	return want
-}
-
-// TestGoTestScriptPartitionsEveryPackage is the load-bearing check for
-// scripts/go-test.sh: every `go list` package is in exactly one group.
-func TestGoTestScriptPartitionsEveryPackage(t *testing.T) {
+// TestDBPackagesRunInBackgroundMode: a package whose tests get databases from
+// internal/testdb has a TestMain that calls testdb.Run, so its clones are
+// made ahead and dropped off the critical path — and none outlives the run.
+// Without it the package still works (synchronous clones), just slower,
+// which is exactly the kind of regression nobody notices.
+func TestDBPackagesRunInBackgroundMode(t *testing.T) {
 	root := repoRoot(t)
-	classified, groupCount := goTestPrintGroups(t, root)
-	want := goListAll(t, root)
-
-	for pkg := range want {
-		if _, ok := classified[pkg]; !ok {
-			t.Errorf("go list package %s is missing from go-test.sh --print-groups", pkg)
-		}
-	}
-	for pkg := range classified {
-		if !want[pkg] {
-			t.Errorf("go-test.sh reports %s but go list does not", pkg)
-		}
-	}
-	for _, g := range []string{"independent", "chat", "sched", "both"} {
-		if groupCount[g] == 0 {
-			t.Errorf("group %s is empty — the partition or go list is broken", g)
-		}
-	}
-}
-
-// TestGoTestScriptSerializesDSNTests: a new package that starts TRUNCATEing
-// fleet_chat_test from the independent group would otherwise pass locally
-// and deadlock in CI.
-func TestGoTestScriptSerializesDSNTests(t *testing.T) {
-	root := repoRoot(t)
-	classified, _ := goTestPrintGroups(t, root)
-	const module = "github.com/ElcanoTek/fleet"
-
+	uses, runs := map[string]bool{}, map[string]bool{}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -100,83 +86,89 @@ func TestGoTestScriptSerializesDSNTests(t *testing.T) {
 			}
 			return nil
 		}
-		return checkDSNTestFile(t, root, module, classified, path)
+		if !strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel, _ := filepath.Rel(root, filepath.Dir(path))
+		rel = filepath.ToSlash(rel)
+		if rel == "internal/testdb" || rel == "scripts" {
+			return nil // testdb tests its own modes; scripts only names them
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := string(body)
+		if strings.Contains(text, `"github.com/ElcanoTek/fleet/internal/testdb"`) || strings.Contains(text, `"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"`) {
+			uses[rel] = true
+		}
+		if strings.Contains(text, "testdb.Run(m)") {
+			runs[rel] = true
+		}
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-}
-
-func checkDSNTestFile(t *testing.T, root, module string, classified map[string]string, path string) error {
-	t.Helper()
-	if !strings.HasSuffix(path, "_test.go") || filepath.Base(path) == "go_test_script_test.go" {
-		return nil
+	if len(uses) == 0 {
+		t.Fatal("no package uses internal/testdb — the walk is broken")
 	}
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	usesChat, usesSched := dsnUse(string(body))
-	if !usesChat && !usesSched {
-		return nil
-	}
-	rel, err := filepath.Rel(root, filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	pkg := module + "/" + filepath.ToSlash(rel)
-	group, ok := classified[pkg]
-	if !ok {
-		t.Errorf("%s talks to a shared DSN but its package %s is not in go list ./...", path, pkg)
-		return nil
-	}
-	serial := group == "chat" || group == "sched" || group == "both"
-	switch {
-	case !serial:
-		t.Errorf("%s uses a shared DSN but package %s is in group %s (want chat, sched, or both)", rel, pkg, group)
-	case usesChat && group == "sched":
-		t.Errorf("%s uses the chat DSN but package %s is in group sched", rel, pkg)
-	case usesSched && group == "chat":
-		t.Errorf("%s uses the sched DSN but package %s is in group chat", rel, pkg)
-	}
-	return nil
-}
-
-// dsnUse reports whether a test file's text touches the chat and/or sched
-// test database. internal/testdb is the shared gate (#2019): its ChatDSN reads
-// FLEET_TEST_DATABASE_URL and its SchedDB/SchedDSN read DATABASE_URL (SchedDB
-// also takes pg_advisory_lock), so a call to one is a DSN use exactly like the
-// inline forms.
-func dsnUse(text string) (chat, sched bool) {
-	chat = strings.Contains(text, "FLEET_TEST_DATABASE_URL") || strings.Contains(text, "testdb.ChatDSN(")
-	sched = strings.Contains(text, `os.Getenv("DATABASE_URL")`) || strings.Contains(text, "pg_advisory_lock") ||
-		strings.Contains(text, "testdb.SchedDB(") || strings.Contains(text, "testdb.SchedDSN(")
-	return chat, sched
-}
-
-func TestDSNUseRecognisesTestdb(t *testing.T) {
-	cases := []struct {
-		text        string
-		chat, sched bool
-	}{
-		{`dsn := testdb.ChatDSN(t)`, true, false},
-		{`database := testdb.SchedDB(t, "tasks")`, false, true},
-		{`dsn := testdb.SchedDSN(t)`, false, true},
-		{`os.Getenv("FLEET_TEST_DATABASE_URL")`, true, false},
-		{`os.Getenv("DATABASE_URL")`, false, true},
-		{`conn.Exec("SELECT pg_advisory_lock(1)")`, false, true},
-		{`nothing here`, false, false},
-	}
-	for _, tc := range cases {
-		if chat, sched := dsnUse(tc.text); chat != tc.chat || sched != tc.sched {
-			t.Errorf("dsnUse(%q) = (%v, %v), want (%v, %v)", tc.text, chat, sched, tc.chat, tc.sched)
+	for dir := range uses {
+		if !runs[dir] {
+			t.Errorf("%s gets test databases from internal/testdb but has no TestMain calling testdb.Run(m)", dir)
 		}
+	}
+}
+
+// sharedDBUses returns the sharedDBPatterns text contains.
+func sharedDBUses(text string) []string {
+	var out []string
+	for _, p := range sharedDBPatterns {
+		if strings.Contains(text, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func TestSharedDBUsesRecognisesEachPattern(t *testing.T) {
+	for _, tc := range []struct {
+		text string
+		want int
+	}{
+		{`dsn := os.Getenv("DATABASE_URL")`, 1},
+		{`dsn := envreg.Get("DATABASE_URL")`, 1},
+		{`base := os.Getenv("FLEET_TEST_DATABASE_URL")`, 1},
+		{`conn.Exec("SELECT pg_advisory_lock(1)")`, 1},
+		{`s.TruncateAllForTest(ctx)`, 1},
+		{`export HTTPAPI_TEST_DATABASE_URL=x`, 1},
+		{`// Skips when FLEET_TEST_DATABASE_URL is unset (internal/testdb).`, 0},
+		{`dsn := fleetdb.New(t).ChatDSN()`, 0},
+	} {
+		if got := sharedDBUses(tc.text); len(got) != tc.want {
+			t.Errorf("sharedDBUses(%q) = %v, want %d match(es)", tc.text, got, tc.want)
+		}
+	}
+}
+
+// TestGoTestScriptIsOneRun: with no shared databases there is nothing to
+// partition, so the script must not grow DSN groups, -p 1 lanes or a
+// prebuild step back.
+func TestGoTestScriptIsOneRun(t *testing.T) {
+	body := readFile(t, repoRoot(t), "scripts/go-test.sh")
+	for _, banned := range []string{"-p 1", "classify", "--print-groups", "HTTPAPI_TEST_DATABASE_URL", "go test -c"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("go-test.sh contains %q; it is one go test run at default -p (#2049 M2)", banned)
+		}
+	}
+	if strings.Count(body, "go test \"${TAGS[@]}\"") != 1 {
+		t.Error("go-test.sh must invoke go test exactly once")
 	}
 }
 
 // TestGoTestScriptIsWhatCIRuns keeps the CI==local promise: a contributor's
 // `make test` / `make test-race` / `make test-cover` is the same script CI
-// invokes, so a partition bug shows up locally instead of only on the runner.
+// invokes, so a script bug shows up locally instead of only on the runner.
 func TestGoTestScriptIsWhatCIRuns(t *testing.T) {
 	root := repoRoot(t)
 	ci := readFile(t, root, ".github/workflows/ci.yml")
@@ -212,5 +204,38 @@ func TestGoTestScriptSurfacesGoListFailure(t *testing.T) {
 	}
 	if !strings.Contains(body, `if ! go list`) {
 		t.Error("go-test.sh does not check go list's exit status")
+	}
+}
+
+// TestGoTestScriptBoundsConnections: go-test.sh sizes -p and -parallel from
+// the test server's free connections, so a many-core box cannot open more
+// than the server allows. The bound keeps three quarters of FREE in use at
+// most (8 per test process + 3 per running test), lowers -p only when
+// -parallel 1 does not fit, and never leaves 1..CPUS.
+func TestGoTestScriptBoundsConnections(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "scripts", "go-test.sh")
+	for _, tc := range []struct{ free, cpus, want string }{
+		{"297", "4", "4 4"},  // CI: max_connections=300 — Go's defaults fit
+		{"90", "4", "4 2"},   // a default-100 server on a 4-core laptop
+		{"90", "16", "6 1"},  // …on a 16-core box: fewer binaries at once
+		{"5", "4", "1 1"},    // nearly full server: the floor
+		{"1000", "8", "8 8"}, // never above the CPU count
+	} {
+		out, err := exec.Command(script, "--connection-bound="+tc.free+","+tc.cpus).Output()
+		if err != nil {
+			t.Fatalf("--connection-bound=%s,%s: %v", tc.free, tc.cpus, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Errorf("bound for %s free, %s CPUs = %q, want %q", tc.free, tc.cpus, got, tc.want)
+		}
+		// The bound must actually fit the budget.
+		var p, par int
+		if _, err := fmt.Sscan(string(out), &p, &par); err != nil {
+			t.Fatal(err)
+		}
+		free, _ := strconv.Atoi(tc.free)
+		if p > 1 && p*(8+3*par) > free*3/4 {
+			t.Errorf("bound %d×(8+3×%d) exceeds 3/4 of %d free connections", p, par, free)
+		}
 	}
 }

@@ -41,8 +41,8 @@ func cmdAccountEvents(argv []string) int {
 // the command: half the state would report a wrong role.
 func accountEventsExport(argv []string) int {
 	fs := flag.NewFlagSet("account-events export", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}

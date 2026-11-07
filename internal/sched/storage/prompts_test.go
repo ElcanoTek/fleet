@@ -7,6 +7,8 @@ import (
 )
 
 func TestPromptLibraryVisibilityAndOwnership(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	alicePrivate, err := store.CreatePromptLibrary(ctx, "alice@example.com", "Private draft", "", "Do the private thing", "private")
@@ -48,6 +50,8 @@ func TestPromptLibraryVisibilityAndOwnership(t *testing.T) {
 }
 
 func TestPromptLibraryValidation(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name, content, visibility string
 	}{

@@ -12,6 +12,8 @@ import (
 // give the chat nothing. A partly hidden connector, and one whose tools are
 // not known yet, are still recommended; the catalog is not modified.
 func TestChatVisibleConnectors_DropsFullyHiddenConnectorFromRecommendations(t *testing.T) {
+	t.Parallel()
+
 	catalog := []agent.OptionalServerInfo{
 		{Name: "openx", DisplayName: "OpenX", Description: "book OpenX deals", Tools: []string{"ox_create_deal"}},
 		{Name: "xandr", DisplayName: "Xandr", Description: "book Xandr deals", Tools: []string{"create_deal", "preview_plan"}},

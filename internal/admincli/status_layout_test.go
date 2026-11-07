@@ -16,8 +16,6 @@ func TestStatusLayoutFollowsOverrides(t *testing.T) {
 	t.Setenv("FLEET_ENV_FILE", t.TempDir()+"/none.env")
 	resetEnvFileCache()
 	t.Cleanup(resetEnvFileCache)
-	orig := probePublicStore
-	t.Cleanup(func() { probePublicStore = orig })
 
 	run := func(chat, sched string) string {
 		var out bytes.Buffer
@@ -25,33 +23,28 @@ func TestStatusLayoutFollowsOverrides(t *testing.T) {
 		return out.String()
 	}
 
-	// A legacy deployment, overrides aimed at a one-database install.
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "postgres://c@h/chat")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "postgres://s@h/sched")
-	probePublicStore = func(string) (bool, error) { return false, nil }
-	if got := run("postgres://u@dr/fleet", "postgres://u@dr/fleet"); !strings.Contains(got, "one database, schemas chat + sched") {
-		t.Errorf("one-database overrides on a legacy box reported %q", got)
-	}
-	if got := run("", ""); !strings.Contains(got, "legacy") {
-		t.Errorf("no overrides on a legacy box reported %q", got)
-	}
-
-	// A one-database deployment, overrides aimed at a legacy pair.
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "")
 	t.Setenv("DATABASE_URL", "postgres://u@h/fleet")
-	probePublicStore = func(string) (bool, error) { return true, nil }
-	if got := run("postgres://c@old/chat", "postgres://s@old/sched"); !strings.Contains(got, "legacy") {
-		t.Errorf("legacy overrides on a one-database box reported %q", got)
+	if got := run("", ""); !strings.Contains(got, "one database, schemas chat + sched") {
+		t.Errorf("no overrides reported %q", got)
 	}
-	if got := run("", ""); !strings.Contains(got, "one database") {
-		t.Errorf("no overrides on a one-database box reported %q", got)
+	// Overrides aimed at another one-database install get the stores' schemas.
+	if got := run("postgres://u@dr/fleet", "postgres://u@dr/fleet"); !strings.Contains(got, "one database, schemas chat + sched") {
+		t.Errorf("overrides to another database reported %q", got)
 	}
-
 	// #2055 review: schemas chat and sched in two DIFFERENT databases are not
 	// "one database".
-	probePublicStore = func(string) (bool, error) { return false, nil }
 	if got := run("postgres://u@a/fleet", "postgres://u@b/fleet"); strings.Contains(got, "one database") || !strings.Contains(got, "two different databases") {
 		t.Errorf("schemas in two databases reported %q", got)
+	}
+	// Overrides that name their own schema are reported as they are.
+	pub := "postgres://u@h/fleet?options=-csearch_path%3Dpublic"
+	if got := run(pub, pub); !strings.Contains(got, `chat in schema "public", sched in schema "public"`) {
+		t.Errorf("explicit public overrides reported %q", got)
+	}
+
+	// A retired per-store key: the layout cannot be told.
+	t.Setenv("FLEET_CHAT_DATABASE_URL", "postgres://c@h/chat")
+	if got := run("", ""); !strings.Contains(got, "DSN unresolved") {
+		t.Errorf("a retired per-store key reported %q", got)
 	}
 }

@@ -15,6 +15,8 @@ import (
 // the validator's message, so the model can fix it before a human is asked to
 // approve a call the create/edit seam would refuse.
 func TestStageRefusesAMalformedTaskPromptBeforeStaging(t *testing.T) {
+	t.Parallel()
+
 	bad := `{"prompt":"Refresh.\n` + models.ExecutionRequirementsMarker + `\n{\"mcp_servers\":[\"fast_io + fastio_helpers\"]}","action":"update","task_ids":["x"]}`
 	for _, tool := range []string{tools.ScheduleTaskToolName, tools.ManageTasksToolName} {
 		// A zero stager has no store or sink: reaching staging would panic, so
@@ -49,6 +51,8 @@ func TestStageRefusesAMalformedTaskPromptBeforeStaging(t *testing.T) {
 }
 
 func TestStageRefusesInvalidTaskCronAndTagsBeforeStaging(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		tool string

@@ -31,6 +31,8 @@ func TestCleanupTempFilesMissingDirIsQuiet(t *testing.T) {
 // the real sweep — an aged upload still gets reclaimed when the directory
 // exists, and a fresh one survives.
 func TestCleanupTempFilesRemovesAgedFile(t *testing.T) {
+	t.Parallel()
+
 	dataDir := t.TempDir()
 	tempDir := filepath.Join(dataDir, "temp_uploads")
 	if err := os.MkdirAll(tempDir, 0o700); err != nil {

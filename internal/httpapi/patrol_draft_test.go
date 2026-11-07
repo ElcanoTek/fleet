@@ -18,6 +18,8 @@ import (
 // endpoint: the wizard's answers reach the synthesizer as given, and the
 // draft comes back as JSON for the review step. Nothing is persisted.
 func TestPatrolDraft_ReturnsDraft(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{
 		Title:   "Morning deal sweep",
 		Prompt:  "**Mission** …",
@@ -70,6 +72,8 @@ func (m *memoriesStore) ListMemories(context.Context, string) ([]store.Memory, e
 // validity window, without retired or proposed rows — not the raw text the
 // wizard sent.
 func TestPatrolDraft_UsesTheTurnsMemories(t *testing.T) {
+	t.Parallel()
+
 	until := int64(1798761600) // 2027-01-01
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
 	s := &Server{agent: fake, store: &memoriesStore{memories: []store.Memory{
@@ -94,6 +98,8 @@ func TestPatrolDraft_UsesTheTurnsMemories(t *testing.T) {
 // shortened before its kind/validity annotation is added, so the annotation
 // always reaches the drafter.
 func TestPatrolDraft_LongMemoryKeepsItsAnnotation(t *testing.T) {
+	t.Parallel()
+
 	until := int64(1798761600) // 2027-01-01
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
 	long := strings.Repeat("é", 3000)
@@ -115,6 +121,8 @@ func TestPatrolDraft_LongMemoryKeepsItsAnnotation(t *testing.T) {
 // the memories cannot be read: a draft without them could contradict what
 // every patrol turn is told.
 func TestPatrolDraft_UnreadableMemoriesRefuse(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p", Summary: "s"}}
 	s := &Server{agent: fake, store: &memoriesStore{err: errors.New("db down")}}
 	rec := httptest.NewRecorder()
@@ -131,6 +139,8 @@ func TestPatrolDraft_UnreadableMemoriesRefuse(t *testing.T) {
 // before any model call, a failed synthesis is a 502 the wizard reports, and
 // the endpoint is POST-only.
 func TestPatrolDraft_Rejections(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		method string
@@ -165,6 +175,8 @@ func TestPatrolDraft_Rejections(t *testing.T) {
 
 // TestPatrolDraft_BodyCap refuses an oversized request rather than reading it.
 func TestPatrolDraft_BodyCap(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{agent: &fakeTurnEngine{patrolDraft: &agent.PatrolDraft{Title: "t", Prompt: "p"}}}
 	big := `{"goals":["` + strings.Repeat("x", patrolDraftMaxBody) + `"]}`
 	rec := httptest.NewRecorder()
@@ -177,6 +189,8 @@ func TestPatrolDraft_BodyCap(t *testing.T) {
 // TestPatrols_ListsTheCallersPatrols backs the Patrols hub in the rail: the
 // caller's live patrols, each with its chat's title, and nobody else's.
 func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const me = "hub@x.com"
@@ -268,6 +282,8 @@ func TestPatrols_ListsTheCallersPatrols(t *testing.T) {
 // TestPatrolDraft_OneAtATime refuses a second draft while the caller's first
 // is still being written: each is a model call of up to 45 seconds.
 func TestPatrolDraft_OneAtATime(t *testing.T) {
+	t.Parallel()
+
 	const user = "busy@x.com"
 	patrolDraftInFlight.Store(user, struct{}{})
 	defer patrolDraftInFlight.Delete(user)
@@ -301,6 +317,8 @@ func TestPatrolDraft_OneAtATime(t *testing.T) {
 // a full page of revoked rows sorted first must not hide a patrol the caller
 // can still open (or make the rail think there are none and open the wizard).
 func TestPatrols_RevokedRowsDoNotCrowdOut(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const me, owner = "crowd@x.com", "owner@x.com"
@@ -357,6 +375,8 @@ func (failingMultiplayerStore) GetMultiplayerConversation(context.Context, strin
 // rather than a successful list that silently drops patrols — or a false
 // empty one that opens the first-time wizard.
 func TestPatrols_AccessCheckErrorIs5xx(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const me, owner = "err@x.com", "errowner@x.com"
@@ -395,6 +415,8 @@ func (c countingMultiplayerStore) GetMultiplayerConversation(ctx context.Context
 // in the caller's own chats need no access check, and patrols sharing a
 // teammate's chat share one.
 func TestPatrols_AccessChecksOncePerTeammateChat(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const me, owner = "cost@x.com", "costowner@x.com"

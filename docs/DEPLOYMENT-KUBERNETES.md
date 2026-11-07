@@ -175,8 +175,10 @@ podman backend guarantees (#796).
    the database) in your `config.existingSecret` and leave
    `postgres.enabled=false`. The chart's Postgres is an evaluation
    convenience: one replica, one PVC, one database `fleet`, no backups. A
-   release installed before #2049 keeps its two in-cluster databases (and the
-   per-store env) on upgrade; see [ONE-DATABASE.md](ONE-DATABASE.md).
+   release whose in-cluster Postgres was installed before #2049 holds two
+   databases (`chat`, `sched`) and no `fleet` database, which this chart no
+   longer supports: reinstall it, or move the data by hand (see
+   [ONE-DATABASE.md](ONE-DATABASE.md)).
 3. **NetworkPolicy enforcement is your CNI's job.** fleet verifies the
    deny-all policy *object* exists; only a CNI that implements NetworkPolicy
    (Calico, Cilium, the EKS VPC CNI's network-policy agent, GKE Dataplane V2,

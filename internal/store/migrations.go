@@ -37,6 +37,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrationFingerprint identifies this binary's chat migration set (a hash of
+// the embedded files). internal/testdb keys its migrated template databases
+// by it.
+func MigrationFingerprint() string { return dbschema.Fingerprint(migrationsFS) }
+
 // migrationFilenamePattern — two groups: the zero-padded number and the
 // human-readable suffix. Anything else in migrations/ is ignored so we
 // can drop README.md etc. in there without breaking the scanner.
@@ -198,7 +203,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) (err error) {
 	//
 	// In the one-database layout the connection's search_path names the chat
 	// schema, which must exist before anything can be created in it
-	// (internal/dbschema); in the legacy layout this is a no-op.
+	// (internal/dbschema); for a DSN that names no store schema it is a no-op.
 	if err := dbschema.Ensure(ctx, conn); err != nil {
 		return err
 	}

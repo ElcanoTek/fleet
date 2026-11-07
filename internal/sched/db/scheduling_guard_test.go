@@ -13,6 +13,8 @@ import (
 // between those statements must still govern dispatch, even if status stays
 // scheduled. Drive that interleaving explicitly instead of relying on timing.
 func TestScheduledBatchPromotionRechecksEditedDefinition(t *testing.T) {
+	t.Parallel()
+
 	d := setupTestDB(t)
 	defer d.Close()
 	ctx := context.Background()

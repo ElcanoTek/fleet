@@ -13,6 +13,8 @@ import (
 // and ListPendingMemoryProposalsForConversation only returns proposals
 // scoped to the requested conversation.
 func TestMemoryProposalConversationScope(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -118,6 +120,8 @@ func TestMemoryProposalConversationScope(t *testing.T) {
 // TestMemoryProposalEmptyContent rejects empty/whitespace content so the
 // user never sees a blank Save-this-memory card.
 func TestMemoryProposalEmptyContent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -133,6 +137,8 @@ func TestMemoryProposalEmptyContent(t *testing.T) {
 // #515 typed memory MVP: kind normalization, partial patch, retirement,
 // validity window, pinned-first ordering, and provenance retention on accept.
 func TestTypedMemoryLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "typed@example.com"
@@ -205,6 +211,8 @@ func TestTypedMemoryLifecycle(t *testing.T) {
 }
 
 func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "prov@example.com"
@@ -237,6 +245,8 @@ func TestAcceptMemoryProposalRetainsProvenance(t *testing.T) {
 // claimed target only when every guard holds; every guard failure is an
 // OUTCOME (the accept still succeeds), never a silent retire.
 func TestAcceptMemoryProposalSupersede(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	user := "supersede@example.com"
@@ -338,6 +348,8 @@ func TestAcceptMemoryProposalSupersede(t *testing.T) {
 // which carries its creator's user_email — is "not found" through the
 // personal API and mutable only via the project-scoped methods.
 func TestPersonalMemoryMutatorsExcludeProjectRows(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@x.com"

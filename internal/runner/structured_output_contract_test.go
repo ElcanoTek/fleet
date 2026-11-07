@@ -123,6 +123,8 @@ func (n *outputOrderingNotifier) Notify(_ context.Context, ev notify.Event) erro
 }
 
 func TestStructuredSuccessCommitsOutputBeforeNotification(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedStructuredPending(t, store)
 	notifier := &outputOrderingNotifier{store: store, done: make(chan error, 1)}
@@ -163,6 +165,8 @@ func TestStructuredSuccessCommitsOutputBeforeNotification(t *testing.T) {
 }
 
 func TestStructuredRunnerDefenseRejectsInvalidAndMissingOutput(t *testing.T) {
+	t.Parallel()
+
 	for name, content := range map[string]string{
 		"invalid": `{"answer":"wrong"}`,
 		"missing": "",
@@ -200,6 +204,8 @@ func TestStructuredRunnerDefenseRejectsInvalidAndMissingOutput(t *testing.T) {
 }
 
 func TestStructuredOutputLeaseLossCannotLandSuccess(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedStructuredPending(t, store)
 	started := make(chan struct{})
@@ -238,6 +244,8 @@ func TestStructuredOutputLeaseLossCannotLandSuccess(t *testing.T) {
 }
 
 func TestStructuredSamePoolReclaimCannotABACommitOrNotify(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedStructuredPending(t, store)
 	oldAtFence := make(chan struct{})
@@ -323,6 +331,8 @@ func TestStructuredSamePoolReclaimCannotABACommitOrNotify(t *testing.T) {
 }
 
 func TestStructuredPersistenceFailureIsClassifiedBeforeSideEffects(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedStructuredPending(t, store)
 	started := make(chan struct{})
@@ -396,6 +406,8 @@ func TestStructuredPersistenceFailureIsClassifiedBeforeSideEffects(t *testing.T)
 }
 
 func TestStructuredCommitOutcomeUnknownSameClaimClassifiesPersistence(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedStructuredPending(t, store)
 	started := make(chan struct{})
@@ -493,6 +505,8 @@ func TestStructuredCommitOutcomeUnknownSameClaimClassifiesPersistence(t *testing
 // re-parse of the redacted display text, which can corrupt or fail an
 // already-valid contract.
 func TestStructuredOutputPrefersDriverHandoffOverRedactedText(t *testing.T) {
+	t.Parallel()
+
 	task := &models.Task{OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]}`)}
 	session := &models.LogSession{
 		OutputJSON: `{"answer":42}`,
@@ -513,6 +527,8 @@ func TestStructuredOutputPrefersDriverHandoffOverRedactedText(t *testing.T) {
 // carried secret material), the run fails with an explicit diagnostic instead
 // of committing corrupted-but-schema-shaped output.
 func TestStructuredOutputRedactionCorruptionFailsLoudly(t *testing.T) {
+	t.Parallel()
+
 	task := &models.Task{OutputSchema: json.RawMessage(`{"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]}`)}
 	session := &models.LogSession{
 		OutputJSON: `{"answer":"[REDACTED]"}`,

@@ -31,6 +31,8 @@ const goodCard = `{
 }`
 
 func TestParseApprovalCard(t *testing.T) {
+	t.Parallel()
+
 	card, canonical, err := parseApprovalCard([]byte(goodCard))
 	if err != nil {
 		t.Fatalf("a valid card was refused: %v", err)
@@ -336,6 +338,8 @@ func TestStage_DescriberNotCalled(t *testing.T) {
 // The describer is resolved on the staged tool's own server: none there, or
 // several candidates, resolve to nothing.
 func TestResolveDescriber(t *testing.T) {
+	t.Parallel()
+
 	catalog := []mcp.ServerTool{
 		{ServerName: "a", Tool: mcp.Tool{Name: "ix_describe_change"}},
 		{ServerName: "b", Tool: mcp.Tool{Name: "describe_change"}},
@@ -388,6 +392,8 @@ func (s *cardGetStore) ListChatSchedules(context.Context, string, string, bool) 
 // pending_approvals and resolved_approvals carry the stored card; a row with
 // none, or with one that no longer validates, carries no card field.
 func TestConversationGet_ApprovalCards(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, _ := parseApprovalCard([]byte(goodCard))
 	st := &cardGetStore{
 		pending: []store.Approval{
@@ -433,6 +439,8 @@ func TestConversationGet_ApprovalCards(t *testing.T) {
 // The bounded one-card GET (?approval_id=) carries the card on a pending and
 // on a resolved row alike (Codex P2 on #1717: the resolved branch dropped it).
 func TestConversationApprovalGet_CarriesCard(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, _ := parseApprovalCard([]byte(goodCard))
 	for _, status := range []string{"pending", "rejected"} {
 		t.Run(status, func(t *testing.T) {
@@ -459,6 +467,8 @@ func TestConversationApprovalGet_CarriesCard(t *testing.T) {
 // a credential: the logged text is redacted (Codex P1 on #1717), and the flag
 // code error no longer echoes the value at all.
 func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
+	t.Parallel()
+
 	secret := "ghp_" + strings.Repeat("a1B2", 9)
 	_, _, err := parseApprovalCard([]byte(`{"title":"x","items":[{"label":"a","flags":[{"code":"` + secret + `","label":"l"}]}]}`))
 	if err == nil {
@@ -573,6 +583,8 @@ func TestStage_DescribesBeforeSuperseding(t *testing.T) {
 // link_label names an item's link ("Open in Index Exchange"). It is optional,
 // text like any label, and only allowed with a link.
 func TestParseApprovalCard_LinkLabel(t *testing.T) {
+	t.Parallel()
+
 	with := `{"title":"t","items":[{"label":"A","link":"https://ssp.example.com/d/1","link_label":"Open in Index Exchange"}]}`
 	card, canonical, err := parseApprovalCard([]byte(with))
 	if err != nil || card.Items[0].LinkLabel != "Open in Index Exchange" || !strings.Contains(string(canonical), `"link_label":"Open in Index Exchange"`) {

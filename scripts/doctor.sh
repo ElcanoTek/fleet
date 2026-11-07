@@ -692,26 +692,22 @@ else
   else
     fail "OPENROUTER_API_KEY unset — run: sudo fleet config set-openrouter-key"
   fi
-  # One DSN, both stores in its schemas chat and sched (ADR-0098).
-  # LEGACY-DB-LAYOUT: remove after consolidation — the per-store branch.
-  # Read as fleet reads the file (fleet_env_value): KEY="" is unset, as in Go.
-  if [[ -n "$(fleet_env_value "$ENV_FILE" FLEET_CHAT_DATABASE_URL)$(fleet_env_value "$ENV_FILE" FLEET_SCHED_DATABASE_URL)$(fleet_env_value "$ENV_FILE" SCHED_DATABASE_URL)" ]]; then
-    _layout=""
-    _fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
-    [[ -x "$_fleet_bin" ]] || _fleet_bin="$(command -v fleet || true)"
-    [[ -n "$_fleet_bin" ]] && _layout="$("$_fleet_bin" db layout --env-file "$ENV_FILE" 2>/dev/null || true)"
-    unset _fleet_bin
-    if [[ "$_layout" == "schemas" ]]; then
-      advise "per-store DSN keys (FLEET_CHAT_/FLEET_SCHED_DATABASE_URL) name ONE database — fleet uses its schemas chat and sched; replace them with DATABASE_URL"
-    else
-      advise "legacy two-database layout (FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL) — still supported; move it into one database with: fleet db consolidate   (dry run first; docs/ONE-DATABASE.md)"
-    fi
-    unset _layout
+  # One DSN, both stores in its schemas chat and sched (ADR-0098). The
+  # per-store keys of the removed two-database layout make fleet refuse to
+  # boot. Read as fleet reads the file (fleet_env_value): KEY="" is unset, as
+  # in Go.
+  _retired=""
+  for _k in FLEET_CHAT_DATABASE_URL FLEET_SCHED_DATABASE_URL SCHED_DATABASE_URL; do
+    if [[ -n "$(fleet_env_value "$ENV_FILE" "$_k")" ]]; then _retired="${_retired:+$_retired, }$_k"; fi
+  done
+  if [[ -n "$_retired" ]]; then
+    fail "$_retired in $ENV_FILE: no longer supported (the two-database layout was removed) — fleet refuses to boot; set DATABASE_URL to the one database and delete $_retired (docs/ONE-DATABASE.md)"
   elif [[ -n "$(fleet_env_value "$ENV_FILE" DATABASE_URL)" ]]; then
     pass "DATABASE_URL set (one database: schemas chat + sched)"
   else
     fail "no DATABASE_URL in $ENV_FILE — rerun scripts/bootstrap.sh"
   fi
+  unset _retired _k
 fi
 
 # The web UI's session secret (ADR-0091). fleet serves the browser tier itself

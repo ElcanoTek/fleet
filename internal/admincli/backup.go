@@ -20,11 +20,9 @@ import (
 
 // Backup/restore wrap pg_dump -Fc / pg_restore for the chat and sched Postgres
 // stores (chat: conversations + turn events + users; sched: tasks + nodes + API
-// keys). We dump PER STORE (custom-format, one file each): in the one-database
-// layout (#2049) each store is a schema of the one database and its dump is
-// that schema (pg_dump -n); in the legacy layout each store is its own
-// database. --db=chat needs only the chat DSN, and restore targets one store at
-// a time. The custom (-Fc)
+// keys). We dump PER STORE (custom-format, one file each): each store is a
+// schema of the one database (#2049) and its dump is that schema (pg_dump
+// -n). Restore targets one store at a time. The custom (-Fc)
 // format is what pg_restore consumes and supports --clean/--if-exists for an
 // idempotent restore-over-existing-DB.
 //
@@ -103,12 +101,12 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
-	// A store's dump is its schema and nothing else: the DSN's schema in the
-	// one-database layout, public in the legacy one (a legacy database may
-	// hold other schemas of its own, which are not fleet's to back up).
+	// A store's dump is its schema and nothing else (the database holds the
+	// other store's schema too, and may hold schemas that are not fleet's).
+	// chatDSN / schedDSN always give the DSN its store's schema.
 	schema := config.DSNSchema(dsn)
 	if schema == "" {
-		schema = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation
+		return fmt.Errorf("pg_dump %s: the DSN names no store schema", redactDSN(dsn))
 	}
 	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath, "-n", schema}
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
@@ -131,16 +129,16 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 // --if-exists drops existing objects first so the restore is idempotent over an
 // already-migrated DB; --no-owner ignores dump ownership.
 //
-// A restore of one store must never touch the other one, which in the
-// one-database layout lives in the same database:
+// A restore of one store must never touch the other one, which lives in the
+// same database:
 //
 //   - The archive's schemas are established from its table of contents (its
 //     SCHEMA entries and the schemas of its TABLE entries) and must include
-//     the schema the store uses (its DSN's schema, public in the legacy
-//     layout). A dump of the other store, a legacy public-schema dump into
-//     the one database, or an archive whose schemas cannot be determined (no
-//     SCHEMA or TABLE entry) is refused before anything is dropped. Other
-//     schemas in the archive are simply not restored.
+//     the schema the store uses (its DSN's schema). A dump of the other
+//     store, a dump of the removed two-database layout (its tables in
+//     public), or an archive whose schemas cannot be determined (no SCHEMA or
+//     TABLE entry) is refused before anything is dropped. Other schemas in
+//     the archive are simply not restored.
 //   - pg_restore runs with -n <schema>, so only that schema's entries are
 //     restored, and --clean can drop only objects in that schema (the SCHEMA
 //     entry itself is not selected, so the schema is never dropped). The
@@ -152,7 +150,7 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	}
 	want := config.DSNSchema(dsn)
 	if want == "" {
-		want = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation (every store has a schema then)
+		return fmt.Errorf("pg_restore %s: the DSN names no store schema", redactDSN(dsn))
 	}
 	got, err := dumpSchemas(ctx, inPath)
 	if err != nil {
@@ -161,12 +159,13 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	switch {
 	case len(got) == 0:
 		return fmt.Errorf("cannot tell which store %s holds: its table of contents has no schema or table entry; refusing to restore it", inPath)
+	case !slices.Contains(got, want) && slices.Equal(got, []string{config.PublicSchema}):
+		return fmt.Errorf("%s is a dump of the removed two-database layout (its tables are in schema public); fleet restores only dumps taken since the box moved to one database (one schema per store) — restore a newer dump, or see docs/BACKUP_RESTORE.md for importing an old one by hand", inPath)
 	case !slices.Contains(got, want):
-		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a dump of the legacy two-database layout restores into a legacy box (restore it there, then run `fleet db consolidate`), and a chat dump restores only with --db=chat", strings.Join(got, ", "), want)
+		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a chat dump restores only with --db=chat, a sched dump only with --db=sched", strings.Join(got, ", "), want)
 	}
-	// Other schemas in the archive (a whole-database dump of a legacy store
-	// with schemas of its own, or of a one-database install) are left out by
-	// -n below: only the store's schema is restored.
+	// Other schemas in the archive (a whole-database dump) are left out by -n
+	// below: only the store's schema is restored.
 	if want != config.PublicSchema {
 		if err := ensureRestoreSchema(ctx, dsn, want); err != nil {
 			return err
@@ -194,7 +193,7 @@ func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
 		return err
 	}
 	defer db.Close()
-	//nolint:gosec // G701: schema passed config.PlainIdentifier above ([a-z_][a-z0-9_]*), and DDL takes no bind parameters.
+	// schema passed config.PlainIdentifier above ([a-z_][a-z0-9_]*), and DDL takes no bind parameters.
 	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS "`+schema+`"`); err != nil {
 		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
 	}
@@ -354,8 +353,8 @@ func cmdBackup(argv []string) int {
 	db := fs.String("db", "all", "which database to back up: chat|sched|all")
 	out := fs.String("out", "", "output directory for the dump file(s) (else FLEET_BACKUP_DIR from the shell or the env file, else .)")
 	prune := fs.Bool("prune", false, "after backing up, delete dumps older than FLEET_BACKUP_RETENTION_DAYS (default 30)")
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}
@@ -407,8 +406,8 @@ func cmdRestore(argv []string) int {
 	fs := flag.NewFlagSet("restore", flag.ContinueOnError)
 	db := fs.String("db", "", "which database to restore into: chat|sched (required)")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive overwrite confirmation (for scripted restores)")
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (else DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (else DATABASE_URL, schema sched)")
 	if err := fs.Parse(argv); err != nil {
 		return 1
 	}

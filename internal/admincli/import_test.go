@@ -13,7 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // writeBundle marshals a bundle to a temp file and returns its path.
@@ -72,16 +72,10 @@ func TestImportBundle_Validation(t *testing.T) {
 // pinned flags / timestamps, messages keep content + timing, memories keep
 // ids — and that a re-run skips everything instead of duplicating.
 func TestImportBundle_ChatSection(t *testing.T) {
-	dsn := testdb.ChatDSN(t)
+	d := fleetdb.New(t)
+	dsn := d.ChatDSN()
 	ctx := context.Background()
-	s, err := store.Open(dsn, store.DefaultPoolConfig())
-	if err != nil {
-		t.Fatalf("open chat store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := s.TruncateAllForTest(ctx); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+	s := d.Chat(t)
 
 	convID := uuid.NewString()
 	memID := uuid.NewString()
@@ -160,7 +154,8 @@ func TestImportBundle_ChatSection(t *testing.T) {
 // re-run skips already-present rows instead of duplicating (state-preservation
 // is covered by TestImportBundle_SchedRerunPreservesLiveState).
 func TestImportBundle_SchedSection(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -201,7 +196,7 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	}
 	path := writeBundle(t, bundle)
 
-	if code := cmdImport([]string{path, "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("import: exit %d", code)
 	}
 
@@ -241,7 +236,7 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	}
 
 	// Re-run: idempotent upserts, no duplicates, user still matched by name.
-	if code := cmdImport([]string{path, "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("re-import: exit %d", code)
 	}
 	var nTasks, nUsers int
@@ -261,6 +256,8 @@ func TestImportBundle_SchedSection(t *testing.T) {
 // positional must keep its own argument, and a boolean flag must never swallow
 // the positional.
 func TestSplitPositionalMixed(t *testing.T) {
+	t.Parallel()
+
 	bools := map[string]bool{"dry-run": true, "live-only": true, "overwrite": true}
 	cases := []struct {
 		argv      []string
@@ -291,25 +288,27 @@ func TestSplitPositionalMixed(t *testing.T) {
 	}
 }
 
-// TestImportBundle_SingleSectionSameDSNGuard proves the same-DSN guard also
-// covers the documented runbook's single-section bundles (#714): with only the
-// generic DATABASE_URL set, importing either single-section bundle would write
-// that store's schema into the shared database, so the import must refuse
-// before opening any store. An explicit --sched-database-url names the target
-// unambiguously and is honored (the guard must fail BEFORE any DB dial, so a
-// non-routable DSN proves it).
-func TestImportBundle_SingleSectionSameDSNGuard(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://shared-host/shared_db")
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "")
-
-	sched := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Sched: &schedSection{}})
-	if code := cmdImport([]string{sched}); code != 1 {
-		t.Errorf("sched-only bundle on generic DATABASE_URL fallback: got exit %d, want 1", code)
+// TestImportBundle_SameSchemaGuard: a dual-section bundle whose two
+// --*-database-url flags name one schema of one database would mix the two
+// stores' tables, so the import refuses before opening any store (the guard
+// must fail BEFORE any DB dial, so a non-routable DSN proves it). With only
+// DATABASE_URL set the stores get their own schemas (#2049), and a retired
+// per-store key is refused like everywhere else.
+func TestImportBundle_SameSchemaGuard(t *testing.T) {
+	for _, k := range dsnEnvKeys {
+		t.Setenv(k, "")
 	}
-	chat := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Chat: &chatSection{}})
-	if code := cmdImport([]string{chat}); code != 1 {
-		t.Errorf("chat-only bundle on generic DATABASE_URL fallback: got exit %d, want 1", code)
+	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "none.env"))
+	resetEnvFileCache()
+	t.Cleanup(resetEnvFileCache)
+	both := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Chat: &chatSection{}, Sched: &schedSection{}})
+	pub := "postgres://shared-host/shared_db?options=-csearch_path%3Dpublic"
+	if code := cmdImport([]string{both, "--chat-database-url", pub, "--sched-database-url", pub}); code != 1 {
+		t.Errorf("dual-section bundle into one schema: got exit %d, want 1", code)
+	}
+	t.Setenv("FLEET_SCHED_DATABASE_URL", "postgres://shared-host/sched")
+	if code := cmdImport([]string{both}); code != 1 {
+		t.Errorf("a retired per-store key: got exit %d, want 1", code)
 	}
 }
 
@@ -319,7 +318,8 @@ func TestImportBundle_SingleSectionSameDSNGuard(t *testing.T) {
 // terminal status/result and fleet's log must survive. --overwrite restores
 // the old upsert for the restore use case.
 func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -341,7 +341,7 @@ func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
 		},
 	}
 	path := writeBundle(t, bundle)
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := d.SchedDSN()
 
 	if code := cmdImport([]string{path, "--sched-database-url", dsn}); code != 0 {
 		t.Fatalf("import: exit %d", code)
@@ -419,7 +419,8 @@ func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
 // TestImportBundle_SchedLiveOnly proves --live-only skips terminal tasks and
 // logs but still imports live definitions.
 func TestImportBundle_SchedLiveOnly(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	liveID, doneID := uuid.New(), uuid.New()
@@ -435,7 +436,7 @@ func TestImportBundle_SchedLiveOnly(t *testing.T) {
 		},
 	}
 	path := writeBundle(t, bundle)
-	if code := cmdImport([]string{path, "--live-only", "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--live-only", "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("import: exit %d", code)
 	}
 

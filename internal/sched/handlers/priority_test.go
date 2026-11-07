@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupPriorityHandler builds a handler wired with the routes the task-priority
@@ -29,14 +29,10 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 		t.Fatalf("temp dir: %v", err)
 	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
 		t.Fatalf("storage init: %v", err)
 	}
-	acquireTestLock(t, store)
 
 	keyMgr, err := apikeys.NewManager(
 		filepath.Join(tmpDir, "api_keys.json"),
@@ -46,13 +42,6 @@ func setupPriorityHandler(t *testing.T) (*chi.Mux, *storage.Storage, *apikeys.Ma
 		store.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("key manager: %v", err)
-	}
-
-	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup %q: %v", q, err)
-		}
 	}
 
 	h := New(Config{DefaultTaskModel: "test/model",
@@ -91,6 +80,8 @@ func postTask(t *testing.T, r *chi.Mux, body, apiKey string) *httptest.ResponseR
 // TestCreateTask_DefaultPriority: an unset priority defaults to Normal (50) on
 // both the submitted and effective columns (#230).
 func TestCreateTask_DefaultPriority(t *testing.T) {
+	t.Parallel()
+
 	r, _, _, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
@@ -109,6 +100,8 @@ func TestCreateTask_DefaultPriority(t *testing.T) {
 
 // TestCreateTask_PriorityOutOfRange rejects a priority outside [0,100] (#230).
 func TestCreateTask_PriorityOutOfRange(t *testing.T) {
+	t.Parallel()
+
 	r, _, _, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
@@ -123,6 +116,8 @@ func TestCreateTask_PriorityOutOfRange(t *testing.T) {
 // capped at max_priority=40 may submit priority 50 (less urgent) but is refused
 // for priority 10 (more urgent than its ceiling).
 func TestCreateTask_KeyPriorityCeiling(t *testing.T) {
+	t.Parallel()
+
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
@@ -149,6 +144,8 @@ func TestCreateTask_KeyPriorityCeiling(t *testing.T) {
 // weaker route around the per-key ceiling (#230): a key capped at 40 has its
 // over-cap entry rejected, and in atomic mode that aborts the whole batch.
 func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
@@ -188,6 +185,8 @@ func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
 // TestQueueStats: GET /admin/queue rolls pending tasks into named tiers with
 // per-tier counts and a total (#230).
 func TestQueueStats(t *testing.T) {
+	t.Parallel()
+
 	r, store, _, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 
@@ -226,6 +225,8 @@ func TestQueueStats(t *testing.T) {
 // request body omits them (such as an orchestrator UI edit), while updating
 // them when explicitly supplied and enforcing the API key priority ceiling.
 func TestUpdateTask_PreservesPriorityAndMaxTotalTokensWhenOmitted(t *testing.T) {
+	t.Parallel()
+
 	r, _, keyMgr, cleanup := setupPriorityHandler(t)
 	defer cleanup()
 

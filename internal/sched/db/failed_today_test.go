@@ -21,6 +21,8 @@ import (
 // Both halves are pinned here: the count, and the filter that has to agree with
 // it. They are one test because the defect was the disagreement between them.
 func TestFailedTodayCountsBothTerminalFailureStatuses(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

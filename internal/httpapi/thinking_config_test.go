@@ -8,6 +8,8 @@ import (
 )
 
 func TestResolveThinkingConfig(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name          string
 		override      *store.ThinkingConfig

@@ -11,6 +11,8 @@ import (
 // up front, and accept nil / valid configs. This pins that WorktreeConfig.Validate
 // is actually wired into the create+edit validation path.
 func TestValidateTaskCreate_WorktreeConfig(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 

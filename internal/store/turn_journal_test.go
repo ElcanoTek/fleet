@@ -53,6 +53,8 @@ func loadEntries(t *testing.T, s *Store, convID string) []agent.HistoryEntry {
 }
 
 func TestCommitUserMessage_DurableBeforeRun(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -80,6 +82,8 @@ func TestCommitUserMessage_DurableBeforeRun(t *testing.T) {
 }
 
 func TestCommitTurnHistory_GatesAndIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -111,6 +115,8 @@ func TestCommitTurnHistory_GatesAndIsIdempotent(t *testing.T) {
 }
 
 func TestBranchCopyKeepsProvenanceNull(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -207,6 +213,8 @@ func assertPaired(t *testing.T, entries []agent.HistoryEntry) {
 }
 
 func TestRecovery_CrashAfterUserCommitOnly(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -229,6 +237,8 @@ func TestRecovery_CrashAfterUserCommitOnly(t *testing.T) {
 }
 
 func TestRecovery_CrashAfterIntentSynthesizesUnknownOutcome(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -270,6 +280,8 @@ func TestRecovery_CrashAfterIntentSynthesizesUnknownOutcome(t *testing.T) {
 // EVERY resultless call (they now ride one multi-row INSERT, not one statement
 // each), and re-running recovery must not duplicate them.
 func TestRecovery_MultipleUnknownOutcomesAllMarked(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -305,6 +317,8 @@ func TestRecovery_MultipleUnknownOutcomesAllMarked(t *testing.T) {
 }
 
 func TestRecovery_JournaledResultAndTextProjected(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -345,6 +359,8 @@ func TestRecovery_JournaledResultAndTextProjected(t *testing.T) {
 }
 
 func TestRecovery_IdempotentAcrossRepeatedRuns(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -370,6 +386,8 @@ func TestRecovery_IdempotentAcrossRepeatedRuns(t *testing.T) {
 }
 
 func TestRecovery_TurnRetryDropsAbandonedText(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t2")
@@ -398,6 +416,8 @@ func TestRecovery_TurnRetryDropsAbandonedText(t *testing.T) {
 }
 
 func TestRecovery_CommittedButUnfinishedTurnCompletes(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -432,6 +452,8 @@ func TestRecovery_CommittedButUnfinishedTurnCompletes(t *testing.T) {
 }
 
 func TestRecovery_SkipsProjectionWhenConversationMovedOn(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t0")
@@ -476,6 +498,8 @@ func TestRecovery_SkipsProjectionWhenConversationMovedOn(t *testing.T) {
 }
 
 func TestInsertTurnJournal_AmbiguousRetryAbsorbed(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedConvAndTurn(t, s, "t1")
@@ -496,6 +520,8 @@ func TestInsertTurnJournal_AmbiguousRetryAbsorbed(t *testing.T) {
 }
 
 func TestRecovery_BlockedCallGetsNeverDispatchedNotUnknown(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -539,6 +565,8 @@ func TestRecovery_BlockedCallGetsNeverDispatchedNotUnknown(t *testing.T) {
 // event, and the turn-start user.message (no steered flag) is committed
 // separately at turn_seq=1 and must not double.
 func TestRecovery_ProjectsSteeredUserMessageExactlyOnce(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -587,6 +615,8 @@ func TestRecovery_ProjectsSteeredUserMessageExactlyOnce(t *testing.T) {
 // recovery's "completed = durably in history" resolution of the injected row
 // is truthful — the row completes AND the text is in canonical history.
 func TestRecovery_InjectedSteerRowCompletesWithTextPreserved(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")

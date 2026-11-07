@@ -14,6 +14,8 @@ import (
 // One credential's streams are capped below the process-wide ceiling, so
 // another credential can still open one.
 func TestA2AStreamCounter_PerPrincipalCap(t *testing.T) {
+	t.Parallel()
+
 	c := newA2AStreamCounter()
 	keyA := a2aStreamKey(principal{apiKey: &apikeys.APIKey{KeyID: "a"}})
 	keyB := a2aStreamKey(principal{apiKey: &apikeys.APIKey{KeyID: "b"}})
@@ -44,6 +46,8 @@ func TestA2AStreamCounter_PerPrincipalCap(t *testing.T) {
 // A reservation past the per-credential cap is refused with a JSON-RPC
 // error before any SSE bytes, and gives back the process-wide slot.
 func TestA2AReserveStream_RefusesPastPerPrincipalCap(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
 	p := principal{apiKey: &apikeys.APIKey{KeyID: "a"}}
 	for i := 0; i < a2aMaxConcurrentStreamsPerPrincipal; i++ {
@@ -69,6 +73,8 @@ func TestA2AReserveStream_RefusesPastPerPrincipalCap(t *testing.T) {
 // A granted reservation counts against both ceilings until released, and a
 // second release (the caller's defer after the stream's own) is a no-op.
 func TestA2AReserveStream_ReleaseIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
 	p := principal{apiKey: &apikeys.APIKey{KeyID: "a"}}
 	slot := h.a2aReserveStream(httptest.NewRecorder(), p, json.RawMessage(`1`))

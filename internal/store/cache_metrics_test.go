@@ -9,6 +9,8 @@ import (
 // count survives the RecordTurn → turn_metrics → AdminStats round trip, so net
 // prompt-cache savings can be computed from the DB alone (#259).
 func TestRecordTurn_PersistsCacheCreationTokens(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

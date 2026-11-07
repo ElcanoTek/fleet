@@ -19,6 +19,8 @@ func mkTask(tags ...string) *models.Task {
 // TestTaskTagsRoundTrip pins the JSONB tags column: empty round-trips as empty,
 // populated round-trips intact.
 func TestTaskTagsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -44,6 +46,8 @@ func TestTaskTagsRoundTrip(t *testing.T) {
 
 // TestTaskTagsFilterAndSemantics pins ?tag= AND-containment + the catalogue.
 func TestTaskTagsFilterAndSemantics(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 
@@ -94,6 +98,8 @@ func TestTaskTagsFilterAndSemantics(t *testing.T) {
 
 // TestUpdateTaskTags pins atomic add/remove with removal-wins and re-normalization.
 func TestUpdateTaskTags(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -130,6 +136,8 @@ func TestUpdateTaskTags(t *testing.T) {
 // principal sees only tags from tasks it created, while fleet-wide scope
 // returns all tags.
 func TestTagCatalogueScope(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 

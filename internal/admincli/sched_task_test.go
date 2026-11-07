@@ -14,7 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // fakeTaskStore is an in-memory taskStore for deterministic, DB-free tests of the
@@ -51,6 +51,8 @@ func (f *fakeTaskStore) GetUsersByIDsWithContext(_ context.Context, ids []uuid.U
 func ptr[T any](v T) *T { return &v }
 
 func TestValidateImportedTask(t *testing.T) {
+	t.Parallel()
+
 	good := &models.Task{Prompt: "do it", Status: models.TaskStatusScheduled, Recurrence: "0 9 * * *", MCPSelection: models.MCPSelection{{Server: "acme"}}}
 	if err := validateImportedTask(good); err != nil {
 		t.Fatalf("valid task rejected: %v", err)
@@ -76,6 +78,8 @@ func TestValidateImportedTask(t *testing.T) {
 }
 
 func TestImportTasks_RejectsUnknownVersion(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeTaskStore{}
 	body := []byte(`{"version":99,"tasks":[]}`)
 	if _, err := importTasks(context.Background(), f, bytes.NewReader(body), taskImportOpts{}); err == nil {
@@ -89,6 +93,8 @@ func TestImportTasks_RejectsUnknownVersion(t *testing.T) {
 // A bad payload must insert NOTHING even if a valid task precedes the invalid one
 // (validate-all-before-insert).
 func TestImportTasks_BadPayloadInsertsNothing(t *testing.T) {
+	t.Parallel()
+
 	f := &fakeTaskStore{}
 	env := taskExportEnvelope{Version: taskExportVersion, Tasks: []*models.Task{
 		{ID: uuid.New(), Prompt: "ok", Status: models.TaskStatusScheduled},
@@ -107,6 +113,8 @@ func TestImportTasks_BadPayloadInsertsNothing(t *testing.T) {
 }
 
 func TestImportTasks_NullsMissingCreatedBy(t *testing.T) {
+	t.Parallel()
+
 	absent := uuid.New()
 	present := uuid.New()
 	f := &fakeTaskStore{present: map[uuid.UUID]string{present: "alice"}}
@@ -135,6 +143,8 @@ func TestImportTasks_NullsMissingCreatedBy(t *testing.T) {
 // TestExportImportRoundTrip_Fake proves the full export→import seam preserves
 // every Task field through JSON (the core acceptance), without a DB.
 func TestExportImportRoundTrip_Fake(t *testing.T) {
+	t.Parallel()
+
 	orig := &models.Task{
 		ID:                     uuid.New(),
 		Prompt:                 "generate the weekly report",
@@ -191,7 +201,7 @@ func exportTasksEnvelope(buf *bytes.Buffer, env taskExportEnvelope) (int, error)
 // TestExportImportRoundTrip_DB is the end-to-end proof against the real sched DB
 // (gated on DATABASE_URL — the sched-suite convention; skips when absent).
 func TestExportImportRoundTrip_DB(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	database := fleetEnv(t).SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -216,7 +226,7 @@ func TestExportImportRoundTrip_DB(t *testing.T) {
 	if _, err := exportTasks(ctx, st, &buf); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	testdb.DeleteRows(t, database, "logs", "tasks", "users") // wipe, then import the export back
+	fleetdb.DeleteRows(t, database, "logs", "tasks", "users") // wipe, then import the export back
 	if n, err := importTasks(ctx, st, &buf, taskImportOpts{}); err != nil || n != 1 {
 		t.Fatalf("import n=%d err=%v", n, err)
 	}
@@ -247,6 +257,8 @@ func (f *fakeTaskListStore) GetTasksFiltered(filter db.TaskFilter, limit, offset
 }
 
 func TestListTasks_TableOutput(t *testing.T) {
+	t.Parallel()
+
 	when := time.Date(2026, 7, 11, 9, 30, 0, 0, time.UTC)
 	id1 := uuid.MustParse("aaaaaaaa-1111-2222-3333-444444444444")
 	id2 := uuid.MustParse("bbbbbbbb-1111-2222-3333-444444444444")
@@ -290,6 +302,8 @@ func TestListTasks_TableOutput(t *testing.T) {
 // TestListTasks_StatusQualifiedByRunOutcome: a Blocked run lists as
 // "success (blocked)", not a plain success.
 func TestListTasks_StatusQualifiedByRunOutcome(t *testing.T) {
+	t.Parallel()
+
 	st := &fakeTaskListStore{
 		tasks: []*models.Task{
 			{ID: uuid.New(), Name: "page-refresh", Status: models.TaskStatusSuccess, RunOutcome: ptr(models.RunOutcomeBlocked)},
@@ -310,6 +324,8 @@ func TestListTasks_StatusQualifiedByRunOutcome(t *testing.T) {
 // then Title — the rung that keeps recurrence occurrences, which clear Name
 // but carry Title, from listing as raw prompt blobs — then the prompt excerpt.
 func TestTaskLabelPrecedence(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		task *models.Task
@@ -329,6 +345,8 @@ func TestTaskLabelPrecedence(t *testing.T) {
 }
 
 func TestListTasks_StatusFilterAndJSON(t *testing.T) {
+	t.Parallel()
+
 	id := uuid.New()
 	st := &fakeTaskListStore{
 		tasks: []*models.Task{{ID: id, Prompt: "p", Status: models.TaskStatusRunning, Priority: 10}},
@@ -356,6 +374,8 @@ func TestListTasks_StatusFilterAndJSON(t *testing.T) {
 // no stray prose. They used to be written straight to os.Stderr, which this
 // test could not observe.
 func TestListTasks_NotesGoToErrW(t *testing.T) {
+	t.Parallel()
+
 	var out, errW bytes.Buffer
 	if err := listTasks(&fakeTaskListStore{}, &out, &errW, "", 50, false); err != nil {
 		t.Fatal(err)
@@ -384,6 +404,8 @@ func TestListTasks_NotesGoToErrW(t *testing.T) {
 // TestRenderTable pins the shared list renderer: a header row first, one line
 // per row, cells aligned by tabwriter (so a column never runs into the next).
 func TestRenderTable(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	err := renderTable(&buf, []string{"A", "BB"}, [][]string{{"x", "1"}, {"longer", "22"}})
 	if err != nil {
@@ -409,6 +431,8 @@ func TestRenderTable(t *testing.T) {
 }
 
 func TestValidTaskStatusFilter(t *testing.T) {
+	t.Parallel()
+
 	for _, ok := range []string{"scheduled", "pending", "running", "success", "error", "cancelled", "dead_lettered", "paused_awaiting_input"} {
 		if !validTaskStatusFilter(ok) {
 			t.Errorf("%q should be a valid status filter", ok)

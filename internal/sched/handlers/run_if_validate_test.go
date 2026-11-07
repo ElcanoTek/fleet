@@ -11,6 +11,8 @@ import (
 // valid run_if gate and rejects a structurally-broken one (#269): empty command,
 // out-of-range timeout, and an invalid on_error policy.
 func TestValidateTaskCreate_RunIf(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
@@ -70,6 +72,8 @@ func TestValidateTaskCreate_RunIf(t *testing.T) {
 // may attach one — structural validation cannot make an arbitrary creator's
 // shell string safe.
 func TestRequireAdminForRunIf(t *testing.T) {
+	t.Parallel()
+
 	gate := &models.RunIf{Command: "true", OnError: models.RunIfOnErrorSkip, TimeoutSeconds: 5}
 
 	if msg := requireAdminForRunIf(false, gate); msg == "" {

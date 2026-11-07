@@ -73,6 +73,8 @@ var (
 // aggregation: rows keyed by (user_email, UTC day), cancelled turns counted,
 // and [from, to) filtering on completed_at.
 func TestUsageByUserDay(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	seedChatUsage(t, s)
 	ctx := context.Background()
@@ -114,6 +116,8 @@ func TestUsageByUserDay(t *testing.T) {
 // TestUsageSummaryGroupByPrincipal covers the who/where dimensions: user email
 // and project (id + name label).
 func TestUsageSummaryGroupByPrincipal(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedChatUsage(t, s)
@@ -168,6 +172,8 @@ func TestUsageSummaryGroupByPrincipal(t *testing.T) {
 // boundary: deleting chat content must not erase the cost and tokens already
 // spent. Migration 038 intentionally removes turn_metrics' cascade for this.
 func TestUsageSummarySurvivesConversationDeletion(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	s.softDelete = false
@@ -205,6 +211,8 @@ func TestUsageSummarySurvivesConversationDeletion(t *testing.T) {
 // key (which chat doesn't have), day/week time bucketing, and the closed-set
 // group_by validation.
 func TestUsageSummaryGroupByDimensions(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedChatUsage(t, s)
@@ -272,6 +280,8 @@ func TestUsageSummaryGroupByDimensions(t *testing.T) {
 }
 
 func TestUsageSummaryRangeFiltering(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	seedChatUsage(t, s)

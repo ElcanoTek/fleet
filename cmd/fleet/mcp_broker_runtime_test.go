@@ -240,6 +240,8 @@ func TestValidateConnectorParentEnvSeparation_AllowsCutlassConnectorWireKeys(t *
 }
 
 func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *testing.T) {
+	t.Parallel()
+
 	for _, name := range []string{
 		"CUTLASS_TASK_MODEL", "CUTLASS_LOG_FILE", "CUTLASS_RETRY_MAX_ATTEMPTS",
 		// Legacy spellings the parent resolves lazily after broker boot: the
@@ -272,6 +274,8 @@ func TestValidateConnectorParentEnvSeparation_RejectsParentOwnedCutlassNames(t *
 // parent-owned name must be refused, so a name added to the enumeration later
 // cannot silently escape in one of its legacy spellings.
 func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testing.T) {
+	t.Parallel()
+
 	spellings := map[string]bool{}
 	var refs strings.Builder
 	for _, name := range parentOwnedRuntimeEnvNames(nil) {
@@ -328,6 +332,8 @@ func TestValidateConnectorParentEnvSeparation_RefusesEveryAliasSpelling(t *testi
 // root through it is not an overlap — while the alias spellings of the same
 // knob remain ordinary (refused) claims.
 func TestValidateConnectorParentEnvSeparation_AdmitsReservedWorkspaceRootToken(t *testing.T) {
+	t.Parallel()
+
 	bundle, err := clientconfig.Load(mcpTestBundle(t, `mcp_servers:
   - name: mailer
     type: stdio
@@ -383,6 +389,8 @@ providers:
 }
 
 func TestValidateConnectorParentEnvSeparation_RejectsRuntimeAndAccountOverlap(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		manifest string
@@ -537,6 +545,8 @@ func TestStartProductionMCPRuntime_RejectsExplicitCommandEnvWithoutScrubbing(t *
 }
 
 func TestPublicMCPServerSpecsStripPrivateRuntimeFields(t *testing.T) {
+	t.Parallel()
+
 	tlsConfig := &mcp.TLSOptions{ServerName: "private.example"}
 	src := map[string]agent.MCPServerSpec{
 		"enabled": {

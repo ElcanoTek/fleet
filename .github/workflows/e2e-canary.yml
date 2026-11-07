@@ -96,22 +96,15 @@ jobs:
 
       - name: Install web dependencies
         working-directory: web
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Install Playwright browser (chromium, retried)
         working-directory: web
         # Retried: download-only step; see ci.yml's mocked e2e job for why.
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if npx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
-            sleep "$(( attempt * 15 ))"
-          done
-          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 15 --what "playwright install (apt or the Playwright CDN)" -- \
+            npx playwright install --with-deps chromium
 
       - name: Ensure podman + pasta + postgres client
         # Kept IDENTICAL to ci.yml's e2e-live equivalent. Both lanes boot the
@@ -128,10 +121,10 @@ jobs:
         # (the red run recorded no podman version at all). The actual fix for
         # that failure is the keep-id pre-warm in scripts/e2e-boot-server.sh.
         run: |
-          sudo apt-get update -qq
-          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
-          command -v pasta  >/dev/null 2>&1 || sudo apt-get install -y -qq passt
-          command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq podman
+          command -v pasta  >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq passt
+          command -v psql   >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq postgresql-client
           podman --version
           pasta --version 2>/dev/null | head -1 || true
           psql --version
@@ -143,7 +136,10 @@ jobs:
         # vendor-published image.
         run: |
           set -euo pipefail
-          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          # Retried once, like ci.yml's e2e-live build: ~300 RPMs from Fedora
+          # mirrors, and podman reuses the layers that finished.
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/retry.sh --attempts 2 --delay 20 --what "sandbox image build" -- \
+            scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
           echo "image=$SANDBOX_IMAGE_LOCAL" >> "$GITHUB_OUTPUT"
 
       - name: Boot live stack against a REAL model + run the canary project

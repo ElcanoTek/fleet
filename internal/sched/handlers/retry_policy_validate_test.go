@@ -10,6 +10,8 @@ import (
 // TestValidateTaskCreate_RetryPolicy pins that validateTaskCreate accepts a nil
 // or valid retry policy and rejects a structurally-broken one (#201).
 func TestValidateTaskCreate_RetryPolicy(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 

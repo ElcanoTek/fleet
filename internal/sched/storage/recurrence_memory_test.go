@@ -19,6 +19,8 @@ import (
 // the next occurrence still gets remember/recall, and (b) copy the completing
 // occurrence's memories into the new occurrence's task_id.
 func TestRecurringTaskCarriesMemoryForward(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

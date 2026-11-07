@@ -51,7 +51,7 @@ func cmdMigrate(argv []string) int {
 // --no-confirm, and refuses a non-TTY without it.
 func cmdMigrateForce(argv []string) int {
 	fs := flag.NewFlagSet("migrate force", flag.ContinueOnError)
-	dbURL := fs.String("database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	dbURL := fs.String("database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	noConfirm := fs.Bool("no-confirm", false, "skip the interactive confirmation (for scripted repairs)")
 	version, ok := parseForceArgs(fs, argv)
 	if !ok {

@@ -15,6 +15,8 @@ import (
 // a task carrying dead_lettered_at / dead_letter_reason / dead_letter_attempts
 // round-trips through AddTask + GetTask, and a plain task reads them back zero/nil.
 func TestDeadLetterColumnsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -63,6 +65,8 @@ func TestDeadLetterColumnsRoundTrip(t *testing.T) {
 // cannot dead-letter a leased task, the owner can, and the result is terminal
 // with the DLQ columns set.
 func TestDeadLetterTaskRespectsLeaseOwnership(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -112,6 +116,8 @@ func TestDeadLetterTaskRespectsLeaseOwnership(t *testing.T) {
 // cannot be replayed (ErrTaskNotDeadLettered), and replaying a dead-lettered task
 // resets it to a fresh pending slate that GetDeadLetteredTasks no longer returns.
 func TestReplayDeadLetteredTaskGuards(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

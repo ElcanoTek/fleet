@@ -147,7 +147,7 @@ main() {
     case "$arg" in
       --help|-h) usage "$src"; exit 0 ;;
       --dry-run) dry_run=1; args+=("$arg") ;;
-      --client-config|--auth-pubkey|--domain|--admin|--chat-db-name|--chat-db-user|--sched-db-name|--sched-db-user)
+      --client-config|--auth-pubkey|--domain|--admin|--db-name|--db-user)
         want="$arg"; args+=("$arg") ;;
       --client-config=*|--auth-pubkey=*)
         args+=("${arg%%=*}=$(absolutize "${arg%%=*}" "${arg#*=}" "$caller_pwd")") ;;

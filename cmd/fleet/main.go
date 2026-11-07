@@ -483,15 +483,11 @@ func run() error {
 		agentLimiter.Total(), agentLimiter.SchedulableSlots(), agentLimiter.Total()-agentLimiter.SchedulableSlots())
 
 	// ── DB pools (both self-migrate on open) ──
-	// cfg's DSNs come from config.ResolveDSNs, which decides the layout: one
-	// database with a chat and a sched schema (the supported layout, #2049),
-	// or a legacy install's two databases, which keep working as before.
+	// cfg's DSNs come from config.ResolveDSNs: one database, the chat store
+	// in schema chat and the sched store in schema sched (#2049, ADR-0098).
 	chatDB, schedDB := cfg.DatabaseURL, cfg.SchedDatabaseURL
 	if err := config.EnsureDistinctStores(chatDB, schedDB); err != nil {
 		return err
-	}
-	if config.LayoutOf(chatDB, schedDB) == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
-		log.Printf("database layout: legacy (chat and sched in two databases); still supported — `fleet db consolidate` moves them into one (docs/ONE-DATABASE.md)")
 	}
 	chatStore, err := store.Open(chatDB, store.PoolConfig{
 		MaxOpenConns:    cfg.ChatDBPool.MaxOpenConns,

@@ -17,6 +17,8 @@ func iptr(v int) *int         { return &v }
 // above needs admin — the same authority as editing the deployment ceiling.
 // An unlimited deployment ceiling (0) bounds nothing (#1533).
 func TestRequireAdminForCeilingsAboveDeployment(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{MaxCostUSD: 10, LiveMaxTotalTokens: func() int { return 1_000_000 }}}
 
 	if msg := h.requireAdminForCeilingsAboveDeployment(false, &models.TaskCreate{}); msg != "" {
@@ -50,6 +52,8 @@ func TestRequireAdminForCeilingsAboveDeployment(t *testing.T) {
 // A per-task ceiling must be a real bound: 0 would read as "unlimited" in
 // checkCeilings — the one escape the field must never offer.
 func TestValidateTaskLimitsRejectsNonBoundingCeilings(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		in   models.TaskCreate

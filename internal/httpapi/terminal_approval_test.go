@@ -11,6 +11,8 @@ import (
 )
 
 func TestHandlerOnlyPatternArgumentsAreFrozenStrings(t *testing.T) {
+	t.Parallel()
+
 	args := handlerApprovalPatternArgs("schedule_task", `{"name":"nightly","prompt":"full prompt","cron":"0 9 * * *","run_immediately":false,"max_iterations":8}`)
 	if len(args) != 3 || args["prompt"] != "full prompt" || args["cron"] != "0 9 * * *" {
 		t.Fatalf("wrong argument key space: %v", args)
@@ -25,6 +27,8 @@ func TestHandlerOnlyPatternArgumentsAreFrozenStrings(t *testing.T) {
 }
 
 func TestHandlerOnlyScopePreservesIdempotentOutcome(t *testing.T) {
+	t.Parallel()
+
 	for _, status := range []string{"pending", "approved", "rejected"} {
 		t.Run(status, func(t *testing.T) {
 			fake := &expiredClickFakeStore{approval: store.Approval{ID: "a", ConversationID: "c", UserEmail: "u@example.com", ToolName: "schedule_task", Status: status}}

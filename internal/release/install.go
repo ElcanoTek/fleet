@@ -437,6 +437,9 @@ func restorePrevious(dir string) error {
 func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	drainErr, err := o.restart(ctx)
 	if err != nil {
+		if drainErr != nil {
+			return fmt.Errorf("restart %s: %w (before the start: %w)", o.Service, err, drainErr)
+		}
 		return fmt.Errorf("restart %s: %w", o.Service, err)
 	}
 	if o.HealthURL == "" {
@@ -448,39 +451,108 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	}
 	if err := o.Prober.WaitReady(ctx, o.HealthURL, timeout); err != nil {
 		if drainErr != nil {
-			return fmt.Errorf("%s not ready: %w (the update drain marker was not cleared: %w)", o.HealthURL, err, drainErr)
+			return fmt.Errorf("%s not ready: %w (before the start: %w)", o.HealthURL, err, drainErr)
 		}
 		return fmt.Errorf("%s not ready: %w", o.HealthURL, err)
 	}
 	return nil
 }
 
+// detachedTimeout caps a detached stop, start or fallback restart (within
+// ctx's deadline): well past the shipped unit's TimeoutStopSec (60s), after
+// which systemd has killed the process. minStartTimeout is what a step still
+// gets when ctx's deadline has already passed — the start must be attempted,
+// never skipped.
+const (
+	detachedTimeout = 3 * time.Minute
+	minStartTimeout = 10 * time.Second
+)
+
+// detachedBounded returns a context that is not cancelled with ctx but keeps
+// a bound: ctx's remaining deadline when it has one (capped at
+// detachedTimeout; once it has passed, minStartTimeout), else detachedTimeout.
+// A detached step must not be cut short by a SIGINT, nor hang past
+// RollbackTimeout or the caller's deadline.
+func detachedBounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	bound := detachedTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		bound = min(time.Until(dl), detachedTimeout)
+		if bound <= 0 {
+			bound = minStartTimeout // the deadline passed: still attempt it, briefly
+		}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), bound)
+}
+
 // restart (re)starts the service. With ClearDrain set it stops the old
-// process, clears the drain marker, then starts the new one; the start runs
-// even when ctx was cancelled during the stop, so an interrupt never leaves
-// the service down. A Restarter that cannot stop and start separately gets
-// the marker cleared immediately before its restart. drainErr is ClearDrain's
-// failure, which the caller reports.
+// process, clears the drain marker, then starts the new one.
+//
+// Once the stop is issued it is not interruptible: it and the start run under
+// contexts detached from ctx's cancellation but still bounded by its deadline
+// (detachedBounded), so RollbackTimeout holds. Cancelling ctx would kill the
+// systemctl client while the stop job it queued still completes, and a skipped
+// start then leaves the service down.
+//
+// The marker is the admission fence: it only comes off once the process it
+// fenced is gone. After a clean stop that is right away, before the start.
+// A failed stop is different: the old process may still be running (a unit
+// that refuses manual stops), and a plain `systemctl start` would then be a
+// no-op whose readiness probe the OLD process answers. So the unit is
+// RESTARTED, which replaces whatever is running, with the marker still in
+// place, and the marker is cleared once the restart returns (before the
+// readiness probe; the server reads it per request). If the restart fails
+// too, the marker is cleared, one last plain start makes sure fleet runs, and
+// the error is returned (Install's failure/rollback path handles it). A
+// Restarter that cannot stop and start separately gets the marker cleared
+// right after its restart. drainErr carries the stop and ClearDrain failures.
 func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	if o.ClearDrain == nil {
 		return nil, o.Restarter.Restart(ctx, o.Service)
 	}
-	ss, split := o.Restarter.(StopStarter)
-	if split {
-		if err := ss.Stop(ctx, o.Service); err != nil {
-			return nil, fmt.Errorf("stop: %w", err)
+	clearDrain := func(when string) {
+		if clearErr := o.ClearDrain(); clearErr != nil {
+			o.logf("warning: could not clear the update drain marker %s %s: %v", when, o.Service, clearErr)
+			drainErr = errors.Join(drainErr, fmt.Errorf("clear the update drain marker: %w", clearErr))
 		}
 	}
-	if drainErr = o.ClearDrain(); drainErr != nil {
-		o.logf("warning: could not clear the update drain marker before starting %s: %v", o.Service, drainErr)
+	ss, split := o.Restarter.(StopStarter)
+	if !split {
+		err = o.Restarter.Restart(ctx, o.Service)
+		clearDrain("after restarting")
+		return drainErr, err
 	}
-	if split {
-		if err := ss.Start(context.WithoutCancel(ctx), o.Service); err != nil {
+	stopCtx, stopCancel := detachedBounded(ctx)
+	stopErr := ss.Stop(stopCtx, o.Service)
+	stopCancel()
+	if stopErr == nil {
+		clearDrain("before starting")
+		// The start's bound begins after the clear (whose lock wait can take
+		// a while), so the minimum start attempt is never already spent.
+		startCtx, cancel := detachedBounded(ctx)
+		defer cancel()
+		if err := ss.Start(startCtx, o.Service); err != nil {
 			return drainErr, fmt.Errorf("start: %w", err)
 		}
 		return drainErr, nil
 	}
-	return drainErr, o.Restarter.Restart(ctx, o.Service)
+	drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
+	o.logf("warning: %v — restarting it instead, with the update drain marker kept until the restart returns", drainErr)
+	restartCtx, cancel := detachedBounded(ctx)
+	defer cancel()
+	rerr := o.Restarter.Restart(restartCtx, o.Service)
+	clearDrain("after restarting")
+	if rerr != nil {
+		// Neither stop nor restart replaced the process. Make sure fleet runs
+		// (a no-op if the old one still does), and fail: the new release is
+		// not what is serving.
+		lastCtx, lastCancel := detachedBounded(ctx)
+		defer lastCancel()
+		if serr := ss.Start(lastCtx, o.Service); serr != nil {
+			rerr = errors.Join(rerr, fmt.Errorf("start: %w", serr))
+		}
+		return drainErr, fmt.Errorf("restart after the failed stop: %w", rerr)
+	}
+	return drainErr, nil
 }
 
 // replaceLink makes dst a hard link to src, replacing dst. A filesystem that
@@ -597,7 +669,10 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 				return nil
 			}
 			last = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
+		} else if last == nil || ctx.Err() == nil {
+			// Keep an earlier real answer (e.g. "HTTP 503") when this
+			// attempt failed only because the overall deadline cut it off:
+			// "context deadline exceeded" says nothing about the server.
 			last = err
 		}
 		select {

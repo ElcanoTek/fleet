@@ -18,6 +18,8 @@ import (
 // the env files, the health probes, the scheduled timers + disk headroom, and
 // the sandbox smoke.
 func TestDoctorDryRunSmoke(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "doctor.sh", "--dry-run")
 	for _, want := range []string{
 		"Toolchain",
@@ -48,6 +50,8 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 
 // TestDoctorHelp — --help must work unprivileged and document the three modes.
 func TestDoctorHelp(t *testing.T) {
+	t.Parallel()
+
 	out, err := runScript(t, nil, "doctor.sh", "--help")
 	if err != nil {
 		t.Fatalf("doctor --help exited non-zero: %v\n--- output ---\n%s", err, out)
@@ -63,6 +67,8 @@ func TestDoctorHelp(t *testing.T) {
 // a silently-ignored flag (e.g. `--chek` running fixes the operator wanted to
 // preview).
 func TestDoctorRejectsUnknownFlag(t *testing.T) {
+	t.Parallel()
+
 	out, err := runScript(t, nil, "doctor.sh", "--chek")
 	if err == nil {
 		t.Fatalf("doctor accepted an unknown flag\n--- output ---\n%s", out)
@@ -79,6 +85,8 @@ func TestDoctorRejectsUnknownFlag(t *testing.T) {
 // (fleet's env file is root's, unlike chat's app-user-owned .env.local), the
 // report-only source-freshness rule, and never sourcing the secrets file.
 func TestDoctorLoadBearingStrings(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
 	if err != nil {
@@ -210,6 +218,8 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 // repair-mode doctor did exactly that). Doctor must never run it; it detects a
 // stale pause process and prints the repair for an operator or agent to judge.
 func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "doctor.sh"))
 	if err != nil {
@@ -237,6 +247,8 @@ func TestDoctorNeverRunsPodmanMigrate(t *testing.T) {
 // user and points at the runbook rather than prescribing a script: when fleet
 // can be stopped is a judgment call for an operator or agent.
 func TestDoctorStalePauseHelpers(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -288,6 +300,8 @@ stale_pause_hint`
 // leave the index byte-for-byte and mtime-for-mtime alone, and must not grow the
 // caller's ~/.gitconfig with a safe.directory line per run.
 func TestDoctorBundleResidueIsReadOnly(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}

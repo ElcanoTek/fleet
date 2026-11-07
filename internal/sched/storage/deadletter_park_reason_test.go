@@ -24,6 +24,8 @@ const malformedParkPrompt = "Refresh the page.\n" + models.ExecutionRequirements
 // prompt resumes the same row, so the schedule continues with its task memory
 // and the successor carries the corrected prompt.
 func TestMalformedParkRecordsWhyAndResumesWithACorrectedPrompt(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -123,6 +125,8 @@ func assertCorrectedReplayResumes(t *testing.T, store *Storage, id uuid.UUID) {
 
 // The two-strike park records its reason too.
 func TestTwoStrikeParkRecordsWhy(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	first := &models.Task{

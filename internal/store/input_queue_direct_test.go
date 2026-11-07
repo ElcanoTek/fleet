@@ -24,6 +24,8 @@ func claimDirect(t *testing.T, s *Store, convID, clientID string) (InputQueueRow
 }
 
 func TestClaimDirectInput_SharesTheQueueKeySpace(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -61,6 +63,8 @@ func TestClaimDirectInput_SharesTheQueueKeySpace(t *testing.T) {
 }
 
 func TestReleaseDirectInput_OnlyAnUnlaunchedClaim(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -86,6 +90,8 @@ func TestReleaseDirectInput_OnlyAnUnlaunchedClaim(t *testing.T) {
 }
 
 func TestSettleDirectInput_CompletedOnlyWhenTheInputRan(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -123,6 +129,8 @@ func TestSettleDirectInput_CompletedOnlyWhenTheInputRan(t *testing.T) {
 // Boot recovery never re-queues a direct input: one whose turn committed its
 // user entry completes, and the rest cancel — nothing runs later unattended.
 func TestRecoverInputQueue_SettlesDirectClaims(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -155,6 +163,8 @@ func TestRecoverInputQueue_SettlesDirectClaims(t *testing.T) {
 }
 
 func TestLookupInputForUser_FindsTheKeyAcrossConversations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -172,6 +182,8 @@ func TestLookupInputForUser_FindsTheKeyAcrossConversations(t *testing.T) {
 // ReleaseDirectInput on a claim already bound to its (aborted) turn cannot
 // drop it as unbound; it settles it cancelled, since nothing ran.
 func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-rel")
@@ -199,6 +211,8 @@ func TestReleaseDirectInput_SettlesABoundClaim(t *testing.T) {
 // a direct claim with no turn id, or a drained row holding its placeholder —
 // and the bind that follows then finds it no longer running.
 func TestCancelUnlaunchedInput_OnlyBeforeTheBind(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-cub")
@@ -252,6 +266,8 @@ func TestCancelUnlaunchedInput_OnlyBeforeTheBind(t *testing.T) {
 // CancelInputKey takes a free key with a cancelled row that a later claim or
 // enqueue of the key finds instead of running, and leaves a held key alone.
 func TestCancelInputKey_TakesOnlyAFreeKey(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-cik")
@@ -283,6 +299,8 @@ func TestCancelInputKey_TakesOnlyAFreeKey(t *testing.T) {
 // CancelStoppedSteer cancels an injected or re-queued steer and never one
 // its turn's settlement recorded completed.
 func TestCancelStoppedSteer_NeverOverwritesACompletedSteer(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-css")
@@ -311,6 +329,8 @@ func TestCancelStoppedSteer_NeverOverwritesACompletedSteer(t *testing.T) {
 // drain — and never one whose input ran, a direct claim, or a row bound to
 // another turn.
 func TestCancelStoppedDrain_OnlyAnInputThatNeverRan(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t-csd")

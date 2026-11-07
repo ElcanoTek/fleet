@@ -82,6 +82,8 @@ func prefsRequest(t *testing.T, s *Server, method, target, body string) *httptes
 // The /connector-prefs endpoint: upsert, list, revert; malformed prefs are
 // rejected; a seat is validated against the live catalog.
 func TestConnectorPrefsEndpoint(t *testing.T) {
+	t.Parallel()
+
 	fs := &prefsFakeStore{fakeChatStore: newFakeChatStore()}
 	s := &Server{store: fs}
 
@@ -122,6 +124,8 @@ func TestConnectorPrefsEndpoint(t *testing.T) {
 // available with the operator default; explicit disable hides; a stale seat
 // degrades to the default seat.
 func TestBundledPrefResolution(t *testing.T) {
+	t.Parallel()
+
 	info := agent.OptionalServerInfo{Name: "gamma", EnabledByDefault: true, Accounts: []string{"client-a"}}
 	none := map[string]store.ConnectorPref{}
 
@@ -177,6 +181,8 @@ func TestBundledPrefResolution(t *testing.T) {
 // from the same default-on calculation as GET /mcp-servers so patrol and
 // discussion turns do not run with optional_mcp_servers_enabled = [].
 func TestCreateConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
+	t.Parallel()
+
 	fs := &prefsFakeStore{
 		fakeChatStore: newFakeChatStore(),
 		prefs: map[string]store.ConnectorPref{
@@ -240,6 +246,8 @@ func TestCreateConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
 // while preserving explicit project mcp_servers / default_persona / default_model
 // when configured.
 func TestCreateProjectConversationSeedsDefaultOptionalMCPServers(t *testing.T) {
+	t.Parallel()
+
 	fs := &prefsFakeStore{
 		fakeChatStore: newFakeChatStore(),
 		prefs: map[string]store.ConnectorPref{

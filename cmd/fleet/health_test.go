@@ -21,6 +21,8 @@ type fakePinger struct{ err error }
 func (f fakePinger) Ping(context.Context) error { return f.err }
 
 func TestPingProbe(t *testing.T) {
+	t.Parallel()
+
 	if got := pingProbe(fakePinger{})(context.Background()); got.Status != health.StatusOK {
 		t.Errorf("healthy ping: got %+v", got)
 	}
@@ -31,6 +33,8 @@ func TestPingProbe(t *testing.T) {
 }
 
 func TestCachedSandboxProbe_MissingBinaryAndCaches(t *testing.T) {
+	t.Parallel()
+
 	p := &cachedProbe{fresh: podmanSandboxProbe("fleet-nonexistent-runtime-xyz"), ttl: time.Minute}
 
 	first := p.probe(context.Background())
@@ -54,6 +58,8 @@ func (f fakeApiserverProber) ApiserverVersion(context.Context) (string, error) {
 }
 
 func TestK8sSandboxProbe(t *testing.T) {
+	t.Parallel()
+
 	ok := k8sSandboxProbe(fakeApiserverProber{version: "v1.36.1"})(context.Background())
 	if ok.Status != health.StatusOK || !strings.Contains(ok.Detail, "v1.36.1") {
 		t.Errorf("reachable apiserver: want ok with version in detail, got %+v", ok)
@@ -65,6 +71,8 @@ func TestK8sSandboxProbe(t *testing.T) {
 }
 
 func TestSandboxProbeForBackendSelection(t *testing.T) {
+	t.Parallel()
+
 	// kubernetes backend with no backend handle: the probe must report the
 	// missing handle, not fall back to a podman exec (which would report a
 	// runtime this deployment never uses) and not report ok (a lie).
@@ -88,6 +96,8 @@ func TestSandboxProbeForBackendSelection(t *testing.T) {
 }
 
 func TestWithHealthProbes(t *testing.T) {
+	t.Parallel()
+
 	delegated := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		delegated = true
@@ -187,6 +197,8 @@ func guardAt(t *testing.T, freePercent float64, sampleErr error) *diskguard.Guar
 // removing the chat interface an operator needs to reclaim the space — the
 // opposite of what the guard is for.
 func TestDiskProbeSheddingIsDegradedNotError(t *testing.T) {
+	t.Parallel()
+
 	got := diskProbe(guardAt(t, 2, nil))(context.Background())
 	if got.Status != health.StatusDegraded {
 		t.Fatalf("shedding disk: status = %q, want %q (a 503 would drain chat off the box)", got.Status, health.StatusDegraded)
@@ -197,6 +209,8 @@ func TestDiskProbeSheddingIsDegradedNotError(t *testing.T) {
 }
 
 func TestDiskProbeHealthyDisk(t *testing.T) {
+	t.Parallel()
+
 	got := diskProbe(guardAt(t, 60, nil))(context.Background())
 	if got.Status != health.StatusOK {
 		t.Fatalf("60%% free against a 5%% floor: status = %q, want ok", got.Status)
@@ -206,6 +220,8 @@ func TestDiskProbeHealthyDisk(t *testing.T) {
 // The guard fails open on an unmeasurable filesystem, so the probe must not
 // claim a degradation the guard itself does not act on.
 func TestDiskProbeUnmeasurableIsOK(t *testing.T) {
+	t.Parallel()
+
 	got := diskProbe(guardAt(t, 0, errors.New("statfs: no such file or directory")))(context.Background())
 	if got.Status != health.StatusOK {
 		t.Fatalf("unmeasurable disk: status = %q, want ok (the guard fails open)", got.Status)
@@ -218,6 +234,8 @@ func TestDiskProbeUnmeasurableIsOK(t *testing.T) {
 // An unwired guard (an embedder managing its own disk policy) must not make the
 // box look degraded.
 func TestDiskProbeUnwiredGuardIsOK(t *testing.T) {
+	t.Parallel()
+
 	got := diskProbe(nil)(context.Background())
 	if got.Status != health.StatusOK {
 		t.Fatalf("nil guard: status = %q, want ok", got.Status)
@@ -228,6 +246,8 @@ func TestDiskProbeUnwiredGuardIsOK(t *testing.T) {
 // a critical DB failure is what produces 503. Locks in that the disk check is
 // registered non-critical.
 func TestReadinessFoldsDiskAsNonCritical(t *testing.T) {
+	t.Parallel()
+
 	checks := []health.Check{
 		{Name: "chat_db", Critical: true, Probe: pingProbe(fakePinger{})},
 		{Name: "disk", Critical: false, Probe: diskProbe(guardAt(t, 1, nil))},

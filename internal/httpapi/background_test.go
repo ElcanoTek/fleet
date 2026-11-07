@@ -11,6 +11,8 @@ import (
 // its timers instead of stopping them would turn every shutdown into a 15-minute
 // one.
 func TestBackgroundTracker_StopCancelsPendingTimer(t *testing.T) {
+	t.Parallel()
+
 	var bg backgroundTracker
 	var ran atomic.Bool
 	bg.After("test.pending", time.Hour, func() { ran.Store(true) })
@@ -31,6 +33,8 @@ func TestBackgroundTracker_StopCancelsPendingTimer(t *testing.T) {
 // is the case where letting the caller proceed means closing the store underneath
 // a live writer.
 func TestBackgroundTracker_StopWaitsForRunningWork(t *testing.T) {
+	t.Parallel()
+
 	var bg backgroundTracker
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -67,6 +71,8 @@ func TestBackgroundTracker_StopWaitsForRunningWork(t *testing.T) {
 // caller just drained, so a late submission during shutdown is dropped rather
 // than extending the drain indefinitely.
 func TestBackgroundTracker_DropsWorkSubmittedAfterStop(t *testing.T) {
+	t.Parallel()
+
 	var bg backgroundTracker
 	bg.StopAndWait()
 
@@ -94,6 +100,8 @@ func TestBackgroundTracker_DropsWorkSubmittedAfterStop(t *testing.T) {
 // of the detached turn goroutine, and must still settle its own count so
 // StopAndWait cannot hang on it.
 func TestBackgroundTracker_RecoversPanicAndStillSettles(t *testing.T) {
+	t.Parallel()
+
 	var bg backgroundTracker
 	bg.Go("test.panicking", func() { panic("boom") })
 
@@ -111,6 +119,8 @@ func TestBackgroundTracker_RecoversPanicAndStillSettles(t *testing.T) {
 // tail must not launch the next queued row. Without this, one cancellation starts
 // a fresh turn and the chain re-arms itself indefinitely.
 func TestMaybeDrainQueueDeclinesWhileDraining(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{inflight: make(map[string]inflightEntry)}
 	s.BeginShutdown()
 	if !s.IsDraining() {

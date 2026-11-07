@@ -29,6 +29,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrationFingerprint identifies this binary's sched migration set (a hash of
+// the embedded files). internal/testdb keys its migrated template databases
+// by it.
+func MigrationFingerprint() string { return dbschema.Fingerprint(migrationsFS) }
+
 // The sched DB's migration runner. It replaces golang-migrate v4 (whose pgx/v5
 // driver was the only reason lib/pq and pgerrcode were in go.mod) with the
 // subset fleet used — Up over an embedded directory — and is deliberately
@@ -325,7 +330,7 @@ func withMigrationLock(ctx context.Context, db *sql.DB, fn func(*migrationRun) e
 
 	// In the one-database layout the connection's search_path names the
 	// sched schema; CURRENT_SCHEMA() is NULL until it exists, so create it
-	// first (internal/dbschema). A no-op in the legacy layout.
+	// first (internal/dbschema). A no-op for a DSN that names no store schema.
 	if err := dbschema.Ensure(ctx, conn); err != nil {
 		return err
 	}

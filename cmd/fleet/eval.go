@@ -244,15 +244,19 @@ func shortSHA(sha string) string {
 }
 
 // openEvalStorage opens the orchestrator DB from the same DSN resolution the
-// server uses (config.ResolveDSNs: FLEET_SCHED_DATABASE_URL /
-// SCHED_DATABASE_URL / DATABASE_URL / DB_* parts). Returns (nil, nonzero) with a warning when no DSN is available.
+// server uses (config.ResolveDSNs: DATABASE_URL, else the DB_* parts; the
+// sched schema). Returns (nil, nonzero) with a warning when no DSN is available.
 //
 // hasNoDBFlag says whether the CALLING subcommand accepts --no-db (only `eval
 // run` does), so the hint to use it is printed only where it would work.
 func openEvalStorage(hasNoDBFlag bool) (*storage.Storage, int) {
-	dsns := config.ResolveDSNs(config.ProcessEnv)
-	if !dsns.SchedConfigured() {
-		msg := "warning: no orchestrator DB configured (FLEET_SCHED_DATABASE_URL / DATABASE_URL / DB_*); skipping eval_runs persistence"
+	dsns, err := config.ResolveDSNs(config.ProcessEnv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v; skipping eval_runs persistence\n", err)
+		return nil, 1
+	}
+	if !dsns.Configured() {
+		msg := "warning: no orchestrator DB configured (DATABASE_URL / DB_*); skipping eval_runs persistence"
 		if hasNoDBFlag {
 			msg += " — use --no-db to silence"
 		}

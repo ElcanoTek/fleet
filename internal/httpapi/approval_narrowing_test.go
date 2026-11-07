@@ -267,6 +267,8 @@ func TestHandleApproval_RefusesABadNarrowingBeforeTheClaim(t *testing.T) {
 // Execution re-checks the record against the staged call: one that does not
 // match refuses the run instead of running the whole staged list.
 func TestApprovalExecutionArgs_RefusesAMismatchedRecord(t *testing.T) {
+	t.Parallel()
+
 	a := narrowApprovalRow()
 	a.NarrowedJSON = `{"arg":"deal_ids","staged":["a","b","c"],"approved":["c"]}`
 	args, n, err := approvalExecutionArgs(&a)
@@ -333,6 +335,8 @@ func TestNarrowingPayloads(t *testing.T) {
 // A describer card row may name a staged value with `key`; keys are unique
 // and bounded like labels.
 func TestParseApprovalCard_Keys(t *testing.T) {
+	t.Parallel()
+
 	if _, canonical, err := parseApprovalCard([]byte(`{"title":"t","items":[{"key":"a","label":"A"},{"label":"B"}]}`)); err != nil || !strings.Contains(string(canonical), `"key":"a"`) {
 		t.Fatalf("a keyed row: %s, %v", canonical, err)
 	}
@@ -610,6 +614,8 @@ func TestHandleApproval_EarlyExecutingAnswerCarriesTheNarrowing(t *testing.T) {
 
 // The audit line names staged positions, never the left-out values.
 func TestApprovalNarrowing_LeftOutPositions(t *testing.T) {
+	t.Parallel()
+
 	n := &approvalNarrowing{Arg: "deal_ids", Staged: []string{"a", "secret-b", "c", "d", "e"}, Approved: []string{"a", "e"}}
 	if got := n.leftOutPositions(); got != "2-4" {
 		t.Fatalf("leftOutPositions = %q, want 2-4", got)
@@ -786,6 +792,8 @@ func TestNarrowApproval_RefusesMoreValuesThanStagedByLength(t *testing.T) {
 // A grouped decision gets its own body cap, not the global 1 MiB JSON cap;
 // every other POST keeps the global one.
 func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
+	t.Parallel()
+
 	big := strings.Repeat("x", maxJSONBodyBytes+10)
 	read := func(path string) error {
 		var err error
@@ -810,6 +818,8 @@ func TestBodyLimitMiddleware_ApprovalGroupHasItsOwnCap(t *testing.T) {
 // The group cap holds the largest decision the endpoint accepts, written in
 // the most expensive JSON escaping (a surrogate pair per character).
 func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	t.Parallel()
+
 	perValue := maxNarrowableValueRunes*12 + 3        // two six-byte escapes per rune, quotes, comma
 	ids := maxApprovalGroupDecisions * (200 + 64 + 8) // ids, keys and brackets, generously; a narrow_args name (64) each
 	if need := maxApprovalGroupNarrowedValues*perValue + ids; need > maxApprovalGroupBody {
@@ -820,6 +830,8 @@ func TestMaxApprovalGroupBody_HoldsTheWorstCaseEscaping(t *testing.T) {
 // The single-card cap holds the largest narrowing it accepts, in the most
 // expensive JSON escaping.
 func TestMaxApprovalBody_HoldsTheWorstCaseEscaping(t *testing.T) {
+	t.Parallel()
+
 	if need := maxNarrowableValues*(maxNarrowableValueRunes*12+3) + 1024; need > maxApprovalBody {
 		t.Fatalf("worst case %d bytes > cap %d", need, maxApprovalBody)
 	}
@@ -849,6 +861,8 @@ func TestNarrowApproval_ErrorsNeverEchoAHugeValue(t *testing.T) {
 }
 
 func TestQuoteClientValue(t *testing.T) {
+	t.Parallel()
+
 	if got := quoteClientValue("ap-1"); got != `"ap-1"` {
 		t.Fatalf("short = %s", got)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupNotesTest wires the notes routes over the shared sched test DB. Auth
@@ -28,20 +29,9 @@ func setupNotesTest(t *testing.T) (*chi.Mux, *sched.Store, func()) {
 		t.Fatalf("temp dir: %v", err)
 	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("database unavailable: %v", err)
-		}
 		t.Fatalf("init storage: %v", err)
-	}
-	acquireTestLock(t, store)
-
-	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM agent_note_proposals", "DELETE FROM agent_notes"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("clean notes tables: %v", err)
-		}
 	}
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
@@ -90,6 +80,8 @@ func doJSON(t *testing.T, r http.Handler, method, path string, body any) *httpte
 }
 
 func TestNotesHandlers_CRUD(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupNotesTest(t)
 	defer cleanup()
 
@@ -156,6 +148,8 @@ func TestNotesHandlers_CRUD(t *testing.T) {
 }
 
 func TestNotesHandlers_ProposalPublishReject(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupNotesTest(t)
 	defer cleanup()
 

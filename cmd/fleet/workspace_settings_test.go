@@ -19,6 +19,8 @@ import (
 // TestBuildWorkspaceSettingsCoversRegistry: construction fails loudly on a
 // wiring gap, so passing construction proves full coverage of the registry.
 func TestBuildWorkspaceSettingsCoversRegistry(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{ErrorAnalysisEnabled: true, AutoTitle: true}
 	if _, _, err := buildWorkspaceSettings(cfg, nil); err != nil {
 		t.Fatalf("buildWorkspaceSettings should cover every registry key: %v", err)
@@ -26,6 +28,8 @@ func TestBuildWorkspaceSettingsCoversRegistry(t *testing.T) {
 }
 
 func TestDefaultPIIRedactionMode(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		enabled bool
 		mode    string
@@ -62,6 +66,8 @@ func TestDefaultPIIRedactionMode(t *testing.T) {
 // TestGatedErrorAnalyzerDisabled: the live gate returns (nil, nil) without
 // touching the manager — a nil manager would panic if the gate leaked through.
 func TestGatedErrorAnalyzerDisabled(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{ErrorAnalysisEnabled: false}
 	g := gatedErrorAnalyzer{cfg: cfg, mgr: nil}
 	analysis, err := g.AnalyzeTaskFailure(context.Background(), "p", "e", "t")
@@ -130,6 +136,8 @@ func TestPIIRedactorState(t *testing.T) {
 // env/reload value serves; an override pins the parsed value; garbage is a
 // wiring error surfaced to the admin.
 func TestApplyFloatOverride(t *testing.T) {
+	t.Parallel()
+
 	var got float64
 	var set bool
 	apply := applyFloatOverride(func(v float64, override bool) { got, set = v, override })
@@ -145,6 +153,8 @@ func TestApplyFloatOverride(t *testing.T) {
 }
 
 func TestApplyIntOverride(t *testing.T) {
+	t.Parallel()
+
 	var got int
 	var set bool
 	apply := applyIntOverride(func(v int, override bool) { got, set = v, override })

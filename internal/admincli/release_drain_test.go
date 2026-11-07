@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -44,7 +45,7 @@ func (p drainProber) WaitReady(context.Context, string, time.Duration) error {
 // `rollback` run inside update.sh's drain fence. The process they start reads
 // the same drain marker, so they must remove the marker the update owns
 // (FLEET_DRAIN_OWNER_TOKEN) — or one whose owner is gone — before the service
-// starts, or /readyz never answers 200 and the box rolls back. A marker that a
+// is probed, or /readyz never answers 200 and the box rolls back. A marker that a
 // different live process holds is left alone.
 func TestReleaseRollbackHandsOffTheUpdateDrain(t *testing.T) {
 	for _, tc := range []struct {
@@ -91,11 +92,45 @@ func TestReleaseRollbackHandsOffTheUpdateDrain(t *testing.T) {
 			if rc != 0 {
 				t.Fatalf("rollback rc=%d: the restarted service still saw the drain", rc)
 			}
-			for i, live := range rs.sawLive {
-				if live {
-					t.Errorf("restart %d ran with the drain marker still on disk", i+1)
-				}
+			// This Restarter cannot stop and start separately, so the marker
+			// stays through its restart (fencing the old process) and comes
+			// off before the probe — rc 0 above is the probe seeing it gone.
+			if len(rs.sawLive) == 0 {
+				t.Fatal("the service was never restarted")
 			}
 		})
+	}
+}
+
+// TestDrainLockWaitIsBounded: a stalled holder of the drain sentinel's lock
+// must not block the release install's handoff clear (and so the start that
+// follows it) forever.
+func TestDrainLockWaitIsBounded(t *testing.T) {
+	marker := filepath.Join(t.TempDir(), "fleet.env.update.drain")
+	t.Setenv("FLEET_UPDATE_DRAIN_FILE", marker)
+	if err := os.WriteFile(marker, []byte("draining pid-2147483646-1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.OpenFile(marker+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+	if err := syscall.Flock(int(held.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+	old := drainLockTimeout
+	drainLockTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { drainLockTimeout = old })
+
+	done := make(chan error, 1)
+	go func() { done <- clearHandedOffDrain() }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("clearHandedOffDrain succeeded while another process held the drain lock")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("clearHandedOffDrain blocked on a stalled drain-lock holder")
 	}
 }

@@ -22,6 +22,8 @@ import (
 // transactions; this drives genuine parallelism and is meant to be run under
 // -race so a torn lease assignment surfaces.
 func TestPoolClaimConcurrencyNoDoubleLease(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 
 	const (
@@ -102,6 +104,8 @@ func TestPoolClaimConcurrencyNoDoubleLease(t *testing.T) {
 // it is reviewable/replayable; the not-stuck/lease/error_message/log guarantees
 // are unchanged.
 func TestToolFailureMarksTaskFailed(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -161,6 +165,8 @@ func TestToolFailureMarksTaskFailed(t *testing.T) {
 // TestGracefulDrain (clean-success drain within grace); here the task outlasts
 // the grace and is force-cancelled.
 func TestInterruptedTaskPersistsTerminalOnShutdown(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -211,6 +217,8 @@ func TestInterruptedTaskPersistsTerminalOnShutdown(t *testing.T) {
 // overwrite the new owner's state. This is the in-process counterpart to the
 // storage-layer lease-ownership rejection (TestRecoveredTaskRejectsOldNode).
 func TestStaleGoroutineTerminalWriteSkipped(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 

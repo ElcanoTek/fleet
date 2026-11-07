@@ -22,6 +22,8 @@ func writeTestEnvFile(t *testing.T, content string) string {
 }
 
 func TestRedactEnvValue(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, key, value, want string
 	}{
@@ -30,7 +32,7 @@ func TestRedactEnvValue(t *testing.T) {
 		{"password name masks", "SMTP_PASSWORD", "hunter2", "[REDACTED]"},
 		{"credential name masks", "GOOGLE_CREDENTIAL", "blob", "[REDACTED]"},
 		{"plain knob passes through", "FLEET_MAX_COST_USD", "5.0", "5.0"},
-		{"dsn userinfo is stripped", "FLEET_CHAT_DATABASE_URL", "postgres://chat:s3cret@127.0.0.1:5432/chat", "postgres://***@127.0.0.1:5432/chat"},
+		{"dsn userinfo is stripped", "DATABASE_URL", "postgres://chat:s3cret@127.0.0.1:5432/chat", "postgres://***@127.0.0.1:5432/chat"},
 		{"plain url untouched", "FLEET_PUBLIC_URL", "https://fleet.example.com", "https://fleet.example.com"},
 	}
 	for _, tc := range cases {
@@ -46,11 +48,13 @@ func TestRedactEnvValue(t *testing.T) {
 // secret VALUE from the file may reach the rendered output, whatever else the
 // renderer does.
 func TestPrintRedactedEnvFile_NeverPrintsSecrets(t *testing.T) {
+	t.Parallel()
+
 	path := writeTestEnvFile(t, strings.Join([]string{
 		"# provisioning comment",
 		"OPENROUTER_API_KEY=sk-or-verysecret",
 		"FLEET_SHARED_TOKEN='tok-3nvfile'",
-		"FLEET_CHAT_DATABASE_URL=postgres://chat:dbpass@127.0.0.1:5432/chat?sslmode=disable",
+		"DATABASE_URL=postgres://chat:dbpass@127.0.0.1:5432/chat?sslmode=disable",
 		"FLEET_MAX_COST_USD=2.5",
 		"",
 	}, "\n"))
@@ -68,7 +72,7 @@ func TestPrintRedactedEnvFile_NeverPrintsSecrets(t *testing.T) {
 		"# " + path,
 		"OPENROUTER_API_KEY=[REDACTED]",
 		"FLEET_SHARED_TOKEN=[REDACTED]",
-		"FLEET_CHAT_DATABASE_URL=postgres://***@127.0.0.1:5432/chat?sslmode=disable",
+		"DATABASE_URL=postgres://***@127.0.0.1:5432/chat?sslmode=disable",
 		"FLEET_MAX_COST_USD=2.5",
 	} {
 		if !strings.Contains(out, want) {
@@ -78,6 +82,8 @@ func TestPrintRedactedEnvFile_NeverPrintsSecrets(t *testing.T) {
 }
 
 func TestPrintRedactedEnvFile_MissingFileIsANote(t *testing.T) {
+	t.Parallel()
+
 	var sb strings.Builder
 	if err := printRedactedEnvFile(&sb, filepath.Join(t.TempDir(), "absent.env")); err != nil {
 		t.Fatalf("missing file should not error, got %v", err)
@@ -88,6 +94,8 @@ func TestPrintRedactedEnvFile_MissingFileIsANote(t *testing.T) {
 }
 
 func TestResolveEditorArgv(t *testing.T) {
+	t.Parallel()
+
 	env := func(m map[string]string) func(string) string {
 		return func(k string) string { return m[k] }
 	}
@@ -117,6 +125,8 @@ func TestResolveEditorArgv(t *testing.T) {
 }
 
 func TestParseEditorChoice(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		answer  string
 		def     int
@@ -146,6 +156,8 @@ func TestParseEditorChoice(t *testing.T) {
 }
 
 func TestLintEnvFile(t *testing.T) {
+	t.Parallel()
+
 	path := writeTestEnvFile(t, strings.Join([]string{
 		"# fine: comment",
 		"GOOD_KEY=value",
@@ -167,6 +179,8 @@ func TestLintEnvFile(t *testing.T) {
 }
 
 func TestLintEnvFile_CleanFileHasNoWarnings(t *testing.T) {
+	t.Parallel()
+
 	path := writeTestEnvFile(t, "# comment\nA=1\nB='two'\n")
 	if warnings := lintEnvFile(path); len(warnings) != 0 {
 		t.Fatalf("want no warnings, got %v", warnings)
@@ -174,6 +188,8 @@ func TestLintEnvFile_CleanFileHasNoWarnings(t *testing.T) {
 }
 
 func TestEnsureEditableEnvFile(t *testing.T) {
+	t.Parallel()
+
 	t.Run("creates missing file 0600", func(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "new.env")
 		if err := ensureEditableEnvFile(path); err != nil {
@@ -215,6 +231,8 @@ func TestEnsureEditableEnvFile(t *testing.T) {
 // (exits 0 without touching the file) — the no-change branch — and with a tiny
 // script that appends a line — the saved branch.
 func TestEnvEdit_TrueEditor(t *testing.T) {
+	t.Parallel()
+
 	t.Run("no changes", func(t *testing.T) {
 		path := writeTestEnvFile(t, "A=1\n")
 		if code := envEdit([]string{"--env-file", path, "--editor", "true"}); code != 0 {
@@ -292,6 +310,8 @@ func TestEnvEdit_TrueEditor(t *testing.T) {
 }
 
 func TestPickEditor_ParsesChoiceFromReader(t *testing.T) {
+	t.Parallel()
+
 	// "1" picks nano; whether nano is installed decides between the run path
 	// and the dnf offer, so use whichever of the menu binaries IS present to
 	// keep the test hermetic. Fall back to skipping when none is installed
@@ -320,6 +340,8 @@ func TestPickEditor_ParsesChoiceFromReader(t *testing.T) {
 }
 
 func TestPickEditor_InvalidChoice(t *testing.T) {
+	t.Parallel()
+
 	var out strings.Builder
 	if _, err := pickEditor(bufio.NewReader(strings.NewReader("emacs\n")), &out); err == nil {
 		t.Fatal("want error for an off-menu choice")
@@ -327,6 +349,8 @@ func TestPickEditor_InvalidChoice(t *testing.T) {
 }
 
 func TestCmdEnv_Dispatch(t *testing.T) {
+	t.Parallel()
+
 	if code := cmdEnv([]string{"bogus"}); code != 1 {
 		t.Fatalf("unknown subcommand: code = %d, want 1", code)
 	}

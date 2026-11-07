@@ -57,6 +57,8 @@ func setupDatasetFixture(t *testing.T) (*Database, *models.Dataset) {
 }
 
 func TestDatasetCRUDAndImport(t *testing.T) {
+	t.Parallel()
+
 	db, d := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -90,6 +92,8 @@ func TestDatasetCRUDAndImport(t *testing.T) {
 }
 
 func TestDatasetClaimAndOutcomes(t *testing.T) {
+	t.Parallel()
+
 	db, d := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -124,6 +128,8 @@ func TestDatasetClaimAndOutcomes(t *testing.T) {
 }
 
 func TestDatasetReviewResetAndSweep(t *testing.T) {
+	t.Parallel()
+
 	db, d := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -187,6 +193,8 @@ func TestDatasetReviewResetAndSweep(t *testing.T) {
 // running row returns to pending with the claim's attempt refunded, is
 // re-claimable, and a non-running row is rejected (reset/approve win).
 func TestRequeueDatasetRow(t *testing.T) {
+	t.Parallel()
+
 	db, d := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -225,6 +233,8 @@ func TestRequeueDatasetRow(t *testing.T) {
 // UTF-8, the TEXT write was rejected, and the row stranded 'running'. The
 // rune-boundary clamp keeps the write valid so the outcome always lands.
 func TestFinishDatasetRow_ClampedMultibyteTextLands(t *testing.T) {
+	t.Parallel()
+
 	db, d := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -260,6 +270,8 @@ func TestFinishDatasetRow_ClampedMultibyteTextLands(t *testing.T) {
 // enforced before the args slice is sized (go/allocation-size-overflow) — and
 // before any DB access, so the check holds without a live database.
 func TestAddDatasetRowsRejectsOversizedBatch(t *testing.T) {
+	t.Parallel()
+
 	cells := make([]json.RawMessage, maxDatasetRowsPerInsert+1)
 	for i := range cells {
 		cells[i] = json.RawMessage(`{}`)
@@ -284,6 +296,8 @@ func TestAddDatasetRowsRejectsOversizedBatch(t *testing.T) {
 // single-dataset fixture above would not notice. A dataset with no rows must
 // still come back with an empty (not nil) map, as the per-dataset form did.
 func TestListDatasetsRowCountsPerDataset(t *testing.T) {
+	t.Parallel()
+
 	db, first := setupDatasetFixture(t)
 	ctx := context.Background()
 
@@ -348,6 +362,8 @@ func TestListDatasetsRowCountsPerDataset(t *testing.T) {
 // datasets that user created, a key scope those that key created, and the
 // zero scope every dataset. The creator pair round-trips through GetDataset.
 func TestListDatasetsScope(t *testing.T) {
+	t.Parallel()
+
 	db, legacy := setupDatasetFixture(t) // no recorded creator
 	ctx := context.Background()
 

@@ -9,6 +9,8 @@ import (
 // A stop is recorded once, only on the owner's row while its call is
 // executing, and read back by the reads the running card and the reload use.
 func TestMarkApprovalStopRequested(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -69,6 +71,8 @@ func TestMarkApprovalStopRequested(t *testing.T) {
 // A stopped call cut off by a restart says in its recovery breadcrumb that
 // the person stopped it.
 func TestRecoverStrandedApprovals_KeepsTheStop(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)

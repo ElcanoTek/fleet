@@ -382,10 +382,12 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   key=value DSNs) widened to any `scheme://` URL and to credential-shaped
   query keys matched decoded, each masked as `***`.
 - **The keys ADR-0098 added are registered**: the libpq/pgx `PG*` target
-  variables `fleet db consolidate` refuses (`PGHOST`, `PGPORT`,
-  `PGDATABASE`, `PGUSER`, `PGSERVICE`, `PGSERVICEFILE`), and the script
-  inputs `FLEET_IDENTITY_BIN`, `FLEET_REDACT_CHAT_PH` and
-  `FLEET_REDACT_SCHED_PH`; `fleet db consolidate` reads them through `envreg`.
+  variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSERVICE`,
+  `PGSERVICEFILE`). (Phase 2 of #2049 later removed `fleet db consolidate`,
+  which read them, and the script inputs `FLEET_IDENTITY_BIN`,
+  `FLEET_REDACT_CHAT_PH` and `FLEET_REDACT_SCHED_PH` with the legacy layout;
+  the per-store DSN keys stay registered as retired, so a stale value is
+  refused.)
 - **Four more settings are secrets** (`OPENAI_CUSTOM_HEADERS`,
   `FLEET_WEBHOOK_URL`, `FLEET_WEBHOOK_BODY_TEMPLATE`, plus the internal
   `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm
@@ -431,7 +433,7 @@ Awk and Perl tokens such as `$NF` and `$_` are excluded explicitly.
 
 The scan found 21 unregistered inputs, all now registered:
 - the e2e harness's `ORCH_PORT`, `WEB_PORT` and `E2E_*`, and `CANARY_MODEL`;
-- `HTTPAPI_TEST_DATABASE_URL`;
+- `HTTPAPI_TEST_DATABASE_URL` (since retired with the per-store test DSNs, #2049 M2);
 - bootstrap's `SCHED_DB_NAME`, `SCHED_DB_USER` and `SCHED_DB_PASSWORD`;
 - doctor's `SRC_DIR`;
 - `IMAGE_NAME`, `FLAG_DIR`, `MIGRATION_LINT_BASE` and `FREEZE_VERSION`.

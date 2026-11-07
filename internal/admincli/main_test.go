@@ -27,6 +27,8 @@ func usageLineFlags(text, prefix string) []string {
 // the top-level help as "fleet <verb>", so a shipped verb is never invisible
 // (the #722 round found several). The list mirrors Run's switch.
 func TestUsageNamesEveryDispatchedVerb(t *testing.T) {
+	t.Parallel()
+
 	text := UsageText()
 	for _, verb := range []string{
 		"bootstrap", "update", "cleanup", "status", "cache-stats", "usage", "doctor", "diagnose", "start", "restart", "stop",
@@ -51,6 +53,8 @@ func TestUsageNamesEveryDispatchedVerb(t *testing.T) {
 // pins the names; cmd/fleet's TestUsageValidateConfigFlagsMatchFlagSet checks
 // the same line against the FlagSet that actually parses them.
 func TestUsageValidateConfigFlags(t *testing.T) {
+	t.Parallel()
+
 	got := usageLineFlags(UsageText(), "fleet validate-config")
 	want := map[string]bool{"bundle-path": true, "skip-network-checks": true, "json": true}
 	if len(got) != len(want) {
@@ -68,6 +72,8 @@ func TestUsageValidateConfigFlags(t *testing.T) {
 // "already exists", 4 is "wrong state" — three facts the old legend omitted or
 // got wrong.
 func TestUsageExitCodeLegend(t *testing.T) {
+	t.Parallel()
+
 	text := UsageText()
 	idx := strings.Index(text, "Exit codes")
 	if idx < 0 {
@@ -86,6 +92,8 @@ func TestUsageExitCodeLegend(t *testing.T) {
 // it used to say "(default .env.local) for mcp account", which was exactly the
 // bug: mcp account wrote .env.local on a provisioned box.
 func TestUsageEnvFileLineMatchesResolver(t *testing.T) {
+	t.Parallel()
+
 	text := UsageText()
 	if !strings.Contains(text, "/etc/fleet/fleet.env when /etc/fleet exists, else .env.local") {
 		t.Errorf("usage env-file line does not describe the resolver order")

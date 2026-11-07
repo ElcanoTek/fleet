@@ -58,6 +58,8 @@ func readEpoch(t *testing.T, h http.Handler, user string) string {
 // The defect this exists for: an admin resets a compromised account's password
 // and the attacker's stolen cookie keeps working for the rest of its 14 days.
 func TestSessionEpoch_AdminPasswordResetEvictsOutstandingSessions(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com", "u@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes()
@@ -101,6 +103,8 @@ func TestSessionEpoch_AdminPasswordResetEvictsOutstandingSessions(t *testing.T) 
 // the event (its epoch moves via users.session_salt). A password session
 // minted afterwards carries the new epoch and works.
 func TestExternalEpochRevocationEndsPasswordSessionsToo(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 	passwordBefore := readEpoch(t, h, "u@x.com")
@@ -156,6 +160,8 @@ func TestExternalEpochRevocationEndsPasswordSessionsToo(t *testing.T) {
 // Every gated route is covered, not just the one above: the check lives in the
 // middleware every one of them shares.
 func TestSessionEpoch_StaleClaimRefusedOnEveryGatedRoute(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 	stolen := readEpoch(t, h, "u@x.com")
@@ -171,6 +177,8 @@ func TestSessionEpoch_StaleClaimRefusedOnEveryGatedRoute(t *testing.T) {
 }
 
 func TestSessionEpoch_ForgedClaimRefused(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 
@@ -184,6 +192,8 @@ func TestSessionEpoch_ForgedClaimRefused(t *testing.T) {
 // minted by the auth service, which chat cannot add a claim to, so rejecting
 // claimless requests would lock every magic-link user out.
 func TestSessionEpoch_NoClaimStillAdmitted(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 	if err := s.concreteStore(t).UpdatePassword(context.Background(), "u@x.com", "rotated-pw-99"); err != nil {
@@ -198,6 +208,8 @@ func TestSessionEpoch_NoClaimStillAdmitted(t *testing.T) {
 // Non-membership still outranks the epoch: a deleted account gets the 403 the
 // no-access page keys on, not a revocation verdict that would say "log in again".
 func TestSessionEpoch_NonMemberStillGetsNotAMember(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 
@@ -215,6 +227,8 @@ func TestSessionEpoch_NonMemberStillGetsNotAMember(t *testing.T) {
 // must get an answer of the same shape rather than a 403 that would both break
 // the login flow and reveal the user-list.
 func TestSessionEpoch_EndpointAnswersForUnknownEmail(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "u@x.com")
 	h := s.Routes()
 

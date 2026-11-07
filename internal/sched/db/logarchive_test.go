@@ -12,6 +12,8 @@ import (
 // roundtrip and asserts compression actually shrinks a realistic (repetitive)
 // log payload.
 func TestEncodeDecodeArchiveGzip(t *testing.T) {
+	t.Parallel()
+
 	raw := []byte(strings.Repeat(`{"role":"assistant","content":"thinking about the task"}`, 200))
 
 	stored, codec, err := encodeArchive(raw, nil)
@@ -37,6 +39,8 @@ func TestEncodeDecodeArchiveGzip(t *testing.T) {
 // TestEncodeDecodeArchiveEncrypted exercises the gzip+AES-256-GCM roundtrip and
 // confirms the stored bytes neither equal the plaintext nor leak it.
 func TestEncodeDecodeArchiveEncrypted(t *testing.T) {
+	t.Parallel()
+
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatalf("rand key: %v", err)
@@ -66,6 +70,8 @@ func TestEncodeDecodeArchiveEncrypted(t *testing.T) {
 // TestDecodeArchiveWrongKey confirms a tampered/incorrect key fails closed (GCM
 // authentication) rather than returning garbage.
 func TestDecodeArchiveWrongKey(t *testing.T) {
+	t.Parallel()
+
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatalf("rand key: %v", err)
@@ -84,6 +90,8 @@ func TestDecodeArchiveWrongKey(t *testing.T) {
 // TestDecodeArchiveMissingKey confirms reading an encrypted archive without a
 // configured key surfaces ErrLogArchiveKeyMissing.
 func TestDecodeArchiveMissingKey(t *testing.T) {
+	t.Parallel()
+
 	key := make([]byte, aesKeyLen)
 	if _, err := rand.Read(key); err != nil {
 		t.Fatalf("rand key: %v", err)
@@ -99,6 +107,8 @@ func TestDecodeArchiveMissingKey(t *testing.T) {
 
 // TestNewGCMRejectsWrongKeyLength guards the AES-256 key-length contract.
 func TestNewGCMRejectsWrongKeyLength(t *testing.T) {
+	t.Parallel()
+
 	if _, err := newGCM(make([]byte, 16)); err == nil {
 		t.Fatal("newGCM accepted a 16-byte key; want rejection")
 	}
@@ -106,6 +116,8 @@ func TestNewGCMRejectsWrongKeyLength(t *testing.T) {
 
 // TestDecodeArchiveUnknownCodec guards against a corrupt/unknown marker.
 func TestDecodeArchiveUnknownCodec(t *testing.T) {
+	t.Parallel()
+
 	if _, err := decodeArchive([]byte("x"), nil, "lz4"); err == nil {
 		t.Fatal("decodeArchive accepted an unknown codec")
 	}

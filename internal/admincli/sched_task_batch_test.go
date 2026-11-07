@@ -33,6 +33,8 @@ func (f *fakeBatchStore) AddTaskBatch(_ context.Context, tasks []*models.Task, a
 }
 
 func TestBatchCreateTasks_AllValid(t *testing.T) {
+	t.Parallel()
+
 	body := `[{"prompt":"Review file a"},{"prompt":"Review file b"}]`
 	st := &fakeBatchStore{}
 	res, err := batchCreateTasks(context.Background(), st, bytes.NewReader([]byte(body)), false)
@@ -48,6 +50,8 @@ func TestBatchCreateTasks_AllValid(t *testing.T) {
 }
 
 func TestBatchCreateTasks_PartialFailNonAtomic(t *testing.T) {
+	t.Parallel()
+
 	// Index 1 has an empty prompt (validation failure); indices 0 and 2 valid.
 	body := `[{"prompt":"Review file a"},{"prompt":"   "},{"prompt":"Review file c"}]`
 	st := &fakeBatchStore{}
@@ -67,6 +71,8 @@ func TestBatchCreateTasks_PartialFailNonAtomic(t *testing.T) {
 }
 
 func TestBatchCreateTasks_AtomicAbortsOnValidationFailure(t *testing.T) {
+	t.Parallel()
+
 	body := `[{"prompt":"Review file a"},{"prompt":""},{"prompt":"Review file c"}]`
 	st := &fakeBatchStore{}
 	res, err := batchCreateTasks(context.Background(), st, bytes.NewReader([]byte(body)), true)
@@ -85,6 +91,8 @@ func TestBatchCreateTasks_AtomicAbortsOnValidationFailure(t *testing.T) {
 }
 
 func TestBatchCreateTasks_AtomicDBErrorRollsBack(t *testing.T) {
+	t.Parallel()
+
 	body := `[{"prompt":"Review file a"},{"prompt":"Review file b"}]`
 	st := &fakeBatchStore{fail: errors.New("boom")}
 	res, err := batchCreateTasks(context.Background(), st, bytes.NewReader([]byte(body)), true)
@@ -102,6 +110,8 @@ func TestBatchCreateTasks_AtomicDBErrorRollsBack(t *testing.T) {
 }
 
 func TestBatchCreateTasks_OversizedRejected(t *testing.T) {
+	t.Parallel()
+
 	tasks := make([]models.TaskCreate, MaxBatchSize+1)
 	for i := range tasks {
 		tasks[i] = models.TaskCreate{Prompt: "x"}
@@ -115,6 +125,8 @@ func TestBatchCreateTasks_OversizedRejected(t *testing.T) {
 }
 
 func TestValidateBatchTaskCreate(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]models.TaskCreate{
 		"empty prompt":       {Prompt: "  "},
 		"bad cron":           {Prompt: "x", Recurrence: "not a cron"},
@@ -132,6 +144,8 @@ func TestValidateBatchTaskCreate(t *testing.T) {
 }
 
 func TestBatchCreateTasks_RecurrenceFirstFire(t *testing.T) {
+	t.Parallel()
+
 	for _, zone := range []string{"UTC", "America/New_York"} {
 		t.Run(zone, func(t *testing.T) {
 			body := `[{"prompt":"Daily report","recurrence":"0 9 * * *","timezone":"` + zone + `"}]`
@@ -158,6 +172,8 @@ func TestBatchCreateTasks_RecurrenceFirstFire(t *testing.T) {
 }
 
 func TestValidateBatchTaskCreate_ScheduleValidation(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []models.TaskCreate{
 		{Prompt: "report", Timezone: "not/a/timezone"},
 		{Prompt: "report", Recurrence: "0 9 31 2 *"},

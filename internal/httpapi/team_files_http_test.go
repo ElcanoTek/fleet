@@ -662,6 +662,8 @@ func TestTeammateBranchIgnoresRepliesPastTheBranchPoint(t *testing.T) {
 // distinct references only the most recent are recorded, and the origin says
 // the list is truncated so the web treats unknown references as withheld.
 func TestWithholdUncopiedReferencesIsBounded(t *testing.T) {
+	t.Parallel()
+
 	history := make([]agent.HistoryEntry, 0, maxOutputReferences+3)
 	for i := range maxOutputReferences + 3 {
 		history = append(history, textEntry("user", "q"), textEntry("assistant", fmt.Sprintf("[f](f%04d.csv)", i)))
@@ -980,6 +982,8 @@ func TestProjectFilesTeamGroupCountsAfterCap(t *testing.T) {
 }
 
 func TestProjectMyStateEndpoint(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamHTTPFixture(t)
 	// sources_open keys are chat ids in the project; keys naming no live chat
 	// here are pruned on write.

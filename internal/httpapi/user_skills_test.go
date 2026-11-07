@@ -136,6 +136,8 @@ func TestMaterializeUserSkills(t *testing.T) {
 // "/name" invocation matches the caller's ACTIVE skills only, and points at
 // the workspace path.
 func TestMatchUserSkillInvocation(t *testing.T) {
+	t.Parallel()
+
 	skills := []store.UserSkill{
 		{Name: "deal-check", Status: store.UserSkillStatusActive},
 		{Name: "sleepy", Status: store.UserSkillStatusDisabled},
@@ -169,6 +171,8 @@ func userSkillsReq(t *testing.T, _ *Server, handler http.HandlerFunc, method, ta
 // codes: create → list → update (disable) → delete; invalid input 400s;
 // unknown ids 404.
 func TestUserSkillsEndpoints(t *testing.T) {
+	t.Parallel()
+
 	fs := &skillsFakeStore{fakeChatStore: newFakeChatStore()}
 	s := &Server{store: fs}
 

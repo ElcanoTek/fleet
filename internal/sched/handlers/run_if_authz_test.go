@@ -63,6 +63,8 @@ func setupRunIfAuthz(t *testing.T) (*chi.Mux, *apikeys.Manager, *storage.Storage
 // so a plain CI key could attach a run_if string that executes on the host as
 // the fleet user — while a genuine admin-ROLE user was refused.
 func TestCreateTaskRunIfRequiresAdminPermission(t *testing.T) {
+	t.Parallel()
+
 	r, keyMgr, _ := setupRunIfAuthz(t)
 
 	clientKey := mustCreateRoleKey(t, keyMgr, "client")
@@ -152,6 +154,8 @@ func TestCreateTaskRunIfRequiresAdminPermission(t *testing.T) {
 // unchanged gate modulo defaultable fields (OnError "", omitted timeout) is
 // not refused, while a real change attempt still is.
 func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
+	t.Parallel()
+
 	r, keyMgr, store := setupRunIfAuthz(t)
 
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
@@ -357,6 +361,8 @@ func TestUpdateTaskRunIfPersistsAndNormalizes(t *testing.T) {
 // NewTask's derivation (models.DeriveDispatchState), so no edit can move a
 // gated task or a template off the scheduler path.
 func TestUpdateTaskKeepsGatedTaskOnSchedulerPath(t *testing.T) {
+	t.Parallel()
+
 	r, keyMgr, store := setupRunIfAuthz(t)
 
 	// Attributed fixtures throughout: editing is own-rows

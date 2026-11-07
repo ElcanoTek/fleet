@@ -5,12 +5,10 @@ package handlers
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -21,72 +19,19 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
-
-// acquireTestLock serializes the handlers test package against the other sched
-// test packages that share the same database. The gate already runs the suite
-// with -p 1, but the advisory lock keeps the package safe to run on its own.
-func acquireTestLock(t *testing.T, s *storage.Storage) {
-	ctx := context.Background()
-	// Get a dedicated connection for the lock
-	conn, err := s.DB().Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get DB connection for lock: %v", err)
-	}
-
-	// Acquire lock (waits if held by another test)
-	// We use a fixed ID (1) to serialize all tests across packages that share the DB
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("Failed to acquire test lock: %v", err)
-	}
-
-	// Release lock when test finishes
-	t.Cleanup(func() {
-		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)"); err != nil {
-			t.Logf("Failed to release test lock: %v", err)
-		}
-		conn.Close()
-	})
-}
-
-func cleanDB(s *storage.Storage) error {
-	ctx := context.Background()
-	// Use raw DB access to clean tables
-	db := s.DB()
-	// prompt_library too, as storage_test.go does: otherwise a second run of
-	// this package on the same database trips over a leftover row (409).
-	tables := []string{"prompt_library", "logs", "tasks", "users"}
-	for _, table := range tables {
-		if _, err := db.Conn().ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 	tmpDir := t.TempDir()
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		t.Fatalf("Failed to init storage: %v", err)
 	}
 	// Close the pool when the test ends: without this every setupTest caller
 	// leaks a full connection pool for the life of the package binary, and the
 	// package creeps toward the Postgres max_connections ceiling ("sorry, too
 	// many clients already") as tests are added.
-	t.Cleanup(func() { store.Close() })
-
-	// Acquire global test lock to prevent interference from other parallel packages
-	acquireTestLock(t, store)
-
-	// Clean up database to ensure a fresh state for each test
-	if err := cleanDB(store); err != nil {
-		t.Fatalf("Failed to clean database: %v", err)
-	}
 
 	keyMgr, _ := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 
@@ -99,6 +44,8 @@ func setupTest(t *testing.T) (*Handlers, *storage.Storage) {
 }
 
 func TestUpload(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	body := &bytes.Buffer{}
@@ -133,6 +80,8 @@ func TestUpload(t *testing.T) {
 }
 
 func TestUserLogin(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	// First create a user
@@ -201,6 +150,8 @@ func TestUserLogin(t *testing.T) {
 }
 
 func TestDashboardStatsWithUserToken(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	// Create a user with a session token
@@ -268,6 +219,8 @@ func TestDashboardStatsWithUserToken(t *testing.T) {
 }
 
 func TestLoginToDashboardFlow(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	// Step 1: Create a user (admin creates it)
@@ -323,6 +276,8 @@ func TestLoginToDashboardFlow(t *testing.T) {
 }
 
 func TestGetLogsWithUserAuth(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	// Create an admin user with session token
@@ -474,6 +429,8 @@ func TestGetLogsWithUserAuth(t *testing.T) {
 // signal ever drifts the backend must still degrade gracefully so the modal's
 // 404 path renders the empty state instead of cascading into an error toast.
 func TestGetLogsForScheduledTaskReturns404(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	scheduledFor := time.Now().Add(1 * time.Hour).UTC()
@@ -508,6 +465,8 @@ func TestGetLogsForScheduledTaskReturns404(t *testing.T) {
 // cmd/fleet wires the seam, and once wired they are stamped LIVE on every
 // response — including cache hits — so the stats cache can't freeze them.
 func TestDashboardStatsAgentPool(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	fetch := func() models.DashboardStats {

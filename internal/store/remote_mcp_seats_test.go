@@ -17,6 +17,8 @@ func seatInput(email, name, account string) RemoteMCPServerInput {
 }
 
 func TestRemoteMCPSeatsCreateDefaultAndUniqueness(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const email = "u@x.com"
@@ -63,6 +65,8 @@ func TestRemoteMCPSeatsCreateDefaultAndUniqueness(t *testing.T) {
 }
 
 func TestRemoteMCPSeatsSetDefaultRenameAndDeletePromotion(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const email = "u@x.com"
@@ -117,6 +121,8 @@ func TestRemoteMCPSeatsSetDefaultRenameAndDeletePromotion(t *testing.T) {
 
 // Sharing is per seat: a grant on "work" must not expose "personal".
 func TestRemoteMCPSeatsShareIsPerSeat(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const owner, mate = "owner@x.com", "mate@x.com"

@@ -10,6 +10,8 @@ import (
 // round-trips: a positive deadline is stored and surfaced on the returned row
 // and on subsequent reads, while a zero deadline persists NULL (→ 0 on read).
 func TestCreateApproval_PersistsExpiresAt(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -55,6 +57,8 @@ func TestCreateApproval_PersistsExpiresAt(t *testing.T) {
 // past deadline are returned. Future deadlines, no-deadline rows, and
 // already-resolved rows are excluded.
 func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -101,6 +105,8 @@ func TestListExpiredApprovals_FiltersCorrectly(t *testing.T) {
 // approval past its expires_at deadline is not claimable, even if the
 // sweep has not run. Default-deny is authoritative at click time.
 func TestClaimApproval_RefusesExpired(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -158,6 +164,8 @@ func TestClaimApproval_RefusesExpired(t *testing.T) {
 // TestSetApprovalTimeout_RoundTrip verifies the per-conversation override
 // column (#225) sets, reads, and clears via List/Get.
 func TestSetApprovalTimeout_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
@@ -209,6 +217,8 @@ func TestSetApprovalTimeout_RoundTrip(t *testing.T) {
 }
 
 func TestSetAutoApprove_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)
