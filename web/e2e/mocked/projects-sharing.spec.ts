@@ -33,7 +33,7 @@ async function mockProject(
   await page.route("**/api/projects", (r: Route) =>
     r.fulfill({ json: { projects: [opts.project] } }),
   );
-  await page.route("**/api/me/team", (r: Route) =>
+  await page.route("**/api/me", (r: Route) =>
     r.fulfill({ json: { email: ME, role: "member", team_id: "quant", admin: false } }),
   );
   await page.route("**/api/projects/*/conversations", (r: Route) =>

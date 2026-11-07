@@ -41,6 +41,7 @@ import {
 import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -265,23 +266,18 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       void loadConnectors();
       void loadMemories();
     });
-    void (async () => {
-      try {
-        const res = await fetch("/api/me", { cache: "no-store" });
-        if (!res.ok) return;
-        const me = (await res.json()) as { role?: string };
-        if (me.role === "viewer") {
-          setReadOnly(true);
-          // A viewer sees only the preamble, even with progress saved on a
-          // later step from before their role changed (or after a quick Next
-          // while this read was in flight). The server still refuses every
-          // write a viewer attempts; this keeps the screen honest.
-          setState((cur) => (cur.step === "why" ? cur : { ...cur, step: "why" }));
-        }
-      } catch {
-        // Unknown role: the server still refuses what a viewer cannot do.
+    // Unknown role (an unreadable record): the server still refuses what a
+    // viewer cannot do.
+    void fetchMe().then((me) => {
+      if (me?.role === "viewer") {
+        setReadOnly(true);
+        // A viewer sees only the preamble, even with progress saved on a
+        // later step from before their role changed (or after a quick Next
+        // while this read was in flight). The server still refuses every
+        // write a viewer attempts; this keeps the screen honest.
+        setState((cur) => (cur.step === "why" ? cur : { ...cur, step: "why" }));
       }
-    })();
+    });
     void (async () => {
       try {
         const res = await fetch("/api/personas", { cache: "no-store" });

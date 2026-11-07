@@ -15,7 +15,7 @@ async function boot(page: Page) {
     { id: "c-shared", title: "Shared findings", project_id: teamProject.id, team_visible: true },
   ] });
   await page.route("**/api/conversations/*/queue", (route) => route.fulfill({ json: { messages: [] } }));
-  await page.route("**/api/me/team", (route) => route.fulfill({ json: { team_id: "Platform", email: "e2e@example.com" } }));
+  await page.route("**/api/me", (route) => route.fulfill({ json: { team_id: "Platform", email: "e2e@example.com" } }));
   await page.route("**/api/projects", (route) => route.fulfill({ json: { projects: [teamProject, personalProject] } }));
   await page.route("**/api/projects/p-team/conversations", (route) => route.fulfill({ json: { conversations: [] } }));
   await page.route("**/api/projects/p-team/team-conversations", (route) => route.fulfill({ json: { conversations: [] } }));

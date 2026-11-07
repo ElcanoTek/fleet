@@ -34,6 +34,7 @@ import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { invalidateMe } from "@/app/shared/lib/account";
 
 export type Me = {
   email: string;
@@ -124,6 +125,9 @@ export default function TeamSettingsPage() {
       }
       if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
       const updated = (await res.json()) as Me;
+      // Every other reader shares one cached account record; it now names
+      // the old team.
+      invalidateMe();
       setMe(updated);
       setDraft("");
       setNotice(

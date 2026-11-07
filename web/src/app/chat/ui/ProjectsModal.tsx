@@ -6,6 +6,7 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe, type Me } from "@/app/shared/lib/account";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -29,7 +30,7 @@ export type Project = {
   updated_at: number;
 };
 
-// The caller's own team, from /api/me/team (#1157). "Share with my team" is
+// The caller's own team, from /api/me (#1157, shared/lib/account). "Share with my team" is
 // meaningless without one, so the teamless state says where teams are managed
 // instead of rendering a control that could only 400.
 //
@@ -40,12 +41,6 @@ export type Project = {
 // for your own, Settings → Admin → Users for anyone's); this modal is now
 // display-only about teams, so there is nothing here to type and nothing to
 // get wrong.
-type Me = {
-  email: string;
-  role: string;
-  team_id: string;
-  admin: boolean;
-};
 
 type ProjectMemory = {
   id: string;
@@ -115,14 +110,11 @@ export function ProjectsModal({
     }
   }, []);
 
+  // Non-fatal: an unreadable record leaves `me` null, and the modal still
+  // works with the neutral copy, minus the team hint.
   const loadMe = useCallback(async () => {
-    try {
-      const res = await fetch("/api/me/team", { cache: "no-store" });
-      if (!res.ok) return; // non-fatal: the modal still works, minus the team hint
-      setMe((await res.json()) as Me);
-    } catch {
-      // Offline / transient: leave `me` null and fall back to the neutral copy.
-    }
+    const record = await fetchMe();
+    if (record) setMe(record);
   }, []);
 
   const loadMemories = useCallback(async (id: string) => {

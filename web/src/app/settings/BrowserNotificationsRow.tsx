@@ -24,6 +24,7 @@ import {
 import { SetRow, SetSwitch } from "./ui/atoms";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 type PushState =
   | "loading" // probing support + current subscription
@@ -65,20 +66,14 @@ async function serverHoldsSubscription(endpoint: string): Promise<boolean> {
 }
 
 // isViewerAccount reports whether the signed-in account is a Viewer, from the
-// account read Settings → Team also makes (GET /api/me/team). The push routes
+// shared account read (GET /api/me, shared/lib/account). The push routes
 // refuse a Viewer's writes, so the switch is greyed out up front instead of
 // failing once pressed. This is presentation only: the server's refusal stays
 // the authority, and a failed read counts as "not a Viewer", leaving the
 // switch to meet that refusal (which enable() turns into the same note).
 async function isViewerAccount(): Promise<boolean> {
-  try {
-    const res = await fetch("/api/me/team", { cache: "no-store" });
-    if (!res.ok) return false;
-    const me = (await res.json()) as { role?: string };
-    return me.role === "viewer";
-  } catch {
-    return false;
-  }
+  const me = await fetchMe();
+  return me?.role === "viewer";
 }
 
 // readOnlyRefusal reports whether a 403 is the server's Viewer refusal

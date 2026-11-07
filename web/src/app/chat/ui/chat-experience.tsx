@@ -168,6 +168,7 @@ import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
 import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
+import { fetchMe } from "@/app/shared/lib/account";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -3421,16 +3422,10 @@ export function ChatExperience({
     queueMicrotask(() => {
       if (!cancelled) void loadChatOrders();
     });
-    void (async () => {
-      try {
-        const res = await fetch("/api/me", { cache: "no-store" });
-        if (!res.ok) return;
-        const me = (await res.json()) as { role?: string };
-        if (!cancelled && typeof me.role === "string") setAccountRole(me.role);
-      } catch {
-        // Unknown role: no reorder mode is offered.
-      }
-    })();
+    // An unreadable record leaves the role unknown: no reorder mode.
+    void fetchMe().then((me) => {
+      if (!cancelled && me?.role) setAccountRole(me.role);
+    });
     return () => {
       cancelled = true;
     };
@@ -3490,16 +3485,13 @@ export function ChatExperience({
   const [myTeamAdmin, setMyTeamAdmin] = useState<boolean | undefined>(
     undefined,
   );
-  const loadMyTeam = useCallback(async () => {
-    try {
-      const res = await fetch("/api/me/team", { cache: "no-store" });
-      if (!res.ok) return;
-      const me = (await res.json()) as { team_id?: string; admin?: boolean };
-      setMyTeam(me.team_id ?? "");
-      setMyTeamAdmin(me.admin ?? false);
-    } catch {
-      // Best-effort: leave it unknown.
-    }
+  // From the shared account read (shared/lib/account); `fresh` skips its
+  // short cache. Best-effort: an unreadable record leaves both unknown.
+  const loadMyTeam = useCallback(async (fresh = false) => {
+    const me = await fetchMe({ fresh });
+    if (!me) return;
+    setMyTeam(me.team_id);
+    setMyTeamAdmin(me.admin);
   }, []);
   useEffect(() => {
     let cancelled = false;
@@ -3898,7 +3890,7 @@ export function ChatExperience({
     // The modal can share a project with the caller's team, and Settings →
     // Team can change which team that is in another tab — re-read it so the
     // project-home dialog's copy agrees with what the modal just did.
-    void loadMyTeam();
+    void loadMyTeam(true);
   };
 
   // Rail-action error toast: the rail's project/move mutations are

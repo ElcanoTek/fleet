@@ -18,6 +18,7 @@ import {
 } from "../ui/panels";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { fetchMe } from "@/app/shared/lib/account";
 
 type UserMemory = {
   id: string;
@@ -92,18 +93,10 @@ export default function MemoriesPage() {
     queueMicrotask(() => {
       if (!cancelled) void loadMemories();
     });
-    void (async () => {
-      try {
-        const res = await fetch("/api/me/team", { cache: "no-store" });
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { role?: string };
-        if (!cancelled && data.role === "viewer") {
-          setReadOnlyViewer(true);
-        }
-      } catch {
-        // Optional viewer-role check.
-      }
-    })();
+    // Optional viewer-role check (shared/lib/account).
+    void fetchMe().then((me) => {
+      if (!cancelled && me?.role === "viewer") setReadOnlyViewer(true);
+    });
     void (async () => {
       try {
         const res = await fetch("/api/projects", { cache: "no-store" });
