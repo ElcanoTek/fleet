@@ -1,16 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { createSSEParser, type TaskStreamFrame } from "./orchestratorApi";
+import { createSSEParser, type ServerEvent } from "./sse";
+import { createTaskFrameParser, type TaskStreamFrame } from "@/app/shared/lib/orchestratorApi";
 
-// #508: the live-activity SSE parser must assemble frames across arbitrary
-// chunk boundaries, skip heartbeats, and survive malformed payloads.
+// #508: the SSE parser (moved here from orchestratorApi in #1999, now shared
+// with chat's summarize stream) must assemble frames across arbitrary chunk
+// boundaries and skip heartbeats; the task-activity layer on top of it must
+// survive malformed payloads.
 
 function collect(): { frames: TaskStreamFrame[]; feed: (chunk: string) => void } {
   const frames: TaskStreamFrame[] = [];
-  const feed = createSSEParser((f) => frames.push(f));
+  const feed = createTaskFrameParser((f) => frames.push(f));
   return { frames, feed };
 }
 
 describe("createSSEParser", () => {
+  it("hands over raw events with their name, data and id", () => {
+    const events: ServerEvent[] = [];
+    const feed = createSSEParser((ev) => events.push(ev));
+    feed("event: summary.delta\nid: 3\ndata: {\"text\":\"a\"}\n\nevent: summary.comp");
+    feed("leted\ndata: done\n\n: heartbeat\n\n");
+    expect(events).toEqual([
+      { event: "summary.delta", data: '{"text":"a"}', id: "3" },
+      { event: "summary.completed", data: "done" },
+    ]);
+  });
+});
+
+describe("createTaskFrameParser", () => {
   it("parses complete frames with id/event/data lines", () => {
     const { frames, feed } = collect();
     feed('id: 1\nevent: tool_call\ndata: {"type":"tool_call","name":"bash","input":"ls"}\n\n');
@@ -29,6 +45,12 @@ describe("createSSEParser", () => {
     expect(frames).toHaveLength(2);
     expect(frames[0]).toMatchObject({ type: "agent_message", content: "hello" });
     expect(frames[1]).toMatchObject({ type: "tool_result", output: "ok" });
+  });
+
+  it("carries the SSE id as _event_id", () => {
+    const { frames, feed } = collect();
+    feed('id: 9\ndata: {"type":"status","status":"running"}\n\n');
+    expect(frames[0]._event_id).toBe("9");
   });
 
   it("skips heartbeats and malformed data without dying", () => {

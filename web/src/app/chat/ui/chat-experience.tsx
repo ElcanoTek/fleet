@@ -22,7 +22,7 @@ import {
   pinnedPrices,
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
-import { parseSseChunk } from "@/app/lib/sse";
+import { createSSEParser } from "@/app/lib/sse";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
@@ -166,6 +166,7 @@ import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 import { fetchMe } from "@/app/shared/lib/account";
 import { useChatMemories } from "./useChatMemories";
 import { MemoryManagerDialog, MemoryPromoteDialog } from "./MemoryManagerDialog";
+import { isAbortError } from "@/app/shared/hooks/useCancellableFetch";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -1236,6 +1237,17 @@ export function ChatExperience({
     null,
   );
   const [summaryExpanded, setSummaryExpanded] = useState(false);
+  // The chat a summarize stream belongs to, and its abort handle (#1999).
+  const [summarizeConvId, setSummarizeConvId] = useState<string | null>(null);
+  const summarizeAbortRef = useRef<AbortController | null>(null);
+  // Switching chats or unmounting ends a summarize stream in flight: its
+  // progress and its reload belong to the chat it was started on.
+  useEffect(
+    () => () => {
+      summarizeAbortRef.current?.abort();
+    },
+    [activeConversationId],
+  );
   const spreadsheetNudge = useMemo(
     () =>
       decideSpreadsheetNudge({
@@ -2990,12 +3002,26 @@ export function ChatExperience({
   // summary message is in messages with everything around it
   // collapsed by default. Replace semantics on the backend mean
   // calling this twice produces a single replacement, never a chain.
+  //
+  // The stream belongs to the chat it summarizes (#1999): switching chats or
+  // leaving the page aborts it (summarizeAbortRef, the effect below), the
+  // progress card shows only on that chat (summarizeConvId), and the reload
+  // after it completes runs only while that chat is still the open one — it
+  // used to load the summarized chat over whichever chat the user had moved
+  // to.
   const summarizeConversation = async () => {
     if (!activeConversationId) return;
     if (isStreaming || isSummarizing) return;
-    const summarizeUrl = conversationApiUrl(activeConversationId, "/summarize");
+    const convId = activeConversationId;
+    const summarizeUrl = conversationApiUrl(convId, "/summarize");
     if (!summarizeUrl) return;
+    summarizeAbortRef.current?.abort();
+    const controller = new AbortController();
+    summarizeAbortRef.current = controller;
+    const stillActive = () =>
+      !controller.signal.aborted && activeConversationIdRef.current === convId;
     setIsSummarizing(true);
+    setSummarizeConvId(convId);
     setSummarizeError(null);
     setSummarizeStream("");
     setSummarizeStartedAt(nowMs());
@@ -3004,6 +3030,7 @@ export function ChatExperience({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: selectedModel }),
+        signal: controller.signal,
       });
       if (!response.ok) {
         if (response.status === 409) {
@@ -3023,47 +3050,54 @@ export function ChatExperience({
       // failure (rare — pre-stream errors come back as HTTP codes).
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = "";
       let streamErr: string | null = null;
       let completed = false;
+      const feed = createSSEParser((event) => {
+        if (completed) return;
+        if (event.event === "summary.delta") {
+          try {
+            const p = JSON.parse(event.data) as { text?: string };
+            if (p.text && stillActive()) setSummarizeStream((prev) => prev + p.text);
+          } catch {
+            /* malformed delta — drop */
+          }
+        } else if (event.event === "summary.completed") {
+          completed = true;
+        } else if (event.event === "summary.error") {
+          try {
+            const p = JSON.parse(event.data) as { message?: string };
+            streamErr = p.message ?? "Summarizing failed.";
+          } catch {
+            streamErr = "Summarizing failed.";
+          }
+          completed = true;
+        }
+      });
       while (!completed) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const parsed = parseSseChunk(buffer);
-        buffer = parsed.remainder;
-        for (const event of parsed.events) {
-          if (event.event === "summary.delta") {
-            try {
-              const p = JSON.parse(event.data) as { text?: string };
-              if (p.text) setSummarizeStream((prev) => prev + p.text);
-            } catch {
-              /* malformed delta — drop */
-            }
-          } else if (event.event === "summary.completed") {
-            completed = true;
-          } else if (event.event === "summary.error") {
-            try {
-              const p = JSON.parse(event.data) as { message?: string };
-              streamErr = p.message ?? "Summarizing failed.";
-            } catch {
-              streamErr = "Summarizing failed.";
-            }
-            completed = true;
-          }
-        }
+        feed(decoder.decode(value, { stream: true }));
       }
+      // The server may hold the stream open past its last event; let go of
+      // it rather than leaving the connection to time out.
+      if (completed) void reader.cancel().catch(() => {});
       if (streamErr) throw new Error(streamErr);
       // Reload from the source of truth so the summary message and
       // any side-effects (updated_at bump, etc.) land cleanly. The
       // collapsed-range UI defaults to closed on each load, so the
       // user sees "+ N earlier turns" right after the summarize call
-      // returns.
-      await loadConversation(activeConversationId);
+      // returns. Only while the summarized chat is still the open one.
+      if (stillActive()) await loadConversation(convId);
     } catch (err) {
-      setSummarizeError(errorMessage(err, "Summarizing failed."));
+      // An abort is the user leaving the chat, not a failure to report; a
+      // failure for a chat the user has left is not this chat's either.
+      if (!isAbortError(err) && stillActive()) {
+        setSummarizeError(errorMessage(err, "Summarizing failed."));
+      }
     } finally {
+      if (summarizeAbortRef.current === controller) summarizeAbortRef.current = null;
       setIsSummarizing(false);
+      setSummarizeConvId(null);
       setSummarizeStream("");
       setSummarizeStartedAt(null);
     }
@@ -7229,9 +7263,11 @@ export function ChatExperience({
                 if (creatingShareForCurrentView) return;
                 setPrompt(next);
               }}
-              isSummarizing={isSummarizing}
-              summarizeStartedAt={summarizeStartedAt}
-              summarizeStream={summarizeStream}
+              isSummarizing={isSummarizing && summarizeConvId === activeConversationId}
+              summarizeStartedAt={
+                summarizeConvId === activeConversationId ? summarizeStartedAt : null
+              }
+              summarizeStream={summarizeConvId === activeConversationId ? summarizeStream : ""}
               summarizeError={summarizeError}
               summaryIndex={summaryIndex}
               summaryExpanded={summaryExpanded}

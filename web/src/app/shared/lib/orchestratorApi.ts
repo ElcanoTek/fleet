@@ -3,7 +3,7 @@
 // httpOnly chat/elcano session cookie (#1115). Relative URLs only — no
 // bearer token is stored or attached in the browser.
 
-import { parseSseChunk } from "@/app/lib/sse";
+import { createSSEParser } from "@/app/lib/sse";
 import type { PillField } from "@/app/chat/ui/protocolPills";
 
 // MCPChoice mirrors agentcore.MCPChoice: which optional server is on + which
@@ -589,31 +589,22 @@ export type TaskStreamFrame = {
   _event_id?: string;
 };
 
-// createSSEParser returns a chunk-feeder that assembles SSE frames and invokes
-// onFrame per parsed `data:` JSON payload. Frame assembly is delegated to the
-// hardened chat parser (parseSseChunk, #589) rather than reimplemented here, so
-// both SSE consumers share ONE parser: it accepts CRLF frame delimiters (a
-// proxy that normalizes line endings would otherwise leave a stream with no
-// "\n\n" — zero frames emitted, buffer growing forever) and joins multi-line
-// `data:` values with "\n" per the SSE spec instead of corrupting them by bare
-// concatenation. Heartbeat/comment frames carry no data and are dropped by
-// parseSseChunk itself.
-// Exported for unit tests; used by streamTaskActivity below.
-export function createSSEParser(onFrame: (frame: TaskStreamFrame) => void): (chunk: string) => void {
-  let buffer = "";
-  return (chunk: string) => {
-    const { events, remainder } = parseSseChunk(buffer + chunk);
-    buffer = remainder;
-    for (const ev of events) {
-      try {
-        const frame = JSON.parse(ev.data) as TaskStreamFrame;
-        if (ev.id) frame._event_id = ev.id;
-        onFrame(frame);
-      } catch {
-        // tolerate a malformed frame rather than killing the stream
-      }
+// createTaskFrameParser returns a chunk-feeder for the live task-activity
+// stream: frames are assembled by the shared SSE parser (lib/sse.ts
+// createSSEParser, which handles CRLF delimiters and multi-line data), each
+// `data:` payload is parsed as a TaskStreamFrame and carries its SSE id as
+// _event_id, and a malformed payload is dropped rather than killing the
+// stream. Exported for unit tests; used by streamTaskActivity below.
+export function createTaskFrameParser(onFrame: (frame: TaskStreamFrame) => void): (chunk: string) => void {
+  return createSSEParser((ev) => {
+    try {
+      const frame = JSON.parse(ev.data) as TaskStreamFrame;
+      if (ev.id) frame._event_id = ev.id;
+      onFrame(frame);
+    } catch {
+      // tolerate a malformed frame rather than killing the stream
     }
-  };
+  });
 }
 
 
@@ -822,7 +813,7 @@ export const orchestratorApi = {
     }
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    const feed = createSSEParser(onFrame);
+    const feed = createTaskFrameParser(onFrame);
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
