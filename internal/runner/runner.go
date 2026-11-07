@@ -424,7 +424,7 @@ func (p *Pool) Run(ctx context.Context) {
 	if p.wallTimeout > 0 {
 		logging.From(ctx).Info("runner: per-task wall-clock timeout ON (FLEET_TASK_WALL_TIMEOUT, 0 disables)", "wall_timeout", p.wallTimeout)
 	} else {
-		logging.From(ctx).Info("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
+		logging.From(ctx).Warn("runner: per-task wall-clock timeout OFF (FLEET_TASK_WALL_TIMEOUT=0)")
 	}
 
 	// Lease renewal runs until the in-flight tasks have DRAINED, not until ctx

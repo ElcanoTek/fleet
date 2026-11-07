@@ -366,7 +366,7 @@ func (s *Server) validateAttachments(userEmail string, atts []chatAttachment) []
 			// %q, not %s: a.Path here is the RAW client-supplied string on the
 			// branch where containment just FAILED, so it is hostile by
 			// construction. %q escapes CR/LF and cannot forge a log entry.
-			slog.Info("attachment rejected (outside the caller's own uploads root)", "path", a.Path)
+			slog.Warn("attachment rejected (outside the caller's own uploads root)", "path", a.Path)
 			continue
 		}
 		abs = filepath.Join(root, rel)

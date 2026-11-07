@@ -1049,7 +1049,7 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 		if served != o.LastServedUpstream {
 			if preferred := preferredUpstreamFor(modelSlug); preferred != "" && served != preferred {
 				o.ServedFallback = true
-				slog.Info("⚠️ Upstream fallback (prompt cache cold; verify serving precision if output quality is off)", "model", modelSlug, "pinned", preferred, "served", served)
+				slog.Warn("⚠️ Upstream fallback (prompt cache cold; verify serving precision if output quality is off)", "model", modelSlug, "pinned", preferred, "served", served)
 			}
 		}
 		o.LastServedUpstream = served

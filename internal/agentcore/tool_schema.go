@@ -1441,7 +1441,7 @@ func noteToolSchemaIssue(server, tool string, issue ToolSchemaIssue, ok bool) {
 	}
 	switch issue.Status {
 	case ToolSchemaInvalid:
-		slog.Info("MCP tool skipped: input schema is not valid JSON Schema draft 2020-12 — the connector must fix its schema", "server", server, "tool", tool, "detail", issue.Detail)
+		slog.Warn("MCP tool skipped: input schema is not valid JSON Schema draft 2020-12 — the connector must fix its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	default:
 		slog.Info("MCP tool: input schema uses older JSON Schema drafts, translated for the model — the connector should update its schema", "server", server, "tool", tool, "detail", issue.Detail)
 	}

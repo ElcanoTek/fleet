@@ -770,7 +770,7 @@ func (r *Runner) runSandboxScope(ctx context.Context, task *models.Task, wtPath 
 		if strictlyInside(root, runDir) {
 			scope.ReadOnly = append(scope.ReadOnly, runDir)
 		} else {
-			logging.From(ctx).Info("scheduled task: MCP run dir is outside the workspace root; not mounted in the scoped sandbox", "task_id", task.ID, "run_dir", runDir, "root", root)
+			logging.From(ctx).Warn("scheduled task: MCP run dir is outside the workspace root; not mounted in the scoped sandbox", "task_id", task.ID, "run_dir", runDir, "root", root)
 		}
 	}
 	return scope, nil

@@ -782,7 +782,7 @@ func (e *engine) streamRoundWithResilience(
 	// instead of burning this round's attempts on a known-bad model. Half-open is
 	// deliberately NOT skipped — that state exists to send exactly one probe.
 	if shouldFastFailoverOnOpenCircuit(e, activeModel, swappedToFallback) {
-		logging.From(ctx).Info("⚡ circuit open; routing to fallback without a primary attempt", "model", activeModel.Model(), "fallback_model", e.fallbackModel.Model())
+		logging.From(ctx).Warn("⚡ circuit open; routing to fallback without a primary attempt", "model", activeModel.Model(), "fallback_model", e.fallbackModel.Model())
 		emitProviderFailover(sink, activeModel, e.fallbackModel, streamErrorRetryExhausted, nil)
 		activeModel = e.takeFallback()
 		e.noteActiveModel(activeModel)

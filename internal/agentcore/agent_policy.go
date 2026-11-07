@@ -316,12 +316,12 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 	activeCriticalSuffixes = critical
 	classes, aliasProblems := buildCriticalAliasClasses(p.CriticalToolAliases, seen)
 	for _, problem := range aliasProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeCriticalAliasClass = classes
 	emailLast, settleable, emailLastProblems := buildEmailLastSets(p, seen)
 	for _, problem := range emailLastProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 
 	subs := make(map[string][]string, len(p.CriticalToolSubstitutes))
@@ -387,31 +387,31 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 
 	noSession, noSessionProblems := buildNoSessionApprovalSet(p.CriticalToolNoSessionApproval, seen)
 	for _, problem := range noSessionProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeNoSessionApproval = noSession
 
 	describers, describerProblems := buildCardDescribers(p.CriticalToolCardDescribers, critical, parallel)
 	for _, problem := range describerProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeCardDescribers = describers
 
 	resume, resumeMax, resumeProblems := buildResumeSet(p, seen)
 	for _, problem := range resumeProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeResume, activeResumeMaxPerHour = resume, resumeMax
 
 	group, groupProblems := buildStagedCardSuffixSet("critical_tool_group_approval", p.CriticalToolGroupApproval, p.CriticalToolModes, seen)
 	for _, problem := range groupProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeGroupApproval = group
 
 	progress, progressProblems := buildStagedCardSuffixSet("critical_tool_progress", p.CriticalToolProgress, p.CriticalToolModes, seen)
 	for _, problem := range progressProblems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	activeProgress = progress
 

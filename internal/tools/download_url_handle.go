@@ -135,7 +135,7 @@ func ProtectFastIODownloadURLs(text string) string {
 		downloadURLDriftOnce.Do(func() {
 			// No URL, no handle: the message is about the shape, and the bearer
 			// is exactly what must not reach a log line.
-			slog.Info("download_url: a Fast.io response carried a credential-bearing URL outside a download_url/zip_url section; vaulted it anyway — the upstream response format may have changed, check the section headings ProtectFastIODownloadURLs expects")
+			slog.Warn("download_url: a Fast.io response carried a credential-bearing URL outside a download_url/zip_url section; vaulted it anyway — the upstream response format may have changed, check the section headings ProtectFastIODownloadURLs expects")
 		})
 	}
 	if !changed {

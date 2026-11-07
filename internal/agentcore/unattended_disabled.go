@@ -70,7 +70,7 @@ func unattendedDisableableNames() []string {
 func installUnattendedDisabledSet(members []string) map[string]bool {
 	set, problems := buildUnattendedDisabledSet(members)
 	for _, problem := range problems {
-		slog.Info("agent_policy: config problem", "problem", problem)
+		slog.Warn("agent_policy: config problem", "problem", problem)
 	}
 	return set
 }

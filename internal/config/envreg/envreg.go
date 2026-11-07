@@ -488,6 +488,6 @@ func unregistered(name, why string) {
 		panic(msg)
 	}
 	if _, dup := warned.LoadOrStore(name, true); !dup {
-		slog.Info("BUG: unregistered environment variable read; reading it anyway", "problem", msg)
+		slog.Warn("BUG: unregistered environment variable read; reading it anyway", "problem", msg)
 	}
 }

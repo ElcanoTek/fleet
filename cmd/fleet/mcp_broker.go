@@ -17,6 +17,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
@@ -38,7 +39,24 @@ const (
 //
 // Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
 // so it never corrupts the frame stream the parent decodes.
+// mcpBrokerLogConfig is the broker child's logging: the parent's format and
+// level (FLEET_LOG_FORMAT, FLEET_LOG_LEVEL — canonical names), and NO file of
+// its own. The parent pipes the child's stderr into its own log destination
+// (logging.ChildStderr), so the child's lines reach FLEET_LOG_FILE under the
+// one rotator the parent owns.
+func mcpBrokerLogConfig() logging.Config {
+	return logging.Config{
+		Format: envreg.Get("FLEET_LOG_FORMAT"),
+		Level:  envreg.Get("FLEET_LOG_LEVEL"),
+	}
+}
+
 func runMCPBroker() error {
+	// Same handler, redactor, format and level as the parent, so the
+	// broker's lines are not Go's default plaintext mixed into JSON.
+	if _, err := logging.Configure(mcpBrokerLogConfig()); err != nil {
+		return fmt.Errorf("configure broker logging: %w", err)
+	}
 	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
 		return err

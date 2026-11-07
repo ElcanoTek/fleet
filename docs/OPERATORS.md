@@ -708,20 +708,28 @@ log aggregators (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index
 natively. This applies to both stderr and the rotating file above.
 
 ```
-FLEET_LOG_FORMAT=json                      # default; structured JSON. Use "text" for the legacy plaintext lines.
+FLEET_LOG_FORMAT=json                      # default; structured JSON. "text" is logfmt (key=value), for reading by eye.
 FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
 ```
 
-Two operator notes:
+Operator notes:
 
-- **`FLEET_LOG_FORMAT=text`** restores the exact prior plaintext behavior if you
-  prefer it (or have tooling that parses the old format).
-- **`FLEET_LOG_LEVEL`** currently sets the threshold for *native* structured
-  (`slog`) call sites. The bulk of today's lines are emitted through a
-  compatibility bridge (the standard-`log`→`slog` conversion is ongoing) and
-  **always emit at info regardless of the level** — so raising the level will not
-  silently suppress existing diagnostics/error lines. Its reach grows as call
-  sites are converted to native `slog` (#178).
+- **`FLEET_LOG_FORMAT=text`** emits slog's logfmt lines —
+  `time=… level=WARN msg="remote-mcp: skipping server — token unavailable" reg_name=github user=…` —
+  for an operator reading `journalctl` by eye. It is **not** the plaintext of
+  releases before #2052: every call site is now structured, so a value that was
+  part of the old message (an id, an error) is a `key=value` attribute, and the
+  message texts themselves changed in that release. Point log-parsing tooling
+  (alerts, grep pipelines, dashboards) at the **JSON** format and its stable
+  `msg` plus attribute keys, not at text-mode lines.
+- **`FLEET_LOG_LEVEL`** gates every fleet log line, in both formats. Warnings
+  about unsafe or degraded configuration (a disabled seccomp filter, a relaxed
+  SSRF guard, a fallback in effect) log at `warn`, so `FLEET_LOG_LEVEL=warn`
+  still shows them. Lines a third-party library writes through Go's standard
+  `log` package are bridged at info and are not gated, since their true
+  severity is unknown.
+- The `fleet mcp-broker` child logs in the same format and level, and its lines
+  join the parent's destination (stderr, plus `FLEET_LOG_FILE` when set).
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.

@@ -1055,7 +1055,7 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 	gb := effectiveDiskGB(p.cfg.Container.DiskLimitGB)
 	if gb <= 0 {
 		// Quota disabled: no flag either way, so skip the probe container.
-		logging.From(ctx).Info("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
+		logging.From(ctx).Warn("sandbox disk quota: DISABLED (FLEET_SANDBOX_DISK_GB<=0) — the host disk is unprotected from runaway sandbox writes")
 		p.storageProbeDone = true
 		return false
 	}
@@ -1084,10 +1084,10 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 		p.storageProbeStrikes++
 		if p.storageProbeStrikes >= storageProbeMaxStrikes {
 			p.storageProbeRetryAt = p.now().Add(storageProbeCooldown)
-			logging.From(ctx).Info("sandbox disk quota: --storage-opt probe timed out repeatedly — treating the driver as unsupported for a cooldown (containers get the per-file ulimit only), then re-probing", "consecutive_timeouts", p.storageProbeStrikes, "cooldown", storageProbeCooldown)
+			logging.From(ctx).Warn("sandbox disk quota: --storage-opt probe timed out repeatedly — treating the driver as unsupported for a cooldown (containers get the per-file ulimit only), then re-probing", "consecutive_timeouts", p.storageProbeStrikes, "cooldown", storageProbeCooldown)
 			return false
 		}
-		logging.From(ctx).Info("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
+		logging.From(ctx).Warn("sandbox disk quota: --storage-opt probe inconclusive — this container gets the per-file ulimit only; the next container creation re-probes")
 		return false
 	}
 	p.storageProbeDone = true
@@ -1095,7 +1095,7 @@ func (p *Pool) storageOptSupported(ctx context.Context) bool {
 	if p.storageOptOK {
 		logging.From(ctx).Info("sandbox disk quota: ulimit fsize (per-file, covers the workspace bind mount) + storage-opt size (total writable LAYER). Total workspace bytes are NOT capped — bind mounts are outside the storage quota.", "fsize_gib", gb, "storage_opt_gib", gb)
 	} else {
-		logging.From(ctx).Info("sandbox disk quota: ulimit fsize only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", "fsize_gib", gb)
+		logging.From(ctx).Warn("sandbox disk quota: ulimit fsize only — storage-opt unsupported on this storage driver, so the writable layer has no total cap either (use overlay+xfs(pquota)/btrfs for one). Caps any single file, not total disk use.", "fsize_gib", gb)
 	}
 	return p.storageOptOK
 }

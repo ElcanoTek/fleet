@@ -405,7 +405,7 @@ func (g *Gateway) loginClientFor(r *http.Request) (string, bool) {
 		return loginClientKey(client), true
 	}
 	g.loginRLWarn.Do(func() {
-		logging.From(r.Context()).Info("webui: password sign-in attempts arrive from a proxy or private address without a usable X-Forwarded-For, so they are not limited per client — only by the backend's process-wide guard. Set FLEET_TRUSTED_PROXIES to the address the reverse proxy connects from (docs/DEPLOYMENT.md).")
+		logging.From(r.Context()).Warn("webui: password sign-in attempts arrive from a proxy or private address without a usable X-Forwarded-For, so they are not limited per client — only by the backend's process-wide guard. Set FLEET_TRUSTED_PROXIES to the address the reverse proxy connects from (docs/DEPLOYMENT.md).")
 	})
 	return "", false
 }
