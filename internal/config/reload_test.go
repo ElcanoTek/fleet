@@ -238,7 +238,7 @@ func TestReload_NonReloadableReportedSkipped(t *testing.T) {
 
 // TestReload_DiscreteDBChangeReportedSkipped: changing the DSN via the discrete
 // DB_* vars (not an explicit DATABASE_URL) must still be reported in Skipped —
-// the watch resolves the effective DSN via buildDatabaseURL, so the common
+// the watch resolves the effective DSN via ResolveDSNs, so the common
 // DB_HOST/DB_PORT/... deployment path is covered, not just DATABASE_URL.
 func TestReload_DiscreteDBChangeReportedSkipped(t *testing.T) {
 	isolateEnv(t)

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func setupA2AHandlers(t *testing.T, pushEnabled bool) (*storage.Storage, *apikey
 	tmpDir := t.TempDir()
 
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)
 		}

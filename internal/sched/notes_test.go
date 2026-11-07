@@ -3,6 +3,7 @@ package sched
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -12,7 +13,7 @@ import (
 func newNotesStore(t *testing.T) *Store {
 	t.Helper()
 	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
+	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
 		t.Skipf("Skipping notes test because DB init failed: %v", err)
 	}
 

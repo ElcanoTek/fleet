@@ -39,7 +39,7 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	}
 
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		os.RemoveAll(tmpDir)
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)
@@ -220,7 +220,8 @@ func TestCreateKeyRejectsRetiredSpendingCaps(t *testing.T) {
 
 func isDatabaseUnavailable(err error) bool {
 	errMsg := err.Error()
-	return strings.Contains(errMsg, "failed to connect to database") ||
+	return strings.Contains(errMsg, "sched DB DSN is empty") || // DATABASE_URL unset
+		strings.Contains(errMsg, "failed to connect to database") ||
 		strings.Contains(errMsg, "connection refused") ||
 		strings.Contains(errMsg, "no such host")
 }

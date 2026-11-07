@@ -30,6 +30,7 @@ func (s *Server) handleDoctor(w http.ResponseWriter, r *http.Request) {
 	if s.store != nil {
 		opts.ChatPing = s.store.Ping
 	}
+	opts.SchedPing = s.schedPing
 	if s.cfg != nil {
 		opts.SandboxImage = s.cfg.SandboxImage
 		opts.TrustedProxies, opts.HaveTrustedProxies = s.cfg.TrustedProxies, true

@@ -75,7 +75,7 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		t.Fatalf("temp dir: %v", err)
 	}
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		os.RemoveAll(tmpDir)
 		if isDatabaseUnavailable(err) {
 			t.Skipf("Skipping tests: database unavailable: %v", err)

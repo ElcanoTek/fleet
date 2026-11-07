@@ -244,16 +244,15 @@ func shortSHA(sha string) string {
 }
 
 // openEvalStorage opens the orchestrator DB from the same DSN resolution the
-// server uses (FLEET_SCHED_DATABASE_URL / SCHED_DATABASE_URL / DATABASE_URL /
-// DB_* parts). Returns (nil, nonzero) with a warning when no DSN is available.
+// server uses (config.ResolveDSNs: FLEET_SCHED_DATABASE_URL /
+// SCHED_DATABASE_URL / DATABASE_URL / DB_* parts). Returns (nil, nonzero) with a warning when no DSN is available.
 //
 // hasNoDBFlag says whether the CALLING subcommand accepts --no-db (only `eval
 // run` does), so the hint to use it is printed only where it would work.
 func openEvalStorage(hasNoDBFlag bool) (*storage.Storage, int) {
-	dsn := schedDSN()
-	if dsn == "" && strings.TrimSpace(os.Getenv("DATABASE_URL")) == "" &&
-		strings.TrimSpace(os.Getenv("DB_HOST")) == "" {
-		msg := "warning: no orchestrator DB configured (DATABASE_URL); skipping eval_runs persistence"
+	dsns := config.ResolveDSNs(config.ProcessEnv)
+	if !dsns.SchedConfigured() {
+		msg := "warning: no orchestrator DB configured (FLEET_SCHED_DATABASE_URL / DATABASE_URL / DB_*); skipping eval_runs persistence"
 		if hasNoDBFlag {
 			msg += " — use --no-db to silence"
 		}
@@ -261,7 +260,7 @@ func openEvalStorage(hasNoDBFlag bool) (*storage.Storage, int) {
 		return nil, 1
 	}
 	st := storage.New()
-	if err := st.Initialize(dsn, storage.DefaultPoolConfig()); err != nil {
+	if err := st.Initialize(dsns.Sched, storage.DefaultPoolConfig()); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: open orchestrator DB: %v; skipping eval_runs persistence\n", err)
 		return nil, 1
 	}
@@ -516,7 +515,7 @@ func captureFromConversation(cfg *config.Config, id, user string) (evals.Case, e
 	if strings.TrimSpace(user) == "" {
 		return evals.Case{}, errors.New("--user is required with --conversation (conversations are user-scoped)")
 	}
-	chatStore, err := store.Open(chatDSN(cfg), store.DefaultPoolConfig())
+	chatStore, err := store.Open(cfg.DatabaseURL, store.DefaultPoolConfig())
 	if err != nil {
 		return evals.Case{}, fmt.Errorf("open chat DB: %w", err)
 	}

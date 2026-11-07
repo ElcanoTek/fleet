@@ -101,11 +101,12 @@ pass what the real run would refuse. Bundle tasks carrying a transient status
 (`leased`, `running`, either paused state) are rejected outright, as they always
 have been — exporters normalize those before export.
 
-Both DSN resolvers fall back to the generic `DATABASE_URL`. Because the chat
-and sched stores must live in **distinct** databases (fleet serve refuses to
-start otherwise), `fleet import` refuses to write a section whose DSN reached
-that shared fallback while the other store's DSN resolves to the same
-database — set `FLEET_CHAT_DATABASE_URL` and `FLEET_SCHED_DATABASE_URL` (or
+Both DSN resolvers fall back to the generic `DATABASE_URL` (and then the
+shared `DB_*` parts). Because the chat and sched stores must live in
+**distinct** databases (fleet serve refuses to start otherwise), `fleet import`
+refuses to write a section whose DSN reached that shared fallback while the
+other store's DSN resolves to the same database (same host, port and database
+name) — set `FLEET_CHAT_DATABASE_URL` and `FLEET_SCHED_DATABASE_URL` (or
 pass the `--*-database-url` flags) so each section lands in its own DB. This
 applies to single-section bundles too: the runbook's two imports would
 otherwise mix both schemas into one `DATABASE_URL` database.

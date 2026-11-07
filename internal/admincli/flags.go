@@ -3,13 +3,13 @@ package admincli
 import (
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
 
 	"golang.org/x/term"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -72,97 +72,63 @@ func resolveSecret(flagVal, prompt string, confirm bool) (string, error) {
 	return v, nil
 }
 
-// dbPartsDSN constructs a Postgres URL from DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/
-// DB_NAME/DB_SSLMODE when at least one of those keys is set in the process
-// environment or the deployment env file (or unconditionally when always=true),
-// matching config.buildDatabaseURL and sched/db.Database.Init.
-func dbPartsDSN(defaultUser, defaultName string, always bool) string {
-	host := strings.TrimSpace(envOrFile("DB_HOST"))
-	port := strings.TrimSpace(envOrFile("DB_PORT"))
-	user := strings.TrimSpace(envOrFile("DB_USER"))
-	pass := envOrFile("DB_PASSWORD")
-	name := strings.TrimSpace(envOrFile("DB_NAME"))
-	ssl := strings.TrimSpace(envOrFile("DB_SSLMODE"))
-	if !always && host == "" && port == "" && user == "" && pass == "" && name == "" && ssl == "" {
-		return ""
-	}
-	if host == "" {
-		host = "localhost"
-	}
-	if port == "" {
-		port = "5432"
-	}
-	if user == "" {
-		user = defaultUser
-	}
-	if name == "" {
-		name = defaultName
-	}
-	if ssl == "" {
-		ssl = "disable"
-	}
-	auth := url.User(user).String()
-	if pass != "" {
-		auth = url.UserPassword(user, pass).String()
-	}
-	return fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=%s", auth, host, port, name, ssl)
+// resolvedDSNs is config.ResolveDSNs over envOrFile: the server's own DSN
+// precedence (#2018), read from the shell or else the deployment env file, so
+// a CLI verb can never point at a different database than `fleet serve`.
+// Process-env values get the server's quote stripping (config.ProcessEnv);
+// env-file values were already unquoted by the file reader.
+func resolvedDSNs() config.DSNs {
+	return config.ResolveDSNs(func(k string) string {
+		if v := config.ProcessEnv(k); v != "" {
+			return v
+		}
+		return envOrFile(k)
+	})
 }
 
-// chatDSNFromFlags resolves the chat DB DSN: --database-url, else
-// FLEET_CHAT_DATABASE_URL, else DATABASE_URL, else DB_* parts.
+// chatDSN resolves the chat DB DSN: --database-url, else config.ResolveDSNs
+// (FLEET_CHAT_DATABASE_URL, DATABASE_URL, DB_* parts). Unlike the server it
+// refuses to fall through to the bare localhost defaults: a CLI verb aimed at
+// nothing in particular should say so rather than guess.
 func chatDSN(dbURL string) (string, error) {
 	if v := strings.TrimSpace(dbURL); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(envOrFile("FLEET_CHAT_DATABASE_URL")); v != "" {
-		return v, nil
-	}
-	if v := strings.TrimSpace(envOrFile("DATABASE_URL")); v != "" {
-		return v, nil
-	}
-	if v := dbPartsDSN("chat", "chat", false); v != "" {
-		return v, nil
+	if d := resolvedDSNs(); d.ChatConfigured() {
+		return d.Chat, nil
 	}
 	return "", fmt.Errorf("chat DB DSN unset — pass --database-url or set FLEET_CHAT_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
 }
 
-// schedDSN resolves the sched DB DSN: --database-url, else
-// FLEET_SCHED_DATABASE_URL, else SCHED_DATABASE_URL, else DATABASE_URL, else DB_* parts.
+// schedDSN resolves the sched DB DSN: --database-url, else config.ResolveDSNs
+// (FLEET_SCHED_DATABASE_URL, SCHED_DATABASE_URL, DATABASE_URL, DB_* parts),
+// refusing the bare localhost defaults like chatDSN.
 func schedDSN(dbURL string) (string, error) {
 	if v := strings.TrimSpace(dbURL); v != "" {
 		return v, nil
 	}
-	if v := strings.TrimSpace(envOrFile("FLEET_SCHED_DATABASE_URL")); v != "" {
-		return v, nil
-	}
-	if v := strings.TrimSpace(envOrFile("SCHED_DATABASE_URL")); v != "" {
-		return v, nil
-	}
-	if v := strings.TrimSpace(envOrFile("DATABASE_URL")); v != "" {
-		return v, nil
-	}
-	if v := dbPartsDSN("fleet", "sched", false); v != "" {
-		return v, nil
+	if d := resolvedDSNs(); d.SchedConfigured() {
+		return d.Sched, nil
 	}
 	return "", fmt.Errorf("sched DB DSN unset — pass --database-url or set FLEET_SCHED_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
 }
 
-// idleChatDSN resolves the chat DB DSN including the unconditional localhost:5432
-// default used by config.buildDatabaseURL at runtime.
+// idleChatDSN resolves the chat DB DSN including the unconditional
+// localhost:5432 default the server itself falls back to.
 func idleChatDSN(dbURL string) string {
-	if v, err := chatDSN(dbURL); err == nil && v != "" {
+	if v := strings.TrimSpace(dbURL); v != "" {
 		return v
 	}
-	return dbPartsDSN("chat", "chat", true)
+	return resolvedDSNs().Chat
 }
 
-// idleSchedDSN resolves the sched DB DSN including the unconditional localhost:5432
-// default used by sched/db.Database.Init at runtime.
+// idleSchedDSN resolves the sched DB DSN including the unconditional
+// localhost:5432 default the server itself falls back to.
 func idleSchedDSN(dbURL string) string {
-	if v, err := schedDSN(dbURL); err == nil && v != "" {
+	if v := strings.TrimSpace(dbURL); v != "" {
 		return v
 	}
-	return dbPartsDSN("fleet", "sched", true)
+	return resolvedDSNs().Sched
 }
 
 // envOrFile reads key from the process environment, falling back to the

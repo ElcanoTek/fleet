@@ -305,7 +305,8 @@ fleet_uri_encode_userinfo() {
 # fleet_resolve_dsn PRIMARY_KEY ENV_FILE — resolves PRIMARY_KEY from the
 # process environment first and then ENV_FILE, checking SCHED_DATABASE_URL for
 # the scheduler store, before falling back to DATABASE_URL and finally the
-# DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE parts.
+# DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE parts. Mirrors the
+# Go resolver, config.ResolveDSNs (internal/config/dsn.go) — keep in step.
 fleet_resolve_dsn() {
   local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val=""
   val="$(fleet_env_or_file "$key" "$env_file")"

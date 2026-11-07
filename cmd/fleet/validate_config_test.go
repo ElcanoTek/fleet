@@ -611,10 +611,10 @@ func TestCheckCredentialsSplitsDefaultsFromMissing(t *testing.T) {
 // TestCheckDatabaseSkipNetwork: with --skip-network-checks the DB check validates
 // the DSN + distinctness without a live probe and stays blocking.
 func TestCheckDatabaseSkipNetwork(t *testing.T) {
-	cfg := &config.Config{DatabaseURL: "postgres://u:p@localhost:5432/fleet_chat?sslmode=disable"}
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "postgres://u:p@localhost:5432/fleet_sched?sslmode=disable")
-	t.Setenv("SCHED_DATABASE_URL", "")
+	cfg := &config.Config{
+		DatabaseURL:      "postgres://u:p@localhost:5432/fleet_chat?sslmode=disable",
+		SchedDatabaseURL: "postgres://u:p@localhost:5432/fleet_sched?sslmode=disable",
+	}
 	res := checkDatabase(t.Context(), cfg, nil, validateOptions{skipNetworkChecks: true})
 	if res.Status != statusOK || !res.Blocking {
 		t.Errorf("skip-network DB = %s blocking=%v: %s", res.Status, res.Blocking, res.Detail)
@@ -622,14 +622,11 @@ func TestCheckDatabaseSkipNetwork(t *testing.T) {
 }
 
 // TestCheckDatabaseSameDB: chat and sched resolving to the SAME database is a
-// blocking failure (the ensureDistinctDatabases invariant), even with the probe
+// blocking failure (the EnsureDistinctDatabases invariant), even with the probe
 // skipped.
 func TestCheckDatabaseSameDB(t *testing.T) {
 	same := "postgres://u:p@localhost:5432/fleet?sslmode=disable"
-	cfg := &config.Config{DatabaseURL: same}
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", same)
-	t.Setenv("SCHED_DATABASE_URL", "")
+	cfg := &config.Config{DatabaseURL: same, SchedDatabaseURL: same}
 	res := checkDatabase(t.Context(), cfg, nil, validateOptions{skipNetworkChecks: true})
 	if res.Status != statusFail {
 		t.Errorf("same-db should fail, got %s: %s", res.Status, res.Detail)
@@ -2010,5 +2007,25 @@ agent_policy:
 	}
 	if res := checkAgentPolicy(b, nil); res.Status != statusFail || !strings.Contains(res.Detail, `"execute_plans"`) {
 		t.Fatalf("want agent_policy fail naming execute_plans, got %q: %s", res.Status, res.Detail)
+	}
+}
+
+// TestCheckDatabaseProbesSched (#2018): the sched DSN is always probed. It used
+// to be probed only when FLEET_SCHED/SCHED/DATABASE_URL was set, so a
+// DB_*-parts deployment with an unreachable sched DB reported "reachable".
+// A reachable chat DB plus an unreachable sched DSN must fail on the sched
+// probe.
+func TestCheckDatabaseProbesSched(t *testing.T) {
+	chat := os.Getenv("FLEET_TEST_DATABASE_URL")
+	if chat == "" {
+		t.Skip("FLEET_TEST_DATABASE_URL not set")
+	}
+	cfg := &config.Config{
+		DatabaseURL:      chat,
+		SchedDatabaseURL: "postgres://nobody@127.0.0.1:1/nope?sslmode=disable&connect_timeout=1",
+	}
+	res := checkDatabase(t.Context(), cfg, nil, validateOptions{})
+	if res.Status != statusFail || !strings.Contains(res.Detail, "sched DB") {
+		t.Fatalf("unreachable sched DB = %s: %s, want a sched DB failure", res.Status, res.Detail)
 	}
 }

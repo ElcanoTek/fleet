@@ -110,6 +110,23 @@ FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
 FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
 ```
 
+**Database DSN precedence.** `fleet serve`, `fleet validate-config`, the admin
+doctor and every operator CLI verb resolve the two DSNs the same way
+(`config.ResolveDSNs`):
+
+- chat: `FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`, else the `DB_*` parts
+- sched: `FLEET_SCHED_DATABASE_URL`, else `SCHED_DATABASE_URL`, else
+  `DATABASE_URL`, else the `DB_*` parts
+
+The `DB_*` parts (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`,
+`DB_SSLMODE`) default to `localhost:5432`, `sslmode=disable`, and user/database
+`chat`/`chat` for chat and `fleet`/`sched` for sched. A CLI verb's
+`--*-database-url` flag wins over all of these, and a verb refuses to fall
+through to the bare localhost defaults when nothing is set. The two stores
+must live in **different** databases: boot and `validate-config` refuse a
+configuration where both resolve to the same host, port and database — which
+is what a shared `DATABASE_URL`, or `DB_*` parts with one `DB_NAME`, produce.
+
 `fleet config set-env KEY` upserts one variable as exactly one line (value from
 stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer
 it over hand-editing. `fleet env` prints this file (the only one — the web UI reads it too) with

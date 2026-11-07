@@ -136,7 +136,7 @@ func logMCPReload(summary *mcp.ReloadSummary, err error) {
 		log.Printf("mcp reload (SIGHUP): error: %v", err)
 		return
 	}
-	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d", //nolint:gosec // G706 false positive: every arg is a len() int; gosec's taint engine misattributes a DB-string flow from the LLM-provider boot logs to this sink
+	log.Printf("mcp reload (SIGHUP): added=%d removed=%d restarted=%d unchanged=%d",
 		len(summary.Added), len(summary.Removed), len(summary.Restarted), len(summary.Unchanged))
 }
 

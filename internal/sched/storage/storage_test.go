@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"math"
+	"os"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func listAllTasks(s *Storage) ([]*models.Task, error) {
 func newTestStore(t *testing.T) (*Storage, *db.Database) {
 	t.Helper()
 	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
+	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
 		t.Skipf("Skipping storage test because DB init failed: %v", err)
 	}
 

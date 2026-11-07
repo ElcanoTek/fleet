@@ -27,7 +27,7 @@ func TestImportBundle_SchedOverwriteRefusesLiveLease(t *testing.T) {
 		t.Skip("DATABASE_URL not set — skipping sched-DB import test")
 	}
 	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
+	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
 		t.Skipf("sched DB unavailable: %v", err)
 	}
 	ctx := context.Background()

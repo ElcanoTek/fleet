@@ -10,7 +10,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -28,9 +27,8 @@ func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
 	if os.Getenv("DATABASE_URL") == "" {
 		t.Skip("DATABASE_URL not set, skipping DB-backed test")
 	}
-	tmpDir := t.TempDir()
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(tmpDir, "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			t.Skipf("database unavailable: %v", err)
 		}
@@ -181,7 +179,7 @@ func TestTaskSchedulerProvider_CarriesConnectors(t *testing.T) {
 		t.Skip("DATABASE_URL not set, skipping DB-backed test")
 	}
 	store := storage.New()
-	if err := store.Initialize(filepath.Join(t.TempDir(), "test.db"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
 		if strings.Contains(err.Error(), "connection refused") {
 			t.Skipf("database unavailable: %v", err)
 		}

@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"math"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,7 +37,7 @@ func allLogs(s *storage.Storage) (map[uuid.UUID]*models.LogSession, error) {
 func newTestStore(t *testing.T) *storage.Storage {
 	t.Helper()
 	database := db.New()
-	if err := database.Init("", db.DefaultPoolConfig()); err != nil {
+	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
 		t.Skipf("Skipping runner test because DB init failed: %v", err)
 	}
 

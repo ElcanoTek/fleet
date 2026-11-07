@@ -9,9 +9,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -79,19 +80,17 @@ func (db *Database) Stats() sql.DBStats { return db.conn.Stats() }
 // Ping verifies the sched DB is reachable (readiness probe, #215).
 func (db *Database) Ping(ctx context.Context) error { return db.conn.PingContext(ctx) }
 
+// ErrEmptyDSN is Init's refusal of an empty DSN. Init no longer reads the
+// environment itself (#2018): every caller resolves the DSN through
+// config.ResolveDSNs (or a test helper) and passes it in, so an empty one is a
+// caller bug, not a cue to guess.
+var ErrEmptyDSN = errors.New("sched DB DSN is empty")
+
+// Init opens the sched database at connStr, pings it within
+// pool.ConnectTimeout and runs the migrations.
 func (db *Database) Init(connStr string, pool PoolConfig) error {
-	if connStr == "" || connStr[0] == '.' || connStr[0] == '/' {
-		connStr = os.Getenv("DATABASE_URL")
-		if connStr == "" {
-			host := getEnvOrDefault("DB_HOST", "localhost")
-			port := getEnvOrDefault("DB_PORT", "5432")
-			user := getEnvOrDefault("DB_USER", "fleet")
-			password := getEnvOrDefault("DB_PASSWORD", "")
-			dbname := getEnvOrDefault("DB_NAME", "sched")
-			sslmode := getEnvOrDefault("DB_SSLMODE", "disable")
-			connStr = fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-				host, port, user, password, dbname, sslmode)
-		}
+	if strings.TrimSpace(connStr) == "" {
+		return ErrEmptyDSN
 	}
 
 	conn, err := sql.Open("pgx", connStr)
@@ -120,13 +119,6 @@ func (db *Database) Init(connStr string, pool PoolConfig) error {
 	}
 
 	return nil
-}
-
-func getEnvOrDefault(key, defaultVal string) string {
-	if val := os.Getenv(key); val != "" {
-		return val
-	}
-	return defaultVal
 }
 
 // Close closes the database connection.
