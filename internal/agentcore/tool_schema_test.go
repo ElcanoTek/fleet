@@ -253,9 +253,9 @@ func TestGate5SkipsOnlyTheInvalidTool(t *testing.T) {
 		t.Run(mode.name, func(t *testing.T) {
 			t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", mode.threshold)
 			obs := &recordingSchemaObserver{}
-			_, roster, err := buildFantasyToolsWithRoster(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{observer: obs})
+			_, roster, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{observer: obs})
 			if err != nil {
-				t.Fatalf("buildFantasyToolsWithRoster: %v", err)
+				t.Fatalf("buildFantasyTools: %v", err)
 			}
 			if mode.name == "deferred" && roster.deferredMCP == 0 {
 				t.Fatal("threshold did not force deferral; the deferred path is untested")
@@ -344,7 +344,7 @@ func TestToolSchemaRecordFollowsTurns(t *testing.T) {
 	t.Cleanup(resetToolSchemaRecordForTest)
 	build := func(catalog []mcp.ServerTool) {
 		t.Helper()
-		if _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
+		if _, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
 			t.Fatalf("buildFantasyTools: %v", err)
 		}
 	}
@@ -431,7 +431,7 @@ func TestToolSchemaRecordConcurrentTurns(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 5; j++ {
-				if _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
+				if _, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, nil, nil, toolBuildConfig{}); err != nil {
 					t.Errorf("buildFantasyTools: %v", err)
 				}
 				_ = ToolSchemaIssues()

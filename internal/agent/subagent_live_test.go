@@ -37,7 +37,7 @@ func liveModel(t *testing.T) (fantasy.LanguageModel, *agentcore.ModelResolver) {
 	if key == "" {
 		t.Skip("OPENROUTER_API_KEY unset")
 	}
-	resolver, err := agentcore.NewModelResolver(key, agentcore.DefaultProviderHeaders)
+	resolver, err := agentcore.NewModelResolver(key)
 	if err != nil {
 		t.Fatalf("model resolver: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestLive_ExploreChildUsesToolsAndReportsTrail(t *testing.T) {
 			Enabled: true, MaxDepth: 1, MaxChildren: 5, BudgetFraction: 1.0, Resolver: resolver,
 		},
 	})
-	parent.runtimePolicy = agentcore.NewScheduledPolicy(parent.logSession, parent.maxIterations, 1.0, 0)
+	parent.runtimePolicy = agentcore.NewScheduledPolicy(parent.logSession, 1.0, 0)
 	parent.subagent.budgetFraction = 1.0
 	parent.spawnObserver = obs
 

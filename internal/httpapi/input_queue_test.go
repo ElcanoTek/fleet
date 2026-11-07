@@ -1089,7 +1089,7 @@ func TestFirstSubmission_ResendFindsTheOriginal(t *testing.T) {
 	if n := eng.turns.Load(); n != 1 {
 		t.Fatalf("turns run = %d, want 1", n)
 	}
-	convs, err := s.store.List(context.Background(), user, false)
+	convs, err := s.concreteStore(t).List(context.Background(), user, false)
 	if err != nil || len(convs) != 1 {
 		t.Fatalf("conversations = %d, want 1 (no second conversation)", len(convs))
 	}

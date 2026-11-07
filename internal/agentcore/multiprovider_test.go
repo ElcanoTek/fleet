@@ -112,7 +112,7 @@ func TestBuildProvider(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			p, err := buildProvider(tc.cfg, DefaultProviderHeaders)
+			p, err := buildProvider(tc.cfg)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got provider %v", p)
@@ -133,10 +133,10 @@ func TestBuildProvider(t *testing.T) {
 // yields a one-provider (OpenRouter catch-all) resolver, byte-compatible with the
 // historical behavior.
 func TestNewModelResolverBackwardCompat(t *testing.T) {
-	if _, err := NewModelResolver("", DefaultProviderHeaders); err == nil {
+	if _, err := NewModelResolver(""); err == nil {
 		t.Error("empty OpenRouter key must error (backward-compat)")
 	}
-	r, err := NewModelResolver("test-key", DefaultProviderHeaders)
+	r, err := NewModelResolver("test-key")
 	if err != nil {
 		t.Fatalf("NewModelResolver: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestNewModelResolverBackwardCompat(t *testing.T) {
 
 func TestNewModelResolverWithProviders(t *testing.T) {
 	t.Run("empty list errors", func(t *testing.T) {
-		if _, err := NewModelResolverWithProviders(nil, DefaultProviderHeaders); err == nil {
+		if _, err := NewModelResolverWithProviders(nil); err == nil {
 			t.Error("empty provider list must error")
 		}
 	})
@@ -163,7 +163,7 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 		_, err := NewModelResolverWithProviders([]ProviderConfig{
 			{Name: "dup", Type: ProviderTypeOpenRouter, APIKey: "k"},
 			{Name: "dup", Type: ProviderTypeAnthropic, APIKey: "k"},
-		}, DefaultProviderHeaders)
+		})
 		if err == nil {
 			t.Error("duplicate provider name must error")
 		}
@@ -171,7 +171,7 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 	t.Run("missing name errors", func(t *testing.T) {
 		_, err := NewModelResolverWithProviders([]ProviderConfig{
 			{Type: ProviderTypeOpenRouter, APIKey: "k"},
-		}, DefaultProviderHeaders)
+		})
 		if err == nil {
 			t.Error("missing provider name must error")
 		}
@@ -180,7 +180,7 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 		_, err := NewModelResolverWithProviders([]ProviderConfig{
 			{Name: "openrouter", Type: ProviderTypeOpenRouter, APIKey: "k"},
 			{Name: "anthropic-direct", Type: ProviderTypeAnthropic}, // no key
-		}, DefaultProviderHeaders)
+		})
 		if err == nil {
 			t.Error("a provider that fails to build must error at construction, not at first turn")
 		}
@@ -188,7 +188,7 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 	t.Run("negative context window fails construction at boot", func(t *testing.T) {
 		_, err := NewModelResolverWithProviders([]ProviderConfig{
 			{Name: "local", Type: ProviderTypeOllama, ContextWindowTokens: -1},
-		}, DefaultProviderHeaders)
+		})
 		if err == nil {
 			t.Error("a negative context window must fail resolver construction")
 		}
@@ -198,7 +198,7 @@ func TestNewModelResolverWithProviders(t *testing.T) {
 			{Name: "openrouter", Type: ProviderTypeOpenRouter, APIKey: "k"},
 			{Name: "anthropic-direct", Type: ProviderTypeAnthropic, APIKey: "k", Models: []string{"claude-opus-4-8"}},
 			{Name: "local", Type: ProviderTypeOllama},
-		}, DefaultProviderHeaders)
+		})
 		if err != nil {
 			t.Fatalf("construction: %v", err)
 		}
@@ -286,10 +286,11 @@ func TestContextWindowForActiveModel_OpenRouterCatalogOverridesDeclaration(t *te
 		observedContextWindows.mu.Unlock()
 	})
 
-	// Even the legacy unwrapped-model cache is isolated from a provider-wrapped
-	// model. This exercises OpenRouter's static/live fallback path without
-	// reintroducing a slug-only observation after the scoped lookup misses.
-	recordContextMax(slug, 2_000_000)
+	// Even an unwrapped model's observation of the same slug is isolated from a
+	// provider-wrapped model. This exercises OpenRouter's static/live fallback
+	// path without consulting a slug-only observation after the scoped lookup
+	// misses.
+	recordContextMaxForModel(&namedMockModel{name: slug}, 2_000_000)
 	if got := contextWindowForActiveModel(openRouter); got != 128*1024 {
 		t.Fatalf("OpenRouter active window = %d, want authoritative catalog 131072", got)
 	}
@@ -325,7 +326,7 @@ func TestResolveWithFallbackChainAndExplicitPin(t *testing.T) {
 		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
 		{Name: "tertiary", Type: ProviderTypeOpenAI, APIKey: "t"},
 	}
-	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	r, err := NewModelResolverWithProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,7 +353,7 @@ func TestResolveWithFallbacksSkipsAGoogleEntryThatRefusesTheSlug(t *testing.T) {
 		{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10"},
 		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
 	}
-	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	r, err := NewModelResolverWithProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +366,7 @@ func TestResolveWithFallbacksSkipsAGoogleEntryThatRefusesTheSlug(t *testing.T) {
 	}
 	// A slug the google entry does serve stays in the chain.
 	providers[0].Models = []string{"gemini-test"}
-	if r, err = NewModelResolverWithProviders(providers, DefaultProviderHeaders); err != nil {
+	if r, err = NewModelResolverWithProviders(providers); err != nil {
 		t.Fatal(err)
 	}
 	if _, fallbacks, err = r.ResolveWithFallbacks(context.Background(), "gemini-test"); err != nil || len(fallbacks) != 2 || fallbacks[0].Provider() != "google" {
@@ -382,7 +383,7 @@ func TestResolveWithFallbacksPassesARefusingGooglePrimary(t *testing.T) {
 		{Name: "secondary", Type: ProviderTypeOpenAI, APIKey: "s"},
 		{Name: "tertiary", Type: ProviderTypeOpenAI, APIKey: "t"},
 	}
-	r, err := NewModelResolverWithProviders(providers, DefaultProviderHeaders)
+	r, err := NewModelResolverWithProviders(providers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +397,7 @@ func TestResolveWithFallbacksPassesARefusingGooglePrimary(t *testing.T) {
 	if _, _, err := r.ResolveWithFallbacks(context.Background(), "gemini/claude-test"); !errors.Is(err, errNotAGeminiModel) {
 		t.Fatalf("explicit pin err = %v, want the refusal", err)
 	}
-	alone, err := NewModelResolverWithProviders([]ProviderConfig{{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10"}}, DefaultProviderHeaders)
+	alone, err := NewModelResolverWithProviders([]ProviderConfig{{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "g", BaseURL: "http://203.0.113.10"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +409,7 @@ func TestResolveWithFallbacksPassesARefusingGooglePrimary(t *testing.T) {
 func TestResolverRejectsUnknownFallbackProvider(t *testing.T) {
 	_, err := NewModelResolverWithProviders([]ProviderConfig{{
 		Name: "primary", Type: ProviderTypeOpenAI, APIKey: "p", FallbackProviders: []string{"primary", "missing"},
-	}}, DefaultProviderHeaders)
+	}})
 	if err == nil {
 		t.Fatal("expected unknown fallback provider error")
 	}

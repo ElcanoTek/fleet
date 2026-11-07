@@ -67,7 +67,7 @@ func TestWithAuditVerdictStampsTheResult(t *testing.T) {
 }
 
 func TestScheduledPolicyExposesTerminalAbort(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 0, 0, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0, 0)
 	if p.AuditAborted() {
 		t.Fatal("fresh policy reported an abort")
 	}

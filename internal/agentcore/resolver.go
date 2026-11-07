@@ -44,7 +44,7 @@ func (m *providerNamedModel) fleetProviderName() string { return m.providerName 
 // NewModelResolver builds a resolver backed by a single catch-all OpenRouter
 // provider — the historical, backward-compatible default. An empty API key is a
 // hard error (OpenRouter is the sole credential in this mode).
-func NewModelResolver(apiKey string, headers ProviderHeaders) (*ModelResolver, error) {
+func NewModelResolver(apiKey string) (*ModelResolver, error) {
 	if strings.TrimSpace(apiKey) == "" {
 		return nil, fmt.Errorf("OPENROUTER_API_KEY required")
 	}
@@ -52,14 +52,14 @@ func NewModelResolver(apiKey string, headers ProviderHeaders) (*ModelResolver, e
 		Name:   "openrouter",
 		Type:   ProviderTypeOpenRouter,
 		APIKey: apiKey,
-	}}, headers)
+	}})
 }
 
 // NewModelResolverWithProviders builds a resolver over an explicit, ordered set
 // of providers (#289). Each provider is constructed eagerly (no network — just
 // the client handle) so a misconfigured provider fails at boot, not on the first
 // turn that needs it. Provider names must be non-empty and unique.
-func NewModelResolverWithProviders(providers []ProviderConfig, headers ProviderHeaders) (*ModelResolver, error) {
+func NewModelResolverWithProviders(providers []ProviderConfig) (*ModelResolver, error) {
 	if len(providers) == 0 {
 		return nil, fmt.Errorf("at least one LLM provider is required")
 	}
@@ -77,7 +77,7 @@ func NewModelResolverWithProviders(providers []ProviderConfig, headers ProviderH
 			return nil, fmt.Errorf("provider %q: context window tokens must be positive when set", name)
 		}
 		seen[name] = true
-		p, err := buildProvider(providers[i], headers)
+		p, err := buildProvider(providers[i])
 		if err != nil {
 			return nil, fmt.Errorf("provider %q: %w", name, err)
 		}

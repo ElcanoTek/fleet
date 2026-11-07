@@ -240,7 +240,7 @@ func validateLLMProviderRow(in store.LLMProviderInput, effectiveKey string) erro
 		BaseURL: in.BaseURL,
 		Models:  in.Models,
 		Region:  in.Region,
-	}, agentcore.DefaultProviderHeaders); err != nil {
+	}); err != nil {
 		return err
 	}
 	// == 0, not <= 0: a negative value is the store's range error.

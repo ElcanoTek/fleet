@@ -19,7 +19,7 @@ type taskTrackerTestInput struct{}
 // TestOrchestrationFinishEnforcementTaskTracker sets latestTaskTracker directly
 // and so could not catch the dead wiring; this exercises the production path.
 func TestPolicyGuardedTool_RecordsNativeTaskTrackerResult(t *testing.T) {
-	pol := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	pol := NewScheduledPolicy(NewLogSession(), 0, 0)
 	// Satisfy the audit gates so checkFinishEnforcement reaches the task-tracker
 	// branch (the audit gating itself is covered by other tests).
 	pol.orch.selfAuditRequested = true

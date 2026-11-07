@@ -185,26 +185,17 @@ var modelContextWindows = []struct {
 	{"x-ai/grok", 131_072},
 }
 
-// contextWindowForModel returns the upstream context window (tokens) for a slug.
-// Resolution order:
-//  1. observed cache (recordContextMax write-backs from provider
-//     context-too-large errors) — per-request ground truth;
-//  2. live OpenRouter /api/v1/models cache (openrouter_models.go) — refreshed
+// contextWindowForModel returns the upstream context window (tokens) for a
+// slug from OpenRouter's per-model metadata and the conservative static
+// fallback. It deliberately consults no observed (provider-error) window: those
+// are keyed by provider identity as well as slug and are looked up first by
+// contextWindowForActiveModel, so a same-slug observation from one provider
+// cannot contaminate another's limit. Resolution order:
+//  1. live OpenRouter /api/v1/models cache (openrouter_models.go) — refreshed
 //     every 24h, the authoritative source for any slug OpenRouter knows;
-//  3. static prefix table (below) — cold-start / offline fallback;
-//  4. defaultModelContextWindow.
+//  2. static prefix table (below) — cold-start / offline fallback;
+//  3. defaultModelContextWindow.
 func contextWindowForModel(slug string) int {
-	if n := contextLengthFromOpenRouter(slug); n > 0 {
-		return n
-	}
-	return contextWindowForOpenRouterCatalog(slug)
-}
-
-// contextWindowForOpenRouterCatalog resolves only OpenRouter's per-model
-// metadata and conservative static fallback. Provider-wrapped OpenRouter models
-// use this after their provider-scoped observation lookup; consulting the
-// legacy unscoped observed cache here would reintroduce same-slug contamination.
-func contextWindowForOpenRouterCatalog(slug string) int {
 	if n := contextLengthFromOpenRouterLive(slug); n > 0 {
 		return n
 	}
@@ -241,7 +232,7 @@ func contextWindowForActiveModel(model fantasy.LanguageModel) int {
 			// per-model live catalog. This branch also protects manually composed
 			// wrappers; the production resolver leaves the OpenRouter declaration
 			// unset in resolvedProviderContextWindow.
-			return contextWindowForOpenRouterCatalog(model.Model())
+			return contextWindowForModel(model.Model())
 		}
 		if named.contextWindowTokens > 0 {
 			return named.contextWindowTokens
@@ -384,21 +375,8 @@ func observedContextWindow(key observedContextKey) int {
 	return observedContextWindows.m[key]
 }
 
-// contextLengthFromOpenRouter returns the observed context_length for slug, or 0
-// when unknown for an unwrapped historical OpenRouter model. Provider-wrapped
-// production models use observedContextWindowForModel so same-slug fallbacks
-// cannot contaminate each other's learned limits.
-func contextLengthFromOpenRouter(slug string) int {
-	return observedContextWindow(observedContextKey{slug: strings.ToLower(strings.TrimSpace(slug))})
-}
-
-// recordContextMax writes an observed context_max back into the cache. Called
-// directly only by historical unwrapped-model tests. Production provider errors
-// call recordContextMaxForModel so the provider identity is part of the key.
-func recordContextMax(slug string, tokens int) {
-	recordObservedContextWindow(observedContextKey{slug: strings.ToLower(strings.TrimSpace(slug))}, tokens)
-}
-
+// recordContextMaxForModel writes an observed context_max back into the cache,
+// keyed by the model's provider identity and slug (observedContextKeyForModel).
 func recordContextMaxForModel(model fantasy.LanguageModel, tokens int) {
 	recordObservedContextWindow(observedContextKeyForModel(model), tokens)
 }

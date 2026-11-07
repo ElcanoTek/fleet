@@ -219,7 +219,7 @@ func TestBedrockRegionPicksTheEndpoint(t *testing.T) {
 			bedrockHTTPClient.Transport = rec
 			t.Cleanup(func() { bedrockHTTPClient.Transport = prev })
 			cfg := ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", Region: tc.region}
-			p, err := buildProvider(cfg, DefaultProviderHeaders)
+			p, err := buildProvider(cfg)
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -255,7 +255,7 @@ func TestBedrockTurnsDoNotFollowRedirectsToAnotherHost(t *testing.T) {
 				http.Redirect(w, r, other.URL+r.URL.RequestURI(), status)
 			}))
 			t.Cleanup(redirect.Close)
-			p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: redirect.URL}, DefaultProviderHeaders)
+			p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: redirect.URL})
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -352,13 +352,13 @@ func TestCheckProviderFields(t *testing.T) {
 		}
 	}
 	// buildProvider refuses the same entries, so the API's eager check does.
-	if _, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", Region: "evil.example/x"}, DefaultProviderHeaders); err == nil {
+	if _, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", Region: "evil.example/x"}); err == nil {
 		t.Error("buildProvider accepted a region that is not a Region name")
 	}
-	if _, err := buildProvider(ProviderConfig{Name: "o", Type: ProviderTypeOpenAI, APIKey: "k", Region: "us-east-1"}, DefaultProviderHeaders); err == nil {
+	if _, err := buildProvider(ProviderConfig{Name: "o", Type: ProviderTypeOpenAI, APIKey: "k", Region: "us-east-1"}); err == nil {
 		t.Error("buildProvider accepted a region on an openai entry")
 	}
-	if _, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: "https://gateway.example/bedrock"}, DefaultProviderHeaders); err == nil {
+	if _, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: "https://gateway.example/bedrock"}); err == nil {
 		t.Error("buildProvider accepted a bedrock base_url with a path")
 	}
 }
@@ -433,7 +433,7 @@ func TestBedrockStreamExceptionsAreTransient(t *testing.T) {
 				_, _ = w.Write(bedrockExceptionFrame(tc.exception, "Too many requests, please wait before trying again."))
 			}))
 			t.Cleanup(srv.Close)
-			p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+			p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL})
 			if err != nil {
 				t.Fatalf("buildProvider: %v", err)
 			}
@@ -465,7 +465,7 @@ func TestBedrockStreamExceptionsAreTransient(t *testing.T) {
 func TestBedrockRequestsCarryCacheMarkers(t *testing.T) {
 	const model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 	srv, calls := bedrockServer(t)
-	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "k", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}
@@ -474,9 +474,9 @@ func TestBedrockRequestsCarryCacheMarkers(t *testing.T) {
 		t.Fatalf("LanguageModel: %v", err)
 	}
 	msgs := []fantasy.Message{fantasy.NewSystemMessage("You are a test."), fantasy.NewUserMessage("ping")}
-	_, prepared, err := promptCachingStep(model)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
+	_, prepared, err := PromptCachingStep(model)(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
-		t.Fatalf("promptCachingStep: %v", err)
+		t.Fatalf("PromptCachingStep: %v", err)
 	}
 	for _, prompt := range []fantasy.Prompt{msgs, prepared.Messages} {
 		if _, err := lm.Generate(context.Background(), fantasy.Call{Prompt: prompt}); err != nil {
@@ -510,7 +510,7 @@ func TestBedrockTurnErrorsCarryNoKey(t *testing.T) {
 		_, _ = io.WriteString(w, `{"message":"The security token included in the request is invalid."}`)
 	}))
 	t.Cleanup(srv.Close)
-	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-row-key", BaseURL: srv.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "b", Type: ProviderTypeBedrock, APIKey: "bedrock-row-key", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}

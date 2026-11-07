@@ -1280,9 +1280,9 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	// audit still covers the delegated work.
 	var inner *agentcore.ScheduledPolicy
 	if a.isDelegatedChild() {
-		inner = agentcore.NewDelegatedPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
+		inner = agentcore.NewDelegatedPolicy(a.logSession, maxCostUSD, maxTotalTokens)
 	} else {
-		inner = agentcore.NewScheduledPolicy(a.logSession, a.maxIterations, maxCostUSD, maxTotalTokens)
+		inner = agentcore.NewScheduledPolicy(a.logSession, maxCostUSD, maxTotalTokens)
 	}
 	inner.SetAuditProtocolRef(a.auditProtocolRef)
 	if a.noteProposer != nil {
@@ -1439,7 +1439,6 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		HiddenToolSuffixes: a.hiddenToolSuffixes,
 		LoaderTools:        loaderTools,
 		NativeTools:        nativeTools,
-		ProviderHeaders:    agentcore.DefaultProviderHeaders,
 		OutputSchema:       a.outputSchema,
 		// Extended thinking (#220): the per-task override (a.thinkingBudget) wins
 		// when set, else the GLOBAL default (FLEET_DEFAULT_THINKING_BUDGET_TOKENS).

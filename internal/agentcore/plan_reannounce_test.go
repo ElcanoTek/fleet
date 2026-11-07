@@ -53,7 +53,7 @@ func TestExtractTaskTrackerRendered(t *testing.T) {
 }
 
 func TestPlanStateForReannounceGating(t *testing.T) {
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	if _, ok := orch.planStateForReannounce(); ok {
 		t.Fatal("tracker never seen: must not re-announce")
 	}
@@ -81,7 +81,7 @@ func planMessageCount(msgs []fantasy.Message) int {
 
 func TestForceCompact_ReannouncesOpenPlan(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	orch.recordToolResult(toolNameTaskTracker, "{}", trackerResultJSON(2, 1, 0), true)
 	e.bindRunUsage(orch)
 
@@ -111,7 +111,7 @@ func TestForceCompact_ReannouncesOpenPlan(t *testing.T) {
 
 func TestProactiveCompact_ReannouncesOpenPlan(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	orch.recordToolResult(toolNameTaskTracker, "{}", trackerResultJSON(1, 0, 0), true)
 	e.bindRunUsage(orch)
 
@@ -133,7 +133,7 @@ func TestProactiveCompact_ReannouncesOpenPlan(t *testing.T) {
 
 func TestProactiveCompact_NoPlanNoMessage(t *testing.T) {
 	e := newMockEngine(t, &mockModel{})
-	e.bindRunUsage(newOrchestrationState(nil, 0))
+	e.bindRunUsage(newOrchestrationState(nil))
 
 	msgs := make([]fantasy.Message, 0, 40)
 	msgs = append(msgs, fantasy.NewUserMessage("HEAD"))

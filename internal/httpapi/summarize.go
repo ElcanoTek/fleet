@@ -68,13 +68,8 @@ type summarizeResponse struct {
 // still come back as plain HTTP error codes so the frontend can
 // distinguish them from mid-stream model failures.
 func (s *Server) handleSummarize(w http.ResponseWriter, r *http.Request, user, convID string) {
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, false, "conversation not found")
+	if !ok {
 		return
 	}
 

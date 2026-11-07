@@ -137,7 +137,7 @@ func (e *engine) generateTerminalStructuredOutput(
 		if !native {
 			terminalToolTokens = estimatedTokensForBytes(len(schemaRaw))
 		}
-		cacheStep := promptCachingStep(
+		cacheStep := PromptCachingStep(
 			model.Model(),
 			WithCompactionSummaryBreakpoint(nil),
 			WithStablePrefixTokens(terminalToolTokens),
@@ -184,9 +184,6 @@ func (e *engine) generateTerminalStructuredOutput(
 		}
 		if orch != nil {
 			orch.updateUsage(model.Model(), resp.Usage, resp.ProviderMetadata)
-			if e != nil && e.usageReporter != nil {
-				e.usageReporter(usageSnapshot(orch))
-			}
 		}
 		if resp.FinishReason == fantasy.FinishReasonError {
 			return nil, fmt.Errorf("%w on attempt %d: provider returned finish_reason=%s", ErrStructuredOutputGeneration, attempt+1, resp.FinishReason)

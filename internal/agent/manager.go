@@ -530,9 +530,9 @@ func New(opts ManagerOptions) (*Manager, error) {
 		err      error
 	)
 	if len(opts.LLMProviders) > 0 {
-		resolver, err = agentcore.NewModelResolverWithProviders(opts.LLMProviders, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolverWithProviders(opts.LLMProviders)
 	} else {
-		resolver, err = agentcore.NewModelResolver(cfg.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolver(cfg.OpenRouterAPIKey)
 	}
 	if err != nil {
 		return nil, err
@@ -548,7 +548,7 @@ func New(opts ManagerOptions) (*Manager, error) {
 	accounts := cloneMCPAccounts(opts.MCPAccounts)
 	if broker == nil {
 		client = BuildMCPClient(opts.ServerSpecs, cfg.HTTPTools, cfg.A2APeers)
-		broker = agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints)
+		broker = agentcore.NewLocalMCPBroker(client)
 		catalog = client.GetAllTools()
 		for name, spec := range opts.ServerSpecs {
 			accounts[name] = creds.AccountsFor(spec.AccountVars)
@@ -1281,9 +1281,9 @@ func (m *Manager) SetLLMProviders(providers []agentcore.ProviderConfig) error {
 		err      error
 	)
 	if len(providers) > 0 {
-		resolver, err = agentcore.NewModelResolverWithProviders(providers, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolverWithProviders(providers)
 	} else {
-		resolver, err = agentcore.NewModelResolver(m.config.OpenRouterAPIKey, agentcore.DefaultProviderHeaders)
+		resolver, err = agentcore.NewModelResolver(m.config.OpenRouterAPIKey)
 	}
 	if err != nil {
 		return err
@@ -1304,7 +1304,7 @@ func (m *Manager) MCPClient() *mcp.Client { return m.mcpClient }
 // transport can remain agnostic to where credentialed execution runs.
 func (m *Manager) MCPBroker() agentcore.MCPBroker {
 	if m.mcpBroker == nil && m.mcpClient != nil {
-		return agentcore.NewLocalMCPBroker(m.mcpClient, agentcore.DefaultRemediationHints)
+		return agentcore.NewLocalMCPBroker(m.mcpClient)
 	}
 	return m.mcpBroker
 }

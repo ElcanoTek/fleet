@@ -109,7 +109,7 @@ func TestStreamRoundSwapsToFallbackOnProviderRejection(t *testing.T) {
 	}
 
 	outcome, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("health scan")}, buildAgent(primary), primary, false, buildAgent,
 	)
 	if err != nil {
@@ -147,7 +147,7 @@ func TestStreamRoundProviderRejectionWithoutFallbackIsTerminal(t *testing.T) {
 	}
 
 	_, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+		context.Background(), newOrchestrationState(e.logSession), newStreamSink(nil), 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("health scan")}, buildAgent(primary), primary, false, buildAgent,
 	)
 	if err == nil {
@@ -199,7 +199,7 @@ func TestStreamRoundProviderRejectionAfterToolExecutionStaysTerminal(t *testing.
 	}
 
 	_, err := e.streamRoundWithResilience(
-		context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+		context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("test task")}, buildAgent(primary), primary, false, buildAgent,
 	)
 	if err == nil {
@@ -267,7 +267,7 @@ func TestStreamRecoveryResumesOnRejectionAfterCompletedStep(t *testing.T) {
 	build := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"), fantasy.WithTools(tool))
 	}
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	out, err := e.streamRoundWithResilience(context.Background(), orch, sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("fetch and parse")}, build(primary), primary, false, build)
 	if err != nil {
@@ -590,7 +590,7 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 		}
 
 		out, err := e.streamRoundWithResilience(
-			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			context.Background(), newOrchestrationState(e.logSession), newStreamSink(nil), 1000,
 			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
 		)
 		if err != nil {
@@ -629,7 +629,7 @@ func TestCreditsExhaustedClassification(t *testing.T) {
 			return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 		}
 		_, err := e.streamRoundWithResilience(
-			context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+			context.Background(), newOrchestrationState(e.logSession), newStreamSink(nil), 1000,
 			[]fantasy.Message{fantasy.NewUserMessage("hello")}, buildAgent(primary), primary, false, buildAgent,
 		)
 		if !IsCreditsExhaustedError(err) {

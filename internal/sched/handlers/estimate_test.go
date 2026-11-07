@@ -120,7 +120,7 @@ func TestForecastTaskExplicitOpenRouterRoute(t *testing.T) {
 	resolver, err := agentcore.NewModelResolverWithProviders([]agentcore.ProviderConfig{
 		{Name: "native", Type: agentcore.ProviderTypeOpenAI, APIKey: "test-native"},
 		{Name: "router", Type: agentcore.ProviderTypeOpenRouter, APIKey: "test-router"},
-	}, agentcore.DefaultProviderHeaders)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

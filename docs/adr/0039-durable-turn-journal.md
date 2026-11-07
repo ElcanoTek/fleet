@@ -44,7 +44,7 @@ before it advertises terminal success:
   (status predicate + `history_committed_at` + a partial unique index on
   `(turn_id, turn_seq)`).
 
-The seam stays driver-supplied data on `agentcore.Deps` (like `UsageReporter`)
+The seam stays driver-supplied data on `agentcore.Deps` (like `Finalize`)
 — the trunk gains no Mode branch and no store dependency. The scheduled driver
 leaves it nil: its session log is already the durable record.
 

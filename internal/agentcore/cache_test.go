@@ -111,7 +111,7 @@ func TestPromptCachingStep_AnthropicPlacesBreakpoints(t *testing.T) {
 		newAssistantMessage("good"),
 		fantasy.NewUserMessage("bye"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatalf("step: %v", err)
@@ -151,7 +151,7 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 	// fixtures keep the tail no larger than the prefix, where the marker stays
 	// (TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt).
 	for _, slug := range []string{"google/gemini-3-flash-preview", "google/gemini-4-argon", "~google/gemini-flash-latest", "gemini-3-flash-preview"} {
-		step := promptCachingStep(slug)
+		step := PromptCachingStep(slug)
 		_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 		if err != nil {
 			t.Fatalf("%s step: %v", slug, err)
@@ -168,7 +168,7 @@ func TestPromptCachingStep_GooglePlacesBreakpoints(t *testing.T) {
 	// breakpoint: stable until the next compaction, so it is read back too.
 	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] dropped 12 messages")
 	long := []fantasy.Message{fantasy.NewSystemMessage("sys"), summary, newAssistantMessage("a"), fantasy.NewUserMessage("b")}
-	_, out, err := promptCachingStep("google/gemini-4-argon", WithCompactionSummaryBreakpoint(nil))(
+	_, out, err := PromptCachingStep("google/gemini-4-argon", WithCompactionSummaryBreakpoint(nil))(
 		context.Background(), fantasy.PrepareStepFunctionOptions{Messages: long})
 	if err != nil {
 		t.Fatal(err)
@@ -191,7 +191,7 @@ func TestPromptCachingStep_GeminiDropsTheMarkerOnceTheTailOutgrowsIt(t *testing.
 	system := fantasy.NewSystemMessage(strings.Repeat("s", 4000))
 	summary := fantasy.NewUserMessage(compactionSummaryPrefix + "] " + strings.Repeat("m", 2000))
 	marked := func(model string, msgs []fantasy.Message, opts ...CacheOption) []bool {
-		_, out, err := promptCachingStep(model, append(opts, WithCompactionSummaryBreakpoint(nil))...)(
+		_, out, err := PromptCachingStep(model, append(opts, WithCompactionSummaryBreakpoint(nil))...)(
 			context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 		if err != nil {
 			t.Fatal(err)
@@ -252,7 +252,7 @@ func TestPromptCachingStep_OpenAIIsNoop(t *testing.T) {
 		fantasy.NewSystemMessage("sys"),
 		fantasy.NewUserMessage("hi"),
 	}
-	step := promptCachingStep("openai/gpt-5.4-nano")
+	step := PromptCachingStep("openai/gpt-5.4-nano")
 	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatalf("step: %v", err)
@@ -268,7 +268,7 @@ func TestPromptCachingStep_KillSwitch(t *testing.T) {
 		fantasy.NewSystemMessage("sys"),
 		fantasy.NewUserMessage("hi"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatalf("step: %v", err)
@@ -287,7 +287,7 @@ func TestPromptCachingStep_KillSwitchLegacyAlias(t *testing.T) {
 		fantasy.NewSystemMessage("sys"),
 		fantasy.NewUserMessage("hi"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, out, _ := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if out.Messages != nil {
 		t.Errorf("legacy CHAT_ kill-switch should short-circuit, got %d msgs", len(out.Messages))
@@ -300,7 +300,7 @@ func TestPromptCachingStep_DoesNotMutateInput(t *testing.T) {
 		fantasy.NewSystemMessage("sys"),
 		fantasy.NewUserMessage("hi"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	if _, _, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs}); err != nil {
 		t.Fatalf("step: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestPromptCachingStep_OnlyOneBreakpointOnShortHistory(t *testing.T) {
 		fantasy.NewSystemMessage("sys"),
 		fantasy.NewUserMessage("hi"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatalf("step: %v", err)
@@ -346,7 +346,7 @@ func TestPromptCachingStep_CompactionSummaryBreakpoint(t *testing.T) {
 		fantasy.NewUserMessage("b"),
 		newAssistantMessage("c"),
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6", WithCompactionSummaryBreakpoint(nil))
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6", WithCompactionSummaryBreakpoint(nil))
 	_, out, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatalf("step: %v", err)
@@ -370,7 +370,7 @@ func TestPromptCachingStep_CompactionSummaryBreakpoint(t *testing.T) {
 // step) does not consume a rolling recency breakpoint: both rolling slots land
 // on the stable history messages before it.
 func TestPromptCachingStep_SkipsBudgetWindDownNotice(t *testing.T) {
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	orch.setCeilings(10.0, 0)
 	orch.CostUSD = 9.0
 	notice := fantasy.NewUserMessage(orch.checkBudgetWindDown(0.5).windDownNotice())
@@ -384,7 +384,7 @@ func TestPromptCachingStep_SkipsBudgetWindDownNotice(t *testing.T) {
 		fantasy.NewUserMessage("u2"),
 		notice,
 	}
-	step := promptCachingStep("anthropic/claude-sonnet-4.6")
+	step := PromptCachingStep("anthropic/claude-sonnet-4.6")
 	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatal(err)
@@ -424,7 +424,7 @@ func TestPromptCachingStep_RuntimeTodayFourthBreakpoint(t *testing.T) {
 			}},
 		},
 	}
-	step := promptCachingStep("anthropic/claude-opus-5.5", WithCompactionSummaryBreakpoint(nil))
+	step := PromptCachingStep("anthropic/claude-opus-5.5", WithCompactionSummaryBreakpoint(nil))
 	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatal(err)
@@ -453,7 +453,7 @@ func TestPromptCachingStep_CoalescesMultiPartAssistantText(t *testing.T) {
 		},
 		fantasy.NewUserMessage("follow up"),
 	}
-	step := promptCachingStep("anthropic/claude-opus-5.5")
+	step := PromptCachingStep("anthropic/claude-opus-5.5")
 	_, res, err := step(context.Background(), fantasy.PrepareStepFunctionOptions{Messages: msgs})
 	if err != nil {
 		t.Fatal(err)

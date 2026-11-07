@@ -523,14 +523,14 @@ func TestConnectorStudioRejectsPlaintextBrowserProbeAndExtractsFromResultPasswor
 			Content: tcPlainRaw,
 		},
 	}
-	pwFields := passwordFieldIDsFromHistory(history)
+	pwFields, _ := passwordFieldIDsFromHistory(history, "")
 	if !pwFields["custom_cred"] {
 		t.Fatalf("expected passwordFieldIDsFromHistory to extract custom_cred from tool_result.Card, got %v", pwFields)
 	}
-	if pwPlain := passwordFieldIDsFromHistoryForCard(history, "card-plain"); pwPlain["custom_cred"] {
+	if pwPlain, _ := passwordFieldIDsFromHistory(history, "card-plain"); pwPlain["custom_cred"] {
 		t.Fatalf("expected card-plain not to inherit custom_cred password flag from earlier card-pw, got %v", pwPlain)
 	}
-	if pwCard := passwordFieldIDsFromHistoryForCard(history, "card-pw"); !pwCard["custom_cred"] {
+	if pwCard, found := passwordFieldIDsFromHistory(history, "card-pw"); !found || !pwCard["custom_cred"] {
 		t.Fatalf("expected card-pw to report custom_cred as password field, got %v", pwCard)
 	}
 

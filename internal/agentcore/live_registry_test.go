@@ -73,13 +73,13 @@ func TestWithLiveRegistryJoinIsNormalized(t *testing.T) {
 	}
 }
 
-// buildFantasyToolsWithRoster reports the same decision it acted on: below the
+// buildFantasyTools reports the same decision it acted on: below the
 // threshold the direct names (sorted); above it the deferred count per server
 // and no direct names.
 func TestBuildFantasyToolsWithRosterSummary(t *testing.T) {
 	t.Setenv("FLEET_TOOL_DISCLOSURE_THRESHOLD", "20")
 
-	_, small, err := buildFantasyToolsWithRoster(discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	_, small, err := buildFantasyTools(discNative(3), discMCPTools(5), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("small: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestBuildFantasyToolsWithRosterSummary(t *testing.T) {
 		t.Errorf("direct names should be the registered mcp_<server>_<tool> form, got %q", small.directMCP[0])
 	}
 
-	_, big, err := buildFantasyToolsWithRoster(discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
+	_, big, err := buildFantasyTools(discNative(3), discMCPTools(200), &fakeBroker{}, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("big: %v", err)
 	}

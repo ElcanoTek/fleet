@@ -13,7 +13,7 @@ func (s sentinelStager) Stage(_, _, _ string) (string, error)           { return
 func (s sentinelStager) StageSuggestion(string) (string, string, error) { return "", "", nil }
 
 func TestEmailGate_SessionPreApprovedRunsNormally(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: PreApprovedSentinel})
 	blocked, _ := o.checkEmailSafety("mcp_sendgrid_send_email", "call-1", `{"to":"a@b.com","content":"hi"}`)
 	if blocked {
@@ -22,7 +22,7 @@ func TestEmailGate_SessionPreApprovedRunsNormally(t *testing.T) {
 }
 
 func TestEmailGate_SessionPreDeniedBlocks(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: PreDeniedSentinel})
 	blocked, msg := o.checkEmailSafety("mcp_sendgrid_send_email", "call-1", `{"to":"a@b.com"}`)
 	if !blocked || !strings.Contains(msg, "APPROVAL_DENIED") {
@@ -31,7 +31,7 @@ func TestEmailGate_SessionPreDeniedBlocks(t *testing.T) {
 }
 
 func TestEmailGate_NormalStagingUnchanged(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: "approval-xyz"})
 	blocked, msg := o.checkEmailSafety("mcp_sendgrid_send_email", "call-1", `{"to":"a@b.com"}`)
 	if !blocked || !strings.Contains(msg, "approval_id=approval-xyz") {
@@ -40,7 +40,7 @@ func TestEmailGate_NormalStagingUnchanged(t *testing.T) {
 }
 
 func TestScheduleTaskGate_StagesForApproval(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: "appr-sched"})
 	blocked, msg := o.checkScheduleTaskSafety("schedule_task", "call-1",
 		`{"name":"weekly report","prompt":"summarize the week","cron":"0 9 * * MON"}`)
@@ -53,7 +53,7 @@ func TestScheduleTaskGate_StagesForApproval(t *testing.T) {
 }
 
 func TestScheduleTaskGate_UnavailableWithoutSink(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	// No approval sink wired (e.g. scheduled mode). Must NOT pass through to the
 	// guarded-error Run, and must NOT loop — a clear unavailable message.
 	blocked, msg := o.checkScheduleTaskSafety("schedule_task", "call-1", `{"prompt":"x"}`)
@@ -63,7 +63,7 @@ func TestScheduleTaskGate_UnavailableWithoutSink(t *testing.T) {
 }
 
 func TestScheduleTaskGate_IgnoresOtherTools(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: "appr-x"})
 	if blocked, _ := o.checkScheduleTaskSafety("bash", "call-1", `{"command":"ls"}`); blocked {
 		t.Fatal("schedule_task gate must ignore non-schedule_task tools")
@@ -71,7 +71,7 @@ func TestScheduleTaskGate_IgnoresOtherTools(t *testing.T) {
 }
 
 func TestBashGate_SessionPreApprovedRunsNormally(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: PreApprovedSentinel})
 	// "git push" is risky → would normally stage; the sentinel lets it run.
 	blocked, _ := o.checkBashSafety("bash", "call-1", `{"command":"git push origin main"}`)
@@ -81,7 +81,7 @@ func TestBashGate_SessionPreApprovedRunsNormally(t *testing.T) {
 }
 
 func TestBashGate_SessionPreDeniedBlocks(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 100)
+	o := newOrchestrationState(NewLogSession())
 	o.setApprovalSink(sentinelStager{ret: PreDeniedSentinel})
 	blocked, msg := o.checkBashSafety("bash", "call-1", `{"command":"git push origin main"}`)
 	if !blocked || !strings.Contains(msg, "APPROVAL_DENIED") {

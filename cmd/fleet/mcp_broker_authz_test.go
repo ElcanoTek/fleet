@@ -50,7 +50,7 @@ func newBrokerBackendForAuthzTest(t *testing.T, bundleAllow map[string][]string)
 	}
 	client := mcp.NewClient()
 	return &brokerBackend{
-		MCPBroker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		MCPBroker: agentcore.NewLocalMCPBroker(client),
 		client:    client,
 		bases: map[string]agentcore.MCPServerBase{
 			"gated": {

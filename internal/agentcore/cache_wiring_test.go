@@ -1,7 +1,7 @@
 package agentcore
 
 // Pins the shared-loop cache wiring end-to-end: roundState.stream installs
-// promptCachingStep WITH the compaction-summary breakpoint, so a compaction
+// PromptCachingStep WITH the compaction-summary breakpoint, so a compaction
 // summary sitting at the head of the tail reaches the provider carrying its
 // own cache_control marker (a stable boundary between the cached head and the
 // evolving tail), alongside the last-system + last-two-window markers. Before
@@ -37,7 +37,7 @@ func TestStreamRound_CompactionSummaryBreakpointWired(t *testing.T) {
 	}
 
 	e := newMockEngine(t, model)
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("system prompt"))
 	}
@@ -100,7 +100,7 @@ func TestTerminalStructuredOutput_PlacesCacheBreakpoints(t *testing.T) {
 	}
 
 	e := newMockEngine(t, model)
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"],"additionalProperties":false}`)
 	msgs := []fantasy.Message{
 		fantasy.NewUserMessage("check the status"),

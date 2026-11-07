@@ -245,7 +245,6 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 		PersonaName:         tc.Persona,
 		PersonaPolicy:       tc.PersonaPolicy,
 		HiddenToolSuffixes:  tc.HiddenToolSuffixes,
-		ProviderHeaders:     agentcore.DefaultProviderHeaders,
 		ThinkingConfig:      tc.ThinkingConfig,
 		RuntimeDateInInput:  tc.RuntimeDateInMessages,
 		EnableResendBudget:  tc.EnableResendBudget,
@@ -552,7 +551,7 @@ const interactiveForceFinalSummaryNudge = forceFinalSummaryNudge
 func buildInteractiveCompactionSummarizer(tc TurnConfig) func(context.Context, agentcore.CompactionSummarizeInput) fantasy.Message {
 	return func(ctx context.Context, in agentcore.CompactionSummarizeInput) fantasy.Message {
 		summary := summarizeDroppedMiddleWith(ctx, summarizerModel(in, tc.Model), in, "")
-		// Tag with the compaction prefix so promptCachingStep's optional
+		// Tag with the compaction prefix so PromptCachingStep's optional
 		// compaction-summary breakpoint can find it.
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] " + summary)
 	}

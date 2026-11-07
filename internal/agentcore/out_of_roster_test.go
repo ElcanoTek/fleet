@@ -328,7 +328,7 @@ func TestOutOfRoster_RosterRecordsTheGate(t *testing.T) {
 		{"narrowed", true, map[string]string{"mcp_opt_a": gateOptIn, "mcp_srv_unlisted": gateNarrowed, "mcp_srv_denied": gatePersona, "mcp_srv_broken": gateSchema}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, roster, err := buildFantasyToolsWithRoster(nil, catalog, &fakeBroker{}, allow, nil, mcpOptionalSet{"opt": true}, nil,
+			_, roster, err := buildFantasyTools(nil, catalog, &fakeBroker{}, allow, nil, mcpOptionalSet{"opt": true}, nil,
 				toolBuildConfig{exclusiveAllowlist: tc.exclusive, personaPolicy: persona, observer: &recordingObserver{}})
 			if err != nil {
 				t.Fatal(err)
@@ -957,7 +957,7 @@ func TestOutOfRoster_RecoveryCheckpointHoldsTheExplanation(t *testing.T) {
 	e := newMockEngine(t, model)
 	e.outOfRoster = newOutOfRoster("", nil, mcpGates{})
 	e.outOfRoster.setRoster(toolRoster{removed: map[string]string{"secret_tool": gatePersona}})
-	round := newRoundState(e, newOrchestrationState(e.logSession, 50), 1000)
+	round := newRoundState(e, newOrchestrationState(e.logSession), 1000)
 	round.sink = newStreamSink(nil)
 	round.sink.outOfRoster = e.outOfRoster
 	if _, err := round.stream(context.Background(), fantasy.NewAgent(model), model, []fantasy.Message{fantasy.NewUserMessage("go")}); err != nil {

@@ -220,9 +220,9 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 	writeJSON(w, map[string]any{
 		"conversation":  conv,
 		"branch_origin": origin,
-		// historyForClient for the owner (carries `injected_context`), or
-		// historyForParticipant for a non-owner multiplayer participant (omits
-		// `injected_context` so owner attachment paths are not exposed).
+		// historyForParticipant: the owner's own entries carry
+		// `injected_context`; another multiplayer participant's are omitted
+		// so their attachment paths are not exposed.
 		"history":                  historyPayload,
 		"pending_approvals":        approvals,
 		"resolved_approvals":       resolvedCards,
@@ -459,13 +459,8 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 	model := strings.TrimSpace(req.Model)
 	ownerEmail := user
 	if model != "" {
-		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.NotFound(w, r)
+		conv, ok := s.conversationOr404(w, r, user, id, true, "404 page not found")
+		if !ok {
 			return
 		}
 		if conv.Lockdown && !s.cfg.LockdownAllows(model) {
@@ -657,9 +652,9 @@ func (s *Server) handleConversationExport(w http.ResponseWriter, r *http.Request
 	default:
 		body := map[string]any{
 			"conversation": exportConv,
-			// historyForClient so the ARCHIVAL shape really does carry every
-			// field for the owner (or historyForParticipant for multiplayer
-			// participants so another sender's injected_context is omitted).
+			// historyForParticipant, so the ARCHIVAL shape really does carry
+			// every field of the caller's own entries while another sender's
+			// injected_context is omitted.
 			"history":     historyPayload,
 			"exported_at": exportedAt.Format(time.RFC3339),
 		}

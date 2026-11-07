@@ -458,7 +458,7 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 
 	t.Setenv("OPENROUTER_BASE_URL", srv.URL)
 
-	provider, err := newOpenRouterProvider("test-openrouter-key", DefaultProviderHeaders)
+	provider, err := newOpenRouterProvider("test-openrouter-key")
 	if err != nil {
 		t.Fatalf("newOpenRouterProvider: %v", err)
 	}
@@ -492,7 +492,7 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 		time.Date(2026, time.November, 3, 20, 0, 0, 0, time.UTC),
 	)
 
-	rs1 := newRoundState(eng, newOrchestrationState(nil, 30), 4096)
+	rs1 := newRoundState(eng, newOrchestrationState(nil), 4096)
 	res1, err := rs1.stream(context.Background(), ag, model, turn1History)
 	if err != nil {
 		t.Fatalf("Turn 1 stream failed: %v", err)
@@ -505,7 +505,7 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 	turn2History = append(turn2History, eng.roundCarry(res1)...)
 	turn2History = append(turn2History, fantasy.NewUserMessage("Now compare step_01 with step_12."))
 
-	rs2 := newRoundState(eng, newOrchestrationState(nil, 30), 4096)
+	rs2 := newRoundState(eng, newOrchestrationState(nil), 4096)
 	if _, err := rs2.stream(context.Background(), ag, model, turn2History); err != nil {
 		t.Fatalf("Turn 2 stream failed: %v", err)
 	}
@@ -518,7 +518,7 @@ func runWireCacheContractForModel(t *testing.T, tc wireContractModelSpec) {
 		turn2History,
 		schemaRaw,
 		2048,
-		newOrchestrationState(nil, 30),
+		newOrchestrationState(nil),
 	); err != nil {
 		t.Fatalf("generateTerminalStructuredOutput failed: %v", err)
 	}
@@ -671,7 +671,7 @@ func assertWirePrefixInvariance(t *testing.T, captured []capturedWireRequest, to
 // TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard scans all production
 // Go files in internal/agentcore, internal/agent, and internal/scheduledrun to
 // ensure no new fantasy.NewAgent, .Stream(, or .Generate( call site can be
-// added without wiring PromptCachingStep/promptCachingStep and provider routing.
+// added without wiring PromptCachingStep/PromptCachingStep and provider routing.
 func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 	// Every production file that invokes fantasy.NewAgent, model.Stream, or
 	// model.Generate must appear in this allowlist AND reference the caching +
@@ -682,7 +682,7 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 		requireStablePrefixOnly bool
 	}{
 		"internal/agentcore/engine.go": {
-			requireCacheSymbol:   "promptCachingStep",
+			requireCacheSymbol:   "PromptCachingStep",
 			requireRoutingSymbol: "providerOptions",
 		},
 		"internal/agentcore/run.go": {
@@ -690,7 +690,7 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 			requireRoutingSymbol: "streamRoundWithResilience",
 		},
 		"internal/agentcore/structured_output.go": {
-			requireCacheSymbol:   "promptCachingStep",
+			requireCacheSymbol:   "PromptCachingStep",
 			requireRoutingSymbol: "providerOptions",
 		},
 		"internal/agent/interactive.go": {
@@ -912,7 +912,7 @@ func TestNativeProviderCacheContract_AcrossProviderTypes(t *testing.T) {
 					APIKey:  "test-native-key",
 					BaseURL: srv.URL,
 					Region:  tc.region,
-				}, DefaultProviderHeaders)
+				})
 				if err != nil {
 					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
 				}
@@ -1011,7 +1011,7 @@ func TestNativeProviderCacheContract_AcrossProviderTypes(t *testing.T) {
 					Type:    tc.provType,
 					APIKey:  "test-native-key",
 					BaseURL: srv.URL,
-				}, DefaultProviderHeaders)
+				})
 				if err != nil {
 					t.Fatalf("buildProvider(%s): %v", tc.provType, err)
 				}

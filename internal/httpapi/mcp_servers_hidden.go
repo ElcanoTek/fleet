@@ -29,7 +29,7 @@ import (
 //     run gate still drops them from that turn.
 //
 // Turning a connector on can never expose a hidden tool either: the run gate
-// (agentcore buildFantasyToolsWithRoster) drops it from every chat turn
+// (agentcore buildFantasyTools) drops it from every chat turn
 // whatever the conversation opted into. This filter only makes the picker
 // say so.
 

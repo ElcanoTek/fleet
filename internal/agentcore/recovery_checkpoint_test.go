@@ -63,7 +63,7 @@ func TestStreamRecoveryContinuesAfterCompletedToolStep(t *testing.T) {
 	build := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"), fantasy.WithTools(tool))
 	}
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	out, err := e.streamRoundWithResilience(context.Background(), orch, sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("save and verify")}, build(primary), primary, false, build)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestResumedStreamHonorsRemainingStepLimit(t *testing.T) {
 	}
 	e := newMockEngine(t, model)
 	e.maxIterations = 3
-	round := newRoundState(e, newOrchestrationState(e.logSession, 50), 1000)
+	round := newRoundState(e, newOrchestrationState(e.logSession), 1000)
 	round.sink = newStreamSink(nil)
 	round.priorSteps = 2
 	agent := fantasy.NewAgent(model, fantasy.WithTools(tool))
@@ -216,7 +216,7 @@ func TestStreamRecoveryContinuesAfterCompletedToolErrorStepWithoutFallback(t *te
 	build := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"), fantasy.WithTools(probeTool))
 	}
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	out, err := e.streamRoundWithResilience(context.Background(), orch, sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("create page if missing")}, build(primary), primary, false, build)
 	if err != nil {

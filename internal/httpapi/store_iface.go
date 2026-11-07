@@ -28,7 +28,6 @@ type chatStore interface {
 	// (#454). Backs POST /conversations/{id}/branch.
 	BranchConversation(ctx context.Context, userEmail, parentConvID string, branchPointMessageID int64, title string) (*store.Conversation, error)
 	Get(ctx context.Context, userEmail, convID string) (*store.Conversation, error)
-	List(ctx context.Context, userEmail string, archivedOnly bool) ([]store.Conversation, error)
 	// Labels (#258): ListFiltered backs the ?label= filter on GET /conversations.
 	ListFiltered(ctx context.Context, userEmail string, f store.ListFilter) ([]store.Conversation, error)
 	Delete(ctx context.Context, userEmail, convID string) error
@@ -140,7 +139,6 @@ type chatStore interface {
 	// conversation's turn events (#189). See store.GetTurnEventPage for the
 	// cursor/direction contract.
 	GetTurnEventPage(ctx context.Context, conversationID string, cursor int64, limit int, asc bool) ([]store.TurnEvent, int64, error)
-	LookupTurn(ctx context.Context, turnID string) (*store.TurnRecord, error)
 	// LookupTurnInConversation folds conversation scope into the query
 	// (#1112) so the stream DB-fallback cannot leak another conversation's
 	// turn events if the handler's equality check is ever dropped.
@@ -293,7 +291,6 @@ type chatStore interface {
 	LLMUsageSince(ctx context.Context, since int64) (calls int64, costUSD float64, err error)
 
 	// Users (auth gate) + admin stats + sweeps.
-	IsUser(ctx context.Context, email string) (bool, error)
 	// GetUser returns the full record (role + team) used by membershipMiddleware
 	// to admit AND enrich a request with the caller's role/team (#237).
 	GetUser(ctx context.Context, email string) (*store.User, error)
@@ -321,7 +318,7 @@ type chatStore interface {
 	// Team-scoped, opt-in conversation sharing (#237). ListTeamConversations
 	// returns the conversations members have shared WITH THE CALLER'S TEAM —
 	// the audience each owner named, not whoever's team they are in now
-	// (migration 054) — read-only; SetConversationTeamVisible flips the
+	// (migration 054) — read-only; SetConversationTeamVisibleWithOptions flips the
 	// owner's opt-in and reports the state it stored.
 	ListTeamConversations(ctx context.Context, callerEmail string) ([]store.Conversation, error)
 	// GetTeamVisibleConversation is the per-conversation half of that read:
@@ -343,7 +340,6 @@ type chatStore interface {
 	TeamViewVersion(ctx context.Context, callerEmail, convID string) (string, error)
 	// LeaveTeamImpact is what leaving the team costs — quoted in the confirm.
 	LeaveTeamImpact(ctx context.Context, email, teamID string) (store.LeaveTeamImpact, error)
-	SetConversationTeamVisible(ctx context.Context, ownerEmail, convID string, visible bool) (bool, error)
 	SetConversationTeamVisibleWithOptions(ctx context.Context, ownerEmail, convID string, visible, allowUnfiled bool) (bool, error)
 	// Multiplayer conversation sharing (migration 092): live multi-user team
 	// chats where participants can send messages directly using their own

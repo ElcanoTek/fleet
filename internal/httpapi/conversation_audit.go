@@ -35,13 +35,7 @@ const (
 // raw secret values never reach this endpoint (see deriveToolCallEntries).
 func (s *Server) handleConversationAudit(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	if _, ok := s.conversationOr404(w, r, user, convID, false, "conversation not found"); !ok {
 		return
 	}
 

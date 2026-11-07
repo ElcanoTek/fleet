@@ -131,7 +131,7 @@ func TestModelOutputArtifactReceivesOnlyGovernedContent(t *testing.T) {
 		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.NewTextResponse(original), nil
 		})
-	registered, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestFinalBoundaryDoesNotRunGuardrailTwiceForGovernedRoutes(t *testing.T) {
 		func(context.Context, struct{}, fantasy.ToolCall) (fantasy.ToolResponse, error) {
 			return fantasy.NewTextResponse("ordinary result"), nil
 		})
-	registered, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools([]fantasy.AgentTool{tool}, nil, nil, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatal(err)
 	}

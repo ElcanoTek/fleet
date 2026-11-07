@@ -224,7 +224,7 @@ func TestLocalMCPBroker_FlattensTextBlocks(t *testing.T) {
 		{Type: "image", Text: "ignored-non-text"},
 		{Type: "text", Text: "line2"},
 	}}}
-	b := &localMCPBroker{client: caller, hints: DefaultRemediationHints}
+	b := &localMCPBroker{client: caller}
 
 	text, isErr, err := b.CallMCP(context.Background(), "deal_sheet", "lookup", map[string]any{})
 	if err != nil {
@@ -245,7 +245,7 @@ func TestLocalMCPBroker_IsErrorPassthrough(t *testing.T) {
 		Content: []mcp.ContentBlock{{Type: "text", Text: "bad"}},
 		IsError: true,
 	}}
-	b := &localMCPBroker{client: caller, hints: DefaultRemediationHints}
+	b := &localMCPBroker{client: caller}
 
 	text, isErr, err := b.CallMCP(context.Background(), "s", "t", nil)
 	if err != nil {
@@ -261,7 +261,7 @@ func TestLocalMCPBroker_IsErrorPassthrough(t *testing.T) {
 // maps it to a model-facing error response.
 func TestLocalMCPBroker_TransportErrorPropagates(t *testing.T) {
 	caller := &fakeCaller{err: errors.New("dial fail")}
-	b := &localMCPBroker{client: caller, hints: DefaultRemediationHints}
+	b := &localMCPBroker{client: caller}
 
 	_, _, err := b.CallMCP(context.Background(), "s", "t", nil)
 	if err == nil || !strings.Contains(err.Error(), "dial fail") {
@@ -274,7 +274,7 @@ func TestLocalMCPBroker_TransportErrorPropagates(t *testing.T) {
 // buggy payload never hits the wire.
 func TestLocalMCPBroker_FastIOGuardFiresBeforeClient(t *testing.T) {
 	caller := &fakeCaller{result: &mcp.ToolResult{}}
-	b := &localMCPBroker{client: caller, hints: DefaultRemediationHints}
+	b := &localMCPBroker{client: caller}
 
 	big := strings.Repeat("A", 64*1024)
 	text, isErr, err := b.CallMCP(context.Background(), "fast_io", "upload", map[string]any{

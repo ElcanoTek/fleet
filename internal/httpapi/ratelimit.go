@@ -27,6 +27,9 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		user := userFromCtx(r.Context())
+		// Deliberately the ADMIN_EMAILS allowlist only (isAdmin), not
+		// callerIsAdmin: a users.role = 'admin' account is rate-limited like
+		// any member.
 		if s.isAdmin(user) { // admins are exempt
 			next.ServeHTTP(w, r)
 			return
@@ -60,6 +63,9 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 // 429 when the user is already at the limit. Admins and a disabled limiter are
 // always admitted with a no-op release.
 func (s *Server) admitConcurrentTurn(w http.ResponseWriter, user string) (release func(), admitted bool) {
+	// Deliberately the ADMIN_EMAILS allowlist only (isAdmin), not
+	// callerIsAdmin: a users.role = 'admin' account gets the same cap as any
+	// member.
 	if s.concurrent == nil || s.isAdmin(user) {
 		return func() {}, true
 	}

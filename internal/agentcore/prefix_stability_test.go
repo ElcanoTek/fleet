@@ -81,7 +81,7 @@ func buildGuardTools(t *testing.T, includeNative bool) []fantasy.AgentTool {
 			),
 		}
 	}
-	tools, err := buildFantasyTools(native, guardMCPTools(), nil, nil, nil, nil, nil, toolBuildConfig{})
+	tools, _, err := buildFantasyTools(native, guardMCPTools(), nil, nil, nil, nil, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}

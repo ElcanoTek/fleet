@@ -407,7 +407,7 @@ func TestStreamRoundRetriesStreamBlipInPlace(t *testing.T) {
 	e.fallbackModel = fallback
 	e.resilience = resilienceConfig{maxAttempts: 0}
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
@@ -460,7 +460,7 @@ func TestStreamRoundSwapsOnPersistentStreamBlip(t *testing.T) {
 	e.fallbackModel = fallback
 	e.resilience = resilienceConfig{maxAttempts: 0}
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
@@ -517,7 +517,7 @@ func TestStreamRoundSwapsToFallbackOnRetryExhaustion(t *testing.T) {
 	e.fallbackModel = fallback
 	e.resilience = resilienceConfig{maxAttempts: 0}
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	maxTokens := int64(1000)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
@@ -574,7 +574,7 @@ func TestCrossProviderSameModelFailover(t *testing.T) {
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
-	outcome, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession, 50), sink, 1000,
+	outcome, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession), sink, 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("task")}, buildAgent(primary), primary, false, buildAgent)
 	if err != nil {
 		t.Fatalf("failover: %v", err)
@@ -619,7 +619,7 @@ func TestStreamRoundFatalPropagates(t *testing.T) {
 	e := newMockEngine(t, primary)
 	e.fallbackModel = fallback
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
@@ -666,7 +666,7 @@ func TestStreamRoundCancelledContextShortCircuits(t *testing.T) {
 	e := newMockEngine(t, primary)
 	e.fallbackModel = fallback
 
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}

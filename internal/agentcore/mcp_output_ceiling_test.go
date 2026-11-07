@@ -137,7 +137,7 @@ func TestMCPGuardrailRunsExactlyOnceDirectAndDeferred(t *testing.T) {
 			detector := &fakeGuardrailDetector{}
 			SetGuardrail(true, false, "observe", "prompt-injection", detector)
 			SetToolDisclosureThreshold(tc.threshold)
-			registered, err := buildFantasyTools(tc.native, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
+			registered, _, err := buildFantasyTools(tc.native, catalog, broker, nil, nil, nil, nil, toolBuildConfig{})
 			if err != nil {
 				t.Fatal(err)
 			}

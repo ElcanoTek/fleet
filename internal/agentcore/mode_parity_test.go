@@ -39,7 +39,7 @@ func runModeCleanPass(t *testing.T, mode Mode) (Result, *captureObserver, *round
 	}
 	var inner Policy
 	if mode == ModeScheduled {
-		sp := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+		sp := NewScheduledPolicy(NewLogSession(), 0, 0)
 		sp.orch.mu.Lock()
 		sp.orch.selfAuditRequested = true
 		sp.orch.selfAuditConfirmedOnce = true
@@ -107,7 +107,7 @@ func TestModeParity_SharedInvariants(t *testing.T) {
 // on; if a shared-code change broke it, this fails.
 func TestModeParity_Divergence(t *testing.T) {
 	// Scheduled with the audit UNSATISFIED until round 1 must run >1 round.
-	sp := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	sp := NewScheduledPolicy(NewLogSession(), 0, 0)
 	round := 0
 	model := &mockModel{
 		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {

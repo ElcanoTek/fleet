@@ -36,8 +36,8 @@ func TestOptionalServerForKeyingRule(t *testing.T) {
 		// Loop: Go randomizes map range order on every pass, so a regression to
 		// first-match (rather than longest-match) fails within a few iterations.
 		for i := 0; i < 64; i++ {
-			if got := optionalServerFor(tc.registered, optional); got != tc.want {
-				t.Fatalf("optionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)
+			if got := OptionalServerFor(tc.registered, optional); got != tc.want {
+				t.Fatalf("OptionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)
 			}
 			if got := OptionalServerFor(tc.registered, optional); got != tc.want {
 				t.Fatalf("OptionalServerFor(%q) = %q, want %q", tc.registered, got, tc.want)
@@ -95,7 +95,7 @@ func TestGate1GatesVariantSeatUnderBaseOptionalKey(t *testing.T) {
 
 	// Not opted in: the default seat AND the variant seat are both withheld.
 	// The non-Optional server is unaffected.
-	registered, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -111,7 +111,7 @@ func TestGate1GatesVariantSeatUnderBaseOptionalKey(t *testing.T) {
 
 	// Opted in by the base key — the key the interactive/scheduled producers
 	// actually put in optIn for a {server: jira, account: prod} selection.
-	registered, err = buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, map[string]bool{"jira": true}, toolBuildConfig{})
+	registered, _, err = buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, optional, map[string]bool{"jira": true}, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -136,7 +136,7 @@ func TestGate1VariantSeatWithOwnOptionalKey(t *testing.T) {
 
 	// Variant-only key: the variant is gated by "jira_prod"; the base server is
 	// not Optional at all and always registers.
-	registered, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, mcpOptionalSet{"jira_prod": true}, nil, toolBuildConfig{})
+	registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, mcpOptionalSet{"jira_prod": true}, nil, toolBuildConfig{})
 	if err != nil {
 		t.Fatalf("buildFantasyTools: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestGate1VariantSeatWithOwnOptionalKey(t *testing.T) {
 		{optIn: "jira", want: "mcp_jira_search", other: "mcp_jira_prod_search"},
 		{optIn: "jira_prod", want: "mcp_jira_prod_search", other: "mcp_jira_search"},
 	} {
-		registered, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, both, map[string]bool{tc.optIn: true}, toolBuildConfig{})
+		registered, _, err := buildFantasyTools(nil, catalog, &fakeBroker{}, nil, passPolicy{}, both, map[string]bool{tc.optIn: true}, toolBuildConfig{})
 		if err != nil {
 			t.Fatalf("buildFantasyTools: %v", err)
 		}

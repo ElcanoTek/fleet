@@ -44,7 +44,7 @@ func TestOpenrouterServedProvider(t *testing.T) {
 func TestUpdateUsage_QuotedServedNameIsNotAFallback(t *testing.T) {
 	// The exact shape the adapter produces on prod: pinned=Google, served
 	// `"Google"` (raw JSON). That is the pinned upstream, not a fallback.
-	o := newOrchestrationState(nil, 0)
+	o := newOrchestrationState(nil)
 	o.updateUsage("google/gemini-3.8-flash", fantasy.Usage{InputTokens: 10}, orMetadata(`"Google"`))
 	if o.ServedFallback {
 		t.Error("ServedFallback = true for a step served by the pinned upstream under its raw-JSON name")
@@ -56,7 +56,7 @@ func TestUpdateUsage_QuotedServedNameIsNotAFallback(t *testing.T) {
 
 // A run served by its canonical upstream is not a fallback.
 func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 50)
+	o := newOrchestrationState(NewLogSession())
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Anthropic"))
 
 	if o.ServedFallback {
@@ -70,7 +70,7 @@ func TestUpdateUsage_CanonicalUpstreamIsNotAFallback(t *testing.T) {
 // A step served by anything other than the pinned upstream latches the flag —
 // this is the signal that explains an otherwise inexplicable bad response.
 func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 50)
+	o := newOrchestrationState(NewLogSession())
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("DeepInfra"))
 
 	if !o.ServedFallback {
@@ -93,7 +93,7 @@ func TestUpdateUsage_RecordsUpstreamFallback(t *testing.T) {
 
 // An UNPINNED family has no canonical upstream, so no route is a "fallback".
 func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 50)
+	o := newOrchestrationState(NewLogSession())
 	const unpinned = "x-ai/grok-4.6" // no canonicalUpstream entry: xAI is its only upstream
 	o.updateUsage(unpinned, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("xAI"))
 
@@ -108,7 +108,7 @@ func TestUpdateUsage_UnpinnedFamilyNeverFlagsFallback(t *testing.T) {
 // Providers that report no upstream must leave the attribution untouched
 // rather than clobbering a previously recorded one with "".
 func TestUpdateUsage_AbsentMetadataPreservesAttribution(t *testing.T) {
-	o := newOrchestrationState(NewLogSession(), 50)
+	o := newOrchestrationState(NewLogSession())
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, orMetadata("Google"))
 	o.updateUsage(DefaultCoreModel, fantasy.Usage{InputTokens: 10, OutputTokens: 5}, fantasy.ProviderMetadata{})
 

@@ -102,7 +102,7 @@ func TestParseTaskTrackerSnapshot_EmptyTrackerStaysUnseen(t *testing.T) {
 // finish gate arms on pending work and releases when the SAME tool reports
 // everything done.
 func TestTaskTrackerFinishGate_CouplesToRealToolOutput(t *testing.T) {
-	pol := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	pol := NewScheduledPolicy(NewLogSession(), 0, 0)
 	// Satisfy the audit gates so checkFinishEnforcement reaches the
 	// task-tracker branch (audit gating is covered elsewhere).
 	pol.orch.selfAuditRequested = true
@@ -139,7 +139,7 @@ func TestTaskTrackerFinishGate_CouplesToRealToolOutput(t *testing.T) {
 // fallback model that took over mid-run sees the remaining plan items instead
 // of being handed the self-audit ritual over an incomplete workspace.
 func TestTaskTrackerFinishGate_FiresBeforeSelfAuditRequest(t *testing.T) {
-	pol := NewScheduledPolicy(NewLogSession(), 100, 0, 0)
+	pol := NewScheduledPolicy(NewLogSession(), 0, 0)
 	guarded := &policyGuardedTool{inner: tools.NewTaskTrackerTool(), policy: pol}
 
 	if _, err := guarded.Run(context.Background(), fantasy.ToolCall{

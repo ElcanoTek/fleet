@@ -78,7 +78,7 @@ func TestRun_ResendBudget_ScheduledCompactsWithoutOptIn(t *testing.T) {
 func TestCheckContextPressure_ResendBudgetIsScheduledOnly(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	slug := "ctx1534-interactive"
-	recordContextMax(slug, testContextWindow)
+	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
 	model := &namedMockModel{name: slug}
 	msgs := fillerMessages(6, 4_000)
 
@@ -115,7 +115,7 @@ func TestCheckContextPressure_ResendBudgetIsScheduledOnly(t *testing.T) {
 func TestCheckContextPressure_WindowCompactionNamesTrigger(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	slug := "ctx1534-window"
-	recordContextMax(slug, testContextWindow)
+	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	obs := &payloadObserver{}
@@ -156,7 +156,7 @@ func TestContextResendBudgetTokensKnob(t *testing.T) {
 func TestCheckContextPressure_LogsTheCompactionSummary(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "1000")
 	slug := "ctx-summary-logged"
-	recordContextMax(slug, testContextWindow)
+	recordContextMaxForModel(&namedMockModel{name: slug}, testContextWindow)
 	model := &namedMockModel{name: slug}
 	e := newMockEngine(t, model)
 	e.requireCompactionOptIn = true

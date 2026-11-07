@@ -369,7 +369,7 @@ func TestCheckContextPressure_ElisionThenSummaryWhenNotEnough(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	model := &namedMockModel{name: "elide-not-enough"}
-	recordContextMax(model.name, 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: model.name}, 10_000_000)
 	e := newMockEngine(t, model)
 	e.requireCompactionOptIn = true
 	var droppable []fantasy.Message
@@ -416,7 +416,7 @@ func TestCheckContextPressure_ElisionJustUnderTheBudgetStillSummarizes(t *testin
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	run := func(used int) []map[string]any {
 		model := &namedMockModel{name: "elide-headroom"}
-		recordContextMax(model.name, 10_000_000)
+		recordContextMaxForModel(&namedMockModel{name: model.name}, 10_000_000)
 		e := newMockEngine(t, model)
 		e.requireCompactionOptIn = true
 		e.logSession.LastStepPromptTokens = used
@@ -455,7 +455,7 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 
 	t.Run("interactive", func(t *testing.T) {
 		model := &namedMockModel{name: "elide-chat"}
-		recordContextMax(model.name, 200_000)
+		recordContextMaxForModel(&namedMockModel{name: model.name}, 200_000)
 		e := newMockEngine(t, model)
 		e.logSession.LastStepPromptTokens = 190_000
 		obs := &payloadObserver{}
@@ -469,7 +469,7 @@ func TestCheckContextPressure_ElisionIsScheduledOnlyAndKnobGated(t *testing.T) {
 		t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 		t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "false")
 		model := &namedMockModel{name: "elide-knob-off"}
-		recordContextMax(model.name, 10_000_000)
+		recordContextMaxForModel(&namedMockModel{name: model.name}, 10_000_000)
 		e := newMockEngine(t, model)
 		e.requireCompactionOptIn = true
 		e.logSession.LastStepPromptTokens = 150_000
@@ -505,7 +505,7 @@ func TestCheckContextPressure_ScheduledWindowCompactionElidesFirst(t *testing.T)
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
 	model := &namedMockModel{name: "elide-window"}
-	recordContextMax(model.name, 200_000)
+	recordContextMaxForModel(&namedMockModel{name: model.name}, 200_000)
 	e := newMockEngine(t, model)
 	e.requireCompactionOptIn = true
 	e.windowCompactionStalled = true
@@ -650,7 +650,7 @@ func TestCheckContextPressure_ElisionFromAnEstimateAddsNothingUnseen(t *testing.
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "true") // on, whatever the shell or a legacy alias says
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	model := &namedMockModel{name: "elide-estimated"}
-	recordContextMax(model.name, 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: model.name}, 10_000_000)
 	e := newMockEngine(t, model)
 	e.requireCompactionOptIn = true
 	msgs := elisionHistory(14, 40_000)
@@ -893,7 +893,7 @@ func heldEngine(t *testing.T, name string, orch *orchestrationState) *engine {
 // re-reads the evidence elision would stub. Before the audit is asked for,
 // and once it is accepted, elision works as before.
 func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	e := heldEngine(t, "elide-audit", orch)
 	history := elisionHistory(10, 40_000)
 	if _, ok := e.elideBeforeSummary(history, 30_000, true, 30_000, 30_000); !ok {
@@ -920,10 +920,10 @@ func TestElideBeforeSummary_HeldWhileTheAuditIsPending(t *testing.T) {
 // one resend_budget compaction, no elision event or breadcrumb.
 func TestCheckContextPressure_PendingAuditSummarizesWithoutEliding(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	e := heldEngine(t, "elide-audit-pressure", orch)
-	recordContextMax("elide-audit-pressure", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "elide-audit-pressure"}, 10_000_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1063,7 +1063,7 @@ func TestElideStaleToolResults_ParallelCallsSharingAnID(t *testing.T) {
 func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "elide-rerun-pressure", nil)
-	recordContextMax("elide-rerun-pressure", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "elide-rerun-pressure"}, 10_000_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1129,7 +1129,7 @@ func TestCheckContextPressure_RerunStopsElision(t *testing.T) {
 func TestResendBudget_RaisedAfterARerun(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "raise-budget", nil)
-	recordContextMax("raise-budget", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "raise-budget"}, 10_000_000)
 	if got := e.resendBudget(); got != 80_000 {
 		t.Fatalf("resendBudget before a re-run = %d, want 80000", got)
 	}
@@ -1245,7 +1245,7 @@ func TestCheckContextPressure_RerunOfASummarizedCallRaisesTheBudget(t *testing.T
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "summary-rerun-pressure", nil)
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "false")
-	recordContextMax("summary-rerun-pressure", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "summary-rerun-pressure"}, 10_000_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1345,7 +1345,7 @@ func TestNoteSummarizedCalls_OnlyBulkyDataWhoseCopiesAllWent(t *testing.T) {
 func TestNoteReruns_SummarizedLeavesElisionOnElidedWins(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "summary-rerun-kinds", nil)
-	recordContextMax("summary-rerun-kinds", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "summary-rerun-kinds"}, 10_000_000)
 	e.summarizedCallKeys = map[string]bool{callKey("fetch", `{"page":"a"}`): true, callKey("fetch", `{"page":"b"}`): true}
 	e.noteReruns(elisionExchange("a2", `{"page":"a"}`, elisionText(10)))
 	if !e.summaryRerun || e.elisionStopped || e.elisionHeld() {
@@ -1374,7 +1374,7 @@ func TestNoteReruns_TheFirstKindRaisesOnce(t *testing.T) {
 	}
 	fresh := func() *engine {
 		e := heldEngine(t, "rerun-kinds", nil)
-		recordContextMax("rerun-kinds", 10_000_000)
+		recordContextMaxForModel(&namedMockModel{name: "rerun-kinds"}, 10_000_000)
 		e.summarizedCallKeys = map[string]bool{callKey("fetch", `{"page":"a"}`): true, callKey("fetch", `{"page":"c"}`): true}
 		e.noteElidedCalls([]string{callKey("fetch", `{"page":"b"}`)})
 		return e
@@ -1410,7 +1410,7 @@ func TestNoteReruns_TheFirstKindRaisesOnce(t *testing.T) {
 func TestCheckContextPressure_ElisionAgainstTheRaisedBudget(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "summary-rerun-elide", nil)
-	recordContextMax("summary-rerun-elide", 10_000_000)
+	recordContextMaxForModel(&namedMockModel{name: "summary-rerun-elide"}, 10_000_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1431,7 +1431,7 @@ func TestCheckContextPressure_WindowSummaryRecordsNothing(t *testing.T) {
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
 	e := heldEngine(t, "summary-window", nil)
 	t.Setenv("FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", "false")
-	recordContextMax("summary-window", 200_000)
+	recordContextMaxForModel(&namedMockModel{name: "summary-window"}, 200_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1497,10 +1497,10 @@ func TestRun_Summary_RerunRaisesTheBudget(t *testing.T) {
 func TestCheckContextPressure_PendingAuditHoldsTheWindowElision(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "0")
 	t.Setenv("FLEET_SCHEDULED_AUTO_COMPACT", "1")
-	orch := newOrchestrationState(NewLogSession(), 0)
+	orch := newOrchestrationState(NewLogSession())
 	orch.selfAuditRequested = true
 	e := heldEngine(t, "elide-window-audit", orch)
-	recordContextMax("elide-window-audit", 200_000)
+	recordContextMaxForModel(&namedMockModel{name: "elide-window-audit"}, 200_000)
 	e.compactionSummarizer = func(_ context.Context, _ CompactionSummarizeInput) fantasy.Message {
 		return fantasy.NewUserMessage(compactionSummaryPrefix + "] summary")
 	}
@@ -1541,7 +1541,7 @@ func TestCallKey(t *testing.T) {
 func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 	t.Setenv("FLEET_CONTEXT_RESEND_BUDGET_TOKENS", "80000")
 	e := heldEngine(t, "raise-200k", nil)
-	recordContextMax("raise-200k", 200_000)
+	recordContextMaxForModel(&namedMockModel{name: "raise-200k"}, 200_000)
 	limit := e.resendWindowLimit()
 	if limit <= 80_000 || limit >= 240_000 {
 		t.Fatalf("fixture: a 200K window's limit is %d", limit)
@@ -1570,14 +1570,14 @@ func TestResendBudget_RaiseStopsShortOfTheWindow(t *testing.T) {
 	// On 128K the cap is 105216 − 24000 = 81216: too little room to be
 	// worth a raise.
 	mid := heldEngine(t, "raise-128k", nil)
-	recordContextMax("raise-128k", 128_000)
+	recordContextMaxForModel(&namedMockModel{name: "raise-128k"}, 128_000)
 	mid.elisionStopped = true
 	if got := mid.resendBudget(); got != 80_000 {
 		t.Fatalf("a 128K window leaves no room for a raise worth making, yet the budget is %d", got)
 	}
 
 	small := heldEngine(t, "raise-64k", nil)
-	recordContextMax("raise-64k", 64_000)
+	recordContextMaxForModel(&namedMockModel{name: "raise-64k"}, 64_000)
 	small.noteElidedCalls([]string{callKey("fetch", `{"page":"page-a"}`)})
 	small.noteReruns(elisionExchange("again", `{"page":"page-a"}`, elisionText(10)))
 	if !small.elisionStopped {

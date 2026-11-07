@@ -49,7 +49,6 @@ type mcpCaller interface {
 // the same implementation, so every caller renders an identical result.
 type localMCPBroker struct {
 	client mcpCaller
-	hints  RemediationHints
 }
 
 // localMCPBroker is the concrete in-process MCPBroker; assert the contract here,
@@ -57,10 +56,9 @@ type localMCPBroker struct {
 var _ MCPBroker = (*localMCPBroker)(nil)
 
 // NewLocalMCPBroker returns the in-process MCPBroker that runs calls directly
-// against client. hints configures the fast.io inline-base64 upload pre-guard
-// (callers that have no specific remediation context pass DefaultRemediationHints).
-func NewLocalMCPBroker(client *mcp.Client, hints RemediationHints) MCPBroker {
-	return &localMCPBroker{client: client, hints: hints}
+// against client, behind the fast.io inline-base64 upload pre-guard.
+func NewLocalMCPBroker(client *mcp.Client) MCPBroker {
+	return &localMCPBroker{client: client}
 }
 
 func (b *localMCPBroker) CallMCP(ctx context.Context, server, tool string, args map[string]any) (string, bool, error) {
@@ -68,7 +66,7 @@ func (b *localMCPBroker) CallMCP(ctx context.Context, server, tool string, args 
 	// fast.io inline-base64 pre-guard: reject oversized inline uploads before they
 	// hit the wire. A blocked upload is surfaced to the agent as a tool-level error
 	// (isError=true) carrying the remediation hint — same shape a real isError takes.
-	if ok, hint := rejectFastIOInlineBase64Upload(fullName, args, b.hints); !ok {
+	if ok, hint := rejectFastIOInlineBase64Upload(fullName, args); !ok {
 		return hint, true, nil
 	}
 	result, err := b.client.CallToolOn(ctx, server, tool, args)

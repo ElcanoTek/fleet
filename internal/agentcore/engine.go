@@ -49,11 +49,6 @@ type engine struct {
 	// instead of burning attempts on a known-bad model. nil = disabled (no-op).
 	healthRegistry *ProviderHealthRegistry
 
-	// providerOptionsFn builds the per-stream OpenRouter ProviderOptions for the
-	// active model slug. Defaults to a reasoning-off pin-only build; drivers may
-	// override to add reasoning / long-context headers.
-	providerOptionsFn func(modelSlug string) fantasy.ProviderOptions
-
 	// thinkingConfig, when set and Enabled, activates Claude extended thinking
 	// (#220) by adding a `thinking` extra-body parameter to the request — but only
 	// for slugs that supportExtendedThinking. nil / disabled leaves the request
@@ -174,10 +169,6 @@ type engine struct {
 	// window cap reserves the same (#1600). 0 means the default allowance.
 	maxCompletionTokens int
 
-	// usageReporter, when set, is called after each step with the run's
-	// accumulated usage so a driver can ship it out-of-band to an external
-	// accountant. Nil for the in-process loop.
-	usageReporter func(RunUsage)
 	// steerSource is the #785 mid-turn input seam (nil = no steering); its
 	// accepted-message state lives on the engine so injections survive
 	// enforcement rounds and resilience re-drives within one run.
@@ -210,9 +201,6 @@ const (
 // signatures). The 1M-context beta header is attached when the active slug is
 // a long-context Claude.
 func (e *engine) providerOptions(modelSlug string) fantasy.ProviderOptions {
-	if e.providerOptionsFn != nil {
-		return e.providerOptionsFn(modelSlug)
-	}
 	opts := &openrouter.ProviderOptions{}
 
 	// Gated on the ACTIVE slug — same rule as thinking below — so a fallback
@@ -420,24 +408,50 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		return messages
 	}
 
-	var summary fantasy.Message
-	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(middle))
-	} else {
-		summary = fantasy.NewUserMessage(fmt.Sprintf(
-			"%s] %d earlier messages were dropped to fit the model's context window after the provider rejected the prompt size.",
-			compactionSummaryPrefix, len(middle)))
-	}
+	summary := e.compactionSummary(ctx, middle,
+		"were dropped to fit the model's context window after the provider rejected the prompt size.")
 
 	e.logCompactionSummary(summary)
-	planText := planReannounceText(e.runOrch)
-	tail = dropPlanReannounceMessages(tail)
-	persistableTail := e.dropRunLocalMessages(tail)
-	firstKeptCallID := ""
-	if len(persistableTail) > 0 {
-		firstKeptCallID = firstToolCallID(persistableTail[0])
+	out, record := e.spliceCompaction(head, middle, tail, summary)
+	e.consecutiveCompactions++
+	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
+	e.compactions = append(e.compactions, record)
+	// The next step re-measures the resend-checkpoint floor (#1600).
+	e.resendFloorStale = true
+	return out
+}
+
+// compactionSummary is the message that stands in for dropped: the engine's
+// compactionSummarizer when set, else a deterministic placeholder tagged with
+// compactionSummaryPrefix that counts the dropped messages and gives reason
+// (the rest of the sentence after "N earlier messages").
+func (e *engine) compactionSummary(ctx context.Context, dropped []fantasy.Message, reason string) fantasy.Message {
+	if e.compactionSummarizer != nil {
+		return e.compactionSummarizer(ctx, e.compactionSummarizeInput(dropped))
 	}
-	out := make([]fantasy.Message, 0, len(head)+2+len(tail))
+	return fantasy.NewUserMessage(fmt.Sprintf("%s] %d earlier messages %s",
+		compactionSummaryPrefix, len(dropped), reason))
+}
+
+// spliceCompaction is the head + summary + kept splice both compaction paths
+// (forceCompactMessageHistory, proactiveCompactKeeping) share once each has
+// chosen its own boundary. It returns head, summary, a fresh task-plan
+// re-announcement (when the plan has open items; marked run-local so it is
+// never persisted) and kept with any earlier re-announcement dropped, plus the
+// CompactionRecord a later turn replays. The record counts head and dropped
+// without run-local messages and names the first persistable kept message's
+// tool call, so a replay finds the same cut. The caller appends the record and
+// updates its own counters; spliceCompaction writes no engine state beyond
+// marking the plan message run-local.
+func (e *engine) spliceCompaction(head, dropped, kept []fantasy.Message, summary fantasy.Message) ([]fantasy.Message, CompactionRecord) {
+	planText := planReannounceText(e.runOrch)
+	kept = dropPlanReannounceMessages(kept)
+	persistableKept := e.dropRunLocalMessages(kept)
+	firstKeptCallID := ""
+	if len(persistableKept) > 0 {
+		firstKeptCallID = firstToolCallID(persistableKept[0])
+	}
+	out := make([]fantasy.Message, 0, len(head)+2+len(kept))
 	out = append(out, head...)
 	out = append(out, summary)
 	if planText != "" {
@@ -445,18 +459,13 @@ func (e *engine) forceCompactMessageHistory(ctx context.Context, messages []fant
 		e.markRunLocalMessages(planMsg)
 		out = append(out, planMsg)
 	}
-	out = append(out, tail...)
-	e.consecutiveCompactions++
-	e.lastForcedCompaction = forcedCompactionStats{removed: len(middle), summaryTokens: estimateMessageTokens(summary)}
-	e.compactions = append(e.compactions, CompactionRecord{
+	out = append(out, kept...)
+	return out, CompactionRecord{
 		Head:                len(e.dropRunLocalMessages(head)),
-		Removed:             len(e.dropRunLocalMessages(middle)),
+		Removed:             len(e.dropRunLocalMessages(dropped)),
 		FirstKeptToolCallID: firstKeptCallID,
 		Summary:             messageText(summary),
-	})
-	// The next step re-measures the resend-checkpoint floor (#1600).
-	e.resendFloorStale = true
-	return out
+	}
 }
 
 // CompactionRecord describes one head/summary/tail compaction applied to a
@@ -646,8 +655,8 @@ func firstPart(m fantasy.Message) fantasy.MessagePart {
 	return m.Content[0]
 }
 
-// proactiveCompactResult reports what proactiveCompact did, so the run loop can
-// emit a fleet.context_compacted event with the right metadata.
+// proactiveCompactResult reports what proactiveCompactKeeping did, so the run
+// loop can emit a fleet.context_compacted event with the right metadata.
 type proactiveCompactResult struct {
 	messages      []fantasy.Message
 	removedTurns  int               // how many old messages were summarized away
@@ -657,9 +666,9 @@ type proactiveCompactResult struct {
 	dropped       []fantasy.Message // the messages summarized away
 }
 
-// proactiveCompact summarizes the OLDEST HALF of the conversation history BEFORE
-// the provider rejects an oversized prompt (#209), preserving the pinned head
-// and the recent half verbatim. It mirrors forceCompactMessageHistory's
+// proactiveCompactKeeping summarizes the OLDEST HALF of the conversation
+// history BEFORE the provider rejects an oversized prompt (#209), preserving
+// the pinned head and the recent half verbatim. It mirrors forceCompactMessageHistory's
 // head + summary + kept structure but, instead of reacting to a rejection with a
 // fixed 20-message tail, it drops the oldest 50% of the messages after the head.
 //
@@ -668,13 +677,10 @@ type proactiveCompactResult struct {
 // identically to a reactive summary). A clean proactive compaction RESETS
 // consecutiveCompactions: it is not a reactive resilience compaction and must not
 // count toward the ErrContextBudgetExhausted cap.
-func (e *engine) proactiveCompact(ctx context.Context, messages []fantasy.Message) proactiveCompactResult {
-	return e.proactiveCompactKeeping(ctx, messages, messages)
-}
-
-// proactiveCompactKeeping is proactiveCompact that summarizes source but keeps
-// kept's copy of the head and the recent half. The two are the same history
-// message for message, kept with its stale tool results elided (#1742): the
+//
+// It summarizes source but keeps kept's copy of the head and the recent half.
+// The two are the same history message for message, kept with its stale tool
+// results elided (#1742): the
 // summary is written from the full results, whose identifiers a stub's
 // preview may have cut, while the stubs carry on in what is kept.
 func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fantasy.Message) proactiveCompactResult {
@@ -704,31 +710,10 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	droppable := active[:midpoint]
 	keep := messages[head+midpoint:]
 
-	var summary fantasy.Message
-	if e.compactionSummarizer != nil {
-		summary = e.compactionSummarizer(ctx, e.compactionSummarizeInput(droppable))
-	} else {
-		summary = fantasy.NewUserMessage(fmt.Sprintf(
-			"%s] %d earlier messages were summarized to relieve context-window pressure before the prompt overflowed.",
-			compactionSummaryPrefix, len(droppable)))
-	}
+	summary := e.compactionSummary(ctx, droppable,
+		"were summarized to relieve context-window pressure before the prompt overflowed.")
 
-	planText := planReannounceText(e.runOrch)
-	keep = dropPlanReannounceMessages(keep)
-	persistableKeep := e.dropRunLocalMessages(keep)
-	firstKeptCallID := ""
-	if len(persistableKeep) > 0 {
-		firstKeptCallID = firstToolCallID(persistableKeep[0])
-	}
-	out := make([]fantasy.Message, 0, head+2+len(keep))
-	out = append(out, messages[:head]...)
-	out = append(out, summary)
-	if planText != "" {
-		planMsg := fantasy.NewUserMessage(planText)
-		e.markRunLocalMessages(planMsg)
-		out = append(out, planMsg)
-	}
-	out = append(out, keep...)
+	out, record := e.spliceCompaction(messages[:head], droppable, keep, summary)
 
 	// Proactive compaction is a clean reduction, not a reactive resilience
 	// compaction — reset the consecutive counter so it never trips
@@ -736,12 +721,7 @@ func (e *engine) proactiveCompactKeeping(ctx context.Context, source, kept []fan
 	e.consecutiveCompactions = 0
 	// The history just shrank: the next step's resent size is the new floor.
 	e.resendFloorStale = true
-	e.compactions = append(e.compactions, CompactionRecord{
-		Head:                len(e.dropRunLocalMessages(messages[:head])),
-		Removed:             len(e.dropRunLocalMessages(droppable)),
-		FirstKeptToolCallID: firstKeptCallID,
-		Summary:             messageText(summary),
-	})
+	e.compactions = append(e.compactions, record)
 
 	return proactiveCompactResult{
 		messages:      out,
@@ -967,7 +947,7 @@ func (e *engine) checkContextPressure(ctx context.Context, messages []fantasy.Me
 			})
 		} else {
 			// Nothing compactible (e.g. one enormous message: head + a single
-			// active turn — proactiveCompact's documented no-op). Stop pausing
+			// active turn — proactiveCompactKeeping's documented no-op). Stop pausing
 			// the tool loop for a compaction that cannot happen, and still
 			// surface the pressure so the worst case isn't silent; the reactive
 			// overflow path is the only backstop left.
@@ -1475,7 +1455,7 @@ func raisedThresholdCap(configured, limit int) int {
 
 // minResendCheckpointHistory is the fewest non-head messages a checkpoint
 // needs (#1600). Below it the compaction the pause exists for has next to
-// nothing to summarize — proactiveCompact would trade one exchange for a
+// nothing to summarize — proactiveCompactKeeping would trade one exchange for a
 // summarizer call and a cold cache — so the loop runs on instead.
 const minResendCheckpointHistory = 4
 
@@ -1941,9 +1921,6 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			sink.onStepFinish()
 			r.orch.updateUsage(modelSlug, step.Usage, step.ProviderMetadata)
 			r.engine.noteResendFloor(step.Usage)
-			if r.engine.usageReporter != nil {
-				r.engine.usageReporter(usageSnapshot(r.orch))
-			}
 			return nil
 		},
 		PrepareStep: budgetGuardedStep(r.orch, chainPrepareStepFunctions(
@@ -1975,7 +1952,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// Tool-call inputs that are not JSON objects are normalized before
 			// any provider sees them (a raw one 400s the whole request on
 			// Anthropic/Bedrock); before the reducers, which size the final slice.
-			toolCallInputSanitizeStep(),
+			ToolCallInputSanitizeStep(),
 			// After the recovery checkpoint, so a resume keeps the signatures
 			// for a Gemini model even when this one is not.
 			geminiSignatureStep,
@@ -1983,7 +1960,7 @@ func (r *roundState) stream(ctx context.Context, ag fantasy.Agent, activeModel f
 			// slice, and no provider call may observe the pre-reduction
 			// history. opts.Model makes fallback swaps use their own window.
 			modelContextBudgetStep(r.engine.modelContextPrefix, int(maxOutputTokens), sink),
-			promptCachingStep(modelSlug,
+			PromptCachingStep(modelSlug,
 				// The shared loop is where compaction summaries live (the engine's
 				// compaction paths insert them into this history), so the optional
 				// 4th breakpoint anchors the summary as a stable boundary between
@@ -2103,13 +2080,13 @@ func (w *firstChunkWatchdog) expire() {
 	w.settled = true
 	w.fired = true
 	// The verdict and its evidence are formed in the same critical section,
-	// so no concurrent noteProviderError can slip a different record between
+	// so no concurrent publishProviderErr can slip a different record between
 	// them.
 	if rec := w.providerErr; rec != nil && rec.from <= at && at < rec.until {
 		w.expiredProviderErr = rec
 	}
 	w.mu.Unlock()
-	// Outside the lock: onExpire cancels the request, and noteProviderError
+	// Outside the lock: onExpire cancels the request, and publishProviderErr
 	// must never block behind it.
 	w.onExpire()
 }
@@ -2149,21 +2126,6 @@ func (w *firstChunkWatchdog) publishProviderErr(rec *providerErrRecord) {
 	w.mu.Unlock()
 }
 
-// noteProviderError records a provider error seen NOW whose window is exactly
-// the backoff it bought. Idempotent in effect; the last status wins.
-func (w *firstChunkWatchdog) noteProviderError(providerErr *fantasy.ProviderError, delay time.Duration) {
-	if delay < 0 {
-		delay = 0
-	}
-	now := w.now()
-	w.publishProviderErr(&providerErrRecord{
-		from:             now.UnixNano(),
-		until:            now.Add(delay + providerErrorGrace).UnixNano(),
-		status:           reportableProviderStatus(providerErr),
-		creditsExhausted: isCreditsExhausted(providerErr),
-	})
-}
-
 func (w *firstChunkWatchdog) noteProviderErrorSeen(providerErr *fantasy.ProviderError) {
 	w.publishProviderErr(&providerErrRecord{
 		from:             w.now().UnixNano(),
@@ -2189,26 +2151,6 @@ func (w *firstChunkWatchdog) closeProviderErrorWindow(delay time.Duration) {
 		status:           w.providerErr.status,
 		creditsExhausted: w.providerErr.creditsExhausted,
 	}
-}
-
-// providerErrorLive reports whether a provider error is the explanation for
-// the silence AT THIS MOMENT — i.e. the retry loop is inside the backoff that
-// error bought. Once the next attempt has begun, silence is the model's own.
-// Only expire() consults it; everyone else wants the snapshot below, taken
-// when the verdict was formed.
-func (w *firstChunkWatchdog) providerErrorLive() bool {
-	now := w.now().UnixNano()
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	rec := w.providerErr
-	return rec != nil && rec.from <= now && now < rec.until
-}
-
-// providerErrorAtExpiry reports the provider-error state as it stood when the
-// watchdog fired, and the status that went with it. One read, one instant.
-func (w *firstChunkWatchdog) providerErrorAtExpiry() (seen bool, status int) {
-	seen, status, _ = w.providerErrorStateAtExpiry()
-	return seen, status
 }
 
 func (w *firstChunkWatchdog) providerErrorStateAtExpiry() (seen bool, status int, creditsExhausted bool) {

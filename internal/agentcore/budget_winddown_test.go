@@ -15,7 +15,7 @@ import (
 )
 
 func TestCheckBudgetWindDown(t *testing.T) {
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	// Unlimited ceilings never wind down.
 	orch.CostUSD = 1e6
 	if st := orch.checkBudgetWindDown(0.8); st.active {
@@ -48,7 +48,7 @@ func TestCheckBudgetWindDown(t *testing.T) {
 	}
 
 	// Token ceiling path (uncached tokens: prompt - cached + completion).
-	tok := newOrchestrationState(nil, 0)
+	tok := newOrchestrationState(nil)
 	tok.setCeilings(0, 1000)
 	tok.PromptTokens = 900
 	tok.CachedTokens = 200
@@ -59,7 +59,7 @@ func TestCheckBudgetWindDown(t *testing.T) {
 }
 
 func TestBudgetWindDownStepAppendsRequestLocalNotice(t *testing.T) {
-	orch := newOrchestrationState(nil, 0)
+	orch := newOrchestrationState(nil)
 	orch.setCeilings(10.0, 0)
 	orch.CostUSD = 9.0
 
@@ -77,7 +77,7 @@ func TestBudgetWindDownStepAppendsRequestLocalNotice(t *testing.T) {
 	}
 
 	// Below the threshold the step leaves the request untouched.
-	calm := newOrchestrationState(nil, 0)
+	calm := newOrchestrationState(nil)
 	calm.setCeilings(10.0, 0)
 	calm.CostUSD = 1.0
 	step = budgetWindDownStep(calm, nil)

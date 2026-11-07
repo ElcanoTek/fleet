@@ -51,13 +51,7 @@ const shareTokenBytes = 32
 func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request, convID, user string) {
 	// Confirm the conversation exists and belongs to the caller before minting a
 	// token (Get is user-scoped, so a foreign/unknown id yields nil → 404).
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	if _, ok := s.conversationOr404(w, r, user, convID, false, "not found"); !ok {
 		return
 	}
 
@@ -99,13 +93,7 @@ func (s *Server) handleConversationShare(w http.ResponseWriter, r *http.Request,
 // already unshared still returns 204, so the UI can call it without checking
 // current state.
 func (s *Server) handleConversationUnshare(w http.ResponseWriter, r *http.Request, convID, user string) {
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	if _, ok := s.conversationOr404(w, r, user, convID, false, "not found"); !ok {
 		return
 	}
 	if err := s.store.RevokeShareToken(r.Context(), user, convID); err != nil {
@@ -155,13 +143,8 @@ func (s *Server) handleConversationShareWithTeam(w http.ResponseWriter, r *http.
 	if !decodeOptionalJSONBody(w, r, &body) {
 		return
 	}
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, false, "not found")
+	if !ok {
 		return
 	}
 	if body.Visible && body.UnsharedPaths != nil {
@@ -309,6 +292,32 @@ func (s *Server) getOwnedOrMultiplayerConversation(ctx context.Context, user, co
 	return s.store.GetMultiplayerConversation(ctx, user, convID)
 }
 
+// conversationOr404 loads the conversation id for a handler, writing the
+// error response itself: a store failure is a 500 carrying the error (the
+// server's problem, not a missing row — a Postgres blip must not read as
+// "this conversation is gone"), and an unknown or foreign id is a 404 with
+// notFound as its body. allowMultiplayer widens the read from the caller's
+// own conversations to those they participate in via Multiplayer mode
+// (getOwnedOrMultiplayerConversation). ok is false once a response has been
+// written.
+func (s *Server) conversationOr404(w http.ResponseWriter, r *http.Request, user, id string, allowMultiplayer bool, notFound string) (conv *store.Conversation, ok bool) {
+	var err error
+	if allowMultiplayer {
+		conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
+	} else {
+		conv, err = s.store.Get(r.Context(), user, id)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return nil, false
+	}
+	if conv == nil {
+		http.Error(w, notFound, http.StatusNotFound)
+		return nil, false
+	}
+	return conv, true
+}
+
 func nonNilStrings(in []string) []string {
 	if in == nil {
 		return []string{}
@@ -321,13 +330,8 @@ func nonNilStrings(in []string) []string {
 // lists, and resolved active roster. Accessible to the owner and to active
 // multiplayer participants.
 func (s *Server) handleConversationMultiplayerGet(w http.ResponseWriter, r *http.Request, convID, user string) {
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "not found")
+	if !ok {
 		return
 	}
 	roster, err := s.store.ListMultiplayerRoster(r.Context(), user, convID)
@@ -360,13 +364,8 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	if !decodeOptionalJSONBody(w, r, &body) {
 		return
 	}
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "not found")
+	if !ok {
 		return
 	}
 	isOwner := strings.EqualFold(conv.UserEmail, user)
@@ -381,6 +380,7 @@ func (s *Server) handleConversationMultiplayerSet(w http.ResponseWriter, r *http
 	if body.Excluded != nil {
 		exclArg = *body.Excluded
 	}
+	var err error
 	var priorRoster []string
 	if conv.Multiplayer {
 		priorRoster, _ = s.store.ListMultiplayerRoster(r.Context(), user, convID)

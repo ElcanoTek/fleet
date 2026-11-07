@@ -112,7 +112,7 @@ func TestGoogleToolSchemasAreOnesGeminiAccepts(t *testing.T) {
 		_, _ = io.WriteString(w, reply)
 	}))
 	defer srv.Close()
-	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL}, DefaultProviderHeaders)
+	p, err := buildProvider(ProviderConfig{Name: "gemini", Type: ProviderTypeGoogle, APIKey: "k", BaseURL: srv.URL})
 	if err != nil {
 		t.Fatalf("buildProvider: %v", err)
 	}

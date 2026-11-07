@@ -136,7 +136,7 @@ func ApprovedCallBudget(serverName, rawInput string) (time.Duration, bool) {
 //
 // Callers, all of which MUST route through here rather than an exact lookup:
 // mcpAllowlist.toolsFor (Gate-2 — except under a narrowed roster, whose
-// exhaustive allowlist is looked up exactly, see gateEntry), optionalServerFor / OptionalServerFor
+// exhaustive allowlist is looked up exactly, see gateEntry), OptionalServerFor
 // (Gate-1), and — via OptionalServerForToolName — internal/agent's
 // system-prompt roster filter. (The per-task credential allowlist's
 // registered-name projection, permittedRegisteredNames, and the persona
@@ -215,15 +215,16 @@ type mcpOptionalSet map[string]bool
 // a key mapped to false is declared but not Optional, so it governs nothing.
 func optionalTrue(optional bool) bool { return optional }
 
-// optionalServerFor returns the Optional key whose per-run opt-in toggle
+// OptionalServerFor returns the Optional key whose per-run opt-in toggle
 // governs a REGISTERED server name, or "" when no Optional key governs it. It
 // is the one keying rule above applied to the Gate-1 set: a variant seat is
 // governed by its own key when the bundle declares one, and by its BASE
 // server's key when it does not — so `jira_prod` (registered from
 // {server: jira, account: prod}) is opt-in gated whenever `jira` is Optional,
 // instead of slipping past an exact map lookup and registering unconditionally
-// while the system prompt hid it (#1272).
-func optionalServerFor(registered string, optional mcpOptionalSet) string {
+// while the system prompt hid it (#1272). Exported so a driver cannot invent a
+// second rule.
+func OptionalServerFor(registered string, optional mcpOptionalSet) string {
 	key, _ := longestServerKey(registered, optional, true, optionalTrue)
 	return key
 }
@@ -236,14 +237,6 @@ type (
 	// MCPOptionalSet reports which servers are Optional (Gate-1 opt-in).
 	MCPOptionalSet = mcpOptionalSet
 )
-
-// OptionalServerFor is the driver-visible form of the Gate-1 keying rule: given
-// a REGISTERED server name it returns the Optional key whose per-run opt-in
-// toggle governs it ("" = not Optional). Exported so a driver cannot invent a
-// second rule.
-func OptionalServerFor(registered string, optional MCPOptionalSet) string {
-	return optionalServerFor(registered, optional)
-}
 
 // OptionalServerForToolName resolves the Optional key governing a prefixed
 // `mcp_<server>_<tool>` roster name — the system-prompt roster's view of the
@@ -267,8 +260,6 @@ type toolBuildConfig struct {
 	readWorkspaceFile   tools.WorkspaceFileReadFunc
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
-	// remediationHints configures the fast.io inline-upload guard hint.
-	remediationHints RemediationHints
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
 	// so the persona allowlist is applied to the deferrable MCP set BEFORE the
 	// disclosure decision (#570) — the roster-level resolvePersonaTools pass in
@@ -301,29 +292,8 @@ type toolBuildConfig struct {
 	exclusiveAllowlist bool
 }
 
-// buildFantasyTools combines native tools with discovered MCP tools into the
-// single slice the fantasy agent wants, applying the Gate-1 opt-in and the
-// per-server allowlist. Every tool is wrapped in a policy-guarded wrapper so
-// cost/audit/repeat enforcement runs before each call.
-//
-// optionalServers may be nil/empty. optIn is the per-run enabled set (server
-// names). policy is the seam both modes feed.
-func buildFantasyTools(
-	nativeTools []fantasy.AgentTool,
-	mcpServerTools []mcp.ServerTool,
-	broker MCPBroker,
-	allow mcpAllowlist,
-	policy Policy,
-	optionalServers mcpOptionalSet,
-	optIn map[string]bool,
-	cfg toolBuildConfig,
-) ([]fantasy.AgentTool, error) {
-	tools, _, err := buildFantasyToolsWithRoster(nativeTools, mcpServerTools, broker, allow, policy, optionalServers, optIn, cfg)
-	return tools, err
-}
-
-// toolRoster is what buildFantasyToolsWithRoster actually registered, in the
-// terms the system prompt's live-registry section needs (live_registry.go):
+// toolRoster is what buildFantasyTools actually registered, in the terms the
+// system prompt's live-registry section needs (live_registry.go):
 // which MCP tools the model can call by name, or — above the disclosure
 // threshold — how many are hidden behind tool_search/tool_describe/tool_call
 // and for which connectors. It is derived from the SAME loop that builds the
@@ -377,9 +347,17 @@ func (r *toolRoster) noteRemoved(name, gate string) {
 	}
 }
 
-// buildFantasyToolsWithRoster is buildFantasyTools plus the roster summary the
-// run loop appends to the system prompt after the tools exist.
-func buildFantasyToolsWithRoster(
+// buildFantasyTools combines native tools with discovered MCP tools into the
+// single slice the fantasy agent wants, applying the Gate-1 opt-in and the
+// per-server allowlist. Every tool is wrapped in a policy-guarded wrapper so
+// cost/audit/repeat enforcement runs before each call.
+//
+// optionalServers may be nil/empty. optIn is the per-run enabled set (server
+// names). policy is the seam both modes feed.
+//
+// It also returns the roster summary the run loop appends to the system prompt
+// after the tools exist.
+func buildFantasyTools(
 	nativeTools []fantasy.AgentTool,
 	mcpServerTools []mcp.ServerTool,
 	broker MCPBroker,
@@ -430,14 +408,14 @@ func buildFantasyToolsWithRoster(
 		roster.servers[st.ServerName] = true
 		// Gate 1: Optional servers only pass if the run opted in. Byte-identical
 		// between modes. The opt-in key is resolved through the ONE keying rule
-		// (optionalServerFor) rather than an exact lookup on the registered
+		// (OptionalServerFor) rather than an exact lookup on the registered
 		// name, so a named-account variant seat is gated by its own Optional key
 		// when the bundle declares one and by its BASE server's key when it does
 		// not. The exact lookup missed the second case entirely: the seat
 		// registered (and was callable) while the system-prompt roster — which
 		// has always resolved the base key by prefix — hid it from the model
 		// (#1272).
-		if optionalKey := optionalServerFor(st.ServerName, optionalServers); optionalKey != "" && !optIn[optionalKey] {
+		if optionalKey := OptionalServerFor(st.ServerName, optionalServers); optionalKey != "" && !optIn[optionalKey] {
 			mcpSkippedOptional++
 			roster.noteRemoved(mcpToolName(st), gateOptIn)
 			continue

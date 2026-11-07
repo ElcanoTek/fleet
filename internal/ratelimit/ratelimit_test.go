@@ -87,16 +87,6 @@ func TestLimiter_Nil(t *testing.T) {
 	}
 }
 
-func TestLimiter_PerMinuteAccessor(t *testing.T) {
-	if got := New(60, 500).PerMinute(); got != 60 {
-		t.Errorf("PerMinute() = %d, want 60", got)
-	}
-	var l *Limiter
-	if got := l.PerMinute(); got != 0 {
-		t.Errorf("nil PerMinute() = %d, want 0", got)
-	}
-}
-
 func TestLimiter_Snapshot(t *testing.T) {
 	l := New(5, 0)
 	limit, remaining, _ := l.Snapshot("u")
@@ -357,14 +347,14 @@ func TestLimiter_ConcurrentAllowWithSweeps(t *testing.T) {
 func TestLimiter_SnapshotNUsesPerCallBound(t *testing.T) {
 	l := New(100, 0)
 	l.AllowN("k", 3, 0)
-	limit, remaining, _ := l.SnapshotN("k", 3)
+	limit, remaining, _ := l.snapshotN("k", 3)
 	if limit != 3 || remaining != 2 {
-		t.Fatalf("SnapshotN = (%d, %d), want (3, 2)", limit, remaining)
+		t.Fatalf("snapshotN = (%d, %d), want (3, 2)", limit, remaining)
 	}
 	if limit, _, _ := l.Snapshot("k"); limit != 100 {
 		t.Fatalf("Snapshot limit = %d, want the instance default 100", limit)
 	}
-	if limit, remaining, _ := l.SnapshotN("k", 0); limit != 0 || remaining != 0 {
-		t.Fatalf("SnapshotN(0) = (%d, %d), want disabled (0, 0)", limit, remaining)
+	if limit, remaining, _ := l.snapshotN("k", 0); limit != 0 || remaining != 0 {
+		t.Fatalf("snapshotN(0) = (%d, %d), want disabled (0, 0)", limit, remaining)
 	}
 }

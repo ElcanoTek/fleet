@@ -51,13 +51,8 @@ type turnEventPageResponse struct {
 //     (forward from cursor, for reconnect/catch-up).
 func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found")
+	if !ok {
 		return
 	}
 
@@ -75,6 +70,7 @@ func (s *Server) handleTurnEventsPage(w http.ResponseWriter, r *http.Request, co
 		return
 	}
 
+	var err error
 	// cursor: optional non-negative int64. Absent/"" = 0 sentinel.
 	var cursor int64
 	if raw := q.Get("cursor"); raw != "" {

@@ -48,7 +48,7 @@ func newBrokerBackendForUserTest(t *testing.T) *brokerBackend {
 	}
 	client := mcp.NewClient()
 	b := &brokerBackend{
-		MCPBroker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		MCPBroker: agentcore.NewLocalMCPBroker(client),
 		client:    client,
 		bases: map[string]agentcore.MCPServerBase{
 			"deals": {

@@ -12,7 +12,7 @@ import (
 func TestAuditGuidanceNamesProtocolOnlyWhenPresent(t *testing.T) {
 	const send = "mcp_ses_outbound_send_email"
 
-	withFile := NewScheduledPolicy(NewLogSession(), 10, 0, 0)
+	withFile := NewScheduledPolicy(NewLogSession(), 0, 0)
 	if allowed, msgs := withFile.orchestration().checkFinishEnforcement(); allowed || len(msgs) != 1 || !strings.Contains(msgs[0], "read protocols/self-audit.md and audit the current state") {
 		t.Fatalf("default nudge should name the protocol: allowed=%v msgs=%v", allowed, msgs)
 	}
@@ -20,7 +20,7 @@ func TestAuditGuidanceNamesProtocolOnlyWhenPresent(t *testing.T) {
 		t.Fatalf("default BLOCKED text should name the protocol: blocked=%v msg=%q", blocked, msg)
 	}
 
-	noFile := NewScheduledPolicy(NewLogSession(), 10, 0, 0)
+	noFile := NewScheduledPolicy(NewLogSession(), 0, 0)
 	noFile.SetAuditProtocolRef("")
 	allowed, msgs := noFile.orchestration().checkFinishEnforcement()
 	if allowed || len(msgs) != 1 {

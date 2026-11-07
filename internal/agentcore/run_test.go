@@ -33,17 +33,11 @@ func (o *captureObserver) Observe(eventType string, _ map[string]any) {
 
 // stubExecutor is the Executor test double (the real sandbox backend is P3).
 type stubExecutor struct {
-	bashCalls   int32
-	pythonCalls int32
+	bashCalls int32
 }
 
 func (e *stubExecutor) RunBash(_ context.Context, _ string) (string, error) {
 	atomic.AddInt32(&e.bashCalls, 1)
-	return "ok", nil
-}
-
-func (e *stubExecutor) RunPython(_ context.Context, _ string) (string, error) {
-	atomic.AddInt32(&e.pythonCalls, 1)
 	return "ok", nil
 }
 
@@ -146,7 +140,7 @@ func TestRun_RejectsPolicyWithoutOrchestration(t *testing.T) {
 func TestRun_RoundCapReturnsAccumulatedUsageAndEntries(t *testing.T) {
 	// The audit is never satisfied, so CanFinish blocks every round and the
 	// loop exhausts maxEnforcementRounds.
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	policy := NewScheduledPolicy(NewLogSession(), 0, 0)
 	model := &mockModel{
 		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 			return func(yield func(fantasy.StreamPart) bool) {
@@ -196,7 +190,7 @@ func TestRun_RoundCapReturnsAccumulatedUsageAndEntries(t *testing.T) {
 // continues. We cap the model to stop so the loop terminates once the audit
 // state is satisfied (set directly after round 0).
 func TestScheduledPolicy_LoopsUntilAuditClears(t *testing.T) {
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	policy := NewScheduledPolicy(NewLogSession(), 0, 0)
 	round := int32(0)
 	model := &mockModel{
 		streamFunc: func(_ context.Context, call fantasy.Call) (fantasy.StreamResponse, error) {

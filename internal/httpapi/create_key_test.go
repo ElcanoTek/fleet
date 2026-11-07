@@ -31,7 +31,7 @@ func TestCreateConversation_IdempotencyKey(t *testing.T) {
 	}
 	count := func() int {
 		t.Helper()
-		list, err := s.store.List(context.Background(), me, false)
+		list, err := s.concreteStore(t).List(context.Background(), me, false)
 		if err != nil {
 			t.Fatal(err)
 		}

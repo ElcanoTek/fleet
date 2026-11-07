@@ -148,7 +148,7 @@ func TestStreamRecoveryShowsGeminiSignaturesOnlyToGemini(t *testing.T) {
 	build := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"), fantasy.WithTools(tool))
 	}
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	out, err := e.streamRoundWithResilience(context.Background(), orch, newStreamSink(nil), 1000,
 		[]fantasy.Message{fantasy.NewUserMessage("save twice")}, build(primary), primary, false, build)
 	if err != nil {

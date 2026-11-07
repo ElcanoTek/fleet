@@ -227,7 +227,7 @@ func TestTaskGatesReportAStageRefusalAsARefusal(t *testing.T) {
 		{"schedule_task", (*orchestrationState).checkScheduleTaskSafety, "SCHEDULE_TASK_REFUSED: "},
 		{"manage_tasks", (*orchestrationState).checkManageTasksSafety, "MANAGE_TASKS_REFUSED: "},
 	} {
-		o := newOrchestrationState(nil, 0)
+		o := newOrchestrationState(nil)
 		o.approvalSink = &stagerFake{err: fmt.Errorf("stage: %w", &StageRefusedError{Reason: "bad line. Nothing was staged for approval"})}
 		blocked, msg := tc.check(o, tc.tool, "call-1", `{"prompt":"x"}`)
 		if !blocked || !strings.HasPrefix(msg, tc.label) || !strings.Contains(msg, "Nothing was staged") {

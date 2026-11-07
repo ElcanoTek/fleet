@@ -355,5 +355,3 @@ func jsonBody(r *http.Request, h http.Header) (io.Reader, int64) {
 func isMultipart(r *http.Request) bool {
 	return strings.HasPrefix(strings.ToLower(r.Header.Get("Content-Type")), "multipart/form-data")
 }
-
-func stringReader(s string) io.Reader { return strings.NewReader(s) }

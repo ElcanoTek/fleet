@@ -73,14 +73,16 @@ func TestAttachmentBlockAdvertisesTheStagedPath(t *testing.T) {
 	}
 }
 
-// historyForClient is the only surface that publishes injected context, and it
-// publishes it as its OWN field — never merged back into the user's text.
-func TestHistoryForClientExposesInjectedContextSeparately(t *testing.T) {
+// historyForParticipant is the only surface that publishes injected context,
+// and for the owner it publishes it as its OWN field — never merged back into
+// the user's text.
+func TestHistoryForParticipantExposesOwnerInjectedContextSeparately(t *testing.T) {
 	entries := []agent.HistoryEntry{
 		{ID: 7, Role: "user", Type: "text", Content: []byte(`{"text":"hi"}`), InjectedContext: "\n\n---\n**User attached files:**\n"},
 		{ID: 8, Role: "assistant", Type: "text", Content: []byte(`{"text":"hello"}`)},
 	}
-	out := historyForClient(entries)
+	const owner = "owner@x.com"
+	out := historyForParticipant(entries, owner, owner)
 	if len(out) != 2 {
 		t.Fatalf("entries = %d, want 2", len(out))
 	}
@@ -95,7 +97,7 @@ func TestHistoryForClientExposesInjectedContextSeparately(t *testing.T) {
 	}
 	// Empty stays absent on the wire (omitempty), so the common entry does not
 	// grow a null field.
-	if len(historyForClient(nil)) != 0 {
+	if out := historyForParticipant(nil, owner, owner); out == nil || len(out) != 0 {
 		t.Error("nil history must project to an empty slice, not a nil one")
 	}
 }

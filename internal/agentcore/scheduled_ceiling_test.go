@@ -14,7 +14,7 @@ import (
 // scheduled / one-shot run MUST enforce the configured cost ceiling (it
 // previously enforced none — the dangerous case, since these run unattended).
 func TestScheduledPolicy_EnforcesCostCeiling(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50, 0.10 /* $0.10 ceiling */, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0.10 /* $0.10 ceiling */, 0)
 
 	// Under the ceiling: a benign tool is allowed.
 	if blocked, msg := p.BeforeToolCall("read_file", "c1", "{}"); blocked {
@@ -31,7 +31,7 @@ func TestScheduledPolicy_EnforcesCostCeiling(t *testing.T) {
 
 // TestScheduledPolicy_EnforcesTokenCeiling guards the token half of #75.
 func TestScheduledPolicy_EnforcesTokenCeiling(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50, 0, 1000 /* 1000-token ceiling */)
+	p := NewScheduledPolicy(NewLogSession(), 0, 1000 /* 1000-token ceiling */)
 	p.orch.PromptTokens = 900
 	p.orch.CompletionTokens = 200 // 1100 uncached >= 1000
 	blocked, msg := p.BeforeToolCall("read_file", "c1", "{}")
@@ -43,7 +43,7 @@ func TestScheduledPolicy_EnforcesTokenCeiling(t *testing.T) {
 // TestScheduledPolicy_ZeroCeilingIsUnlimited confirms 0 disables the ceiling
 // (back-compat for runs that intentionally configure no budget).
 func TestScheduledPolicy_ZeroCeilingIsUnlimited(t *testing.T) {
-	p := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0, 0)
 	p.orch.CostUSD = 999
 	p.orch.PromptTokens = 9_000_000
 	if blocked, msg := p.BeforeToolCall("read_file", "c1", "{}"); blocked {
@@ -74,7 +74,7 @@ func TestStepStopConditions(t *testing.T) {
 func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
 	// 10-token ceiling; the audit is NEVER satisfied, so without the hard abort
 	// the loop would run to maxEnforcementRounds and return an error.
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 10)
+	policy := NewScheduledPolicy(NewLogSession(), 0, 10)
 	model := &mockModel{
 		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 			return func(yield func(fantasy.StreamPart) bool) {
@@ -123,7 +123,7 @@ func TestCeiling_HardAbortBeforeNextCompletion(t *testing.T) {
 // BudgetStopReason contract: a dollar-ceiling stop must name
 // COST_CEILING_REACHED with the spend and the limit, not just "some ceiling".
 func TestCeiling_BudgetStopReasonNamesCostCeiling(t *testing.T) {
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0.05 /* $0.05 ceiling */, 0)
+	policy := NewScheduledPolicy(NewLogSession(), 0.05 /* $0.05 ceiling */, 0)
 	policy.orch.CostUSD = 0.06 // already over before the first paid step
 	model := &mockModel{
 		streamFunc: func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
@@ -161,7 +161,7 @@ func TestCeiling_BudgetStopReasonNamesCostCeiling(t *testing.T) {
 }
 
 func TestStructuredCeilingStopCannotBypassTerminalContract(t *testing.T) {
-	policy := NewScheduledPolicy(NewLogSession(), 50, 0, 10)
+	policy := NewScheduledPolicy(NewLogSession(), 0, 10)
 	model := &terminalTestModel{provider: "anthropic", model: "budget-stop"}
 	model.streamFunc = func(_ context.Context, _ fantasy.Call) (fantasy.StreamResponse, error) {
 		return func(yield func(fantasy.StreamPart) bool) {

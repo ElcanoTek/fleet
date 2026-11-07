@@ -37,7 +37,6 @@ func (s *scriptExecutor) RunBash(_ context.Context, cmd string) (string, error) 
 	}
 	return s.out, s.err
 }
-func (s *scriptExecutor) RunPython(context.Context, string) (string, error) { return "", nil }
 func (s *scriptExecutor) lastCommand() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

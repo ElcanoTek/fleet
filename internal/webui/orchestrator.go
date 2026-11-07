@@ -66,8 +66,6 @@ func clip(text string, maxUnits int) string {
 	return string(utf16.Decode(u[:maxUnits])) + "\n[…truncated…]"
 }
 
-func jsUnits(s string) int { return len(utf16.Encode([]rune(s))) }
-
 type discussTask struct {
 	ID           string  `json:"id"`
 	Prompt       string  `json:"prompt"`
@@ -163,7 +161,7 @@ func formatDigest(task discussTask, log discussLog) string {
 	var kept []string
 	used := 0
 	for i := len(rendered) - 1; i >= 0; i-- {
-		used += jsUnits(rendered[i]) + 1
+		used += jsLen(rendered[i]) + 1
 		if used > digestTotalChars {
 			kept = append(kept, fmt.Sprintf("[…%d earlier transcript message(s) omitted…]", i+1))
 			break

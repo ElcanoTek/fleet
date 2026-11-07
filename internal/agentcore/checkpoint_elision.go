@@ -361,7 +361,7 @@ type elisionOutcome struct {
 // history is the user's to keep, and its windows are large), when the
 // operator turned it off (FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY=0), or when it
 // would save less than elisionMinSavingFraction of the budget. An elision is
-// a clean reduction like proactiveCompact's: it resets the
+// a clean reduction like proactiveCompactKeeping's: it resets the
 // consecutive-compaction count, and the next step re-measures the
 // resend-checkpoint floor (#1600).
 func (e *engine) elideBeforeSummary(messages []fantasy.Message, used int, measured bool, threshold, budget int) (elisionOutcome, bool) {

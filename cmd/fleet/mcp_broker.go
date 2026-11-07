@@ -65,7 +65,7 @@ func runMCPBroker() error {
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
-		MCPBroker:   agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		MCPBroker:   agentcore.NewLocalMCPBroker(client),
 		client:      client,
 		bases:       agent.BuildMCPBases(cfg),
 		httpTools:   cfg.HTTPTools,
@@ -342,7 +342,7 @@ func (b *brokerBackend) OpenScope(ctx context.Context, spec mcpbroker.ScopeSpec)
 		// credential allowlist is enforced identically on both sides of the
 		// boundary rather than by a second implementation.
 		broker: agentcore.GateMCPBrokerWithAllowlist(
-			agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+			agentcore.NewLocalMCPBroker(client),
 			scopeCredentialAllowlist(spec.Policy),
 		),
 		authz: authz,
@@ -412,7 +412,7 @@ func (b *brokerBackend) openRemoteScope(ctx context.Context, spec mcpbroker.Remo
 	authz := newRemoteScopeAuthorizer(connected, policy)
 	scope := &brokerScope{
 		client: client,
-		broker: agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
+		broker: agentcore.NewLocalMCPBroker(client),
 		authz:  authz,
 		remote: true,
 	}

@@ -1,21 +1,16 @@
 package agentcore
 
-// Merged from chat + cutlass mcp_fastio_guard_test.go. The headline assertion is
-// the parameterization: the rejection hint renders whichever remediation paths a
-// deployment configures. fleet's own default is the blob flow alone — it ships no
-// upload tool of its own since the fast.io tooling moved to the client bundle —
-// while a bundle that installs a path-taking upload names it via NativeUploadTool
-// and gets both paths in the hint.
+// Merged from chat + cutlass mcp_fastio_guard_test.go. The rejection hint names
+// the blob flow alone — fleet ships no upload tool of its own since the fast.io
+// tooling moved to the client bundle.
 
 import (
 	"strings"
 	"testing"
-
-	"github.com/ElcanoTek/fleet/internal/mcp"
 )
 
-// TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly pins fleet's own
-// default: the blob flow, and no native-tool line. fleet used to hardcode
+// TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly pins the hint:
+// the blob flow, and no native-tool line. fleet used to hardcode
 // `fastio_upload_file` here, which became a pointer to a tool that no longer
 // exists in this repo — a rejection hint that names an unreachable tool is worse
 // than one that names none, because the model burns a turn trying it.
@@ -27,7 +22,7 @@ func TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly(t *testing.T) 
 		"profile_id":     "1234567890000000000",
 		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
+	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args)
 	if ok {
 		t.Fatal("expected rejection for oversized content_base64")
 	}
@@ -41,56 +36,12 @@ func TestRejectFastIOInlineBase64Upload_DefaultHintIsBlobFlowOnly(t *testing.T) 
 	}
 }
 
-// TestRejectFastIOInlineBase64Upload_BundleNativeToolHint asserts a deployment
-// whose bundle installs a path-taking upload gets BOTH paths — the parameterized
-// behaviour the merged guard exists for.
-func TestRejectFastIOInlineBase64Upload_BundleNativeToolHint(t *testing.T) {
-	args := map[string]any{
-		"action":         "stream-upload",
-		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
-	}
-	hints := RemediationHints{
-		NativeUploadTool: "mcp_fastio_helpers_upload_file path=<file> workspace_id=<19-digit id>",
-		IncludeBlobFlow:  true,
-	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, hints)
-	if ok {
-		t.Fatal("expected rejection")
-	}
-	for _, want := range []string{"mcp_fastio_helpers_upload_file", "blob", "create-session"} {
-		if !strings.Contains(hint, want) {
-			t.Errorf("hint missing %q\n--- hint ---\n%s", want, hint)
-		}
-	}
-}
-
-// TestRejectFastIOInlineBase64Upload_BlobFlowOnlyHint asserts a chat-style
-// hints config (no native tool, blob flow only) still produces the chat hint.
-func TestRejectFastIOInlineBase64Upload_BlobFlowOnlyHint(t *testing.T) {
-	args := map[string]any{
-		"action":         "stream-upload",
-		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
-	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, RemediationHints{IncludeBlobFlow: true})
-	if ok {
-		t.Fatal("expected rejection")
-	}
-	if strings.Contains(hint, "fastio_upload_file") {
-		t.Errorf("blob-flow-only hint should not mention the native tool, got: %s", hint)
-	}
-	for _, want := range []string{"blob", "create-session", "chunk", "finalize"} {
-		if !strings.Contains(hint, want) {
-			t.Errorf("blob-flow hint missing %q\n%s", want, hint)
-		}
-	}
-}
-
 func TestRejectFastIOInlineBase64Upload_AcceptsSmallInlineContent(t *testing.T) {
 	args := map[string]any{
 		"action":         "stream-upload",
 		"content_base64": strings.Repeat("A", 1024),
 	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
+	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args)
 	if !ok {
 		t.Fatalf("small inline upload should pass; rejected with: %s", hint)
 	}
@@ -104,7 +55,7 @@ func TestRejectFastIOInlineBase64Upload_AcceptsBlobFlow(t *testing.T) {
 			refField:         "blob-abc-123",
 			"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 		}
-		ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
+		ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args)
 		if !ok {
 			t.Fatalf("upload via %s should pass even with stray content_base64; rejected with: %s", refField, hint)
 		}
@@ -116,7 +67,7 @@ func TestRejectFastIOInlineBase64Upload_RejectsOversizedPlainContent(t *testing.
 		"action":  "stream-upload",
 		"content": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
+	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args)
 	if ok {
 		t.Fatal("expected rejection for oversized inline content")
 	}
@@ -129,7 +80,7 @@ func TestRejectFastIOInlineBase64Upload_IgnoresOtherTools(t *testing.T) {
 	args := map[string]any{
 		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 	}
-	ok, _ := rejectFastIOInlineBase64Upload("mcp_gamma_upload_asset", args, DefaultRemediationHints)
+	ok, _ := rejectFastIOInlineBase64Upload("mcp_gamma_upload_asset", args)
 	if !ok {
 		t.Fatal("guard leaked outside mcp_fast_io_upload")
 	}
@@ -141,7 +92,7 @@ func TestRejectFastIOInlineBase64Upload_SafeOnNilArgs(t *testing.T) {
 			t.Fatalf("guard panicked on nil args: %v", r)
 		}
 	}()
-	ok, _ := rejectFastIOInlineBase64Upload(fastIOUploadToolName, nil, DefaultRemediationHints)
+	ok, _ := rejectFastIOInlineBase64Upload(fastIOUploadToolName, nil)
 	if !ok {
 		t.Fatal("nil args should be a no-op")
 	}
@@ -151,7 +102,7 @@ func TestRejectFastIOInlineBase64Upload_DefaultsActionInHint(t *testing.T) {
 	args := map[string]any{
 		"content_base64": strings.Repeat("A", fastIOInlineUploadByteCap+1),
 	}
-	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args, DefaultRemediationHints)
+	ok, hint := rejectFastIOInlineBase64Upload(fastIOUploadToolName, args)
 	if ok {
 		t.Fatal("expected rejection")
 	}
@@ -160,33 +111,5 @@ func TestRejectFastIOInlineBase64Upload_DefaultsActionInHint(t *testing.T) {
 	}
 	if !strings.Contains(hint, "action=stream-upload") {
 		t.Errorf("hint should default action to stream-upload, got: %s", hint)
-	}
-}
-
-func TestFastIOServerEnabled_DetectsByServerName(t *testing.T) {
-	cases := []struct {
-		name string
-		in   []mcp.ServerTool
-		want bool
-	}{
-		{"empty", nil, false},
-		{"no fast_io", []mcp.ServerTool{
-			{ServerName: "sendgrid", Tool: mcp.Tool{Name: "send_email"}},
-			{ServerName: "openx_mcp", Tool: mcp.Tool{Name: "openx_auth_status"}},
-		}, false},
-		{"fast_io present", []mcp.ServerTool{
-			{ServerName: "sendgrid", Tool: mcp.Tool{Name: "send_email"}},
-			{ServerName: "fast_io", Tool: mcp.Tool{Name: "upload"}},
-		}, true},
-		{"fast_io only", []mcp.ServerTool{
-			{ServerName: "fast_io", Tool: mcp.Tool{Name: "workspace"}},
-		}, true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := fastIOServerEnabled(c.in); got != c.want {
-				t.Errorf("fastIOServerEnabled(%v) = %v, want %v", c.in, got, c.want)
-			}
-		})
 	}
 }

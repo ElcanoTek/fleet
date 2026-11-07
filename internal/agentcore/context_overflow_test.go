@@ -290,7 +290,7 @@ func TestStreamRound_ForcedCompactionClearsStalledWindowCheckpoint(t *testing.T)
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
 	messages := fillerMessages(compactionKeepTail+6, 20)
-	if _, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession, 50), newStreamSink(nil), 1000,
+	if _, err := e.streamRoundWithResilience(context.Background(), newOrchestrationState(e.logSession), newStreamSink(nil), 1000,
 		messages, buildAgent(model), model, false, buildAgent); err != nil {
 		t.Fatalf("expected the round to recover via forced compaction, got %v", err)
 	}

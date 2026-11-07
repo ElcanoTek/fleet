@@ -5,6 +5,7 @@ package webui
 
 import (
 	"net/http"
+	"strings"
 )
 
 // ssePassthroughHeaders are the response headers chat-server sets on an SSE
@@ -91,7 +92,7 @@ func (g *Gateway) registerStreams(mux *http.ServeMux) {
 		c := call{method: http.MethodPost, target: "/conversations/" + p(r, "id") + "/summarize", header: h}
 		c.body, c.contentLength = bodyOrNil(r)
 		if c.body == nil {
-			c.body, c.contentLength = stringReader("{}"), 2
+			c.body, c.contentLength = strings.NewReader("{}"), 2
 		}
 		g.dispatch(w, r, g.chat, "chat-server", c, out{
 			headers:    contentTypeOnly,

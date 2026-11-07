@@ -15,7 +15,7 @@ import (
 func ptr(f float64) *float64 { return &f }
 
 // openRouterMetadataWithCost builds provider metadata carrying an
-// OpenRouter-reported cost, the shape openrouterCost reads.
+// OpenRouter-reported cost, the shape OpenRouterCost reads.
 func openRouterMetadataWithCost(cost float64) fantasy.ProviderMetadata {
 	return fantasy.ProviderMetadata{
 		openrouter.Name: &openrouter.ProviderMetadata{
@@ -331,7 +331,7 @@ func TestUpdateUsage_UsesOverrideForCeiling(t *testing.T) {
 	})
 
 	// $0.50 ceiling.
-	p := NewScheduledPolicy(NewLogSession(), 50, 0.50, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0.50, 0)
 
 	// One step: 1000 input + 1000 output tokens.
 	// override cost = (1000/1e6)*100 + (1000/1e6)*200 = 0.10 + 0.20 = 0.30
@@ -365,7 +365,7 @@ func TestUpdateUsage_DefaultUsesOpenRouterCost(t *testing.T) {
 	t.Cleanup(func() { ConfigurePricing(PricingConfig{}) })
 	ConfigurePricing(PricingConfig{}) // explicit default
 
-	p := NewScheduledPolicy(NewLogSession(), 50, 0, 0)
+	p := NewScheduledPolicy(NewLogSession(), 0, 0)
 	md := openRouterMetadataWithCost(0.0042)
 	p.orch.updateUsage("openai/gpt-4o", fantasy.Usage{InputTokens: 100, OutputTokens: 50}, md)
 	if !approxEqual(p.orch.CostUSD, 0.0042) {

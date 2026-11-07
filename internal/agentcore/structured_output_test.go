@@ -77,7 +77,7 @@ func terminalToolResponse(input string) *fantasy.Response {
 
 func testTerminalEngine(model fantasy.LanguageModel) (*engine, *orchestrationState) {
 	session := NewLogSession()
-	orch := newOrchestrationState(session, 10)
+	orch := newOrchestrationState(session)
 	return newRunEngine(RunConfig{}, Deps{Model: model}, session), orch
 }
 

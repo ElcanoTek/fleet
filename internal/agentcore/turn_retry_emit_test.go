@@ -59,7 +59,7 @@ func TestStreamRoundEmitsTurnRetryOnBlipRedrive(t *testing.T) {
 
 	rec := &retryEventRecorder{}
 	sink := newStreamSink(rec)
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}
@@ -106,7 +106,7 @@ func TestStreamRoundEmitsTurnRetryOnFallbackSwap(t *testing.T) {
 
 	rec := &retryEventRecorder{}
 	sink := newStreamSink(rec)
-	orch := newOrchestrationState(e.logSession, 50)
+	orch := newOrchestrationState(e.logSession)
 	buildAgent := func(m fantasy.LanguageModel) fantasy.Agent {
 		return fantasy.NewAgent(m, fantasy.WithSystemPrompt("test"))
 	}

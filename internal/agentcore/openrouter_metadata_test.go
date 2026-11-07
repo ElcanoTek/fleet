@@ -25,9 +25,9 @@ func generatePathMetadata(cost float64, provider string) fantasy.ProviderMetadat
 }
 
 func TestOpenRouterCost_GeneratePathKeyedUnderOpenAI(t *testing.T) {
-	got := openrouterCost(generatePathMetadata(0.12, ""))
+	got := OpenRouterCost(generatePathMetadata(0.12, ""))
 	if got == nil || *got != 0.12 {
-		t.Fatalf("openrouterCost on Generate-path metadata = %v, want 0.12", got)
+		t.Fatalf("OpenRouterCost on Generate-path metadata = %v, want 0.12", got)
 	}
 	if got := OpenRouterCost(generatePathMetadata(0.12, "")); got == nil || *got != 0.12 {
 		t.Fatalf("OpenRouterCost on Generate-path metadata = %v, want 0.12", got)
@@ -35,14 +35,14 @@ func TestOpenRouterCost_GeneratePathKeyedUnderOpenAI(t *testing.T) {
 }
 
 func TestOpenRouterCost_StreamingPathAndAbsent(t *testing.T) {
-	if got := openrouterCost(openRouterMetadataWithCost(0.5)); got == nil || *got != 0.5 {
-		t.Fatalf("openrouterCost on streaming-path metadata = %v, want 0.5", got)
+	if got := OpenRouterCost(openRouterMetadataWithCost(0.5)); got == nil || *got != 0.5 {
+		t.Fatalf("OpenRouterCost on streaming-path metadata = %v, want 0.5", got)
 	}
-	if got := openrouterCost(nil); got != nil {
-		t.Fatalf("openrouterCost(nil) = %v, want nil", *got)
+	if got := OpenRouterCost(nil); got != nil {
+		t.Fatalf("OpenRouterCost(nil) = %v, want nil", *got)
 	}
-	if got := openrouterCost(fantasy.ProviderMetadata{openai.Name: &openai.ProviderMetadata{}}); got != nil {
-		t.Fatalf("openrouterCost on plain OpenAI metadata = %v, want nil", *got)
+	if got := OpenRouterCost(fantasy.ProviderMetadata{openai.Name: &openai.ProviderMetadata{}}); got != nil {
+		t.Fatalf("OpenRouterCost on plain OpenAI metadata = %v, want nil", *got)
 	}
 }
 

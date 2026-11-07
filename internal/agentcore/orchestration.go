@@ -415,7 +415,7 @@ func (o *orchestrationState) auditInstruction() string {
 	return "read " + o.auditProtocolRef + " and audit the current state against every requirement of the original task"
 }
 
-func newOrchestrationState(logSession *LogSession, _ int) *orchestrationState {
+func newOrchestrationState(logSession *LogSession) *orchestrationState {
 	return &orchestrationState{
 		auditProtocolRef:            defaultAuditProtocolRef,
 		sentEmailFingerprints:       make(map[string]struct{}),
@@ -849,86 +849,113 @@ func (o *orchestrationState) checkEmailSafety(toolName, toolCallID, rawInput str
 	return false, ""
 }
 
+// checkProposal is the one interception path for the propose_* tools
+// (propose_memory, propose_note, propose_skill): the staging IS the effect, so
+// the tool body never executes and the call always returns blocked with the
+// text the model reads. A call to any other tool passes (false, "").
+//
+// stager runs under o.mu and returns the wired proposer's stage function, or
+// nil when the proposer is not wired on this transport (the call is then
+// answered with unavailable). o.mu is held from the proposer lookup through the
+// stage call, so a concurrent Set*Proposer cannot swap it mid-proposal.
+// failPrefix heads the invalid-arguments and stage-failure texts; staged
+// renders the success text from the proposal id.
+func checkProposal[A any](o *orchestrationState, toolName, rawInput, tool, unavailable, failPrefix string,
+	stager func() func(A) (string, error), staged func(id string) string,
+) (bool, string) {
+	if toolName != tool {
+		return false, ""
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	stage := stager()
+	if stage == nil {
+		return true, unavailable
+	}
+	var args A
+	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
+		return true, fmt.Sprintf("%s: invalid arguments (%v).", failPrefix, err)
+	}
+	id, err := stage(args)
+	if err != nil {
+		return true, fmt.Sprintf("%s: could not stage proposal (%v).", failPrefix, err)
+	}
+	return true, staged(id)
+}
+
+type memoryProposalArgs struct {
+	Content string `json:"content"`
+	Kind    string `json:"kind"`
+}
+
 // checkMemoryProposal intercepts propose_memory calls (interactive).
 func (o *orchestrationState) checkMemoryProposal(toolName, rawInput string) (bool, string) {
-	if toolName != "propose_memory" {
-		return false, ""
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.memoryProposer == nil {
-		return true, "MEMORY_PROPOSAL_UNAVAILABLE: saving user memories is not enabled on this transport. Do NOT retry — summarize the point for the user instead."
-	}
-	var args struct {
-		Content string `json:"content"`
-		Kind    string `json:"kind"`
-	}
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
-		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: invalid arguments (%v).", err)
-	}
-	id, err := o.memoryProposer.Propose(args.Content, args.Kind)
-	if err != nil {
-		return true, fmt.Sprintf("MEMORY_PROPOSAL_FAILED: could not stage proposal (%v).", err)
-	}
-	return true, fmt.Sprintf("MEMORY_PROPOSED: this memory has been staged for user confirmation (proposal_id=%s). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", id)
+	return checkProposal(o, toolName, rawInput, "propose_memory",
+		"MEMORY_PROPOSAL_UNAVAILABLE: saving user memories is not enabled on this transport. Do NOT retry — summarize the point for the user instead.",
+		"MEMORY_PROPOSAL_FAILED",
+		func() func(memoryProposalArgs) (string, error) {
+			p := o.memoryProposer
+			if p == nil {
+				return nil
+			}
+			return func(a memoryProposalArgs) (string, error) { return p.Propose(a.Content, a.Kind) }
+		},
+		func(id string) string {
+			return fmt.Sprintf("MEMORY_PROPOSED: this memory has been staged for user confirmation (proposal_id=%s). Summarize what you proposed and ask the user whether to save it. Do NOT retry the tool.", id)
+		})
 }
 
-// checkNoteProposal intercepts propose_note calls (BOTH modes). Mirrors
-// checkMemoryProposal; routed from the same BeforeToolCall path both Policy
-// bundles use. Returns (blocked, msg) — propose_note never executes a tool, the
-// staging IS the effect.
+type noteProposalArgs struct {
+	Slug   string `json:"slug"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Reason string `json:"reason"`
+}
+
+// checkNoteProposal intercepts propose_note calls (BOTH modes). Routed from
+// the same BeforeToolCall path both Policy bundles use.
 func (o *orchestrationState) checkNoteProposal(toolName, rawInput string) (bool, string) {
-	if toolName != "propose_note" {
-		return false, ""
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.noteProposer == nil {
-		return true, "NOTE_PROPOSAL_UNAVAILABLE: note proposals are not enabled on this transport. Do NOT retry."
-	}
-	var args struct {
-		Slug   string `json:"slug"`
-		Title  string `json:"title"`
-		Body   string `json:"body"`
-		Reason string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
-		return true, fmt.Sprintf("NOTE_PROPOSAL_FAILED: invalid arguments (%v).", err)
-	}
-	id, err := o.noteProposer.Propose(args.Slug, args.Title, args.Body, args.Reason)
-	if err != nil {
-		return true, fmt.Sprintf("NOTE_PROPOSAL_FAILED: could not stage proposal (%v).", err)
-	}
-	return true, fmt.Sprintf("NOTE_PROPOSED: staged for admin review (proposal_id=%s). "+
-		"An admin will publish or reject it; the change is NOT live yet. Do NOT retry the tool.", id)
+	return checkProposal(o, toolName, rawInput, "propose_note",
+		"NOTE_PROPOSAL_UNAVAILABLE: note proposals are not enabled on this transport. Do NOT retry.",
+		"NOTE_PROPOSAL_FAILED",
+		func() func(noteProposalArgs) (string, error) {
+			p := o.noteProposer
+			if p == nil {
+				return nil
+			}
+			return func(a noteProposalArgs) (string, error) { return p.Propose(a.Slug, a.Title, a.Body, a.Reason) }
+		},
+		func(id string) string {
+			return fmt.Sprintf("NOTE_PROPOSED: staged for admin review (proposal_id=%s). "+
+				"An admin will publish or reject it; the change is NOT live yet. Do NOT retry the tool.", id)
+		})
 }
 
-// checkSkillProposal intercepts propose_skill calls (BOTH modes). Mirrors
-// checkNoteProposal: the staging IS the effect — the tool body never executes.
+type skillProposalArgs struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Body        string `json:"body"`
+	Reason      string `json:"reason"`
+}
+
+// checkSkillProposal intercepts propose_skill calls (BOTH modes).
 func (o *orchestrationState) checkSkillProposal(toolName, rawInput string) (bool, string) {
-	if toolName != "propose_skill" {
-		return false, ""
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-	if o.skillProposer == nil {
-		return true, "SKILL_PROPOSAL_UNAVAILABLE: skill proposals are not enabled on this transport. Do NOT retry."
-	}
-	var args struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		Body        string `json:"body"`
-		Reason      string `json:"reason"`
-	}
-	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
-		return true, fmt.Sprintf("SKILL_PROPOSAL_FAILED: invalid arguments (%v).", err)
-	}
-	id, err := o.skillProposer.Propose(args.Name, args.Description, args.Body, args.Reason)
-	if err != nil {
-		return true, fmt.Sprintf("SKILL_PROPOSAL_FAILED: could not stage proposal (%v).", err)
-	}
-	return true, fmt.Sprintf("SKILL_PROPOSED: staged for the user's review on their Skills page (proposal_id=%s). "+
-		"It is NOT active yet and will not exist in later turns unless the user approves it. Do NOT retry the tool.", id)
+	return checkProposal(o, toolName, rawInput, "propose_skill",
+		"SKILL_PROPOSAL_UNAVAILABLE: skill proposals are not enabled on this transport. Do NOT retry.",
+		"SKILL_PROPOSAL_FAILED",
+		func() func(skillProposalArgs) (string, error) {
+			p := o.skillProposer
+			if p == nil {
+				return nil
+			}
+			return func(a skillProposalArgs) (string, error) {
+				return p.Propose(a.Name, a.Description, a.Body, a.Reason)
+			}
+		},
+		func(id string) string {
+			return fmt.Sprintf("SKILL_PROPOSED: staged for the user's review on their Skills page (proposal_id=%s). "+
+				"It is NOT active yet and will not exist in later turns unless the user approves it. Do NOT retry the tool.", id)
+		})
 }
 
 // hasUnresolvedToolPlaceholder detects ${tool:…} binding tokens the model
@@ -1008,7 +1035,7 @@ func (o *orchestrationState) accumulateUsage(modelSlug string, usage fantasy.Usa
 	o.CachedTokens += int(usage.CacheReadTokens)
 	o.CacheCreationTokens += int(usage.CacheCreationTokens)
 
-	cost := computeCostFromUsage(modelSlug, usage, openrouterCost(metadata), pricingConfig())
+	cost := ResolveStepCost(modelSlug, usage, OpenRouterCost(metadata))
 	o.CostUSD += cost
 
 	// Attribute the step to the upstream that actually served it. A soft pin

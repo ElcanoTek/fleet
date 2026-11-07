@@ -179,3 +179,32 @@ func (s *Server) claimMaintenanceSlot(now time.Time) bool {
 func (s *Server) NoteMaintenanceRun(at time.Time) {
 	s.lastMaintenance.Store(at.UnixNano())
 }
+
+// sweepRetention runs the database retention sweeps — expired
+// conversations, terminal input-queue rows, and finished turns' durable SSE
+// ledgers (turns + turn_events + turn_journal, which otherwise outlive their
+// usefulness as reattach/recovery state and grow without bound in long-lived
+// conversations). It is RunMaintenance's database half; a mock-mode turn
+// also calls it directly after its scripted stream. Best-effort: each sweep
+// logs and moves on, and the store treats a non-positive TTL as "disabled".
+func (s *Server) sweepRetention(ctx context.Context) {
+	if expired, evicted, err := s.store.SweepExpired(ctx,
+		time.Duration(s.cfg.ConversationTTL)*24*time.Hour, s.cfg.UnpinnedCap); err != nil {
+		log.Printf("post-turn sweep error: %v", err)
+	} else if expired > 0 || evicted > 0 {
+		log.Printf("sweep: %d expired, %d evicted", expired, evicted)
+		s.sweepOrphanPrivateWorkspaceStashes(ctx)
+	}
+	if purged, err := s.store.PurgeTerminalInputs(ctx,
+		time.Duration(s.cfg.InputQueueRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("post-turn input-queue purge error: %v", err)
+	} else if purged > 0 {
+		log.Printf("input-queue purge: %d terminal row(s) removed", purged)
+	}
+	if swept, err := s.store.SweepTurnEvents(ctx,
+		time.Duration(s.cfg.TurnEventRetentionDays)*24*time.Hour); err != nil {
+		log.Printf("post-turn turn-ledger sweep error: %v", err)
+	} else if swept > 0 {
+		log.Printf("turn-ledger sweep: %d aged-out turn(s) removed", swept)
+	}
+}

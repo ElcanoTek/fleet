@@ -3,7 +3,7 @@
 //
 // Two halves, both host-side:
 //
-//   - presentedWorkspacePaths reads the assistant's TEXT replies, grouped and
+//   - boundedPresentedPaths reads the assistant's TEXT replies, grouped and
 //     normalized exactly as the chat renders them, parses each with a
 //     CommonMark + GFM parser (markdownDestinations), and collects the href of
 //     every link / image the chat RENDERS that the web UI would rewrite into a
@@ -15,11 +15,13 @@
 //     "what the owner sees as a chip" and "what a teammate may download" can
 //     never disagree: the same sandbox-prefix stripping, the same absolute-URL
 //     bailout, the same `.`/`..` reject (encoded forms included), the same
-//     per-segment percent-decoding.
-//   - conversationOutputs keeps only presented paths that exist RIGHT NOW as
-//     regular files in the conversation's workspace, reached without
+//     per-segment percent-decoding. The walk is bounded: newest first, at
+//     most maxOutputReferences distinct paths within the discovery visit
+//     budget (maxDiscoveryReplies, maxDiscoveryBytes).
+//   - conversationOutputsUntil keeps only presented paths that exist RIGHT
+//     NOW as regular files in the conversation's workspace, reached without
 //     traversing a symlink, and not under attachments/ (uploads are never
-//     outputs).
+//     outputs); conversationOutputsCtx runs it abandonably for handlers.
 //
 // A file the agent wrote but never linked is not an output: it is never
 // shared or counted, and stays a download-only entry in its owner's Sources.
@@ -368,29 +370,6 @@ func (c *discoveryCutoff) more(e agent.HistoryEntry) bool {
 	return true
 }
 
-// presentedWorkspacePaths returns every workspace-relative path the
-// assistant's text replies link or embed (within the discovery visit budget),
-// in first-seen order, deduplicated.
-// Only role=assistant, type=text entries count: a path in a user message, a
-// tool result or reasoning is not a file chip.
-func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(dest string) {
-		if p, ok := resolveWorkspaceRelPath(dest); ok && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	replies, _ := recentRenderedReplies(history, maxDiscoveryReplies, maxDiscoveryBytes)
-	for i := len(replies) - 1; i >= 0; i-- {
-		for _, d := range markdownDestinations(replies[i]) {
-			add(d)
-		}
-	}
-	return out
-}
-
 // maxOutputReferences bounds how many distinct presented paths output
 // discovery considers per conversation. Discovery opens and stats every path
 // it considers, and it runs on hot paths — the outputs listing, Sources, the
@@ -400,19 +379,19 @@ func presentedWorkspacePaths(history []agent.HistoryEntry) []string {
 // the files a long chat is still working with are the ones a reader wants.
 const maxOutputReferences = 500
 
-// recentPresentedPaths is presentedWorkspacePaths, bounded: walking the
-// assistant's text replies newest message first, it keeps at most limit
-// distinct non-upload paths and reports truncated when an older reference
-// was dropped. Uploads are skipped before they count — they are never
-// outputs, so they must not crowd real ones out of the bound.
-func recentPresentedPaths(history []agent.HistoryEntry, limit int) (paths []string, truncated bool) {
-	return boundedPresentedPaths(history, limit, false)
-}
-
-// boundedPresentedPaths is the walk behind recentPresentedPaths; with
-// includeUploads it also keeps upload references (a teammate branch records
-// those as withheld — they are references it does not have a copy of).
-func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploads bool) (paths []string, truncated bool) {
+// boundedPresentedPaths returns the workspace-relative paths the assistant's
+// text replies link or embed, deduplicated. Only role=assistant, type=text
+// entries count: a path in a user message, a tool result or reasoning is not a
+// file chip. Walking the replies newest message first (and newest reference
+// first within one), it keeps at most maxOutputReferences distinct paths and
+// reports truncated when an older reference was dropped or the visit budget
+// cut the walk short.
+//
+// Without includeUploads, owner-private paths (uploads, private skills) are
+// skipped before they count — they are never outputs, so they must not crowd
+// real ones out of the bound. With it they are kept: a teammate branch records
+// those as withheld — references it does not have a copy of.
+func boundedPresentedPaths(history []agent.HistoryEntry, includeUploads bool) (paths []string, truncated bool) {
 	seen := map[string]bool{}
 	replies, budgetCut := recentRenderedReplies(history, maxDiscoveryReplies, maxDiscoveryBytes)
 	for _, reply := range replies {
@@ -425,7 +404,7 @@ func boundedPresentedPaths(history []agent.HistoryEntry, limit int, includeUploa
 			if !ok || seen[p] || (!includeUploads && isPrivateWorkspacePath(p)) {
 				continue
 			}
-			if len(paths) >= limit {
+			if len(paths) >= maxOutputReferences {
 				return paths, true
 			}
 			seen[p] = true
@@ -563,21 +542,7 @@ func statWorkspaceFileNoFollow(wsDir, rel string) (fs.FileInfo, bool) {
 	return info, true
 }
 
-// conversationOutputs resolves a conversation's presented paths against its
-// workspace on disk and applies the owner's exclusions. Newest first
-// (modified_at desc, then path for a stable order).
-//
-// Only the maxOutputReferences most recent distinct references are
-// considered; truncated reports that older ones were not. A path beyond the
-// bound is not an output for any caller — not listed, not copied into a
-// branch, and refused by the team-files gate — so the gate stays an exact
-// match against this (bounded) list and never widens.
-func conversationOutputs(convID string, history []agent.HistoryEntry, excluded map[string]bool) (out []outputFile, truncated bool) {
-	return conversationOutputsUntil(context.Background(), convID, history, excluded)
-}
-
-// conversationOutputsCtx is conversationOutputs bounded by ctx, and
-// abandonable: the stats run on their own goroutine and the caller returns
+// conversationOutputsCtx is conversationOutputsUntil made abandonable: the stats run on their own goroutine and the caller returns
 // ctx.Err() as soon as ctx is done, even if a stat is stuck in the kernel on
 // a stalled filesystem (that goroutine finishes, and is discarded, whenever
 // the stat returns; between stats it stops at ctx itself).
@@ -635,9 +600,19 @@ func acquireFSWorker() (release func(), ok bool) {
 // filesystem is simulated by blocking in it).
 var outputStatHook func(rel string)
 
+// conversationOutputsUntil resolves a conversation's presented paths against
+// its workspace on disk and applies the owner's exclusions, stopping early
+// once ctx is done. Newest first (modified_at desc, then path for a stable
+// order).
+//
+// Only the maxOutputReferences most recent distinct references are
+// considered; truncated reports that older ones were not. A path beyond the
+// bound is not an output for any caller — not listed, not copied into a
+// branch, and refused by the team-files gate — so the gate stays an exact
+// match against this (bounded) list and never widens.
 func conversationOutputsUntil(ctx context.Context, convID string, history []agent.HistoryEntry, excluded map[string]bool) (out []outputFile, truncated bool) {
 	out = []outputFile{}
-	presented, truncated := recentPresentedPaths(history, maxOutputReferences)
+	presented, truncated := boundedPresentedPaths(history, false)
 	if len(presented) == 0 {
 		return out, truncated
 	}

@@ -41,28 +41,10 @@ type historyEntryResponse struct {
 	InjectedContext string          `json:"injected_context,omitempty"`
 }
 
-// historyForClient projects loaded history into the owner-facing shape above.
-// Always returns a non-nil slice so the JSON carries `[]`, not `null`, for an
-// empty conversation — the shape LoadHistory's direct marshal used to produce
-// for a fresh chat.
-func historyForClient(entries []agent.HistoryEntry) []historyEntryResponse {
-	out := make([]historyEntryResponse, 0, len(entries))
-	for _, e := range entries {
-		out = append(out, historyEntryResponse{
-			ID:              e.ID,
-			Role:            e.Role,
-			Type:            e.Type,
-			Content:         e.Content,
-			InjectedContext: e.InjectedContext,
-		})
-	}
-	return out
-}
-
-// historyForParticipant projects loaded history for viewerEmail, retaining each
-// entry's InjectedContext only when viewerEmail is the sender of that entry
-// (or the conversation owner for unattributed entries) so another user's
-// private attachment paths or library listings are never exposed.
+// isPrivateTurnTraceEntry reports whether e is a working-trace entry
+// (tool_call, tool_result, reasoning, …) rather than a rendered message:
+// anything but text, a compaction summary or its content-free boundary. Those
+// are private to the turn's sender and dropped for every other participant.
 func isPrivateTurnTraceEntry(e agent.HistoryEntry) bool {
 	return e.Type != "text" && e.Type != "summary" && e.Type != agent.EntryTypeSummaryBoundary
 }
@@ -181,6 +163,13 @@ func redactTurnSummaryForOtherParticipant(raw json.RawMessage) (json.RawMessage,
 	return b, true
 }
 
+// historyForParticipant projects loaded history into the wire shape above for
+// viewerEmail, retaining each entry's InjectedContext only when viewerEmail is
+// the sender of that entry (or the conversation owner for unattributed
+// entries) so another user's private attachment paths or library listings are
+// never exposed. For the owner's own single-user chat every entry is theirs,
+// so the projection carries every field. Always returns a non-nil slice so the
+// JSON carries `[]`, not `null`, for an empty conversation.
 func historyForParticipant(entries []agent.HistoryEntry, viewerEmail, convOwnerEmail string) []historyEntryResponse {
 	out := make([]historyEntryResponse, 0, len(entries))
 	currentTurnSender := strings.TrimSpace(convOwnerEmail)

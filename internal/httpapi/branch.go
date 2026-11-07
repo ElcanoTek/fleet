@@ -280,7 +280,7 @@ func withholdUncopiedReferences(history []agent.HistoryEntry, copied []store.Bra
 	for _, p := range withheld {
 		have[p] = true
 	}
-	refs, truncated := boundedPresentedPaths(history, maxOutputReferences, true)
+	refs, truncated := boundedPresentedPaths(history, true)
 	for _, p := range refs {
 		if !have[p] {
 			have[p] = true

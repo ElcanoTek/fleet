@@ -97,9 +97,6 @@ type RunConfig struct {
 	// the policy gate. Like PersonaPolicy it only SUBTRACTS. Driver-supplied
 	// data, not a Mode branch (see TestSeamPurity). nil = no narrowing.
 	HiddenToolSuffixes []string
-	// RemediationHints configures the fast.io guard (defaults to
-	// DefaultRemediationHints, which exposes both remediation paths).
-	RemediationHints RemediationHints
 	// IncludeConfirmAudit appends the scheduled confirm_audit tool.
 	IncludeConfirmAudit bool
 	// RequireCompactionOptIn gates proactive context compaction (#209) behind the
@@ -117,10 +114,9 @@ type RunConfig struct {
 	EnableResendBudget bool
 	// LoaderTools are extra always-registered tools (scheduled mcp_list/load).
 	LoaderTools []fantasy.AgentTool
-	// NativeTools are the mode's native tools (bash/python via Executor, etc.).
+	// NativeTools are the mode's native tools (bash/run_python over the run's
+	// sandbox, etc.).
 	NativeTools []fantasy.AgentTool
-	// ProviderHeaders identify the run to OpenRouter.
-	ProviderHeaders ProviderHeaders
 
 	// OutputSchema enables the fail-closed terminal structured-output contract.
 	// The ordinary governed agent loop runs first with its full sandboxed tool
@@ -154,8 +150,10 @@ type Deps struct {
 	Observer Observer
 	// Policy gates tool calls + finishing.
 	Policy Policy
-	// Executor runs sandboxed code (passed through to NativeTools by the driver;
-	// held here so the loop can surface it to the finalize hook).
+	// Executor runs sandboxed commands: the lifecycle hook engine runs each
+	// bundle hook command through it, inside the run's sandbox (hooks.go). The
+	// native bash/run_python tools are built over the sandbox by the driver,
+	// not through this seam.
 	Executor Executor
 	// ReadWorkspaceFile binds MCP binary argument references to the active sandbox.
 	ReadWorkspaceFile tools.WorkspaceFileReadFunc
@@ -186,12 +184,6 @@ type Deps struct {
 	// fetched from the broker (ListTools) without holding a client of its own, so
 	// MCP servers are not double-spawned. Nil = discover from MCPClient as before.
 	MCPCatalog []mcp.ServerTool
-
-	// NotesProvider supplies the admin-curated knowledge base injected into the
-	// system prompt for BOTH modes. Nil = no notes section. The DRIVERS read it
-	// at prompt-assembly time (the run loop does not touch it); held here so the
-	// process can hand the same sched-backed provider to both drivers' Deps.
-	NotesProvider NotesProvider
 
 	// LogSession is the structured session log the scheduled Observer writes
 	// (interactive may pass a throwaway). Usage accounting flows into it.
@@ -230,13 +222,6 @@ type Deps struct {
 	// with the conversation's durable input queue; scheduled/evals leave it
 	// nil. Driver-supplied data, not a Mode branch (see TestSeamPurity).
 	SteerSource SteerSource
-
-	// UsageReporter, when set, is invoked after each LLM step with that step's
-	// accumulated run usage (the SAME counters usageSnapshot returns). A driver
-	// may wire this to ship a per-step usage event out-of-band so an external
-	// accountant tracks tokens/cost as steps complete. Nil for the in-process
-	// loop — it reads usage from the orch at the end.
-	UsageReporter func(RunUsage)
 
 	// HealthRegistry, when set, is the cross-run provider circuit-breaker (#267).
 	// The interactive Manager owns one long-lived registry and passes it on every
@@ -487,11 +472,9 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	eng.maxCompletionTokens = int(maxTokens)
 
 	optIn := cfg.Selection.OptInSet()
-	hints := runRemediationHints(cfg)
 	toolCfg := toolBuildConfig{
 		includeConfirmAudit: cfg.IncludeConfirmAudit,
 		loaderTools:         cfg.LoaderTools,
-		remediationHints:    hints,
 		// Gate-4 (#294) rides into the tool build itself so the persona
 		// allowlist also governs the deferrable MCP set BEFORE the disclosure
 		// decision (#570) — the roster-level pass in buildTools below cannot see
@@ -518,7 +501,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	// takes over calls without changing the loop.
 	broker := deps.MCPBroker
 	if broker == nil {
-		broker = NewLocalMCPBroker(mcpClient, hints)
+		broker = NewLocalMCPBroker(mcpClient)
 	}
 	// Gate-3 (#184): scope MCP calls to the task's permitted (server, account)
 	// pairs. nil allowlist = inherit global (no-op wrap). Applied at the broker
@@ -542,7 +525,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		if catalog == nil {
 			catalog = mcpClient.GetAllTools()
 		}
-		tools, roster, err := buildFantasyToolsWithRoster(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
+		tools, roster, err := buildFantasyTools(cfg.NativeTools, catalog, broker, cfg.Allowlist, deps.Policy, cfg.OptionalServers, optIn, toolCfg)
 		if err != nil {
 			return nil, toolRoster{}, err
 		}
@@ -1036,15 +1019,6 @@ func runMaxCompletionTokens(cfg RunConfig) int64 {
 	return int64(DefaultMaxCompletionTokens)
 }
 
-// runRemediationHints resolves the fast.io guard hints: the configured value,
-// or DefaultRemediationHints (both remediation paths) when unset.
-func runRemediationHints(cfg RunConfig) RemediationHints {
-	if cfg.RemediationHints == (RemediationHints{}) {
-		return DefaultRemediationHints
-	}
-	return cfg.RemediationHints
-}
-
 func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 	fallbackModels := runFallbackModels(deps)
 	eng := &engine{
@@ -1055,7 +1029,6 @@ func newRunEngine(cfg RunConfig, deps Deps, logSession *LogSession) *engine {
 		onRetry:                newRetryLogger(logSession),
 		temperature:            cfg.Temperature,
 		compactionSummarizer:   deps.CompactionSummarizer,
-		usageReporter:          deps.UsageReporter,
 		steerSource:            deps.SteerSource,
 		maxIterations:          cfg.MaxIterations,
 		healthRegistry:         deps.HealthRegistry,

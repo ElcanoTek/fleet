@@ -396,7 +396,7 @@ func (s *Server) projectTransfer(w http.ResponseWriter, r *http.Request, user, p
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	admin := s.isAdmin(user) || roleFromCtx(r.Context()) == store.RoleAdmin
+	admin := s.callerIsAdmin(r.Context())
 	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
@@ -465,7 +465,7 @@ func (s *Server) projectMembersByID(w http.ResponseWriter, r *http.Request, user
 	// Same shape as projectTransfer's gate, and the same 404 for everyone
 	// else: this list enumerates every account in a team, which is more than a
 	// plain member can learn from the project's own surfaces.
-	admin := s.isAdmin(user) || roleFromCtx(r.Context()) == store.RoleAdmin
+	admin := s.callerIsAdmin(r.Context())
 	if p == nil || (!strings.EqualFold(p.OwnerEmail, user) && !admin) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
@@ -1250,7 +1250,7 @@ func (s *Server) projectExport(w http.ResponseWriter, r *http.Request, p *store.
 	// workspace routes are owner-scoped), but the export exists for the one
 	// person who can destroy the project, and that is who should have it.
 	user := userFromCtx(r.Context())
-	if !strings.EqualFold(p.OwnerEmail, user) && !s.isAdmin(user) && roleFromCtx(r.Context()) != store.RoleAdmin {
+	if !strings.EqualFold(p.OwnerEmail, user) && !s.callerIsAdmin(r.Context()) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}

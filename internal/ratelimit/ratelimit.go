@@ -62,15 +62,6 @@ func New(perMinute, perDay int) *Limiter {
 	}
 }
 
-// PerMinute reports the configured per-minute bound (0 = disabled). Callers use
-// it to populate the X-RateLimit-Limit header.
-func (l *Limiter) PerMinute() int {
-	if l == nil {
-		return 0
-	}
-	return l.perMinute
-}
-
 // Keys reports how many per-key buckets the limiter currently tracks. It exists
 // for tests asserting the map is not attacker-growable: a caller keying buckets
 // on an unauthenticated, attacker-chosen string would let a flood of distinct
@@ -175,21 +166,19 @@ func (l *Limiter) bucketFor(key string) *bucket {
 // time the minute window resets for key — WITHOUT recording a request. Used to
 // emit advisory X-RateLimit-* headers on a response. remaining is relative to
 // the configured per-minute bound; reset is now+60 when the window is empty,
-// else (oldest sample + 60). A caller that admitted the request through AllowN
-// with a per-key bound must use SnapshotN with that same bound, or the headers
-// advertise the instance default rather than the cap actually enforced.
+// else (oldest sample + 60).
 func (l *Limiter) Snapshot(key string) (limit, remaining int, reset int64) {
 	if l == nil {
 		return 0, 0, time.Now().Unix() + 60
 	}
-	return l.SnapshotN(key, l.perMinute)
+	return l.snapshotN(key, l.perMinute)
 }
 
-// SnapshotN is Snapshot against a caller-supplied per-minute bound — the
+// snapshotN is Snapshot against a caller-supplied per-minute bound — the
 // read-side twin of AllowN, so a key with its own rate_limit gets headers that
 // match the ceiling it was admitted under. A non-positive bound reports the
 // window as disabled (0, 0, now+60).
-func (l *Limiter) SnapshotN(key string, perMinute int) (limit, remaining int, reset int64) {
+func (l *Limiter) snapshotN(key string, perMinute int) (limit, remaining int, reset int64) {
 	now := time.Now().Unix()
 	if l == nil || perMinute <= 0 {
 		return 0, 0, now + 60
@@ -348,7 +337,7 @@ func (l *Limiter) maybeSweep() {
 // dropBefore returns ts trimmed of all values < cutoff. The slice is already
 // sorted by insertion order, so a linear scan works. The trim is performed IN
 // PLACE on ts's backing array — safe because every caller (AllowN and
-// SnapshotN) holds b.mu, which is the sole owner of the slice header. Skipping
+// snapshotN) holds b.mu, which is the sole owner of the slice header. Skipping
 // the per-call allocation keeps the hot path allocation-free on a full backing
 // array.
 func dropBefore(ts []int64, cutoff int64) []int64 {
