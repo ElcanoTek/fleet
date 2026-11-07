@@ -325,28 +325,25 @@ const schemaOptionPrefix = "-csearch_path="
 // touched, the rest keeps its order and encoding — so the shell mirror
 // (fleet_dsn_with_schema in scripts/lib/idle.sh) produces the same bytes.
 func WithSchema(dsn, schema string) string {
-	dsn = stripSchemaOption(strings.TrimSpace(dsn))
+	dsn = strings.TrimSpace(dsn)
 	opt := schemaOptionPrefix + schema
+	appendOpt := func(prev string) string {
+		if prev = stripSchemaSwitches(prev); prev != "" {
+			return prev + " " + opt
+		}
+		return opt
+	}
 	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
-		return withRawQuery(dsn, func(q string) string {
-			return editRawOption(q, func(prev string) string {
-				if prev = strings.TrimSpace(prev); prev != "" {
-					return prev + " " + opt
-				}
-				return opt
-			})
-		})
+		dsn = stripSchemaOption(dsn)
+		return withRawQuery(dsn, func(q string) string { return editRawOption(q, appendOpt) })
 	}
 	kv, ok := parseKeywordDSN(dsn)
 	if !ok {
 		// Not a DSN this can rewrite safely; the driver will reject it.
 		return dsn
 	}
-	if prev := strings.TrimSpace(kv.get("options")); prev != "" {
-		opt = prev + " " + opt
-	}
-	kv.set("options", opt)
-	return kv.String()
+	// In place, after the options already there (a later -c wins).
+	return editKeywordOption(dsn, kv, appendOpt)
 }
 
 // DSNSchema returns the schema dsn sets as its search_path (the last
@@ -386,15 +383,6 @@ func isPostgresScheme(s string) bool { return s == "postgres" || s == "postgresq
 // stripSchemaOption removes WithSchema's switch from a DSN's options, so
 // sameDatabase compares the DSNs as configured.
 func stripSchemaOption(dsn string) string {
-	strip := func(opts string) string {
-		var keep []string
-		for _, f := range strings.Fields(opts) {
-			if !strings.HasPrefix(f, schemaOptionPrefix) {
-				keep = append(keep, f)
-			}
-		}
-		return strings.Join(keep, " ")
-	}
 	if !strings.Contains(dsn, "search_path") {
 		return dsn
 	}
@@ -402,18 +390,13 @@ func stripSchemaOption(dsn string) string {
 		if !strings.Contains(u.Query().Get("options"), schemaOptionPrefix) {
 			return dsn
 		}
-		return withRawQuery(dsn, func(q string) string { return editRawOption(q, strip) })
+		return withRawQuery(dsn, func(q string) string { return editRawOption(q, stripSchemaSwitches) })
 	}
 	kv, ok := parseKeywordDSN(dsn)
 	if !ok || !strings.Contains(kv.get("options"), schemaOptionPrefix) {
 		return dsn
 	}
-	if o := strip(kv.get("options")); o == "" {
-		kv.del("options")
-	} else {
-		kv.set("options", o)
-	}
-	return kv.String()
+	return editKeywordOption(dsn, kv, stripSchemaSwitches)
 }
 
 // withRawQuery applies edit to a URL DSN's raw query text, leaving every
@@ -486,9 +469,13 @@ func PlainIdentifier(s string) bool {
 	return true
 }
 
-// keywordDSN is a libpq key=value connection string, kept in order so a
-// rewrite changes only the keyword it touches.
-type keywordDSN struct{ keys, vals []string }
+// keywordDSN is a parsed libpq key=value connection string: each pair's key,
+// decoded value, and the byte span [start, end) of the whole pair in the
+// original text, so a rewrite can change one pair in place.
+type keywordDSN struct {
+	keys, vals []string
+	spans      [][2]int
+}
 
 // parseKeywordDSN parses libpq's key=value form: whitespace-separated
 // keyword = value pairs, a value bare or single-quoted with \' and \\
@@ -550,6 +537,7 @@ func parseKeywordDSN(s string) (keywordDSN, bool) {
 		}
 		kv.keys = append(kv.keys, key)
 		kv.vals = append(kv.vals, val.String())
+		kv.spans = append(kv.spans, [2]int{start, i})
 	}
 	if len(kv.keys) == 0 {
 		return keywordDSN{}, false
@@ -567,31 +555,56 @@ func (kv *keywordDSN) get(key string) string {
 	return v
 }
 
-func (kv *keywordDSN) set(key, val string) {
-	kv.del(key)
-	kv.keys = append(kv.keys, key)
-	kv.vals = append(kv.vals, val)
-}
-
-func (kv *keywordDSN) del(key string) {
-	keys, vals := kv.keys[:0:0], kv.vals[:0:0]
+// editKeywordOption rewrites the options pair of key=value DSN s in place:
+// edit gets the decoded value of the LAST options pair (the one libpq uses;
+// "" when absent) and returns the new value. The pair is replaced where it
+// stands, appended after a space when absent, or removed (with the
+// whitespace before it) when edit returns "". Every other byte is kept, so
+// the shell mirror (fleet_dsn_with_schema) produces the same text.
+func editKeywordOption(s string, kv keywordDSN, edit func(string) string) string {
+	at := -1
 	for i, k := range kv.keys {
-		if k != key {
-			keys, vals = append(keys, k), append(vals, kv.vals[i])
+		if k == "options" {
+			at = i
 		}
 	}
-	kv.keys, kv.vals = keys, vals
+	prev := ""
+	if at >= 0 {
+		prev = kv.vals[at]
+	}
+	next := edit(prev)
+	switch {
+	case at < 0 && next == "":
+		return s
+	case at < 0:
+		return s + " options=" + quoteKeywordValue(next)
+	case next == "":
+		start := kv.spans[at][0]
+		for start > 0 && (s[start-1] == ' ' || s[start-1] == '\t') {
+			start--
+		}
+		return s[:start] + s[kv.spans[at][1]:]
+	default:
+		return s[:kv.spans[at][0]] + "options=" + quoteKeywordValue(next) + s[kv.spans[at][1]:]
+	}
 }
 
-// String renders the keywords back, quoting every value that needs it.
-func (kv keywordDSN) String() string {
-	parts := make([]string, len(kv.keys))
-	for i, k := range kv.keys {
-		v := kv.vals[i]
-		if v == "" || strings.ContainsAny(v, " \t\n\r'\\") {
-			v = "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'"
-		}
-		parts[i] = k + "=" + v
+// quoteKeywordValue renders one key=value value, single-quoted (with \ and '
+// escaped) only when it is empty or holds whitespace, a quote or a backslash.
+func quoteKeywordValue(v string) string {
+	if v == "" || strings.ContainsAny(v, " \t\n\r'\\") {
+		return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'"
 	}
-	return strings.Join(parts, " ")
+	return v
+}
+
+// stripSchemaSwitches drops WithSchema's switches from an options value.
+func stripSchemaSwitches(opts string) string {
+	var keep []string
+	for _, f := range strings.Fields(opts) {
+		if !strings.HasPrefix(f, schemaOptionPrefix) {
+			keep = append(keep, f)
+		}
+	}
+	return strings.Join(keep, " ")
 }

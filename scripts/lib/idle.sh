@@ -335,16 +335,103 @@ fleet_db_parts_dsn() {
   fi
 }
 
+# fleet_kv_last_options DSN — parse a libpq key=value DSN (whitespace-separated
+# key = value pairs, a value bare or single-quoted with \' and \\ escapes)
+# and set REPLY_KV_START / REPLY_KV_END to the byte span of its LAST options
+# pair (-1 when it has none) and REPLY_KV_VALUE to that pair's decoded value.
+# Returns 1 when DSN is not a well-formed key=value string. Mirrors
+# parseKeywordDSN (internal/config/dsn.go).
+fleet_kv_last_options() {
+  local LC_ALL=C s="$1" n i=0 start key val c closed any=0
+  n=${#s}
+  REPLY_KV_START=-1 REPLY_KV_END=-1 REPLY_KV_VALUE=""
+  while :; do
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    (( i < n )) || break
+    start=$i
+    while (( i < n )) && [[ "${s:i:1}" != [=$' \t'] ]]; do i=$((i + 1)); done
+    key="${s:start:i-start}"
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    [[ -n "$key" ]] && (( i < n )) && [[ "${s:i:1}" == "=" ]] || return 1
+    i=$((i + 1))
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    val=""
+    if (( i < n )) && [[ "${s:i:1}" == "'" ]]; then
+      i=$((i + 1))
+      closed=0
+      while (( i < n )); do
+        c="${s:i:1}"
+        if [[ "$c" == '\' ]] && (( i + 1 < n )); then
+          val+="${s:i+1:1}"
+          i=$((i + 2))
+          continue
+        fi
+        if [[ "$c" == "'" ]]; then
+          i=$((i + 1))
+          closed=1
+          break
+        fi
+        val+="$c"
+        i=$((i + 1))
+      done
+      (( closed )) || return 1
+    else
+      while (( i < n )) && [[ "${s:i:1}" != [$' \t\n\r'] ]]; do
+        if [[ "${s:i:1}" == '\' ]] && (( i + 1 < n )); then i=$((i + 1)); fi
+        val+="${s:i:1}"
+        i=$((i + 1))
+      done
+    fi
+    any=1
+    if [[ "$key" == "options" ]]; then
+      REPLY_KV_START=$start REPLY_KV_END=$i REPLY_KV_VALUE="$val"
+    fi
+  done
+  (( any ))
+}
+
+# fleet_kv_quote VALUE — one key=value value, single-quoted (\ and ' escaped)
+# only when it is empty or holds whitespace, a quote or a backslash. Mirrors
+# quoteKeywordValue.
+fleet_kv_quote() {
+  local v="$1"
+  if [[ -z "$v" || "$v" == *[$' \t\n\r']* || "$v" == *"'"* || "$v" == *'\'* ]]; then
+    v="${v//\\/\\\\}"
+    v="${v//\'/\\\'}"
+    printf "'%s'" "$v"
+  else
+    printf '%s' "$v"
+  fi
+}
+
 # fleet_dsn_with_schema DSN SCHEMA — DSN with SCHEMA as its connections' only
 # search_path: an `options=-csearch_path%3D<schema>` query parameter appended
 # to a URL DSN (to an existing options value, after a +), every other byte
-# kept as written. Mirrors config.WithSchema for URL DSNs; a key=value DSN
-# gets an options keyword when it has none.
+# kept as written. A key=value DSN gets `-csearch_path=<schema>` added to its
+# LAST options pair in place (any earlier schema switch dropped), or an
+# options pair appended. Mirrors config.WithSchema byte for byte.
 fleet_dsn_with_schema() {
-  local dsn="$1" schema="$2" base query frag="" out="" p found=0
+  local LC_ALL=C dsn="$1" schema="$2" base query frag="" out="" p found=0
   local opt="-csearch_path%3D${schema}"
   if [[ "$dsn" != postgres://* && "$dsn" != postgresql://* ]]; then
-    if [[ "$dsn" == *options=* ]]; then printf '%s' "$dsn"; else printf '%s' "$dsn options=-csearch_path=${schema}"; fi
+    if ! fleet_kv_last_options "$dsn"; then
+      printf '%s' "$dsn" # not a DSN this can rewrite safely
+      return 0
+    fi
+    local prev="" w new
+    local -a words=()
+    if (( REPLY_KV_START >= 0 )); then
+      read -r -d '' -a words <<< "$REPLY_KV_VALUE" || true
+      for w in "${words[@]}"; do
+        [[ "$w" == -csearch_path=* ]] || prev="${prev:+$prev }$w"
+      done
+    fi
+    new="${prev:+$prev }-csearch_path=${schema}"
+    if (( REPLY_KV_START >= 0 )); then
+      printf '%s' "${dsn:0:REPLY_KV_START}options=$(fleet_kv_quote "$new")${dsn:REPLY_KV_END}"
+    else
+      printf '%s' "$dsn options=$(fleet_kv_quote "$new")"
+    fi
     return 0
   fi
   if [[ "$dsn" == *"#"* ]]; then frag="#${dsn#*#}"; dsn="${dsn%%#*}"; fi

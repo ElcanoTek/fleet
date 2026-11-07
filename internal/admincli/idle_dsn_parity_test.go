@@ -38,6 +38,8 @@ func TestIdleLibResolveDSNParity(t *testing.T) {
 		{"DB_NAME parts", map[string]string{"DB_HOST": "db.internal", "DB_PASSWORD": "päss:1", "DB_NAME": "fleet"}, config.LayoutSchemas},
 		{"DB_NAME socket parts", map[string]string{"DB_HOST": "/var/run/postgresql", "DB_NAME": "fleet"}, config.LayoutSchemas},
 		{"DB_NAME IPv6 parts", map[string]string{"DB_HOST": "2001:db8::1", "DB_NAME": "fleet", "DB_USER": "app"}, config.LayoutSchemas},
+		{"key=value DATABASE_URL", map[string]string{"DATABASE_URL": "host=127.0.0.1 dbname=fleet user=fleet"}, config.LayoutSchemas},
+		{"key=value DATABASE_URL with options", map[string]string{"DATABASE_URL": "host=127.0.0.1 options='-c statement_timeout=5000' dbname=fleet"}, config.LayoutSchemas},
 		// LEGACY-DB-LAYOUT: remove after consolidation — the rows below.
 		{"legacy store keys", map[string]string{"FLEET_CHAT_DATABASE_URL": "postgres://chat:a@127.0.0.1:5432/chat", "FLEET_SCHED_DATABASE_URL": "postgres://sched:b@127.0.0.1:5432/sched"}, config.LayoutLegacy},
 		{"legacy SCHED_DATABASE_URL + DATABASE_URL", map[string]string{"SCHED_DATABASE_URL": "postgres://s@h/sched", "DATABASE_URL": "postgres://c@h/chat"}, config.LayoutLegacy},

@@ -108,6 +108,12 @@ func TestWithSchemaAndDSNSchema(t *testing.T) {
 		{"keyword form", "host=h dbname=db password=x", "host=h dbname=db password=x options=-csearch_path=chat"},
 		{"keyword form keeps quoted options", "host=h options='-c work_mem=4MB'", "host=h options='-c work_mem=4MB -csearch_path=chat'"},
 		{"keyword form quoting survives", `host=h password='a b\'c'`, `host=h password='a b\'c' options=-csearch_path=chat`},
+		// #2055 review: an existing options pair is extended where it stands,
+		// every other byte kept, so the shell mirror can match exactly.
+		{"keyword options in the middle stay in place", `host=h options=-cwork_mem=4MB dbname=x`, `host=h options='-cwork_mem=4MB -csearch_path=chat' dbname=x`},
+		{"keyword: the last options pair is the one edited", `options=-ca=1 host=h options='-c b=2'`, `options=-ca=1 host=h options='-c b=2 -csearch_path=chat'`},
+		{"keyword: a schema switch is replaced, not stacked", `host=h options='-ca=1 -csearch_path=sched'`, `host=h options='-ca=1 -csearch_path=chat'`},
+		{"url: existing options extended in place", "postgres://u@h/db?options=-ca%3D1&sslmode=disable", "postgres://u@h/db?options=-ca%3D1+-csearch_path%3Dchat&sslmode=disable"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
