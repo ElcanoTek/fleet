@@ -597,10 +597,15 @@ supply chain matters as much as what it scans.
 
 The per-PR scan collects and uploads **all** findings, including unfixed and
 non-blocking language-package records. A separate repository-owned policy
-(`scripts/check-grype-policy.sh`) fails on a **CRITICAL *or* HIGH Fedora RPM**
-with a non-empty fix version — that is, `severity in {critical, high}` **and**
-`.artifact.type == "rpm"` **and** a non-empty `fix.versions`. MEDIUM and below are
-reported, not blocking, and a non-RPM record never blocks whatever its severity.
+(`scripts/check-grype-policy.sh`) fails on a **CRITICAL *or* HIGH** finding with a
+non-empty fix version in a package the image's build can move forward — that is,
+`severity in {critical, high}` **and** a non-empty `fix.versions` **and** either
+`.artifact.type == "rpm"` or a `python` record found under `/usr/local/` (where
+the build's hash-locked `pip install` puts packages: `deploy/python/requirements.txt`
+— Playwright and its dependencies — and the sandbox's requirements). MEDIUM and
+below are reported, not blocking, and a Python record found only under the
+distro's `/usr/lib*/python3*/site-packages` (dist-info a Fedora RPM ships) never
+blocks whatever its severity.
 
 Both halves of that filter are deliberate. HIGH was added to the gate *after*
 measuring rather than before: the published image at the time carried zero fixable
@@ -614,7 +619,8 @@ those language records as a merge gate previously led to hand-maintained pip
 replacements layered over a coherent distro package set. They are still uploaded
 to SARIF; they just do not gate. The generic image follows Fedora latest, so an
 actionable failure should be fixed by rebuilding/updating the RPM rather than by
-layering a pip wheel over files owned by the distro. The weekly scan uses the same
+layering a pip wheel over files owned by the distro; a fixable finding in a
+`/usr/local` pip package is fixed by bumping its hash-locked pin. The weekly scan uses the same
 complete reporting model (see below). Narrow, reviewed suppressions live in [`.grype.yaml`](../.grype.yaml)
 (one `ignore:` entry per CVE, with a rationale comment); Grype auto-reads it from
 the repository root.

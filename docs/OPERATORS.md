@@ -77,22 +77,14 @@ fleet bootstrap   →   fleet update   →   fleet status / fleet doctor
   (provision a box)   (roll a new version)   (check health / repair drift)
 ```
 
-> **You do not have to get the order right.** This used to matter: an existing
-> box a node major behind the checkout would hit `fleet update`'s refusal, and
-> the fix lived in a verb that comes *later* in the line above. `fleet update`
-> now repairs a node shortfall in place by handing it to
-> `sudo fleet doctor --node` mid-run and re-resolving, so the documented
-> sequence works on a box that is behind. `fleet update --dry-run` and
-> `fleet update --check` both resolve the interpreter for real and say so
-> before you commit to anything. See
-> [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
-
-> **`bootstrap` and `update` operate on a fleet *source checkout*.** They run
-> `make build` (and, on update, `git pull`) against the checkout and install the
-> resulting `fleet` binary to `FLEET_INSTALL_DIR` (default
-> `/opt/fleet`, the unit's `ExecStart` dir). Keep the repo cloned on the box (Go
-> toolchain present); `status`, `restart`, `stop`, and `logs` work off the
-> installed binary alone.
+> **`bootstrap` and `update` use a fleet checkout for the units, scripts and
+> the generic bundle, and a signed release for the binary.** They download the
+> release's `fleet` binary, verify it (signature by fleet's release workflow,
+> checksums, architecture, no host executor) and install it to
+> `FLEET_INSTALL_DIR` (default `/opt/fleet`, the unit's `ExecStart` dir); the
+> checkout is moved to the same release tag. No Go or Node on the box
+> ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)). `status`, `restart`, `stop`,
+> and `logs` work off the installed binary alone.
 
 ## The env file (the one source of credentials)
 
@@ -281,7 +273,8 @@ fleet bootstrap --postgres=local                     # dnf+initdb+pg_hba+\gexec,
 fleet bootstrap --postgres=external                  # validate the DSNs with SELECT 1, sslmode=require
 fleet bootstrap --client-config <git-url|path>       # check out / point at a client bundle
 fleet bootstrap --enable-service                     # systemctl enable --now the fleet unit at the end
-fleet bootstrap --enable-web [--domain <fqdn>]       # also build+enable the web tier (+ Caddy TLS with --domain); implies --enable-service
+fleet bootstrap --enable-web [--domain <fqdn>]       # also enable the web tier (+ Caddy TLS with --domain); implies --enable-service
+fleet bootstrap --tag vYYYY.MM.DD.N                  # install this signed release (default: the release the checkout contains)
 fleet bootstrap --dry-run                            # print the plan; touch nothing
 ```
 
@@ -293,10 +286,14 @@ so the one-command deploy writes secrets where the unit picks them up. Set
 End to end, every run: uninstall Cockpit when `cockpit-ws` is installed
 (`dnf -y remove 'cockpit*'`: the Vultr Fedora image ships its root-capable web
 login on :9090, and fleet boxes are administered over ssh only;
-`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → make SSH key-only (below) → ensure the 0600 env file → resolve the client bundle
-(`--client-config`) → **build the sandbox image from the bundle** (calls
-`scripts/build-sandbox-image.sh` with `FLEET_CLIENT_CONFIG_DIR`; skipped when the
-manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
+`FLEET_KEEP_COCKPIT=1` keeps it; never fatal) → make SSH key-only (below) →
+**download and verify the signed release** (runtime packages only — no Go or
+Node; [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)) → ensure the 0600 env file →
+resolve the client bundle (`--client-config`) → **the sandbox image** (the
+release's signed image for a bundle with no Containerfile or the generic one;
+otherwise built on the box with `scripts/build-sandbox-image.sh`, on top of the
+verified release image when the Containerfile declares `FLEET_SANDBOX_BASE`;
+skipped when the manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
 roles/databases idempotently via `\gexec` (local) or validate the DSNs (external)
 → write the resolved DSNs + `FLEET_CLIENT_CONFIG_DIR` into the env file →
 optionally `enable --now` the systemd unit. Local-mode role passwords are
@@ -346,7 +343,7 @@ names a release and says how far past it this box is:
 | Output | Meaning |
 | --- | --- |
 | `2026.09.04.2 (…)` | exactly that release |
-| `2026.09.04.2+3.g<sha> (…)` | 3 commits past it — the normal state of a box tracking `main` |
+| `2026.09.04.2+3.g<sha> (…)` | 3 commits past it — a development box built `--from-source` between releases |
 | `dev+g<sha> (…)` | the checkout has no release tags (fetched with `--no-tags`, or shallow) |
 | `dev (…)` | an unstamped binary — built with a bare `go build` rather than `make build` |
 
@@ -357,98 +354,84 @@ carries the **version only**, without the revision, and `/healthz` carries no
 version at all — it is a liveness probe. Full contract:
 [`VERSIONING.md`](VERSIONING.md).
 
-## update — roll a new version in place
+## update — install a new release in place
 
 ```
-fleet update              # pull → build → conditional sandbox rebuild → restart
-fleet update --no-pull    # rebuild the current checkout(s) only
-fleet update --dry-run    # print the plan
-fleet update --check      # read-only: "commits behind" + can this box build the
-                          # web tier? touches nothing; non-zero if it cannot
-fleet update --no-node-repair   # never install node; refuse instead (nvm/NodeSource boxes)
+sudo fleet update                       # the newest published release: verify, swap, restart, gate, roll back on failure
+sudo fleet update --tag v2026.11.07.3   # a specific release (older than running: add --allow-downgrade)
+sudo fleet update --no-pull             # reinstall the release the checkout is at
+fleet update --dry-run                  # print the plan
+fleet update --check                    # read-only: running vs newest release, commits/bundle behind
+sudo fleet release rollback             # put the previous binary (fleet.prev) back, restart, gate
 ```
 
-`update` (ported from the `moc`/`gig` pattern) `git pull`s **both** the fleet
-checkout and the client-config checkout, runs `make build` (fleet binary) and
-`cd web && npm ci && npm run build`, then **rebuilds the sandbox image when
-the bundle's `sandbox/Containerfile` or resolved image tag changed, the tag
-is missing from the service user's image store, or the installed image is
-older than `FLEET_SANDBOX_MAX_AGE_DAYS`** (default 7; `--sandbox-max-age <d>`
-per run, `0` disables) — it stores a SHA-256 of the Containerfile and the
-resolved tag under `.fleet-state/` and compares, skipping the ~2-3 min image
-build when unchanged and still fresh (a bundle that pins a prebuilt
-`sandbox.image` skips the build entirely). The **max-age freshness backstop**
-is what keeps a stable bundle from serving a weeks-old image: an unchanged
-Containerfile does not stop the base layers and packages *inside* the image
-from aging and accumulating published CVEs, so an age-triggered rebuild runs
-with `--no-cache` (every layer re-runs, packages refresh), and every sandbox
-build now passes `--pull=newer` so an unpinned base (the generic bundle's
-`fedora-minimal:latest`) is re-checked against the registry instead of
-silently reusing the stale local copy. Services self-migrate on restart, so
-`update` runs no migrations; it finishes with `systemctl restart fleet` and a
-unit health check.
+`update` (ported from the `moc`/`gig` pattern) moves the fleet checkout to the
+release **tag** it installs and `git pull`s the client-config checkout, then:
+
+1. **verifies the release before anything uses it** (`fleet release fetch`):
+   `SHA256SUMS` signed by fleet's release workflow on `main` (keyless cosign,
+   pinned identity), the binary's checksum and own signature, `release.json`
+   naming the requested tag, the binary's architecture, no host executor, a web
+   bundle — and no downgrade unless `--allow-downgrade`;
+2. **sandbox image**: a bundle with no Containerfile, or the generic one, runs
+   the release's signed image (verified, pulled by digest, tagged as the
+   bundle's `sandbox.tag`); a bundle with its own `sandbox/Containerfile` is
+   rebuilt on the box when the Containerfile or resolved tag changed, the tag is
+   missing from the service user's store, the release's base digest moved (for
+   a `FROM ${FLEET_SANDBOX_BASE}` Containerfile), or the image is older than
+   `FLEET_SANDBOX_MAX_AGE_DAYS` (default 7; `--sandbox-max-age <d>`; `0`
+   disables) — the max-age backstop rebuilds with `--no-cache` so an unchanged
+   Containerfile cannot freeze its packages; a bundle that pins
+   `sandbox.image` skips this step;
+3. **installs** (`fleet release install`): the running binary is kept as
+   `fleet.prev`, the new one renamed over `fleet` atomically, `systemctl
+   restart` (the service migrates on start — `update` runs no migrations), then
+   a wait for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s). If it is not
+   ready, `fleet.prev` goes back, the service restarts on it, and `update`
+   exits non-zero saying it rolled back (the failed binary is kept as
+   `fleet.failed`).
+
+The sandbox step runs before the install on purpose: if the image cannot be
+verified, pulled or built and the resolved ref is absent from the service
+user's store, `update` stops with the old binary and old service untouched.
 
 `update` also refreshes the one shipped host file that no unit owns:
 `/etc/profile.d/fleet-motd.sh` (the login-banner hook). It is shipped content
 with no operator-tunable parts, rewritten only when it differs from
 `deploy/`, and never fatal — a box that cannot write them keeps updating and
-says so. The MOTD hook matters here because `bootstrap` used to be the only thing
-that installed it: a box provisioned before it existed never had one, and an edit
-to `deploy/fleet-motd.sh` reached no existing box. (`fleet doctor` repairs the
-same file — see below — so either verb converges it.)
+says so. (`fleet doctor` repairs the same file — see below — so either verb
+converges it.)
 
-Before any of that — after both pulls, before the sandbox rebuild — it runs the
-**node gate**: it resolves the interpreter `web/.nvmrc` calls for and, if the
-box is short, hands the shortfall to `scripts/doctor.sh --node` (the one
-implementation of the node install), then **re-resolves** rather than trusting
-that repair's exit code. `--no-node-repair` (`FLEET_UPDATE_NODE_REPAIR=0`)
-refuses instead, for boxes whose node is managed outside dnf. The gate sits
-where it does on purpose: it cannot run before the pull, because the major it
-enforces is declared in the checkout being pulled, and it must not run after
-the sandbox rebuild, because an abort that follows a multi-GB build is not a
-gate.
-If the pull changed `update.sh` itself, the script **re-execs the fresh copy** in
-rebuild-only mode (bash holds the pre-pull inode open, so the fix would otherwise
-only land on the *next* update). On a build failure the live binary/image is left
-untouched; if the sandbox build fails and the resolved image is absent from the
-service user's store, `update` refuses to restart rather than bring the box up
-reporting healthy with every sandboxed tool call failing. Roll back with
-`git checkout <sha> && fleet update --no-pull`.
+If the pull changed `update.sh` itself, the script **re-execs the fresh copy**
+(bash holds the pre-pull inode open, so the fix would otherwise only land on the
+*next* update).
 
-## upgrade — drain, swap, health-gate, auto-roll-back
-
-```
-git pull && scripts/fleet-upgrade.sh            # build → backup → swap → restart → /readyz gate
-scripts/fleet-upgrade.sh --no-build             # swap the already-built source binaries
-scripts/fleet-upgrade.sh --dry-run              # print the plan; change nothing
-```
-
-`scripts/fleet-upgrade.sh` is a safer companion to `update.sh` for production
-boxes. It does not pull (run `git pull` first); it `make build`s, **backs up the
-live `fleet` binary**, installs the new one, `systemctl
-restart`s, then **gates on the new process's `/readyz` probe** before declaring
-success — and if `/readyz` does not come green within `--health-timeout` (default
-90s) it **reinstalls the backup binary and restarts**, so a bad build
-self-heals to the last-known-good version instead of crash-looping.
-
-The **drain is the binary's, not the script's**: `systemctl restart` sends
-`SIGTERM`, and `cmd/fleet` already handles it gracefully — it flips `/healthz`
-and `/readyz` to `503` (a load balancer stops routing to it), lets in-flight chat
-turns **and** running scheduled tasks finish within
+**The drain is the binary's.** `systemctl restart` sends `SIGTERM`, and
+`cmd/fleet` handles it gracefully — it flips `/healthz` and `/readyz` to `503`,
+lets in-flight chat turns **and** running scheduled tasks finish within
 `FLEET_SHUTDOWN_GRACE_SECONDS` (default 30s, bounded by the unit's
-`TimeoutStopSec`), then force-cancels stragglers and exits 0. The script's value
-is the **backup/rollback + readiness gate around** that built-in drain; it adds
-no Go code and runs no migrations.
+`TimeoutStopSec`), then force-cancels stragglers and exits 0. `update`'s own
+drain gate (above the steps) refuses to start while work is in flight unless
+`--wait` or `--force`.
 
 > **Honest about "zero-downtime."** This is *zero-downtime-ish* / brief-blip, not
-> truly zero-downtime. fleet is a **single process on one box** (the deployment
-> posture — no rolling replicas behind a proxy), so there is an unavoidable window
-> from when the old process finishes draining and exits until the new one binds
-> its listeners and passes `/readyz`, during which new requests get a `503` (while
-> draining) or a connection refusal (during the swap). What *is* graceful:
-> **in-flight work is drained, not killed.** True zero-downtime would need a
-> second instance plus a front proxy that fails over — out of scope for the
-> single-big-box deployment.
+> truly zero-downtime. fleet is a **single process on one box**, so there is an
+> unavoidable window from when the old process finishes draining and exits until
+> the new one binds its listeners and passes `/readyz`, during which new requests
+> get a `503` (while draining) or a connection refusal (during the swap). What
+> *is* graceful: **in-flight work is drained, not killed**, and a release that
+> cannot become ready is rolled back automatically.
+
+**Rolling back on purpose.** `sudo fleet release rollback` swaps `fleet.prev`
+and `fleet` and restarts behind the same `/readyz` gate (running it twice undoes
+itself). To go back further, or to realign the checkout too, install an older
+release: `sudo fleet update --tag <tag> --allow-downgrade` (the newest ten
+releases stay downloadable).
+
+**Development boxes** can still build on the box: `fleet update --from-source`
+runs `make build` from the checkout's branch tip with the Go, Node and npm on
+PATH (nothing installs them), installs it and restarts — without the readiness
+gate or rollback. It is marked for removal once every box runs artifacts.
 
 ## status — is the box healthy? (quick, read-only)
 
@@ -484,8 +467,6 @@ DSN passwords are redacted in the output.
 
 ```
 sudo fleet doctor              # diagnose + fix + restart services if needed
-sudo fleet doctor --node       # repair ONLY the node toolchain, then exit
-fleet doctor --node --check    # read-only node readiness probe (no root needed)
 sudo fleet doctor --check      # diagnose only, change nothing; exit 1 if anything is off
 sudo fleet doctor --no-restart # fix but never restart services
 fleet doctor --dry-run         # print the checklist; touch nothing (no root needed)
@@ -497,12 +478,13 @@ place** — it exists to kill the version lottery, where boxes provisioned at
 different times drift apart and each drift surfaces later as a confusing
 production-only bug. The pass covers, in order:
 
-1. **Toolchain** — Node ≥ 20 for the web tier, `go`/`git`/`podman`/`psql`/…
-   present (installed via dnf when missing).
+1. **Toolchain** — `git`/`curl`/`jq`/`podman`/`psql`/`python3` present
+   (installed via dnf when missing). No Go or Node: the box installs signed
+   release binaries.
 2. **Package currency** — disables dnf repos whose metadata is unreachable
    (they abort *every* transaction on strict dnf builds), then upgrades the
-   fleet-critical set (`podman crun passt conmon containers-common golang
-   nodejs caddy`) to the box's repo-latest. Rootless-podman behavior differs
+   fleet-critical set (`podman crun passt conmon containers-common caddy`)
+   to the box's repo-latest. Rootless-podman behavior differs
    meaningfully across versions; holding boxes at repo-latest beats debugging
    per-box combinations.
 3. **Rootless podman for the `fleet` service user** — subuid/subgid ranges,
@@ -545,7 +527,8 @@ production-only bug. The pass covers, in order:
    worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
    The same step checks disk headroom and **disk hygiene**. It reclaims root's
    build caches (Go build + module cache, npm, dnf) once they pass 3 GiB.
-   `fleet update` fills those as root, and the maintenance timer runs as
+   From-source builds (`fleet update --from-source`, and every update before
+   signed releases) filled those as root, and the maintenance timer runs as
    `fleet`, so the timer never reaches them. It caps the journal at 1G
    (`/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf`) unless you set
    `SystemMaxUse`/`RuntimeMaxUse` yourself, and it *reports* images left in root's podman
@@ -553,12 +536,13 @@ production-only bug. The pass covers, in order:
    See [`docs/DOCTOR.md`](DOCTOR.md), "Disk hygiene".
 8. **Sandbox smoke** — `podman run --rm --network=none <image> true` **as the
    `fleet` user** (the image lives in *that* user's rootless store).
-9. **Source freshness + build identity** — reports commits behind upstream,
-   whether the installed binary's stamped version is what the checkout would
-   build *now* (a release tag that arrived after the last `update` is the usual
-   gap — see [`VERSIONING.md`](VERSIONING.md)), and the modified/untracked
-   paths that make the checkout build as `.dirty`. Report-only: pulling and
-   rebuilding stays `fleet update`'s job; doctor never deploys.
+9. **Release + checkout** — reports the installed release against the newest
+   published one (`fleet release latest`) and against the release the checkout
+   is at (they differ after a `fleet release rollback`, or a hand edit), and the
+   modified/untracked paths in the checkout. Report-only: installing stays
+   `fleet update`'s job; doctor never deploys. (Step 4 also reads the installed
+   binary's build info: a host executor compiled in, or a missing web bundle,
+   is a failure.)
 
 Exit codes: `0` healthy (or everything fixed) · `1` problems remain.
 
@@ -822,11 +806,14 @@ database directly, so it cannot run that check. See
 ## Where the sandbox build fits
 
 The execution sandbox is a **per-client bundle artifact**: each bundle ships its
-own `sandbox/Containerfile` (base tracks `fedora-minimal:latest`; pin a digest
-for reproducibility). `bootstrap` builds it on the
-box by default (auditable supply chain); `update` rebuilds it when the
-Containerfile or the manifest's `sandbox.tag` changed, the tag is missing
-from the service user's image store, or the installed image aged past
+own `sandbox/Containerfile` — or none. Each release publishes the generic
+bundle's image, signed (`ghcr.io/elcanotek/fleet-sandbox`); a bundle with no
+Containerfile, or the generic one, runs it — `bootstrap` and `update` verify it
+and pull it by digest. A bundle with its own Containerfile is built on the box,
+on that verified image when it declares `FLEET_SANDBOX_BASE`
+([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)); `update` rebuilds it when the
+Containerfile, the manifest's `sandbox.tag` or the release base changed, the tag
+is missing from the service user's image store, or the installed image aged past
 `FLEET_SANDBOX_MAX_AGE_DAYS` (default 7 — see
 [`docs/SANDBOX-IMAGE-FRESHNESS.md`](SANDBOX-IMAGE-FRESHNESS.md)); `status`
 verifies the resolved image runs.

@@ -200,6 +200,32 @@ The content is copied when the email is sent, so a file changed between
 staging a card and approving it is sent as it is at approval time. The card
 does not record a hash of the bytes.
 
+An attachment item is either an object with a `path` (`{"path": "logo.png",
+"cid": "logo"}`) or a bare path string (`"report.xlsx"`). Both shapes are
+checked, copied and rewritten the same way, and each keeps its shape.
+
+**The copies are named by absolute path, and the connector must be allowed to
+read them.** The connector is an MCP subprocess with its own working directory
+(a scheduled run's `mcp-runs/task-<id>/`), so fleet resolves
+`EMAIL_ATTACHMENT_DIR` to an absolute path when it loads its configuration
+(the default `./data/attachments` is relative to the service's working
+directory, `/var/lib/fleet` under `deploy/fleet.service`). A connector that
+allowlists the directories it reads from does not list
+`<EMAIL_ATTACHMENT_DIR>/outbound/`, which is deliberately outside the
+workspace root, so fleet adds it: at spawn time, an env key whose name ends in
+`ALLOWED_DIRS` and whose path list already contains `${FLEET_WORKSPACE_ROOT}`
+gets the absolute outbound directory appended
+([MCP-BUNDLE-ENV.md §1a](MCP-BUNDLE-ENV.md)). Only that directory is added,
+not the attachment directory around it (uploads, downloads), and a connector
+whose bundle entry does not admit the workspace root gains nothing. Until both
+fixes shipped, a scheduled email with an attachment failed with "Inline
+attachment file not found". What it does not do: the copies sit in
+randomly named directories that exist only for the duration of one send, but
+a connector that admits the outbound directory could, while a send is in
+flight, read another send's copy if a model named that exact path in an
+argument the snapshot does not rewrite (such as a `content_file` the connector
+reads itself).
+
 ## What this does not fix
 
 **Cross-conversation visibility of the workspace root.** The workspace root is

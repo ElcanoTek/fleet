@@ -71,8 +71,11 @@ breaking change or operator action stated plainly (ADR-0061 retired the
 changelog on this basis). In the dialog, keep that section and drop the rest —
 verification, scope, the checklist, any tool's footer. What is in the box when
 you click merge is what ships. (Merging through the API instead? Pass the same
-text as the commit message.) Only the newest release is listed on the Releases
-page; tags are permanent, and an older release's notes are its commit message.
+text as the commit message.) The release also builds, signs and publishes the
+binaries and GHCR images that boxes install (docs/RELEASE-ARTIFACTS.md); there
+is still nothing to do by hand. The newest ten releases are listed on the
+Releases page; tags are permanent, and an older release's notes are its commit
+message.
 
 Never add a hand-authored version number anywhere, and date every deprecation
 window ("removed in the first release on or after `YYYY-MM-DD`") rather than

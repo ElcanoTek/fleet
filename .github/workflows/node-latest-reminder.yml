@@ -1,19 +1,13 @@
 # Node latest reminder — files an issue when node publishes a major newer than
-# web/.nvmrc, or when node's release-signing keys drift from the copy vendored
-# in scripts/lib/ (ADR-0078; replaces the LTS reminder of #1300).
+# web/.nvmrc (ADR-0078; replaces the LTS reminder of #1300).
 #
 # WHY: the node RUNTIME major is invisible to Dependabot (see the note in
 # .github/dependabot.yml — the npm ecosystem bumps packages, not the
 # interpreter, and `engines.node` is a constraint it never moves). fleet tracks
-# the LATEST node major, so "a new major exists" is the event that starts the
-# bump, and nothing else would surface it: the same rot pattern
-# scan-cron-alarm.yml exists for, a thing with no PR attached.
-#
-# The keyring half matters because the upstream fallback
-# (fleet_node_tarball_install) verifies SHASUMS256.txt.asc against the VENDORED
-# keys only. A releaser added upstream after our copy was taken signs a release
-# we then refuse to install — fail-closed, which is right, but the fix
-# (scripts/update-node-release-keys.sh) should land before a box needs it.
+# the LATEST node major for the web bundle it builds — in CI and release.yml
+# only since ADR-0100; no box runs or builds with node — so "a new major exists"
+# is the event that starts the bump, and nothing else would surface it: the
+# same rot pattern scan-cron-alarm.yml exists for, a thing with no PR attached.
 #
 # Deliberately ONLINE, unlike the LTS reminder it replaces: "what is the newest
 # release" has no date to hardcode. A fetch failure fails the job — a red
@@ -30,12 +24,12 @@ on:
   workflow_dispatch: # manual re-check
 
 permissions:
-  contents: read # reads web/.nvmrc and scripts/lib/node-release-keys.list
+  contents: read # reads web/.nvmrc
   issues: write # files the reminder issues
 
 jobs:
   remind:
-    name: File an issue when node has a newer major or new release keys
+    name: File an issue when node has a newer major
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -48,18 +42,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # The canonical parser (the major before the first dot): `tr -dc`
+          # The major before the first dot (a leading v dropped): `tr -dc`
           # would read a full-version .nvmrc like 26.10.0 as 26100.
-          # shellcheck source=/dev/null
-          . scripts/lib/node-version.sh
-          current="$(fleet_node_major_want .)"
+          current="$(tr -d '[:space:]' < web/.nvmrc)"
+          current="${current#v}"
+          current="${current%%.*}"
+          case "${current}" in
+            ''|*[!0-9]*) echo "cannot read a node major from web/.nvmrc" >&2; exit 1 ;;
+          esac
           # index.json is newest-first, but it also lists PRERELEASES: from
           # v27 on, each major has a public alpha phase months before it
           # ships (v27.0.0-alpha.0.0.0 topped the list on 2026-10-29 while
           # v26 was still the newest release, and filed #1903 by mistake).
           # ADR-0078 tracks the latest RELEASED major, so take the newest
           # entry shaped exactly vMAJOR.MINOR.PATCH — the same shape
-          # fleet_node_tarball_install accepts — and skip anything with a
+          # a release (not a prerelease) has — and skip anything with a
           # prerelease suffix.
           latest="$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json \
             | jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].version // empty')"
@@ -87,44 +84,8 @@ jobs:
 
           Bump every declaration point together (\`TestNodeMajorAgreesEverywhere\` in scripts/check_versions_test.go enforces the set):
 
-          - [ ] \`web/.nvmrc\` → ${latest_major} (the single declaration point; CI, bootstrap, doctor, update all read it)
+          - [ ] \`web/.nvmrc\` → ${latest_major} (the single declaration point; CI and release.yml build the web bundle with it — boxes have no node, ADR-0100)
           - [ ] \`web/package.json\` \`engines.node\` → \`>=${latest_major}\`, and \`@types/node\` → \`^${latest_major}\` (+ \`npm install\` for the lockfile)
           - [ ] \`make test\` (\`TestNodeMajorAgreesEverywhere\` green) + \`make ci-web\`
-          - [ ] Boxes: where Fedora has no \`nodejs${latest_major}\` stream yet, \`fleet update\` → \`doctor --node\` installs the signed nodejs.org build instead (scripts/lib/node-version.sh). Note it in the PR so operators know which boxes take that path.
-
-          This issue dedupes by title: the weekly cron will not file another while this one is open."
-
-      - name: Compare the vendored node release keys against nodejs/release-keys
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-
-          # Regenerate the keyring exactly as a maintainer would and diff the
-          # result. Comparing only keys.list (primary fingerprints) would miss
-          # a new or rotated SUBKEY under an existing primary — and a release
-          # signed by that subkey would then be refused by the stale keyring.
-          scripts/update-node-release-keys.sh
-          if git diff --quiet -- scripts/lib/node-release-keys.list scripts/lib/node-release-keys.asc; then
-            echo "vendored node release keys match nodejs/release-keys."
-            exit 0
-          fi
-          echo "drift between the vendored keyring and nodejs/release-keys:"
-          git diff --stat -- scripts/lib/node-release-keys.list scripts/lib/node-release-keys.asc
-          git diff -- scripts/lib/node-release-keys.list || true
-
-          title="Refresh the vendored node release keys: nodejs/release-keys has changed"
-          num="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
-            --search "\"$title\" in:title" --json number --jq '.[0].number // empty' || true)"
-          if [ -n "$num" ]; then
-            echo "reminder issue #${num} is already open; not duplicating."
-            exit 0
-          fi
-          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "Filed automatically by .github/workflows/node-latest-reminder.yml: nodejs/release-keys' keys.list no longer matches scripts/lib/node-release-keys.list.
-
-          The upstream node fallback (fleet_node_tarball_install) trusts only the vendored keyring, so a release signed by a newly added releaser (or a new subkey) would be refused on boxes that need it.
-
-          - [ ] Run \`scripts/update-node-release-keys.sh\` and review the diff (added/removed fingerprints should match nodejs/release-keys' history).
-          - [ ] \`make test\`
 
           This issue dedupes by title: the weekly cron will not file another while this one is open."

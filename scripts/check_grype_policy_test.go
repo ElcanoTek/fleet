@@ -12,6 +12,8 @@ func TestCheckGrypePolicy(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq is required by the CI policy script")
 	}
+	const rpmOwned = "/usr/lib/python3.14/site-packages/demo-1.0.dist-info/METADATA"
+	const pipInstalled = "/usr/local/lib/python3.14/site-packages/demo-1.0.dist-info/METADATA"
 	tests := []struct {
 		name     string
 		report   string
@@ -20,20 +22,47 @@ func TestCheckGrypePolicy(t *testing.T) {
 	}{
 		{name: "empty report passes", report: `{"matches":[]}`, wantText: "no fixable CRITICAL"},
 		{
-			name:     "upstream Python record remains report only",
-			report:   grypeMatch("python", true),
+			name:     "RPM-owned Python dist-info remains report only",
+			report:   grypeMatch("python", "Critical", true, rpmOwned),
+			wantText: "no fixable CRITICAL",
+		},
+		{
+			name:     "Python record with no location remains report only",
+			report:   grypeMatch("python", "Critical", true),
 			wantText: "no fixable CRITICAL",
 		},
 		{
 			name:     "unfixed RPM remains report only",
-			report:   grypeMatch("rpm", false),
+			report:   grypeMatch("rpm", "Critical", false),
 			wantText: "no fixable CRITICAL",
 		},
 		{
 			name:     "fixable critical RPM blocks",
-			report:   grypeMatch("rpm", true),
+			report:   grypeMatch("rpm", "Critical", true),
 			wantFail: true,
-			wantText: "CVE-test  demo 1.0  fix: 2.0",
+			wantText: "CVE-test  rpm demo 1.0  fix: 2.0",
+		},
+		{
+			name:     "fixable high pip package under /usr/local blocks",
+			report:   grypeMatch("python", "High", true, pipInstalled),
+			wantFail: true,
+			wantText: "CVE-test  python demo 1.0  fix: 2.0",
+		},
+		{
+			name:     "unfixed pip package under /usr/local remains report only",
+			report:   grypeMatch("python", "Critical", false, pipInstalled),
+			wantText: "no fixable CRITICAL",
+		},
+		{
+			name:     "medium pip package under /usr/local remains report only",
+			report:   grypeMatch("python", "Medium", true, pipInstalled),
+			wantText: "no fixable CRITICAL",
+		},
+		{
+			name:     "a record found in both places is gated",
+			report:   grypeMatch("python", "Critical", true, rpmOwned, pipInstalled),
+			wantFail: true,
+			wantText: "python demo 1.0",
 		},
 	}
 	for _, tt := range tests {
@@ -53,10 +82,15 @@ func TestCheckGrypePolicy(t *testing.T) {
 	}
 }
 
-func grypeMatch(packageType string, fixable bool) string {
+func grypeMatch(packageType, severity string, fixable bool, locations ...string) string {
 	fix := "[]"
 	if fixable {
 		fix = `["2.0"]`
 	}
-	return `{"matches":[{"vulnerability":{"id":"CVE-test","severity":"Critical","fix":{"versions":` + fix + `}},"artifact":{"type":"` + packageType + `","name":"demo","version":"1.0"}}]}`
+	locs := make([]string, 0, len(locations))
+	for _, l := range locations {
+		locs = append(locs, `{"path":"`+l+`","layerID":"sha256:0"}`)
+	}
+	return `{"matches":[{"vulnerability":{"id":"CVE-test","severity":"` + severity + `","fix":{"versions":` + fix + `,"state":"fixed"}},` +
+		`"artifact":{"type":"` + packageType + `","name":"demo","version":"1.0","locations":[` + strings.Join(locs, ",") + `]}}]}`
 }

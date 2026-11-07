@@ -38,19 +38,43 @@ kubectl create namespace fleet
 kubectl -n fleet create secret generic fleet-secrets \
   --from-literal=OPENROUTER_API_KEY=sk-or-...
 
-helm install fleet deploy/helm/fleet \
+# The chart attached to a release (fleet-<YYYY>.<MMDD>.<N>.tgz on the release
+# page) installs that release's images. Verify it first, like any release file:
+TAG=v2026.11.07.3 CHART=fleet-2026.1107.3.tgz   # https://github.com/ElcanoTek/fleet/releases
+for f in SHA256SUMS SHA256SUMS.sigstore.json "$CHART"; do
+  curl -fsSLO "https://github.com/ElcanoTek/fleet/releases/download/${TAG}/$f"
+done
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
+helm install fleet "./$CHART" \
   --namespace fleet \
-  --set image.repository=REGISTRY/fleet --set image.tag=v1 \
-  --set sandbox.image=REGISTRY/fleet-sandbox:v1 \
   --set postgres.enabled=true \
   --set config.existingSecret=fleet-secrets
+
+# …or the chart from a checkout, told which release to run:
+helm install fleet deploy/helm/fleet --namespace fleet --set image.tag="${TAG}" \
+  --set postgres.enabled=true --set config.existingSecret=fleet-secrets
 ```
+
+Both default to the images every release publishes, signed with keyless cosign
+and carrying an SBOM and SLSA provenance (ADR-0100):
+`ghcr.io/elcanotek/fleet` (the control plane, with the generic bundle) and
+`ghcr.io/elcanotek/fleet-sandbox`, at the same release tag. `image.repository`
+/ `image.tag` and `sandbox.image` still override them. The chart attached to a
+release deploys both images BY DIGEST (`image.signedDigest` and
+`sandbox.signedImageDigest` are stamped in from the signed release); a chart
+from a checkout has no digests and falls back to the tag. The signed digests
+apply only to the official repositories: point `image.repository` or
+`sandbox.imageRepository` at your own image (or a mirror) and it is deployed by
+`image.digest` / `sandbox.imageDigest` when you set one, else by tag — and the
+install notes warn that it is not digest-pinned. For an image with your
+client bundle baked in, build it `FROM` the published one. Verify the images
+before you deploy them; the deployment guide shows the `cosign verify` line.
 
 Every `config.env` key is described in `values.schema.json` (generated from
 the configuration registry — see docs/CONFIGURATION.md).
-
-You build both images yourself — fleet publishes none. See the deployment
-guide for the two Containerfiles.
 
 ## Honest scope
 
@@ -70,9 +94,9 @@ The separate Next.js web Deployment is gone (ADR-0091,
 UI itself on port 3000, the chart's Service exposes it as `web`, and the
 Ingress routes there. On upgrade:
 
-1. Build the fleet image from a checkout with `make build` (it builds the web
-   bundle and embeds it; `fleet version --web` inside the image must print a
-   build id, not `missing`). There is no web image to build any more.
+1. Use the published `ghcr.io/elcanotek/fleet` image (the default), or build
+   yours `FROM` it — the binary in it embeds the web bundle (`fleet version
+   --web` prints a build id). There is no web image any more.
 2. Move the keys your web Secret carried into `config.existingSecret`:
    `APP_SESSION_SECRET` (required for sign-in; keep the same value and existing
    sessions survive the upgrade), and any `FLEET_OIDC_*` / `AUTH_*` keys.

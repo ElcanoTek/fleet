@@ -162,8 +162,10 @@ and run it (`curl -fsSLo /tmp/fleet-install.sh … && sudo bash /tmp/fleet-insta
 so a failed download fails the step instead of piping nothing into `bash`.
 
 On a bare Fedora/RHEL box this is **four steps** — the bootstrap script installs
-the toolchain (Go, Node for the web build, podman, python3), provisions Postgres,
-builds + installs the binary (the web UI is compiled into it), and installs + enables the systemd units:
+the runtime packages (podman, python3, git, … — no Go, no Node), provisions
+Postgres, downloads and **verifies** the signed release binary (the web UI is
+compiled into it — [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)), and installs +
+enables the systemd units:
 
 ```sh
 # 1. Git, and (for a PRIVATE config bundle) cache a read-only token so the box
@@ -233,35 +235,42 @@ each piece yourself):
    scripts/bootstrap.sh --postgres=local      # or --postgres=external
    ```
 
-   bootstrap installs the build/sandbox toolchain (Go, Node — build-time only, podman,
-   python3 — skipped on non-dnf hosts), then writes `DATABASE_URL` and
+   bootstrap installs the runtime + sandbox packages (podman, python3, … —
+   skipped on non-dnf hosts; no Go or Node), downloads and verifies the signed
+   release binary, then writes `DATABASE_URL` and
    `FLEET_CLIENT_CONFIG_DIR` into the env file for
    you; you then add `OPENROUTER_API_KEY`, the bundle's MCP connector
    credentials, and any MCP account secrets (`fleet mcp account set ...`).
    See **Operating fleet** below for the full bootstrap → update → status
    lifecycle (`fleet bootstrap` wraps this).
 
-2. **Build** the binary (with the web UI embedded) and the sandbox image:
+2. **The binary and the sandbox image come from the release.** bootstrap (and
+   later `fleet update`) download the signed `fleet-linux-<arch>` binary — web
+   UI embedded, verified against the release workflow's keyless signature
+   before it is used — and run the release's signed `fleet-sandbox` image for a
+   bundle that ships no Containerfile or the generic one. A bundle with its own
+   `sandbox/Containerfile` is built on the box, on top of that verified image
+   when it starts `ARG FLEET_SANDBOX_BASE` / `FROM ${FLEET_SANDBOX_BASE}`:
 
    ```
-   make build                              # → ./fleet (npm ci + vite build, then go build; needs node per web/.nvmrc)
-   # The sandbox image is a per-client BUNDLE artifact (build-on-box by default):
-   # the Containerfile lives in the bundle at <bundle>/sandbox/Containerfile and
-   # each client ships its own flavor. Build the bundle's sandbox:
-   FLEET_CLIENT_CONFIG_DIR=<bundle> scripts/build-sandbox-image.sh   # → the manifest's tag (podman)
-   #   (defaults to config/default → localhost/fleet-sandbox:latest)
+   FLEET_CLIENT_CONFIG_DIR=<bundle> FLEET_SANDBOX_BASE=<verified digest ref> \
+     scripts/build-sandbox-image.sh        # → the manifest's tag (podman)
    ```
 
-   Registry publish is **opt-in per client**: instead of building on the box, a
-   client may set `sandbox.image` in its `manifest.yaml` to a prebuilt ref it
+   Everything about trust, the files, bundles and rollback is in
+   [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md). A development box can still
+   build from source: `scripts/bootstrap.sh --from-source` / `fleet update
+   --from-source` run `make build` with the Go and Node on PATH.
+
+   Registry publish stays **opt-in per client**: a client may set
+   `sandbox.image` in its `manifest.yaml` to a prebuilt ref it
    pushed (e.g. `ghcr.io/<org>/sandbox@sha256:...`); fleet then pulls/uses that
-   and skips the build. fleet resolves the ref from the bundle
+   and nothing is built or pulled by update. fleet resolves the ref from the bundle
    (`clientconfig.Sandbox().ResolvedImageRef()` — `image` if set, else `tag`); an
    explicit `FLEET_SANDBOX_IMAGE` env var still overrides. fleet never builds at
-   process startup — this deploy step (or the client's registry push) does. Each
-   bundle's Containerfile owns its base image: the shipped defaults track
-   `fedora-minimal:latest` so on-box rebuilds pick up current patches — pin a
-   digest there if you need byte-for-byte reproducible builds.
+   process startup. A bundle Containerfile with its own base owns that base:
+   the generic one tracks `fedora-minimal:latest` (rebuilt by every release) —
+   pin a digest there if you need byte-for-byte reproducible builds.
 
    To automate that publish path (#195), fleet ships a **reusable GitHub Actions
    workflow** — `.github/workflows/publish-sandbox-image.yml` (`workflow_call`).
@@ -270,9 +279,9 @@ each piece yourself):
    builds the bundle's image with the same `scripts/build-sandbox-image.sh` and
    pushes an immutable `{git-sha}` tag plus `:latest` to GHCR with the caller's
    `GITHUB_TOKEN`. It exposes `image_ref` and `image_digest` as workflow outputs
-   and prints them in the run summary. Fleet core CI deliberately does NOT
-   publish the generic bundle's image (the coupling removed in 24ce69f stays
-   removed); a manual `workflow_dispatch` exists for ad-hoc publishes.
+   and prints them in the run summary. The generic bundle's image,
+   `ghcr.io/elcanotek/fleet-sandbox`, is published (signed) by release.yml on
+   every release, so this workflow refuses that name (ADR-0100).
 
    **Package visibility follows the publishing repo** (measured 2026-08-20, in
    this org): `ghcr.io/elcanotek/fleet-sandbox` and `…/fleet-sandbox-example`
@@ -283,8 +292,9 @@ each piece yourself):
    org-level setting may be in play — **check a new package's visibility after
    its first publish rather than assuming**. A public image needs no pull
    credentials; a private one means the box (or cluster) authenticates to GHCR.
-   Nothing sensitive is in any of these images either way — no shipped
-   Containerfile has a `COPY` or `ADD`, so they are Fedora plus RPMs; what a
+   Nothing sensitive is in any of these images either way — the only `COPY`
+   in a shipped sandbox Containerfile is the generic one's hash-locked
+   `requirements.txt`, so they are Fedora, RPMs and pinned PyPI packages; what a
    public package discloses is its *name*, and a public
    `fleet-sandbox-<client>` names a customer.
 
@@ -436,7 +446,7 @@ each piece yourself):
 
    There is no separate web unit to install: `fleet serve` serves the web UI
    on `FLEET_WEB_ADDR` (default `127.0.0.1:3000`; `off` disables it) from the
-   bundle `make build` embedded, reading its settings (`APP_SESSION_SECRET`,
+   bundle embedded in the release binary, reading its settings (`APP_SESSION_SECRET`,
    `FLEET_PUBLIC_BASE_URL`, `AUTH_*`, `FLEET_OIDC_*`) from the same
    `/etc/fleet/fleet.env`. `fleet version --web` prints the embedded bundle's
    build id. A box upgraded from the old Next.js tier (`fleet-web.service`)

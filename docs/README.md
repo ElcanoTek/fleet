@@ -83,6 +83,9 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
   connection test): [`docs/API-CLIENTS.md`](API-CLIENTS.md) +
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
+- **Reading auth facts from the spec** (`x-fleet-permission` per operation,
+  `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
+  manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
 - **One database** (both stores in one Postgres database, one schema each; moving a legacy two-database install with `fleet db consolidate`): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
@@ -303,6 +306,7 @@ above fails otherwise.
 - [`LLM-PROVIDERS.md`](LLM-PROVIDERS.md) — Admin-managed LLM providers
 - [`LOAD-TESTING.md`](LOAD-TESTING.md) — Load testing & benchmarks (#296)
 - [`MAINTENANCE.md`](MAINTENANCE.md) — Reclamation, disk backpressure, and stuck-task backstops
+- [`MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md) — Manifest contract: reading fleet's API facts from the OpenAPI spec
 - [`MCP-BROKER-SCOPES.md`](MCP-BROKER-SCOPES.md) — MCP broker scoped sessions
 - [`MCP-BUNDLE-ENV.md`](MCP-BUNDLE-ENV.md) — MCP bundle env contract: `${FLEET_WORKSPACE}`, the signed-in user's `${FLEET_USER_EMAIL}` (ADR-0087), `MCP_VARIANT_CLIENT`, `identity_env`, interactive critical-tool staging
 - [`MCP-CATALOG-SMOKE.md`](MCP-CATALOG-SMOKE.md) — Nightly MCP catalog smoke — dead links and live handshakes for the built-in directory
@@ -316,7 +320,7 @@ above fails otherwise.
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Claude Haiku 5.5 as the everyday default (2026-10-15), Gemini 4 Argon as the strong tier (2026-10-14); the earlier Luna Pro / Opus swaps (2026-09-21, 2026-09-22), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
-- [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
+- [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back, and how client bundles get their sandbox image (#2051, ADR-0100)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
 - [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), `fleet db consolidate` for legacy two-database installs, and removing the legacy layout (#2049, ADR-0098)
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections

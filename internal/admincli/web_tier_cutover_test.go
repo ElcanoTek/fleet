@@ -198,8 +198,8 @@ func TestCutoverFailureLeavesAStoppedTierAlone(t *testing.T) {
 // Every path that retires the old tier removes it only after fleet is back
 // up; nothing stops-and-removes in one go any more. bootstrap goes through
 // cutover_web_tier_or_die at both sites; update.sh and doctor.sh remove only
-// in their post-restart success branch; fleet-upgrade.sh after its readiness
-// gate (TestFleetUpgrade* run it).
+// in their post-restart success branch (update.sh's restart is `fleet release
+// install`, which gates on /readyz and rolls back itself).
 func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
 	t.Parallel()
 
@@ -215,7 +215,7 @@ func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
 	if strings.Contains(lib, "fleet_retire_web_tier()") {
 		t.Error("web-tier.sh still defines a stop-and-remove helper")
 	}
-	for _, name := range []string{"bootstrap.sh", "update.sh", "doctor.sh", "fleet-upgrade.sh"} {
+	for _, name := range []string{"bootstrap.sh", "update.sh", "doctor.sh"} {
 		if strings.Contains(read(name), "fleet_retire_web_tier") {
 			t.Errorf("%s still calls fleet_retire_web_tier", name)
 		}
@@ -233,7 +233,7 @@ func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
 	}
 
 	for name, restart := range map[string]string{
-		"update.sh": `systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT`,
+		"update.sh": `"$NEW_FLEET" release install --tag "$RELEASE_TAG"`,
 		"doctor.sh": `systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \` + "\n" + `       && { [[ "$web_tier_cutover" == "0" ]] || fleet_web_tier_wait_active`,
 	} {
 		body := read(name)

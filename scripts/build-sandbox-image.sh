@@ -69,31 +69,17 @@ BUNDLE_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
 MANIFEST="$BUNDLE_DIR/manifest.yaml"
 
 # containerfile: manifest sandbox.containerfile (relative to the bundle) when
-# present, else the conventional default path inside the bundle.
-manifest_value() {
-    # Extract a scalar under the top-level `sandbox:` block from the manifest.
-    # Tiny purpose-built parser (no yq dependency): finds the `sandbox:` line,
-    # then the first `  <key>:` under it, strips quotes/inline-comments. Good
-    # enough for the flat scalars this block carries; the Go loader is the
-    # authoritative parser the process consumes.
-    local key="$1" file="$2"
-    [[ -f "$file" ]] || return 0
-    awk -v key="$key" '
-        /^sandbox:[[:space:]]*$/ { in_block=1; next }
-        /^[^[:space:]]/ { in_block=0 }
-        in_block && $0 ~ "^[[:space:]]+" key ":" {
-            sub("^[[:space:]]+" key ":[[:space:]]*", "")
-            sub(/[[:space:]]+#.*$/, "")            # strip inline comment
-            gsub(/^["'\'']|["'\'']$/, "")          # strip surrounding quotes
-            print
-            exit
-        }
-    ' "$file"
-}
-
-CF_REL="$(manifest_value containerfile "$MANIFEST")"
-CF_REL="${CF_REL:-sandbox/Containerfile}"
-CONTAINERFILE="$BUNDLE_DIR/$CF_REL"
+# present, else the conventional default path inside the bundle — resolved by
+# the helper bootstrap.sh and update.sh use too (scripts/lib/sandbox-bundle.sh).
+# shellcheck source=lib/sandbox-bundle.sh
+. "$REPO_ROOT/scripts/lib/sandbox-bundle.sh"
+manifest_value() { fleet_sandbox_manifest_value "$@"; }
+# A bundle that ships no Containerfile AND names none customizes nothing: its
+# sandbox IS the generic image (fleet_sandbox_uses_release_image agrees), so a
+# build on the box — --from-source, or no release image reachable — builds the
+# generic bundle's Containerfile under the bundle's own sandbox.tag. A bundle
+# that NAMES a missing Containerfile still fails below: that is a broken bundle.
+CONTAINERFILE="$(fleet_sandbox_build_containerfile "$BUNDLE_DIR" "$REPO_ROOT/config/default")"
 
 # Image name/tag: explicit IMAGE_NAME wins; else derive from the manifest's
 # sandbox.tag (name:tag). Positional $1 overrides the tag.
@@ -117,7 +103,7 @@ fi
 
 if [[ ! -f "$CONTAINERFILE" ]]; then
     echo "build-sandbox-image: missing $CONTAINERFILE" >&2
-    echo "  (FLEET_CLIENT_CONFIG_DIR=$BUNDLE_DIR; the bundle must ship $CF_REL)" >&2
+    echo "  (FLEET_CLIENT_CONFIG_DIR=$BUNDLE_DIR; the bundle must ship ${CONTAINERFILE#"$BUNDLE_DIR"/})" >&2
     exit 1
 fi
 if ! command -v podman >/dev/null 2>&1; then
@@ -132,6 +118,15 @@ BUILD_CONTEXT="$(dirname "$CONTAINERFILE")"
 # Pull errors are suppressed by podman when a local copy of the base exists, so
 # an offline box still rebuilds from what it has instead of failing.
 BUILD_ARGS=(--pull=newer)
+# FLEET_SANDBOX_BASE: the release's signed sandbox image, as a VERIFIED digest
+# reference (update.sh/bootstrap.sh pass what `fleet release sandbox` printed).
+# A bundle Containerfile that starts `ARG FLEET_SANDBOX_BASE` / `FROM
+# ${FLEET_SANDBOX_BASE}` layers its additions on that base instead of
+# rebuilding the whole Python stack on the box (docs/RELEASE-ARTIFACTS.md);
+# one that does not declare the ARG ignores it.
+if [[ -n "${FLEET_SANDBOX_BASE:-}" ]]; then
+    BUILD_ARGS+=(--build-arg "FLEET_SANDBOX_BASE=${FLEET_SANDBOX_BASE}")
+fi
 if [[ "$NO_CACHE" == "1" ]]; then
     # Full refresh: re-run every RUN layer so unpinned dnf/pip installs pick up
     # current package versions even when the base digest did not move.

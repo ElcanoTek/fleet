@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -727,6 +728,10 @@ type Config struct {
 	// EmailAttachmentDir is the host directory MCP tools write downloaded
 	// attachments to and where uploads are staged for the sandbox bind mount.
 	// Generic infrastructure, independent of any specific email connector.
+	// Load resolves it to an ABSOLUTE path against the process cwd: paths
+	// derived from it (the outbound attachment copies in particular) are handed
+	// to MCP subprocesses that run in a different cwd, where the relative
+	// default "./data/attachments" would not resolve.
 	EmailAttachmentDir string
 
 	// ── rate limit (interactive) ──
@@ -1420,7 +1425,7 @@ func Load(envFile string) (*Config, error) {
 		RemoteMCPAllowInsecureHTTP: lp.getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
 
 		// ── attachments / uploads (generic infra) ──
-		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
+		EmailAttachmentDir: absoluteDir(getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments")),
 
 		// ── rate limit (interactive) ──
 		RatePerMinute:       lp.getenvInt("CHAT_RATE_PER_MIN", 40),
@@ -1600,6 +1605,15 @@ func Load(envFile string) (*Config, error) {
 			log.Printf("Warning: FLEET_%s is set but no longer used: Fleet no longer publishes account events (docs/adr/0096); remove it from the env file", k)
 		}
 	}
+
+	// Every entrypoint that can spawn MCP servers (fleet serve and the broker
+	// it starts, fleet task run, fleet mcp test) loads its config
+	// here, so this is where the outbound attachment staging dir is exported
+	// for agentcore.AdmitOutboundAttachmentDir. The value must equal
+	// tools.OutboundAttachmentStagingDir(cfg.EmailAttachmentDir), where the
+	// copies are actually written (pinned by a taskrun test; config cannot
+	// import tools).
+	agentcore.PinOutboundAttachmentDir(outboundAttachmentStagingDir(cfg.EmailAttachmentDir))
 
 	// Capture the boot environment last, once the process env is in its final
 	// (file-loaded, winners-restored) state, so a later hot-reload (#286) can
@@ -1921,6 +1935,30 @@ func boolKnobInEnv(key string) bool {
 // consistent). Numeric/bool/duration knobs are NOT read through these string
 // helpers — they parse through the envKnobs registry (knobs.go) via Load's
 // loadParser, which fails boot loudly on a set-but-malformed value.
+
+// absoluteDir resolves a configured directory against the process cwd. An
+// empty value stays empty (unset), and a cwd that cannot be read leaves the
+// value as written: every reader would fail the same way.
+func absoluteDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
+}
+
+// outboundAttachmentStagingDir mirrors tools.OutboundAttachmentStagingDir:
+// <emailAttachmentDir>/outbound, absolute, or "" when the dir is unset.
+func outboundAttachmentStagingDir(emailAttachmentDir string) string {
+	dir := absoluteDir(emailAttachmentDir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "outbound")
+}
 
 func getenvDefault(key, def string) string {
 	if v := envreg.Get(key); v != "" {

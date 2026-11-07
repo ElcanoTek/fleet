@@ -128,6 +128,11 @@ func main() {
 			// Exit 1 when the binary carries no bundle.
 			os.Exit(printWebBundle(os.Stdout))
 		}
+		if len(argv) > 1 && argv[1] == "--build-info" {
+			// JSON build facts, including the host-executor compile-time
+			// marker release.yml and `fleet release fetch` refuse on.
+			os.Exit(printBuildInfo(os.Stdout))
+		}
 		fmt.Println("fleet " + version.String())
 	case invokeMCPBroker:
 		// The out-of-process MCP credential broker over stdio (issue #167): it holds
@@ -304,6 +309,9 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.PinWorkspaceRoot()
+	// config.Load also exported the outbound attachment staging dir
+	// (agentcore.AdmitOutboundAttachmentDir); the MCP broker started below
+	// inherits it.
 
 	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
 	// With the endpoint unset (the default) this is a complete no-op — no

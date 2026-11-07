@@ -3,10 +3,10 @@
 Design note for the change that replaced GitHub's zero-config CodeQL "default
 setup" with an advanced-setup workflow, `.github/workflows/codeql.yml`.
 
-Companion reading: [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) —
-this is the same failure family (a toolchain version that had a second,
-unreconciled copy) and the same rule applies: one declaration point per version,
-asserted rather than remembered. [`TESTING.md`](TESTING.md) describes the rest of
+Companion reading: the node major's single declaration point (`web/.nvmrc`,
+`TestNodeMajorAgreesEverywhere`, ADR-0078) — the same failure family (a
+toolchain version that had a second, unreconciled copy) and the same rule:
+one declaration point per version, asserted rather than remembered. [`TESTING.md`](TESTING.md) describes the rest of
 the CI ladder.
 
 ## What was broken

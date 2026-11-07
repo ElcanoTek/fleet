@@ -25,6 +25,64 @@ info:
     The interactive chat HTTP/SSE API (`internal/httpapi`) is a separate surface
     and is not described here.
 
+    ## Machine-readable auth facts (vendor extensions)
+
+    External consumers (e.g. an intake app's contract check) should read these
+    instead of grepping fleet's Go source; `docs/MANIFEST-CONTRACT.md` maps each
+    fact to its path here.
+
+    - **`x-fleet-api-version`** (top level): the HTTP API major version, equal to
+      `apiversion.Version` — what `GET /api-info` reports as `api_version` and
+      every `/v1` response carries in `X-Fleet-API-Version`. `servers[0].url` is
+      the version prefix (`/v1`).
+    - **`x-fleet-permission`** (on EVERY operation): ONE value — the
+      `models.Permission` an `X-API-Key` principal must hold to be admitted to
+      the operation at all. `admin` implies every other permission. The
+      non-permission values: `none` (the operation REQUIRES no credential: it
+      admits a request that carries none; always paired with `security: []`.
+      It does not promise a presented credential is ignored — `POST
+      /auth/logout` revokes the session of a Bearer token it is given, and
+      `POST /auth/login` checks the username/password in its body and issues
+      a token); `authenticated` (any valid API key is admitted at the
+      HTTP layer and the permission is checked per JSON-RPC method inside the
+      dispatcher: the A2A endpoint only); `webhook` (`POST /triggers/{slug}`:
+      EITHER a typed `webhook` key whose allowed trigger slugs include the
+      path slug, as X-API-Key or Authorization: Bearer — a webhook key for
+      another slug is 403 — OR a valid per-trigger HMAC signature; no other
+      key type, admin included, is honoured; security schemes `webhookKey`,
+      `webhookKeyBearer`, `triggerSignature`); `hmac`
+      (`POST /triggers/email/{slug}`: the per-trigger HMAC signature only,
+      `triggerSignature`; no API key of any type). It is
+      deliberately a single value, not an any-of list: no operation is
+      admitted by one of several permissions.
+      What it does NOT capture, so read it as "necessary, and sufficient up to
+      these rules": (1) per-row rules applied after admission — own-rows task
+      visibility, creator-only transcripts and workspaces (`view_all_logs`
+      widens those), creator-or-`cancel_task` for stop/delete; a request that
+      clears the permission can still get a 403 for a row it may not touch.
+      (2) Key TYPE rules, in `x-fleet-key-types`: a typed key holds its type's
+      fixed permission set, a `readonly` key is refused (403) on any non-safe
+      method even where it holds the permission, and the admin-only routes
+      accept only the bootstrap `ADMIN_API_KEY` or a typed `admin` key.
+      (3) Legacy untyped `sk-` keys additionally need `view_tasks` on the routes
+      behind the scoped-key group middleware (every operation whose `security`
+      lists `scopedApiKey`, except `POST /tasks`, `/tasks/batch`,
+      `/tasks/estimate`, `/upload` and the A2A endpoint), and a legacy key is
+      never admitted to an `AdminAuthMiddleware` route even when it carries
+      `admin`. (4) `GET /files/{filename}` accepts the bootstrap
+      `ADMIN_API_KEY` only — a typed admin key is 401 there. (5) Human
+      principals (bearer token, Elcano cookie) are authorised by their role's
+      permission set (`models.RolePermissions`) through the same handler checks.
+      The value is proven against enforcement by
+      `TestOpenAPIPermissionEnforcement` (cmd/fleet), which drives real
+      requests through the real router with keys that hold, and lack, it;
+      `none` by `TestOpenAPINoneOperationsTakeNoCredential` and `webhook` /
+      `hmac` by `TestOpenAPITriggerAuthEnforcement`.
+    - **`x-fleet-key-types`** (top level): each typed key class
+      (`fleet_<type>_…`) with the permission set it carries and the HTTP methods
+      it may use on the scoped-key route group; pinned to `internal/sched/apikeys`
+      by `TestOpenAPIKeyTypes`.
+
 servers:
   - url: /v1
     description: >-
@@ -37,6 +95,20 @@ servers:
       compatibility. Responses carry Deprecation + Link (successor-version)
       headers; migrate to the /v1 base. (The version prefix is applied by a
       wrapper, so both bases resolve to the identical routes.)
+
+# The HTTP API major version (apiversion.Version). See info.description.
+x-fleet-api-version: "1"
+
+# Typed API-key classes (internal/sched/apikeys): the permission set each type
+# carries (KeyType.Permissions) and the HTTP methods it may use on the
+# scoped-key route group (TypeAllowsMethod). `any` = every method. Webhook keys
+# reach no scoped-key route: they authenticate POST /triggers/{slug} only, for
+# their own slugs (x-fleet-permission: webhook).
+x-fleet-key-types:
+  admin: { permissions: [admin], methods: any }
+  task: { permissions: [create_task, view_tasks, view_logs], methods: any }
+  readonly: { permissions: [view_tasks, view_logs], methods: [GET, HEAD, OPTIONS] }
+  webhook: { permissions: [], methods: [] }
 
 components:
   headers:
@@ -69,6 +141,30 @@ components:
       in: cookie
       name: elcano_auth
       description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
+    webhookKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        A typed webhook key (fleet_webhook_…, #190), accepted ONLY on
+        POST /triggers/{slug} and only for a slug in the key's allowed trigger
+        slugs (x-fleet-permission: webhook).
+    webhookKeyBearer:
+      type: http
+      scheme: bearer
+      description: >-
+        The same fleet_webhook_ key sent as Authorization: Bearer (checked after
+        X-API-Key). Not a user token.
+    triggerSignature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: >-
+        "sha256=" + hex HMAC-SHA256 of the raw request body under the trigger's
+        own secret (GitHub-compatible). X-Fleet-Signature-256 is read when
+        X-Hub-Signature-256 is absent. OpenAPI cannot express a body signature;
+        this scheme names the header, and the value is a signature, not a
+        static key.
 
   schemas:
     PromptLibraryWrite:
@@ -708,6 +804,7 @@ paths:
     get:
       summary: Liveness check.
       security: []
+      x-fleet-permission: none
       responses:
         "200":
           description: OK
@@ -724,6 +821,7 @@ paths:
         supported/deprecated version lists. Unauthenticated (same posture as
         /health); reachable at both /api-info and /v1/api-info.
       security: []
+      x-fleet-permission: none
       responses:
         "200":
           description: Version metadata.
@@ -741,6 +839,7 @@ paths:
     get:
       summary: Prometheus metrics (text exposition format). Admin-API-key gated.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: OK
@@ -751,6 +850,7 @@ paths:
     get:
       summary: Public dashboard config (version, server clock, task-scheduling default zone).
       security: []
+      x-fleet-permission: none
       responses:
         "200":
           description: OK
@@ -791,6 +891,7 @@ paths:
         sets FLEET_A2A_ENABLED. See docs/A2A.md; spec pin
         internal/a2a.SpecVersion.
       security: []
+      x-fleet-permission: none
       responses:
         "200":
           description: The Agent Card.
@@ -820,6 +921,7 @@ paths:
         (A2A §3.3.2). Requires the A2A-Version: "1.0" header. Answers 501
         until FLEET_A2A_ENABLED is set. See docs/A2A.md.
       security: [{ scopedApiKey: [] }, { adminApiKey: [] }]
+      x-fleet-permission: authenticated
       requestBody:
         content:
           application/json:
@@ -849,6 +951,7 @@ paths:
         a base and POST to "<url>/", which chi's exact matching otherwise
         404s. Same handler, same auth, same rate limiter.
       security: [{ scopedApiKey: [] }, { adminApiKey: [] }]
+      x-fleet-permission: authenticated
       requestBody:
         content:
           application/json:
@@ -875,6 +978,7 @@ paths:
         holders list every task. The same scope applies to the single-task
         reads, export, and the upcoming projection.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -885,6 +989,7 @@ paths:
       summary: Create (schedule) a task.
       description: Authenticated in-handler — accepts an admin key, a scoped key, a user bearer token, or the Elcano cookie.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           application/json:
@@ -911,6 +1016,7 @@ paths:
         (one by the auth check, N-1 by the handler) so the batch path is never a
         rate-limit bypass.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           application/json:
@@ -963,6 +1069,7 @@ paths:
         with null cost fields and an explanatory note when the model's pricing is
         unknown. Same authentication and rate limiter as POST /tasks.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           application/json:
@@ -989,6 +1096,7 @@ paths:
         created, with counts over those tasks; the admin key, PermissionAdmin
         carriers, and view_all_logs holders get the fleet-wide catalogue.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -1012,6 +1120,7 @@ paths:
         /tasks/tags (#1082): a non-admin user or scoped API key gets only the
         addresses on tasks it created.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -1030,6 +1139,7 @@ paths:
     get:
       summary: Export task DEFINITIONS (not runs/logs) as a versioned JSON or YAML envelope for backup, cross-box migration, and cloning (#238).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       parameters:
         - name: ids
           in: query
@@ -1063,6 +1173,7 @@ paths:
     post:
       summary: Import task definitions from a previously exported envelope; creates tasks in a single batch with per-task conflict handling (#238).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       parameters:
         - name: dry_run
           in: query
@@ -1120,6 +1231,7 @@ paths:
     get:
       summary: Get a task.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -1138,6 +1250,7 @@ paths:
         ceiling back to inheriting the deployment ceiling, or 0 for priority to
         reset it to normal (50).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           application/json:
@@ -1161,6 +1274,7 @@ paths:
         task's creator — the user or API key that created it. A task outside
         the caller's scope answers 404.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200": { description: Cancelled (attribution on the task's result). }
   /tasks/{task_id}/permanent:
@@ -1186,6 +1300,7 @@ paths:
         caller can see, or the task's creator (user or API key); 404 for a
         task outside the caller's scope.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: Deleted.
@@ -1219,6 +1334,7 @@ paths:
         marks a legacy/corrupt invariant-violating success row (no output_json,
         or stored bytes that are not valid JSON).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The validated structured output (shape defined by the task's output_schema).
@@ -1246,6 +1362,7 @@ paths:
         disabled, or the diagnosis was not produced); 409 while the task has not
         yet reached a terminal state.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The error diagnosis.
@@ -1292,6 +1409,7 @@ paths:
         creator-private workspace. 404 when the run published no artifacts; 409
         while the task has not yet reached a terminal state.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The published-artifact manifest.
@@ -1318,6 +1436,7 @@ paths:
     post:
       summary: Atomically add and/or remove tags on a task.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           application/json:
@@ -1355,6 +1474,7 @@ paths:
         owner's hosted connections is a 400 carrying the message its run
         would have dead-lettered with.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: false
         content:
@@ -1426,6 +1546,7 @@ paths:
         source's owner, overrides.new_lineage starts a job of its own, and an
         unresolvable mcp_selection is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: false
         content:
@@ -1468,6 +1589,7 @@ paths:
         admin API key, a scoped key carrying admin, or an admin-role session).
         CLI twin: fleet sched task set-owner <task_id> <username>.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       requestBody:
         required: true
         content:
@@ -1509,6 +1631,7 @@ paths:
         Event types: agent_message, tool_call, tool_result, and a terminal status.
         Same auth + ownership gate as GET /logs/{task_id}.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: An SSE stream of run-log events.
@@ -1534,6 +1657,7 @@ paths:
         With ?format=zip the entire workspace is streamed as a ZIP archive (capped at
         FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES total uncompressed size, default 50 MiB).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       parameters:
         - name: format
           in: query
@@ -1568,6 +1692,7 @@ paths:
         the task's creator. A file larger than FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES
         (default 50 MiB) returns 413 and must be fetched via the CLI.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: The file contents, as an attachment.
@@ -1583,6 +1708,7 @@ paths:
     post:
       summary: Cleanup completed/old task history.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
   /tasks/model:
@@ -1592,6 +1718,7 @@ paths:
         Fleet-wide mutation; admin-only. Optionally limited to tasks pinned to
         from_model. dry_run returns the matched tasks without writing.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       requestBody:
         content:
           application/json:
@@ -1624,6 +1751,7 @@ paths:
         Admin-only. The chat server exposes the equivalent for its own database
         at the same path on its port.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: Migration status for the sched database.
@@ -1664,6 +1792,7 @@ paths:
         for those fleet-wide principals. Every /datasets/{datasetID} route
         answers 404 for a dataset outside the caller's scope.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The dataset list.
@@ -1683,6 +1812,7 @@ paths:
         pinned model each row runs at, and an optional persona + worker
         concurrency (1..8, default 2).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: true
         content:
@@ -1715,6 +1845,7 @@ paths:
     get:
       summary: Get one dataset (#514).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The dataset with row counts.
@@ -1726,6 +1857,7 @@ paths:
       summary: Delete a dataset and its rows (#514).
       description: Refused (409) while the dataset is running — pause it first.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       responses:
         "204": { description: Deleted. }
         "404": { $ref: "#/components/responses/Error" }
@@ -1743,6 +1875,7 @@ paths:
         (default limit 200). A limit outside 1-1000, a negative offset, or a
         non-integer value for either is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       parameters:
         - name: status
           in: query
@@ -1777,6 +1910,7 @@ paths:
         only target input columns; unknown names are rejected. Capped at 5000
         rows / 16 MiB per request.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: true
         content:
@@ -1815,6 +1949,7 @@ paths:
         (402 when the caller's budget window is exhausted), as do row import
         and re-run.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       responses:
         "200":
           description: Run started.
@@ -1839,6 +1974,7 @@ paths:
       summary: Pause a running dataset (#514).
       description: Cancels the active run between rows; pending rows stay pending and resume on the next run.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       responses:
         "200":
           description: Paused.
@@ -1863,6 +1999,7 @@ paths:
         approved. Empty/omitted row_ids approves EVERY proposed row (bulk
         approve). Only rows in status "proposed" are touched.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: false
         content:
@@ -1894,6 +2031,7 @@ paths:
         The given row_ids (any non-running status), or EVERY failed row when
         omitted (bulk retry). Clears proposed/error state; approved cells stay.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: false
         content:
@@ -1923,6 +2061,7 @@ paths:
       summary: Export the dataset as CSV (#514).
       description: All columns (approved values merged) plus _status/_note/_error per row.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The CSV export.
@@ -1944,6 +2083,7 @@ paths:
         enabled, a learned instruction is DISTILLED and staged as 'proposed'
         (off-thread) — it does not change behavior until activated.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       requestBody:
         required: true
         content:
@@ -1970,6 +2110,7 @@ paths:
     get:
       summary: List a task's learned instructions (#516), newest version first.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: The task's learned instructions.
@@ -1998,6 +2139,7 @@ paths:
         any prior active) — this is both the activate and the revert primitive.
         Requires operator (cancel) permission.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: cancel_task
       responses:
         "200":
           description: The activated instruction.
@@ -2016,6 +2158,7 @@ paths:
       summary: Deactivate the active learned instruction (#516 full revert).
       description: Archives the task's active learned instruction so future runs inject none. Requires operator (cancel) permission.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: cancel_task
       responses:
         "200":
           description: Whether an instruction was active.
@@ -2034,6 +2177,7 @@ paths:
         parked in paused_awaiting_input (holding no sandbox/lease). Newest
         first; ?limit= outside 1-1000 (or non-integer) is a 400.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       parameters:
         - name: limit
           in: query
@@ -2065,6 +2209,7 @@ paths:
         continues. 409 when the task is not paused. Requires operator (cancel)
         permission.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: cancel_task
       requestBody:
         required: true
         content:
@@ -2102,6 +2247,7 @@ paths:
         wake or waits for a different event. Requires operator (cancel)
         permission, mirroring /tasks/{task_id}/resume. See docs/SELF-WAKE.md.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: cancel_task
       requestBody:
         required: true
         content:
@@ -2134,6 +2280,7 @@ paths:
         table). ?limit= outside 1-1000 (or non-integer) is a 400, as is an
         ?until= that is not an RFC3339 timestamp.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       parameters:
         - name: limit
           in: query
@@ -2177,6 +2324,7 @@ paths:
         persists, plus a fleet-wide aggregate (tool-turn histogram and the
         share of runs that were long multi-tool pipelines). Admin-only.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       parameters:
         - name: runs
           in: query
@@ -2229,6 +2377,7 @@ paths:
         (critical/high/normal/low/bulk). Lower priority integer = higher urgency.
         Admin-only — backlog data is operator-sensitive.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: Pending-queue depth and oldest wait, overall and per tier.
@@ -2266,6 +2415,7 @@ paths:
         (bind addresses, DB DSNs, auth secrets, the admission-semaphore size, TLS)
         are NOT reloadable and are reported under `skipped` when changed. Admin-only.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: A diff of what changed, was skipped (needs restart), or errored.
@@ -2313,6 +2463,7 @@ paths:
         in-flight runs finish on their current tool set. Equivalent to sending
         SIGHUP. Admin-only. Returns a summary of what changed.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: Summary of the servers added, removed, restarted, or left unchanged.
@@ -2343,6 +2494,7 @@ paths:
         Admin-only; read-only. `fleet mcp schema-issues` and `fleet doctor`
         read it.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: The findings, sorted by server then tool.
@@ -2379,6 +2531,7 @@ paths:
         non-admin member gets 403 (#458). days= (default 7, clamped to [1, 90])
         selects the window.
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       parameters:
         - name: days
           in: query
@@ -2409,6 +2562,7 @@ paths:
         provider runs accrue $0 unless a pricing override is set — token totals
         are complete regardless.
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       parameters:
         - name: group_by
           in: query
@@ -2450,6 +2604,7 @@ paths:
         on pricing configuration (#289) — token totals are complete
         regardless, which is why the leaderboard reads token volume first.
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       parameters:
         - name: from
           in: query
@@ -2488,6 +2643,7 @@ paths:
         admin permission so both the admin API key and an admin-role dashboard
         session are accepted (#458).
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       responses:
         "200":
           description: The configured budgets with live evaluation.
@@ -2515,6 +2671,7 @@ paths:
         FLEET_MAX_TOTAL_TOKENS ceilings, never exceed them. Admin-only
         (in-handler admin gate, #458).
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       requestBody:
         required: true
         content:
@@ -2534,6 +2691,7 @@ paths:
     delete:
       summary: Delete a per-principal rolling budget (#601 part 2).
       security: [{ adminApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       parameters:
         - name: budget_id
           in: path
@@ -2563,6 +2721,7 @@ paths:
         anyone else's is 403. Same gate on the /history siblings and on
         GET /tasks/{task_id}/stream.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: OK
@@ -2585,6 +2744,7 @@ paths:
         the SAME task id overwrote a transcript. Same auth + ownership gate as
         GET /logs/{task_id}.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: OK
@@ -2618,6 +2778,7 @@ paths:
         Returns the LogSession shape GET /logs/{task_id} returns. Entry lookups
         are task-scoped; same auth + ownership gate as GET /logs/{task_id}.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: OK
@@ -2648,6 +2809,7 @@ paths:
         longer present, while the parent log's linkage entry remains the
         durable record.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_logs
       responses:
         "200":
           description: OK
@@ -2662,6 +2824,7 @@ paths:
     post:
       summary: Create a sched user.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       requestBody:
         content:
           application/json:
@@ -2676,6 +2839,7 @@ paths:
     get:
       summary: The authenticated principal.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -2686,6 +2850,7 @@ paths:
     get:
       summary: Dashboard stats.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -2703,6 +2868,7 @@ paths:
         seat names (derived from the <VAR>_<ACCOUNT> env suffix scan). Secret
         values are never returned.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -2733,6 +2899,7 @@ paths:
         every provisioned (server, account) seat by name; never returns secret
         values.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -2761,6 +2928,7 @@ paths:
         (the task is created through the ordinary POST /tasks path). Returns an
         empty array when the bundle ships no templates.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: OK
@@ -2807,6 +2975,7 @@ paths:
         directory with the caller's private prompts and all workspace-shared
         database prompts.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: Visible prompt entries.
@@ -2816,6 +2985,7 @@ paths:
     post:
       summary: Create a private or workspace-shared prompt.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: true
         content:
@@ -2830,6 +3000,7 @@ paths:
     get:
       summary: Export the visible hybrid prompt library as versioned JSON.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200":
           description: Portable prompt-library backup.
@@ -2852,6 +3023,7 @@ paths:
     put:
       summary: Replace an owned database-backed prompt (admins may replace any).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         required: true
         content:
@@ -2864,6 +3036,7 @@ paths:
     delete:
       summary: Delete an owned database-backed prompt (admins may delete any).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       responses:
         "204": { description: Deleted }
         "404": { $ref: "#/components/responses/Error" }
@@ -2872,6 +3045,7 @@ paths:
     post:
       summary: Create an API key (plaintext shown once).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       requestBody:
         content:
           application/json:
@@ -2885,12 +3059,14 @@ paths:
     get:
       summary: List API keys (metadata only).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
   /keys/audit:
     get:
       summary: API-key audit log.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
   /keys/{key_id}:
@@ -2902,12 +3078,14 @@ paths:
     get:
       summary: Get an API key's metadata.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
         "404": { $ref: "#/components/responses/Error" }
     delete:
       summary: Delete an API key.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Deleted }
   /keys/{key_id}/rotate:
@@ -2919,6 +3097,7 @@ paths:
     post:
       summary: Rotate an API key (new plaintext shown once).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Rotated }
   /keys/{key_id}/revoke:
@@ -2930,6 +3109,7 @@ paths:
     post:
       summary: Revoke an API key.
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Revoked }
 
@@ -2937,11 +3117,13 @@ paths:
     get:
       summary: List published notes.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200": { description: OK }
     post:
       summary: Create a note (admin).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Created }
   /notes/{slug}:
@@ -2953,17 +3135,20 @@ paths:
     get:
       summary: Get a note by slug.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: view_tasks
       responses:
         "200": { description: OK }
         "404": { $ref: "#/components/responses/Error" }
     put:
       summary: Update a note (admin).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Updated }
     delete:
       summary: Archive a note (admin).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Archived }
   /notes/proposals:
@@ -2971,6 +3156,7 @@ paths:
       summary: List note proposals (admin).
       description: Requires the admin permission (admin API key, a key carrying admin, or an admin-role user).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
         "403": { $ref: "#/components/responses/Error" }
@@ -2984,6 +3170,7 @@ paths:
       summary: Get a note proposal (admin).
       description: Requires the admin permission (admin API key, a key carrying admin, or an admin-role user).
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: OK }
         "403": { $ref: "#/components/responses/Error" }
@@ -2997,6 +3184,7 @@ paths:
     post:
       summary: Publish a note proposal (admin).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Published }
   /notes/proposals/{id}/reject:
@@ -3008,6 +3196,7 @@ paths:
     post:
       summary: Reject a note proposal (admin).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: Rejected }
 
@@ -3021,6 +3210,7 @@ paths:
         stage uploads; a valid readonly/webhook key gets a definitive 403), a
         user bearer token, or the Elcano cookie.
       security: [{ adminApiKey: [] }, { scopedApiKey: [] }, { bearerToken: [] }, { elcanoAuthCookie: [] }]
+      x-fleet-permission: create_task
       requestBody:
         content:
           multipart/form-data:
@@ -3041,6 +3231,7 @@ paths:
     get:
       summary: Download a previously-uploaded file (admin-only; the worker-node download path was removed in #459).
       security: [{ adminApiKey: [] }]
+      x-fleet-permission: admin
       responses:
         "200": { description: The file bytes }
         "401": { $ref: "#/components/responses/Error" }
@@ -3058,13 +3249,18 @@ paths:
         Spawns a one-shot run cloned from the trigger's template task, with the
         rendered prompt_template as the prompt. Authenticated SOLELY by the
         per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible
-        X-Hub-Signature-256, or X-Fleet-Signature-256) — NOT the admin API key.
-        Unknown slug and bad signature both return 401 (indistinguishable, with
-        equalized HMAC work) to prevent slug enumeration. A leaked secret lets a
-        caller inject the spawned run's prompt under the template's seat
-        (network/MCP/files); the sandbox remains the execution boundary. Rotate
-        with `fleet sched trigger rotate`.
-      security: []
+        X-Hub-Signature-256, or X-Fleet-Signature-256), OR by a typed
+        fleet_webhook_ API key whose allowed trigger slugs include this slug
+        (#190), sent as X-API-Key or Authorization: Bearer — never the admin
+        API key or any other key type. A valid webhook key that does not list
+        this slug is a definitive 403. Unknown slug and bad signature both
+        return 401 (indistinguishable, with equalized HMAC work) to prevent slug
+        enumeration. A leaked secret or key lets a caller inject the spawned
+        run's prompt under the template's seat (network/MCP/files); the sandbox
+        remains the execution boundary. Rotate the secret with
+        `fleet sched trigger rotate`.
+      security: [{ webhookKey: [] }, { webhookKeyBearer: [] }, { triggerSignature: [] }]
+      x-fleet-permission: webhook
       requestBody:
         content:
           application/json:
@@ -3080,6 +3276,7 @@ paths:
                   run_id: { type: string, format: uuid }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
 
   /triggers/email/{slug}:
     parameters:
@@ -3093,7 +3290,8 @@ paths:
         An email provider's inbound-parse webhook posts a normalized email
         payload to spawn a governed run cloned from the trigger's template task.
         Authenticated by the per-trigger HMAC-SHA256 secret over the raw body
-        (X-Hub-Signature-256 or X-Fleet-Signature-256) — NOT the admin API key.
+        (X-Hub-Signature-256 or X-Fleet-Signature-256) ONLY — no API key of
+        any type, webhook keys included, is accepted here.
         An unknown slug, a webhook-kind slug, or a bad signature all return an
         identical timing-equalized 401 (no slug/kind enumeration). After auth the
         email-kind policy is enforced (approved senders → 403; required DKIM/SPF →
@@ -3103,7 +3301,8 @@ paths:
         when the template task set allow_event_triggers=true; otherwise it runs
         with native tools only. The run is recorded against the inbound event, and
         on success a reply is sent to the sender when SMTP is configured.
-      security: []
+      security: [{ triggerSignature: [] }]
+      x-fleet-permission: hmac
       requestBody:
         description: >-
           A normalized inbound email: { message_id, from, to, subject, text,
@@ -3142,6 +3341,7 @@ paths:
         ADR-0095), where a token this login minted earlier is not accepted
         either.
       security: []
+      x-fleet-permission: none
       requestBody:
         content:
           application/json:
@@ -3163,5 +3363,6 @@ paths:
         minted by POST /auth/login, that session is also ended server-side, so
         the token is refused (401) from then on.
       security: []
+      x-fleet-permission: none
       responses:
         "303": { description: Redirect (See Other) after clearing the cookie. }

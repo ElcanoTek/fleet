@@ -39,7 +39,7 @@ func TestDoctorDryRunSmoke(t *testing.T) {
 		"root build caches",
 		"60-fleet-journal-cap.conf",
 		"Sandbox smoke",
-		"Source freshness",
+		"Release + checkout",
 		"staged copy under", // the client bundle must be service-owned and outside the checkout (#1655)
 	} {
 		if !strings.Contains(out, want) {
@@ -95,7 +95,6 @@ func TestDoctorLoadBearingStrings(t *testing.T) {
 	script := string(body)
 	for _, want := range []string{
 		"skip_if_unavailable=1",
-		"upgrade -y --quiet nodejs",
 		":100000:65536",
 		`cgroup_manager = "cgroupfs"`,
 		"podman system migrate",

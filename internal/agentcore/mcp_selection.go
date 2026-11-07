@@ -517,11 +517,13 @@ func bindMCPServer(ctx context.Context, client *mcp.Client, plan mcpBindPlan, wo
 //  3. ${FLEET_TASK_ID}: taskID for a scheduled run's own bases; every other
 //     caller passes "" (no task identity), which drops the keys.
 //  4. ${FLEET_WORKSPACE_ROOT}: the deployment root, offered on every path.
+//     A read allowlist that admits the root (a *ALLOWED_DIRS key) also gets
+//     fleet's outbound attachment staging dir (AdmitOutboundAttachmentDir).
 func SpawnEnv(env map[string]string, workdir, taskID string, user MCPUserIdentity) map[string]string {
 	env = ExpandUserEnv(env, user)
 	env = ExpandWorkspaceEnv(env, workdir)
 	env = ExpandTaskIDEnv(env, taskID)
-	return ExpandWorkspaceRootEnv(env)
+	return ExpandWorkspaceRootEnv(AdmitOutboundAttachmentDir(env))
 }
 
 func upperAccount(account string) string {

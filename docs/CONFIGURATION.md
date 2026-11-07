@@ -142,7 +142,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
 | `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Also read as `DATA_DIR` (read only by the operator CLI's API-key store lookup (fleet sched apikey); the server ignores it). Deprecated aliases: `CHAT_DATA_DIR`, `CUTLASS_DATA_DIR` (process env only). Helm: set by the chart from `dataDir`. |
-| `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. Relative to the working directory, not FLEET_DATA_DIR. Helm: set by the chart from `dataDir (+ /attachments)`. |
+| `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. A relative value is resolved against the working directory (not FLEET_DATA_DIR) to an absolute path at load. Helm: set by the chart from `dataDir (+ /attachments)`. |
 | `CONVERSATION_TTL_DAYS` | int | `14` | server | Days an unpinned conversation is kept. *Validated at boot*. |
 | `CONVERSATION_UNPINNED_CAP` | int | `50` | server | Maximum unpinned conversations kept per user. *Validated at boot*. |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | int | `30` | server | Days finished input-queue rows keep their idempotency keys; 0 disables the purge. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_INPUT_QUEUE_RETENTION_DAYS` (process env only), `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` (process env only). |
@@ -333,6 +333,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `TAVILY_API_KEY` | string | — | server | Tavily key for the web-search tool. **Secret.** |
 | `BROWSERBASE_API_KEY` | string | — | server | Browserbase key that mints live-view links (docs/BROWSERBASE.md). Set it with `fleet config set-browserbase-key`. **Secret.** |
 | `CUTLASS_ALLOWED_DIRS` | string | — | broker | Connector wire key: the workspace directories passed to cutlass-family MCP servers. A canonical name, not a legacy alias. |
+| `FLEET_MCP_OUTBOUND_ATTACHMENT_DIR` | path | — | broker | Internal: exported when the configuration loads (fleet serve and the MCP broker it starts, fleet task run, fleet mcp test) as the absolute EMAIL_ATTACHMENT_DIR/outbound; MCP spawns append it to connector *ALLOWED_DIRS lists that admit the workspace root (docs/MCP-BUNDLE-ENV.md). Not operator-facing: loading overwrites any value. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CUTLASS_IMAGE_OUTPUT` | path | — | broker | Connector wire key: image output directory for cutlass-family MCP servers. A canonical name, not a legacy alias. |
 | `CUTLASS_IMAGE_MODEL` | string | — | broker | Connector wire key: image model for cutlass-family MCP servers. A canonical name, not a legacy alias. |
 | `GH_TOKEN` | string | — | broker | GitHub token admitted from the env file for MCP servers that use the gh CLI; fleet itself does not read it. **Secret.** |
@@ -404,6 +405,12 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_CADDYFILE` | path | `/etc/caddy/Caddyfile` | cli | Caddyfile `fleet doctor`/`fleet status` inspect. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_CHAT_URL` | url | — | cli | Chat server URL for `fleet chat`, `fleet acp` and fleet-bench. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_USER_EMAIL` | string | — | cli | Email `fleet chat` and `fleet acp` act as when --email is not given. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_RELEASE_CACHE_DIR` | path | `/var/cache/fleet` | cli | Private cache (root-owned, 0700) of the pinned cosign and each release's staging dir; fleet release, update.sh and bootstrap.sh refuse one others can write. Non-root runs default to the user cache dir. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_RELEASE_BASE_URL` | url | `https://github.com/ElcanoTek/fleet/releases/download` | cli | Where release assets are downloaded from (a mirror). Changes only where bytes come from: they are verified against the pinned signer identity regardless. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_RELEASE_LATEST_URL` | url | `https://api.github.com/repos/ElcanoTek/fleet/releases/latest` | cli | The endpoint that names the newest published release. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_COSIGN_URL` | url | (the pinned cosign's GitHub release) | cli | Where the pinned cosign is downloaded from (a mirror); the download must still match the digest in internal/release/cosign.lock. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_COSIGN_BIN` | path | — | cli | Use this cosign instead of downloading one; it must be the pinned build (its SHA-256 is checked) and is copied into the private cache before it runs. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_SIGSTORE_TRUSTED_ROOT` | path | — | cli | A Sigstore trusted_root.json for offline verification (air-gapped boxes, tests); default is Sigstore's public-good root over TUF. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_INSTALL_DIR` | path | `/opt/fleet` | cli | Install checkout used by bootstrap, update and doctor. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SANDBOX_MAX_AGE_DAYS` | int | `7` | cli | `fleet update` rebuilds a sandbox image older than this. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_DRAIN_OWNER_TOKEN` | string | — | cli | Internal: identifies the update that owns the drain sentinel (set by the CLI for scripts/lib/idle.sh). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -440,11 +447,20 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
 | `FLEET_UPDATE_YES` | bool | `0` | scripts | update.sh: same as --yes (skip the confirmation). *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_UPGRADE_YES` | bool | `0` | scripts | fleet-upgrade.sh: skip the confirmation. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_UPDATE_TAG` | string | (the newest published release) | scripts | update.sh: same as --tag (install this signed release, vYYYY.MM.DD.N). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_UPDATE_ALLOW_DOWNGRADE` | bool | `0` | scripts | update.sh: same as --allow-downgrade (install a release older than the running one). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_UPDATE_FROM_SOURCE` | bool | `0` | scripts | update.sh: same as --from-source (development boxes: build from the checkout instead of installing a signed release). Legacy: removed once every box runs artifacts. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_RELEASE_TAG` | string | (the newest published release) | scripts | bootstrap.sh: same as --tag (install this signed release, vYYYY.MM.DD.N). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_BOOTSTRAP_FROM_SOURCE` | bool | `0` | scripts | bootstrap.sh: same as --from-source (development boxes: build from the checkout). Legacy: removed once every box runs artifacts. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_BOOTSTRAP_ALIGNED` | bool | `0` | scripts | Internal: set by bootstrap.sh when it re-executes itself from the verified release's checkout. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_SANDBOX_BASE` | string | — | scripts | Internal: the release's verified sandbox image (by digest) that bootstrap/update pass to build-sandbox-image.sh for a bundle Containerfile declaring ARG FLEET_SANDBOX_BASE. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PINS_COOLDOWN_DAYS` | int | `7` | scripts | update-pins.sh: how old an upstream release must be before a pin moves to it. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PINS_GITHUB_API` | url | `https://api.github.com` | test | Test seam: the GitHub API update-pins.sh asks for releases. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PINS_GITHUB_DOWNLOAD` | url | `https://github.com` | test | Test seam: where update-pins.sh downloads release assets and checksums. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PINS_PYPI` | url | `https://pypi.org` | test | Test seam: the PyPI index update-pins.sh asks for versions. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_NO_PULL` | bool | `0` | scripts | update.sh: same as --no-pull. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_BRANCH` | string | — | scripts | update.sh: same as --branch. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_ADOPT_UNITS` | bool | `0` | scripts | update.sh: same as --adopt-units. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_UPDATE_NODE_REPAIR` | bool | `1` | scripts | update.sh: 0 is the same as --no-node-repair. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_OFFER_TIMERS` | bool | `1` | scripts | update.sh: 0 is the same as --no-timers. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_POLL_SECONDS` | int | `5` | scripts | update.sh: poll interval while waiting for work to drain. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_UPDATE_REEXEC` | bool | `0` | scripts | Internal: set by update.sh when it re-executes its updated self. *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -461,18 +477,13 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_KEEP_SSH_PASSWORDS` | bool | `0` | scripts | bootstrap.sh: skip making SSH key-only. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SERVICE_USER` | string | `fleet` | scripts | doctor.sh: the service account. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SERVICE_HOME` | path | `/var/lib/fleet` | scripts | doctor.sh: the service account's home. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_HEALTH_URL` | url | — | scripts | fleet-upgrade.sh: health URL polled after the upgrade. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_HEALTH_TIMEOUT` | int | `90` | scripts | fleet-upgrade.sh: seconds to wait for health. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_HEALTH_TIMEOUT` | int | `90` | scripts | update.sh: seconds `fleet release install` waits for the restarted service's /readyz before it rolls back to the previous binary. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_IDLE_APPROVAL_WINDOW_SECONDS` | int | `7200` | scripts | scripts/lib/idle.sh: how recent a pending approval must be to count as active work. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_PSQL_TIMEOUT_SECONDS` | int | `5` | scripts | scripts/lib/idle.sh: timeout of its psql probes. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_WAIT_DEADLINE_EPOCH` | int | — | scripts | Internal: deadline of an update's wait for work to drain. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SANDBOX_BUILD_NO_CACHE` | bool | `0` | scripts | build-sandbox-image.sh: build without the layer cache. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SKIP_SANDBOX_BUILD` | bool | `0` | scripts | run_workflow_live.sh: reuse the existing sandbox image. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_RUNS_DIR` | path | (<checkout>/.fleet-runs) | scripts | run_workflow_live.sh: where per-run workspaces go. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_NODE_DIST_URL` | url | `https://nodejs.org/dist` | scripts | Node.js download mirror used when the box's node is below the floor. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_NODE_RELEASE_KEYS` | path | — | scripts | Keyring that verifies Node.js release signatures. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_NODE_TARBALL_PREFIX` | path | `/usr/local/lib/fleet-node` | scripts | Where a tarball Node.js is installed. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_NODE_TARBALL_BINDIR` | path | `/usr/local/bin` | scripts | Where its node/npm links go. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_WEB_TIER_BUILD_DIR` | path | `/opt/fleet/web` | scripts | Retired Next.js tier's build directory (removed by update, ADR-0091). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_WEB_TIER_SHIM` | path | `/usr/local/bin/fleet-web-start.sh` | scripts | Retired Next.js tier's start shim (removed by update, ADR-0091). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_WEB_TIER_UNIT_DIR` | path | `/etc/systemd/system` | scripts | Where the retired web tier's unit is looked for. *Process env only* (fleet's env-file loader does not admit it; export it). |

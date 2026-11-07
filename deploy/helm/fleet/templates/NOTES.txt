@@ -1,8 +1,16 @@
 fleet installed as {{ .Release.Name }} in {{ .Release.Namespace }}.
 
 Control plane : one replica (by design — single-owner scheduler; do not scale it)
-Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ .Values.sandbox.image }}
+Sandbox pods  : namespace {{ include "fleet.sandboxNamespace" . }}, image {{ include "fleet.sandboxImage" . }}
 Workspace     : PVC {{ .Values.workspace.claimName }} mounted at {{ .Values.workspaceRoot }} (control plane + every sandbox pod)
+{{- range $ref := splitList "," (include "fleet.unpinnedImages" .) }}
+{{- if $ref }}
+WARNING: {{ $ref }} is NOT digest-pinned — it is deployed by a tag that can be
+moved. Pin your own image with image.digest / sandbox.imageDigest (or an
+@sha256: reference in sandbox.image); the official images are pinned
+automatically by the chart attached to a release.
+{{- end }}
+{{- end }}
 
 Check boot (the kubernetes sandbox preflight runs before serving; a missing
 RBAC grant, workspace claim, or NetworkPolicy aborts start with the reason):

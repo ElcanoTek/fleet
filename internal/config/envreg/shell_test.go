@@ -29,6 +29,12 @@ var shellInternal = map[string]bool{
 	// CI (GitHub Actions)
 	"CI": true, "GITHUB_ACTIONS": true, "GITHUB_OUTPUT": true, "GITHUB_ENV": true, "GITHUB_STEP_SUMMARY": true,
 	"GITHUB_WORKSPACE": true, "GITHUB_SHA": true, "GITHUB_REF": true, "RUNNER_TEMP": true,
+	"GITHUB_SERVER_URL": true, "GITHUB_REPOSITORY": true, "GITHUB_REPOSITORY_ID": true, "GITHUB_REPOSITORY_OWNER_ID": true,
+	"GITHUB_WORKFLOW_REF": true, "GITHUB_EVENT_NAME": true, "GITHUB_RUN_ID": true, "GITHUB_RUN_ATTEMPT": true,
+	"RUNNER_ENVIRONMENT": true,
+	// release.yml's job env, set by the workflow for scripts/release-*.sh
+	// (not operator configuration)
+	"FLEET_IMAGE": true, "SANDBOX_IMAGE": true, "SIGNER_IDENTITY": true, "OIDC_ISSUER": true,
 	// tools fleet's scripts drive, read under their own names
 	"GOPATH": true, "GOBIN": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOCACHE": true, "GOMODCACHE": true,
 	"PGPASSWORD":      true,
