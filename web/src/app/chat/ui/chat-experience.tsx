@@ -1240,13 +1240,16 @@ export function ChatExperience({
   // The chat a summarize stream belongs to, and its abort handle (#1999).
   const [summarizeConvId, setSummarizeConvId] = useState<string | null>(null);
   const summarizeAbortRef = useRef<AbortController | null>(null);
-  // Switching chats or unmounting ends a summarize stream in flight: its
-  // progress and its reload belong to the chat it was started on.
+  // Unmounting (closing or leaving the app) ends a summarize stream in
+  // flight. Switching chats does NOT: the server finishes the summary only
+  // while the request is open, so the stream is read to completion and its
+  // summary lands; only the reload and the progress card stay with the
+  // summarized chat.
   useEffect(
     () => () => {
       summarizeAbortRef.current?.abort();
     },
-    [activeConversationId],
+    [],
   );
   const spreadsheetNudge = useMemo(
     () =>
@@ -3003,12 +3006,14 @@ export function ChatExperience({
   // collapsed by default. Replace semantics on the backend mean
   // calling this twice produces a single replacement, never a chain.
   //
-  // The stream belongs to the chat it summarizes (#1999): switching chats or
-  // leaving the page aborts it (summarizeAbortRef, the effect below), the
-  // progress card shows only on that chat (summarizeConvId), and the reload
-  // after it completes runs only while that chat is still the open one — it
-  // used to load the summarized chat over whichever chat the user had moved
-  // to.
+  // The stream belongs to the chat it summarizes (#1999). Switching chats
+  // lets it run on to completion (the server stops summarizing if the
+  // request goes away), but the progress card shows only on that chat
+  // (summarizeConvId), and the reload after it completes runs only while that
+  // chat is still the open one — it used to load the summarized chat over
+  // whichever chat the user had moved to. A chat left mid-summary needs no
+  // refresh: opening it again loads it from the server. Unmounting aborts the
+  // stream (summarizeAbortRef).
   const summarizeConversation = async () => {
     if (!activeConversationId) return;
     if (isStreaming || isSummarizing) return;
@@ -3057,7 +3062,9 @@ export function ChatExperience({
         if (event.event === "summary.delta") {
           try {
             const p = JSON.parse(event.data) as { text?: string };
-            if (p.text && stillActive()) setSummarizeStream((prev) => prev + p.text);
+            // Accumulated even while another chat is open, so the card is
+            // whole again if the user comes back before it finishes.
+            if (p.text) setSummarizeStream((prev) => prev + p.text);
           } catch {
             /* malformed delta — drop */
           }
@@ -3089,8 +3096,8 @@ export function ChatExperience({
       // returns. Only while the summarized chat is still the open one.
       if (stillActive()) await loadConversation(convId);
     } catch (err) {
-      // An abort is the user leaving the chat, not a failure to report; a
-      // failure for a chat the user has left is not this chat's either.
+      // An abort is the page going away, not a failure to report; a failure
+      // for a chat the user has left is not the open chat's either.
       if (!isAbortError(err) && stillActive()) {
         setSummarizeError(errorMessage(err, "Summarizing failed."));
       }

@@ -4,9 +4,10 @@ import { ChatExperience, type ConversationSummary } from "./chat-experience";
 import { clearChatSession } from "./chatSessionStore";
 
 // "Summarize earlier messages" streams for a while (#1999). The stream belongs
-// to the chat it summarizes: switching chats mid-stream must abort it and must
-// not drag the user back — the completion used to reload the summarized chat
-// over whichever chat was open by then.
+// to the chat it summarizes: switching chats mid-stream must NOT abort it (the
+// server only finishes the summary while the request is open) and must not
+// drag the user back — the completion used to reload the summarized chat over
+// whichever chat was open by then. Unmounting aborts it.
 
 const CONVS: ConversationSummary[] = [
   { id: "conv-a", title: "Alpha chat", persona: "default", model: "vendor/one", pinned: false, updated_at: 1767225600 },
@@ -21,8 +22,10 @@ const HISTORY = [
 let summarizeCalled = false;
 let summarizeSignal: AbortSignal | undefined;
 let pushStream: (chunk: string) => void;
-let endStream: () => void;
 let convAReads = 0;
+// Set when the client cancels the body after reading summary.completed —
+// proof the stream was read to completion.
+let readerCancelled = false;
 
 function mockBackend() {
   const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
@@ -33,9 +36,11 @@ function mockBackend() {
       summarizeSignal = init.signal ?? undefined;
       const encoder = new TextEncoder();
       const body = new ReadableStream<Uint8Array>({
+        cancel() {
+          readerCancelled = true;
+        },
         start(controller) {
           pushStream = (chunk) => controller.enqueue(encoder.encode(chunk));
-          endStream = () => controller.close();
           init.signal?.addEventListener("abort", () => {
             try {
               controller.error(new DOMException("aborted", "AbortError"));
@@ -75,6 +80,7 @@ beforeEach(() => {
   summarizeCalled = false;
   summarizeSignal = undefined;
   convAReads = 0;
+  readerCancelled = false;
   vi.stubGlobal(
     "matchMedia",
     vi.fn(() => ({
@@ -114,7 +120,7 @@ describe("summarizing a chat", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("switching chats mid-stream aborts it and leaves the new chat open", async () => {
+  it("switching chats mid-stream keeps it running without moving the user", async () => {
     mockBackend();
     render(<ChatExperience initialUserEmail="user@example.com" />);
     await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
@@ -126,24 +132,31 @@ describe("summarizing a chat", () => {
     fireEvent.click(screen.getByRole("button", { name: "Beta chat" }));
     await waitFor(() => expect(headerTitle()).toHaveTextContent("Beta chat"));
     const readsAfterSwitch = convAReads;
+    // Not aborted: the server is still writing the summary.
+    expect(summarizeSignal?.aborted).toBe(false);
+    // The summarized chat's progress card does not follow the user.
+    expect(screen.queryByText(/Partial summ/)).not.toBeInTheDocument();
 
-    // A completion that still arrives changes nothing.
     await act(async () => {
-      try {
-        pushStream("event: summary.completed\ndata: {}\n\n");
-        endStream();
-      } catch {
-        /* the stream already errored on abort */
-      }
+      pushStream("event: summary.completed\ndata: {}\n\n");
     });
-    await new Promise((r) => setTimeout(r, 20));
 
+    // Read to completion: the client let go of the body after the last event.
+    await waitFor(() => expect(readerCancelled).toBe(true));
+    expect(summarizeSignal?.aborted).toBe(false);
+    // And the completion did not reload the summarized chat over this one.
     expect(headerTitle()).toHaveTextContent("Beta chat");
     expect(convAReads).toBe(readsAfterSwitch);
-    // Neither the abort nor the old chat's progress reaches this chat.
-    expect(screen.queryByText(/Partial summ/)).not.toBeInTheDocument();
     expect(screen.queryByText(/Summarizing failed/)).not.toBeInTheDocument();
-    // And the request itself was let go.
+  });
+
+  it("unmounting aborts it", async () => {
+    mockBackend();
+    const { unmount } = render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    await startSummarize();
+    expect(summarizeSignal?.aborted).toBe(false);
+    unmount();
     expect(summarizeSignal?.aborted).toBe(true);
   });
 });
