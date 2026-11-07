@@ -34,7 +34,7 @@ rejected:
 
 - **~400MB** added to an image built on `fedora-minimal`.
 - **The Grype gate.** `scripts/check-grype-policy.sh` fails CI on any fixable
-  CRITICAL **or HIGH** Fedora RPM in the sandbox image. Chromium is the most
+  CRITICAL **or HIGH** Fedora RPM (or `/usr/local` pip package) in the sandbox image. Chromium is the most
   CVE-heavy RPM in any distro, so this would become a recurring gate that blocks
   every merge in the repository, not just Bento work — and at the HIGH threshold
   the argument is stronger than it was when this was written against CRITICAL

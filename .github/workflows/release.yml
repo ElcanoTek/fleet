@@ -20,9 +20,11 @@
 #            to carry no host executor and to embed the bundle — the
 #            fleet-sandbox and fleet images, an SPDX SBOM for each, the
 #            stamped Helm chart. The only job that runs the release's code.
-#   publish  packages/id-token/attestations/contents write. Pushes the
-#            multi-arch images, signs them and the binaries + SHA256SUMS with
-#            keyless cosign, attaches SBOM attestations and SLSA provenance,
+#   publish  packages/id-token/attestations/contents write. Scans the image
+#            archives with Grype (CI's pinned version and policy) BEFORE
+#            pushing anything, pushes the multi-arch images, signs them and
+#            the binaries + SHA256SUMS with keyless cosign, attaches SBOM
+#            attestations and SLSA provenance naming the release commit,
 #            writes release.json, and publishes the GitHub release with every
 #            file. Runs no code from the release.
 #
@@ -450,6 +452,43 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # The archives below are what gets pushed and signed — not CI's local
+      # rebuilds — so they are scanned HERE, with the same pinned Grype and the
+      # same policy as CI's grype-scan job (scripts/check-grype-policy.sh: a
+      # fixable CRITICAL/HIGH Fedora RPM or /usr/local pip package fails), and
+      # a violation fails the release before anything is pushed or signed.
+      # The policy and .grype.yaml come from the default branch checkout.
+      - name: Install Grype
+        env:
+          # Keep GRYPE_VERSION + GRYPE_SHA256 equal to ci.yml's grype-scan job
+          # (scripts/update-pins.sh moves every workflow's pin together).
+          GRYPE_VERSION: '0.117.0'
+          GRYPE_SHA256: '38525dab1e06f162ebaa02f94d82d1f807076b011a44180cf2777edf1a7b9c26'
+        run: |
+          set -euo pipefail
+          cd "${RUNNER_TEMP}"
+          tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSL --retry 3 -o "$tarball" \
+            "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
+          echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "$tarball" grype
+          sudo install -m 0755 grype /usr/local/bin/grype
+          grype version
+
+      - name: Scan the release image archives (before anything is pushed or signed)
+        run: |
+          set -euo pipefail
+          for name in fleet-sandbox fleet; do
+            for arch in amd64 arm64; do
+              archive="dist/${name}-image-linux-${arch}.oci.tar"
+              [ -f "${archive}" ] || { echo "::error::the build produced no ${archive}"; exit 1; }
+              report="${RUNNER_TEMP}/grype-${name}-${arch}.json"
+              grype "oci-archive:${archive}" --output table --output "json=${report}"
+              scripts/check-grype-policy.sh "${report}" \
+                || { echo "::error::${archive} fails the Grype policy; refusing to publish ${TAG}"; exit 1; }
+            done
+          done
+
       # The same cosign every box verifies with: version and digest from
       # internal/release/cosign.lock, checked before it runs.
       - name: Install the pinned cosign
@@ -471,6 +510,8 @@ jobs:
           set -euo pipefail
           printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
           printf '%s' "$GHCR_TOKEN" | cosign login ghcr.io --username "$GHCR_USER" --password-stdin
+          # gh attestation verify (below) reads the registry through docker's auth.
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USER" --password-stdin
 
       # Each architecture's image is pushed by digest, then one multi-arch
       # index per repository is pushed under the release tag. The index digest
@@ -532,17 +573,35 @@ jobs:
             cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
           done
 
+      # SLSA provenance whose SOURCE is the release commit. The action's own
+      # predicate would take it from this job's OIDC token — under
+      # workflow_run, the default-branch head when the release ran, which can
+      # be a LATER commit than the one built — so the predicate is written
+      # explicitly (scripts/slsa-predicate.sh: resolvedDependencies[0] is the
+      # release tag at HEAD_SHA, the commit the build job checked out and
+      # checked) and the attestations are verified against it below.
+      - name: SLSA provenance predicate (source = the release commit)
+        run: |
+          set -euo pipefail
+          scripts/slsa-predicate.sh "${TAG}" "${HEAD_SHA}" > "${RUNNER_TEMP}/provenance-predicate.json"
+          jq . "${RUNNER_TEMP}/provenance-predicate.json"
       - name: SLSA provenance — control-plane image
+        id: provenance_fleet
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/elcanotek/fleet
           subject-digest: ${{ steps.images.outputs.fleet_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
           push-to-registry: true
       - name: SLSA provenance — sandbox image
+        id: provenance_sandbox
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/elcanotek/fleet-sandbox
           subject-digest: ${{ steps.images.outputs.fleet_sandbox_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
           push-to-registry: true
       - name: SLSA provenance — binaries
         id: provenance
@@ -551,6 +610,34 @@ jobs:
           subject-path: |
             dist/fleet-linux-amd64
             dist/fleet-linux-arm64
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+
+      # Verify every provenance attestation just made, as a consumer would —
+      # signature, signer identity, subject — and require its source to be the
+      # release commit. A predicate naming anything else fails the release
+      # before release.json, SHA256SUMS or the GitHub release exist.
+      - name: Verify the provenance names the release commit
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          BIN_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+          FLEET_BUNDLE: ${{ steps.provenance_fleet.outputs.bundle-path }}
+          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          check() {
+            local subject="$1" bundle="$2" out
+            out="$(mktemp)"
+            gh attestation verify "${subject}" --bundle "${bundle}" --repo "${GITHUB_REPOSITORY}" \
+              --cert-identity "${SIGNER_IDENTITY}" --cert-oidc-issuer "${OIDC_ISSUER}" \
+              --predicate-type https://slsa.dev/provenance/v1 --format json > "${out}"
+            scripts/check-attested-commit.sh "${out}" "${HEAD_SHA}"
+          }
+          check dist/fleet-linux-amd64 "${BIN_BUNDLE}"
+          check dist/fleet-linux-arm64 "${BIN_BUNDLE}"
+          check "oci://${FLEET_REF}" "${FLEET_BUNDLE}"
+          check "oci://${SANDBOX_REF}" "${SANDBOX_BUNDLE}"
 
       # The chart the build job packaged deploys these exact images: stamp
       # the digests just pushed (and signed) into its values, so it renders

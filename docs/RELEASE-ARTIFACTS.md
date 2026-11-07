@@ -13,7 +13,7 @@ release.yml runs three jobs after CI goes green on a push to `main`:
 | --- | --- | --- |
 | `tag` | `contents: write` | mints `vYYYY.MM.DD.N` on the certified SHA (unchanged) |
 | `build` (amd64 on `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`) | `contents: read` only | web bundle; static `fleet` binary; the host-executor, CGO, version and web-bundle assertions; `fleet-sandbox` and `fleet` images; SPDX SBOMs; the stamped Helm chart |
-| `publish` | contents, packages, id-token, attestations: write | pushes multi-arch images, signs everything, attaches SBOM attestations and SLSA provenance, writes `release.json` + `SHA256SUMS`, publishes the GitHub release |
+| `publish` | contents, packages, id-token, attestations: write | scans the image archives with Grype (CI's pin and policy) before anything is pushed, pushes multi-arch images, signs everything, attaches SBOM attestations and SLSA provenance, writes `release.json` + `SHA256SUMS`, publishes the GitHub release |
 
 The build job is the only one that runs the release's code, and it holds no
 write scope. The publish job runs no code from the release: it checks out the
@@ -45,7 +45,16 @@ Images, multi-arch (amd64 + arm64) indexes tagged with the release tag (and
 Each index digest is signed with cosign; each per-architecture image carries a
 signed SPDX attestation (`cosign attest --type spdxjson`); both indexes and the
 binaries have SLSA build provenance in GitHub's attestation store (pushed to
-the registry for the images).
+the registry for the images). The provenance's source
+(`resolvedDependencies[0]`) is the release tag at the release commit:
+release.yml runs on `workflow_run`, where the job's own commit is the
+default-branch head when the release ran — possibly a later commit than the one
+built — so the publish job writes the predicate itself
+(`scripts/slsa-predicate.sh`; the second dependency names that workflow
+commit), then verifies every attestation with `gh attestation verify` and
+requires the release commit (`scripts/check-attested-commit.sh`) before it
+writes `release.json`. The Sigstore certificate still records the workflow's
+own run commit: that is the signer, not the source.
 
 ## The trust rule
 
@@ -288,7 +297,7 @@ linking it).
 | Python for the images, hash-locked (`--require-hashes --no-deps`) | `deploy/python/requirements.txt`, `config/default/sandbox/requirements.txt` (compiled from the `requirements.in` beside each) | Dependabot `pip` (re-compiles the lock with hashes) |
 | GitHub Actions, by commit SHA | every workflow | Dependabot `github-actions` (`/`) |
 | `COSIGN` — the verifier boxes and release.yml run | `internal/release/cosign.lock` | `update-pins.sh`: the new `cosign_checksums.txt` must carry Sigstore's keyless signature, verified by the cosign already pinned; both binaries hash-checked |
-| `GRYPE` | `ci.yml`, `grype-scheduled.yml` | `update-pins.sh`: checksums file, its keyless signature (anchore's release workflow), the asset's SHA-256 |
+| `GRYPE` | `ci.yml`, `grype-scheduled.yml`, `release.yml` | `update-pins.sh`: checksums file, its keyless signature (anchore's release workflow), the asset's SHA-256 |
 | `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature) |
 | `RUFF`, `SEMGREP` (`pip install x==v`) | `ci.yml`, `semgrep.yml` | `update-pins.sh`: newest final PyPI release past the cooldown |
 
@@ -307,8 +316,13 @@ the security fixes the Grype gate demands, and has no updater Dependabot or
 
 **CVE scanning.** CI's Grype job scans both release images — the sandbox and,
 built around a placeholder binary, the control-plane image (the fleet binary's
-Go modules are govulncheck's) — and blocks on a fixable CRITICAL/HIGH RPM
-finding.
+Go modules are govulncheck's) — and blocks on a fixable CRITICAL/HIGH finding
+in a Fedora RPM or in a package the build pip-installs under `/usr/local`
+(Python dist-info that Fedora RPMs ship stays report-only:
+`scripts/check-grype-policy.sh`). The release itself scans what it publishes:
+the publish job runs the same pinned Grype and policy over all four
+`*.oci.tar` archives (both images, amd64 and arm64) before anything is pushed
+or signed, and a violation fails the release.
 
 ## Development boxes: `--from-source`
 
@@ -361,7 +375,7 @@ and deleted in one pass.
   the image) carry the same workflow identity the provenance would; the
   provenance adds build metadata that operators can check with
   `gh attestation verify`. The provenance is generated in the publish job (the
-  one with `id-token`), so it names release.yml's run rather than the build
-  job specifically.
+  one with `id-token`), so its builder is release.yml's run rather than the
+  build job specifically; its source is the release commit (above).
 - **Retention** changed from one release object to ten (ADR-0059's "newest
   only"): release objects now carry the downloadable files.
