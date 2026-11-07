@@ -202,10 +202,16 @@ follow the newest tag.
 
 | Bundle ships | What the box runs |
 | --- | --- |
-| no `sandbox/Containerfile`, or the generic one unchanged | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
+| no Containerfile (none at `sandbox/Containerfile` and none named by `sandbox.containerfile`), or the generic build context unchanged (its Containerfile and `requirements.txt`) | the release's signed `fleet-sandbox`, pulled by digest and tagged as the bundle's `sandbox.tag` |
 | its own Containerfile starting `ARG FLEET_SANDBOX_BASE` / `FROM ${FLEET_SANDBOX_BASE}` | built on the box on top of the verified release image; rebuilt when a release moves the base |
 | any other Containerfile | built on the box from its own base, as before (with the max-age freshness backstop) |
 | `sandbox.image` in its manifest | that image; nothing is pulled or built here |
+
+The Containerfile is the manifest's `sandbox.containerfile` (relative to the
+bundle) when set, else `sandbox/Containerfile` — resolved by one helper
+(`scripts/lib/sandbox-bundle.sh`) that `build-sandbox-image.sh`, `bootstrap`
+and `update` share. A manifest that names a Containerfile which does not exist
+stops the run; the generic image is never used in its place.
 
 A bundle Containerfile that only adds packages should become:
 
@@ -224,13 +230,17 @@ a bundle's image under its own name, and refuses
 
 The Helm chart defaults to `ghcr.io/elcanotek/fleet` and
 `ghcr.io/elcanotek/fleet-sandbox`. The chart attached to a release is
-stamped with that release's signed image digests (`image.digest`,
-`sandbox.imageDigest` — release.yml runs `scripts/helm-stamp-digests.sh` before
+stamped with that release's signed image digests (`image.signedDigest`,
+`sandbox.signedImageDigest` — release.yml runs `scripts/helm-stamp-digests.sh` before
 `SHA256SUMS` covers the chart), so it deploys both images BY DIGEST
 (`repository@sha256:…`), the exact bytes the release signed, with no image
 values. The tag (`image.tag`, defaulting to `v<appVersion>`) is only the
 fallback for an unstamped chart from a checkout, which then needs `image.tag`;
-CI renders a stamped chart and requires the digest form.
+CI renders a stamped chart and requires the digest form. The signed digests
+apply only to the official repositories: an overridden `image.repository` or
+`sandbox.imageRepository` (your own image, a mirror) is deployed by its own
+`image.digest` / `sandbox.imageDigest` when set, else by tag, and the install
+notes warn that it is not digest-pinned.
 See [DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md) for verifying the
 images and building a bundle image `FROM` them.
 

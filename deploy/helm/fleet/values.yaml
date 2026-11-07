@@ -30,11 +30,18 @@ image:
   # from). Pin a release tag (vYYYY.MM.DD.N). Required when the chart is
   # unstamped (installed from a checkout).
   tag: ""
-  # The signed image digest (sha256:…). The chart attached to a release has it
-  # stamped in, and then the image is deployed BY DIGEST — the exact bytes the
-  # release signed — and tag is ignored. Empty (an unstamped chart from a
-  # checkout) falls back to the tag. Clear it to deploy by tag on purpose.
+  # Your own digest pin (sha256:…) for the repository above: when set, the
+  # image is repository@digest and tag is ignored. Set it when you point
+  # repository at your own image (or a mirror) — the official digest below is
+  # never applied to another repository.
   digest: ""
+  # Stamped into the chart attached to a release (scripts/helm-stamp-digests.sh):
+  # the digest that release SIGNED for signedRepository. It applies only while
+  # repository is signedRepository — then the image is deployed BY DIGEST, the
+  # exact bytes the release signed. Empty (a chart from a checkout) falls back
+  # to the tag. Do not set these by hand.
+  signedRepository: ghcr.io/elcanotek/fleet
+  signedDigest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -58,10 +65,13 @@ sandbox:
   # build-on-box tag cannot work here.
   image: ""
   imageRepository: ghcr.io/elcanotek/fleet-sandbox
-  # The signed sandbox image digest, stamped into a release's chart like
-  # image.digest; when set (and sandbox.image is not), the sandbox image is
-  # imageRepository@imageDigest.
+  # Your own digest pin for imageRepository, like image.digest: when set (and
+  # sandbox.image is not), the sandbox image is imageRepository@imageDigest.
   imageDigest: ""
+  # Stamped into a release's chart like image.signedDigest; applies only while
+  # imageRepository is signedImageRepository. Do not set these by hand.
+  signedImageRepository: ghcr.io/elcanotek/fleet-sandbox
+  signedImageDigest: ""
   # Backend is what this chart exists for; podman-in-a-pod is NOT a supported
   # chart topology (the podman backend's supported home is a VM —
   # docs/DEPLOYMENT.md).

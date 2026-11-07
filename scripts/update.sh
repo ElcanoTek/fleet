@@ -134,6 +134,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # predates `fleet release` (ADR-0100).
 # shellcheck source=lib/release.sh
 . "$SCRIPT_DIR/lib/release.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same
 # implementation bootstrap.sh writes from and doctor.sh repairs against.
 # shellcheck source=lib/caddyfile.sh
@@ -978,7 +980,9 @@ fi
 # a tag that exists nowhere and every sandboxed tool call fails at runtime
 # (fleet does not verify the image at boot). The tag is resolved by
 # build-sandbox-image.sh --print-tag — the same manifest read the build uses.
-sandbox_cf="$CLIENT_DIR/sandbox/Containerfile"
+# The manifest's sandbox.containerfile when set, as build-sandbox-image.sh
+# resolves it (scripts/lib/sandbox-bundle.sh).
+sandbox_cf="$(fleet_sandbox_containerfile "$CLIENT_DIR")"
 hash_file() { [[ -f "$1" ]] && sha256sum "$1" | awk '{print $1}' || printf 'absent'; }
 STATE_DIR="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
 STAMP_FILE="$STATE_DIR/sandbox-containerfile.sha256"
@@ -1186,7 +1190,7 @@ step "3/5  Sandbox image (the release's signed image, or an on-box build for a c
 # own Containerfile is still built here — layered on the verified image when it
 # declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md).
 sandbox_published=0
-if [[ "$FROM_SOURCE" != "1" ]] && { [[ "$cf_now" == "absent" ]] || cmp -s "$sandbox_cf" "$SRC_DIR/config/default/sandbox/Containerfile"; }; then
+if [[ "$FROM_SOURCE" != "1" ]] && fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
   sandbox_published=1
 fi
 sandbox_base=""   # the verified release image a custom Containerfile layers on
@@ -1216,7 +1220,10 @@ elif [[ "$sandbox_published" == "1" ]]; then
       mkdir -p "$STATE_DIR"
       printf '%s\n' "$pub_ref" > "$SANDBOX_DIGEST_FILE"
       printf '%s\n' "$ref_now" > "$REF_FILE"
-      printf '%s\n' "$cf_now" > "$STAMP_FILE"
+      # Not the Containerfile hash: the tag now holds the RELEASE image, so a
+      # bundle that later turns custom (its own requirements, say, under an
+      # unchanged Containerfile) must not read as "already built".
+      printf 'release-image\n' > "$STAMP_FILE"
       ok "sandbox image ${ref_now} = ${pub_ref} (verified, pulled by digest)"
       sandbox_podman image prune -f >/dev/null 2>&1 || true
     elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
@@ -1225,6 +1232,8 @@ elif [[ "$sandbox_published" == "1" ]]; then
       die "could not pull ${pub_ref} and ${ref_now} is not in the service user's store — refusing to install an update whose every sandboxed tool call would fail"
     fi
   fi
+elif [[ "$cf_now" == "absent" ]] && fleet_sandbox_containerfile_named "$CLIENT_DIR"; then
+  die "the bundle's manifest names sandbox.containerfile ${sandbox_cf}, which does not exist — fix the bundle (the generic release image is never used in place of a bundle's own Containerfile)"
 elif [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then

@@ -25,14 +25,14 @@ func TestReleaseChartDeploysByDigest(t *testing.T) {
 	}
 	root := repoRoot(t)
 	helpers := readFile(t, root, "deploy/helm/fleet/templates/_helpers.tpl")
-	for _, want := range []string{`.Values.image.digest`, `.Values.sandbox.imageDigest`, `printf "%s@%s" $repo $digest`} {
+	for _, want := range []string{`.Values.image.signedDigest`, `.Values.sandbox.signedImageDigest`, `(eq $repo .signedRepo)`, `printf "%s@%s" $repo $digest`} {
 		if !strings.Contains(helpers, want) {
 			t.Errorf("_helpers.tpl no longer contains %q", want)
 		}
 	}
 	values := readFile(t, root, "deploy/helm/fleet/values.yaml")
-	if strings.Count(values, "\n  digest: \"\"\n") != 1 || strings.Count(values, "\n  imageDigest: \"\"\n") != 1 {
-		t.Error(`values.yaml must hold exactly one '  digest: ""' and one '  imageDigest: ""' placeholder — what helm-stamp-digests.sh stamps`)
+	if strings.Count(values, "\n  signedDigest: \"\"\n") != 1 || strings.Count(values, "\n  signedImageDigest: \"\"\n") != 1 {
+		t.Error(`values.yaml must hold exactly one '  signedDigest: ""' and one '  signedImageDigest: ""' placeholder — what helm-stamp-digests.sh stamps`)
 	}
 	if !strings.Contains(readFile(t, root, ".github/workflows/ci.yml"), "scripts/helm-stamp-digests.sh") {
 		t.Error("CI's helm job must render a digest-stamped chart")
@@ -75,6 +75,79 @@ func TestHelmStampDigests(t *testing.T) {
 	}
 	if out, err := stamp(fd, sd); err == nil {
 		t.Errorf("an already-stamped chart was stamped again\n%s", out)
+	}
+
+	// An overridden repository never inherits the official signed digest: it
+	// uses its own digest when one is set, else the tag — flagged as unpinned.
+	own := "sha256:" + strings.Repeat("c", 64)
+	render := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command("helm", append([]string{"template", "ci", tgz}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return string(out)
+	}
+	for _, c := range []struct {
+		args          []string
+		want, notWant []string
+	}{
+		{[]string{"--set", "image.repository=registry.invalid/custom"},
+			[]string{`image: "registry.invalid/custom:v2026.11.07.3"`, `unpinned-images: "registry.invalid/custom:v2026.11.07.3"`, `value: "ghcr.io/elcanotek/fleet-sandbox@` + sd + `"`},
+			[]string{"registry.invalid/custom@" + fd}},
+		{[]string{"--set", "image.repository=registry.invalid/custom", "--set", "image.digest=" + own},
+			[]string{`image: "registry.invalid/custom@` + own + `"`},
+			[]string{"unpinned-images"}},
+		{[]string{"--set", "sandbox.imageRepository=registry.invalid/sbx"},
+			[]string{`value: "registry.invalid/sbx:v2026.11.07.3"`, `unpinned-images: "registry.invalid/sbx:v2026.11.07.3"`},
+			[]string{"registry.invalid/sbx@" + sd}},
+		{[]string{"--set", "sandbox.imageRepository=registry.invalid/sbx", "--set", "sandbox.imageDigest=" + own},
+			[]string{`value: "registry.invalid/sbx@` + own + `"`},
+			[]string{"unpinned-images"}},
+		{[]string{"--set", "sandbox.image=registry.invalid/sbx:v1"},
+			[]string{`unpinned-images: "registry.invalid/sbx:v1"`}, nil},
+	} {
+		out := render(c.args...)
+		for _, w := range c.want {
+			if !strings.Contains(out, w) {
+				t.Errorf("%v: render lacks %s", c.args, w)
+			}
+		}
+		for _, w := range c.notWant {
+			if strings.Contains(out, w) {
+				t.Errorf("%v: render contains %s", c.args, w)
+			}
+		}
+	}
+
+	// NOTES.txt (which `helm template` does not render) warns about each
+	// unpinned image: render it through a copy of the chart.
+	notes := filepath.Join(dir, "notes")
+	if out, err := exec.Command("tar", "-xzf", tgz, "-C", dir).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if err := os.Rename(filepath.Join(dir, "fleet"), notes); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(filepath.Join(notes, "templates", "NOTES.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = os.WriteFile(filepath.Join(notes, "templates", "_notes_copy.tpl"), append(append([]byte(`{{- define "notes.copy" -}}`), body...), []byte(`{{- end -}}`)...), 0o644)
+	_ = os.WriteFile(filepath.Join(notes, "templates", "notes-render.yaml"), []byte("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: notes\ndata:\n  notes: |\n    {{- include \"notes.copy\" . | nindent 4 }}\n"), 0o644)
+	out, err = exec.Command("helm", "template", "ci", notes, "--show-only", "templates/notes-render.yaml", "--set", "image.repository=registry.invalid/custom").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "WARNING: registry.invalid/custom:v2026.11.07.3 is NOT digest-pinned") {
+		t.Errorf("NOTES does not warn about the unpinned override:\n%s", out)
+	}
+	out, err = exec.Command("helm", "template", "ci", notes, "--show-only", "templates/notes-render.yaml").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "WARNING") {
+		t.Errorf("NOTES warns although both images are digest-pinned:\n%s", out)
 	}
 	_ = os.Remove(tgz)
 }

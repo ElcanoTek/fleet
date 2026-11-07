@@ -24,6 +24,8 @@
         "repository": { "type": "string" },
         "tag": { "type": "string" },
         "digest": { "type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$" },
+        "signedRepository": { "type": "string" },
+        "signedDigest": { "type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$" },
         "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
       }
     },
@@ -44,6 +46,8 @@
         "image": { "type": "string" },
         "imageRepository": { "type": "string" },
         "imageDigest": { "type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$" },
+        "signedImageRepository": { "type": "string" },
+        "signedImageDigest": { "type": "string", "pattern": "^$|^sha256:[0-9a-f]{64}$" },
         "memory": { "type": "string" },
         "cpus": { "type": ["string", "number"] },
         "diskGB": { "type": "integer" },

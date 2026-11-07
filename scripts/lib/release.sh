@@ -270,3 +270,22 @@ fleet_release_health_url() {
   esac
   printf '%s://%s/readyz' "$scheme" "$addr"
 }
+
+# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+# fleet_install_built_binary SRC INSTALL_DIR — install a --from-source build
+# the way `fleet release install --no-restart` installs a release: atomic
+# rename, the live binary kept as fleet.prev — except when the live binary
+# already IS these bytes, when nothing is swapped and fleet.prev (what `fleet
+# release rollback` restores) is left exactly as it was.
+fleet_install_built_binary() {
+  local src="$1" dir="$2"
+  install -d -m 0755 "$dir" || return 1
+  if [[ -f "$dir/fleet" ]] && cmp -s "$src" "$dir/fleet"; then
+    printf '%s already is this binary — nothing to swap; %s left as it was\n' "$dir/fleet" "$dir/fleet.prev" >&2
+    return 0
+  fi
+  if [[ -e "$dir/fleet" ]]; then
+    ln -f "$dir/fleet" "$dir/fleet.prev" || return 1
+  fi
+  install -m 0755 "$src" "$dir/.fleet.new" && mv -f "$dir/.fleet.new" "$dir/fleet"
+}

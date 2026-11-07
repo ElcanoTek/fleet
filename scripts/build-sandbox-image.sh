@@ -69,31 +69,12 @@ BUNDLE_DIR="${FLEET_CLIENT_CONFIG_DIR:-$REPO_ROOT/config/default}"
 MANIFEST="$BUNDLE_DIR/manifest.yaml"
 
 # containerfile: manifest sandbox.containerfile (relative to the bundle) when
-# present, else the conventional default path inside the bundle.
-manifest_value() {
-    # Extract a scalar under the top-level `sandbox:` block from the manifest.
-    # Tiny purpose-built parser (no yq dependency): finds the `sandbox:` line,
-    # then the first `  <key>:` under it, strips quotes/inline-comments. Good
-    # enough for the flat scalars this block carries; the Go loader is the
-    # authoritative parser the process consumes.
-    local key="$1" file="$2"
-    [[ -f "$file" ]] || return 0
-    awk -v key="$key" '
-        /^sandbox:[[:space:]]*$/ { in_block=1; next }
-        /^[^[:space:]]/ { in_block=0 }
-        in_block && $0 ~ "^[[:space:]]+" key ":" {
-            sub("^[[:space:]]+" key ":[[:space:]]*", "")
-            sub(/[[:space:]]+#.*$/, "")            # strip inline comment
-            gsub(/^["'\'']|["'\'']$/, "")          # strip surrounding quotes
-            print
-            exit
-        }
-    ' "$file"
-}
-
-CF_REL="$(manifest_value containerfile "$MANIFEST")"
-CF_REL="${CF_REL:-sandbox/Containerfile}"
-CONTAINERFILE="$BUNDLE_DIR/$CF_REL"
+# present, else the conventional default path inside the bundle — resolved by
+# the helper bootstrap.sh and update.sh use too (scripts/lib/sandbox-bundle.sh).
+# shellcheck source=lib/sandbox-bundle.sh
+. "$REPO_ROOT/scripts/lib/sandbox-bundle.sh"
+manifest_value() { fleet_sandbox_manifest_value "$@"; }
+CONTAINERFILE="$(fleet_sandbox_containerfile "$BUNDLE_DIR")"
 
 # Image name/tag: explicit IMAGE_NAME wins; else derive from the manifest's
 # sandbox.tag (name:tag). Positional $1 overrides the tag.
@@ -117,7 +98,7 @@ fi
 
 if [[ ! -f "$CONTAINERFILE" ]]; then
     echo "build-sandbox-image: missing $CONTAINERFILE" >&2
-    echo "  (FLEET_CLIENT_CONFIG_DIR=$BUNDLE_DIR; the bundle must ship $CF_REL)" >&2
+    echo "  (FLEET_CLIENT_CONFIG_DIR=$BUNDLE_DIR; the bundle must ship ${CONTAINERFILE#"$BUNDLE_DIR"/})" >&2
     exit 1
 fi
 if ! command -v podman >/dev/null 2>&1; then

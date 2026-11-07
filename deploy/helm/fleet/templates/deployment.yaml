@@ -9,6 +9,11 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "fleet.labels" . | nindent 4 }}
+  {{- with include "fleet.unpinnedImages" . }}
+  annotations:
+    # Images deployed by a movable tag, not a digest (NOTES.txt warns too).
+    fleet.elcanotek.com/unpinned-images: {{ . | quote }}
+  {{- end }}
 spec:
   replicas: 1
   strategy:

@@ -222,6 +222,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 . "$SCRIPT_DIR/lib/caddyfile.sh"
 # shellcheck source=lib/bundle.sh
 . "$SCRIPT_DIR/lib/bundle.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # Uninstall Cockpit (bootstrap only).
 # shellcheck source=lib/cockpit.sh
 . "$SCRIPT_DIR/lib/cockpit.sh"
@@ -1288,12 +1290,17 @@ resolve_sandbox_image() {
 # declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md). A bundle that
 # names sandbox.image in its manifest uses that image; nothing happens here.
 step "Sandbox image"
-SANDBOX_CONTAINERFILE="${CLIENT_CONFIG_DIR}/sandbox/Containerfile"
+# The manifest's sandbox.containerfile when set, as build-sandbox-image.sh
+# resolves it (scripts/lib/sandbox-bundle.sh).
+SANDBOX_CONTAINERFILE="$(fleet_sandbox_containerfile "$CLIENT_CONFIG_DIR")"
 SANDBOX_IMAGE_REF="$(resolve_sandbox_image "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 SANDBOX_TAG="$(sandbox_manifest_tag "${CLIENT_CONFIG_DIR}/manifest.yaml")"
 sandbox_published=0
-if [[ "$FROM_SOURCE" != "1" ]] && { [[ ! -f "$SANDBOX_CONTAINERFILE" ]] || cmp -s "$SANDBOX_CONTAINERFILE" "$REPO_ROOT/config/default/sandbox/Containerfile"; }; then
+if [[ "$FROM_SOURCE" != "1" ]] && fleet_sandbox_uses_release_image "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default"; then
   sandbox_published=1
+fi
+if [[ -z "$SANDBOX_IMAGE_REF" && ! -f "$SANDBOX_CONTAINERFILE" ]] && fleet_sandbox_containerfile_named "$CLIENT_CONFIG_DIR"; then
+  die "the bundle's manifest names sandbox.containerfile ${SANDBOX_CONTAINERFILE}, which does not exist — fix the bundle (the generic release image is never used in place of a bundle's own Containerfile)"
 fi
 # sandbox_podman CMD… — podman in the store the service reads: the service
 # user's rootless store on the --enable-service path, else the invoking user's.
@@ -1340,7 +1347,7 @@ else
     info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
     _base_args=()
     [[ -n "$sandbox_base" ]] && _base_args=(--build-arg "FLEET_SANDBOX_BASE=${sandbox_base}")
-    if sandbox_podman build --pull=newer "${_base_args[@]}" -t "$SANDBOX_TAG" -f "$SANDBOX_CONTAINERFILE" "${CLIENT_CONFIG_DIR}/sandbox"; then
+    if sandbox_podman build --pull=newer "${_base_args[@]}" -t "$SANDBOX_TAG" -f "$SANDBOX_CONTAINERFILE" "$(dirname "$SANDBOX_CONTAINERFILE")"; then
       ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
     else
       warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
@@ -1816,7 +1823,7 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     if [[ "$FROM_SOURCE" == "1" ]]; then
       info "[dry-run] --from-source: would run (cd ${REPO_ROOT} && make build) with the go, node and npm on PATH → fleet with the web UI embedded"
     fi
-    info "[dry-run] would install fleet ${RELEASE_TAG:-(built from source)} → ${INSTALL_DIR} (atomic rename; a binary already there is kept as fleet.prev)"
+    info "[dry-run] would install fleet ${RELEASE_TAG:-(built from source)} → ${INSTALL_DIR} (fleet release install --no-restart: atomic rename; a different binary already there is kept as fleet.prev, the same one is left as it is)"
     info "[dry-run] would symlink /usr/local/bin/fleet → ${INSTALL_DIR} (operator PATH)"
     info "[dry-run] would install deploy/fleet-motd.sh → /etc/profile.d/fleet-motd.sh (login banner)"
     info "[dry-run] would install deploy/fleet.service → /etc/systemd/system"
@@ -1838,11 +1845,20 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
     [[ -x "$_new_bin" ]] \
       || die "no verified fleet binary to install — re-run bootstrap (it downloads and verifies the release)"
     # Atomic: stage beside the live binary, keep any existing one as
-    # fleet.prev (what `fleet release rollback` restores), rename over.
-    install -d -m 0755 "$INSTALL_DIR"
-    [[ -e "$INSTALL_DIR/fleet" ]] && ln -f "$INSTALL_DIR/fleet" "$INSTALL_DIR/fleet.prev"
-    install -m 0755 "$_new_bin" "$INSTALL_DIR/.fleet.new" && mv -f "$INSTALL_DIR/.fleet.new" "$INSTALL_DIR/fleet" \
-      || die "could not install fleet into ${INSTALL_DIR}"
+    # fleet.prev (what `fleet release rollback` restores), rename over — and
+    # when the live binary already IS this release, swap nothing and leave
+    # fleet.prev alone. A release goes through the same Go install `fleet
+    # update` uses (`fleet release install --no-restart`, run from the
+    # verified binary, which re-verifies the staged files from open
+    # descriptors); the unit is enabled and started below.
+    if [[ "$FROM_SOURCE" == "1" ]]; then
+      fleet_install_built_binary "$_new_bin" "$INSTALL_DIR" \
+        || die "could not install fleet into ${INSTALL_DIR}"
+    else
+      "$FLEET_RELEASE_BIN" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+        --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" --no-restart \
+        || die "could not install fleet ${RELEASE_TAG} into ${INSTALL_DIR} (above)"
+    fi
     ok "installed fleet ${RELEASE_TAG:-(from source)} → ${INSTALL_DIR}"
     # Put `fleet` on the operator's PATH (#461). deploy/fleet.service's
     # ExecStart points at $INSTALL_DIR/fleet, but an operator typing `fleet
