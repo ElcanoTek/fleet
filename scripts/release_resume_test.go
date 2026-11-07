@@ -168,7 +168,10 @@ echo "$MSG" >&2; exit 1
 			continue
 		}
 		for _, verb := range []string{"cosign sign ", "cosign attest ", "cosign sign-blob "} {
-			if strings.Contains(l, verb) && !strings.Contains(l, "scripts/retry-transient.sh "+verb) {
+			// The wrapper may be called relatively or, after a cd, as
+			// "$GITHUB_WORKSPACE/scripts/retry-transient.sh".
+			if strings.Contains(l, verb) && !strings.Contains(l, "scripts/retry-transient.sh "+verb) &&
+				!strings.Contains(l, `scripts/retry-transient.sh" `+verb) {
 				t.Errorf("release.yml runs %q without scripts/retry-transient.sh: %s", strings.TrimSpace(verb), l)
 			}
 		}
