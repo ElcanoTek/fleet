@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -184,8 +185,8 @@ func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
 		// A new message: an unclosed fence above does not swallow this.
 		textEntry("assistant", "[next](next.csv)"),
 	}
-	got := presentedWorkspacePaths(history)
-	if want := []string{"real.csv", "next.csv"}; !reflect.DeepEqual(got, want) {
+	got, _ := boundedPresentedPaths(history, false)
+	if want := []string{"next.csv", "real.csv"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("presented = %q, want %q", got, want)
 	}
 
@@ -195,7 +196,7 @@ func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
 		{Role: "assistant", Type: "summary", Content: json.RawMessage(`{"text":"s"}`)},
 		textEntry("assistant", "[after](after.csv)"),
 	}
-	if got := presentedWorkspacePaths(history); !reflect.DeepEqual(got, []string{"after.csv"}) {
+	if got, _ := boundedPresentedPaths(history, false); !reflect.DeepEqual(got, []string{"after.csv"}) {
 		t.Errorf("presented across a summary = %q, want [after.csv]", got)
 	}
 }
@@ -209,7 +210,7 @@ func TestPresentedWorkspacePathsSplitsAtSummaryBoundary(t *testing.T) {
 		{Role: "assistant", Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)},
 		textEntry("assistant", "[after](after.csv)"),
 	}
-	if got := presentedWorkspacePaths(history); !reflect.DeepEqual(got, []string{"after.csv"}) {
+	if got, _ := boundedPresentedPaths(history, false); !reflect.DeepEqual(got, []string{"after.csv"}) {
 		t.Errorf("presented across a boundary = %q, want [after.csv]", got)
 	}
 }
@@ -252,7 +253,7 @@ func TestRecentRenderedRepliesBudget(t *testing.T) {
 	for i := 0; i < maxDiscoveryReplies+1; i++ {
 		long = append(long, textEntry("user", "q"), textEntry("assistant", "no links here"))
 	}
-	if paths, truncated := recentPresentedPaths(long, maxOutputReferences); len(paths) != 0 || !truncated {
+	if paths, truncated := boundedPresentedPaths(long, false); len(paths) != 0 || !truncated {
 		t.Errorf("a linkless chat past the reply budget: paths=%q truncated=%v, want none and truncated", paths, truncated)
 	}
 }
@@ -272,13 +273,13 @@ func TestPresentedWorkspacePathsOnlyAssistantText(t *testing.T) {
 		textEntry("assistant", "Saved [a](a.csv) and [a again](a.csv) plus [web](https://x.y/z.csv)"),
 		textEntry("assistant", "and ![b](sandbox:/opt/chat/workspace/b.png)"),
 	}
-	got := presentedWorkspacePaths(history)
-	if want := []string{"a.csv", "b.png"}; !reflect.DeepEqual(got, want) {
+	got, _ := boundedPresentedPaths(history, false)
+	if want := []string{"b.png", "a.csv"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("presented = %q, want %q", got, want)
 	}
 }
 
-// conversationOutputs keeps presented paths that exist as regular files now,
+// conversationOutputsUntil keeps presented paths that exist as regular files now,
 // drops uploads, missing files, directories and anything reached through a
 // symlink, and applies exclusions.
 func TestConversationOutputsFiltersOnDisk(t *testing.T) {
@@ -313,7 +314,7 @@ func TestConversationOutputsFiltersOnDisk(t *testing.T) {
 		"[r](report.xlsx) ![c](out/chart.png) [u](attachments/abc/upload.pdf) [gone](missing.csv) "+
 			"[d](adir) [alias](alias.pdf) [via](linkdir/abc/upload.pdf)")}
 
-	outs, truncated := conversationOutputs(conv, history, map[string]bool{"out/chart.png": true})
+	outs, truncated := conversationOutputsUntil(context.Background(), conv, history, map[string]bool{"out/chart.png": true})
 	if truncated {
 		t.Error("a short transcript is not truncated")
 	}
@@ -393,7 +394,7 @@ func TestConversationOutputsBoundsReferences(t *testing.T) {
 		history = append(history, textEntry("assistant",
 			fmt.Sprintf("[f](%s) [u](attachments/u%d.pdf)", name, i)))
 	}
-	outs, truncated := conversationOutputs(conv, history, nil)
+	outs, truncated := conversationOutputsUntil(context.Background(), conv, history, nil)
 	if !truncated {
 		t.Error("more than maxOutputReferences references must report truncated")
 	}
@@ -414,7 +415,7 @@ func TestConversationOutputsBoundsReferences(t *testing.T) {
 	}
 
 	// Exactly at the bound: everything considered, nothing truncated.
-	if _, truncated := conversationOutputs(conv, history[extra:], nil); truncated {
+	if _, truncated := conversationOutputsUntil(context.Background(), conv, history[extra:], nil); truncated {
 		t.Error("exactly maxOutputReferences references is not truncated")
 	}
 }

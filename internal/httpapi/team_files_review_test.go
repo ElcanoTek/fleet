@@ -116,13 +116,13 @@ func TestDiscoveryHistoryMatchesLoadHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, include := range []bool{false, true} {
-		wantP, wantT := boundedPresentedPaths(full, maxOutputReferences, include)
-		gotP, gotT := boundedPresentedPaths(narrow, maxOutputReferences, include)
+		wantP, wantT := boundedPresentedPaths(full, include)
+		gotP, gotT := boundedPresentedPaths(narrow, include)
 		if !reflect.DeepEqual(gotP, wantP) || gotT != wantT {
 			t.Errorf("includeUploads=%v: narrow %v/%v, full %v/%v", include, gotP, gotT, wantP, wantT)
 		}
 	}
-	wantOuts, _ := conversationOutputs(f.chat.ID, full, map[string]bool{"held.json": true})
+	wantOuts, _ := conversationOutputsUntil(context.Background(), f.chat.ID, full, map[string]bool{"held.json": true})
 	gotOuts, _, err := f.srv.ownerOutputs(f.ctx, f.chat.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -142,8 +142,8 @@ func TestDiscoveryHistoryMatchesLoadHistory(t *testing.T) {
 			cut = append(cut, e)
 		}
 	}
-	wantP, _ := boundedPresentedPaths(cut, maxOutputReferences, true)
-	gotP, _ := boundedPresentedPaths(narrow, maxOutputReferences, true)
+	wantP, _ := boundedPresentedPaths(cut, true)
+	gotP, _ := boundedPresentedPaths(narrow, true)
 	if !reflect.DeepEqual(gotP, wantP) {
 		t.Errorf("through: narrow %v, full %v", gotP, wantP)
 	}
