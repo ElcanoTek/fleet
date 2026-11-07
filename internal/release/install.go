@@ -525,10 +525,12 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	stopCtx, stopCancel := detachedBounded(ctx, stopTimeout)
 	stopErr := ss.Stop(stopCtx, o.Service)
 	stopCancel()
-	startCtx, cancel := detachedBounded(ctx, startTimeout)
-	defer cancel()
 	if stopErr == nil {
 		clearDrain("before starting")
+		// The start's bound begins after the clear (whose lock wait can take
+		// a while), so the minimum start attempt is never already spent.
+		startCtx, cancel := detachedBounded(ctx, startTimeout)
+		defer cancel()
 		if err := ss.Start(startCtx, o.Service); err != nil {
 			return drainErr, fmt.Errorf("start: %w", err)
 		}
@@ -536,7 +538,9 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	}
 	drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
 	o.logf("warning: %v — restarting it instead, with the update drain marker kept until the restart returns", drainErr)
-	rerr := o.Restarter.Restart(startCtx, o.Service)
+	restartCtx, cancel := detachedBounded(ctx, startTimeout)
+	defer cancel()
+	rerr := o.Restarter.Restart(restartCtx, o.Service)
 	clearDrain("after restarting")
 	if rerr != nil {
 		// Neither stop nor restart replaced the process. Make sure fleet runs

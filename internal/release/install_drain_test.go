@@ -514,3 +514,24 @@ func TestInstallStopIsBoundedByTheCallersDeadline(t *testing.T) {
 		t.Fatal("a stalled stop held the install past its deadline and RollbackTimeout")
 	}
 }
+
+// TestInstallStartGetsItsAttemptAfterASlowDrainClear: the start's bound is
+// taken after ClearDrain returns, so a clear that outlasts the caller's
+// deadline (a contended drain lock) still leaves the start its minimum
+// attempt instead of an already-expired context.
+func TestInstallStartGetsItsAttemptAfterASlowDrainClear(t *testing.T) {
+	dir, bin, s := drainSetup(t)
+	s.ready["NEW"], s.ready["OLD"] = true, true
+	o := opts(dir, bin, s, s)
+	o.RollbackTimeout = 200 * time.Millisecond
+	o.ClearDrain = func() error {
+		time.Sleep(400 * time.Millisecond) // past the caller's deadline
+		return os.Remove(s.marker)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_, _ = Install(ctx, o)
+	if !s.running {
+		t.Fatalf("fleet was left stopped: the start ran on an expired context (events %v)", s.events)
+	}
+}
