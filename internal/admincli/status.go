@@ -15,6 +15,7 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -53,6 +54,11 @@ func cmdStatus(argv []string) int {
 	// 3. both databases reachable + active work summary + prompt cache health.
 	checkDB(r, "chat database", *chatURL, chatDSN)
 	checkDB(r, "sched database", *schedURL, schedDSN)
+	if resolvedDSNs().Layout == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
+		r.warnLine("database layout", "legacy: chat and sched in two databases — move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)")
+	} else {
+		r.pass("database layout", "one database, schemas chat + sched")
+	}
 	checkActiveWork(r, serviceName(*service), *schedURL, *chatURL, false)
 	checkPromptCache(r, *chatURL)
 

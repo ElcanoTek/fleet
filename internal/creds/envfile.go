@@ -66,6 +66,33 @@ func SetEnvKey(path, key, value string) error {
 	return writeEnvLines(path, out)
 }
 
+// EnvLine renders one KEY=VALUE line exactly as SetEnvKey writes it (the value
+// encoded so ParseEnvLine reads back the same bytes; a line break refused).
+func EnvLine(key, value string) (string, error) {
+	encoded, err := encodeEnvValue(value)
+	if err != nil {
+		return "", fmt.Errorf("key %s: %w", key, err)
+	}
+	return key + "=" + encoded, nil
+}
+
+// EditEnvLines rewrites the env file at path in ONE atomic write: edit gets
+// its current lines and returns the new ones, which replace the file the way
+// SetEnvKey's do (0600, owner kept, fsync before rename). For changes that
+// must land together or not at all, such as moving a setting from one key
+// to another; an edit error leaves the file untouched.
+func EditEnvLines(path string, edit func([]string) ([]string, error)) error {
+	lines, err := readEnvLines(path)
+	if err != nil {
+		return err
+	}
+	out, err := edit(lines)
+	if err != nil {
+		return err
+	}
+	return writeEnvLines(path, out)
+}
+
 // DeleteEnvKey removes key from the env file. Returns true if a line was
 // removed. A missing file is not an error (nothing to delete).
 func DeleteEnvKey(path, key string) (bool, error) {
