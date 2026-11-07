@@ -460,46 +460,92 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 
 // stopTimeout bounds the detached `systemctl stop`: well past the shipped
 // unit's TimeoutStopSec (60s), after which systemd has killed the process.
-const stopTimeout = 3 * time.Minute
+// startTimeout bounds a detached start (or fallback restart) when ctx has no
+// deadline of its own; minStartTimeout is what one still gets when ctx's
+// deadline has already passed — the start must be attempted, never skipped.
+const (
+	stopTimeout     = 3 * time.Minute
+	startTimeout    = 3 * time.Minute
+	minStartTimeout = 10 * time.Second
+)
+
+// detachedBounded returns a context that is not cancelled with ctx but keeps
+// a bound: ctx's remaining deadline when it has one (capped at maxWait; once
+// it has passed, minStartTimeout), else maxWait. A detached step must not be cut short by a
+// SIGINT, nor hang past RollbackTimeout or the caller's deadline.
+func detachedBounded(ctx context.Context, maxWait time.Duration) (context.Context, context.CancelFunc) {
+	bound := maxWait
+	if dl, ok := ctx.Deadline(); ok {
+		bound = min(time.Until(dl), maxWait)
+		if bound <= 0 {
+			bound = minStartTimeout // the deadline passed: still attempt it, briefly
+		}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), bound)
+}
 
 // restart (re)starts the service. With ClearDrain set it stops the old
 // process, clears the drain marker, then starts the new one.
 //
 // Once the stop is issued it is not interruptible: it and the start run under
-// contexts detached from ctx's cancellation. Cancelling ctx would kill the
-// systemctl client while the stop job it queued still completes, and a
-// skipped start then leaves the service down. For the same reason a failed
-// stop does not skip the start: the marker is cleared and the service started
-// regardless (starting a unit that is still running is a no-op), and the stop
-// error is logged and returned as part of drainErr, so it is reported with
-// the readiness result rather than turned into a rollback. A Restarter that
-// cannot stop and start separately gets the marker cleared immediately before
-// its restart. drainErr carries the stop and ClearDrain failures.
+// contexts detached from ctx's cancellation (each still bounded — see
+// detachedBounded). Cancelling ctx would kill the systemctl client while the
+// stop job it queued still completes, and a skipped start then leaves the
+// service down.
+//
+// A failed stop is not a reason to skip the start either, but a plain start
+// cannot be trusted after one: if the stop never happened (a unit that
+// refuses manual stops), `systemctl start` is a no-op on the still-active
+// unit and the readiness probe would be answered by the OLD process,
+// reporting the new release live. So after a failed stop the marker is
+// cleared and the unit RESTARTED, which replaces whatever is running; if that
+// fails too, the error is returned (Install's failure/rollback path handles
+// it) after a last plain start, so fleet is never left stopped. The stop error
+// is logged and returned in drainErr. A Restarter that cannot stop and start
+// separately gets the marker cleared immediately before its restart.
+// drainErr carries the stop and ClearDrain failures.
 func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	if o.ClearDrain == nil {
 		return nil, o.Restarter.Restart(ctx, o.Service)
 	}
 	ss, split := o.Restarter.(StopStarter)
+	var stopErr error
 	if split {
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopTimeout)
-		stopErr := ss.Stop(stopCtx, o.Service)
+		stopErr = ss.Stop(stopCtx, o.Service)
 		cancel()
 		if stopErr != nil {
 			drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
-			o.logf("warning: %v — clearing the update drain marker and starting it anyway", drainErr)
+			o.logf("warning: %v — clearing the update drain marker and restarting it instead", drainErr)
 		}
 	}
 	if clearErr := o.ClearDrain(); clearErr != nil {
 		o.logf("warning: could not clear the update drain marker before starting %s: %v", o.Service, clearErr)
 		drainErr = errors.Join(drainErr, fmt.Errorf("clear the update drain marker: %w", clearErr))
 	}
-	if split {
-		if err := ss.Start(context.WithoutCancel(ctx), o.Service); err != nil {
+	if !split {
+		return drainErr, o.Restarter.Restart(ctx, o.Service)
+	}
+	startCtx, cancel := detachedBounded(ctx, startTimeout)
+	defer cancel()
+	if stopErr == nil {
+		if err := ss.Start(startCtx, o.Service); err != nil {
 			return drainErr, fmt.Errorf("start: %w", err)
 		}
 		return drainErr, nil
 	}
-	return drainErr, o.Restarter.Restart(ctx, o.Service)
+	if err := o.Restarter.Restart(startCtx, o.Service); err != nil {
+		// Neither stop nor restart replaced the process. Make sure fleet runs
+		// (a no-op if the old one still does), and fail: the new release is
+		// not what is serving.
+		lastCtx, lastCancel := detachedBounded(ctx, startTimeout)
+		defer lastCancel()
+		if serr := ss.Start(lastCtx, o.Service); serr != nil {
+			err = errors.Join(err, fmt.Errorf("start: %w", serr))
+		}
+		return drainErr, fmt.Errorf("restart after the failed stop: %w", err)
+	}
+	return drainErr, nil
 }
 
 // replaceLink makes dst a hard link to src, replacing dst. A filesystem that

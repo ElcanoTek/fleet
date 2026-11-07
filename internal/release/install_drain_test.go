@@ -20,6 +20,7 @@ import (
 type drainService struct {
 	dir, marker string
 	running     bool
+	runningBin  string // the binary the running process was started from
 	ready       map[string]bool
 	events      []string
 	// startedDraining records, per start, whether the marker was on disk.
@@ -48,7 +49,7 @@ func (s *drainService) Start(ctx context.Context, _ string) error {
 	b, _ := os.ReadFile(filepath.Join(s.dir, "fleet"))
 	s.events = append(s.events, "start "+string(b))
 	s.startedDraining = append(s.startedDraining, s.markerPresent())
-	s.running = true
+	s.running, s.runningBin = true, string(b)
 	return nil
 }
 
@@ -58,15 +59,14 @@ func (s *drainService) Restart(ctx context.Context, svc string) error {
 }
 
 func (s *drainService) WaitReady(_ context.Context, _ string, _ time.Duration) error {
-	b, _ := os.ReadFile(filepath.Join(s.dir, "fleet"))
-	s.events = append(s.events, "probe "+string(b))
+	s.events = append(s.events, "probe "+s.runningBin)
 	if !s.running {
 		return errors.New("connection refused")
 	}
 	if s.markerPresent() {
 		return errors.New(`HTTP 503 {"checks":{"draining":{"detail":"shutting_down","status":"error"}},"status":"not_ready"}`)
 	}
-	if !s.ready[string(b)] {
+	if !s.ready[s.runningBin] {
 		return errors.New("HTTP 503")
 	}
 	return nil
@@ -87,7 +87,7 @@ func (s *drainService) clearDrain(t *testing.T) func() error {
 func drainSetup(t *testing.T) (dir, bin string, s *drainService) {
 	t.Helper()
 	dir, bin, _, _ = setup(t, "OLD")
-	s = &drainService{dir: dir, marker: filepath.Join(t.TempDir(), "fleet.env.update.drain"), running: true, ready: map[string]bool{}}
+	s = &drainService{dir: dir, marker: filepath.Join(t.TempDir(), "fleet.env.update.drain"), running: true, runningBin: "OLD", ready: map[string]bool{}}
 	if err := os.WriteFile(s.marker, []byte("draining pid-1-1\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -347,5 +347,93 @@ func TestInstallStartsWhenTheStopFails(t *testing.T) {
 	}
 	if !strings.Contains(log.String(), "Job for fleet.service canceled") {
 		t.Errorf("the stop error is not reported: log %q", log.String())
+	}
+}
+
+// refusingStop models a unit that refuses manual stops (RefuseManualStop=yes,
+// or a stop job systemd rejects): stop and restart fail and the OLD process
+// keeps running, so `systemctl start` is a no-op on the active unit.
+type refusingStop struct{ *drainService }
+
+func (s *refusingStop) Stop(context.Context, string) error {
+	s.events = append(s.events, "stop refused")
+	return errors.New("Operation refused, unit fleet.service may be requested by dependency only")
+}
+
+func (s *refusingStop) Restart(context.Context, string) error {
+	s.events = append(s.events, "restart refused")
+	return errors.New("Operation refused, unit fleet.service may be requested by dependency only")
+}
+
+func (s *refusingStop) Start(ctx context.Context, svc string) error {
+	if s.running {
+		s.events = append(s.events, "start no-op")
+		return nil
+	}
+	return s.drainService.Start(ctx, svc)
+}
+
+// TestInstallFailsWhenTheStopDidNotStopTheOldProcess: a failed stop that left
+// the old process running must not be followed by a no-op start whose probe
+// the OLD process answers — that reported the new release as live while the
+// old binary served. The install must fail (through its normal failure path)
+// and fleet must still be running.
+func TestInstallFailsWhenTheStopDidNotStopTheOldProcess(t *testing.T) {
+	dir, bin, ds := drainSetup(t)
+	ds.ready["NEW"], ds.ready["OLD"] = true, true
+	s := &refusingStop{ds}
+	o := opts(dir, bin, s, s)
+	o.ClearDrain = func() error {
+		if err := os.Remove(ds.marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	res, err := Install(context.Background(), o)
+	if err == nil && !res.RolledBack {
+		t.Fatalf("install reported %s live, but the old process never stopped and still runs %q (events %v)", "NEW", ds.runningBin, ds.events)
+	}
+	if !ds.running {
+		t.Fatalf("fleet was left stopped (events %v)", ds.events)
+	}
+}
+
+// stalledStart is a unit whose start never completes on its own: Start
+// returns only when its context ends.
+type stalledStart struct{ *drainService }
+
+func (s *stalledStart) Start(ctx context.Context, _ string) error {
+	s.events = append(s.events, "start stalled")
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestInstallStartIsBoundedByTheCallersDeadline: the start is detached from
+// the caller's cancellation but not from its deadline — RollbackTimeout (and
+// the caller's own deadline) must still bound a start that stalls.
+func TestInstallStartIsBoundedByTheCallersDeadline(t *testing.T) {
+	dir, bin, ds := drainSetup(t)
+	ds.ready["NEW"], ds.ready["OLD"] = true, true
+	s := &stalledStart{ds}
+	o := opts(dir, bin, s, s)
+	o.RollbackTimeout = 300 * time.Millisecond
+	o.ClearDrain = func() error {
+		_ = os.Remove(ds.marker)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Install(ctx, o)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("install succeeded although the start never completed")
+		}
+	case <-time.After(8 * time.Second):
+		t.Fatal("a stalled start hung the install past its deadline and RollbackTimeout")
 	}
 }
