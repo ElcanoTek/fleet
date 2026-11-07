@@ -23,6 +23,7 @@ import { WorkspaceImage } from "./WorkspaceImage";
 import { resolveWorkspaceHref } from "./workspaceHref";
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { plural } from "@/app/shared/lib/format";
 
 // The syntax highlighter (CodeHighlight: the vendored Prism tokenizer +
 // grammars) would be one of the larger pieces of the initial /chat bundle,
@@ -86,7 +87,7 @@ export function PythonOutput({
   }
   const stdoutLines = stdout ? stdout.split("\n").length : 0;
   const summaryBits = [
-    stdoutLines ? `${stdoutLines} line${stdoutLines === 1 ? "" : "s"}` : "",
+    stdoutLines ? plural(stdoutLines, "line") : "",
     stream.executionMs ? `${stream.executionMs}ms` : "",
   ]
     .filter(Boolean)

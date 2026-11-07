@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { TeamGlyph } from "./ShareGlyphs";
-import { fetchConversationOutputs, plural } from "./teamSharing";
+import { fetchConversationOutputs } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 
 // The confirmations the chat rail needs before a chat changes where it lives
 // or whether it exists (finding #13, then the sharing decisions #25–#30).

@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { orchestratorApi, type SLAReport } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
-import { plural } from "./plural";
+import { plural } from "@/app/shared/lib/format";
 import { SlaChip } from "./taskDisplay";
 
 // SLAReportPanel — the Operations Center SLA tab (#274): a per-task-name table

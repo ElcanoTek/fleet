@@ -9,9 +9,9 @@ import { primaryButtonClass } from "./ProjectGettingStarted";
 import {
   fetchConversationOutputs,
   formatDay,
-  plural,
   type ViewerBranch,
 } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 
 // The project home's two chat lists (Fleet Projects sharing, decisions #18–
 // #21):

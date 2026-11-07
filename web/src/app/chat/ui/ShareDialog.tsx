@@ -42,13 +42,13 @@ import {
   fetchConversationOutputs,
   filesLabel,
   formatDay,
-  plural,
   sharedToast,
   teamLinkUrl,
   type ConversationOutputs,
   type OutputChecklist,
   type ShareWithTeamResult,
 } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 import { useEffect, useId, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";

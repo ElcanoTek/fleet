@@ -5,6 +5,7 @@
 // source of truth; every helper here is a thin, typed wrapper over one route.
 
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { plural } from "@/app/shared/lib/format";
 import type { ChatToastInput } from "./ChatToasts";
 
 /** One output: a workspace file the agent presented in a reply (a file chip). */
@@ -246,11 +247,6 @@ export async function updateProjectMyState(
       body: JSON.stringify(patch),
     }),
   );
-}
-
-/** "1 chat" / "2 chats" — the count-plus-noun every confirm and toast uses. */
-export function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
 }
 
 /** "1 file" / "3 files". */

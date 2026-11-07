@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  isPendingKey,
+  realConvId,
   PENDING_CONV_KEY,
   decideReadOnlyFile,
   redactUnsharedFiles,
@@ -683,5 +685,20 @@ describe("workspaceFileRef / teamFileDownloadName", () => {
     expect(teamFileDownloadName(`/api/conversations/${CONV}/team-files/out/a%20b.csv`)).toBe("a b.csv");
     expect(teamFileDownloadName(`/api/conversations/${CONV}/workspace/a.csv`)).toBeNull();
     expect(teamFileDownloadName("https://evil.example/api/conversations/x/team-files/a")).toBeNull();
+  });
+});
+
+describe("isPendingKey / realConvId", () => {
+  it.each([null, "__pending__", "__pending__:3"])("%j is a pending key", (key) => {
+    expect(isPendingKey(key)).toBe(true);
+    expect(realConvId(key)).toBeNull();
+  });
+
+  it("treats anything else as a real conversation id", () => {
+    expect(isPendingKey("abc-123")).toBe(false);
+    expect(realConvId("abc-123")).toBe("abc-123");
+    // Only the exact sentinel and its `:` slots are pending.
+    expect(isPendingKey("__pending__x")).toBe(false);
+    expect(realConvId("")).toBeNull();
   });
 });

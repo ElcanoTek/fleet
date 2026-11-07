@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { orchestratorApi, type UpcomingRun } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { describeCronExpression } from "@/app/shared/lib/cron";
-import { plural } from "./plural";
+import { plural } from "@/app/shared/lib/format";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 

@@ -11,7 +11,7 @@ import type {
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
 import { applyTemplateVars, humanizeVarName, promptableVars } from "@/app/shared/lib/taskTemplates";
 import { validateTaskForm, validateCronExpression, describeEmailError } from "@/app/shared/lib/validation";
-import { isValidEmail } from "@/app/shared/lib/format";
+import { isValidEmail, plural } from "@/app/shared/lib/format";
 import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
 import { rankRecipientSuggestions } from "./recipientSuggestions";
 import { isTerminal } from "./taskDisplay";
@@ -1042,7 +1042,7 @@ export function TaskCreateModal({
           unavailableAlwaysOnServers > 0
             ? `${unavailableAlwaysOnServers} unavailable`
             : "",
-          fileCount > 0 ? `${fileCount} file${fileCount === 1 ? "" : "s"}` : "",
+          fileCount > 0 ? plural(fileCount, "file") : "",
         ]
           .filter(Boolean)
           .join(" · ");
@@ -1056,10 +1056,10 @@ export function TaskCreateModal({
   if (contextCount > 0) dirtyParts.push("the context notes");
   if (scheduleMode !== "now" || recurrence.trim() || scheduledDate) dirtyParts.push("the schedule");
   if (emails.length > 0)
-    dirtyParts.push(`${emails.length} email recipient${emails.length === 1 ? "" : "s"}`);
+    dirtyParts.push(plural(emails.length, "email recipient"));
   if (enabledServers > 0)
-    dirtyParts.push(`${enabledServers} enabled server${enabledServers === 1 ? "" : "s"}`);
-  if (fileCount > 0) dirtyParts.push(`${fileCount} attachment${fileCount === 1 ? "" : "s"}`);
+    dirtyParts.push(plural(enabledServers, "enabled server"));
+  if (fileCount > 0) dirtyParts.push(plural(fileCount, "attachment"));
   if (advancedCount > 0) dirtyParts.push("the advanced settings");
   const dirtyList =
     dirtyParts.length <= 1
@@ -1447,7 +1447,7 @@ export function TaskCreateModal({
     : errorCount > 0
       ? {
           className: "task-footer-status task-footer-status--error",
-          text: `Fix ${errorCount} field${errorCount === 1 ? "" : "s"} above`,
+          text: `Fix ${plural(errorCount, "field")} above`,
         }
       : promptEmpty
         ? { className: "task-footer-status", text: "Add a prompt to launch" }

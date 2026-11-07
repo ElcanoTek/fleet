@@ -83,3 +83,10 @@ export function truncateFilename(name: string, maxLen = 35): string {
   }
   return name.slice(0, maxLen - 3) + "...";
 }
+
+// plural renders "1 row" / "2 rows" — the UI's one count-plus-noun formatter
+// (confirms, toasts, panel counts). `many` defaults to `one` + "s"; pass it
+// for irregular nouns.
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}

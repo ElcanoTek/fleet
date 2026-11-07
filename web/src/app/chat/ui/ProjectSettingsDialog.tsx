@@ -5,7 +5,7 @@ import { useChatToast } from "./ChatToasts";
 import { LockGlyph } from "./ShareGlyphs";
 import { ProjectVisibilityChoice } from "./NewProjectDialog";
 import type { Project } from "./ProjectsModal";
-import { plural } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 
 // Project settings (B26–B31, decisions #48–#51). OWNER only: the gear on the
 // project home and the rail project menu are the two ways in, and both are

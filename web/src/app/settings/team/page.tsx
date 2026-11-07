@@ -37,6 +37,7 @@ import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { invalidateMe } from "@/app/shared/lib/account";
 import { redirectToLogin } from "@/app/settings/lib/getGated";
+import { plural } from "@/app/shared/lib/format";
 
 export type Me = {
   email: string;
@@ -319,7 +320,7 @@ function LeaveTeamConfirm({
       ? "any project shared with it"
       : sharedProjects === 0
         ? "any project shared with it (there are none right now)"
-        : `${sharedProjects} team-shared project${sharedProjects === 1 ? "" : "s"}`;
+        : plural(sharedProjects, "team-shared project");
   return (
     <DialogShell
       label={`Leave ${team}?`}
@@ -336,7 +337,7 @@ function LeaveTeamConfirm({
           <li>
             {sharedChats === undefined
               ? "Chats you shared with the team stop being shared"
-              : `${sharedChats} chat${sharedChats === 1 ? "" : "s"} you shared with the team stop${sharedChats === 1 ? "s" : ""} being shared`}
+              : `${plural(sharedChats, "chat")} you shared with the team stop${sharedChats === 1 ? "s" : ""} being shared`}
             {" "}— they stay yours, teammates just can&rsquo;t open them any more.
           </li>
         ) : null}

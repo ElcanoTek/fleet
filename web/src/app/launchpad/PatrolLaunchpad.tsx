@@ -42,7 +42,9 @@ import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { fetchMe } from "@/app/shared/lib/account";
-import { conversationApiPath, conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { createSchedule, PatrolApiError, runScheduleNow, setScheduleAction } from "@/app/shared/lib/patrolApi";
+import { plural } from "@/app/shared/lib/format";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -173,7 +175,12 @@ function loadSaved(): Saved {
 // requests refused. An empty body already reads "<step> (NNN)" from
 // responseErrorText and is not prefixed twice.
 async function stepErrorText(res: Response, step: string): Promise<string> {
-  const text = await responseErrorText(res, step);
+  return stepMessage(await responseErrorText(res, step), step);
+}
+
+// stepMessage prefixes a refusal with the step it stopped, unless the text
+// already is that step's own fallback ("<step> (<status>)").
+function stepMessage(text: string, step: string): string {
   return text.startsWith(`${step} (`) ? text : `${step}: ${text}`;
 }
 
@@ -498,8 +505,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       }
       setCreated({ ...created.current, conversationId });
       const toolsUrl = conversationApiUrl(conversationId, "/mcp-servers");
-      const schedulesUrl = conversationApiUrl(conversationId, "/schedules");
-      if (!toolsUrl || !schedulesUrl) throw new Error("The server returned an invalid chat id.");
+      if (!toolsUrl) throw new Error("The server returned an invalid chat id.");
 
       setPhase("tools");
       // Only replace the chat's connector set when the catalog is known: an
@@ -514,19 +520,20 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       }
 
       setPhase("schedule");
-      const schedRes = await fetch(schedulesUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const armStep = "Could not arm the patrol";
+      const sched = await createSchedule(
+        conversationId,
+        {
           title: savedTitle,
           prompt: prompt.trim(),
           cron: state.cron.trim(),
           timezone: state.timezone || "UTC",
           auto_approve: state.mode === "act",
-        }),
+        },
+        armStep,
+      ).catch((e: unknown) => {
+        throw e instanceof PatrolApiError ? new Error(stepMessage(e.message, armStep)) : e;
       });
-      if (!schedRes.ok) throw new Error(await stepErrorText(schedRes, "Could not arm the patrol"));
-      const sched = (await schedRes.json()) as { schedule?: { id: string } };
       const scheduleId = sched.schedule?.id ?? "";
       setCreated({ ...created.current, scheduleId });
 
@@ -534,14 +541,12 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       // The patrol is armed from here on; a refused first run (a full queue,
       // say) is reported, not treated as a failed launch.
       let firstRun: LaunchState["firstRun"] = "skipped";
-      const runNowUrl = scheduleId
-        ? conversationApiPath(conversationId, "schedules", scheduleId, "run-now")
-        : null;
-      if (runNowUrl) {
-        const runRes = await fetch(runNowUrl, {
-          method: "POST",
-        }).catch(() => null);
-        firstRun = runRes === null ? "unknown" : runRes.ok ? "running" : "refused";
+      if (scheduleId) {
+        firstRun = await runScheduleNow(conversationId, scheduleId).then(
+          (): LaunchState["firstRun"] => "running",
+          (e: unknown): LaunchState["firstRun"] =>
+            !(e instanceof PatrolApiError) ? "unknown" : e.status === 0 ? "skipped" : "refused",
+        );
       }
       // Storage unavailable: nothing to clean up.
       removePref(progressItem(), "session");
@@ -579,15 +584,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     if (conversationId) {
       // An id the URL gate refuses is never sent; it counts as not settled.
       if (scheduleId) {
-        const scheduleUrl = conversationApiPath(conversationId, "schedules", scheduleId);
-        const res = scheduleUrl
-          ? await fetch(scheduleUrl, {
-              method: "PATCH",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ action: "cancel" }),
-            }).catch(() => null)
-          : null;
-        if (!settled(res)) {
+        const cancelled = await setScheduleAction(conversationId, scheduleId, "cancel").then(
+          () => true,
+          (e: unknown) => e instanceof PatrolApiError && e.status === 404,
+        );
+        if (!cancelled) {
           setLaunch((cur) => ({
             ...(cur ?? { phase: "schedule" }),
             error: "Couldn’t stop the half-launched patrol. Try again, or open the chat and stop it from the Patrol bar.",
@@ -1110,7 +1111,7 @@ function WelcomeStep({
       </ol>
       <div className="mt-4 flex flex-wrap gap-2 text-[0.78rem]" data-testid="launchpad-readiness">
         <ReadyChip ok={(ready ?? 0) > 0} loading={ready === null}>
-          {ready === null ? "Checking tools…" : `${ready} tool${ready === 1 ? "" : "s"} ready`}
+          {ready === null ? "Checking tools…" : `${plural(ready, "tool")} ready`}
         </ReadyChip>
         <ReadyChip ok={(memories?.length ?? 0) > 0} loading={memories === null && !memoriesFailed}>
           {memories === null

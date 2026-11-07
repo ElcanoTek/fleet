@@ -39,7 +39,7 @@ import {
   conversationApiUrl,
 } from "@/app/lib/conversationApiUrl";
 import { currentDefaultModel } from "@/app/lib/modelAliases";
-import { PENDING_CONV_KEY } from "./workspaceHref";
+import { isPendingKey, PENDING_CONV_KEY } from "./workspaceHref";
 import { mcpAccountOverrides } from "./mcpAccounts";
 import { allocMessageIds } from "./messageIds";
 import {
@@ -547,7 +547,6 @@ export interface TurnStreamDeps {
   loadRankedModels: () => Promise<void>;
   loadCatalogModels: () => Promise<void>;
   nextPendingKey: () => string;
-  isPendingKey: (key: string | null) => boolean;
   // Composer helpers (usePerConvComposerState).
   setPromptForKey: PerConvComposerState["setPromptForKey"];
   setPendingAttachmentsForKey: PerConvComposerState["setPendingAttachmentsForKey"];
@@ -723,7 +722,6 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
     loadRankedModels,
     loadCatalogModels,
     nextPendingKey,
-    isPendingKey,
     setPromptForKey,
     setPendingAttachmentsForKey,
     setAttachmentErrorForKey,

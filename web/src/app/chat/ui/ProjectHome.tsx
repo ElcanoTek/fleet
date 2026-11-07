@@ -8,12 +8,12 @@ import { useChatToast } from "./ChatToasts";
 import {
   fetchProjectMyState,
   formatDay,
-  plural,
   shareChatWithTeam,
   sharedToast,
   updateProjectMyState,
   type ProjectMyState,
 } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 import { ProjectVisibilityPill } from "./ProjectVisibilityPill";
 import {
   buildGettingStarted,

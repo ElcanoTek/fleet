@@ -24,6 +24,14 @@ import {
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { createSSEParser } from "@/app/lib/sse";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import {
+  createSchedule,
+  deleteSchedule,
+  PatrolApiError,
+  runScheduleNow,
+  setScheduleAction,
+  type PatrolResponse,
+} from "@/app/shared/lib/patrolApi";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -71,7 +79,7 @@ import {
 import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
-import { PENDING_CONV_KEY } from "./workspaceHref";
+import { isPendingKey, PENDING_CONV_KEY, realConvId } from "./workspaceHref";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { Icon } from "./Icon";
@@ -659,12 +667,6 @@ export function ChatExperience({
     pendingKeyCounterRef.current += 1;
     return `${PENDING_CONV_KEY}:${pendingKeyCounterRef.current}`;
   };
-  const isPendingKey = (key: string | null): boolean =>
-    key === null ||
-    key === PENDING_CONV_KEY ||
-    key.startsWith(`${PENDING_CONV_KEY}:`);
-  const realConvId = (key: string | null): string | null =>
-    key && !isPendingKey(key) ? key : null;
   // Cold start shows the full blocking spinner; a warm return (restoredSession
   // present) paints the cached transcript immediately and never blocks.
   const [isLoadingHistory, setIsLoadingHistory] = useState(
@@ -5375,7 +5377,6 @@ export function ChatExperience({
     loadRankedModels,
     loadCatalogModels,
     nextPendingKey,
-    isPendingKey,
     setPromptForKey,
     setPendingAttachmentsForKey,
     setAttachmentErrorForKey,
@@ -5470,13 +5471,7 @@ export function ChatExperience({
 
   const activeSchedules = useMemo(() => {
     const id = activeConversationId;
-    if (
-      !id ||
-      id === PENDING_CONV_KEY ||
-      id.startsWith(`${PENDING_CONV_KEY}:`)
-    ) {
-      return [];
-    }
+    if (!id || isPendingKey(id)) return [];
     return schedulesByConv.get(id) ?? [];
   }, [activeConversationId, schedulesByConv]);
   const activePatrolCount = useMemo(
@@ -5523,31 +5518,15 @@ export function ChatExperience({
       await submitPrompt(synthesized);
       return true;
     }
-    const url = conversationApiUrl(convId, "/schedules");
-    if (!url) return false;
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: input.title,
-          prompt: input.prompt,
-          cron: input.cron,
-          timezone: input.timezone,
-          duration_seconds: input.durationSeconds,
-          auto_approve: input.autoApprove,
-        }),
+      const data = await createSchedule(convId, {
+        title: input.title,
+        prompt: input.prompt,
+        cron: input.cron,
+        timezone: input.timezone,
+        duration_seconds: input.durationSeconds,
+        auto_approve: input.autoApprove,
       });
-      if (!res.ok) {
-        const msg = (await res.text()).trim();
-        showRailError(msg || `Couldn't schedule patrol (HTTP ${res.status}).`);
-        return false;
-      }
-      const data = (await res.json()) as {
-        schedule?: ChatSchedule;
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
       applyScheduleResponse(convId, data);
       notify({
         message: data.schedule
@@ -5555,93 +5534,57 @@ export function ChatExperience({
           : "Patrol scheduled.",
       });
       return true;
-    } catch {
-      showRailError("Couldn't reach the server to schedule the patrol.");
+    } catch (e) {
+      showRailError(
+        e instanceof PatrolApiError ? e.message : "Couldn't reach the server to schedule the patrol.",
+      );
       return false;
     }
   };
 
-  const handleRunPatrolNow = async (scheduleId: string) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
+  // mutatePatrol runs one Patrol-bar action against the open conversation's
+  // schedule and applies the reply; a refusal shows the server's reason, an
+  // unreachable server says so. A pending (not yet created) chat has no
+  // schedules to act on.
+  const mutatePatrol = async (
+    verb: string,
+    call: (convId: string) => Promise<PatrolResponse>,
+    after?: (convId: string) => void,
+  ) => {
     const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}/run-now`,
-    );
-    if (!url) return;
+    if (!convId || isPendingKey(convId)) return;
     try {
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) {
-        showRailError(`Couldn't trigger patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-      void refreshQueue(convId);
-      void followApprovalResume(convId, approvalResumeFollowSettledMs);
-    } catch {
-      showRailError("Couldn't reach the server to trigger patrol.");
+      applyScheduleResponse(convId, await call(convId));
+      after?.(convId);
+    } catch (e) {
+      showRailError(
+        e instanceof PatrolApiError ? e.message : `Couldn't reach the server to ${verb} patrol.`,
+      );
     }
   };
 
-  const handleTogglePausePatrol = async (
+  const handleRunPatrolNow = (scheduleId: string) =>
+    mutatePatrol(
+      "trigger",
+      (convId) => runScheduleNow(convId, scheduleId),
+      (convId) => {
+        void refreshQueue(convId);
+        void followApprovalResume(convId, approvalResumeFollowSettledMs);
+      },
+    );
+
+  const handleTogglePausePatrol = (
     scheduleId: string,
     currentStatus: ChatSchedule["status"],
   ) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
-    const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}`,
-    );
-    if (!url) return;
     const action = currentStatus === "paused" ? "resume" : "pause";
-    try {
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      if (!res.ok) {
-        showRailError(`Couldn't ${action} patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-    } catch {
-      showRailError(`Couldn't reach the server to ${action} patrol.`);
-    }
+    return mutatePatrol(action, (convId) => setScheduleAction(convId, scheduleId, action));
   };
 
-  const handleCancelPatrol = async (scheduleId: string) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
-    const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}`,
-    );
-    if (!url) return;
-    try {
-      const res = await fetch(url, { method: "DELETE" });
-      if (!res.ok) {
-        showRailError(`Couldn't cancel patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-    } catch {
-      showRailError("Couldn't reach the server to cancel patrol.");
-    }
-  };
+  // Chat cancels with DELETE (the Launchpad's rollback uses PATCH
+  // {action:"cancel"}); both end the schedule server-side.
+  const handleCancelPatrol = (scheduleId: string) =>
+    mutatePatrol("cancel", (convId) => deleteSchedule(convId, scheduleId));
 
   // When the open conversation has an active patrol and is currently idle,
   // poll /inflight via reattachToConv every 15s while the tab is visible so
@@ -5651,8 +5594,7 @@ export function ChatExperience({
     const convId = activeConversationId;
     if (
       !convId ||
-      convId === PENDING_CONV_KEY ||
-      convId.startsWith(`${PENDING_CONV_KEY}:`) ||
+      isPendingKey(convId) ||
       activePatrolCount === 0 ||
       isStreaming
     ) {
@@ -5901,14 +5843,11 @@ export function ChatExperience({
     // when no conversation is being loaded, and flip this flag before awaiting
     // loadConversation so a late personas resolution skips the write.
     let willLoadConversation = false;
-    // Local pending-key check (mirrors the component's isPendingKey) so this
-    // mount-once effect keeps `[]` deps instead of depending on a per-render
-    // helper. PENDING_CONV_KEY is a module constant. A real conversation id is
-    // anything that isn't the empty-new-chat sentinel or a per-submission slot.
-    const isRealConvId = (id: string | null): id is string =>
-      id !== null &&
-      id !== PENDING_CONV_KEY &&
-      !id.startsWith(`${PENDING_CONV_KEY}:`);
+    // A real conversation id is anything that isn't the empty-new-chat
+    // sentinel or a per-submission slot (the module-level isPendingKey, so
+    // this mount-once effect keeps `[]` deps); narrowed to string for the
+    // callers below.
+    const isRealConvId = (id: string | null): id is string => !isPendingKey(id);
 
     // Deep-link (?c=<conversation id>): open a specific conversation on boot.
     // Used by the orchestrator's "Discuss this run" bridge, which creates a
