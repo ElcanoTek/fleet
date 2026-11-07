@@ -32,12 +32,15 @@ custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 Each store is dumped to its **own** file — its schema (`pg_dump -n chat` /
 `-n sched`), or on a legacy box its database — so you can restore one store
 without touching the other. `fleet restore` reads the dump's table of contents
-first and establishes its schema from its SCHEMA and TABLE entries; it refuses a
-dump whose schema is not the one the target store uses (the other store's dump,
-or a legacy `public` dump restored into the one database: restore that on a
-legacy box, then run `fleet db consolidate`) or cannot be determined. It then
-restores with `pg_restore -n <schema>`, so `--clean` can drop only the target
-store's objects — never the other store's, which shares the database.
+first and establishes its schemas from its SCHEMA and TABLE entries; it refuses a
+dump that does not contain the schema the target store uses (the other store's
+dump, or a legacy `public` dump restored into the one database: restore that on
+a legacy box, then run `fleet db consolidate`) or whose schemas cannot be
+determined. It then restores with `pg_restore -n <schema>`, so only the store's
+schema is restored (other schemas in the archive are left out) and `--clean` can
+drop only the target store's objects — never the other store's, which shares
+the database. On a legacy box the store's schema is `public`, and `fleet backup`
+dumps only that (`-n public`), whatever other schemas the database holds.
 
 ## Prerequisites
 
