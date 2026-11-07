@@ -212,6 +212,9 @@ type Handlers struct {
 	// A plain int64 driven by sync/atomic, not atomic.Int64: a test clones the
 	// Handlers value, and the embedded noCopy would flag that clone.
 	a2aStreams int64
+	// a2aStreamsBy counts the same streams per principal against
+	// a2aMaxConcurrentStreamsPerPrincipal (a2a.go).
+	a2aStreamsBy *a2aStreamCounter
 
 	// systemPromptForPersona resolves the assembled scheduled system prompt
 	// (default prompt + persona expertise) for a persona override, exactly as the
@@ -367,6 +370,7 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		taskKeyRL:    ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL: ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		statsCache:   &statsCache{},
+		a2aStreamsBy: newA2AStreamCounter(),
 	}
 }
 

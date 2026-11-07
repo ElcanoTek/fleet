@@ -210,8 +210,10 @@ there is no `Last-Event-ID` protocol (the A2A spec has none either).
 
 Because every stream is a standing once-per-second Postgres poller, two
 bounds apply (and lean on exactly that lossless-reconnect property): at most
-**64 concurrent A2A streams** per process (the 65th subscribe is refused with
-an ordinary JSON-RPC error naming the ceiling, before any SSE bytes), and a
+**64 concurrent A2A streams** per process, of which one API key may hold at
+most **8** at a time (a subscribe past either is refused with an ordinary
+JSON-RPC error naming the limit, before any SSE bytes; the admin key is not
+held to the per-key limit), and a
 **30-minute per-stream lifetime**, after which the server closes the
 connection without a terminal `statusUpdate` — indistinguishable from any
 dropped connection, so a client that still cares resubscribes and misses

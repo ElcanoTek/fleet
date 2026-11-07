@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -124,6 +125,67 @@ const a2aStreamMaxLifetime = 30 * time.Minute
 // without a ceiling one credential could accumulate hundreds of held
 // connections — each a standing DB poller — over an hour.
 const a2aMaxConcurrentStreams = 64
+
+// a2aMaxConcurrentStreamsPerPrincipal caps the A2A SSE connections one
+// credential holds at once, so the process-wide ceiling above stays shared
+// between callers. The admin key is not counted against it (it bypasses the
+// rate limiter the same way).
+const a2aMaxConcurrentStreamsPerPrincipal = 8
+
+// a2aStreamCounter counts held A2A streams per principal. Handlers holds it by
+// pointer (New sets it) so a cloned Handlers value shares one counter.
+type a2aStreamCounter struct {
+	mu          sync.Mutex
+	byPrincipal map[string]int
+}
+
+func newA2AStreamCounter() *a2aStreamCounter {
+	return &a2aStreamCounter{byPrincipal: make(map[string]int)}
+}
+
+// acquire takes one stream slot for key, refusing when key already holds
+// a2aMaxConcurrentStreamsPerPrincipal. An empty key (the admin key) and a nil
+// counter always succeed. Every successful acquire is paired with release.
+func (c *a2aStreamCounter) acquire(key string) bool {
+	if c == nil || key == "" {
+		return true
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byPrincipal[key] >= a2aMaxConcurrentStreamsPerPrincipal {
+		return false
+	}
+	c.byPrincipal[key]++
+	return true
+}
+
+func (c *a2aStreamCounter) release(key string) {
+	if c == nil || key == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.byPrincipal[key] <= 1 {
+		delete(c.byPrincipal, key)
+		return
+	}
+	c.byPrincipal[key]--
+}
+
+// a2aStreamKey names the principal a stream is counted against: the API key's
+// stable id, the user's id, or "" for the admin key (not counted).
+func a2aStreamKey(p principal) string {
+	switch {
+	case p.isAdmin:
+		return ""
+	case p.apiKey != nil:
+		return "key:" + p.apiKey.KeyID
+	case p.user != nil:
+		return "user:" + p.user.ID.String()
+	default:
+		return "anonymous"
+	}
+}
 
 // a2aUnaryWaitBudget bounds a blocking unary SendMessage (returnImmediately
 // false — the spec default — MUST wait for the outcome). Long enough for the
@@ -450,7 +512,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	}
 
 	if streaming {
-		h.a2aStreamTask(w, r, req.ID, task.ID)
+		h.a2aStreamTask(w, r, p, req.ID, task.ID)
 		return
 	}
 	// Spec: a unary SendMessage with returnImmediately false — the DEFAULT —
@@ -474,7 +536,8 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 // Deliberately NOT counted against the concurrent-stream ceiling: each wait
 // is tied to one just-created or just-resumed task, so it is already bounded
 // by the create path's rate limit and the key's hourly cap, while
-// subscriptions can be opened without limit against a single task.
+// subscriptions can be opened repeatedly against a single task (and are
+// therefore counted, per process and per credential).
 func (h *Handlers) a2aAwaitOutcome(ctx context.Context, taskID uuid.UUID, latest *models.Task) *models.Task {
 	settled := func(t *models.Task) bool {
 		state, _ := a2abridge.TaskStateFor(t.Status)
@@ -557,7 +620,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		}
 	}
 	if streaming {
-		h.a2aStreamTask(w, r, req.ID, task.ID)
+		h.a2aStreamTask(w, r, p, req.ID, task.ID)
 		return
 	}
 	updated, err := h.storage.GetTask(task.ID)
@@ -861,7 +924,7 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 			fmt.Sprintf("task %s is already terminal (state %s); use GetTask for the result", task.ID, task.Status), nil))
 		return
 	}
-	h.a2aStreamTask(w, r, req.ID, task.ID)
+	h.a2aStreamTask(w, r, p, req.ID, task.ID)
 }
 
 // a2aStreamTask serves one task-lifecycle SSE stream (spec §3.1.2): it MUST
@@ -875,7 +938,7 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 // second, at the cost of merging two event sources — and it evicts after two
 // minutes, while the row never lies. Nothing is lost to a dropped connection:
 // SubscribeToTask re-reads the row.
-func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, rpcID json.RawMessage, taskID uuid.UUID) {
+func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, p principal, rpcID json.RawMessage, taskID uuid.UUID) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
@@ -890,6 +953,13 @@ func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, rpcID j
 		return
 	}
 	defer atomic.AddInt64(&h.a2aStreams, -1)
+	streamKey := a2aStreamKey(p)
+	if !h.a2aStreamsBy.acquire(streamKey) {
+		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+			fmt.Sprintf("this credential already holds %d concurrent A2A streams; close one, or poll GetTask", a2aMaxConcurrentStreamsPerPrincipal), nil))
+		return
+	}
+	defer h.a2aStreamsBy.release(streamKey)
 	lifetime := time.NewTimer(a2aStreamMaxLifetime)
 	defer lifetime.Stop()
 	w.Header().Set("Content-Type", "text/event-stream")
