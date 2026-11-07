@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -137,22 +138,52 @@ func TestWithSchemaAndDSNSchema(t *testing.T) {
 	}
 }
 
-func TestForStoreOverride(t *testing.T) {
-	d := ResolveDSNs(func(k string) string {
+// TestOverrideFor pins how a --database-url override's layout is decided
+// (#2055 review: an override naming another database used to stay in
+// public even on a one-database deployment).
+func TestOverrideFor(t *testing.T) {
+	one := ResolveDSNs(func(k string) string {
 		return map[string]string{"DATABASE_URL": "postgres://u:pw@h:5432/fleet"}[k]
 	})
-	if got := d.ForChat(""); got != d.Chat {
-		t.Errorf("ForChat(\"\") = %q, want the resolved %q", got, d.Chat)
+	legacy := ResolveDSNs(func(k string) string {
+		return map[string]string{"FLEET_CHAT_DATABASE_URL": "postgres://c@h:5432/chat", "FLEET_SCHED_DATABASE_URL": "postgres://s@h:5432/sched"}[k]
+	})
+	publicStore := func(string) (bool, error) { return true, nil }
+	empty := func(string) (bool, error) { return false, nil }
+	unreachable := func(string) (bool, error) { return false, errors.New("connection refused") }
+	const other = "postgres://u@dr-host:5432/fleet"
+	cases := []struct {
+		name     string
+		d        DSNs
+		override string
+		probe    PublicStoreProbe
+		want     string // the schema the result names ("" = verbatim, public)
+	}{
+		{"no override is the resolved DSN", one, "", nil, ChatSchema},
+		{"same database, one-database deployment", one, "postgres://x@h:5432/fleet", publicStore, ChatSchema},
+		{"same database, legacy deployment", legacy, "postgres://x@h:5432/chat", empty, ""},
+		{"own schema is verbatim", one, other + "?options=-csearch_path%3Dpublic", empty, PublicSchema},
+		{"other database holding a one-database install", one, other, empty, ChatSchema},
+		{"other database holding a legacy store", one, other, publicStore, ""},
+		{"DR host from a legacy (or unconfigured) box, one-database data", legacy, other, empty, ChatSchema},
+		{"DR host from a legacy box, legacy data", legacy, other, publicStore, ""},
+		{"probe fails: the deployment decides (one database)", one, other, unreachable, ChatSchema},
+		{"probe fails: the deployment decides (legacy)", legacy, other, unreachable, ""},
+		{"no probe: the deployment decides", one, other, nil, ChatSchema},
 	}
-	// A flag naming the same database inherits the store's schema.
-	if got := d.ForSched("postgres://other@h:5432/fleet"); DSNSchema(got) != SchedSchema {
-		t.Errorf("ForSched(same db) = %q, want the sched schema", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.d.OverrideFor(tc.override, ChatSchema, tc.probe)
+			if s := DSNSchema(got); s != tc.want {
+				t.Errorf("OverrideFor(%q) = %q (schema %q), want schema %q", tc.override, got, s, tc.want)
+			}
+			if tc.override != "" && !sameDatabase(got, tc.override) {
+				t.Errorf("OverrideFor(%q) = %q points somewhere else", tc.override, got)
+			}
+		})
 	}
-	// A flag naming another database, or carrying its own schema, is verbatim.
-	for _, o := range []string{"postgres://u@h:5432/elsewhere", "postgres://u@h:5432/fleet?search_path=x"} {
-		if got := d.ForChat(o); got != o {
-			t.Errorf("ForChat(%q) = %q, want it verbatim", o, got)
-		}
+	if got := one.ForSched(other); DSNSchema(got) != SchedSchema {
+		t.Errorf("ForSched(other) = %q, want the sched schema", got)
 	}
 }
 

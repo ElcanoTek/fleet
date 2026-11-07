@@ -29,10 +29,25 @@ produces the same bytes; `TestIdleLibResolveDSNParity` pins the two.
 Because the schema travels inside the DSN, every consumer agrees without
 deciding anything: `fleet serve`, the MCP broker, `fleet validate-config`,
 `fleet eval`, every admin verb (`status`, `import`, `migrate`, `backup`,
-`restore`, `cache-stats`, `diagnose`, the idle checks) and psql/pg_dump. An
-admin verb's `--database-url` / `--*-database-url` naming the one database is
-given the store's schema too (`DSNs.ForChat` / `ForSched`), so a flag can never
-land a verb in the other store or in `public`.
+`restore`, `cache-stats`, `diagnose`, the idle checks) and psql/pg_dump.
+
+An admin verb's `--database-url` / `--*-database-url` gets its layout from
+`DSNs.OverrideFor`, the one place an override is decided:
+
+- an override that names its own schema is used verbatim
+  (`?options=-csearch_path%3Dpublic` addresses a legacy store explicitly);
+- an override naming the deployment's own database follows the deployment's
+  layout;
+- an override naming **any other** database — a DR host with no env, a
+  restored copy — is decided by its data: the CLI probes it read-only for a
+  fleet store in `public` (`public.schema_migrations`). A legacy store is
+  used verbatim; anything else (a one-database install, or an empty database
+  being restored into) gets the store's schema, because the one-database
+  layout is the only one fleet provisions. If the probe cannot connect, the
+  deployment's layout decides (the verb then fails to connect anyway).
+
+So a flag can never land a verb in the other store, or in `public` of a
+one-database install.
 
 Each migration runner first calls `internal/dbschema.Ensure`, which creates
 the connection's schema under a transaction advisory lock (Postgres reports

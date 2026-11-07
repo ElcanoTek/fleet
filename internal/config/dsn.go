@@ -75,22 +75,58 @@ func (d DSNs) SchedFromGeneric() bool {
 }
 
 // ForChat returns the DSN a chat-store consumer connects with when an
-// operator passed override (a --database-url flag): the resolved chat DSN
-// when override is empty, else override — with the chat schema added when
-// the deployment runs in LayoutSchemas and override names that same database
-// without a schema of its own, so a flag pointing at the one database still
-// lands in the chat store rather than in public.
-func (d DSNs) ForChat(override string) string { return d.forStore(override, d.Chat, ChatSchema) }
+// operator passed override (a --database-url flag); it decides the
+// override's layout as OverrideFor does without a probe. Callers
+// that can reach the database use OverrideFor with one.
+func (d DSNs) ForChat(override string) string { return d.OverrideFor(override, ChatSchema, nil) }
 
 // ForSched is ForChat for the sched store.
-func (d DSNs) ForSched(override string) string { return d.forStore(override, d.Sched, SchedSchema) }
+func (d DSNs) ForSched(override string) string { return d.OverrideFor(override, SchedSchema, nil) }
 
-func (d DSNs) forStore(override, resolved, schema string) string {
+// PublicStoreProbe reports whether the database a DSN names holds a fleet
+// store in its public schema (a public.schema_migrations table) — i.e. it is
+// a legacy store's database. The admin CLI supplies one that connects.
+type PublicStoreProbe func(dsn string) (bool, error)
+
+// OverrideFor is the DSN a store consumer connects with when an operator
+// passed override (a --database-url flag) for the store whose schema is
+// schema ("chat" / "sched"). It is the one place an override's layout is
+// decided:
+//
+//  1. no override: the resolved DSN;
+//  2. an override that names its own schema (a search_path in its options) is
+//     used verbatim — `options=-csearch_path%3Dpublic` is how to address a
+//     legacy store explicitly;
+//  3. an override naming the deployment's own database follows the
+//     deployment's layout (the store's schema in LayoutSchemas, verbatim in
+//     the legacy layout);
+//  4. an override naming ANY other database (a DR host with no env, a
+//     restored copy) is decided by its data: probe reports whether that
+//     database's public schema holds a fleet store. If it does, it is a legacy
+//     store and is used verbatim; if not — a one-database install, or an empty
+//     database being restored into — it gets the store's schema, because the
+//     one-database layout is the only one fleet provisions. Without a probe,
+//     or when the probe fails (the verb will then fail to connect anyway), the
+//     deployment's layout decides as in 3.
+func (d DSNs) OverrideFor(override, schema string, probe PublicStoreProbe) string {
 	override = strings.TrimSpace(override)
+	resolved := d.Chat
+	if schema == SchedSchema {
+		resolved = d.Sched
+	}
 	if override == "" {
 		return resolved
 	}
-	if d.Layout == LayoutSchemas && DSNSchema(override) == "" && sameDatabase(override, resolved) {
+	if DSNSchema(override) != "" {
+		return override
+	}
+	schemaMode := d.Layout == LayoutSchemas
+	if !sameDatabase(override, resolved) && probe != nil {
+		if legacy, err := probe(override); err == nil {
+			schemaMode = !legacy
+		}
+	}
+	if schemaMode {
 		return WithSchema(override, schema)
 	}
 	return override
