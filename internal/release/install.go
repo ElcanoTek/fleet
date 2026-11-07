@@ -42,6 +42,15 @@ type Restarter interface {
 	Restart(ctx context.Context, service string) error
 }
 
+// StopStarter is a Restarter that can also stop and start the service as two
+// steps. Install and Rollback use it when they hand off the update drain
+// (InstallOptions.ClearDrain), so the marker comes off between the old
+// process exiting and the new one starting.
+type StopStarter interface {
+	Stop(ctx context.Context, service string) error
+	Start(ctx context.Context, service string) error
+}
+
 // Prober waits for the service to answer ready.
 type Prober interface {
 	WaitReady(ctx context.Context, url string, timeout time.Duration) error
@@ -71,9 +80,18 @@ type InstallOptions struct {
 	// cancelled with it: a SIGINT/SIGTERM that interrupted the health gate must
 	// not also abort the restore. Default: HealthTimeout + 2 minutes.
 	RollbackTimeout time.Duration
-	Restarter       Restarter
-	Prober          Prober
-	Log             io.Writer
+	// ClearDrain, when set, removes the update drain marker (see
+	// httpapi.UpdateDrainActive) that the caller — update.sh, inside its
+	// idle-wait fence — still holds. It runs at every (re)start, after the old
+	// process is stopped and before the new one starts: the marker keeps the
+	// old process from admitting new work until it exits, and the new process
+	// must not see it, or /readyz answers 503 "draining" until the health gate
+	// gives up and rolls back (the v2026.11.07.21 rollout). Its error is
+	// reported, never a reason to leave the service stopped.
+	ClearDrain func() error
+	Restarter  Restarter
+	Prober     Prober
+	Log        io.Writer
 }
 
 // InstallResult says what happened.
@@ -116,7 +134,9 @@ func (o *InstallOptions) logf(format string, a ...any) {
 //     exact inode that was running, not a copy that could differ);
 //  4. rename .fleet.new over <dir>/fleet — atomic: the path names the old or
 //     the new binary, never a partial one;
-//  5. restart the service (which migrates on start) and wait for HealthURL;
+//  5. restart the service (which migrates on start) and wait for HealthURL —
+//     with ClearDrain set, as stop, clear the update drain marker, start, so
+//     the new process never starts draining;
 //  6. on a failed restart or health gate, rename fleet.prev's bytes back,
 //     restart, and re-check — under a fresh context, so an interrupted gate
 //     still rolls back — and the box ends on a binary that answered ready, or
@@ -415,7 +435,8 @@ func restorePrevious(dir string) error {
 }
 
 func restartAndProbe(ctx context.Context, o InstallOptions) error {
-	if err := o.Restarter.Restart(ctx, o.Service); err != nil {
+	drainErr, err := o.restart(ctx)
+	if err != nil {
 		return fmt.Errorf("restart %s: %w", o.Service, err)
 	}
 	if o.HealthURL == "" {
@@ -426,9 +447,40 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 		timeout = 90 * time.Second
 	}
 	if err := o.Prober.WaitReady(ctx, o.HealthURL, timeout); err != nil {
+		if drainErr != nil {
+			return fmt.Errorf("%s not ready: %w (the update drain marker was not cleared: %w)", o.HealthURL, err, drainErr)
+		}
 		return fmt.Errorf("%s not ready: %w", o.HealthURL, err)
 	}
 	return nil
+}
+
+// restart (re)starts the service. With ClearDrain set it stops the old
+// process, clears the drain marker, then starts the new one; the start runs
+// even when ctx was cancelled during the stop, so an interrupt never leaves
+// the service down. A Restarter that cannot stop and start separately gets
+// the marker cleared immediately before its restart. drainErr is ClearDrain's
+// failure, which the caller reports.
+func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
+	if o.ClearDrain == nil {
+		return nil, o.Restarter.Restart(ctx, o.Service)
+	}
+	ss, split := o.Restarter.(StopStarter)
+	if split {
+		if err := ss.Stop(ctx, o.Service); err != nil {
+			return nil, fmt.Errorf("stop: %w", err)
+		}
+	}
+	if drainErr = o.ClearDrain(); drainErr != nil {
+		o.logf("warning: could not clear the update drain marker before starting %s: %v", o.Service, drainErr)
+	}
+	if split {
+		if err := ss.Start(context.WithoutCancel(ctx), o.Service); err != nil {
+			return drainErr, fmt.Errorf("start: %w", err)
+		}
+		return drainErr, nil
+	}
+	return drainErr, o.Restarter.Restart(ctx, o.Service)
 }
 
 // replaceLink makes dst a hard link to src, replacing dst. A filesystem that
@@ -485,7 +537,22 @@ type Systemctl struct{}
 
 // Restart implements Restarter.
 func (Systemctl) Restart(ctx context.Context, service string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", "restart", service).CombinedOutput() //nolint:gosec // G204: fixed binary; the unit name is operator config.
+	return systemctl(ctx, "restart", service)
+}
+
+// Stop implements StopStarter: it returns once the unit's process has exited.
+func (Systemctl) Stop(ctx context.Context, service string) error {
+	return systemctl(ctx, "stop", service)
+}
+
+// Start implements StopStarter. Under the shipped Type=notify unit it returns
+// once the new process signalled READY=1.
+func (Systemctl) Start(ctx context.Context, service string) error {
+	return systemctl(ctx, "start", service)
+}
+
+func systemctl(ctx context.Context, verb, service string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", verb, service).CombinedOutput() //nolint:gosec // G204: fixed binary and verb; the unit name is operator config.
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

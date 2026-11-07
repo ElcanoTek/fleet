@@ -472,7 +472,8 @@ else
   fi
   # Release the pre-check drain fence while git fetch and make build run; step 4
   # re-establishes the drain fence before installing the new binary and holds it
-  # until systemctl restart completes in step 5.
+  # until step 5 has stopped the old process (it is cleared before the new one
+  # starts, so the new process does not come up draining).
   fleet_clear_drain "$backend_env_file"
 fi
 
@@ -1810,11 +1811,11 @@ elif [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web — fleet serves the web UI on 127.0.0.1:3000 itself"
   fi
   if [[ "$FROM_SOURCE" == "1" ]]; then
-    info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
+    info "[dry-run] would run: systemctl stop ${SERVICE_NAME}, clear the update drain marker, systemctl start ${SERVICE_NAME}"
   elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     info "[dry-run] ${SERVICE_NAME}.service is not installed: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor; the run would not report it as running"
   else
-    info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), systemctl restart ${SERVICE_NAME} (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_TLS_MODE "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
+    info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), stop ${SERVICE_NAME}, clear the update drain marker, start it (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_TLS_MODE "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
   fi
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
@@ -1834,17 +1835,34 @@ else
   fi
   fleet_stop_web_tier || true
   _install_rc=0
+  # The drain marker fleet_wait_for_idle left on disk fences the OLD process
+  # until it exits, and must be gone before the NEW one starts: fleet reads it
+  # at every /readyz and on every task claim, so a process started under it
+  # answers 503 "draining" and claims nothing (v2026.11.07.21: every non
+  # --force update failed its readiness gate and rolled back). So: stop, clear
+  # the marker, start — never a plain restart while it is held.
+  # (scripts/update_drain_order_test.go pins this order.)
   if [[ "$FROM_SOURCE" == "1" ]]; then
     # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
     # The from-source binary was installed in step 4; restart onto it. No
     # readiness gate and no rollback here — that is the artifact path's.
-    systemctl restart "$SERVICE_NAME" \
-      && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME" \
-      || _install_rc=1
+    if systemctl stop "$SERVICE_NAME"; then
+      fleet_clear_drain "$backend_env_file"
+      systemctl start "$SERVICE_NAME" \
+        && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME" \
+        || _install_rc=1
+    else
+      _install_rc=1
+    fi
   else
     # Swap + restart + readiness gate + automatic rollback, in one verb of the
     # VERIFIED new binary, which re-verifies the staged files before it trusts
-    # them (exit 4 = rolled back to the previous binary).
+    # them (exit 4 = rolled back to the previous binary). The drain is handed
+    # to it (the marker's path and this run's owner token): it stops the old
+    # process, removes the marker, and only then starts the new binary — and
+    # does the same for the previous binary if it has to roll back.
+    FLEET_UPDATE_DRAIN_FILE="$(fleet_drain_file "$backend_env_file")" \
+    FLEET_DRAIN_OWNER_TOKEN="$FLEET_DRAIN_OWNER_TOKEN" \
     "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
       --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" \
       --server-addr "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" \

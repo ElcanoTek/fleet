@@ -148,7 +148,8 @@ What it does, in order (`scripts/update.sh`):
 7. `fleet release install`, run by the verified new binary, which re-verifies
    the staged files, stages the binary on the install filesystem, keeps the
    running one as `fleet.prev` (hard link), renames the new one over `fleet`
-   atomically, `systemctl restart`s (the service migrates on start, as before),
+   atomically, restarts the service as `systemctl stop`, remove the update
+   drain marker, `systemctl start` (the service migrates on start, as before),
    waits for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s), and on failure
    restores `fleet.prev`, restarts and re-checks — the failed binary is kept
    as `fleet.failed` and the update exits non-zero saying it rolled back. The
@@ -163,6 +164,25 @@ What it does, in order (`scripts/update.sh`):
    (or `--probe-server-name`), against the system roots plus, in manual mode,
    `FLEET_TLS_CERT_FILE`; with no domain known it refuses rather than skip the
    check.
+
+   **The drain marker comes off between the stop and the start.** The drain
+   gate leaves `<FLEET_ENV_FILE>.update.drain` on disk so the old process
+   admits no new work while it is idle-checked and stopped. fleet reads that
+   marker on every `/readyz` and every task claim, so a process *started* under
+   it answers `503 {"draining":"shutting_down"}` until the marker goes — in
+   v2026.11.07.21 update held it through the install, the new binary never
+   became ready, and every update without `--force` rolled back. Now
+   update.sh hands the marker to `fleet release install` (its path in
+   `FLEET_UPDATE_DRAIN_FILE`, its owner in `FLEET_DRAIN_OWNER_TOKEN`), and
+   the install (and `fleet release rollback`, and the automatic rollback
+   inside an install) removes it after the old process has exited and before
+   the new one starts — every start, so a rolled-back binary also comes back
+   serving. It removes only a marker that is this update's, or one whose owner
+   process is gone; a marker another live `fleet restart`/`stop` holds, or one
+   an operator created by hand, is left in place and named in the output. If
+   the install is killed between the steps, the update's exit trap still
+   clears the marker, and fleet ignores one older than 15 minutes in any case.
+   `--from-source` restarts the same way (stop, clear, start).
 
 **No systemd, or no fleet unit (a custom supervisor).** Update still installs
 the verified binary — the same atomic swap, `fleet.prev` kept — but cannot

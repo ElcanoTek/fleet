@@ -412,7 +412,11 @@ lets in-flight chat turns **and** running scheduled tasks finish within
 `FLEET_SHUTDOWN_GRACE_SECONDS` (default 30s, bounded by the unit's
 `TimeoutStopSec`), then force-cancels stragglers and exits 0. `update`'s own
 drain gate (above the steps) refuses to start while work is in flight unless
-`--wait` or `--force`.
+`--wait` or `--force`. While it waits it holds the update drain marker
+(`<FLEET_ENV_FILE>.update.drain`), which stops the old process admitting new
+work; the install stops the old process, removes the marker, and only then
+starts the new binary, so the new process does not come up draining (and fail
+its `/readyz` gate). See [RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md).
 
 > **Honest about "zero-downtime."** This is *zero-downtime-ish* / brief-blip, not
 > truly zero-downtime. fleet is a **single process on one box**, so there is an

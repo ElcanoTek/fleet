@@ -330,6 +330,10 @@ func (i *installFlags) options(w io.Writer) (release.InstallOptions, error) {
 	if i.noRestart {
 		return o, nil // nothing is probed
 	}
+	// The update drain marker comes off between stopping the old process and
+	// starting the new one (release.InstallOptions.ClearDrain); without this
+	// the new process starts draining and fails its readiness gate.
+	o.ClearDrain = clearHandedOffDrain
 	cfg, err := i.probeTLS(url)
 	if err != nil {
 		return o, err
