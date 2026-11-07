@@ -164,6 +164,28 @@ jobs:
             exit 0
           fi
 
+          # SUPERSEDED BY A WORKFLOW CHANGE. GitHub refuses a ref that a
+          # GITHUB_TOKEN pushes when it would "create or update" a workflow
+          # file relative to what the default branch holds ("refusing to allow
+          # a GitHub App to create or update workflow … without workflows
+          # permission") — so once a newer commit on main has changed
+          # .github/workflows/, a tag on this OLDER commit cannot be pushed
+          # by this job at all, and no number of retries changes that. The
+          # newer commit was certified and gets its own release, which
+          # contains this one, so this commit is skipped as superseded:
+          # released=false, nothing is built or published for it. (This
+          # amends "every built tag publishes": a commit superseded this way
+          # is never tagged, so never built.) Creating the tag through the REST
+          # refs API instead is not attempted: nothing documents it lifting
+          # this rule for an App token, and a skip is safe where a guess is
+          # not.
+          tip="$(git rev-parse HEAD)"
+          if [ "${HEAD_SHA}" != "${tip}" ] && ! git diff --quiet "${HEAD_SHA}" "${tip}" -- .github/workflows; then
+            echo "::notice::${HEAD_SHA} is superseded: main is at ${tip}, whose workflow files differ, so a release tag on ${HEAD_SHA} cannot be pushed with this token. ${tip}'s own release covers this commit; not tagging it."
+            echo "released=false" >>"${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
           # Retry loop for the one race the concurrency group cannot rule out:
           # a tag pushed between our `next` computation and our push (another
           # commit's run — the group is per SHA, so any number of green pushes
@@ -171,10 +193,15 @@ jobs:
           # against the refreshed tags rather than forcing ours, and keep going:
           # a rejected push means SOMEONE took that ordinal, so every round
           # makes progress, and a certified commit must not end up untagged
-          # because K other runs happened to land at once. The bound is a
-          # backstop against a push that fails for another reason (auth, a
-          # protected ref), not a limit on contention; the jittered backoff
-          # spreads the contenders out so they stop colliding.
+          # because K other runs happened to land at once. ONLY that kind of
+          # rejection retries (scripts/release-push-rejection.sh classifies
+          # the push's output: the ref already exists, or a non-fast-forward);
+          # anything else — a permission or rule refusal, an auth error —
+          # stops at once with the reason. The workflow-permission refusal is
+          # the superseded case above, met by a race with main moving after
+          # the check: it is skipped the same way. The bound is a backstop,
+          # not a limit on contention; the jittered backoff spreads the
+          # contenders out so they stop colliding.
           MAX_ATTEMPTS="${TAG_MAX_ATTEMPTS:-40}"
           attempt=0
           while :; do
@@ -187,13 +214,35 @@ jobs:
           Rolling release, tagged automatically from the green CI run on main.
           CI: ${RUN_URL}"
 
-            if git push origin "refs/tags/${tag}"; then
+            push_log="$(mktemp)"
+            if git push origin "refs/tags/${tag}" >"${push_log}" 2>&1; then
+              cat "${push_log}"
               echo "tag=${tag}" >>"${GITHUB_OUTPUT}"
               echo "released=true" >>"${GITHUB_OUTPUT}"
               exit 0
             fi
-
+            cat "${push_log}"
             git tag -d "${tag}"
+            kind="$(scripts/release-push-rejection.sh "${push_log}")"
+            case "${kind}" in
+              contention) ;;
+              workflow-permission)
+                # Only a commit main has moved past can be superseded; on
+                # the tip itself this refusal is a real failure.
+                tip="$(git ls-remote origin HEAD | cut -f1)"
+                if [ -n "${tip}" ] && [ "${tip}" != "${HEAD_SHA}" ]; then
+                  echo "::notice::pushing ${tag} was refused because main (now ${tip}) changed the workflow files after ${HEAD_SHA}, so ${HEAD_SHA} is superseded; ${tip}'s release covers it. Not tagging it."
+                  echo "released=false" >>"${GITHUB_OUTPUT}"
+                  exit 0
+                fi
+                echo "::error::pushing ${tag} was refused for missing workflows permission although ${HEAD_SHA} is main's tip. Not retrying."
+                exit 1
+                ;;
+              *)
+                echo "::error::pushing ${tag} was refused for a reason retrying cannot fix (above). Not retrying."
+                exit 1
+                ;;
+            esac
             if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
               echo "::error::could not push a release tag after ${attempt} attempts; re-run this workflow to tag ${HEAD_SHA}."
               exit 1
@@ -248,7 +297,7 @@ jobs:
           for name in fleet fleet-sandbox; do
             for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
               if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
-                echo "::error::ghcr.io/elcanotek/${name}:${ref} already exists but ${TAG} has no release. Releases are immutable: refusing to push different bytes under that tag. Delete the partial publish and re-run, or let the next green push release."
+                echo "::error::ghcr.io/elcanotek/${name}:${ref} already exists but ${TAG} has no release. Releases are immutable: refusing to rebuild under that tag. A publish that failed after pushing resumes with \"Re-run failed jobs\" on its ORIGINAL run (same build, same bytes); otherwise delete the partial publish and re-run, or let the next green push release."
                 exit 1
               fi
             done
@@ -544,32 +593,43 @@ jobs:
         id: images
         run: |
           set -euo pipefail
-          # Immutable tags: never push over an existing one (see the tag job).
+          # Immutable tags, resumable publishes (scripts/release-ghcr-gate.sh):
+          # nothing is ever pushed over an existing tag. A tag that already
+          # holds THIS run's images — a "Re-run failed jobs" of a publish that
+          # failed after pushing, on the same build artifacts — is reused as
+          # is; one holding any other build's bytes refuses the publish.
+          declare -A gate
           for name in fleet fleet-sandbox; do
-            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
-              if skopeo inspect --raw "docker://ghcr.io/elcanotek/${name}:${ref}" >/dev/null 2>&1; then
-                echo "::error::ghcr.io/elcanotek/${name}:${ref} appeared since the tag job checked; refusing to overwrite it."
-                exit 1
-              fi
-            done
+            gate[$name]="$(scripts/release-ghcr-gate.sh "ghcr.io/elcanotek/${name}" "${TAG}" \
+              "dist/${name}-image-linux-amd64.oci.tar" "dist/${name}-image-linux-arm64.oci.tar")" \
+              || { echo "::error::ghcr.io/elcanotek/${name}:${TAG} holds another build's images (above); releases are immutable, refusing to publish."; exit 1; }
+            printf '%s: %s\n' "${name}" "$(printf '%s' "${gate[$name]}" | tr '\n' ' ')"
           done
+          field() { printf '%s\n' "${gate[$1]}" | awk -F= -v k="$2" '$1 == k { print $2 }'; }
           for name in fleet fleet-sandbox; do
             repo="ghcr.io/elcanotek/${name}"
             key="${name//-/_}"
+            [ "$(field "${name}" state)" = resume ] && echo "::notice::resuming ${repo}:${TAG}: what is already there is this run's build"
             podman manifest rm "${repo}:${TAG}" >/dev/null 2>&1 || true
             podman manifest create "${repo}:${TAG}"
             for arch in amd64 arm64; do
-              # Straight from the build's OCI archive to the registry: no
-              # local store, no name to re-derive, the bytes the SBOM scanned.
-              skopeo copy --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
-                "oci-archive:dist/${name}-image-linux-${arch}.oci.tar" "docker://${repo}:${TAG}-${arch}"
-              digest="$(cat "${RUNNER_TEMP}/${name}-${arch}.digest")"
+              digest="$(field "${name}" "${arch}")"
+              if [ -z "${digest}" ]; then
+                # Straight from the build's OCI archive to the registry: no
+                # local store, no name to re-derive, the bytes the SBOM scanned.
+                skopeo copy --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
+                  "oci-archive:dist/${name}-image-linux-${arch}.oci.tar" "docker://${repo}:${TAG}-${arch}"
+                digest="$(cat "${RUNNER_TEMP}/${name}-${arch}.digest")"
+              fi
               echo "${key}_${arch}=${repo}@${digest}" >> "${GITHUB_OUTPUT}"
               podman manifest add "${repo}:${TAG}" "docker://${repo}@${digest}"
             done
-            podman manifest push --all --digestfile "${RUNNER_TEMP}/${name}.digest" \
-              "${repo}:${TAG}" "docker://${repo}:${TAG}"
-            digest="$(cat "${RUNNER_TEMP}/${name}.digest")"
+            digest="$(field "${name}" index)"
+            if [ -z "${digest}" ]; then
+              podman manifest push --all --digestfile "${RUNNER_TEMP}/${name}.digest" \
+                "${repo}:${TAG}" "docker://${repo}:${TAG}"
+              digest="$(cat "${RUNNER_TEMP}/${name}.digest")"
+            fi
             {
               echo "${key}=${repo}@${digest}"
               echo "${key}_digest=${digest}"
@@ -584,16 +644,31 @@ jobs:
           FLEET_ARM64: ${{ steps.images.outputs.fleet_arm64 }}
           SANDBOX_AMD64: ${{ steps.images.outputs.fleet_sandbox_amd64 }}
           SANDBOX_ARM64: ${{ steps.images.outputs.fleet_sandbox_arm64 }}
+          SBOM_REF_TYPE: https://github.com/ElcanoTek/fleet/sbom-reference/v1
         run: |
           set -euo pipefail
-          cosign sign --yes "${FLEET_REF}"
-          cosign sign --yes "${SANDBOX_REF}"
-          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
-          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
-          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
-          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
+          # Every call that talks to Sigstore (Fulcio, Rekor) or the registry
+          # retries on a transient failure — a Rekor 502 must not fail a
+          # release whose images are already pushed (scripts/retry-transient.sh:
+          # 5xx, timeouts and dropped connections only, ~3 minutes in all).
+          scripts/retry-transient.sh cosign sign --yes "${FLEET_REF}"
+          scripts/retry-transient.sh cosign sign --yes "${SANDBOX_REF}"
+          # Each image's SBOM is attested BY REFERENCE (name, SHA-256, release
+          # URL), not inline: the sandbox image's SPDX SBOM is ~28 MB, and a
+          # DSSE envelope of it is past what Rekor accepts (its upload fails
+          # with a 502 every time — not a transient error). The SBOM files
+          # themselves ship as release assets under the signed SHA256SUMS.
+          attest_sbom() {
+            local sbom="$1" ref="$2" pred
+            pred="$(scripts/sbom-reference.sh "${TAG}" "${sbom}")"
+            scripts/retry-transient.sh cosign attest --yes --type "${SBOM_REF_TYPE}" --predicate "${pred}" "${ref}"
+          }
+          attest_sbom dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
+          attest_sbom dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
+          attest_sbom dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
+          attest_sbom dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
           for ref in "${FLEET_REF}" "${SANDBOX_REF}"; do
-            cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
+            scripts/retry-transient.sh cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
           done
 
       # SLSA provenance whose SOURCE is the release commit. The action's own
@@ -610,6 +685,20 @@ jobs:
           jq . "${RUNNER_TEMP}/provenance-predicate.json"
       - name: SLSA provenance — control-plane image
         id: provenance_fleet
+        continue-on-error: true # a transient Sigstore failure gets one retry below
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet
+          subject-digest: ${{ steps.images.outputs.fleet_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+          push-to-registry: true
+      - name: SLSA provenance — control-plane image (pause before the retry)
+        if: ${{ steps.provenance_fleet.outcome == 'failure' }}
+        run: sleep 60
+      - name: SLSA provenance — control-plane image (retry)
+        id: provenance_fleet_retry
+        if: ${{ steps.provenance_fleet.outcome == 'failure' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/elcanotek/fleet
@@ -619,6 +708,20 @@ jobs:
           push-to-registry: true
       - name: SLSA provenance — sandbox image
         id: provenance_sandbox
+        continue-on-error: true # a transient Sigstore failure gets one retry below
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet-sandbox
+          subject-digest: ${{ steps.images.outputs.fleet_sandbox_digest }}
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+          push-to-registry: true
+      - name: SLSA provenance — sandbox image (pause before the retry)
+        if: ${{ steps.provenance_sandbox.outcome == 'failure' }}
+        run: sleep 60
+      - name: SLSA provenance — sandbox image (retry)
+        id: provenance_sandbox_retry
+        if: ${{ steps.provenance_sandbox.outcome == 'failure' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ghcr.io/elcanotek/fleet-sandbox
@@ -628,6 +731,20 @@ jobs:
           push-to-registry: true
       - name: SLSA provenance — binaries
         id: provenance
+        continue-on-error: true # a transient Sigstore failure gets one retry below
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/fleet-linux-amd64
+            dist/fleet-linux-arm64
+          predicate-type: https://slsa.dev/provenance/v1
+          predicate-path: ${{ runner.temp }}/provenance-predicate.json
+      - name: SLSA provenance — binaries (pause before the retry)
+        if: ${{ steps.provenance.outcome == 'failure' }}
+        run: sleep 60
+      - name: SLSA provenance — binaries (retry)
+        id: provenance_retry
+        if: ${{ steps.provenance.outcome == 'failure' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -644,9 +761,9 @@ jobs:
         env:
           FLEET_REF: ${{ steps.images.outputs.fleet }}
           SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
-          BIN_BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
-          FLEET_BUNDLE: ${{ steps.provenance_fleet.outputs.bundle-path }}
-          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outputs.bundle-path }}
+          BIN_BUNDLE: ${{ steps.provenance.outcome == 'success' && steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
+          FLEET_BUNDLE: ${{ steps.provenance_fleet.outcome == 'success' && steps.provenance_fleet.outputs.bundle-path || steps.provenance_fleet_retry.outputs.bundle-path }}
+          SANDBOX_BUNDLE: ${{ steps.provenance_sandbox.outcome == 'success' && steps.provenance_sandbox.outputs.bundle-path || steps.provenance_sandbox_retry.outputs.bundle-path }}
         run: |
           set -euo pipefail
           check() {
@@ -684,7 +801,7 @@ jobs:
         env:
           FLEET_REF: ${{ steps.images.outputs.fleet }}
           SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
-          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+          PROVENANCE: ${{ steps.provenance.outcome == 'success' && steps.provenance.outputs.bundle-path || steps.provenance_retry.outputs.bundle-path }}
         run: |
           set -euo pipefail
           cd dist
@@ -698,7 +815,7 @@ jobs:
             fleet-linux.provenance.sigstore.json | sed 's#  \./#  #' > SHA256SUMS
           cat SHA256SUMS
           for f in SHA256SUMS fleet-linux-amd64 fleet-linux-arm64; do
-            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
+            scripts/retry-transient.sh cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
             # Verify exactly as a box will: a signer/verifier identity drift
             # fails HERE, not on every box's next update.
             cosign verify-blob --bundle "${f}.sigstore.json" \

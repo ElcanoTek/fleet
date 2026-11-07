@@ -44,7 +44,13 @@ Images, multi-arch (amd64 + arm64) indexes tagged with the release tag (and
   (`config/default/sandbox/Containerfile`).
 
 Each index digest is signed with cosign; each per-architecture image carries a
-signed SPDX attestation (`cosign attest --type spdxjson`); both indexes and the
+signed SBOM attestation BY REFERENCE (`cosign attest --type
+https://github.com/ElcanoTek/fleet/sbom-reference/v1`,
+`scripts/sbom-reference.sh`): it names that image's SPDX SBOM release asset —
+file name, SHA-256, download URL — and the asset is covered by the signed
+`SHA256SUMS`. Not the SBOM inline: the sandbox image's SBOM is ~28 MB, and a
+DSSE envelope that large is refused by Rekor (the upload fails with a 502 on
+every attempt, which is how the first releases failed). Both indexes and the
 binaries have SLSA build provenance in GitHub's attestation store (pushed to
 the registry for the images). The provenance's source
 (`resolvedDependencies[0]`) is the release tag at the release commit:
@@ -201,9 +207,44 @@ published: the tag job skips a complete release, and REFUSES — loudly, for a
 human — a partial one (a draft, a release without `SHA256SUMS`, or GHCR images
 under the tag with no complete release), because a rebuild would put different
 bytes (a newer base layer or RPM) under a tag boxes already verified. The
-publish job checks GHCR again right before it pushes. Recovering a partial
-publish is deliberate: delete it and re-run, or let the next green push
-release. Overlapping runs both publish: a tag a newer one overtook while it
+publish job checks GHCR again right before it pushes
+(`scripts/release-ghcr-gate.sh`), and nothing is ever pushed over an existing
+tag: a tag holding another build's image (compared by config digest) refuses
+the publish, while one holding THIS run's images is reused as is. That makes
+a publish that failed after pushing (a Sigstore outage while signing)
+resumable: **"Re-run failed jobs" on the original run** re-runs the publish
+job on the same build artifacts, finds its own images, signs them again (a
+second signature on the same digest is harmless) and publishes. "Re-run all
+jobs" rebuilds, so the tag job refuses it; for anything else, delete the
+partial publish and re-run, or let the next green push release. A re-run uses
+the workflow file of the ORIGINAL run, so it resumes only on a release.yml
+that already has the gate.
+
+**Transient Sigstore and registry failures retry.** Every cosign `sign`,
+`attest`, `sign-blob` and image `verify` in the publish job goes through
+`scripts/retry-transient.sh`: 5 attempts over about three minutes, ONLY on a
+5xx, a timeout or a dropped connection — a refused signature fails at once.
+Each SLSA provenance step (an action, which cannot be wrapped) gets one retry
+after a minute.
+
+**Tagging.** Tagging retries with jittered backoff until an ordinal is free
+(40 attempts as a backstop), so any number of green pushes landing together
+all get tagged — but only a rejection that IS contention (the tag already
+exists, a non-fast-forward: `scripts/release-push-rejection.sh`) retries; any
+other refusal stops at once with its reason. One refusal is expected and
+handled: GitHub will not let the job's token create a ref that would add or
+change a workflow file relative to the default branch, so once a NEWER commit
+on main has changed `.github/workflows/`, an older green commit cannot be
+tagged at all. The tag job checks for exactly that before it pushes (the
+commit is not main's tip and its workflow files differ from the tip's) and
+skips the commit as **superseded**, with a notice: nothing is built or
+published for it, and the newer commit's release, which contains it, covers
+it. This amends "every built tag publishes" below: a superseded commit is
+never tagged, so never built. (Creating the tag through the REST refs API
+instead is not attempted: nothing documents it lifting the rule for an App
+token.)
+
+Overlapping runs both publish: a tag a newer one overtook while it
 was building still gets its release, so no signed image is left without a
 release naming it. The Latest mark follows the newest successfully
 PUBLISHED release (non-draft, with `SHA256SUMS`;
@@ -214,9 +255,7 @@ are moved only by the serialized `promote-latest` job
 (`scripts/release-promote-latest.sh`), which never promotes "its own" run's
 release: overlapping publish jobs cannot move `:latest` back to an older
 digest or leave `fleet:latest` and `fleet-sandbox:latest` on different
-releases. Retention counts published releases. Tagging itself
-retries with jittered backoff until an ordinal is free (40 attempts as a
-backstop), so any number of green pushes landing together all get tagged.
+releases. Retention counts published releases.
 
 ## Sandbox images and client bundles
 
@@ -285,10 +324,24 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 gh attestation verify fleet-linux-amd64 --repo ElcanoTek/fleet      # SLSA provenance
-cosign verify-attestation --type spdxjson ghcr.io/elcanotek/fleet-sandbox@sha256:<per-arch digest> \
+cosign verify-attestation --type https://github.com/ElcanoTek/fleet/sbom-reference/v1 \
+  ghcr.io/elcanotek/fleet-sandbox@sha256:<per-arch digest> \
   --certificate-identity https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com   # the image SBOM
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate.sbom'   # names the SBOM asset and its SHA-256
+# The SBOM itself: download the named asset, then check its hash against BOTH
+# the signed SHA256SUMS and the attested digest (sha256sum -c above skipped it
+# with --ignore-missing because it was not downloaded yet).
+SBOM=fleet-sandbox-image-linux-amd64.spdx.json   # the asset the attestation names
+curl -fsSLO "https://github.com/ElcanoTek/fleet/releases/download/$TAG/$SBOM"
+grep " ${SBOM}\$" SHA256SUMS | sha256sum -c -                # matches the signed sums
+sha256sum "$SBOM"                                               # compare with .predicate.sbom's sha256
 ```
+
+The SBOM files are release assets, so they share the release's retention:
+when an old release is pruned, its SBOM URLs stop resolving, while its GHCR
+images and their attestations remain (the attested SHA-256 still identifies
+the SBOM if you kept a copy).
 
 ## Knobs
 

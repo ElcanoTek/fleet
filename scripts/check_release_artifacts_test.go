@@ -83,7 +83,8 @@ func TestReleaseSignerIsTheIdentityBoxesVerify(t *testing.T) {
 		"cosign sign-blob --yes --bundle \"${f}.sigstore.json\"",
 		"cosign verify-blob --bundle",
 		"cosign sign --yes",
-		"cosign attest --yes --type spdxjson",
+		"cosign attest --yes --type \"${SBOM_REF_TYPE}\"",
+		"scripts/sbom-reference.sh",
 		"internal/release/cosign.lock",
 		"sha256sum -c",
 		"> SHA256SUMS",
@@ -102,7 +103,7 @@ func TestReleaseSignerIsTheIdentityBoxesVerify(t *testing.T) {
 	}
 	var provenance int
 	for _, s := range pub.Steps {
-		if strings.HasPrefix(s.Uses, "actions/attest-build-provenance@") {
+		if strings.HasPrefix(s.Uses, "actions/attest-build-provenance@") && !strings.HasSuffix(s.Name, "(retry)") {
 			provenance++
 		}
 	}

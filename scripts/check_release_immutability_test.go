@@ -33,8 +33,15 @@ func TestReleasesAreImmutable(t *testing.T) {
 	if strings.Contains(pub, "--clobber") || strings.Contains(pub, "gh release upload") {
 		t.Error("the publish job overwrites release assets; releases are immutable")
 	}
-	if !strings.Contains(pub, "appeared since the tag job checked; refusing to overwrite it") {
-		t.Error("the publish job must re-check GHCR before pushing")
+	// Before pushing, every repository goes through the gate that refuses
+	// another build's bytes and resumes only this run's own.
+	gate := strings.Index(pub, "scripts/release-ghcr-gate.sh")
+	push := strings.Index(pub, "skopeo copy --digestfile")
+	if gate < 0 || push < 0 || gate > push {
+		t.Error("the publish job must check GHCR (scripts/release-ghcr-gate.sh) before pushing")
+	}
+	if !strings.Contains(pub, `if [ -z "${digest}" ]; then`) {
+		t.Error("the publish job must push only what the gate reports missing, never over an existing tag")
 	}
 }
 
