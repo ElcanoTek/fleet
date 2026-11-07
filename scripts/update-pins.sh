@@ -78,14 +78,42 @@ newest_pypi() {
 
 mapfile -t WORKFLOWS < <(find "$ROOT/.github/workflows" -name '*.yml' -print | sort)
 
+# Upstream data (tags, versions, checksums) is UNTRUSTED input: it is
+# validated against a strict shape before any use, and it never becomes part
+# of a program — no sed or awk script, no eval, no unquoted expansion. Values
+# reach awk only through ENVIRON, and the rewrite is an exact string match.
+VERSION_RE='^v?[0-9]+(\.[0-9]+){1,3}([-.][0-9A-Za-z]+)?$'
+SHA_RE='^[0-9a-f]{64}$'
+valid_version() { [[ "$1" =~ $VERSION_RE ]]; }
+valid_sha() { [[ "$1" =~ $SHA_RE ]]; }
+
 current_value() { # NAME SUFFIX → the pinned value (first occurrence)
-  grep -h -o -E "^[[:space:]]+$1_$2:[[:space:]]*'[^']+'" "${WORKFLOWS[@]}" | head -n1 | sed -E "s/.*'([^']+)'/\\1/"
+  KEY="$1_$2" awk '
+    { line = $0; sub(/^[[:space:]]+/, "", line) }
+    index(line, ENVIRON["KEY"] ": \047") == 1 {
+      v = substr(line, length(ENVIRON["KEY"]) + 4)
+      if (sub(/\047[[:space:]]*$/, "", v) && v !~ /\047/) { print v; exit }
+    }' "${WORKFLOWS[@]}"
 }
 
-rewrite() { # NAME SUFFIX OLD NEW
-  local f
+# rewrite NAME SUFFIX OLD NEW — replace `<NAME>_<SUFFIX>: 'OLD'` with 'NEW' in
+# every workflow: an exact match of the whole value, the new value passed as
+# data (ENVIRON), never spliced into a program. Both values are validated by
+# the caller.
+rewrite() {
+  local f tmp
   for f in "${WORKFLOWS[@]}"; do
-    sed -i -E "s|^([[:space:]]+$1_$2:[[:space:]]*)'$3'|\\1'$4'|" "$f"
+    tmp="$(mktemp)"
+    KEY="$1_$2" OLD="$3" NEW="$4" awk '
+      {
+        line = $0
+        match(line, /^[[:space:]]*/)
+        indent = substr(line, 1, RLENGTH); rest = substr(line, RLENGTH + 1)
+        want = ENVIRON["KEY"] ": \047" ENVIRON["OLD"] "\047"
+        if (rest == want) { print indent ENVIRON["KEY"] ": \047" ENVIRON["NEW"] "\047"; next }
+        print
+      }' "$f" > "$tmp" && cat "$tmp" > "$f"
+    rm -f "$tmp"
   done
 }
 
@@ -115,8 +143,8 @@ verify_signed() {
 # file, confirmed by downloading the asset and hashing it.
 checked_sha() {
   local sums="$1" asset="$2" base="$3" want got
-  want="$(awk -v a="$asset" '$2==a || $2=="*"a {print $1}' "$sums" | head -n1)"
-  [[ ${#want} -eq 64 ]] || { echo "no checksum for $asset" >&2; return 1; }
+  want="$(A="$asset" awk '$2==ENVIRON["A"] || $2=="*"ENVIRON["A"] {print $1}' "$sums" | head -n1)"
+  valid_sha "$want" || { echo "no well-formed checksum for $asset" >&2; return 1; }
   fleet_release_get "$base/$asset" "$WORK/asset" "$FLEET_RELEASE_MAX_BINARY" || return 1
   got="$(sha256sum "$WORK/asset" | awk '{print $1}')"
   rm -f "$WORK/asset"
@@ -130,6 +158,7 @@ update_github() { # NAME REPO ASSET SUMS ID ISS
   [[ -n "$cur" ]] || { fail "$name: no ${name}_VERSION pin found in the workflows"; return; }
   tag="$(newest_github "$repo")" || { fail "$name: could not list $repo releases"; return; }
   [[ -n "$tag" ]] || { note "$name: no release of $repo older than ${COOLDOWN_DAYS} days"; return; }
+  valid_version "$tag" || { fail "$name: upstream tag is not a plain version — refusing it"; return; }
   v="${tag#v}"
   [[ "$v" == "$cur" ]] && { note "$name: $cur is current"; return; }
   if [[ "$(printf '%s\n%s\n' "$cur" "$v" | sort -V | tail -n1)" != "$v" ]]; then
@@ -155,6 +184,7 @@ update_pypi() { # NAME PROJECT
   cur="$(current_value "$name" VERSION)"
   [[ -n "$cur" ]] || { fail "$name: no ${name}_VERSION pin found in the workflows"; return; }
   v="$(newest_pypi "$proj")" || { fail "$name: could not read PyPI for $proj"; return; }
+  if [[ -n "$v" ]] && ! valid_version "$v"; then fail "$name: PyPI version is not a plain version — refusing it"; return; fi
   [[ -n "$v" && "$v" != "$cur" ]] || { note "$name: $cur is current"; return; }
   if [[ "$(printf '%s\n%s\n' "$cur" "$v" | sort -V | tail -n1)" != "$v" ]]; then
     note "$name: pinned $cur is newer than $v (cooldown) — leaving it"; return
@@ -170,6 +200,7 @@ update_cosign() { # REPO ASSET SUMS ID ISS
   lock="$ROOT/internal/release/cosign.lock"
   cur="$(awk '$1=="version"{print $2}' "$lock")"
   tag="$(newest_github "$repo")" || { fail "COSIGN: could not list $repo releases"; return; }
+  if [[ -n "$tag" ]] && ! valid_version "$tag"; then fail "COSIGN: upstream tag is not a plain version — refusing it"; return; fi
   [[ -n "$tag" && "$tag" != "$cur" ]] || { note "COSIGN: $cur is current"; return; }
   if [[ "$(printf '%s\n%s\n' "${cur#v}" "${tag#v}" | sort -V | tail -n1)" != "${tag#v}" ]]; then
     note "COSIGN: pinned $cur is newer than $tag (cooldown) — leaving it"; return

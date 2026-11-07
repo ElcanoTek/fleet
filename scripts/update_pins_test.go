@@ -20,6 +20,10 @@ import (
 // pinsFixture lays out a minimal repo (the updater, its libs, a workflow with a
 // FOO pin) and an upstream serving release v1.1.0 of o/foo.
 func pinsFixture(t *testing.T, published time.Time, tamper bool) (root string, run func() (string, error)) {
+	return pinsFixtureTag(t, published, tamper, "v1.1.0")
+}
+
+func pinsFixtureTag(t *testing.T, published time.Time, tamper bool, tag string) (root string, run func() (string, error)) {
 	t.Helper()
 	src := repoRoot(t)
 	root = t.TempDir()
@@ -49,9 +53,9 @@ func pinsFixture(t *testing.T, published time.Time, tamper bool) (root string, r
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/o/foo/releases":
-			fmt.Fprintf(w, `[{"tag_name":"v1.1.0","draft":false,"prerelease":false,"published_at":%q},
+			fmt.Fprintf(w, `[{"tag_name":%q,"draft":false,"prerelease":false,"published_at":%q},
 			                {"tag_name":"v1.2.0-rc1","draft":false,"prerelease":true,"published_at":%q}]`,
-				published.UTC().Format(time.RFC3339), published.UTC().Format(time.RFC3339))
+				tag, published.UTC().Format(time.RFC3339), published.UTC().Format(time.RFC3339))
 		case "/o/foo/releases/download/v1.1.0/foo_1.1.0_checksums.txt":
 			fmt.Fprintf(w, "%s  foo_1.1.0_linux_amd64.tar.gz\n%s  foo_1.1.0_darwin_arm64.tar.gz\n", listed, strings.Repeat("c", 64))
 		case "/o/foo/releases/download/v1.1.0/foo_1.1.0_linux_amd64.tar.gz":
@@ -104,5 +108,28 @@ func TestUpdatePinsHonoursTheCooldown(t *testing.T) {
 	wf, _ := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
 	if !strings.Contains(string(wf), "FOO_VERSION: '1.0.0'") {
 		t.Fatalf("a release younger than the 7-day cooldown was adopted:\n%s", wf)
+	}
+}
+
+// TestUpdatePinsRefusesHostileVersionStrings — an upstream tag is untrusted
+// data: anything but a plain version is refused, and nothing in it can reach
+// a program (the rewrite is an exact-match replacement fed through ENVIRON).
+func TestUpdatePinsRefusesHostileVersionStrings(t *testing.T) {
+	for _, tag := range []string{
+		"v1.1.0|e",
+		"v1.1.0'; touch /tmp/pwned; '",
+		"v1.1.0/\\1/",
+		"v1.1.0\nFOO_SHA256: 'x'",
+		"$(id)",
+	} {
+		root, run := pinsFixtureTag(t, time.Now().Add(-30*24*time.Hour), false, tag)
+		out, err := run()
+		if err == nil || !strings.Contains(out, "not a plain version") {
+			t.Errorf("tag %q: want a refusal, got err=%v\n%s", tag, err, out)
+		}
+		wf, _ := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+		if !strings.Contains(string(wf), "FOO_VERSION: '1.0.0'") || strings.Count(string(wf), "FOO_") != 2 {
+			t.Errorf("tag %q changed the workflow:\n%s", tag, wf)
+		}
 	}
 }
