@@ -52,11 +52,15 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
   transaction, then drops the chat table.
 - **One tick loop.** `Scheduler.runLoop` runs a chat-schedule phase on every
   tick, once as soon as it starts, and on a wake-up the loop arms for the
-  earliest active schedule due before the next tick (and that the chat server
+  earliest work due before the next tick — an active schedule's slot, or a
+  pending fire's retry (lease expiry) — (and that the chat server
   requests when a schedule is created, edited or resumed; a request is kept
   when it is within one tick interval or five minutes, whichever is longer).
   A pass drains everything due, bounded by the sweep's deadline (and a
   10,000-fire backstop), never re-claiming a row it already attempted. The
+  daily maintenance (run-history prunes, log archival) runs in its own
+  single-flight goroutine, so its long sweeps never delay a tick or a
+  wake-up; Stop cancels and waits for it. The
   chat-side sweeper goroutine and its `AfterFunc` timers are deleted.
 - **One lease model.** A fire is claim → delivery → settle. The claim
   (`db.ClaimDueChatSchedules`, `FOR UPDATE SKIP LOCKED`) writes a per-claim
@@ -74,7 +78,9 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
   the dead claim's late settle is refused. A delivery that errors keeps its
   fire and lease, the lease pushed out by a backoff (30s doubling to 30m), so
   a failing schedule is retried by recovery and never crowds out the healthy
-  ones. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
+  ones. A fire the chat server defers (draining, shutting down) is kept the
+  same way with a 10s retry — not counted, not dropped, and delivered once
+  when turns are taken again, a Run now on a paused schedule included. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
   its claim runs on the caller's context; delivery and settle run on a
   detached, bounded one, and a second Run now while a fire is pending is
   refused rather than minting a new fire for the same run.
