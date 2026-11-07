@@ -76,7 +76,10 @@ Three rules keep the gate honest in the other direction:
 - **The Operations Center bearer login is untouched.** `fleet sched user
   passwd` re-upserts through `AddUser`, whose `ON CONFLICT` writes
   `session_token` back unchanged, so an issued bearer token survives a sched
-  password change. Ending one means deleting (and re-creating) the sched user.
+  password change. A bearer ends when it is presented to the orchestrator's
+  `POST /auth/logout` (which clears that session server-side), when a later
+  login replaces it, at its expiry, or when the sched user is deleted or
+  disabled.
   A chat password reset never governed that credential. On a Fleet that signs
   in through central Auth no such bearer is accepted at all (ADR-0095).
 - **Magic-link (`elcano_auth`) sessions carry no epoch** and stay revocable only
