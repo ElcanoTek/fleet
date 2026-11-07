@@ -61,4 +61,4 @@ internal/redact/redact_test.go:generic-api-key:122
 
 # fake: fabricated Web Push subscription placeholder ("fake-p256dh-refreshed")
 # compared in TestUpsertPushSubscription's refresh assertion (#292).
-internal/store/push_subscriptions_test.go:generic-api-key:50
+internal/store/push_subscriptions_test.go:generic-api-key:52
