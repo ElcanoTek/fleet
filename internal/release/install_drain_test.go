@@ -220,9 +220,10 @@ type restartOnly struct{ s *drainService }
 
 func (r restartOnly) Restart(ctx context.Context, svc string) error { return r.s.Restart(ctx, svc) }
 
-// TestInstallClearsTheDrainBeforeARestartOnlyRestarter: without a separate
-// stop, the marker is cleared immediately before the restart.
-func TestInstallClearsTheDrainBeforeARestartOnlyRestarter(t *testing.T) {
+// TestInstallClearsTheDrainAfterARestartOnlyRestart: without a separate stop,
+// the marker fences the old process through the restart and comes off right
+// after it, before the readiness probe.
+func TestInstallClearsTheDrainAfterARestartOnlyRestart(t *testing.T) {
 	dir, bin, s := drainSetup(t)
 	s.ready["NEW"] = true
 	o := opts(dir, bin, restartOnly{s}, s)
@@ -233,7 +234,7 @@ func TestInstallClearsTheDrainBeforeARestartOnlyRestarter(t *testing.T) {
 	if _, err := Install(context.Background(), o); err != nil {
 		t.Fatalf("install: %v (events %v)", err, s.events)
 	}
-	if got, want := strings.Join(s.events, ","), "clear,stop,start NEW,probe NEW"; got != want {
+	if got, want := strings.Join(s.events, ","), "stop,start NEW,clear,probe NEW"; got != want {
 		t.Errorf("events %q, want %q", got, want)
 	}
 }
@@ -326,7 +327,7 @@ func TestInstallStartsWhenInterruptedDuringTheStop(t *testing.T) {
 }
 
 // TestInstallStartsWhenTheStopFails: whatever `systemctl stop` reports, the
-// drain is cleared and the service is started, and the stop error is reported.
+// service is restarted and the drain cleared, and the stop error is reported.
 func TestInstallStartsWhenTheStopFails(t *testing.T) {
 	dir, bin, ds := drainSetup(t)
 	ds.ready["NEW"] = true
@@ -339,8 +340,8 @@ func TestInstallStartsWhenTheStopFails(t *testing.T) {
 		return nil
 	}
 	_, err := Install(context.Background(), o)
-	if !ds.running || len(ds.startedDraining) == 0 || !noneTrue(ds.startedDraining) {
-		t.Fatalf("running %v, starts %v (events %v): want started without the drain", ds.running, ds.startedDraining, ds.events)
+	if !ds.running || ds.markerPresent() {
+		t.Fatalf("running %v, marker present %v (events %v): want restarted with the drain cleared", ds.running, ds.markerPresent(), ds.events)
 	}
 	if err != nil {
 		t.Fatalf("install: %v — the new binary came up ready; a stop error alone must not roll it back", err)
@@ -435,5 +436,81 @@ func TestInstallStartIsBoundedByTheCallersDeadline(t *testing.T) {
 		}
 	case <-time.After(8 * time.Second):
 		t.Fatal("a stalled start hung the install past its deadline and RollbackTimeout")
+	}
+}
+
+// stopFailsButRestarts is a unit whose stop job fails while the OLD process
+// keeps running, but whose restart works and replaces it.
+type stopFailsButRestarts struct{ *drainService }
+
+func (s *stopFailsButRestarts) Stop(context.Context, string) error {
+	s.events = append(s.events, "stop failed")
+	return errors.New("Job for fleet.service failed")
+}
+
+func (s *stopFailsButRestarts) Restart(ctx context.Context, svc string) error {
+	s.events = append(s.events, "restart")
+	s.running = false
+	return s.Start(ctx, svc)
+}
+
+// TestInstallKeepsTheDrainThroughTheFallbackRestart: after a failed stop the
+// old process may still be running, so the marker (its admission fence) must
+// stay on disk until the fallback restart has replaced it — and come off
+// before the readiness probe, so the new release still comes up ready.
+func TestInstallKeepsTheDrainThroughTheFallbackRestart(t *testing.T) {
+	dir, bin, ds := drainSetup(t)
+	ds.ready["NEW"] = true
+	s := &stopFailsButRestarts{ds}
+	o := opts(dir, bin, s, s)
+	o.ClearDrain = func() error {
+		if ds.runningBin == "OLD" {
+			t.Error("the drain marker was cleared while the OLD process still ran — it could admit work the restart then kills")
+		}
+		ds.events = append(ds.events, "clear")
+		return os.Remove(ds.marker)
+	}
+	if _, err := Install(context.Background(), o); err != nil {
+		t.Fatalf("install: %v (events %v)", err, ds.events)
+	}
+	order := strings.Join(ds.events, ",")
+	if !strings.Contains(order, "restart,start NEW,clear") || strings.Index(order, "clear") > strings.Index(order, "probe NEW") {
+		t.Fatalf("want the fallback restart, then the clear, then the probe; got events %v", ds.events)
+	}
+}
+
+// stalledStop is a unit whose stop never completes on its own: Stop returns
+// only when its context ends.
+type stalledStop struct{ *drainService }
+
+func (s *stalledStop) Stop(ctx context.Context, _ string) error {
+	s.events = append(s.events, "stop stalled")
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// TestInstallStopIsBoundedByTheCallersDeadline: the detached stop keeps the
+// caller's deadline (and so RollbackTimeout), not a fixed three minutes.
+func TestInstallStopIsBoundedByTheCallersDeadline(t *testing.T) {
+	dir, bin, ds := drainSetup(t)
+	ds.ready["NEW"], ds.ready["OLD"] = true, true
+	s := &stalledStop{ds}
+	o := opts(dir, bin, s, s)
+	o.RollbackTimeout = 300 * time.Millisecond
+	o.ClearDrain = func() error {
+		_ = os.Remove(ds.marker)
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := Install(ctx, o)
+		done <- err
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("a stalled stop held the install past its deadline and RollbackTimeout")
 	}
 }

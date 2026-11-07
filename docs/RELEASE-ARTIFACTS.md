@@ -180,15 +180,18 @@ What it does, in order (`scripts/update.sh`):
    serving. It removes only a marker that is this update's, or one whose owner
    process is gone; a marker another live `fleet restart`/`stop` holds, or one
    an operator created by hand, is left in place and named in the output.
-   Once the stop is issued, a Ctrl-C or SIGTERM cannot cut it short (it runs
-   detached, bounded at 3 minutes), and a start always follows (detached too,
-   but bounded by the install's or rollback's own deadline), so an
-   interrupted stop never leaves fleet down. If `systemctl stop` reports an
-   error, the old process may still be running and a plain start would be a
-   no-op the old process answers `/readyz` for; so the install restarts the
-   unit instead, and if that fails too it makes sure fleet runs and fails
-   the install (rolling back as usual) rather than report the new release
-   live. The stop error is printed with the result. If the install is
+   Once the stop is issued, a Ctrl-C or SIGTERM cannot cut it short, and a
+   start always follows; both run detached from the signal but bounded by the
+   install's or rollback's own deadline (at most 3 minutes each), so an
+   interrupted stop never leaves fleet down and `FLEET_HEALTH_TIMEOUT` /
+   the rollback budget still hold. If `systemctl stop` reports an error, the
+   old process may still be running and a plain start would be a no-op the
+   old process answers `/readyz` for; so the install restarts the unit
+   instead, keeping the marker in place until that restart has replaced the
+   old process (it comes off before the readiness probe), and if the restart
+   fails too it makes sure fleet runs and fails the install (rolling back as
+   usual) rather than report the new release live. Taking the marker's lock
+   waits at most 30 seconds, so a stalled holder cannot block the start. The stop error is printed with the result. If the install is
    SIGKILLed between the steps, the update's exit trap still
    clears the marker, and fleet ignores one older than 15 minutes in any case.
    `--from-source` restarts the same way (stop, clear, start).
