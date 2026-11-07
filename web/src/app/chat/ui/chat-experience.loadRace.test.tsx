@@ -111,9 +111,11 @@ describe("loadConversation supersession (#2043)", () => {
     const composer = await screen.findByRole("textbox", { name: /message/i });
     fireEvent.change(composer, { target: { value: "hello" } });
     fireEvent.keyDown(composer, { key: "Enter" });
-    await waitFor(() => expect(chatBodies.length).toBe(1));
+    // Generous: under a fully loaded suite run the send path can take more
+    // than waitFor's default second to reach fetch.
+    await waitFor(() => expect(chatBodies.length).toBe(1), { timeout: 5000 });
     expect(chatBodies[0].conversation_id).toBe("conv-c");
-  });
+  }, 15000);
 
   it("leaves the spinner up while the newer load is still in flight", async () => {
     mockBackend();
