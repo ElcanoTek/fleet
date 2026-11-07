@@ -127,11 +127,14 @@ describe("Tools picker catalog loads", () => {
 describe("Tools picker connector saves", () => {
   let posts: Array<{ body: { enabled_optional: string[] }; resolve: () => void }> = [];
   let catalogLoads = 0;
+  // When set, conversation catalog loads after the first are held here.
+  let heldCatalog: Array<() => void> | null = null;
   const checked = (name: string) => screen.getByRole("switch", { name }).getAttribute("aria-checked");
 
   function mockSaveBackend() {
     posts = [];
     catalogLoads = 0;
+    heldCatalog = null;
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
     vi.stubGlobal(
       "fetch",
@@ -143,7 +146,15 @@ describe("Tools picker connector saves", () => {
             posts.push({ body, resolve: () => resolve(json({ enabled_optional: body.enabled_optional })) });
           });
         }
-        if (url === "/api/conversations/conv-a/mcp-servers") catalogLoads++;
+        if (url === "/api/conversations/conv-a/mcp-servers") {
+          catalogLoads++;
+          const hold = heldCatalog;
+          if (hold && catalogLoads > 1) {
+            return new Promise<Response>((resolve) => {
+              hold.push(() => resolve(json(catalog(0))));
+            });
+          }
+        }
         if (url === "/api/mcp-servers" || /\/mcp-servers$/.test(url)) return json(catalog(0));
         if (url === "/api/conversations") return json({ conversations: CONVS });
         if (url === "/api/conversations?archived=true") return json({ conversations: [] });
@@ -189,5 +200,28 @@ describe("Tools picker connector saves", () => {
     expect(sent[sent.length - 1]).toEqual(["srv0", "srv1"]);
     expect(checked("srv0")).toBe("true");
     expect(checked("srv1")).toBe("true");
+  });
+
+  it("a catalog reload that started before a toggle does not switch it back", async () => {
+    mockSaveBackend();
+    heldCatalog = [];
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    await waitFor(() => expect(catalogLoads).toBe(1));
+
+    // Opening the picker starts a reload, held while the user toggles.
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    await waitFor(() => expect(heldCatalog).toHaveLength(1));
+    fireEvent.click(screen.getByRole("switch", { name: "srv0" }));
+    expect(checked("srv0")).toBe("true");
+
+    // The reload answers with the state from before the toggle: ignored.
+    await act(async () => {
+      heldCatalog![0]();
+    });
+    expect(checked("srv0")).toBe("true");
+
+    expect(await answerNewestPost()).toEqual(["srv0"]);
+    expect(checked("srv0")).toBe("true");
   });
 });

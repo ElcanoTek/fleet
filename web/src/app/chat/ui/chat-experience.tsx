@@ -2002,6 +2002,15 @@ export function ChatExperience({
     }
   };
 
+  // A local selection change retires every catalog load already in flight:
+  // its response was read before the change, so applying it would switch the
+  // row the user just flipped back (#2046). The retired load's finally no
+  // longer owns the spinner, so it is cleared here; a later load sets it again.
+  const supersedeMcpCatalogLoads = () => {
+    mcpCatalogGenRef.current += 1;
+    setIsLoadingMcpServers(false);
+  };
+
   // toggleMcpServer optimistically flips the local enabled flag for a
   // server and POSTs the FULL enabled set to the backend. The server is
   // the source of truth for which names are valid optional servers — we
@@ -2027,6 +2036,7 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, enabled: !s.enabled } : s,
     );
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -2049,6 +2059,7 @@ export function ChatExperience({
     // that changes nothing (the bar marks the button aria-disabled, but a
     // keyboard user can still activate it) neither re-renders nor POSTs.
     if (nextServers.every((row, i) => row === prev[i])) return;
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -2068,6 +2079,7 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, account } : s,
     );
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
