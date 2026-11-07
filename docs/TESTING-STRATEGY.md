@@ -187,7 +187,7 @@ The critical path is the `-race` Go lane. What keeps it short:
 Before adding a slow test, check which lane it lands in. A 5s parallel test
 costs the gate little. A 5s *serial* test (one that cannot call `t.Parallel()`:
 `t.Setenv`, a package-global override) adds to its package's critical path —
-`internal/httpapi` is the slowest package. So does a 5s step in `e2e-live`.
+`internal/httpapi` is the slowest DB package, `internal/agentcore` the slowest under `-race`. So does a 5s step in `e2e-live`.
 
 ## Database tests
 

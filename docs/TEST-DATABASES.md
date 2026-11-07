@@ -137,30 +137,38 @@ build cache was shared) with a warm cache, the baseline in CI's shape (three
 databases, `HTTPAPI_TEST_DATABASE_URL` set). Wall time of `scripts/go-test.sh
 --count=1`.
 
+Runs were interleaved (before, after, before, after) because the box's load
+moved a lot; each cell lists every run, in order.
+
 | run | before (4c850839) | after |
 |---|---|---|
-| `make test`, private server | 157 s, 148 s | 114 s, 126 s |
-| `make test -race`, private server | 276 s | 324 s |
-| `make test`, the box's shared server (`fsync=on`), first runs | 252 s | — (see below) |
+| `make test`, private server | 157 s, 148 s, 165 s (median 157) | 114 s, 126 s, 143 s, 109 s (median 120) |
+| `make test -race`, private server | 276 s, 257 s | 324 s, 215 s |
+| `make test`, the box's shared server (`fsync=on`), first run | 252 s | — (see below) |
 | `make test -race`, shared server, first run | 563 s | — |
 
-Per package (warm, private server, before → after): `internal/store`
-39–49 s → 18 s; `internal/httpapi` 75–82 s → 56–57 s;
-`internal/sched/handlers` 10–15 s → 5–7 s; `internal/runner` 9–11 s → 3 s;
-`internal/admincli` 27–36 s → 21–31 s. Under `-race`: store 88 s → 25 s,
-httpapi 167 s → 144 s.
+(A fifth "after" run, 154 s, came straight after a code change and
+recompiled; it is left out of the median.)
+
+Per package (private server, before → after): `internal/store` 39–49 s →
+17–19 s; `internal/httpapi` 75–82 s → 56–59 s; `internal/sched/handlers`
+10–15 s → 5–7 s; `internal/runner` 9–11 s → 3 s; `internal/admincli`
+27–36 s → 21–31 s. Under `-race`: store 74–88 s → 18–25 s, httpapi
+154–167 s → 91–144 s.
 
 Honest reading:
 
-- **`make test` is ~25 % faster** here, and the DB packages are 1.5–3×
-  faster. The wall time is now bounded by compile plus the slowest packages,
-  several of which (`internal/sandbox`, `internal/tools`) use no database.
-- **`-race` did not get faster on this box.** Its critical path is
-  `internal/agentcore` (220–240 s under `-race`, no database), which M2 does
-  not touch; with the DB packages now running at the same time instead of in
-  a serial lane, a 4-core box loaded by other runs gave agentcore less CPU.
-  CI runners are not shared, but they are 4-core too: expect the race lane to
-  be bounded by agentcore, not by the database.
+- **`make test` is ~25 % faster** (median 157 s → 120 s), and the DB packages
+  are 1.5–3× faster. The wall time is now bounded by compile plus the slowest
+  packages, several of which (`internal/sandbox`, `internal/tools`) use no
+  database.
+- **`-race`: no clear win on this box.** Its critical path is
+  `internal/agentcore` (170–240 s under `-race`, no database), which M2 does
+  not touch; the DB packages finish well inside it now, but they also run at
+  the same time as agentcore instead of in their own serial lane, so on a
+  4-core box loaded by other runs agentcore can get less CPU (the 324 s run).
+  CI runners are 4-core too: expect the race lane to be bounded by
+  agentcore, not by the database — that package is the next lever.
 - **Clone cost is real.** `CREATE DATABASE … TEMPLATE` of the ~11 MB
   one-database template took ~170 ms alone and ~60 ms each at 4 in parallel
   (`WAL_LOG`; `FILE_COPY` ~90 ms); a drop ~50 ms. On a server with `fsync=on`
