@@ -1,4 +1,4 @@
--- 098_webhook_deliveries.sql — one row per accepted webhook delivery
+-- 098_webhook_deliveries.sql — one row per webhook delivery
 -- (docs/WEBHOOKS.md, "Delivery idempotency").
 --
 -- Senders deliver at least once: Slack retries an event it did not see answered
@@ -8,18 +8,25 @@
 -- conversation_id instead of starting a second turn.
 --
 -- delivery_key is "<source>:<sha256 hex>" (source = github | slack | body).
--- conversation_id is '' while the claiming request is still creating the
--- conversation. claim_token is a random value the claiming request holds;
--- binding the conversation and releasing the claim both require it, and a
--- takeover of a stale claim rotates it, so a request that lost its claim can
--- neither complete nor drop the claim of the request that took it over. No FK to conversations: deleting the conversation must not make
--- a later repeat of the same delivery start a new one. Rows are kept for 24 h,
+-- A row moves through three states:
+--   claimed    conversation_id = '', completed_at = 0
+--   bound      conversation_id set (created in the same transaction), completed_at = 0
+--   completed  completed_at set, in the same transaction that inserts the
+--              turn row — only then is the delivery answered as a duplicate,
+--              so a crash before the turn is durable leaves it retryable.
+-- claim_token is a random value the claiming request holds; binding,
+-- completing, releasing and discarding all require it, and a takeover of a
+-- stale unfinished row rotates it (keeping a bound conversation for reuse), so
+-- a request that lost its claim cannot act on the row of the request that took
+-- it over. No FK to conversations: deleting the conversation must not make a
+-- later repeat of the same delivery start a new one. Rows are kept for 24 h,
 -- then removed by the retention sweep (Store.SweepWebhookDeliveries).
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     slug            TEXT   NOT NULL,
     delivery_key    TEXT   NOT NULL,
     conversation_id TEXT   NOT NULL DEFAULT '',
     claim_token     TEXT   NOT NULL DEFAULT '',
+    completed_at    BIGINT NOT NULL DEFAULT 0,
     created_at      BIGINT NOT NULL,
     PRIMARY KEY (slug, delivery_key)
 );

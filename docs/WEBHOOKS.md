@@ -102,7 +102,7 @@ curl -sS -X POST https://your-fleet/webhooks/github-pr-review \
 |--------|---------|
 | `202` | Accepted. Body is `{"conversation_id":"…"}`; the turn runs asynchronously. |
 | `200` | Slack `url_verification` handshake echoed, **or** a repeat of an already-accepted delivery: body `{"conversation_id":"…","duplicate":true}` names the conversation the first delivery started, and nothing new runs. |
-| `409` | A repeat arrived while the first request for the same delivery was still starting its conversation. Retry later. |
+| `409` | A repeat arrived while the first request for the same delivery had not yet recorded its turn (or this request lost its claim to such a repeat). Retry later. |
 | `400` | Body was not valid JSON. |
 | `401` | Unknown slug **or** invalid/missing signature (deliberately indistinguishable — no slug enumeration). |
 | `429` | Per-slug rate limit (`FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE`, default 10) or the per-owner concurrent-turn cap. |
@@ -131,13 +131,17 @@ per delivery. A delivery is identified, per slug, by the first of:
 A repeat of an accepted delivery is answered `200` with the original
 `conversation_id` (see Responses) and does not count against the per-slug rate
 limit. The conversation is created and recorded against the delivery in one
-database transaction, and its turn starts only after that commits. A delivery
-that was **not** accepted — throttled, refused, or failed before its turn
-started — is not remembered (a conversation created for it is discarded), so
-the sender's retry is processed normally. Each claim carries a random token: a
-request that is still unfinished after a minute loses its claim to a repeat,
-and from then on can neither record a conversation nor drop the repeat's claim
-(it answers `409` and starts nothing). Two different events with byte-identical bodies and no
+database transaction; the delivery counts as accepted only when the turn's
+record is written, in the same transaction that marks it complete, and the turn
+starts after that. A delivery that was **not** accepted — throttled, refused,
+or failed before its turn was recorded — is not remembered (a conversation
+created for it is discarded), so the sender's retry is processed normally.
+Each claim carries a random token: a request still unfinished after a minute
+loses its claim to a repeat, and from then on can neither record nor complete
+anything (it answers `409` and starts nothing). If the server stopped after
+creating the conversation but before recording the turn, a repeat arriving
+after that minute runs the turn in that same conversation. Such a conversation
+stays empty in `notify_user`'s list if no repeat comes within 24 hours. Two different events with byte-identical bodies and no
 delivery id (case 3) within 24 hours are treated as one; senders that need
 otherwise should send a distinguishing field or header.
 

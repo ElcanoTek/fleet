@@ -121,10 +121,13 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Redeliver re-sends the same X-GitHub-Delivery). Claim the delivery before
 	// anything else so a repeat of an accepted one answers 200 with the
 	// original conversation and starts nothing — and spends none of the slug's
-	// rate budget. Every early return below gives the claim back (and discards
-	// a conversation created for it without a turn), so a delivery that was
-	// not accepted is processed afresh when it comes again. The claim token
-	// makes those calls no-ops once a repeat has taken a stale claim over.
+	// rate budget. A delivery counts as accepted only once its turn row is
+	// durable (CreateWebhookTurn completes the claim in the same transaction),
+	// so a crash before that leaves it retryable. Every early return below
+	// gives the claim back (and discards a conversation created for it without
+	// a turn), so a delivery that was not accepted is processed afresh when it
+	// comes again. The claim token makes those calls no-ops once a repeat has
+	// taken a stale claim over.
 	deliveryKey := webhookDeliveryKey(r, body, payload, trig)
 	claim, err := s.store.ClaimWebhookDelivery(r.Context(), trig.Slug, deliveryKey)
 	if err != nil {
@@ -133,20 +136,24 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !claim.Claimed {
-		metrics.RecordWebhookTrigger(trig.Slug, "duplicate")
-		if claim.ConversationID == "" {
-			// The first request for this delivery is still starting its
-			// conversation. 409 rather than 200: if that request fails, the
+		if !claim.Completed {
+			// The first request for this delivery has not made its turn
+			// durable yet. 409 rather than 200: if that request fails, the
 			// sender's next retry should be processed, not swallowed.
+			metrics.RecordWebhookTrigger(trig.Slug, "conflict")
 			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
 			return
 		}
+		metrics.RecordWebhookTrigger(trig.Slug, "duplicate")
 		writeJSONStatus(w, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
 		return
 	}
 	var (
-		boundConvID string // set once the conversation exists and is bound to the claim
-		launched    bool   // set once the turn goroutine is started
+		// The conversation bound to the claim: one an earlier request for
+		// this delivery created but never started a turn in (reused below),
+		// or the one created here.
+		boundConvID = claim.ConversationID
+		launched    bool // set once the turn goroutine is started
 	)
 	defer func() {
 		switch {
@@ -235,12 +242,26 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create the conversation and bind it to the delivery claim in one
-	// transaction: a turn is only ever launched for a delivery whose record
-	// names its conversation, so no repeat can take the claim over and start
-	// a second one.
-	conv, err := s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token,
-		user, agent.HeuristicTitle(prompt), persona, model, lockdown)
+	// Reuse the conversation an earlier request for this delivery bound but
+	// never started a turn in (it stopped before the turn was durable), so
+	// the retry does not leave it behind empty.
+	var conv *store.Conversation
+	if boundConvID != "" {
+		conv, err = s.store.Get(r.Context(), user, boundConvID)
+		if err != nil {
+			releaseTurn()
+			metrics.RecordWebhookTrigger(trig.Slug, "error")
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	// Otherwise create the conversation and bind it to the delivery claim in
+	// one transaction: a turn is only ever launched for a delivery whose
+	// record names its conversation.
+	if conv == nil {
+		conv, err = s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token, boundConvID,
+			user, agent.HeuristicTitle(prompt), persona, model, lockdown)
+	}
 	if errors.Is(err, store.ErrWebhookClaimLost) {
 		// This request outlived its claim and a repeat now owns the delivery.
 		releaseTurn()
@@ -283,11 +304,31 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Background-rooted for the same reason as startTurn: the turn outlives
 	// the webhook POST, and its ledger must exist whether or not the sender
 	// waits for the response.
+	//
+	// Unlike a chat turn, a failure here is fatal: the turn row is created in
+	// the same transaction that completes the delivery claim
+	// (webhookTurnPersister), and a delivery is answered as a duplicate only
+	// once it is complete. Starting the turn without that would let a crash
+	// strand the delivery — or let a repeat start a second turn.
 	persistCtx, persistCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		log.Printf("attachPersister (webhook user=%s conv=%s): %v", user, conv.ID, err)
-	}
+	err = buf.attachPersister(persistCtx, webhookTurnPersister{
+		chatStore: s.store, slug: trig.Slug, deliveryKey: deliveryKey, token: claim.Token,
+	})
 	persistCancel()
+	if err != nil {
+		turnCancel()
+		s.finishTurn(conv.ID, turnToken)
+		releaseTurn()
+		if errors.Is(err, store.ErrWebhookClaimLost) {
+			metrics.RecordWebhookTrigger(trig.Slug, "conflict")
+			writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+			return
+		}
+		log.Printf("webhook trigger: start turn (conv=%s): %v", conv.ID, err)
+		metrics.RecordWebhookTrigger(trig.Slug, "error")
+		http.Error(w, "could not start the turn", http.StatusInternalServerError)
+		return
+	}
 
 	buf.Emit("conversation", map[string]any{
 		"id":      conv.ID,
@@ -317,6 +358,18 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
+}
+
+// webhookTurnPersister is the store as a webhook turn's event persister,
+// except that CreateTurn also completes the delivery claim, in one
+// transaction (store.CreateWebhookTurn).
+type webhookTurnPersister struct {
+	chatStore
+	slug, deliveryKey, token string
+}
+
+func (p webhookTurnPersister) CreateTurn(ctx context.Context, turnID, convID string, startedAt int64) error {
+	return p.CreateWebhookTurn(ctx, p.slug, p.deliveryKey, p.token, turnID, convID, startedAt)
 }
 
 // releaseWebhookClaim drops the delivery claim of a request that did not

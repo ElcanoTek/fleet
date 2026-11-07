@@ -116,10 +116,13 @@ answers a repeat of an accepted delivery `200` with the original
 `conversation_id`. The key is `X-GitHub-Delivery`, else a Slack trigger's
 payload `event_id`, else the SHA-256 of the signature header and body; records
 are kept 24 hours and expire through the existing retention sweep. The
-conversation is created and bound to the claim in one transaction, and the
-turn launches only after that; a claim carries a random token that a takeover
-of a stale (over a minute old, unfinished) claim rotates, and binding,
-releasing and discarding all require it. A delivery that was not accepted
+conversation is created and bound to the claim in one transaction; the turn row
+is inserted in the same transaction that marks the delivery complete, and the
+turn launches only after that, so a repeat is a duplicate only once the turn is
+durable (startup recovery covers it from there). A claim carries a random token
+that a takeover of a stale (over a minute old, incomplete) claim rotates, and
+binding, completing, releasing and discarding all require it; a takeover keeps
+a bound conversation, so a retry after a crash runs the turn there. A delivery that was not accepted
 (throttled, failed before its turn started) gives its claim back and discards
 any conversation created for it, so the sender's retry is processed. The table, rather than
 process memory, holds the records because fleet runs as one replica that

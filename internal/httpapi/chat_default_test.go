@@ -176,6 +176,8 @@ type fakeChatStore struct {
 	webhookClaimsStale bool
 	// webhookBindErr makes the next CreateWebhookConversation fail with it.
 	webhookBindErr error
+	// webhookTurnErr makes the next CreateWebhookTurn fail with it.
+	webhookTurnErr error
 	// beforeWebhookBind runs (unlocked) at the start of
 	// CreateWebhookConversation.
 	beforeWebhookBind func()

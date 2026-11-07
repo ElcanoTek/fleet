@@ -28,10 +28,10 @@ func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 	}
 
 	// A wrong token binds nothing and creates no conversation.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", "not-the-token", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", "not-the-token", "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
 		t.Fatalf("bind with a wrong token: err = %v, want ErrWebhookClaimLost", err)
 	}
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "u@x.com", "t", "victoria", "", false)
+	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "", "u@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 		t.Fatalf("repeat of an accepted delivery = %+v, %v; want refused with %s", c, err, conv.ID)
 	}
 	// Binding twice is refused: the claim is complete.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
 		t.Fatalf("second bind: err = %v, want ErrWebhookClaimLost", err)
 	}
 	// Release only drops unfinished claims.
@@ -112,13 +112,13 @@ func TestWebhookDeliveryTakeoverRotatesToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	// ...and so is its bind: no conversation is created.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", orig.Token, "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", orig.Token, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
 		t.Fatalf("stale original's bind: err = %v, want ErrWebhookClaimLost", err)
 	}
 	if n := countConversations(t, s, "u@x.com"); n != 0 {
 		t.Fatalf("the stale original created %d conversations", n)
 	}
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", retry.Token, "u@x.com", "t", "victoria", "", false)
+	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", retry.Token, "", "u@x.com", "t", "victoria", "", false)
 	if err != nil {
 		t.Fatalf("the retry's bind after the original's release: %v", err)
 	}
@@ -150,12 +150,13 @@ func TestWebhookDeliveryExpiry(t *testing.T) {
 		{"stale-claim", "", 2 * webhookClaimStaleAfter},
 	} {
 		if _, err := s.db.ExecContext(ctx,
-			`INSERT INTO webhook_deliveries (slug, delivery_key, conversation_id, created_at) VALUES ('gh', $1, $2, $3)`,
+			`INSERT INTO webhook_deliveries (slug, delivery_key, conversation_id, completed_at, created_at)
+			 VALUES ('gh', $1, $2, CASE WHEN $2 = '' THEN 0 ELSE $3::bigint END, $3)`,
 			row.key, row.conv, now.Add(-row.age).Unix()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "fresh"); c.Claimed || c.ConversationID != "conv-new" {
+	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "fresh"); c.Claimed || !c.Completed || c.ConversationID != "conv-new" {
 		t.Fatalf("a delivery inside the window = %+v, want refused with conv-new", c)
 	}
 	// A claim whose request died is taken over rather than refused for a day.
@@ -211,5 +212,84 @@ func TestWebhookDeliveryConcurrentClaims(t *testing.T) {
 	wg.Wait()
 	if claimed != 1 {
 		t.Fatalf("%d concurrent claims succeeded, want exactly 1", claimed)
+	}
+}
+
+// A delivery is a duplicate only once its turn row is durable: a request that
+// bound a conversation and then died (no turn row) leaves the row unfinished;
+// a retry after the stale window takes it over, gets the bound conversation
+// back to reuse, and completes it with its own turn. The dead request's token
+// can complete nothing.
+func TestWebhookDeliveryCrashBeforeTurnIsRetryable(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	orig, err := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
+	if err != nil || !orig.Claimed {
+		t.Fatalf("claim: %+v %v", orig, err)
+	}
+	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:crash", orig.Token, "", "u@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// "Crash": no CreateWebhookTurn. A repeat inside the window is refused
+	// as in progress, not answered as a duplicate.
+	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash"); c.Claimed || c.Completed {
+		t.Fatalf("repeat of a bound, uncompleted delivery = %+v; want refused, not completed", c)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:crash'`,
+		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	retry, err := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
+	if err != nil || !retry.Claimed || retry.Token == orig.Token || retry.ConversationID != conv.ID {
+		t.Fatalf("takeover = %+v, %v; want claimed under a new token, reusing %s", retry, err, conv.ID)
+	}
+	if err := s.CreateWebhookTurn(ctx, "gh", "github:crash", orig.Token, "turn-orig", conv.ID, time.Now().Unix()); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("stale token's turn: err = %v, want ErrWebhookClaimLost", err)
+	}
+	if err := s.CreateWebhookTurn(ctx, "gh", "github:crash", retry.Token, "turn-retry", conv.ID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	var turns int
+	if err := s.db.QueryRowContext(ctx, `SELECT count(*) FROM turns WHERE conversation_id = $1`, conv.ID).Scan(&turns); err != nil {
+		t.Fatal(err)
+	}
+	if turns != 1 {
+		t.Fatalf("turn rows = %d, want 1", turns)
+	}
+	if n := countConversations(t, s, "u@x.com"); n != 1 {
+		t.Fatalf("conversations = %d, want 1 (the bound one reused)", n)
+	}
+	// Completed: a repeat is a duplicate, even after the stale window.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:crash'`,
+		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash"); c.Claimed || !c.Completed || c.ConversationID != conv.ID {
+		t.Fatalf("repeat of a completed delivery = %+v; want a duplicate of %s", c, conv.ID)
+	}
+}
+
+// A reused conversation that no longer exists is replaced: the bind names the
+// conversation the claim currently holds.
+func TestWebhookDeliveryRebindsAMissingConversation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:gone")
+	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, "", "u@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE id = $1`, conv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("bind with the wrong previous conversation: err = %v, want ErrWebhookClaimLost", err)
+	}
+	conv2, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, conv.ID, "u@x.com", "t", "victoria", "", false)
+	if err != nil || conv2.ID == conv.ID {
+		t.Fatalf("rebind = %v, %v; want a new conversation", conv2, err)
 	}
 }
