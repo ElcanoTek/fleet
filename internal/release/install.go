@@ -42,6 +42,15 @@ type Restarter interface {
 	Restart(ctx context.Context, service string) error
 }
 
+// StopStarter is a Restarter that can also stop and start the service as two
+// steps. Install and Rollback use it when they hand off the update drain
+// (InstallOptions.ClearDrain), so the marker comes off between the old
+// process exiting and the new one starting.
+type StopStarter interface {
+	Stop(ctx context.Context, service string) error
+	Start(ctx context.Context, service string) error
+}
+
 // Prober waits for the service to answer ready.
 type Prober interface {
 	WaitReady(ctx context.Context, url string, timeout time.Duration) error
@@ -71,9 +80,18 @@ type InstallOptions struct {
 	// cancelled with it: a SIGINT/SIGTERM that interrupted the health gate must
 	// not also abort the restore. Default: HealthTimeout + 2 minutes.
 	RollbackTimeout time.Duration
-	Restarter       Restarter
-	Prober          Prober
-	Log             io.Writer
+	// ClearDrain, when set, removes the update drain marker (see
+	// httpapi.UpdateDrainActive) that the caller — update.sh, inside its
+	// idle-wait fence — still holds. It runs at every (re)start, after the old
+	// process is stopped and before the new one starts: the marker keeps the
+	// old process from admitting new work until it exits, and the new process
+	// must not see it, or /readyz answers 503 "draining" until the health gate
+	// gives up and rolls back (the v2026.11.07.21 rollout). Its error is
+	// reported, never a reason to leave the service stopped.
+	ClearDrain func() error
+	Restarter  Restarter
+	Prober     Prober
+	Log        io.Writer
 }
 
 // InstallResult says what happened.
@@ -116,7 +134,9 @@ func (o *InstallOptions) logf(format string, a ...any) {
 //     exact inode that was running, not a copy that could differ);
 //  4. rename .fleet.new over <dir>/fleet — atomic: the path names the old or
 //     the new binary, never a partial one;
-//  5. restart the service (which migrates on start) and wait for HealthURL;
+//  5. restart the service (which migrates on start) and wait for HealthURL —
+//     with ClearDrain set, as stop, clear the update drain marker, start, so
+//     the new process never starts draining;
 //  6. on a failed restart or health gate, rename fleet.prev's bytes back,
 //     restart, and re-check — under a fresh context, so an interrupted gate
 //     still rolls back — and the box ends on a binary that answered ready, or
@@ -415,7 +435,11 @@ func restorePrevious(dir string) error {
 }
 
 func restartAndProbe(ctx context.Context, o InstallOptions) error {
-	if err := o.Restarter.Restart(ctx, o.Service); err != nil {
+	drainErr, err := o.restart(ctx)
+	if err != nil {
+		if drainErr != nil {
+			return fmt.Errorf("restart %s: %w (before the start: %w)", o.Service, err, drainErr)
+		}
 		return fmt.Errorf("restart %s: %w", o.Service, err)
 	}
 	if o.HealthURL == "" {
@@ -426,9 +450,109 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 		timeout = 90 * time.Second
 	}
 	if err := o.Prober.WaitReady(ctx, o.HealthURL, timeout); err != nil {
+		if drainErr != nil {
+			return fmt.Errorf("%s not ready: %w (before the start: %w)", o.HealthURL, err, drainErr)
+		}
 		return fmt.Errorf("%s not ready: %w", o.HealthURL, err)
 	}
 	return nil
+}
+
+// detachedTimeout caps a detached stop, start or fallback restart (within
+// ctx's deadline): well past the shipped unit's TimeoutStopSec (60s), after
+// which systemd has killed the process. minStartTimeout is what a step still
+// gets when ctx's deadline has already passed — the start must be attempted,
+// never skipped.
+const (
+	detachedTimeout = 3 * time.Minute
+	minStartTimeout = 10 * time.Second
+)
+
+// detachedBounded returns a context that is not cancelled with ctx but keeps
+// a bound: ctx's remaining deadline when it has one (capped at
+// detachedTimeout; once it has passed, minStartTimeout), else detachedTimeout.
+// A detached step must not be cut short by a SIGINT, nor hang past
+// RollbackTimeout or the caller's deadline.
+func detachedBounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	bound := detachedTimeout
+	if dl, ok := ctx.Deadline(); ok {
+		bound = min(time.Until(dl), detachedTimeout)
+		if bound <= 0 {
+			bound = minStartTimeout // the deadline passed: still attempt it, briefly
+		}
+	}
+	return context.WithTimeout(context.WithoutCancel(ctx), bound)
+}
+
+// restart (re)starts the service. With ClearDrain set it stops the old
+// process, clears the drain marker, then starts the new one.
+//
+// Once the stop is issued it is not interruptible: it and the start run under
+// contexts detached from ctx's cancellation but still bounded by its deadline
+// (detachedBounded), so RollbackTimeout holds. Cancelling ctx would kill the
+// systemctl client while the stop job it queued still completes, and a skipped
+// start then leaves the service down.
+//
+// The marker is the admission fence: it only comes off once the process it
+// fenced is gone. After a clean stop that is right away, before the start.
+// A failed stop is different: the old process may still be running (a unit
+// that refuses manual stops), and a plain `systemctl start` would then be a
+// no-op whose readiness probe the OLD process answers. So the unit is
+// RESTARTED, which replaces whatever is running, with the marker still in
+// place, and the marker is cleared once the restart returns (before the
+// readiness probe; the server reads it per request). If the restart fails
+// too, the marker is cleared, one last plain start makes sure fleet runs, and
+// the error is returned (Install's failure/rollback path handles it). A
+// Restarter that cannot stop and start separately gets the marker cleared
+// right after its restart. drainErr carries the stop and ClearDrain failures.
+func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
+	if o.ClearDrain == nil {
+		return nil, o.Restarter.Restart(ctx, o.Service)
+	}
+	clearDrain := func(when string) {
+		if clearErr := o.ClearDrain(); clearErr != nil {
+			o.logf("warning: could not clear the update drain marker %s %s: %v", when, o.Service, clearErr)
+			drainErr = errors.Join(drainErr, fmt.Errorf("clear the update drain marker: %w", clearErr))
+		}
+	}
+	ss, split := o.Restarter.(StopStarter)
+	if !split {
+		err = o.Restarter.Restart(ctx, o.Service)
+		clearDrain("after restarting")
+		return drainErr, err
+	}
+	stopCtx, stopCancel := detachedBounded(ctx)
+	stopErr := ss.Stop(stopCtx, o.Service)
+	stopCancel()
+	if stopErr == nil {
+		clearDrain("before starting")
+		// The start's bound begins after the clear (whose lock wait can take
+		// a while), so the minimum start attempt is never already spent.
+		startCtx, cancel := detachedBounded(ctx)
+		defer cancel()
+		if err := ss.Start(startCtx, o.Service); err != nil {
+			return drainErr, fmt.Errorf("start: %w", err)
+		}
+		return drainErr, nil
+	}
+	drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
+	o.logf("warning: %v — restarting it instead, with the update drain marker kept until the restart returns", drainErr)
+	restartCtx, cancel := detachedBounded(ctx)
+	defer cancel()
+	rerr := o.Restarter.Restart(restartCtx, o.Service)
+	clearDrain("after restarting")
+	if rerr != nil {
+		// Neither stop nor restart replaced the process. Make sure fleet runs
+		// (a no-op if the old one still does), and fail: the new release is
+		// not what is serving.
+		lastCtx, lastCancel := detachedBounded(ctx)
+		defer lastCancel()
+		if serr := ss.Start(lastCtx, o.Service); serr != nil {
+			rerr = errors.Join(rerr, fmt.Errorf("start: %w", serr))
+		}
+		return drainErr, fmt.Errorf("restart after the failed stop: %w", rerr)
+	}
+	return drainErr, nil
 }
 
 // replaceLink makes dst a hard link to src, replacing dst. A filesystem that
@@ -485,7 +609,22 @@ type Systemctl struct{}
 
 // Restart implements Restarter.
 func (Systemctl) Restart(ctx context.Context, service string) error {
-	out, err := exec.CommandContext(ctx, "systemctl", "restart", service).CombinedOutput() //nolint:gosec // G204: fixed binary; the unit name is operator config.
+	return systemctl(ctx, "restart", service)
+}
+
+// Stop implements StopStarter: it returns once the unit's process has exited.
+func (Systemctl) Stop(ctx context.Context, service string) error {
+	return systemctl(ctx, "stop", service)
+}
+
+// Start implements StopStarter. Under the shipped Type=notify unit it returns
+// once the new process signalled READY=1.
+func (Systemctl) Start(ctx context.Context, service string) error {
+	return systemctl(ctx, "start", service)
+}
+
+func systemctl(ctx context.Context, verb, service string) error {
+	out, err := exec.CommandContext(ctx, "systemctl", verb, service).CombinedOutput() //nolint:gosec // G204: fixed binary and verb; the unit name is operator config.
 	if err != nil {
 		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
 	}

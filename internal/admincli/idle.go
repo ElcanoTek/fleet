@@ -115,6 +115,32 @@ func createDrainFileAtomic(p string) error {
 	return nil
 }
 
+// drainLockTimeout bounds the wait for the drain sentinel's lock. Holders only
+// do a few small file operations under it, so a lock still held after this is
+// a stalled process; giving up keeps a caller such as the release install's
+// stop → clear → start handoff from blocking forever (the stale marker then
+// ages out on its own).
+var drainLockTimeout = 30 * time.Second
+
+// flockBounded takes an exclusive flock on f, polling a non-blocking attempt
+// until timeout.
+func flockBounded(f *os.File, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("still held by another process after %s", timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func withDrainLock(p string, fn func() error) error {
 	if err := verifyDrainDir(p); err != nil {
 		return err
@@ -126,7 +152,7 @@ func withDrainLock(p string, fn func() error) error {
 		return fmt.Errorf("open drain lock %s: %w", lockPath, err)
 	}
 	defer func() { _ = lf.Close() }()
-	if err := syscall.Flock(int(lf.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flockBounded(lf, drainLockTimeout); err != nil {
 		return fmt.Errorf("lock drain sentinel %s: %w", lockPath, err)
 	}
 	defer func() { _ = syscall.Flock(int(lf.Fd()), syscall.LOCK_UN) }()
@@ -173,6 +199,55 @@ func SetUpdateDrain() error {
 		_ = os.Remove(p)
 		if err := createDrainFileAtomic(p); err != nil {
 			return fmt.Errorf("write drain sentinel %s: %w", p, err)
+		}
+		return nil
+	})
+}
+
+// clearHandedOffDrain removes the update drain sentinel on behalf of the
+// update that holds it, once the process it fenced has stopped. `fleet
+// release install`/`rollback` run inside update.sh's drain fence and start a
+// new fleet process that reads the same sentinel: left in place, that process
+// answers /readyz 503 "draining" and the health gate rolls the release back.
+//
+// It removes the sentinel only when it is this process's own, the caller's
+// (FLEET_DRAIN_OWNER_TOKEN, exported by update.sh and set by `fleet update`),
+// or a lifecycle drain whose owner process is gone. A drain another live
+// process holds, or a marker an operator wrote by hand, is left alone and
+// reported. A missing sentinel is not an error.
+func clearHandedOffDrain() error {
+	p := drainFilePath()
+	if p == "" {
+		return nil
+	}
+	if _, err := os.Lstat(p); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	callerToken := strings.TrimSpace(envreg.Get("FLEET_DRAIN_OWNER_TOKEN"))
+	return withDrainLock(p, func() error {
+		lst, err := os.Lstat(p)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
+		if lst.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("drain sentinel %s is a symlink — not touching it", p)
+		}
+		//nolint:gosec // G304: drainFilePath resolves a local sentinel path from operator env/config.
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		cur := strings.TrimSpace(string(data))
+		owned := string(data) == drainOwnerToken ||
+			(callerToken != "" && cur == "draining "+callerToken) ||
+			(strings.HasPrefix(cur, "draining pid-") && !drainOwnerAlive(cur))
+		if !owned {
+			return fmt.Errorf("drain sentinel %s is held by someone else (%q) — the service reports not-ready until it is removed", p, cur)
+		}
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 		return nil
 	})

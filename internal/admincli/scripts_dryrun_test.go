@@ -583,8 +583,10 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 // marker the owner asked for so it can be found and deleted in one pass.
 func TestUpdateFromSourceIsIsolatedLegacy(t *testing.T) {
 	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--from-source")
-	if !strings.Contains(out, "make build") || !strings.Contains(out, "systemctl restart") {
-		t.Errorf("--from-source plan must build on the box and restart\n--- output ---\n%s", out)
+	// The restart is stop, clear the update drain marker, start: the new
+	// process must not start under the old one's drain fence.
+	if !strings.Contains(out, "make build") || !strings.Contains(out, "systemctl stop") || !strings.Contains(out, "systemctl start") {
+		t.Errorf("--from-source plan must build on the box and restart (stop, clear the drain, start)\n--- output ---\n%s", out)
 	}
 	if strings.Contains(out, "fleet release install") {
 		t.Errorf("--from-source must not run the signed-artifact install\n--- output ---\n%s", out)
