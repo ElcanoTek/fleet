@@ -61,9 +61,11 @@ probe also fails if any operation manifest reads is ever left out.
 - **`x-fleet-permission`** (on every operation, one string): the
   `models.Permission` value an `X-API-Key` principal must hold to use the
   operation (`admin` implies every permission). Four other values exist:
-  - `none`: the operation reads no credential (`security: []`).
-    `POST /auth/login` is `none` too: it checks a username and password in its
-    body and issues a token.
+  - `none`: the operation requires no credential (`security: []`): a request
+    carrying none is admitted. It does not mean a presented credential is
+    ignored: `POST /auth/logout` revokes the session of a Bearer token it is
+    given, and `POST /auth/login` checks a username and password in its body
+    and issues a token.
   - `webhook`: `POST /triggers/{slug}` accepts EITHER a typed
     `fleet_webhook_` key whose allowed slugs include the path slug (as
     `X-API-Key` or `Authorization: Bearer`; schemes `webhookKey` and

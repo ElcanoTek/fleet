@@ -38,10 +38,12 @@ info:
     - **`x-fleet-permission`** (on EVERY operation): ONE value — the
       `models.Permission` an `X-API-Key` principal must hold to be admitted to
       the operation at all. `admin` implies every other permission. The
-      non-permission values: `none` (the operation reads no credential at all;
-      always paired with `security: []`. `POST /auth/login` is `none` too: it
-      checks the username/password in its body and issues a token, it does
-      not accept one); `authenticated` (any valid API key is admitted at the
+      non-permission values: `none` (the operation REQUIRES no credential: it
+      admits a request that carries none; always paired with `security: []`.
+      It does not promise a presented credential is ignored — `POST
+      /auth/logout` revokes the session of a Bearer token it is given, and
+      `POST /auth/login` checks the username/password in its body and issues
+      a token); `authenticated` (any valid API key is admitted at the
       HTTP layer and the permission is checked per JSON-RPC method inside the
       dispatcher: the A2A endpoint only); `webhook` (`POST /triggers/{slug}`:
       EITHER a typed `webhook` key whose allowed trigger slugs include the
