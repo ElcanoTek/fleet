@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -194,5 +195,93 @@ func TestA2APushWorkScanAndMark(t *testing.T) {
 	}
 	if work, _ := db.ListA2APushWork(ctx, 10); len(work) != 1 || work[0].Status != models.TaskStatusRunning {
 		t.Fatalf("status move must re-queue the config: %+v", work)
+	}
+}
+
+// TestA2APushWorkSkipsUnreadableRow pins #2040: a config whose secrets were
+// sealed under a different key (the store key rotated) no longer fails the
+// whole scan — the good row is still returned, and the bad row is marked so
+// it stops occupying the batch until the task's next status change.
+func TestA2APushWorkSkipsUnreadableRow(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	cleanA2APush(t, db)
+	ctx := context.Background()
+	taskID := seedPushTask(t, db, models.TaskStatusRunning)
+
+	// Sealed under the OLD key, then the key changes.
+	db.SetA2APushCipher(testPushCipher(t))
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+		TaskID: taskID, ID: "stale", URL: "https://example.com/old", Token: "not-a-real-token-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	db.SetA2APushCipher(testPushCipher(t))
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+		TaskID: taskID, ID: "good", URL: "https://example.com/new", Token: "not-a-real-token-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	work, err := db.ListA2APushWork(ctx, 10)
+	if err != nil {
+		t.Fatalf("one unreadable row must not fail the scan: %v", err)
+	}
+	if len(work) != 1 || work[0].Config.ID != "good" || work[0].Config.Token != "not-a-real-token-value" {
+		t.Fatalf("want only the good row, got %+v", work)
+	}
+	var marker sql.NullString
+	if err := db.conn.QueryRowContext(ctx,
+		"SELECT last_pushed_status FROM a2a_push_configs WHERE task_id=$1 AND id='stale'", taskID).Scan(&marker); err != nil {
+		t.Fatal(err)
+	}
+	if marker.String != string(models.TaskStatusRunning) {
+		t.Fatalf("unreadable row must be marked for its current status, got %+v", marker)
+	}
+	// Marked: the next scan no longer sees it (only the still-unmarked good row).
+	if work, err := db.ListA2APushWork(ctx, 10); err != nil || len(work) != 1 || work[0].Config.ID != "good" {
+		t.Fatalf("rescan: %v %+v", err, work)
+	}
+	// Re-registering reseals under the current key and makes it deliverable.
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+		TaskID: taskID, ID: "stale", URL: "https://example.com/old", Token: "not-a-real-token-value",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if work, err := db.ListA2APushWork(ctx, 10); err != nil || len(work) != 2 {
+		t.Fatalf("re-registered row must be deliverable again: %v %+v", err, work)
+	}
+}
+
+// TestA2APushConfigPerTaskCap pins the #2040 cap: a task holds at most
+// MaxA2APushConfigsPerTask configs; updating an existing id at the cap is
+// still allowed, and another task is unaffected.
+func TestA2APushConfigPerTaskCap(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+	cleanA2APush(t, db)
+	db.SetA2APushCipher(testPushCipher(t))
+	ctx := context.Background()
+	taskID := seedPushTask(t, db, models.TaskStatusRunning)
+
+	for i := range MaxA2APushConfigsPerTask {
+		if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{
+			TaskID: taskID, ID: fmt.Sprintf("c%d", i), URL: "https://example.com/hook",
+		}); err != nil {
+			t.Fatalf("config %d: %v", i, err)
+		}
+	}
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{TaskID: taskID, URL: "https://example.com/hook"}); !errors.Is(err, ErrA2APushConfigLimit) {
+		t.Fatalf("over-cap create: want ErrA2APushConfigLimit, got %v", err)
+	}
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{TaskID: taskID, ID: "c0", URL: "https://example.com/hook2"}); err != nil {
+		t.Fatalf("update at the cap must succeed: %v", err)
+	}
+	if all, err := db.ListA2APushConfigs(ctx, taskID); err != nil || len(all) != MaxA2APushConfigsPerTask {
+		t.Fatalf("list: %v %d", err, len(all))
+	}
+	other := seedPushTask(t, db, models.TaskStatusRunning)
+	if _, err := db.UpsertA2APushConfig(ctx, models.A2APushConfig{TaskID: other, URL: "https://example.com/hook"}); err != nil {
+		t.Fatalf("another task is unaffected: %v", err)
 	}
 }

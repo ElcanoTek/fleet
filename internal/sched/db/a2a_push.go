@@ -17,6 +17,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/google/uuid"
 
@@ -28,6 +29,19 @@ import (
 // because no sealing cipher was configured. Named so the handler can turn it
 // into an actionable message pointing at FLEET_MCP_OAUTH_ENCRYPTION_KEY.
 var ErrA2APushCipherMissing = errors.New("a2a push configs require the store cipher (set FLEET_MCP_OAUTH_ENCRYPTION_KEY)")
+
+// MaxA2APushConfigsPerTask caps how many push configs one task may hold
+// (#2040). The spec lets a caller manage several configs per task under its
+// own ids, but every config is one outbound POST per status change, so an
+// unbounded set would let one caller fan a single task out into an
+// arbitrary number of deliveries per tick. Re-registering an existing id is
+// an update and never counts against the cap.
+const MaxA2APushConfigsPerTask = 10
+
+// ErrA2APushConfigLimit reports that a task already holds
+// MaxA2APushConfigsPerTask configs. Named so the handler maps it to an
+// invalid-params refusal rather than an internal error.
+var ErrA2APushConfigLimit = fmt.Errorf("a task may hold at most %d push-notification configs; delete one first", MaxA2APushConfigsPerTask)
 
 // a2aPushAADPurpose versions the sealed-blob format; bump only with a
 // migration story for existing rows.
@@ -73,6 +87,9 @@ func (db *Database) openA2APushSecret(sealed []byte, taskID uuid.UUID, configID 
 // ids, and a repeated create for the same id is an update, not a conflict
 // (matching the reference implementation). An empty id is server-minted.
 // Secrets are sealed before the INSERT; with no cipher the store fails closed.
+// A NEW id on a task already holding MaxA2APushConfigsPerTask configs is
+// refused with ErrA2APushConfigLimit; the count and the insert run under a
+// per-task advisory lock so concurrent creates cannot overshoot the cap.
 func (db *Database) UpsertA2APushConfig(ctx context.Context, cfg models.A2APushConfig) (*models.A2APushConfig, error) {
 	if cfg.ID == "" {
 		cfg.ID = uuid.NewString()
@@ -85,9 +102,34 @@ func (db *Database) UpsertA2APushConfig(ctx context.Context, cfg models.A2APushC
 	if err != nil {
 		return nil, err
 	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := acquireSerializationLockTx(ctx, tx, "a2a-push-configs:"+cfg.TaskID.String()); err != nil {
+		return nil, err
+	}
+	var others int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM a2a_push_configs WHERE task_id = $1 AND id <> $2`,
+		cfg.TaskID, cfg.ID).Scan(&others); err != nil {
+		return nil, err
+	}
+	if others >= MaxA2APushConfigsPerTask {
+		var exists bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM a2a_push_configs WHERE task_id = $1 AND id = $2)`,
+			cfg.TaskID, cfg.ID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrA2APushConfigLimit
+		}
+	}
 	// An upsert RESETS the delivery marker: a re-registered config is a fresh
 	// subscription, so the current state gets (re-)announced on the next scan.
-	row := db.conn.QueryRowContext(ctx, `
+	row := tx.QueryRowContext(ctx, `
 		INSERT INTO a2a_push_configs (task_id, id, url, token_sealed, auth_scheme, auth_credentials_sealed)
 		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (task_id, id) DO UPDATE SET
@@ -100,6 +142,9 @@ func (db *Database) UpsertA2APushConfig(ctx context.Context, cfg models.A2APushC
 		RETURNING created_at, updated_at`,
 		cfg.TaskID, cfg.ID, cfg.URL, tokenSealed, cfg.AuthScheme, credsSealed)
 	if err := row.Scan(&cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	cfg.LastPushedStatus = nil
@@ -183,6 +228,15 @@ func (db *Database) DeleteA2APushConfig(ctx context.Context, taskID uuid.UUID, c
 // which the A2A spec permits ("duplicate deliveries may occur"; only one
 // delivery ATTEMPT per change is a MUST). Bounded to keep one tick's work
 // finite; the next tick picks up the remainder.
+//
+// A row whose secrets no longer unseal (the store key rotated, a corrupt
+// blob) is SKIPPED, logged, and marked attempted for its current status
+// (#2040): failing the whole scan would stall every other delivery behind
+// it forever, and leaving it unmarked would re-scan (and re-log) it every
+// tick while it holds a batch slot. It is reconsidered on the task's next
+// status change, and the caller recovers it by re-registering the config,
+// which reseals its secrets under the current key. A missing cipher is a
+// deployment error, not a row error, and still fails the scan.
 func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2APushWork, error) {
 	if limit <= 0 {
 		limit = 100
@@ -198,7 +252,7 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 		return nil, err
 	}
 	defer rows.Close()
-	var out []models.A2APushWork
+	var out, unreadable []models.A2APushWork
 	for rows.Next() {
 		var (
 			w                        models.A2APushWork
@@ -209,15 +263,31 @@ func (db *Database) ListA2APushWork(ctx context.Context, limit int) ([]models.A2
 			return nil, err
 		}
 		w.Status = models.TaskStatus(status)
-		if w.Config.Token, err = db.openA2APushSecret(tokenSealed, w.Config.TaskID, w.Config.ID); err != nil {
-			return nil, err
+		token, terr := db.openA2APushSecret(tokenSealed, w.Config.TaskID, w.Config.ID)
+		creds, cerr := db.openA2APushSecret(credsSealed, w.Config.TaskID, w.Config.ID)
+		if err := errors.Join(terr, cerr); err != nil {
+			if errors.Is(err, ErrA2APushCipherMissing) {
+				return nil, err
+			}
+			// Value-free log line: ids only — never the URL or a secret.
+			log.Printf("a2a push: skipping config %q on task %s: its secrets do not unseal (store key changed?); re-register the config to resume deliveries: %v",
+				w.Config.ID, w.Config.TaskID, err)
+			unreadable = append(unreadable, models.A2APushWork{Config: models.A2APushConfig{TaskID: w.Config.TaskID, ID: w.Config.ID}, Status: w.Status})
+			continue
 		}
-		if w.Config.AuthCredentials, err = db.openA2APushSecret(credsSealed, w.Config.TaskID, w.Config.ID); err != nil {
-			return nil, err
-		}
+		w.Config.Token, w.Config.AuthCredentials = token, creds
 		out = append(out, w)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	_ = rows.Close()
+	for _, w := range unreadable {
+		if _, err := db.MarkA2APushAttempted(ctx, w.Config.TaskID, w.Config.ID, w.Status); err != nil {
+			log.Printf("a2a push: could not mark unreadable config %q on task %s: %v", w.Config.ID, w.Config.TaskID, err)
+		}
+	}
+	return out, nil
 }
 
 // MarkA2APushAttempted records that a delivery ATTEMPT for the given status

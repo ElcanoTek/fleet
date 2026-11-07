@@ -285,10 +285,15 @@ func (h *Handlers) a2aStorePushConfigInline(r *http.Request, taskID uuid.UUID, i
 
 // a2aPushStoreError maps storage failures: the missing-cipher fail-closed
 // case reports as the capability refusal (the capability genuinely is not
-// available), everything else as an internal error with no row detail.
+// available), the per-task config cap as invalid params (the caller's to
+// fix by deleting a config), everything else as an internal error with no
+// row detail.
 func a2aPushStoreError(id json.RawMessage, err error) a2abridge.Response {
 	if errors.Is(err, db.ErrA2APushCipherMissing) {
 		return a2aPushRefusal(id)
+	}
+	if errors.Is(err, db.ErrA2APushConfigLimit) {
+		return a2abridge.NewErrorResponse(id, wire.ErrInvalidParams, db.ErrA2APushConfigLimit.Error(), nil)
 	}
 	return a2abridge.NewErrorResponse(id, wire.ErrInternalError, "push-notification config storage failed", nil)
 }
