@@ -3,6 +3,7 @@ package admincli
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"net/url"
@@ -127,11 +128,19 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 // --if-exists drops existing objects first so the restore is idempotent over an
 // already-migrated DB; --no-owner ignores dump ownership.
 //
-// The dump's tables must all live in the schema the store uses (its DSN's
-// schema in the one-database layout, public in the legacy one): restoring a
-// sched dump into the chat store, or a legacy public-schema dump into the one
-// database, would scatter tables where no store looks. Such a dump is
-// refused before anything is dropped.
+// A restore of one store must never touch the other one, which in the
+// one-database layout lives in the same database:
+//
+//   - The archive's schema is established from its table of contents (its
+//     SCHEMA entries and the schemas of its TABLE entries) and must be exactly
+//     the schema the store uses (its DSN's schema, public in the legacy
+//     layout). A dump of the other store, a legacy public-schema dump into
+//     the one database, or an archive whose schema cannot be determined (no
+//     SCHEMA or TABLE entry) is refused before anything is dropped.
+//   - pg_restore runs with -n <schema>, so only that schema's entries are
+//     restored, and --clean can drop only objects in that schema (the SCHEMA
+//     entry itself is not selected, so the schema is never dropped). The
+//     store's schema is created first if it is missing.
 func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	c, err := parsePGConn(dsn)
 	if err != nil {
@@ -141,13 +150,23 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	if want == "" {
 		want = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation (every store has a schema then)
 	}
-	if got, err := dumpTableSchemas(ctx, inPath); err != nil {
+	got, err := dumpSchemas(ctx, inPath)
+	if err != nil {
 		return err
-	} else if len(got) > 0 && (len(got) != 1 || got[0] != want) {
-		return fmt.Errorf("the dump's tables are in schema(s) %s but this store uses schema %q; a dump of the legacy two-database layout restores into a legacy box (restore it there, then run `fleet db consolidate`), and a chat dump restores only with --db=chat", strings.Join(got, ", "), want)
 	}
-	//nolint:gosec // G204: fixed "pg_restore" binary; dbname comes from the parsed operator DSN and inPath is an operator-supplied path, both separate argv (no shell interpolation); connection params ride in the env.
-	cmd := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "-d", c.dbname, inPath)
+	switch {
+	case len(got) == 0:
+		return fmt.Errorf("cannot tell which store %s holds: its table of contents has no schema or table entry; refusing to restore it", inPath)
+	case len(got) != 1 || got[0] != want:
+		return fmt.Errorf("the dump holds schema(s) %s but this store uses schema %q; a dump of the legacy two-database layout restores into a legacy box (restore it there, then run `fleet db consolidate`), and a chat dump restores only with --db=chat", strings.Join(got, ", "), want)
+	}
+	if want != config.PublicSchema {
+		if err := ensureRestoreSchema(ctx, dsn, want); err != nil {
+			return err
+		}
+	}
+	//nolint:gosec // G204: fixed "pg_restore" binary; dbname comes from the parsed operator DSN, want is a validated plain identifier and inPath is an operator-supplied path, all separate argv (no shell interpolation); connection params ride in the env.
+	cmd := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "-n", want, "-d", c.dbname, inPath)
 	cmd.Env = c.env()
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -156,22 +175,43 @@ func runPgRestore(ctx context.Context, dsn, inPath string) error {
 	return nil
 }
 
-// dumpTableSchemas lists the schemas holding the TABLE entries of a
-// custom-format dump (pg_restore --list, which reads only the archive's
-// table of contents), sorted and distinct.
-func dumpTableSchemas(ctx context.Context, path string) ([]string, error) {
+// ensureRestoreSchema creates the store's schema when it is missing (a
+// restore into a fresh database): pg_restore -n restores the schema's
+// objects, not the schema itself.
+func ensureRestoreSchema(ctx context.Context, dsn, schema string) error {
+	if !config.PlainIdentifier(schema) {
+		return fmt.Errorf("schema %q is not a plain identifier", schema)
+	}
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS "`+schema+`"`); err != nil {
+		return fmt.Errorf("create schema %s before the restore: %w", schema, err)
+	}
+	return nil
+}
+
+// dumpSchemas lists the schemas a custom-format dump holds — the names of its
+// SCHEMA entries and the schemas of its TABLE entries — from pg_restore
+// --list (which reads only the archive's table of contents), sorted and
+// distinct.
+func dumpSchemas(ctx context.Context, path string) ([]string, error) {
 	//nolint:gosec // G204: fixed "pg_restore" binary; path is an operator-supplied path passed as a separate argv. --list is read-only.
 	out, err := exec.CommandContext(ctx, "pg_restore", "--list", path).Output()
 	if err != nil {
 		return nil, fmt.Errorf("read the dump's table of contents (%s): %w", path, err)
 	}
-	return parseTOCTableSchemas(string(out)), nil
+	return parseTOCSchemas(string(out)), nil
 }
 
-// parseTOCTableSchemas extracts the schemas of TABLE entries from pg_restore
-// --list output, whose entry lines read "<id>; <oid> <oid> TABLE <schema>
-// <name> <owner>".
-func parseTOCTableSchemas(toc string) []string {
+// parseTOCSchemas extracts the schemas of a pg_restore --list output: entry
+// lines read "<id>; <oid> <oid> <TYPE> <schema> <name> <owner>", where a
+// SCHEMA entry has "-" for its schema and the schema's name as its name.
+// Only SCHEMA and TABLE entries count (other types span several words, and
+// every other object of a store sits next to a table of it).
+func parseTOCSchemas(toc string) []string {
 	seen := map[string]bool{}
 	for _, ln := range strings.Split(toc, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(ln), ";") {
@@ -182,7 +222,10 @@ func parseTOCTableSchemas(toc string) []string {
 			continue
 		}
 		f := strings.Fields(rest)
-		if len(f) >= 5 && f[2] == "TABLE" && f[3] != "DATA" {
+		switch {
+		case len(f) >= 5 && f[2] == "SCHEMA" && f[3] == "-":
+			seen[f[4]] = true
+		case len(f) >= 5 && f[2] == "TABLE" && f[3] != "DATA":
 			seen[f[3]] = true
 		}
 	}
