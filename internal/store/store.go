@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -1354,11 +1355,23 @@ func (s *Store) SetThinkingConfig(ctx context.Context, userEmail, convID string,
 		}
 		arg = payload
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET thinking_config = $1, updated_at = $2
-		 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		arg, time.Now().Unix(), convID, userEmail,
-	)
+	return s.updateOwnedConversation(ctx, userEmail, convID, "thinking_config = $1", arg)
+}
+
+// updateOwnedConversation runs `UPDATE conversations SET <set>, updated_at =
+// now` on the caller's own live conversation: the row must match id AND
+// user_email (so one user can never write another's conversation) and must not
+// be soft-deleted (deleted_at IS NULL, #596 — a soft-deleted conversation is
+// not mutable). No matching row maps to ErrConversationNotFound. set is a
+// constant SQL fragment from the calling setter whose placeholders are $1..$n
+// for args; the helper binds updated_at, id and user_email after them.
+func (s *Store) updateOwnedConversation(ctx context.Context, userEmail, convID, set string, args ...any) error {
+	next := len(args) + 1
+	//nolint:gosec // G202: set is a constant fragment from a setter in this package and every value is a bound placeholder; only placeholder numbers are formatted in.
+	query := "UPDATE conversations SET " + set + ", updated_at = $" + strconv.Itoa(next) +
+		" WHERE id = $" + strconv.Itoa(next+1) + " AND user_email = $" + strconv.Itoa(next+2) + " AND deleted_at IS NULL"
+	args = append(args, time.Now().Unix(), convID, userEmail)
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -1458,18 +1471,7 @@ func (s *Store) SetConversationMCPAccounts(ctx context.Context, userEmail, convI
 // deleted_at IS NULL matches SetShareToken: a soft-deleted conversation is
 // not mutable (#596) — the guard is applied uniformly across the setters.
 func (s *Store) SetModel(ctx context.Context, userEmail, convID, model string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET model = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		model, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrConversationNotFound
-	}
-	return nil
+	return s.updateOwnedConversation(ctx, userEmail, convID, "model = $1", model)
 }
 
 // SetPersona updates the conversation's persona before any messages have been
@@ -1491,8 +1493,6 @@ func (s *Store) SetPersona(ctx context.Context, userEmail, convID, persona strin
 	return nil
 }
 
-// UpdateTitle is called after the first assistant reply (when we have enough
-// context to auto-name the conversation).
 // UpdateTitle sets the title from the AUTO-titler (#302). It is guarded by
 // title_locked = FALSE so a user's manual rename is never overwritten; when the
 // title is locked it makes no change and returns ErrTitleLocked, which the
@@ -1518,34 +1518,13 @@ func (s *Store) UpdateTitle(ctx context.Context, userEmail, convID, title string
 // always wins and pins the name against the auto-titler thereafter. A
 // soft-deleted conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) RenameTitle(ctx context.Context, userEmail, convID, title string) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET title = $1, title_locked = TRUE, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		title, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrConversationNotFound
-	}
-	return nil
+	return s.updateOwnedConversation(ctx, userEmail, convID, "title = $1, title_locked = TRUE", title)
 }
 
 // SetPinned toggles the pin state for a conversation. A soft-deleted
 // conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) SetPinned(ctx context.Context, userEmail, convID string, pinned bool) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET pinned = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		pinned, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrConversationNotFound
-	}
-	return nil
+	return s.updateOwnedConversation(ctx, userEmail, convID, "pinned = $1", pinned)
 }
 
 // SetArchived archives or unarchives a conversation (#282). archived=true sets
@@ -1611,36 +1590,14 @@ func (s *Store) SetApprovalTimeout(ctx context.Context, userEmail, convID string
 	if seconds != nil {
 		arg = *seconds
 	}
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET approval_timeout_seconds = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		arg, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrConversationNotFound
-	}
-	return nil
+	return s.updateOwnedConversation(ctx, userEmail, convID, "approval_timeout_seconds = $1", arg)
 }
 
 // SetAutoApprove sets the per-conversation auto-approve toggle. Scoped by
 // user_email so a caller can only touch their own conversations. A soft-deleted
 // conversation is not mutable (deleted_at IS NULL, #596).
 func (s *Store) SetAutoApprove(ctx context.Context, userEmail, convID string, enabled bool) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE conversations SET auto_approve = $1, updated_at = $2 WHERE id = $3 AND user_email = $4 AND deleted_at IS NULL`,
-		enabled, time.Now().Unix(), convID, userEmail,
-	)
-	if err != nil {
-		return err
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrConversationNotFound
-	}
-	return nil
+	return s.updateOwnedConversation(ctx, userEmail, convID, "auto_approve = $1", enabled)
 }
 
 // SharedConversation is the read-only public snapshot returned for a valid
