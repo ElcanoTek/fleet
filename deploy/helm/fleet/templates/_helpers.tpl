@@ -40,3 +40,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "fleet.postgresHost" -}}
 {{- printf "%s-postgres" (include "fleet.fullname" .) -}}
 {{- end -}}
+
+{{/* LEGACY-DB-LAYOUT: remove after consolidation.
+     "true" when this release's in-cluster Postgres predates the one-database
+     layout (#2049): its Secret carries the per-store chat-url / sched-url keys
+     and no url key, so its volume holds the chat and sched databases. Such a
+     release keeps its two databases on upgrade (an upgrade never strands
+     data); a new install gets ONE database, "fleet", and DATABASE_URL. */}}
+{{- define "fleet.postgresLegacyLayout" -}}
+{{- $s := lookup "v1" "Secret" .Release.Namespace (printf "%s-postgres" (include "fleet.fullname" .)) -}}
+{{- if $s -}}
+{{- with $s.data -}}
+{{- if and (hasKey . "chat-url") (not (hasKey . "url")) -}}true{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
