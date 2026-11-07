@@ -12,7 +12,7 @@
 //
 //   - internal/config's env-file allowlist (allowedEnvVars) and the
 //     FLEET_→CHAT_→CUTLASS_ alias resolution (lookupFleet), until the legacy
-//     aliases are removed (ADR-0098);
+//     aliases are removed (ADR-0099);
 //   - internal/config's typed-knob table (envKnobs: kind, bounds, scope);
 //   - docs/CONFIGURATION.md and the config.env part of the Helm chart's
 //     values.schema.json (both generated, both drift-checked by tests);
@@ -60,7 +60,7 @@ const CanonicalPrefix = "FLEET_"
 
 // LegacyPrefixes lists the deprecated prefixes (the chat-server's and
 // cutlass's) in the order a Chain entry tries them after the canonical
-// spelling. The first non-empty value wins. ADR-0098 deprecates them; they
+// spelling. The first non-empty value wins. ADR-0099 deprecates them; they
 // are removed once every deployment has run `fleet config migrate-env
 // --write` (docs/CONFIG-REGISTRY.md "Removing the aliases").
 //
@@ -116,7 +116,7 @@ const (
 type Alias struct {
 	// Name is the alias spelling.
 	Name string
-	// Deprecated marks a legacy CHAT_/CUTLASS_ spelling (ADR-0098): `fleet
+	// Deprecated marks a legacy CHAT_/CUTLASS_ spelling (ADR-0099): `fleet
 	// doctor` warns about it and `fleet config migrate-env` rewrites it. An
 	// alias without it is a permanent alternate spelling (the bare PERSONA).
 	//

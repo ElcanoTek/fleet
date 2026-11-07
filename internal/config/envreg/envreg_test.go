@@ -47,7 +47,7 @@ func TestTableIsWellFormed(t *testing.T) {
 	}
 }
 
-// TestDeprecatedAliasesAreOnlyLegacyPrefixed — ADR-0098 deprecates the
+// TestDeprecatedAliasesAreOnlyLegacyPrefixed — ADR-0099 deprecates the
 // CHAT_/CUTLASS_ spellings and nothing else; every deprecated alias must be
 // one of them, and its canonical must be the FLEET_ spelling of the same
 // suffix.

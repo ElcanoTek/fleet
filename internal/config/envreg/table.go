@@ -15,7 +15,7 @@ package envreg
 //     (internal/config's allowlist leaves it out): it works only from the
 //     process environment.
 //   - Chain + ChainFile declare the legacy CHAT_/CUTLASS_ spellings the
-//     loader still resolves (deprecated, ADR-0098).
+//     loader still resolves (deprecated, ADR-0099).
 //   - Knob makes the boot gate validate the value (internal/config/knobs.go).
 
 // Docs sections, in document order.
@@ -110,7 +110,7 @@ var table = []Entry{
 	{Name: "FLEET_TLS_ACME_EMAIL", Group: GroupServer, Scope: ScopeServer, Type: TypeString,
 		Description: "Contact email registered with the ACME CA."},
 	{Name: "FLEET_TLS_HTTP_ADDR", Group: GroupServer, Scope: ScopeServer, Type: TypeString, Default: ":80",
-		Description: "Listen address of the ACME HTTP-01 challenge responder."},
+		Description: "The HTTP→HTTPS redirect and ACME HTTP-01 challenge listener, when fleet terminates TLS itself."},
 	{Name: "FLEET_IP_ALLOWLIST", Group: GroupServer, Scope: ScopeServer, Type: TypeCSV,
 		Chain:       true,
 		Description: "Comma-separated IPs/CIDRs allowed to reach fleet; empty allows every source. A malformed entry refuses to boot."},
@@ -165,7 +165,7 @@ var table = []Entry{
 		Description: "OIDC client ID."},
 	{Name: "FLEET_OIDC_CLIENT_SECRET", Group: GroupAuth, Scope: ScopeServer, Type: TypeString, Secret: true,
 		Description: "OIDC client secret."},
-	{Name: "FLEET_OIDC_SCOPES", Group: GroupAuth, Scope: ScopeServer, Type: TypeString, Default: "openid email profile",
+	{Name: "FLEET_OIDC_SCOPES", Group: GroupAuth, Scope: ScopeServer, Type: TypeString, Default: "openid email",
 		Description: "Space-separated OIDC scopes requested at sign-in."},
 	{Name: "FLEET_OIDC_ALLOWED_DOMAINS", Group: GroupAuth, Scope: ScopeServer, Type: TypeCSV,
 		Description: "Comma-separated email domains allowed to sign in through OIDC; empty allows any."},
@@ -261,7 +261,7 @@ var table = []Entry{
 		Chain: true, Knob: &Knob{Min: b(0)},
 		Description: "Total size cap on shared files, in MB. Also an admin setting."},
 	{Name: "FLEET_AUTO_ARCHIVE_AFTER_DAYS", Group: GroupData, Scope: ScopeServer, Type: TypeInt, Default: "0", Chain: true, Knob: loader,
-		Description: "Archive conversations idle this many days; 0 disables."},
+		Description: "Auto-archive a conversation this many days after its last activity; 0 leaves archiving to the user."},
 	{Name: "FLEET_SEARCH_ENABLED", Group: GroupData, Scope: ScopeServer, Type: TypeBool, Default: "true", Knob: loader,
 		Description: "Conversation search."},
 	{Name: "FLEET_CONVERSATION_SOFT_DELETE", Group: GroupData, Scope: ScopeServer, Type: TypeBool, Default: "false", Knob: loader,
@@ -284,7 +284,7 @@ var table = []Entry{
 	{Name: "FLEET_WORKTREE_PRUNE_AGE", Group: GroupData, Scope: ScopeServer, Type: TypeDuration, Default: "24h",
 		Chain: true, Knob: &Knob{Min: b(0)},
 		Description: "Age after which idle git worktrees are pruned; 0 disables the sweep."},
-	{Name: "FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES", Group: GroupData, Scope: ScopeServer, Type: TypeInt64, Default: "(built-in cap)",
+	{Name: "FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES", Group: GroupData, Scope: ScopeServer, Type: TypeInt64, Default: "52428800",
 		Knob:        &Knob{Min: b(1), ReadBy: "internal/sched/handlers (workspace download cap)"},
 		Description: "Cap on a task-workspace download, in bytes."},
 
@@ -306,7 +306,7 @@ var table = []Entry{
 	{Name: "FLEET_ADVANCED_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Chain: true,
 		Description: "Env default of the advanced model tier (admin setting advanced_model)."},
 	{Name: "FLEET_PINNED_MODELS", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Chain: true,
-		Description: "Operator-pinned or relabelled model-picker rows. A malformed value refuses to boot."},
+		Description: "JSON array of `{\"slug\",\"label\",\"tag\",\"free\",\"input_price_per_mtok\",\"output_price_per_mtok\"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md)."},
 	{Name: "FLEET_TITLE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "(the everyday tier)",
 		Chain: true, ChainFile: fileCHAT,
 		Description: "Model that titles conversations."},
@@ -338,7 +338,7 @@ var table = []Entry{
 	{Name: "FLEET_SUBAGENTS_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "(the parent's model)", Chain: true,
 		Description: "Model sub-agents run on."},
 	{Name: "FLEET_VERIFIER_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Default: "(the run's own model)", Chain: true,
-		Description: "Dedicated end-of-run verifier model."},
+		Description: "Dedicated model for the scheduled end-of-run completeness verifier. The verifier runs when a fallback model (the task's or FLEET_TASK_FALLBACK_MODEL) or this variable is set; the fallback model only retries a verifier call that produced no verdict. A slug that does not resolve is logged and the run's own model verifies."},
 	{Name: "FLEET_A2A_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Chain: true,
 		Description: "Model inbound A2A tasks run on."},
 	{Name: "FLEET_IMAGE_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, ProcessOnly: true,
@@ -445,7 +445,7 @@ var table = []Entry{
 		Description: "Only lockdown (no-egress) conversations; needs a sandbox image. A mistyped value refuses to boot."},
 	{Name: "FLEET_LOCKDOWN_ALLOWED_MODELS", Group: GroupAgent, Scope: ScopeServer, Type: TypeCSV, Default: "(the two model tiers)",
 		Chain: true, ChainFile: fileCHAT,
-		Description: "Models (exact slugs or `*` globs) a lockdown conversation may use; the first is the lockdown default."},
+		Description: "Comma-separated model slugs (or `*` globs) a lockdown conversation may run on; the first literal entry is the lockdown default. Unset, the list is the workspace's current default and advanced models, so lockdown follows a tier change live. A lockdown conversation whose model is no longer listed moves to the lockdown default on its next turn; a list of globs only has no literal to move to, so give it a literal first entry."},
 	{Name: "FLEET_PII_REDACTION_ENABLED", Group: GroupAgent, Scope: ScopeServer, Type: TypeBool, Default: "false", Chain: true, Knob: loader,
 		Description: "PII redaction with the built-in pattern engine."},
 	{Name: "FLEET_PII_REDACTION_MODE", Group: GroupAgent, Scope: ScopeServer, Type: TypeString, Chain: true,
@@ -478,7 +478,7 @@ var table = []Entry{
 		Description: "Default model of scheduled tasks."},
 	{Name: "FLEET_TASK_FALLBACK_MODEL", Group: GroupScheduler, Scope: ScopeServer, Type: TypeString,
 		Chain: true, ChainFile: fileCUTLASS,
-		Description: "Fallback model of scheduled tasks."},
+		Description: "Model the scheduler falls back to when a task's own model is unavailable."},
 	{Name: "FLEET_TASK_DEFAULT_MAX_RETRIES", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "1",
 		Chain: true, Knob: &Knob{Min: b(0), Max: b(10)},
 		Description: "max_retries of a task created without one."},
@@ -497,7 +497,7 @@ var table = []Entry{
 	{Name: "FLEET_RUN_LOG_RETENTION_DAYS", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "90", Chain: true, Knob: loader,
 		Description: "Days run logs are kept."},
 	{Name: "FLEET_KEEP_RUNS_PER_TASK", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "10", Chain: true, Knob: loader,
-		Description: "Runs kept per task regardless of age."},
+		Description: "Superseded run logs kept per scheduled task before the retention sweep prunes the oldest."},
 	{Name: "FLEET_CLEANUP_HOUR", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "4", Chain: true, Knob: loader,
 		Description: "Hour of day (server time) of the retention cleanup."},
 	{Name: "FLEET_TASK_STARVATION_WINDOW_MINUTES", Group: GroupScheduler, Scope: ScopeServer, Type: TypeInt, Default: "30", Chain: true, Knob: loader,
@@ -589,7 +589,7 @@ var table = []Entry{
 		Description: "Maximum persistent REPL sessions."},
 
 	// ───────────────────────────── Kubernetes sandbox backend ─────────────────────────────
-	{Name: "FLEET_SANDBOX_K8S_NAMESPACE", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString, Default: "(the control plane's namespace)",
+	{Name: "FLEET_SANDBOX_K8S_NAMESPACE", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString, Default: "(the kubeconfig context's namespace, else the control plane's own, else fleet-sandboxes)",
 		Chain: true, Helm: "sandbox.kubernetes.namespace",
 		Description: "Namespace of sandbox pods."},
 	{Name: "FLEET_SANDBOX_K8S_WORKSPACE_CLAIM", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString,
@@ -610,10 +610,10 @@ var table = []Entry{
 	{Name: "FLEET_SANDBOX_K8S_KUBECONFIG", Group: GroupK8s, Scope: ScopeSandbox, Type: TypePath, Default: "(in-cluster credentials)",
 		Chain:       true,
 		Description: "Kubeconfig for a control plane running outside the cluster."},
-	{Name: "FLEET_SANDBOX_K8S_NETWORK_POLICY", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString,
+	{Name: "FLEET_SANDBOX_K8S_NETWORK_POLICY", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString, Default: "fleet-sandbox-deny-all",
 		Chain: true, Helm: "networkPolicies.denyAll.name",
 		Description: "Name of the deny-all egress NetworkPolicy the boot preflight requires."},
-	{Name: "FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString,
+	{Name: "FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeString, Default: "fleet-sandbox-open-egress",
 		Chain: true, Helm: "networkPolicies.openEgress.name",
 		Description: "Name of the NetworkPolicy shaping open-mode sandbox egress."},
 	{Name: "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", Group: GroupK8s, Scope: ScopeSandbox, Type: TypeBool, Default: "false",
@@ -681,13 +681,13 @@ var table = []Entry{
 
 	// ───────────────────────────── Notifications and Web Push ─────────────────────────────
 	{Name: "FLEET_NOTIFY_ON", Group: GroupNotify, Scope: ScopeServer, Type: TypeCSV,
-		Description: "Task statuses that notify (comma-separated); empty sends nothing (docs/NOTIFICATIONS.md)."},
+		Description: "Task statuses that notify (comma-separated; failure includes blocked); empty notifies on every status. Nothing is sent until a channel (SMTP or webhook) is configured (docs/NOTIFICATIONS.md)."},
 	{Name: "FLEET_NOTIFY_EMAIL_TO", Group: GroupNotify, Scope: ScopeServer, Type: TypeCSV,
 		Description: "Recipients of task notification email."},
-	{Name: "FLEET_NOTIFY_TIMEOUT", Group: GroupNotify, Scope: ScopeServer, Type: TypeDuration, Default: "(built-in)",
+	{Name: "FLEET_NOTIFY_TIMEOUT", Group: GroupNotify, Scope: ScopeServer, Type: TypeDuration, Default: "10s",
 		Knob:        &Knob{Min: b(0), ReadBy: "internal/notify"},
 		Description: "Timeout of one notification delivery."},
-	{Name: "FLEET_NOTIFY_RETRIES", Group: GroupNotify, Scope: ScopeServer, Type: TypeInt, Default: "(built-in)",
+	{Name: "FLEET_NOTIFY_RETRIES", Group: GroupNotify, Scope: ScopeServer, Type: TypeInt, Default: "2",
 		Knob:        &Knob{Min: b(0), ReadBy: "internal/notify"},
 		Description: "Retries of a failed notification delivery."},
 	{Name: "FLEET_SMTP_HOST", Group: GroupNotify, Scope: ScopeServer, Type: TypeString,
