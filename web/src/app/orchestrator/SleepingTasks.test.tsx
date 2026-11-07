@@ -40,7 +40,10 @@ describe("SleepingTasks", () => {
     render(<SleepingTasks onOpen={() => {}} />);
     expect(await screen.findByTestId("sleeping-tasks-count")).toHaveTextContent("37");
     expect(screen.getByTestId("sleeping-tasks-truncated")).toHaveTextContent(`showing the first ${SLEEPING_LIMIT}`);
-    expect(tasks).toHaveBeenCalledWith(`status=paused_awaiting_wake&limit=${SLEEPING_LIMIT}&offset=0`);
+    expect(tasks).toHaveBeenCalledWith(
+      `status=paused_awaiting_wake&limit=${SLEEPING_LIMIT}&offset=0`,
+      expect.any(AbortSignal),
+    );
   });
 
   it("omits the first-page note when everything fits", async () => {

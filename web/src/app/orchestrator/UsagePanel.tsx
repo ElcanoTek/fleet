@@ -100,11 +100,11 @@ export function UsagePanel() {
   } = useCancellableFetch(
     // `from` is computed inside the fetcher (an effect-driven callback, where
     // reading the clock is fine) rather than in render, keeping render pure.
-    useCallback(() => {
+    useCallback((signal: AbortSignal) => {
       const from = new Date(Date.now() - rangeDays * 24 * 60 * 60 * 1000)
         .toISOString()
         .slice(0, 10);
-      return orchestratorApi.usage({ groupBy, from });
+      return orchestratorApi.usage({ groupBy, from }, signal);
     }, [groupBy, rangeDays]),
     [groupBy, rangeDays],
   );
@@ -219,7 +219,7 @@ export function UsagePanel() {
 // be created.
 function BudgetsSection() {
   const { data, error, reload } = useCancellableFetch(
-    useCallback(() => orchestratorApi.budgets(), []),
+    useCallback((signal: AbortSignal) => orchestratorApi.budgets(signal), []),
     [],
   );
   const [scope, setScope] = useState<BudgetCreate["scope"]>("user");

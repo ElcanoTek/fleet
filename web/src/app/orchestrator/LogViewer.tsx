@@ -899,11 +899,11 @@ function LogViewerBody({
     error,
   } = useCancellableFetch(
     useCallback(
-      () =>
+      (signal: AbortSignal) =>
         absent404(
           attemptId === null
-            ? orchestratorApi.taskLogs(task.id)
-            : orchestratorApi.taskLogHistoryEntry(task.id, attemptId),
+            ? orchestratorApi.taskLogs(task.id, signal)
+            : orchestratorApi.taskLogHistoryEntry(task.id, attemptId, signal),
         ),
       [absent404, task.id, attemptId],
     ),
@@ -913,7 +913,10 @@ function LogViewerBody({
   // none, in which case the picker never renders. Same 404 contract as the
   // transcript itself: never-run and not-readable are one response.
   const { data: attemptHistory } = useCancellableFetch(
-    useCallback(() => absent404(orchestratorApi.taskLogHistory(task.id)), [absent404, task.id]),
+    useCallback(
+      (signal: AbortSignal) => absent404(orchestratorApi.taskLogHistory(task.id, signal)),
+      [absent404, task.id],
+    ),
     [task.id],
   );
   const attempts = attemptHistory?.entries ?? [];
@@ -1206,14 +1209,14 @@ function TaskRunHistory({
     loading,
     error,
   } = useCancellableFetch(
-    useCallback(() => {
+    useCallback((signal: AbortSignal) => {
       const p = new URLSearchParams();
       // The first 120 chars keep the query URL sane for very long prompts;
       // the exact-equality filter below does the real matching.
       p.set("q", prompt.slice(0, 120));
       p.set("limit", "50");
       // orchestratorApi.tasks prepends the "?" itself.
-      return orchestratorApi.tasks(p.toString());
+      return orchestratorApi.tasks(p.toString(), signal);
     }, [prompt]),
     [prompt],
   );

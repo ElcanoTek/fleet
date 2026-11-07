@@ -120,4 +120,81 @@ describe("useCancellableFetch", () => {
     rerender({ id: 2 });
     await waitFor(() => expect(fetcher).toHaveBeenCalledWith(2));
   });
+
+  it("passes an AbortSignal and aborts a run superseded by a dep change", async () => {
+    const signals: AbortSignal[] = [];
+    const d1 = deferred<string>();
+    const d2 = deferred<string>();
+    const fetcher = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return signals.length === 1 ? d1.promise : d2.promise;
+    });
+    const { result, rerender } = renderHook(({ id }) => useCancellableFetch(fetcher, [id]), {
+      initialProps: { id: "a" },
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    expect(signals[0].aborted).toBe(false);
+
+    rerender({ id: "b" });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+
+    // The superseded run's AbortError never reaches `error`.
+    await act(async () => {
+      d1.reject(new DOMException("aborted", "AbortError"));
+      d2.resolve("b-data");
+    });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.data).toBe("b-data");
+    expect(result.current.error).toBeNull();
+  });
+
+  it("aborts the run in flight on reload and on unmount", async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<string>(() => {});
+    });
+    const { result, unmount } = renderHook(() => useCancellableFetch(fetcher, []));
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    act(() => {
+      void result.current.reload();
+    });
+    expect(signals[0].aborted).toBe(true);
+    expect(signals[1].aborted).toBe(false);
+    unmount();
+    expect(signals[1].aborted).toBe(true);
+  });
+
+  it("aborts the run in flight when disabled", async () => {
+    const signals: AbortSignal[] = [];
+    const fetcher = vi.fn((signal: AbortSignal) => {
+      signals.push(signal);
+      return new Promise<string>(() => {});
+    });
+    const { result, rerender } = renderHook(({ on }) => useCancellableFetch(fetcher, [], { enabled: on }), {
+      initialProps: { on: true },
+    });
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    rerender({ on: false });
+    await waitFor(() => expect(signals[0].aborted).toBe(true));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+  });
+
+  it("an AbortError from the current run leaves error null", async () => {
+    const fetcher = vi.fn().mockRejectedValue(new DOMException("aborted", "AbortError"));
+    const { result } = renderHook(() => useCancellableFetch(fetcher, []));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("setData replaces the data without a refetch", async () => {
+    const fetcher = vi.fn().mockResolvedValue("first");
+    const { result } = renderHook(() => useCancellableFetch(fetcher, []));
+    await waitFor(() => expect(result.current.data).toBe("first"));
+    act(() => result.current.setData("second"));
+    expect(result.current.data).toBe("second");
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
 });

@@ -8,6 +8,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 // that here keeps the cancelled-ref bookkeeping in one place and lets the call
 // sites drop their bespoke `react-hooks/set-state-in-effect` disables.
 //
+// The fetcher receives an AbortSignal (#2009). A run superseded by a newer
+// reload or dep change, a run in flight when the hook is disabled, and the run
+// in flight at unmount are ABORTED, not merely ignored, so the request itself
+// stops; an AbortError never reaches `error`. A fetcher that ignores the
+// signal still works: its late result is dropped by the run-id guard as before.
+//
 // Why `loading` is lazy-initialized to `enabled` and never set true in the
 // effect's synchronous phase: a synchronous `setLoading(true)` at the top of an
 // effect trips react-hooks/set-state-in-effect (it cascades a render straight
@@ -24,10 +30,21 @@ export type UseCancellableFetch<T> = {
   // when the fetch settles; a fetch superseded by a newer reload/unmount is
   // dropped without touching state.
   reload: () => Promise<void>;
+  // setData replaces the data in place — for a caller whose own write already
+  // returned the new record — without a refetch. It does not cancel a run in
+  // flight; that run's result lands when it settles.
+  setData: (data: T | null) => void;
 };
 
+/** True for the rejection an aborted fetch produces. */
+export function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException || err instanceof Error) && err.name === "AbortError"
+  );
+}
+
 export function useCancellableFetch<T>(
-  fetcher: () => Promise<T>,
+  fetcher: (signal: AbortSignal) => Promise<T>,
   deps: ReadonlyArray<unknown>,
   options: { enabled?: boolean } = {},
 ): UseCancellableFetch<T> {
@@ -46,6 +63,9 @@ export function useCancellableFetch<T>(
   // Set false on unmount so even the latest in-flight fetch can't setState
   // after the component is gone.
   const mountedRef = useRef(true);
+  // The controller of the run in flight; aborted when a newer run, a disable or
+  // the unmount supersedes it.
+  const controllerRef = useRef<AbortController | null>(null);
   // Keep the latest fetcher reachable without forcing callers to memoize it.
   // The ref is written in an effect (never during render) so it doesn't trip
   // react-hooks/refs; the deferred fetch kickoff below always runs after this
@@ -58,11 +78,16 @@ export function useCancellableFetch<T>(
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      controllerRef.current?.abort();
+      controllerRef.current = null;
     };
   }, []);
 
   const run = useCallback(async () => {
     const runId = ++runIdRef.current;
+    controllerRef.current?.abort();
+    const controller = new AbortController();
+    controllerRef.current = controller;
     // Setting loading true here is safe for the rule: `run` is invoked as an
     // async callback (from the effect's deferred kickoff or an imperative
     // reload), not synchronously in an effect body. The guard keeps a
@@ -70,14 +95,18 @@ export function useCancellableFetch<T>(
     setLoading(true);
     setError(null);
     try {
-      const result = await fetcherRef.current();
+      const result = await fetcherRef.current(controller.signal);
       if (!mountedRef.current || runId !== runIdRef.current) return;
       setData(result);
     } catch (err) {
       if (!mountedRef.current || runId !== runIdRef.current) return;
+      if (isAbortError(err)) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (mountedRef.current && runId === runIdRef.current) setLoading(false);
+      if (mountedRef.current && runId === runIdRef.current) {
+        setLoading(false);
+        controllerRef.current = null;
+      }
     }
   }, []);
 
@@ -95,8 +124,11 @@ export function useCancellableFetch<T>(
     queueMicrotask(() => {
       if (cancelled) return;
       if (!enabled) {
-        // Supersede any in-flight run and clear the initial loading state.
+        // Supersede (and abort) any in-flight run and clear the initial
+        // loading state.
         runIdRef.current++;
+        controllerRef.current?.abort();
+        controllerRef.current = null;
         if (mountedRef.current) setLoading(false);
         return;
       }
@@ -108,5 +140,5 @@ export function useCancellableFetch<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, run, ...deps]);
 
-  return { data, loading, error, reload: run };
+  return { data, loading, error, reload: run, setData };
 }

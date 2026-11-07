@@ -66,10 +66,11 @@ export function UpcomingPanel() {
     // to cap recurring tasks at their next 5 occurrences, which made a weekly
     // task look like it "ended" after five weeks).
     useCallback(
-      () =>
+      (signal: AbortSignal) =>
         orchestratorApi.upcomingRuns(
           500,
           new Date(Date.now() + HORIZON_DAYS * 24 * 60 * 60 * 1000).toISOString(),
+          signal,
         ),
       [],
     ),

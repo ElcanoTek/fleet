@@ -517,7 +517,7 @@ describe("LogViewer per-attempt transcripts", () => {
     expect(
       await screen.findByText(/transcript from the superseded attempt/),
     ).toBeTruthy();
-    expect(taskLogHistoryEntry).toHaveBeenCalledWith(DONE_TASK.id, 7);
+    expect(taskLogHistoryEntry).toHaveBeenCalledWith(DONE_TASK.id, 7, expect.any(AbortSignal));
     // Back to the latest transcript.
     fireEvent.change(picker, { target: { value: "latest" } });
     expect(await screen.findByText(/token totals|infographic/i)).toBeTruthy();

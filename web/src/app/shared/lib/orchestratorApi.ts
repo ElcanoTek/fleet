@@ -688,9 +688,15 @@ export type RecipientUse = {
   last_used: string;
 };
 
+// The read helpers take an optional AbortSignal (#2009), so a caller such as
+// useCancellableFetch can stop a request a newer one or an unmount has
+// superseded. Writes do not: a write once sent is the server's to finish.
+const withSignal = (signal?: AbortSignal): RequestInit | undefined => (signal ? { signal } : undefined);
+
 export const orchestratorApi = {
-  stats: () => request<DashboardStats>("/stats"),
-  tasks: (qs: string) => request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`),
+  stats: (signal?: AbortSignal) => request<DashboardStats>("/stats", withSignal(signal)),
+  tasks: (qs: string, signal?: AbortSignal) =>
+    request<Paginated<Task>>(`/tasks${qs ? `?${qs}` : ""}`, withSignal(signal)),
   createTask: (body: TaskCreate) =>
     request<Task>("/tasks", { method: "POST", body: JSON.stringify(body) }),
   // Pre-submission cost forecast (#233): same body as createTask, creates
@@ -700,8 +706,10 @@ export const orchestratorApi = {
     request<CostForecast>("/tasks/estimate", { method: "POST", body: JSON.stringify(body) }),
   // One task by id (GET /tasks/{id}) — how a task link opens a row the
   // dashboard's current page may not list.
-  task: (taskId: string) => request<Task>(`/tasks/${encodeURIComponent(taskId)}`),
-  taskLogs: (taskId: string) => request<LogSession>(`/logs/${encodeURIComponent(taskId)}`),
+  task: (taskId: string, signal?: AbortSignal) =>
+    request<Task>(`/tasks/${encodeURIComponent(taskId)}`, withSignal(signal)),
+  taskLogs: (taskId: string, signal?: AbortSignal) =>
+    request<LogSession>(`/logs/${encodeURIComponent(taskId)}`, withSignal(signal)),
   // A spawned child's own transcript (#1043) — 404 when the transcript file is
   // no longer on the host (the linkage entry on the parent log stays the
   // durable record either way).
@@ -711,10 +719,13 @@ export const orchestratorApi = {
     ),
   // Per-attempt run log history: transcripts superseded by a retry or an
   // ask-pause/wake resume of the SAME task id. Metadata list + one entry.
-  taskLogHistory: (taskId: string) =>
-    request<{ entries: RunLogMeta[] }>(`/logs/${encodeURIComponent(taskId)}/history`),
-  taskLogHistoryEntry: (taskId: string, entryId: number) =>
-    request<LogSession>(`/logs/${encodeURIComponent(taskId)}/history/${entryId}`),
+  taskLogHistory: (taskId: string, signal?: AbortSignal) =>
+    request<{ entries: RunLogMeta[] }>(
+      `/logs/${encodeURIComponent(taskId)}/history`,
+      withSignal(signal),
+    ),
+  taskLogHistoryEntry: (taskId: string, entryId: number, signal?: AbortSignal) =>
+    request<LogSession>(`/logs/${encodeURIComponent(taskId)}/history/${entryId}`, withSignal(signal)),
   // Edit (PUT /tasks/{id}): rewrites a pending/scheduled task's definition —
   // for a recurring task that means every future run. The server re-checks
   // editability transactionally (409 when the task started meanwhile).
@@ -743,14 +754,15 @@ export const orchestratorApi = {
   // front of you — a tag you cannot see is exactly the one you want to find.
   // Deployment-wide, like the dashboard counters: a non-admin sees only their
   // own tasks, so a tag here can narrow the board to nothing.
-  tagCatalogue: () => request<TagCount[]>("/tasks/tags"),
+  tagCatalogue: (signal?: AbortSignal) => request<TagCount[]>("/tasks/tags", withSignal(signal)),
   // Addresses the task form's Email results field can suggest: every recipient
   // a visible task already delivers to (last 180 days, own tasks only for a
   // non-admin), most recently used first.
   recipientHistory: () => request<RecipientUse[]>("/tasks/recipients"),
-  upcomingRuns: (limit = 50, until?: string) =>
+  upcomingRuns: (limit = 50, until?: string, signal?: AbortSignal) =>
     request<{ upcoming: UpcomingRun[] }>(
       `/tasks/upcoming?limit=${limit}${until ? `&until=${encodeURIComponent(until)}` : ""}`,
+      withSignal(signal),
     ),
   // #516 self-improving memory: feedback + versioned learned instructions.
   submitFeedback: (taskId: string, rating: "up" | "down", critique?: string) =>
@@ -820,45 +832,46 @@ export const orchestratorApi = {
   // server_time is the orchestrator's own clock, formatted in ITS location so
   // the offset rides along; default_task_timezone is the zone a cron recurrence
   // fires in when a task names none (distinct from `timezone`, the server clock).
-  config: () =>
+  config: (signal?: AbortSignal) =>
     request<{
       version?: string;
       timezone?: string;
       server_time?: string;
       default_task_timezone?: string;
-    }>("/config"),
+    }>("/config", withSignal(signal)),
   me: () => request<{ authenticated: boolean; username?: string; role?: string }>("/me"),
 
   // SLA report (#274): admin-only per-task actual-duration p50/p95 + breach
   // rate over a window. days defaults to 7 (clamped to [1, 90] server-side).
-  slaReport: (days = 7) =>
-    request<SLAReport>(`/sla-report?days=${encodeURIComponent(days)}`),
+  slaReport: (days = 7, signal?: AbortSignal) =>
+    request<SLAReport>(`/sla-report?days=${encodeURIComponent(days)}`, withSignal(signal)),
 
   // Usage analytics (#601 part 1): admin-only cost/token roll-up by
   // principal / project / model / time bucket over [from, to). from/to are
   // RFC 3339 or YYYY-MM-DD; both optional (default: trailing 30 days).
-  usage: (params: { groupBy?: UsageGroupBy; from?: string; to?: string } = {}) => {
+  usage: (params: { groupBy?: UsageGroupBy; from?: string; to?: string } = {}, signal?: AbortSignal) => {
     const qs = new URLSearchParams();
     if (params.groupBy) qs.set("group_by", params.groupBy);
     if (params.from) qs.set("from", params.from);
     if (params.to) qs.set("to", params.to);
     const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
-    return request<UsageReport>(`/admin/usage${suffix}`);
+    return request<UsageReport>(`/admin/usage${suffix}`, withSignal(signal));
   },
 
   // Adoption analytics: admin-only per-user AI-adoption audit — merged
   // per-user totals with daily series, previous-window trend deltas, and the
   // inactive-seat roster over [from, to) (default: trailing 30 days).
-  adoption: (params: { from?: string; to?: string } = {}) => {
+  adoption: (params: { from?: string; to?: string } = {}, signal?: AbortSignal) => {
     const qs = new URLSearchParams();
     if (params.from) qs.set("from", params.from);
     if (params.to) qs.set("to", params.to);
     const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
-    return request<AdoptionReport>(`/admin/usage/adoption${suffix}`);
+    return request<AdoptionReport>(`/admin/usage/adoption${suffix}`, withSignal(signal));
   },
 
   // Per-principal rolling budgets (#601 part 2): admin-only list + upsert/delete.
-  budgets: () => request<{ budgets: BudgetStatus[] }>("/admin/budgets"),
+  budgets: (signal?: AbortSignal) =>
+    request<{ budgets: BudgetStatus[] }>("/admin/budgets", withSignal(signal)),
   createBudget: (body: BudgetCreate) =>
     request<BudgetStatus>("/admin/budgets", { method: "POST", body: JSON.stringify(body) }),
   deleteBudget: (budgetId: string) =>
@@ -882,7 +895,8 @@ export const orchestratorApi = {
     request<void>(`/prompts/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   // MCP catalog + credential accounts.
-  mcpServers: () => request<{ servers: McpServer[] }>("/mcp-servers"),
+  mcpServers: (signal?: AbortSignal) =>
+    request<{ servers: McpServer[] }>("/mcp-servers", withSignal(signal)),
   createAccount: (server: string, body: { account: string; secrets: Record<string, string> }) =>
     request<{ server: string; account: string }>(
       `/mcp-servers/${encodeURIComponent(server)}/accounts`,
@@ -900,15 +914,17 @@ export const orchestratorApi = {
     ),
 
   // Dataset / table agent (#514).
-  datasets: () => request<{ datasets: Dataset[] }>("/datasets"),
-  dataset: (id: string) => request<Dataset>(`/datasets/${encodeURIComponent(id)}`),
+  datasets: (signal?: AbortSignal) => request<{ datasets: Dataset[] }>("/datasets", withSignal(signal)),
+  dataset: (id: string, signal?: AbortSignal) =>
+    request<Dataset>(`/datasets/${encodeURIComponent(id)}`, withSignal(signal)),
   createDataset: (body: DatasetCreate) =>
     request<Dataset>("/datasets", { method: "POST", body: JSON.stringify(body) }),
   deleteDataset: (id: string) =>
     request<void>(`/datasets/${encodeURIComponent(id)}`, { method: "DELETE" }),
-  datasetRows: (id: string, qs = "") =>
+  datasetRows: (id: string, qs = "", signal?: AbortSignal) =>
     request<{ rows: DatasetRow[]; row_counts: Record<string, number> }>(
       `/datasets/${encodeURIComponent(id)}/rows${qs}`,
+      withSignal(signal),
     ),
   importDatasetRowsCSV: (id: string, csv: string) =>
     request<{ imported: number }>(`/datasets/${encodeURIComponent(id)}/rows`, {

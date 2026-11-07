@@ -21,7 +21,7 @@ export type UseMcpServers = {
 
 export function useMcpServers(enabled = true): UseMcpServers {
   const { data, loading, error, reload } = useCancellableFetch(
-    useCallback(async () => (await orchestratorApi.mcpServers()).servers ?? [], []),
+    useCallback(async (signal: AbortSignal) => (await orchestratorApi.mcpServers(signal)).servers ?? [], []),
     [],
     { enabled },
   );

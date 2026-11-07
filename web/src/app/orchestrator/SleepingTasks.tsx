@@ -26,7 +26,8 @@ export type SleepingTasksProps = {
 export function SleepingTasks({ onOpen, refreshKey }: SleepingTasksProps) {
   const { data } = useCancellableFetch(
     useCallback(
-      () => orchestratorApi.tasks(`status=paused_awaiting_wake&limit=${SLEEPING_LIMIT}&offset=0`),
+      (signal: AbortSignal) =>
+        orchestratorApi.tasks(`status=paused_awaiting_wake&limit=${SLEEPING_LIMIT}&offset=0`, signal),
       [],
     ),
     [refreshKey],
