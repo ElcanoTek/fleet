@@ -207,17 +207,16 @@ func Fetch(ctx context.Context, d *Downloader, v Verifier, o FetchOptions) (*Fet
 		base = BaseURL()
 	}
 	url := func(name string) string { return base + "/" + o.Tag.String() + "/" + name }
-	get := func(name string, limit int64) (string, error) {
-		p := filepath.Join(o.Dir, name)
-		if err := d.Get(ctx, url(name), p, limit); err != nil {
-			return "", fmt.Errorf("download %s: %w", name, err)
+	get := func(name string, limit int64) error {
+		if err := d.Get(ctx, url(name), filepath.Join(o.Dir, name), limit); err != nil {
+			return fmt.Errorf("download %s: %w", name, err)
 		}
-		return p, nil
+		return nil
 	}
-	if _, err := get(SumsFile, maxMetaBytes); err != nil {
+	if err := get(SumsFile, maxMetaBytes); err != nil {
 		return nil, err
 	}
-	if _, err := get(SumsFile+BundleSuffix, maxMetaBytes); err != nil {
+	if err := get(SumsFile+BundleSuffix, maxMetaBytes); err != nil {
 		if IsNotFound(err) {
 			return nil, fmt.Errorf("release %s has no signature for %s — refusing an unsigned release", o.Tag, SumsFile)
 		}
@@ -232,10 +231,10 @@ func Fetch(ctx context.Context, d *Downloader, v Verifier, o FetchOptions) (*Fet
 	if _, ok := sums[asset]; !ok {
 		return nil, fmt.Errorf("the signed %s does not list %s", SumsFile, asset)
 	}
-	if _, err := get(asset, maxBinaryBytes); err != nil {
+	if err := get(asset, maxBinaryBytes); err != nil {
 		return nil, err
 	}
-	if _, err := get(asset+BundleSuffix, maxMetaBytes); err != nil {
+	if err := get(asset+BundleSuffix, maxMetaBytes); err != nil {
 		if IsNotFound(err) {
 			return nil, fmt.Errorf("release %s has no signature for %s — refusing it", o.Tag, asset)
 		}
@@ -251,7 +250,7 @@ func Fetch(ctx context.Context, d *Downloader, v Verifier, o FetchOptions) (*Fet
 	if err := copyFromFD(bf, binCopy, sums[asset]); err != nil {
 		return nil, err
 	}
-	bundle, err := readPrivateFile(o.Dir, asset+BundleSuffix, maxMetaBytes)
+	bundle, err := readPrivateFile(o.Dir, asset+BundleSuffix)
 	if err != nil {
 		return nil, err
 	}
@@ -265,14 +264,14 @@ func Fetch(ctx context.Context, d *Downloader, v Verifier, o FetchOptions) (*Fet
 	if _, ok := sums[ManifestFile]; !ok {
 		return nil, fmt.Errorf("the signed %s does not list %s", SumsFile, ManifestFile)
 	}
-	if _, err := get(ManifestFile, maxMetaBytes); err != nil {
+	if err := get(ManifestFile, maxMetaBytes); err != nil {
 		return nil, err
 	}
 	man, err := verifiedManifest(o.Dir, sums, o.Tag, o.Commit)
 	if err != nil {
 		return nil, err
 	}
-	if err := bf.Chmod(0o755); err != nil { //nolint:gosec // G302: the verified binary is about to be installed as an executable.
+	if err := bf.Chmod(0o755); err != nil {
 		return nil, err
 	}
 	return &Fetched{Tag: o.Tag, Binary: filepath.Join(o.Dir, asset), Manifest: man, Sums: sums, BinarySHA256: sums[asset]}, nil
@@ -319,11 +318,11 @@ func LoadVerified(ctx context.Context, v Verifier, dir string, tag Tag, arch str
 // exact bytes to the private dir, verifies the signature there and parses the
 // same bytes — the file cosign checked is the file that is used.
 func verifiedSums(ctx context.Context, v Verifier, dir, private string) (Sums, error) {
-	raw, err := readPrivateFile(dir, SumsFile, maxMetaBytes)
+	raw, err := readPrivateFile(dir, SumsFile)
 	if err != nil {
 		return nil, err
 	}
-	bundle, err := readPrivateFile(dir, SumsFile+BundleSuffix, maxMetaBytes)
+	bundle, err := readPrivateFile(dir, SumsFile+BundleSuffix)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("no signature for %s in %s — refusing an unsigned release", SumsFile, dir)
@@ -350,7 +349,7 @@ func verifiedManifest(dir string, sums Sums, tag Tag, commit string) (Manifest, 
 	if !ok {
 		return Manifest{}, fmt.Errorf("the signed %s does not list %s", SumsFile, ManifestFile)
 	}
-	raw, err := readPrivateFile(dir, ManifestFile, maxMetaBytes)
+	raw, err := readPrivateFile(dir, ManifestFile)
 	if err != nil {
 		return Manifest{}, err
 	}
@@ -396,8 +395,10 @@ func openVerifiedBinary(dir, name, want, arch string) (*os.File, error) {
 	return f, nil
 }
 
-// readPrivateFile reads up to limit bytes of dir/name through openPrivate.
-func readPrivateFile(dir, name string, limit int64) ([]byte, error) {
+// readPrivateFile reads a metadata file (up to maxMetaBytes) of dir/name
+// through openPrivate.
+func readPrivateFile(dir, name string) ([]byte, error) {
+	const limit = maxMetaBytes
 	f, err := openPrivate(filepath.Join(dir, name))
 	if err != nil {
 		return nil, err

@@ -164,6 +164,9 @@ the checkout moves to a release tag, update and bootstrap check the tag's
 signed manifest (with the cosign pinned in the checkout already running) and
 require `release.json` to name the commit the tag resolves to locally, so a
 moved or locally created tag cannot get its code checked out, let alone run.
+The pinned cosign itself runs only from a private cache (an operator-supplied
+`FLEET_COSIGN_BIN` is copied in from the bytes that were hashed), and the
+install dir must be writable by root alone.
 
 ## Roll back
 

@@ -26,7 +26,7 @@ func TestUpdateLegacyPathRefusesADowngrade(t *testing.T) {
 	install := t.TempDir()
 	// An installed fleet from before `fleet release`, NEWER than the tag.
 	fake := "#!/bin/sh\ncase \"$1\" in version) echo 'fleet 2026.12.01.1 (abcdef012345)';; *) exit 1;; esac\n"
-	if err := os.WriteFile(filepath.Join(install, "fleet"), []byte(fake), 0o755); err != nil { //nolint:gosec // an executable stub
+	if err := os.WriteFile(filepath.Join(install, "fleet"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	env = append(env, "FLEET_INSTALL_DIR="+install, "FLEET_RELEASE_CACHE_DIR="+t.TempDir())

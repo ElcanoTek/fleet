@@ -83,7 +83,10 @@ fleet_release_cosign() {
   ver="$(awk '$1=="version"{print $2}' "$lock")"
   want="$(awk -v k="linux/$arch" '$1==k{print $2}' "$lock")"
   [[ -n "$ver" && ${#want} -eq 64 ]] || { echo "cosign.lock has no pin for linux/$arch" >&2; return 1; }
-  install -d -m 0700 "$cache" || return 1
+  install -d -m 0700 "$cache" && chmod 0700 "$cache" || return 1
+  # A program is executed from here after its digest is checked by path, so
+  # nobody else may be able to swap it in between.
+  fleet_release_private_dir "$cache" || return 1
   path="$cache/cosign-${ver}-linux-${arch}"
   if [[ -f "$path" ]] && [[ "$(sha256sum "$path" | awk '{print $1}')" == "$want" ]]; then
     printf '%s' "$path"; return 0

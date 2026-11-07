@@ -90,7 +90,10 @@ func EnsureCosign(ctx context.Context, d *Downloader, cacheDir, arch string) (st
 	if !ok {
 		return "", fmt.Errorf("no pinned cosign for linux/%s", arch)
 	}
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+	// The cache holds a program this process will EXECUTE after checking its
+	// digest by path, so it must be private: no one else may swap the file
+	// between the check and the exec.
+	if err := EnsurePrivateDir(cacheDir); err != nil {
 		return "", fmt.Errorf("cosign cache: %w", err)
 	}
 	path := filepath.Join(cacheDir, "cosign-"+pin.Version+"-linux-"+arch)
@@ -233,3 +236,38 @@ func (c *Cosign) run(ctx context.Context, args ...string) error {
 
 // FileSHA256 is the lowercase hex SHA-256 of a file.
 func FileSHA256(path string) (string, error) { return fileSHA256(path) }
+
+// InstallCosignFrom copies an operator-supplied cosign (FLEET_COSIGN_BIN) into
+// the private cache under the pinned name — hashing the bytes AS they are
+// copied from one open descriptor and refusing anything but the pinned
+// digest — so what later runs is the private, verified copy, never the
+// operator's path (which could be swapped between a check and an exec).
+func InstallCosignFrom(src, cacheDir, arch string) (string, error) {
+	pin := PinnedCosign()
+	want, ok := pin.SHA256["linux/"+arch]
+	if !ok {
+		return "", fmt.Errorf("no pinned cosign for linux/%s", arch)
+	}
+	if err := EnsurePrivateDir(cacheDir); err != nil {
+		return "", fmt.Errorf("cosign cache: %w", err)
+	}
+	in, err := os.Open(src) //nolint:gosec // G304: the operator's FLEET_COSIGN_BIN, read once and hash-checked.
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	path := filepath.Join(cacheDir, "cosign-"+pin.Version+"-linux-"+arch)
+	tmp := path + ".copy"
+	_ = os.Remove(tmp)
+	if err := copyFromFD(in, tmp, want); err != nil {
+		_ = os.Remove(tmp)
+		return "", fmt.Errorf("FLEET_COSIGN_BIN %s is not cosign %s for linux/%s: %w", src, pin.Version, arch, err)
+	}
+	if err := os.Chmod(tmp, 0o700); err != nil { //nolint:gosec // G302: a private executable.
+		return "", err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return "", err
+	}
+	return path, nil
+}

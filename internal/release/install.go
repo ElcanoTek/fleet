@@ -128,6 +128,9 @@ func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
 	if err := os.MkdirAll(o.InstallDir, 0o755); err != nil { //nolint:gosec // G301: the install dir holds a world-executable binary.
 		return res, err
 	}
+	if err := checkInstallDir(o.InstallDir); err != nil {
+		return res, err
+	}
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
 		return res, err
@@ -230,6 +233,9 @@ func Rollback(ctx context.Context, o InstallOptions) error {
 	prev := filepath.Join(o.InstallDir, prevName)
 	if _, err := os.Stat(prev); err != nil {
 		return fmt.Errorf("no previous binary at %s to roll back to", prev)
+	}
+	if err := checkInstallDir(o.InstallDir); err != nil {
+		return err
 	}
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
@@ -606,4 +612,40 @@ func ProbeTLSConfig(url, mode, serverName, certFile string) (*tls.Config, error)
 		}
 	}
 	return &tls.Config{ServerName: serverName, RootCAs: roots, MinVersion: tls.VersionTLS12}, nil
+}
+
+// checkInstallDir requires the install dir — whose fleet and fleet.prev are
+// executed as the service — to be writable only by root or this user, and
+// reachable only through directories others cannot rename entries in (the
+// CheckPrivateDir rule for parents). Unlike a staging dir it may be readable
+// (0755): the service user runs the binary from it.
+func checkInstallDir(dir string) error {
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return fmt.Errorf("install dir %s: %w", dir, err)
+	}
+	fi, err := os.Lstat(resolved)
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.IsDir() || !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) || fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("install dir %s must be a directory owned by root (or uid %d) that no one else can write to (is %v) — refusing it", resolved, os.Geteuid(), fi.Mode())
+	}
+	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
+		fi, err := os.Lstat(p)
+		if err != nil {
+			return err
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) {
+			return fmt.Errorf("install dir %s sits under %s, owned by another user — refusing it", resolved, p)
+		}
+		if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
+			return fmt.Errorf("install dir %s sits under %s (mode %v), which others can write to — refusing it", resolved, p, fi.Mode())
+		}
+		if p == "/" || p == filepath.Dir(p) {
+			return nil
+		}
+	}
 }

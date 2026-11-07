@@ -112,14 +112,12 @@ var newVerifier = func(ctx context.Context, cacheDir string) (release.Verifier, 
 	bin := os.Getenv("FLEET_COSIGN_BIN")
 	if bin != "" {
 		// An operator-supplied cosign must still be the pinned build: the
-		// digest is the trust anchor, not the path.
-		pin := release.PinnedCosign()
-		got, err := release.FileSHA256(bin)
+		// digest is the trust anchor, not the path — and what runs is a
+		// private copy made from the bytes that were hashed.
+		var err error
+		bin, err = release.InstallCosignFrom(bin, cacheDir, release.HostArch())
 		if err != nil {
 			return nil, err
-		}
-		if got != pin.SHA256["linux/"+release.HostArch()] {
-			return nil, fmt.Errorf("FLEET_COSIGN_BIN %s is not cosign %s for linux/%s (SHA-256 %s) — refusing it", bin, pin.Version, release.HostArch(), got)
 		}
 	} else {
 		var err error
