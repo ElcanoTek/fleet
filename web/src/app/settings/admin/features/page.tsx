@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Features (fleet-unified settings pass): every workspace
 // feature setting the server registers (GET /api/admin/settings), with its
 // effective value, where it came from (env default vs admin override), and
@@ -41,6 +39,7 @@ import {
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
+import { responseErrorText } from "@/app/lib/responseError";
 
 type ResolvedSetting = {
   key: string;
@@ -894,7 +893,7 @@ function GuardrailActions() {
     setProbe("running");
     try {
       const response = await fetch("/api/admin/guardrail/test", { method: "POST" });
-      if (!response.ok) throw new Error((await response.text()).trim() || `Probe failed: ${response.status}`);
+      if (!response.ok) throw new Error(await responseErrorText(response, "Probe failed"));
       setProbe((await response.json()) as GuardrailProbeResult);
     } catch (err) {
       setProbe({

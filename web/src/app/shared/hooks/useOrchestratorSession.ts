@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import { classifyBootstrapFailure } from "@/app/chat/ui/bootstrapFailure";
 import { OrchestratorError, orchestratorApi } from "@/app/shared/lib/orchestratorApi";

@@ -1,5 +1,3 @@
-"use client";
-
 // The orchestrator used to persist moc's username/password bearer in
 // localStorage (`orchestratorToken`, plus moc's original `userToken`).
 // That path is retired (#1115): the password form is gone, and anything

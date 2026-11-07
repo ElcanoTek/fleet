@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { DEFAULT_PILLS, type ProtocolPill } from "@/app/chat/ui/protocolPills";
 import {

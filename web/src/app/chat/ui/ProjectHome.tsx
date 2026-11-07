@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Menu, MenuItem, MenuSeparator } from "@/app/shared/ui/Menu";
 import type { ConversationSummary } from "./chat-experience";
@@ -29,6 +27,7 @@ import {
   type ProjectChatEntry,
   type TeamChatEntry,
 } from "./ProjectChatSections";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Project home (#509 follow-up): the page a project's rail row opens — title,
 // this member's chats in the project, the TEAM's shared chats beside them, a
@@ -928,7 +927,7 @@ export function TeamLearningsPanel({
         `/api/projects/${encodeURIComponent(projectId)}/memories`,
         { cache: "no-store" },
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t load team learnings"));
       const data = (await res.json()) as { memories?: TeamLearning[] };
       setEntries(data.memories ?? []);
       setError(null);
@@ -978,7 +977,7 @@ export function TeamLearningsPanel({
           body: JSON.stringify({ content }),
         },
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t save that learning"));
       setDraft("");
       await load();
     } catch (err) {
@@ -1004,7 +1003,7 @@ export function TeamLearningsPanel({
           body: JSON.stringify(body),
         },
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t update that learning"));
       await load();
       return true;
     } catch (err) {
@@ -1021,7 +1020,7 @@ export function TeamLearningsPanel({
         `/api/projects/${encodeURIComponent(projectId)}/memories/${encodeURIComponent(id)}`,
         { method: "DELETE" },
       );
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t delete that learning"));
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn’t delete that learning.");

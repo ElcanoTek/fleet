@@ -1,5 +1,3 @@
-"use client";
-
 import { useSyncExternalStore } from "react";
 import { currentBuildId } from "@/app/lib/buildId";
 

@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo, useState } from "react";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import {

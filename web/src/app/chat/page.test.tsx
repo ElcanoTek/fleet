@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render } from "@testing-library/react";
 import { setBootstrapForTest } from "@/app/lib/bootstrap";
 
-const pageClient = vi.fn((_: { initialEmail?: string | null }) => null);
-vi.mock("./page-client", () => ({ PageClient: (props: { initialEmail?: string | null }) => pageClient(props) }));
+const chatExperience = vi.fn((_: { initialUserEmail?: string | null }) => null);
+vi.mock("./ui/chat-experience", () => ({
+  ChatExperience: (props: { initialUserEmail?: string | null }) => chatExperience(props),
+}));
 
 import ChatPage from "./page";
 
@@ -16,19 +18,19 @@ import ChatPage from "./page";
 describe("chat page", () => {
   afterEach(() => {
     setBootstrapForTest(null);
-    pageClient.mockClear();
+    chatExperience.mockClear();
     cleanup();
   });
 
   it("hands the bootstrap's session email to the chat shell", () => {
     setBootstrapForTest({ session: { email: "x@omc.com" } });
     render(<ChatPage />);
-    expect(pageClient).toHaveBeenCalledWith({ initialEmail: "x@omc.com" });
+    expect(chatExperience).toHaveBeenCalledWith({ initialUserEmail: "x@omc.com" });
   });
 
   it("passes null when the request carried only a bearer (no cookie session)", () => {
     setBootstrapForTest({ session: null });
     render(<ChatPage />);
-    expect(pageClient).toHaveBeenCalledWith({ initialEmail: null });
+    expect(chatExperience).toHaveBeenCalledWith({ initialUserEmail: null });
   });
 });

@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { validateFile } from "@/app/shared/lib/validation";
 import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";

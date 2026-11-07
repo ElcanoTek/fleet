@@ -1,5 +1,3 @@
-"use client";
-
 // Settings-area atoms (fleet-unified settings design pass). These transcribe
 // the design's component vocabulary — .btn/.settings-input/.conn-badge/
 // .set-switch/.theme-seg/.act-status and friends — into the token-driven

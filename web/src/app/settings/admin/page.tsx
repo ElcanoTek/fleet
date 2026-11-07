@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Overview (fleet-unified settings pass): the operator's
 // live single-pane view — system health from GET /api/admin/health-summary
 // (polled every 10s, #301), the MCP catalog chips, and per-deployment usage
@@ -20,6 +18,7 @@ import {
   formatAgo,
   formatCompactTokens,
   formatUSD,
+  formatUptime,
   type DailyCacheStat,
   type UserStat,
 } from "./lib";
@@ -59,16 +58,6 @@ type HealthSummary = {
 };
 
 const REFRESH_MS = 10_000;
-
-function formatUptime(seconds: number): string {
-  if (seconds <= 0) return "—";
-  const d = Math.floor(seconds / 86400);
-  const h = Math.floor((seconds % 86400) / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
-}
 
 // healthItems maps the summary onto the design's ADMIN_HEALTH card order.
 function healthItems(d: HealthSummary): AdminStat[] {

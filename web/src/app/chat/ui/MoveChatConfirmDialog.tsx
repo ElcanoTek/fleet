@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { ConfirmDialog, NameChip } from "./ConfirmDialog";
 import { TeamGlyph } from "./ShareGlyphs";

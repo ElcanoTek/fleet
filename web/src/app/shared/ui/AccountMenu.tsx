@@ -1,5 +1,3 @@
-"use client";
-
 // AccountMenu — the rail footer's account control (#169, settings pass). A
 // single button shows the avatar + email; opening it reveals the account menu
 // built on the shared Menu surface, so it is the same component family as the

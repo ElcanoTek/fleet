@@ -1,5 +1,3 @@
-"use client";
-
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { formatCompactCronCadence } from "@/app/shared/lib/patrolSchedule";

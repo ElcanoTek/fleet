@@ -1,5 +1,3 @@
-"use client";
-
 import { useState } from "react";
 import { FormFields } from "./FormFields";
 import { Icon } from "./Icon";

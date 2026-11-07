@@ -1,5 +1,3 @@
-"use client";
-
 import { createContext, useCallback, useContext, useMemo, useRef, useState } from "react";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 

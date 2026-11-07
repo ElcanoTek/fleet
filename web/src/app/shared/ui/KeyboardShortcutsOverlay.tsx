@@ -1,5 +1,3 @@
-"use client";
-
 import { useMemo, useRef, useState } from "react";
 import { isMacPlatform } from "@/app/shared/hooks/useKeyboardShortcuts";
 import { CloseButton } from "./CloseButton";

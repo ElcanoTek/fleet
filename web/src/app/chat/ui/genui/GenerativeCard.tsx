@@ -1,5 +1,3 @@
-"use client";
-
 // GenerativeCard — renders a show_ui card (docs/GENERATIVE-UI.md) from the
 // tool call's own arguments. The spec is model-authored and therefore
 // untrusted: only the catalog below renders (anything else is skipped), every

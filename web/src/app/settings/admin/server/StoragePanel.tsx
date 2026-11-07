@@ -1,5 +1,3 @@
-"use client";
-
 // Storage panel for Settings → Admin → Server: byte accounting for the
 // fleet data trees (chat attachment uploads, orchestrator temp uploads,
 // per-conversation workspaces), the largest workspaces with owner/pinned
@@ -12,6 +10,7 @@ import { useEffect, useState } from "react";
 import { InlineConfirmButton } from "../../ui/atoms";
 import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { formatBytes } from "../lib";
 
 type StorageTree = { path: string; bytes: number; files: number };
 
@@ -49,19 +48,6 @@ type CleanupResponse = {
 // Above this share of the disk, the panel's tone flips to a warning so the
 // operator notices before boxdoctor starts failing health checks (85/95%).
 const CHAT_DATA_WARN_FRACTION = 0.5;
-
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(digits)} ${units[unit]}`;
-}
 
 export function StoragePanel() {
   const [data, setData] = useState<StorageResponse | null>(null);

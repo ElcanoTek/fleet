@@ -1,5 +1,3 @@
-"use client";
-
 // NavRail — the shared left rail that unifies Chat and the Operations Center
 // into one experience (#169). It owns the frame both surfaces render: brand,
 // the Chat / Operations Center / Guides navigation (router links with active

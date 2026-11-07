@@ -1,5 +1,3 @@
-"use client";
-
 // Conversation rail (#169 unified shell, #258/#279 organization). This renders
 // the chat surface's content inside the shared NavRail: the new-chat / sealed
 // affordances, the unified search, the projects tree, the organized

@@ -1,5 +1,3 @@
-"use client";
-
 // <Link> — next/link's replacement (see navigation.tsx for the router). Its own
 // module so a test that stubs the router hooks still renders real anchors.
 
@@ -10,8 +8,6 @@ import { navigate } from "./navigation";
 type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
   href: string;
   replace?: boolean;
-  /** Accepted for API compatibility with next/link; there is nothing to prefetch. */
-  prefetch?: boolean;
 };
 
 /**
@@ -19,10 +15,9 @@ type LinkProps = Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> & {
  * behaves exactly like an anchor (new tab, modifier keys, download, target).
  */
 export const Link = forwardRef<HTMLAnchorElement, LinkProps>(function Link(
-  { href, replace, prefetch, onClick, children, ...rest },
+  { href, replace, onClick, children, ...rest },
   ref,
 ) {
-  void prefetch;
   const handle = useCallback(
     (e: MouseEvent<HTMLAnchorElement>) => {
       onClick?.(e);

@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { movePinned } from "./conversationOrganization";

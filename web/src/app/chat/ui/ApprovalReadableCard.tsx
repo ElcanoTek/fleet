@@ -1,5 +1,3 @@
-"use client";
-
 // The readable approval card (docs/APPROVAL-CARD-DESCRIBERS.md). A bundle can
 // declare a read-only "describer" tool for a critical tool; when that call is
 // staged, the server calls it with the same arguments and stores its

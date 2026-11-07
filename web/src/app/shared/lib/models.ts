@@ -215,6 +215,36 @@ async function fetchCatalogModels(): Promise<PickerModel[]> {
   }
 }
 
+const CATALOG_TTL_MS = 30_000;
+let cachedCatalog: PickerModel[] | null = null;
+let cachedCatalogAt = 0;
+let catalogInflight: Promise<PickerModel[]> | null = null;
+
+// loadCatalogModels is the one client of /api/model-catalog: the normalised
+// OpenRouter catalog (no seeds, pins or routes), cached for 30s and with
+// concurrent callers sharing one request. The task form's picker (via
+// loadModels) and the chat composer's picker both read it, so opening one
+// after the other does not fetch the catalog again. A failed fetch rejects
+// and is not cached, so the next caller retries.
+export async function loadCatalogModels(): Promise<PickerModel[]> {
+  if (cachedCatalog && Date.now() - cachedCatalogAt < CATALOG_TTL_MS) return cachedCatalog;
+  if (catalogInflight) return catalogInflight;
+  const request = fetchCatalogModels().then(
+    (models) => {
+      cachedCatalog = models;
+      cachedCatalogAt = Date.now();
+      if (catalogInflight === request) catalogInflight = null;
+      return models;
+    },
+    (err: unknown) => {
+      if (catalogInflight === request) catalogInflight = null;
+      throw err;
+    },
+  );
+  catalogInflight = request;
+  return request;
+}
+
 let cachedModels: PickerModel[] | null = null;
 let cachedAt = 0;
 // The pin list the cache was built against: a /api/client-config payload that
@@ -237,7 +267,7 @@ export async function loadModels(): Promise<PickerModel[]> {
   inflight = (async () => {
     const [catalog, fetched] = await Promise.all([
       loadWorkspaceModelCatalog(),
-      fetchCatalogModels().catch(() => [] as PickerModel[]),
+      loadCatalogModels().catch(() => [] as PickerModel[]),
     ]);
     const workspace: PickerModel[] = catalog.models.map((m) => ({
       id: m.id,
@@ -276,5 +306,7 @@ export async function loadModels(): Promise<PickerModel[]> {
 export function _resetModelCacheForTests() {
   cachedModels = null;
   inflight = null;
+  cachedCatalog = null;
+  catalogInflight = null;
   _resetWorkspaceModelCacheForTests();
 }

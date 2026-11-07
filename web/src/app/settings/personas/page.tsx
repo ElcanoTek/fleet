@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 
 import { navigate } from "@/app/lib/navigation";
@@ -28,6 +26,7 @@ import {
   type PersonaDraft,
   type PersonaPatrol,
 } from "./personaTemplates";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Personas (Settings → Personas, docs/USER-PERSONAS.md). A persona is how the
 // assistant thinks, writes and patrols in chats you start with it. Three
@@ -71,11 +70,6 @@ const CHOICE =
 
 function titleCase(p: string): string {
   return p.charAt(0).toUpperCase() + p.slice(1);
-}
-
-async function failText(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text()).trim();
-  return text || `${fallback} (${res.status})`;
 }
 
 /** Choice renders one radio card of a two-way setting. */
@@ -127,7 +121,7 @@ export default function PersonasPage() {
   const reload = () =>
     fetch("/api/user-personas", { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error(await failText(res, "Failed to load your personas"));
+        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load your personas"));
         return (await res.json()) as ListResponse;
       })
       .then((data) => {
@@ -193,7 +187,7 @@ export default function PersonasPage() {
           })),
         }),
       });
-      if (!res.ok) throw new Error(await failText(res, "Save failed"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
       setNotice(isNew ? `Created “${draft.display_name.trim()}”. Pick it from the persona menu in a new chat.` : "Saved.");
       setDraft(null);
       await reload();
@@ -202,7 +196,7 @@ export default function PersonasPage() {
   const approve = (p: UserPersona) =>
     run("Approve", async () => {
       const res = await fetch(`/api/user-personas/${encodeURIComponent(p.id)}/approve`, { method: "POST" });
-      if (!res.ok) throw new Error(await failText(res, "Approve failed"));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Approve failed"));
       setNotice(p.replaces_name ? `Applied the edit to “${p.replaces_name}”.` : `“${p.display_name}” is ready to use.`);
       await reload();
     });
@@ -210,7 +204,7 @@ export default function PersonasPage() {
   const remove = (p: UserPersona) =>
     run("Delete", async () => {
       const res = await fetch(`/api/user-personas/${encodeURIComponent(p.id)}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(await failText(res, "Delete failed"));
+      if (!res.ok && res.status !== 204) throw new Error(await responseErrorText(res, "Delete failed"));
       await reload();
     });
 
@@ -227,7 +221,7 @@ export default function PersonasPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ persona: p.ref, title: patrol.title, model: currentDefaultModel() }),
       });
-      if (!convRes.ok) throw new Error(await failText(convRes, "Could not create the patrol chat"));
+      if (!convRes.ok) throw new Error(await responseErrorText(convRes, "Could not create the patrol chat"));
       const conv = (await convRes.json()) as { id: string };
       const base = `/api/conversations/${encodeURIComponent(conv.id)}/schedules`;
       const schedRes = await fetch(base, {
@@ -241,7 +235,7 @@ export default function PersonasPage() {
           auto_approve: p.autonomy === "act",
         }),
       });
-      if (!schedRes.ok) throw new Error(await failText(schedRes, "Could not start the patrol"));
+      if (!schedRes.ok) throw new Error(await responseErrorText(schedRes, "Could not start the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
       if (sched.schedule?.id) {
         // The first check runs now so the chat shows the persona at work;

@@ -1,5 +1,3 @@
-"use client";
-
 // Patrol Launchpad (docs/PATROL-LAUNCHPAD.md) — the guided path from "nothing
 // set up" to "an assistant on patrol, reporting back on a schedule".
 //
@@ -40,6 +38,7 @@ import {
   type LaunchpadConnector,
   type PatrolMode,
 } from "./launchpadModel";
+import { responseErrorText } from "@/app/lib/responseError";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -165,9 +164,13 @@ function loadSaved(): Saved {
   }
 }
 
-async function failText(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text().catch(() => "")).trim();
-  return text ? `${fallback}: ${text}` : fallback;
+// A failed step names itself ahead of the server's reason ("Could not arm the
+// patrol: over the cap"), so the banner says which of the launch's several
+// requests refused. An empty body already reads "<step> (NNN)" from
+// responseErrorText and is not prefixed twice.
+async function stepErrorText(res: Response, step: string): Promise<string> {
+  const text = await responseErrorText(res, step);
+  return text.startsWith(`${step} (`) ? text : `${step}: ${text}`;
 }
 
 type LaunchPhase = "conversation" | "tools" | "schedule" | "first-run";
@@ -215,7 +218,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     const gen = ++connectorsGen.current;
     try {
       const res = await fetch("/api/mcp-servers", { cache: "no-store" });
-      if (!res.ok) throw new Error(await failText(res, "Could not load your connectors"));
+      if (!res.ok) throw new Error(await stepErrorText(res, "Could not load your connectors"));
       const data = (await res.json()) as { servers?: LaunchpadConnector[] };
       if (gen !== connectorsGen.current) return;
       setConnectors(data.servers ?? []);
@@ -379,7 +382,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       body: JSON.stringify(body),
     }).catch(() => null);
     if (!res) return "";
-    if (!res.ok) throw new Error(await failText(res, "Could not create the patrol chat"));
+    if (!res.ok) throw new Error(await stepErrorText(res, "Could not create the patrol chat"));
     return res
       .json()
       .then((d: { id?: string }) => (typeof d?.id === "string" ? d.id : ""))
@@ -509,7 +512,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled_optional: optionalSelection(toolsCatalog, toolsSelection), accounts: {} }),
         });
-        if (!toolsRes.ok) throw new Error(await failText(toolsRes, "Could not switch on the patrol's tools"));
+        if (!toolsRes.ok) throw new Error(await stepErrorText(toolsRes, "Could not switch on the patrol's tools"));
       }
 
       setPhase("schedule");
@@ -524,7 +527,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
           auto_approve: state.mode === "act",
         }),
       });
-      if (!schedRes.ok) throw new Error(await failText(schedRes, "Could not arm the patrol"));
+      if (!schedRes.ok) throw new Error(await stepErrorText(schedRes, "Could not arm the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
       const scheduleId = sched.schedule?.id ?? "";
       setCreated({ ...created.current, scheduleId });
@@ -1338,7 +1341,7 @@ function RulesStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: text, kind: "constraint" }),
       }).catch(() => null);
-      if (res && !res.ok) throw new Error(await failText(res, "Could not save that"));
+      if (res && !res.ok) throw new Error(await stepErrorText(res, "Could not save that"));
       let savedId = res ? await res.json().then((d: { id?: string }) => d?.id ?? "").catch(() => "") : "";
       // No reply (or an unreadable one): the save may still have committed.
       // Look before inviting a retry, so it is never saved twice.
@@ -1764,7 +1767,7 @@ function LaunchStep({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draftRequest),
       });
-      if (!res.ok) throw new Error(await failText(res, "The assistant could not draft this patrol"));
+      if (!res.ok) throw new Error(await stepErrorText(res, "The assistant could not draft this patrol"));
       const d = (await res.json()) as { title?: string; prompt?: string; summary?: string };
       if (!d.prompt?.trim()) throw new Error("The assistant returned an empty draft.");
       onDrafted({ title: d.title?.trim() || title, prompt: d.prompt.trim(), summary: d.summary?.trim() ?? "" });

@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Users (fleet-unified settings pass): the admin surface
 // for the RBAC layer (#237) merged with the old /admin usage table. One table
 // joins GET /api/admin/users (provisioned accounts: role/team/ops flag) with
@@ -36,6 +34,7 @@ import type { OwnedSharedProject } from "./DeleteRefusal";
 import { Icon } from "@/app/shared/ui/Icon";
 import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { responseErrorText } from "@/app/lib/responseError";
 
 export type AdminUser = {
   email: string;
@@ -371,11 +370,6 @@ async function fetchUsers(): Promise<AdminUser[] | null> {
   return data.users ?? [];
 }
 
-async function readErrorText(res: Response, fallback: string): Promise<string> {
-  const text = (await res.text()).trim();
-  return text.length > 0 && text.length <= 200 ? text : fallback;
-}
-
 // One table row: the union of a provisioned account and its usage stats,
 // keyed by email. Either side may be missing — a provisioned user with no
 // activity yet shows "—" in the numeric cells; an email that only appears in
@@ -666,7 +660,7 @@ export default function AdminUsersPage() {
       );
       if (!res.ok) {
         throw new Error(
-          await readErrorText(res, `Save failed (${res.status}).`),
+          await responseErrorText(res, "Save failed"),
         );
       }
       const updated = (await res.json()) as AdminUser;
@@ -715,7 +709,7 @@ export default function AdminUsersPage() {
         } catch {
           message = raw;
         }
-        // readErrorText's 200-char rule (an anti-HTML-error-page guard) is too
+        // A 200-char rule (an anti-HTML-error-page guard) is too
         // tight for THIS body: the refusal grows one project name at a time,
         // and an account owning a handful of them would have had its whole
         // explanation replaced by "Delete failed (409)." — the exact sentence
@@ -761,7 +755,7 @@ export default function AdminUsersPage() {
       );
       if (!res.ok) {
         throw new Error(
-          await readErrorText(res, `Reset failed (${res.status}).`),
+          await responseErrorText(res, "Reset failed"),
         );
       }
       setRowStatus((s) => ({ ...s, [u.email]: "saved" }));
@@ -804,7 +798,7 @@ export default function AdminUsersPage() {
       });
       if (!res.ok) {
         throw new Error(
-          await readErrorText(res, `Create failed (${res.status}).`),
+          await responseErrorText(res, "Create failed"),
         );
       }
       const created = (await res.json()) as AdminUser;
@@ -836,7 +830,7 @@ export default function AdminUsersPage() {
       });
       if (!res.ok) {
         throw new Error(
-          await readErrorText(res, `Rename failed (${res.status}).`),
+          await responseErrorText(res, "Rename failed"),
         );
       }
       // The server relabels team-shared PROJECTS as well as members and

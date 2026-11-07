@@ -1,5 +1,3 @@
-"use client";
-
 // DiffBlock renders a unified diff from an assistant message as a coloured,
 // line-by-line diff view. The chat `pre` interceptor (AssistantContent) mounts
 // it for ```diff / ```patch fences and for bare code blocks that match the

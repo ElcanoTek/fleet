@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect } from "react";
 import { claimChunkAutoReload, isChunkLoadError } from "@/app/shared/chunkReload";
 

@@ -1,5 +1,3 @@
-"use client";
-
 // Orchestrator sign-in card. Cookie/OIDC is the only operator path: the
 // leftover moc username/password form is gone (EnsureAdminUser mints an
 // unusable random password, so that form could not admit a real operator).
@@ -26,15 +24,11 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
         </p>
 
         {magicLinkLoginEnabled ? (
-          // A plain <a> is required here, not next/link: the target is a route
-          // HANDLER (app/api/orchestrator/auth/elcano-login/route.ts), not a
-          // page. It answers with a 303 to the auth service's magic-link login
-          // on another origin, so there is no RSC payload for the client router
-          // to render — a <Link> soft-navigation would break the handoff. The
-          // oxlint port of this rule flags every root-relative href without
-          // resolving it against the route tree (upstream @next/next resolves
-          // the pages dir and would not fire here), hence the suppression.
-          // eslint-disable-next-line @next/next/no-html-link-for-pages -- /api/* is a route handler that 303s to an external IdP, not a Next page.
+          // A plain <a> is required here, not <Link>: the target is an API
+          // route (/api/orchestrator/auth/elcano-login), not a page. It answers
+          // with a 303 to the auth service's magic-link login on another
+          // origin, so the full document navigation is the handoff — a <Link>
+          // soft-navigation would never perform it.
           <a
             className="btn btn-primary"
             href="/api/orchestrator/auth/elcano-login"
@@ -44,14 +38,8 @@ export function OrchestratorLogin({ magicLinkLoginEnabled }: OrchestratorLoginPr
           </a>
         ) : (
           // /login IS a real page (app/login/page.tsx), so this is genuine
-          // in-app navigation and belongs to the client router. prefetch is off
-          // deliberately: the proxy gate (src/proxy.ts) bounces a request for
-          // /login that already carries a session to /chat, and this card can
-          // render while a chat-side cookie exists (the orchestrator /me 401s
-          // independently) — speculatively fetching it would only cache that
-          // redirect. Clicking still follows whatever the gate decides, exactly
-          // as the old full-page <a> did.
-          <Link className="btn btn-primary" href="/login" prefetch={false}>
+          // in-app navigation and belongs to the client router.
+          <Link className="btn btn-primary" href="/login">
             Sign in via Chat
           </Link>
         )}

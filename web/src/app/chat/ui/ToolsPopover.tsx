@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { Icon } from "@/app/shared/ui/Icon";
 import {

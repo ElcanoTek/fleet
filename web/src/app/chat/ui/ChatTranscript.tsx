@@ -1,5 +1,3 @@
-"use client";
-
 // ChatTranscript — the scrollable conversation transcript extracted from
 // ChatExperience (issue #169 decomposition, slice 8). This is a *presentational*
 // component: it owns no turn/send/SSE state machine of its own. Every value,
@@ -98,6 +96,7 @@ import { assistantDisplayContent } from "./turnNarration";
 import { ReplyBubble, SubmissionBubble } from "./genui/SubmissionBubble";
 import { answerOf, cardSpecOf, deriveGenUiState, GenUiContext, isRenderableCardCall } from "./genui/transcript";
 import { DashboardTranscriptContext } from "./dashboard/context";
+import type { TranscriptModelCatalog } from "./useChatModelCatalog";
 // Generative-UI cards (show_ui) carry their own renderer and the markdown
 // pipeline; lazy-loaded like AssistantMarkdown so chats without a card never
 // pay for it.
@@ -199,10 +198,7 @@ export type ChatTranscriptProps = {
 
   // Model picker / model-required affordance
   setSelectedModel: Dispatch<SetStateAction<string>>;
-  setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
-  setModelSearchQuery: Dispatch<SetStateAction<string>>;
-  loadRankedModels: () => void | Promise<void>;
-  loadCatalogModels: () => void | Promise<void>;
+  modelCatalog: TranscriptModelCatalog;
   onMcpServersUpdated?: (enabledOptional: string[]) => void;
 };
 
@@ -308,13 +304,11 @@ export function ChatTranscript({
   loadMemories,
   memoryProject,
   setSelectedModel,
-  setModelPickerOpen,
-  setModelSearchQuery,
-  loadRankedModels,
-  loadCatalogModels,
+  modelCatalog,
   onMcpServersUpdated,
 }: ChatTranscriptProps) {
   "use no memo";
+  const { setModelPickerOpen, setModelSearchQuery, loadRankedModels, loadCatalogModels } = modelCatalog;
   // TanStack Virtual returns imperative functions whose identities cannot be
   // safely memoized by React Compiler. Keep this component opted out until the
   // library exposes a compiler-compatible API; its own virtualizer still

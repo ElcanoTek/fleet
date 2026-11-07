@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef } from "react";
 
 // useKeyboardShortcuts — a single, declarative keyboard-shortcut layer for the

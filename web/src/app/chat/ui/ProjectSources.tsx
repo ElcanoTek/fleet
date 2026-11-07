@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";

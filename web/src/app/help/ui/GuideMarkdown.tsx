@@ -1,5 +1,3 @@
-"use client";
-
 // GuideMarkdown — the user guides rendered as a document.
 //
 // Chat's AssistantContent and the orchestrator's LogMarkdown both render

@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 
 // useCancellableFetch — the single audited place where a setState lands after

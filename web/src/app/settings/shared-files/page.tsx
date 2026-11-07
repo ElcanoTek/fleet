@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Shared files — the cross-chat shared file library. Admins stage
 // files once; every conversation's agent can then read them (mounted read-only
 // into each sandbox at shared/<name>), and every member can browse/download
@@ -15,7 +13,8 @@
 import { useRef, useState } from "react";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
-import { formatBytes, screenFilesForUpload } from "@/app/lib/uploadLimits";
+import { formatBytes } from "@/app/chat/ui/formatters";
+import { screenFilesForUpload } from "@/app/lib/uploadLimits";
 import {
   btnClass,
   CodeChip,
@@ -36,6 +35,7 @@ import {
   SetSection,
 } from "../ui/panels";
 import { useIsAdmin } from "../useIsAdmin";
+import { responseErrorText } from "@/app/lib/responseError";
 
 type SharedFile = {
   id: string;
@@ -101,13 +101,6 @@ function formatDate(unixSeconds: number): string {
   });
 }
 
-async function readError(res: Response, fallback: string): Promise<string> {
-  // The Go handlers reply with short plain-text reasons (bad folder,
-  // duplicate name, over the cap) — show those words, not a bare status.
-  const text = (await res.text()).trim();
-  return text.length > 0 && text.length <= 300 ? text : fallback;
-}
-
 export default function SharedFilesPage() {
   const admin = useIsAdmin();
   const { data: library, loading, error, reload } = useCancellableFetch<Library | null>(
@@ -147,7 +140,7 @@ export default function SharedFilesPage() {
         window.location.assign("/login");
         return;
       }
-      if (!res.ok) throw new Error(await readError(res, `Delete failed: ${res.status}`));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
       await refresh();
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Delete failed.");
@@ -182,7 +175,7 @@ export default function SharedFilesPage() {
         window.location.assign("/login");
         return;
       }
-      if (!res.ok) throw new Error(await readError(res, `Save failed: ${res.status}`));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
       setEditing(null);
       await refresh();
     } catch (err) {
@@ -486,7 +479,7 @@ function UploadPanel({
         window.location.assign("/login");
         return;
       }
-      if (!res.ok) throw new Error(await readError(res, `Upload failed: ${res.status}`));
+      if (!res.ok) throw new Error(await responseErrorText(res, "Upload failed"));
       setPicked([]);
       setPickError(null);
       setFolder("");

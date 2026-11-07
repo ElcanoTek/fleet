@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { useRouter } from "@/app/lib/navigation";
 
@@ -10,6 +8,7 @@ import { StoragePanel } from "./StoragePanel";
 import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
+import { formatBytes, formatUptime } from "../lib";
 
 type ServerStats = {
   available: boolean;
@@ -53,29 +52,6 @@ type ServerStats = {
 };
 
 const REFRESH_MS = 10_000;
-
-function formatBytes(bytes: number, rate = false): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-  const digits = value >= 100 || unit === 0 ? 0 : value >= 10 ? 1 : 2;
-  return `${value.toFixed(digits)} ${units[unit]}${rate ? "/s" : ""}`;
-}
-
-function formatUptime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "—";
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  return `${minutes}m`;
-}
 
 function percent(used: number, total: number): number {
   if (total <= 0) return 0;

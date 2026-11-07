@@ -1,5 +1,3 @@
-"use client";
-
 // The Share dialog (ADR-0057; docs/TEAM-SHARING.md "Share dialog").
 //
 // One team block, always first, and one public-link row below it. The team

@@ -1,5 +1,3 @@
-"use client";
-
 // Settings-area panels + composite pieces (fleet-unified settings design pass):
 // the design's .set-section/.set-head, .conn-group/.conn-panel family,
 // .conn-row list rows, .conn-form fields, the sticky .dir-bar search + category

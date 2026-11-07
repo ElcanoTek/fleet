@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → General (fleet-unified settings pass): personal preference rows —
 // Theme (mirrors the account-menu segmented control via the shared useTheme
 // hook), Send on Enter (the composer's localStorage preference), and the

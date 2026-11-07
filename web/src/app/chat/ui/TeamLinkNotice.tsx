@@ -1,5 +1,3 @@
-"use client";
-
 // The dead ends a team link can land on (docs/TEAM-SHARING.md, B22 and B23).
 //
 // A team link (`/chat?team=<id>`) opens the read-only view for a member of the

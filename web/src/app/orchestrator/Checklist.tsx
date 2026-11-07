@@ -1,5 +1,3 @@
-"use client";
-
 // Checklist renders a task_tracker plan as a todo→done list in the Operations
 // Center (#518). The chat client already renders the same task_tracker tool
 // result live (ToolChips taskTrackerDisplayForMessage); this brings the live,

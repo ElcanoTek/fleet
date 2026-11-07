@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { TeamChip } from "./MoveChatConfirmDialog";

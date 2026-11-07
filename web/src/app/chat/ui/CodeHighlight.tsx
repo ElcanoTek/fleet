@@ -1,5 +1,3 @@
-"use client";
-
 // Syntax-highlighted code block body. It is loaded lazily (React.lazy in
 // ToolChips.tsx and orchestrator/LogTimeline.tsx) because the tokenizer +
 // grammars are the largest piece of the /chat UI that nothing on screen needs

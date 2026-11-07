@@ -1,5 +1,3 @@
-"use client";
-
 // Guides shell (/help). Same chrome as Chat, the Operations Center and
 // Settings — one NavRail, one PageTopBar — because the guides are a surface of
 // the app, not a link out to a docs site. That is the whole point of putting

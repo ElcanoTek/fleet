@@ -1,5 +1,3 @@
-"use client";
-
 // Read-only public render of a shared conversation snapshot (#226). No session,
 // no sidebar, no SSE — a static snapshot fetched at page load. Assistant text
 // reuses the same markdown pipeline as the live chat (renderAssistantContent);
@@ -25,7 +23,6 @@ export type SharedSnapshot = {
   messages: RawEntry[];
 };
 
-// Deterministic UTC date so server-render and client hydration agree.
 function formatDate(unixSeconds: number): string {
   if (!unixSeconds) return "";
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);

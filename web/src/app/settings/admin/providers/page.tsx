@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Providers (fleet-unified settings pass): the admin
 // surface for admin-managed LLM providers. Add an OpenRouter/Anthropic/OpenAI/
 // Vercel AI Gateway/Gemini API key, an Azure OpenAI resource, or point at any
@@ -36,6 +34,7 @@ import {
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
+import { responseErrorText } from "@/app/lib/responseError";
 
 export type LLMProvider = {
   id: string;
@@ -507,7 +506,7 @@ function ProvidersAdmin() {
       },
     )
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Save failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
         setDraft(null);
         return reload();
       })
@@ -541,7 +540,7 @@ function ProvidersAdmin() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Update failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Update failed"));
         return reload();
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Update failed."))
@@ -555,7 +554,7 @@ function ProvidersAdmin() {
     setProbes((cur) => ({ ...cur, [p.id]: "running" }));
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}/test`, { method: "POST" })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Test failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Test failed"));
         return (await res.json()) as ProbeResult;
       })
       .then((result) => setProbes((cur) => ({ ...cur, [p.id]: result })))
@@ -578,7 +577,7 @@ function ProvidersAdmin() {
     setBusy(true);
     fetch(`/api/admin/llm-providers/${encodeURIComponent(p.id)}`, { method: "DELETE" })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Delete failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
         return reload();
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : "Delete failed."))

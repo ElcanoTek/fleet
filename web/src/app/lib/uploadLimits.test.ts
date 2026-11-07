@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
   LARGE_UPLOAD_WARNING_BYTES,
-  formatBytes,
   largeUploadWarning,
   screenFilesForUpload,
 } from "./uploadLimits";
@@ -63,14 +62,5 @@ describe("largeUploadWarning", () => {
     const msg = largeUploadWarning(500 * MB);
     expect(msg).toContain("500.0 MB");
     expect(msg).toContain("take a while");
-  });
-});
-
-describe("formatBytes", () => {
-  it("formats each magnitude", () => {
-    expect(formatBytes(512)).toBe("512 B");
-    expect(formatBytes(2048)).toBe("2.0 KB");
-    expect(formatBytes(5 * MB)).toBe("5.0 MB");
-    expect(formatBytes(1536 * MB)).toBe("1.5 GB");
   });
 });

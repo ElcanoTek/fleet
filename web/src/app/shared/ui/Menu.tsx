@@ -1,5 +1,3 @@
-"use client";
-
 // Menu — the shared anchored popover surface for the unified rail (#169). The
 // conversation-row kebab, the footer account menu, and the bulk-action pickers
 // all render through this one primitive so they read as the same component

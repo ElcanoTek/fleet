@@ -1,5 +1,3 @@
-"use client";
-
 // InjectedContextNote — the collapsed system note for a user turn's
 // server-injected context (QA finding #6).
 //

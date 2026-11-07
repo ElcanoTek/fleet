@@ -12,6 +12,8 @@
 // error line and the large-upload banner; tests assert the logic without
 // touching the DOM.
 
+import { formatBytes } from "@/app/chat/ui/formatters";
+
 // Mirrors the server-side default in server/internal/config/config.go.
 // Used only until /server-config responds (or when talking to an older
 // server that doesn't advertise the limit).
@@ -26,13 +28,6 @@ export type FileSizeLike = {
   name: string;
   size: number;
 };
-
-export function formatBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
 
 export type ScreenedFiles<T extends FileSizeLike> = {
   accepted: T[];

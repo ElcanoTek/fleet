@@ -1,5 +1,3 @@
-"use client";
-
 // NOTE (lint hygiene): this large component used to disable three React
 // Compiler rules file-wide (react-hooks/set-state-in-effect,
 // react-hooks/purity, react-hooks/immutability). Those disables hid real
@@ -19,10 +17,8 @@ import {
   currentDefaultModel,
   currentTierModels,
   DEFAULT_MODEL as FALLBACK_DEFAULT_MODEL,
-  currentPinnedModels,
   labelForModel,
   pinnedLabelFor,
-  pinnedModelFor,
   pinnedPrices,
 } from "@/app/lib/modelAliases";
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
@@ -118,7 +114,6 @@ import { DownloadChatDialog, type DownloadOptions } from "./DownloadChatDialog";
 import { useRailCollapse } from "@/app/shared/ui/NavRail";
 import { loadWorkspaceModelCatalog } from "@/app/shared/lib/workspaceModels";
 import {
-  catalogModelRoutes,
   catalogModelSlug,
   modelIsAvailable,
   unavailableModelMessage,
@@ -137,6 +132,7 @@ import {
 import { NewProjectDialog, type NewProjectInput } from "./NewProjectDialog";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
 import { useChatToast } from "./ChatToasts";
+import { useChatModelCatalog } from "./useChatModelCatalog";
 import {
   afterDeleteAllUnpinned,
   countDeletedByDeleteAllUnpinned,
@@ -166,6 +162,7 @@ import {
   writeDashboardView,
 } from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -533,8 +530,8 @@ function isInteractiveTarget(el: Element | null): boolean {
 // The constant lives in ./workspaceHref.ts so the rewrite helpers can
 // share it with no React dependency.
 
-// initialUserEmail: the session email the /chat server component already
-// resolved (getServerSession) — passing it down removes a serial /api/session
+// initialUserEmail: the session email the Go gateway already resolved for
+// this request (the index.html bootstrap, see chat/page.tsx) — passing it down removes a serial /api/session
 // round-trip from the cold-boot critical path (session THEN conversations →
 // just conversations). Optional so other mounts keep the fetch fallback; the
 // warm-return revalidation still re-checks the session on every return.
@@ -543,8 +540,8 @@ export function ChatExperience({
 }: {
   initialUserEmail?: string | null;
 } = {}) {
-  // Cross-navigation rehydration. /chat and /settings are separate App Router
-  // route segments, so leaving chat fully unmounts this component. The module
+  // Cross-navigation rehydration. /chat and /settings are separate lazy
+  // routes (src/App.tsx), so leaving chat fully unmounts this component. The module
   // store (./chatSessionStore) keeps the conversation state alive across that
   // unmount; `restoredSession` is its snapshot captured once at mount. Non-null
   // means we're returning to chat with a warm cache and can paint instantly +
@@ -818,18 +815,8 @@ export function ChatExperience({
     modelTouchedRef.current = true;
     setSelectedModel(value);
   }, []);
-  const [rankedModels, setRankedModels] = useState<RankedModel[]>([]);
-  const [catalogModels, setCatalogModels] = useState<RankedModel[]>([]);
-  // Active workspace-provider models, "<provider>/<model>" slugs. Loaded via the
-  // shared lib (which also expands catch-all anthropic/openai providers from
-  // the catwalk catalog); empty when none are configured or the fetch fails.
-  const [workspaceModels, setWorkspaceModels] = useState<RankedModel[]>([]);
   const [modelRouting, setModelRouting] = useState<ModelRouting>(null);
-  const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [personaPickerOpen, setPersonaPickerOpen] = useState(false);
-  const [modelSearchQuery, setModelSearchQuery] = useState<string>("");
-  const [isLoadingRankedModels, setIsLoadingRankedModels] = useState(false);
-  const [isLoadingCatalog, setIsLoadingCatalog] = useState(false);
   // modelError includes local routing and /api/model-check rejections. When set,
   // submitPrompt refuses to send and the composer shows the error.
   const [checkedModelError, setModelError] = useState<{
@@ -1055,6 +1042,26 @@ export function ChatExperience({
     activeConversation?.lockdown === true ||
     ((activeConversationId === null || isPendingKey(activeConversationId)) &&
       (pendingLockdown || serverConfig.lockdownOnly));
+  // The model picker's lists, open/search state, loaders and ordered rows
+  // (useChatModelCatalog.ts). The workspace-provider list is filled by the
+  // mount effect further down, which also installs modelRouting.
+  const modelCatalog = useChatModelCatalog({
+    modelRouting,
+    workspaceModelTiers,
+    isLockdown,
+    lockdownAllowedModels: serverConfig.lockdownAllowedModels,
+  });
+  const {
+    rankedModels,
+    catalogModels,
+    workspaceModels,
+    setWorkspaceModels,
+    modelPickerOpen,
+    setModelPickerOpen,
+    setModelSearchQuery,
+    loadRankedModels,
+    loadCatalogModels,
+  } = modelCatalog;
   const activePendingKey =
     activeConversationId === null
       ? draftKey
@@ -1384,7 +1391,8 @@ export function ChatExperience({
     };
     window.addEventListener("mousedown", onPointerDown);
     return () => window.removeEventListener("mousedown", onPointerDown);
-  }, []);
+    // setModelPickerOpen is a state setter (stable), listed for exhaustive-deps.
+  }, [setModelPickerOpen]);
 
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -1875,287 +1883,6 @@ export function ChatExperience({
     ],
   );
 
-  // With no query, show "default" + "advanced" + the top-ranked list. As
-  // soon as the user types, expand the search to the full budget-filtered
-  // catalog so they can find cheaper models without leaving the page.
-  // Catalog order is price-descending (up to the $30/M ceiling) so the
-  // best-quality options show first. Results are capped so the dropdown
-  // stays short.
-  //
-  // Tier slugs deliberately appear twice in the no-query view: once as
-  // the friendly alias row at the top (`default` / `advanced`) and once
-  // under their lab in the rankings section
-  // (`google/gemini-3-flash-preview`, …). Both rows select the same
-  // model — users searching by lab or model name shouldn't have to know
-  // that "advanced" maps to Claude Sonnet.
-  const MAX_SEARCH_RESULTS = 15;
-  const filteredRankedModels = useMemo(() => {
-    const query = modelSearchQuery.trim().toLowerCase();
-    // Operator pins (FLEET_PINNED_MODELS) relabel their slug everywhere the
-    // picker names it, so the catalog/ranked rows are renamed up front. The
-    // pin list is module state installed by the same /api/client-config
-    // payload that replaces workspaceModelTiers, so that dep re-runs this.
-    const relabel = (model: RankedModel): RankedModel => {
-      const pin = pinnedModelFor(model.slug);
-      if (!pin) return model;
-      return {
-        ...model,
-        ...(pin.label ? { name: pin.label, relabelled: true } : {}),
-        ...(pin.tag ? { pinTag: pin.tag } : {}),
-        ...pinnedPrices(pin),
-      };
-    };
-    const ranked = rankedModels.map(relabel);
-    const catalog = catalogModels.map(relabel);
-    // The two pinned rows are hand-written, so their prices have to be joined
-    // back from the catalog (or the ranked list when the catalog is empty) —
-    // otherwise the recommended models would be the only rows in the listbox
-    // without a cost indicator.
-    const pricesFor = (slug: string) => {
-      const hit =
-        catalog.find((m) => m.slug === slug) ??
-        ranked.find((m) => m.slug === slug);
-      if (!hit) return {};
-      return {
-        pricePrompt: hit.pricePrompt,
-        priceCompletion: hit.priceCompletion,
-      };
-    };
-    const tierSlugs = workspaceModelTiers
-      ? [workspaceModelTiers.defaultModel, workspaceModelTiers.advancedModel]
-      : currentTierModels().map((tier) => tier.slug);
-    const tierModels: RankedModel[] = tierSlugs.map((slug) => ({
-      slug,
-      name: labelForModel(slug),
-      ...pricesFor(slug),
-    }));
-    const defaults = tierModels.filter((model) =>
-      modelIsAvailable(model.slug, modelRouting, true),
-    );
-    // Pinned rows sit directly under the recommended tiers. A pin with no
-    // label keeps the catalog (or workspace-provider) display name; that row
-    // also supplies the prices / context / created / workspace flag a
-    // hand-written row would otherwise lack.
-    const pinnedSeeds: RankedModel[] = currentPinnedModels().map((pin) => {
-      const hit =
-        catalog.find((m) => m.slug === pin.slug) ??
-        ranked.find((m) => m.slug === pin.slug) ??
-        workspaceModels.find((m) => m.slug === pin.slug);
-      return relabel({
-        ...(hit ?? {}),
-        slug: pin.slug,
-        name: hit?.name ?? pin.slug,
-      });
-    });
-    const publicCatalog = new Set(
-      [...catalog, ...ranked].map((model) => model.slug),
-    );
-    const catalogChoices = (models: RankedModel[]): RankedModel[] =>
-      models.flatMap((model) =>
-        catalogModelRoutes(
-          model.slug,
-          modelRouting,
-          publicCatalog.has(model.slug),
-        ).map((route) => ({
-          ...model,
-          slug: route.slug,
-          name: route.provider
-            ? `${route.provider}: ${model.name}`
-            : model.name,
-          workspace: !!route.provider,
-        })),
-      );
-    // Public pins take the same explicit-route rewrite as catalog rows (a
-    // native catch-all can shadow the OpenRouter one); workspace pins are
-    // already provider-routed and only need the availability check.
-    const pinnedModels: RankedModel[] = [
-      ...pinnedSeeds.filter((m) => m.workspace),
-      ...catalogChoices(pinnedSeeds.filter((m) => !m.workspace)),
-    ].filter((m) => modelIsAvailable(m.slug, modelRouting, !m.workspace));
-
-    // Lockdown chats are pinned to the operator-configured allow-list.
-    // Build a fixed list that mirrors that allow-list (default first,
-    // others in declared order), ignore the freeform search query, and
-    // skip the catalog entirely. Server-side enforcement is the source
-    // of truth; this filter is just the UX so the user doesn't pick a
-    // slug we'd reject anyway.
-    if (isLockdown) {
-      const allowed = serverConfig.lockdownAllowedModels;
-      if (allowed.length === 0) return defaults;
-      const seen = new Set<string>();
-      const out: RankedModel[] = [];
-      for (const slug of allowed) {
-        if (!modelIsAvailable(slug, modelRouting)) continue;
-        if (seen.has(slug)) continue;
-        seen.add(slug);
-        const aliased = defaults.find((d) => d.slug === slug);
-        if (aliased) {
-          out.push(aliased);
-          continue;
-        }
-        const fromRanked = ranked.find((m) => m.slug === slug);
-        const fromCatalog = catalog.find((m) => m.slug === slug);
-        const known = fromRanked ?? fromCatalog;
-        out.push(
-          known ??
-            pinnedSeeds.find((m) => m.slug === slug) ?? { slug, name: slug },
-        );
-      }
-      return out;
-    }
-
-    if (!query) {
-      // Browse order: pinned defaults, then workspace-provider models (the
-      // operator configured them deliberately — they outrank the generic
-      // rankings), then the ranked list.
-      const seen = new Set<string>();
-      const out: RankedModel[] = [];
-      for (const m of [
-        ...defaults,
-        ...pinnedModels,
-        ...workspaceModels,
-        ...catalogChoices([...tierModels, ...ranked]),
-      ]) {
-        if (!modelIsAvailable(m.slug, modelRouting, !m.workspace)) continue;
-        if (seen.has(m.slug)) continue;
-        seen.add(m.slug);
-        out.push(m);
-      }
-      return out;
-    }
-    const source = catalogChoices(
-      catalog.length > 0 ? catalog : ranked,
-    );
-    // A relabelled pin matches on its label only: searching the underlying
-    // slug's vendor/model name should not surface the renamed row.
-    const matchesQuery = (m: RankedModel) =>
-      (!m.relabelled && m.slug.toLowerCase().includes(query)) ||
-      m.name.toLowerCase().includes(query);
-    const seen = new Set<string>();
-    const matches: RankedModel[] = [];
-    for (const d of [
-      ...defaults,
-      ...pinnedModels,
-      ...workspaceModels,
-      ...catalogChoices(tierModels),
-    ]) {
-      if (seen.has(d.slug)) continue;
-      if (matchesQuery(d)) {
-        seen.add(d.slug);
-        matches.push(d);
-      }
-    }
-    for (const model of source) {
-      if (!modelIsAvailable(model.slug, modelRouting, true)) continue;
-      if (seen.has(model.slug)) continue;
-      if (!matchesQuery(model)) continue;
-      seen.add(model.slug);
-      matches.push(model);
-      if (matches.length >= MAX_SEARCH_RESULTS) break;
-    }
-    return matches;
-  }, [
-    rankedModels,
-    catalogModels,
-    workspaceModels,
-    modelRouting,
-    workspaceModelTiers,
-    modelSearchQuery,
-    isLockdown,
-    serverConfig.lockdownAllowedModels,
-  ]);
-
-  const loadRankedModels = async () => {
-    if (rankedModels.length > 0 || isLoadingRankedModels) return;
-    setIsLoadingRankedModels(true);
-    try {
-      const response = await fetch("/api/model-rankings", {
-        cache: "no-store",
-      });
-      if (!response.ok) return;
-      const data = (await response.json()) as {
-        models?: Array<{
-          slug: string;
-          name: string;
-          created?: number;
-          price_prompt?: number;
-          price_completion?: number;
-        }>;
-      };
-      setRankedModels(
-        (data.models ?? []).map((m) => ({
-          slug: m.slug,
-          name: m.name,
-          created: m.created,
-          pricePrompt: m.price_prompt,
-          priceCompletion: m.price_completion,
-        })),
-      );
-    } catch {
-      /* optional enhancement only */
-    } finally {
-      setIsLoadingRankedModels(false);
-    }
-  };
-
-  // loadCatalogModels pulls the full budget-filtered list of text models
-  // from OpenRouter. Larger than the ranked list but still small (~a few
-  // hundred entries), so we fetch once per session and search client-side.
-  // The response carries `context_length` per model — used by the
-  // context-usage indicator (Show details) as well as the picker.
-  //
-  // Wrapped in useCallback so its identity only changes when the dedup
-  // inputs (catalogModels.length / isLoadingCatalog) actually change — the
-  // hoisted mount effect lists it as a dependency, so a fresh-every-render
-  // identity would re-fire that effect each render. The early-return guard
-  // makes any re-fire after the first successful load a no-op.
-  //
-  // catalogAttemptedRef makes it once-per-session regardless of OUTCOME: with
-  // only the length/loading guards, an EMPTY or failing catalog left length
-  // at 0 while isLoadingCatalog's flip cycled the callback identity — the
-  // mount effect re-fired in a tight loop and the client hammered
-  // /api/model-catalog indefinitely (thousands of requests in seconds,
-  // starving the UI; found via a Playwright trace in the mocked suite, but
-  // any deployment whose catalog errors would self-DDoS the same way).
-  const catalogAttemptedRef = useRef(false);
-  const loadCatalogModels = useCallback(async () => {
-    if (
-      catalogAttemptedRef.current ||
-      catalogModels.length > 0 ||
-      isLoadingCatalog
-    )
-      return;
-    catalogAttemptedRef.current = true;
-    setIsLoadingCatalog(true);
-    try {
-      const response = await fetch("/api/model-catalog", { cache: "no-store" });
-      if (!response.ok) return;
-      const data = (await response.json()) as {
-        models?: Array<{
-          slug: string;
-          name: string;
-          context_length?: number;
-          created?: number;
-          price_prompt?: number;
-          price_completion?: number;
-        }>;
-      };
-      const normalized: RankedModel[] = (data.models ?? []).map((m) => ({
-        slug: m.slug,
-        name: m.name,
-        contextLength: m.context_length,
-        created: m.created,
-        pricePrompt: m.price_prompt,
-        priceCompletion: m.price_completion,
-      }));
-      setCatalogModels(normalized);
-    } catch {
-      /* autocomplete enhancement only */
-    } finally {
-      setIsLoadingCatalog(false);
-    }
-  }, [catalogModels.length, isLoadingCatalog]);
-
   // Validate the current model slug against /api/model-check whenever it
   // changes. Debounced so a burst of commits (a row pick, then a typed slug a
   // moment later) costs one request; the picker's search text is a draft that
@@ -2424,7 +2151,7 @@ export function ChatExperience({
     setMemoryError(null);
     try {
       const response = await fetch("/api/memories", { cache: "no-store" });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to load memories"));
       const data = (await response.json()) as { memories?: UserMemory[] };
       setMemories(data.memories ?? []);
     } catch (err) {
@@ -2461,7 +2188,7 @@ export function ChatExperience({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content, kind: memoryKindDraft }),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to save memory"));
       setMemoryDraft("");
       setMemoryKindDraft("fact");
       setEditingMemoryId(null);
@@ -2494,7 +2221,7 @@ export function ChatExperience({
           body: JSON.stringify({ from_memory_id: id }),
         },
       );
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to move that memory to team learnings"));
       setPromoteMemoryId(null);
       await loadMemories();
     } catch (err) {
@@ -2512,7 +2239,7 @@ export function ChatExperience({
       const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
         method: "DELETE",
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to delete memory"));
       setMemories((prev) => prev.filter((m) => m.id !== id));
       if (editingMemoryId === id) {
         setEditingMemoryId(null);
@@ -2541,7 +2268,7 @@ export function ChatExperience({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      if (!response.ok) throw new Error(await response.text());
+      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to update memory"));
       await loadMemories();
     } catch (err) {
       setMemoryError(
@@ -2575,9 +2302,9 @@ export function ChatExperience({
       return activeConversation.title;
     return deriveConversationTitle(messages);
   }, [activeConversationId, activeConversation, messages]);
-  // Show ⌘K only to mac users; everyone else gets Ctrl+K. SSR is off
-  // for this component (dynamic import in app/page.tsx) so reading
-  // navigator at render time is safe — no hydration mismatch.
+  // Show ⌘K only to mac users; everyone else gets Ctrl+K. The SPA has no
+  // server rendering, so reading navigator at render time is safe — no
+  // hydration mismatch.
   const searchShortcut = useMemo(() => {
     if (typeof navigator === "undefined") return "Ctrl+K";
     return /Mac|iPhone|iPad|iPod/i.test(navigator.platform) ? "⌘K" : "Ctrl+K";
@@ -6175,7 +5902,8 @@ export function ChatExperience({
     return () => {
       cancelled = true;
     };
-  }, [modelPickerOpen]);
+    // setWorkspaceModels is a state setter (stable): only modelPickerOpen re-runs this.
+  }, [modelPickerOpen, setWorkspaceModels]);
 
   // Refresh the active conversation when the tab/window becomes visible
   // again. The server now keeps generating after the SSE connection
@@ -6491,9 +6219,10 @@ export function ChatExperience({
 
     const loadInitialState = async () => {
       try {
-        // The server component already resolved the session for this very
-        // request; trust it and skip the round-trip. An expired session is
-        // still caught: the conversations fetch below 401s and redirects.
+        // The Go gateway already resolved the session for this very
+        // request (the bootstrap); trust it and skip the round-trip. An
+        // expired session is still caught: the conversations fetch below
+        // 401s and redirects.
         if (initialUserEmail) {
           setUserEmail(initialUserEmail);
         } else {
@@ -6685,8 +6414,8 @@ export function ChatExperience({
     // Mount-once bootstrap: re-running it would re-fetch the session and
     // clobber the active conversation. It calls loadMcpServerCatalogPreview
     // and loadConversation through their latest-refs (see the ref bundle
-    // above). initialUserEmail is a per-mount constant (the server component
-    // resolves it per request), so listing it keeps exhaustive-deps honest
+    // above). initialUserEmail is a per-mount constant (the bootstrap
+    // carries it per request), so listing it keeps exhaustive-deps honest
     // without changing the mount-once behavior.
   }, [initialUserEmail, refreshServerConfig, refreshSkills]);
 
@@ -8022,10 +7751,7 @@ export function ChatExperience({
               loadMemories={loadMemories}
               memoryProject={activeProjectForMemory}
               setSelectedModel={selectModelExplicitly}
-              setModelPickerOpen={setModelPickerOpen}
-              setModelSearchQuery={setModelSearchQuery}
-              loadRankedModels={loadRankedModels}
-              loadCatalogModels={loadCatalogModels}
+              modelCatalog={modelCatalog}
               onMcpServersUpdated={(enabledOptional) => {
                 const enabledSet = new Set(enabledOptional.map((n) => n.toLowerCase()));
                 setMcpServers((curr) =>
@@ -8179,17 +7905,9 @@ export function ChatExperience({
                 selectedModelPrices={selectedModelPrices}
                 selectedModelFree={selectedModelFree}
                 modelError={modelError}
-                modelPickerOpen={modelPickerOpen}
-                setModelPickerOpen={setModelPickerOpen}
+                modelCatalog={modelCatalog}
                 modelPickerRef={modelPickerRef}
                 modelInputRef={modelInputRef}
-                modelSearchQuery={modelSearchQuery}
-                setModelSearchQuery={setModelSearchQuery}
-                filteredRankedModels={filteredRankedModels}
-                isLoadingRankedModels={isLoadingRankedModels}
-                isLoadingCatalog={isLoadingCatalog}
-                loadRankedModels={loadRankedModels}
-                loadCatalogModels={loadCatalogModels}
                 skills={skills}
                 mcpServers={mcpServers}
                 mcpPickerOpen={mcpPickerOpen}

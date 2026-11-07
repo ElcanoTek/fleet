@@ -1,5 +1,3 @@
-"use client";
-
 // stickToBottom — the transcript's follow-the-bottom behavior, as a pure
 // decision function plus the thin hook that acts on it.
 //

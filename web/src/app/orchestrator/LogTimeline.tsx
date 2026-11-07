@@ -1,5 +1,3 @@
-"use client";
-
 // The Operations Center transcript, rendered as a timeline (see logTimeline.ts
 // for the model). One card per tool call with its result folded in, colored by
 // tool family; code and JSON syntax-highlighted; python and shell output shown

@@ -1,5 +1,3 @@
-"use client";
-
 // Small presentational chips and badges extracted from chat-experience.tsx
 // (slice 4 of #169). These are the glanceable, self-contained bits of chrome
 // the chat surface scatters around the transcript and composer — model-row
@@ -401,7 +399,6 @@ export function PendingAttachmentChip({
       title={`${attachment.name} (${formatBytes(attachment.size)})`}
     >
       {isImage && previewUrl ? (
-        // eslint-disable-next-line @next/next/no-img-element
         <img
           src={previewUrl}
           alt=""

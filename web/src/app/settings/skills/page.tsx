@@ -1,5 +1,3 @@
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -22,6 +20,7 @@ import {
   SetSection,
 } from "../ui/panels";
 import { ClampText } from "../ui/atoms";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Skills library (Settings → Skills, fleet-unified settings pass). Two panels
 // on the design's .skill-row anatomy: "Your skills" — the personal skill
@@ -198,7 +197,7 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Save failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Save failed"));
         setDraft(null);
         await reloadMine();
         await reloadWorkspacePack();
@@ -223,7 +222,7 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Share update failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Share update failed"));
         await reloadMine();
         await reloadWorkspacePack();
       })
@@ -246,7 +245,7 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Update failed: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Update failed"));
         await reloadMine();
         await reloadWorkspacePack();
       })
@@ -279,7 +278,7 @@ export default function SkillsPage() {
       }),
     })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || "Approve failed.");
+        if (!res.ok) throw new Error(await responseErrorText(res, "Approve failed"));
         await reloadMine();
         await reloadWorkspacePack();
       })
@@ -295,7 +294,7 @@ export default function SkillsPage() {
     fetch(`/api/user-skills/${encodeURIComponent(sk.id)}`, { method: "DELETE" })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Delete failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Delete failed"));
         }
         await reloadMine();
         await reloadWorkspacePack();
@@ -309,7 +308,7 @@ export default function SkillsPage() {
     setError(null);
     fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load skill"));
         return (await res.json()) as SkillDetail;
       })
       .then(async (d) => {
@@ -324,7 +323,7 @@ export default function SkillsPage() {
             visibility: "private",
           }),
         });
-        if (!res.ok) throw new Error((await res.text()) || `Failed to add skill: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to add skill"));
         await reloadMine();
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to add skill."))
@@ -339,7 +338,7 @@ export default function SkillsPage() {
     setError(null);
     fetch(`/api/skills/${encodeURIComponent(s.name)}`, { cache: "no-store" })
       .then(async (res) => {
-        if (!res.ok) throw new Error((await res.text()) || `Failed to load skill: ${res.status}`);
+        if (!res.ok) throw new Error(await responseErrorText(res, "Failed to load skill"));
         return (await res.json()) as SkillDetail;
       })
       .then((d) => {

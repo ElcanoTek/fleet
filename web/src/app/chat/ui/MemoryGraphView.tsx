@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useState } from "react";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import {

@@ -1,5 +1,3 @@
-"use client";
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -61,6 +59,7 @@ import { useMcpServers } from "@/app/shared/hooks/useMcpServers";
 import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { responseErrorText } from "@/app/lib/responseError";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -1273,7 +1272,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error((await res.text()) || `Add failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Add failed"));
         }
         const data = (await res.json()) as { id?: string; name?: string };
         setName("");
@@ -1303,7 +1302,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok) {
           throw new Error(
-            (await res.text()) || `Authorize failed: ${res.status}`,
+            await responseErrorText(res, "Authorize failed"),
           );
         }
         const data = (await res.json()) as { redirect_url?: string };
@@ -1350,7 +1349,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Update failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Update failed"));
         }
         const data =
           res.status === 204
@@ -1379,7 +1378,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            (await res.text()) || `Set default failed: ${res.status}`,
+            await responseErrorText(res, "Set default failed"),
           );
         }
         setNotice("Default account updated.");
@@ -1401,7 +1400,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Rename failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Rename failed"));
         }
         setRenameOpenFor(null);
         setRenameValue("");
@@ -1449,7 +1448,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error((await res.text()) || `Add failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Add failed"));
         }
         const data = (await res.json()) as {
           id?: string;
@@ -1537,7 +1536,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok) {
-          throw new Error((await res.text()) || `Add failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Add failed"));
         }
         const data = (await res.json()) as {
           id?: string;
@@ -1580,7 +1579,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Save failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Save failed"));
         }
         setPrefs((cur) => [
           ...cur.filter(
@@ -1603,7 +1602,7 @@ function ConnectionsPageInner() {
     )
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Reset failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Reset failed"));
         }
         setPrefs((cur) =>
           cur.filter((p) => !(p.kind === kind && p.connector_id === id)),
@@ -1628,7 +1627,7 @@ function ConnectionsPageInner() {
     })
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
-          throw new Error((await res.text()) || `Share failed: ${res.status}`);
+          throw new Error(await responseErrorText(res, "Share failed"));
         }
         setShareGrantee("");
         refresh();
@@ -1647,7 +1646,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            (await res.text()) || `Unshare failed: ${res.status}`,
+            await responseErrorText(res, "Unshare failed"),
           );
         }
         refresh();
@@ -1665,7 +1664,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            (await res.text()) || `Sign out failed: ${res.status}`,
+            await responseErrorText(res, "Sign out failed"),
           );
         }
         setNotice(
@@ -1688,7 +1687,7 @@ function ConnectionsPageInner() {
       .then(async (res) => {
         if (!res.ok && res.status !== 204) {
           throw new Error(
-            (await res.text()) || `Disconnect failed: ${res.status}`,
+            await responseErrorText(res, "Disconnect failed"),
           );
         }
         setNotice("Disconnected.");

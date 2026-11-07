@@ -1,5 +1,3 @@
-"use client";
-
 // Settings → Admin → Notifications (fleet-unified settings pass): admin-managed
 // task notifications (email + outbound webhook). Previously FLEET_SMTP_*/
 // FLEET_WEBHOOK_*/FLEET_NOTIFY_ON env vars + a restart; now editable here and
@@ -35,6 +33,7 @@ import {
 } from "../../ui/panels";
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
+import { responseErrorText } from "@/app/lib/responseError";
 
 type NotifySettings = {
   notify_on: string;
@@ -228,7 +227,7 @@ function NotificationsAdmin() {
         return;
       }
       if (!response.ok) {
-        throw new Error((await response.text()).trim() || `Save failed: ${response.status}`);
+        throw new Error(await responseErrorText(response, "Save failed"));
       }
       setTests({});
       setEdits(null);
@@ -251,7 +250,7 @@ function NotificationsAdmin() {
     try {
       const response = await fetch("/api/admin/notify-settings", { method: "DELETE" });
       if (!response.ok) {
-        throw new Error((await response.text()).trim() || `Revert failed: ${response.status}`);
+        throw new Error(await responseErrorText(response, "Revert failed"));
       }
       setTests({});
       setEdits(null);
@@ -272,7 +271,7 @@ function NotificationsAdmin() {
         body: JSON.stringify({ channel }),
       });
       if (!response.ok) {
-        throw new Error((await response.text()).trim() || `Test failed: ${response.status}`);
+        throw new Error(await responseErrorText(response, "Test failed"));
       }
       const result = (await response.json()) as TestResult;
       setTests((prev) => ({ ...prev, [channel]: result }));
