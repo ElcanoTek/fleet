@@ -8,10 +8,6 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // SuggestTitle generates a short, sidebar-friendly title for a freshly-created
@@ -33,36 +29,20 @@ func (m *Manager) SuggestTitle(ctx context.Context, userMessage, assistantReply 
 		"Do not copy the user's request verbatim. Omit filler like 'help', 'please', 'find', 'show me', 'latest', or 'email from' unless essential to meaning. " +
 		"No quotes, no trailing punctuation, no prefix like 'Title:'."
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.2),
-		fantasy.WithMaxOutputTokens(titleMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-
 	prompt := fmt.Sprintf("User: %s\n\nAssistant: %s", truncate(userMessage, 600), truncate(assistantReply, 600))
 
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
-	maxTokens := int64(titleMaxOutputTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(prompt)},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      prompt,
+		Temperature: 0.2,
+		MaxTokens:   titleMaxOutputTokens,
+		Timeout:     20 * time.Second,
 	})
 	if err != nil {
 		log.Printf("SuggestTitle: %v", err)
 		return ""
 	}
-
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
-	}
-	return normalizeTitle(out.String())
+	return normalizeTitle(text)
 }
 
 const titleMaxOutputTokens = 512

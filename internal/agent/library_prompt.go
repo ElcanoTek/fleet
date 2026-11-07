@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
@@ -124,37 +122,22 @@ func (m *Manager) SuggestLibraryPrompt(ctx context.Context, in LibraryPromptInpu
 	// cheapest to drop.
 	b.WriteString(trunc.Ends(in.Transcript, libraryTranscriptHeadRunes, libraryTranscriptTailRunes, libraryTranscriptOmitted))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.2),
-		fantasy.WithMaxOutputTokens(libraryPromptMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-
-	maxTokens := int64(libraryPromptMaxOutputTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("library-prompt synthesis: %w", err)
-	}
 	// Meter visibly (#1118), like the recurring-task synthesizer next door:
 	// this is a conversation-level user action with no run session, so the
 	// structured host log line is the only record that it cost anything.
 	// Logged before validation — a non-conforming draft still cost money.
-	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsageLibraryPromptSynthesis, model.Model(), result))
-
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      b.String(),
+		Temperature: 0.2,
+		MaxTokens:   libraryPromptMaxOutputTokens,
+		Timeout:     45 * time.Second,
+		AuxLabel:    agentcore.AuxUsageLibraryPromptSynthesis,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("library-prompt synthesis: %w", err)
 	}
-	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(libraryPromptSchema))
+	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(libraryPromptSchema))
 	if err != nil {
 		log.Printf("SuggestLibraryPrompt: output failed schema validation")
 		return nil, fmt.Errorf("library-prompt synthesis produced no conforming output")

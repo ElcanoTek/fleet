@@ -127,7 +127,7 @@ log lines.
 
 ## Run-traceable but log-line-only
 
-Two host-side calls ARE traceable to a specific run/conversation but fire
+Four host-side calls ARE traceable to a specific run/conversation but fire
 where no live session ledger is reachable. They are metered as the same
 structured host log line the ledger-backed calls emit
 (`aux model call: label=… model=… prompt=… completion=… cost=…`, logged
@@ -154,6 +154,14 @@ oversight:
   the Patrol Launchpad's "Draft it with AI" writes a new patrol's instructions
   from the wizard's answers before any conversation exists — no run session at
   all, so the log line is the record (docs/PATROL-LAUNCHPAD.md).
+- **Library-prompt synthesis** (`internal/agent/library_prompt.go`, label
+  `library_prompt_synthesis`): `SuggestLibraryPrompt` turns a finished chat
+  into a reusable workflow template on user request — a conversation-level
+  action with no run session, so the log line is the record.
+
+Each of these, and the unmetered one-shot helpers below, makes its model call
+through `generateOnce` (`internal/agent/session_log.go`); a non-empty
+`AuxLabel` is what makes it emit the log line, so metering a call is one field.
 
 ## Deliberately out of scope
 
@@ -163,8 +171,7 @@ summarizer (`summarize.go`, which already prices via `ResolveStepCost` and
 returns its usage to its caller), user-memory extraction
 (`memory_extract.go`), the memory-graph extractor (`memory_graph.go`),
 learned-instruction distillation (`DistillLearnedInstruction`,
-`learned_instructions.go`), the library-prompt synthesizer
-(`library_prompt.go`), and the evals LLM-judge (`internal/evals/judge.go`).
+`learned_instructions.go`), and the evals LLM-judge (`internal/evals/judge.go`).
 They are per-feature host utilities with their own bounds and their own
 callers (conversation- or feedback-level, not run-level); folding them into a
 run ledger would attribute spend to runs that did not incur it. Named here so

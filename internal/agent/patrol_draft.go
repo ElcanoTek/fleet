@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
@@ -100,35 +98,20 @@ func (m *Manager) SuggestPatrolDraft(ctx context.Context, in PatrolDraftInput) (
 
 	sys := patrolDraftSystemPrompt + structuredoutput.PromptAugmentation(json.RawMessage(patrolDraftSchema))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.3),
-		fantasy.WithMaxOutputTokens(patrolDraftMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-
-	maxTokens := int64(patrolDraftMaxOutputTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(patrolDraftUserMessage(in))},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	// Metered like the other pre-conversation synthesizers (#1118): logged
+	// before validation, because a non-conforming draft still cost money.
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      patrolDraftUserMessage(in),
+		Temperature: 0.3,
+		MaxTokens:   patrolDraftMaxOutputTokens,
+		Timeout:     45 * time.Second,
+		AuxLabel:    agentcore.AuxUsagePatrolDraft,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("patrol-draft synthesis: %w", err)
 	}
-	// Metered like the other pre-conversation synthesizers (#1118): logged
-	// before validation, because a non-conforming draft still cost money.
-	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsagePatrolDraft, model.Model(), result))
-
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
-	}
-	return parsePatrolDraft(out.String())
+	return parsePatrolDraft(text)
 }
 
 // parsePatrolDraft validates and normalizes the model's output.

@@ -8,8 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 	trunc "github.com/ElcanoTek/fleet/internal/truncate"
@@ -86,36 +84,21 @@ func (m *Manager) SuggestRecurringTask(ctx context.Context, transcript string, e
 	// wants to make recurring is at the END of a long exploration, not the start.
 	b.WriteString(trunc.Ends(transcript, 0, recurringTranscriptMaxRunes, recurringTranscriptOmitted))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.2),
-		fantasy.WithMaxOutputTokens(recurringTaskMaxOutputTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-
-	maxTokens := int64(recurringTaskMaxOutputTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	// Meter visibly (#1118): a conversation-level user action with no run
+	// session at all, so the structured host log line is the record. Logged
+	// before validation: a non-conforming proposal still cost money.
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      b.String(),
+		Temperature: 0.2,
+		MaxTokens:   recurringTaskMaxOutputTokens,
+		Timeout:     45 * time.Second,
+		AuxLabel:    agentcore.AuxUsageRecurringTaskSynthesis,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("recurring-task synthesis: %w", err)
 	}
-	// Meter visibly (#1118): a conversation-level user action with no run
-	// session at all, so the structured host log line is the record. Logged
-	// before validation: a non-conforming proposal still cost money.
-	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsageRecurringTaskSynthesis, model.Model(), result))
-
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
-	}
-	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(recurringTaskSchema))
+	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(recurringTaskSchema))
 	if err != nil {
 		log.Printf("SuggestRecurringTask: output failed schema validation")
 		return nil, fmt.Errorf("recurring-task synthesis produced no conforming output")
