@@ -1918,13 +1918,27 @@ export function ChatExperience({
     };
   }, [selectedModel, modelRouting]);
 
+  // Catalog loads race: opening chat A then chat B (or a new chat's preview
+  // landing after a conversation's catalog) used to let whichever response
+  // arrived LAST paint the Tools picker, so B could show A's connectors. Every
+  // load takes a generation; a response is applied only while it is the
+  // latest one AND the conversation it was fetched for is still the open one
+  // (no real conversation, for the preview). The spinner follows the latest
+  // load.
+  const mcpCatalogGenRef = useRef(0);
+  const mcpCatalogIsCurrent = (gen: number, conversationId: string | null) =>
+    gen === mcpCatalogGenRef.current &&
+    (conversationId === null
+      ? realConvId(activeConversationIdRef.current) === null
+      : activeConversationIdRef.current === conversationId);
+
   // loadMcpServerCatalog fetches Optional connector controls plus locked
   // always-on status for the given conversation. Safe to call repeatedly —
-  // the backend is a cheap JSON read.
+  // the backend is a cheap JSON read, and a superseded load is ignored.
   const loadMcpServerCatalog = async (conversationId: string) => {
-    if (isLoadingMcpServers) return;
     const url = conversationApiUrl(conversationId, "/mcp-servers");
     if (!url) return;
+    const gen = ++mcpCatalogGenRef.current;
     setIsLoadingMcpServers(true);
     try {
       const response = await fetch(url, { cache: "no-store" });
@@ -1933,12 +1947,13 @@ export function ChatExperience({
         servers?: MCPServerInfo[];
         categories?: PickerCategory[];
       };
+      if (!mcpCatalogIsCurrent(gen, conversationId)) return;
       setMcpServers(data.servers ?? []);
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal — picker just stays empty */
     } finally {
-      setIsLoadingMcpServers(false);
+      if (gen === mcpCatalogGenRef.current) setIsLoadingMcpServers(false);
     }
   };
 
@@ -1960,6 +1975,7 @@ export function ChatExperience({
   // conversation loads. The backend has already merged the user's connector
   // prefs into `enabled`, so the response IS the seed state.
   const loadMcpServerCatalogPreview = async () => {
+    const gen = ++mcpCatalogGenRef.current;
     try {
       const response = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!response.ok) return;
@@ -1968,9 +1984,12 @@ export function ChatExperience({
         categories?: PickerCategory[];
       };
       const servers = data.servers ?? [];
+      // The seed is the user's saved prefs, not any chat's state: always
+      // refresh it. The picker rows only while no conversation took over.
       seededEnabledRef.current = new Map(
         servers.map((s) => [s.name, s.enabled]),
       );
+      if (!mcpCatalogIsCurrent(gen, null)) return;
       setMcpServers(servers);
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
@@ -2071,9 +2090,30 @@ export function ChatExperience({
     prev: MCPServerInfo[],
   ) => {
     const requested = enabledOptionalMcpServerNames(next);
+    // A failed save reverts only the rows THIS request changed (switch and
+    // seat), so a catalog load or another toggle that landed meanwhile is
+    // kept — and only while the picker still shows this conversation.
+    const before = new Map(prev.map((row) => [row.name, row]));
+    const changed = new Map<string, MCPServerInfo>();
+    for (const row of next) {
+      const old = before.get(row.name);
+      if (old && (old.enabled !== row.enabled || old.account !== row.account)) {
+        changed.set(row.name, old);
+      }
+    }
+    const stillShown = () => activeConversationIdRef.current === conversationId;
+    const revert = () => {
+      if (!stillShown()) return;
+      setMcpServers((curr) =>
+        curr.map((row) => {
+          const old = changed.get(row.name);
+          return old ? { ...row, enabled: old.enabled, account: old.account } : row;
+        }),
+      );
+    };
     const url = conversationApiUrl(conversationId, "/mcp-servers");
     if (!url) {
-      setMcpServers(prev);
+      revert();
       return;
     }
     try {
@@ -2086,7 +2126,7 @@ export function ChatExperience({
         }),
       });
       if (!response.ok) {
-        setMcpServers(prev);
+        revert();
         return;
       }
       const body = (await response.json()) as { enabled_optional?: unknown };
@@ -2099,7 +2139,7 @@ export function ChatExperience({
       const persisted = body.enabled_optional.filter(
         (n): n is string => typeof n === "string",
       );
-      setMcpServers(reconcileMcpSelection(next, persisted));
+      if (stillShown()) setMcpServers(reconcileMcpSelection(next, persisted));
       const dropped = droppedOptionalMcpServerNames(requested, persisted);
       if (dropped.length > 0) {
         // The toggle visibly springing back is the user-facing signal; this is
@@ -2112,7 +2152,7 @@ export function ChatExperience({
         );
       }
     } catch {
-      setMcpServers(prev);
+      revert();
     }
   };
 
@@ -2512,6 +2552,10 @@ export function ChatExperience({
         });
       }
       if (movesTheUser) {
+        // The ref moves with the state synchronously (as the new-chat and
+        // stream paths do) so the catalog load below, which checks it when
+        // its response lands, never compares against the previous chat.
+        activeConversationIdRef.current = hydratedConversation.id;
         setActiveConversationId(hydratedConversation.id);
         // Opening a conversation clears the keyboard focus cursor (#306): the
         // cursor is a transient nav aid, and letting it linger would keep the
