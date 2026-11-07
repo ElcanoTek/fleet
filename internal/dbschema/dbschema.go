@@ -16,6 +16,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -80,12 +81,18 @@ func Ensure(ctx context.Context, db Execer) error {
 		return fmt.Errorf("ensure schema %s: %w", schema, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var legacy bool
-	if err := tx.QueryRowContext(ctx, PublicStoreSQL).Scan(&legacy); err != nil {
-		return fmt.Errorf("ensure schema %s: probe public: %w", schema, err)
+	// The one readiness check — the same that `fleet validate-config` runs and
+	// bootstrap's shell gate mirrors (TestExternalSchemaPrivilegeCheck pins
+	// the two).
+	r, err := CheckReadiness(ctx, tx, []string{schema})
+	if err != nil {
+		return fmt.Errorf("ensure schema %s: %w", schema, err)
 	}
-	if legacy {
+	if r.LegacyPublicStore {
 		return LegacyDatabaseError{Schema: schema}
+	}
+	if !r.OK() {
+		return fmt.Errorf("ensure schema %s: %s", schema, r.Problem())
 	}
 	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKeyBase+schema); err != nil {
 		return fmt.Errorf("ensure schema %s: lock: %w", schema, err)
@@ -102,6 +109,103 @@ func Ensure(ctx context.Context, db Execer) error {
 		return fmt.Errorf("create schema %s: %w", schema, err)
 	}
 	return tx.Commit()
+}
+
+// QueryRower runs one query returning rows: *sql.DB, *sql.Conn and *sql.Tx.
+type QueryRower interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// Readiness is whether fleet's stores can run in a database as the
+// connection's role — the ONE definition, read-only:
+//
+//   - LegacyPublicStore: the public schema holds a fleet store (a legacy
+//     two-database install's database) — refused, whatever else holds;
+//   - MissingCreate: store schemas that do not exist yet while the role has
+//     no CREATE on the database (the store could not create them);
+//   - NotOwned: for store schemas that DO exist, the schema itself or a
+//     table, sequence or view in it that the role does not own ("x is owned
+//     by y") — the migrations ALTER them, which needs ownership.
+//
+// scripts/lib/pgprovision.sh's fleet_db_store_readiness applies the same
+// rules for bootstrap, and `fleet validate-config` calls CheckReadiness itself;
+// TestExternalSchemaPrivilegeCheck (internal/admincli) pins the shell and Go
+// verdicts together at every step. Both order the findings byte-wise (COLLATE
+// "C" in SQL, sort.Strings here) so the five shown are the same five.
+type Readiness struct {
+	LegacyPublicStore bool
+	MissingCreate     []string
+	NotOwned          []string
+}
+
+// OK reports whether the stores can run.
+func (r Readiness) OK() bool {
+	return !r.LegacyPublicStore && len(r.MissingCreate) == 0 && len(r.NotOwned) == 0
+}
+
+// Problem says what is wrong, for an operator ("" when OK).
+func (r Readiness) Problem() string {
+	switch {
+	case r.LegacyPublicStore:
+		return LegacyDatabaseError{Schema: "chat/sched"}.Error()
+	case len(r.NotOwned) > 0:
+		shown := r.NotOwned
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		return "the role must own the existing store schemas and everything in them, but found: " + strings.Join(shown, "; ")
+	case len(r.MissingCreate) > 0:
+		return "the role cannot create schema(s) " + strings.Join(r.MissingCreate, ", ") + ": it needs CREATE on the database"
+	}
+	return ""
+}
+
+// CheckReadiness evaluates Readiness for the given store schemas over db.
+func CheckReadiness(ctx context.Context, db QueryRower, schemas []string) (Readiness, error) {
+	var r Readiness
+	if err := db.QueryRowContext(ctx, PublicStoreSQL).Scan(&r.LegacyPublicStore); err != nil {
+		return r, fmt.Errorf("probe public: %w", err)
+	}
+	for _, s := range schemas {
+		var exists, canCreate bool
+		if err := db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1),
+			has_database_privilege(current_database(), 'CREATE')`, s).Scan(&exists, &canCreate); err != nil {
+			return r, fmt.Errorf("probe schema %s: %w", s, err)
+		}
+		if !exists {
+			if !canCreate {
+				r.MissingCreate = append(r.MissingCreate, s)
+			}
+			continue
+		}
+		rows, err := db.QueryContext(ctx, `SELECT x FROM (
+			SELECT format('schema %s is owned by %s', n.nspname, pg_get_userbyid(n.nspowner)) AS x
+			  FROM pg_catalog.pg_namespace n WHERE n.nspname = $1 AND pg_get_userbyid(n.nspowner) <> current_user
+			UNION ALL
+			SELECT format('%s.%s is owned by %s', n.nspname, c.relname, pg_get_userbyid(c.relowner))
+			  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+			 WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'S', 'v', 'm') AND pg_get_userbyid(c.relowner) <> current_user
+		) f ORDER BY x COLLATE "C"`, s)
+		if err != nil {
+			return r, fmt.Errorf("probe ownership in %s: %w", s, err)
+		}
+		for rows.Next() {
+			var x string
+			if err := rows.Scan(&x); err != nil {
+				_ = rows.Close()
+				return r, err
+			}
+			r.NotOwned = append(r.NotOwned, x)
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return r, err
+		}
+	}
+	sort.Strings(r.NotOwned)
+	return r, nil
 }
 
 // LegacyDatabaseError is Ensure's refusal to create Schema in a database whose

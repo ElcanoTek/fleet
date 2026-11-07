@@ -42,6 +42,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/creds"
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 )
 
@@ -1351,9 +1352,10 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 	return res
 }
 
-// probeDB opens a short-lived pool, pings, and runs SELECT 1 within a 5s budget,
-// then closes it. It deliberately does NOT run migrations — the issue asks for a
-// dry-run probe, not the self-migrating store.Open path.
+// probeDB opens a short-lived pool, pings, runs SELECT 1 and the store-schema
+// readiness check within a 5s budget, then closes it. It deliberately does NOT
+// run migrations — the issue asks for a dry-run probe, not the self-migrating
+// store.Open path.
 func probeDB(ctx context.Context, dsn string) error {
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -1365,6 +1367,22 @@ func probeDB(ctx context.Context, dsn string) error {
 	var one int
 	if err := db.QueryRowContext(probeCtx, "SELECT 1").Scan(&one); err != nil {
 		return fmt.Errorf("SELECT 1: %w", err)
+	}
+	// #2055 review: the same read-only readiness check dbschema.Ensure runs on
+	// every store open (and bootstrap's shell gate mirrors), so a green
+	// validate-config predicts a boot — not only that the database answers.
+	// Configured reads the connection's own search_path, exactly as Ensure
+	// does, so the legacy layout (no store schema) is skipped as at boot.
+	schema, err := dbschema.Configured(probeCtx, db)
+	if err != nil || schema == "" {
+		return err
+	}
+	r, err := dbschema.CheckReadiness(probeCtx, db, []string{schema})
+	if err != nil {
+		return fmt.Errorf("schema readiness: %w", err)
+	}
+	if !r.OK() {
+		return fmt.Errorf("schema %s is not ready: %s", schema, r.Problem())
 	}
 	return nil
 }

@@ -91,7 +91,11 @@ schema, or one schema forced on both).
   in the target store's schema, before anything is dropped.
 - `fleet serve` logs a one-line notice on a legacy box; `fleet status` and
   `fleet doctor` report the layout and recommend consolidation;
-  `validate-config` names the layout; `fleet db layout` prints it.
+  `validate-config` names the layout and, in schema mode, runs the same
+  read-only readiness check every store open runs (no fleet store in
+  `public`; each store schema missing with CREATE on the database, or present
+  and owned by the role with everything in it) — the check bootstrap's shell
+  gate mirrors; `fleet db layout` prints it.
 
 **`fleet db consolidate`** moves a legacy box into one database (below).
 
@@ -191,7 +195,11 @@ exists; the target is absent, or exists owned by that role with empty
 `chat`/`sched` schemas and nothing in `public`; enough free disk at the data
 directory (about twice the sources' size, best effort); both sources on the
 same local instance (same socket directory or loopback, same port) and the
-server that answers the superuser connection on that port; URL DSNs. It also
+server that answers the superuser connection on that port — checked by the
+cluster's system identifier read over the superuser connection and over each
+source DSN as written (or, when the DSN's role cannot read it, by postmaster
+start time, port and cluster name), since two clusters can answer on one
+port; URL DSNs. It also
 refuses a box whose env file already
 configures one database ("Nothing to do").
 

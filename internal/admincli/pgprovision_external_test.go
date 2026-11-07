@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
 
 // TestExternalSchemaPrivilegeCheck (#2055 review): external-mode bootstrap
@@ -60,17 +62,27 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	roleDSN := u.String()
 
 	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "pgprovision.sh")
-	readiness := func() int {
-		err := exec.Command("bash", "-c", `. "$1"; fleet_db_store_readiness "$2"`, "_", lib, roleDSN).Run()
-		if err == nil {
-			return 0
-		}
-		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			return ee.ExitCode()
-		}
+	roleDB, err := sql.Open("pgx", roleDSN)
+	if err != nil {
 		t.Fatal(err)
-		return -1
+	}
+	defer roleDB.Close()
+	// readiness runs the shell gate and, at every step, the Go check that
+	// dbschema.Ensure and `fleet validate-config` run (#2055 review): the
+	// two must reach the same verdict and name the same findings.
+	readiness := func() int {
+		t.Helper()
+		out, err := exec.Command("bash", "-c", `. "$1"; fleet_db_store_readiness "$2"`, "_", lib, roleDSN).Output()
+		code := 0
+		if err != nil {
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				t.Fatal(err)
+			}
+			code = ee.ExitCode()
+		}
+		assertReadinessParity(t, roleDB, code, string(out))
+		return code
 	}
 	can := func() bool { return readiness() == 0 }
 	if got := readiness(); got != 1 {
@@ -143,6 +155,7 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		t.Fatalf("the gate did not name the table and sequence it found: %v: %s", err, out)
 	}
 	mustExec(t, tdb, "DROP TABLE sched.stray")
+	checkManyFindings(t, tdb, readiness)
 	if !can() {
 		t.Fatal("the role's own schemas were refused once the stray table was gone")
 	}
@@ -157,6 +170,53 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	}
 	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "fleet db consolidate") {
 		t.Fatalf("the gate did not refuse a legacy store in public: %v: %s", err, out)
+	}
+}
+
+// checkManyFindings: more than five findings, with names whose order differs
+// between a linguistic and a byte-wise collation — the shell gate and the Go
+// check show the same five.
+func checkManyFindings(t *testing.T, tdb *sql.DB, readiness func() int) {
+	t.Helper()
+	mustExec(t, tdb, `CREATE TABLE sched.ab (i int); CREATE TABLE sched.a_b (i int); CREATE TABLE sched."A_c" (i int);
+		CREATE TABLE sched.a1 (i int); CREATE TABLE sched.b (i int); CREATE TABLE sched.aa (i int)`)
+	if got := readiness(); got != 4 {
+		t.Fatalf("six tables in sched owned by another role: readiness %d, want 4", got)
+	}
+	mustExec(t, tdb, `DROP TABLE sched.ab, sched.a_b, sched."A_c", sched.a1, sched.b, sched.aa`)
+}
+
+// assertReadinessParity checks dbschema.CheckReadiness's verdict against the
+// shell gate's exit code and printed findings.
+func assertReadinessParity(t *testing.T, db *sql.DB, shellCode int, shellOut string) {
+	t.Helper()
+	r, err := dbschema.CheckReadiness(t.Context(), db, []string{"chat", "sched"})
+	if err != nil {
+		t.Fatalf("CheckReadiness: %v", err)
+	}
+	goCode := 0
+	switch {
+	case r.LegacyPublicStore:
+		goCode = 2
+	case len(r.NotOwned) > 0:
+		goCode = 4
+	case len(r.MissingCreate) > 0:
+		goCode = 1
+	}
+	if goCode != shellCode {
+		t.Fatalf("readiness parity: shell %d, Go %d (%+v)", shellCode, goCode, r)
+	}
+	if goCode == 4 {
+		shown := r.NotOwned
+		if len(shown) > 5 {
+			shown = shown[:5]
+		}
+		if got, want := strings.TrimSpace(shellOut), strings.Join(shown, "; "); got != want {
+			t.Fatalf("readiness parity: shell found %q, Go %q", got, want)
+		}
+		if !strings.Contains(r.Problem(), strings.Join(shown, "; ")) {
+			t.Fatalf("Go's Problem() does not name its findings: %s", r.Problem())
+		}
 	}
 }
 

@@ -134,7 +134,7 @@ fleet_db_store_readiness() {
             FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n3 ON n3.oid = c.relnamespace
            WHERE n3.nspname IN ('chat', 'sched') AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
              AND pg_get_userbyid(c.relowner) <> current_user
-        ) f ORDER BY x LIMIT 5) l), '')
+        ) f ORDER BY x COLLATE \"C\" LIMIT 5) l), '')
     FROM (VALUES ('chat'), ('sched')) AS s(name)
     LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
   IFS="$sep" read -r legacy create owned <<< "$out"
