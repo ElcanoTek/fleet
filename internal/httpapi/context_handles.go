@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -97,13 +96,14 @@ func expandContextHandles(ctx context.Context, message, workspaceRoot string) (b
 	ctx, cancel := context.WithTimeout(ctx, contextExpandTimeout)
 	defer cancel()
 
-	results := make([]expandedHandle, len(matches))
-	var wg sync.WaitGroup
+	// Each expansion reports on a buffered channel, and collection stops at the
+	// deadline: a handle still being fetched or read then becomes a notice, and
+	// its goroutine finishes into the buffer without holding the turn.
+	done := make(chan expandedHandle, len(matches))
 	for i, mt := range matches {
-		wg.Add(1)
 		go func(i int, mt handleMatch) {
-			defer wg.Done()
 			eh := expandedHandle{order: i}
+			defer func() { done <- eh }()
 			switch mt.kind {
 			case "url":
 				text, err := tools.FetchURLForContext(ctx, mt.arg)
@@ -115,10 +115,25 @@ func expandContextHandles(ctx context.Context, message, workspaceRoot string) (b
 			case "file":
 				eh.block, eh.notice = expandFileHandle(workspaceRoot, mt.arg)
 			}
-			results[i] = eh
 		}(i, mt)
 	}
-	wg.Wait()
+	results := make([]expandedHandle, 0, len(matches))
+	finished := make([]bool, len(matches))
+collect:
+	for range matches {
+		select {
+		case eh := <-done:
+			results = append(results, eh)
+			finished[eh.order] = true
+		case <-ctx.Done():
+			break collect
+		}
+	}
+	for i, mt := range matches {
+		if !finished[i] {
+			results = append(results, expandedHandle{order: i, notice: fmt.Sprintf("@%s:%s timed out", mt.kind, mt.arg)})
+		}
+	}
 
 	sort.SliceStable(results, func(a, b int) bool { return results[a].order < results[b].order })
 	for _, r := range results {
@@ -136,8 +151,9 @@ func expandContextHandles(ctx context.Context, message, workspaceRoot string) (b
 }
 
 // expandFileHandle reads relPath from the conversation workspace, path-gated by
-// SafeWorkspaceJoin (rejects absolute paths, "..", and symlink escapes) and
-// size-capped. Returns (block, notice); exactly one is non-empty.
+// SafeWorkspaceJoin (rejects absolute paths, "..", and symlink escapes), opened
+// through os.Root and required to be a regular file on the opened descriptor,
+// and size-capped. Returns (block, notice); exactly one is non-empty.
 func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return "", fmt.Sprintf("@file is unavailable for this conversation: %s", relPath)
@@ -163,7 +179,23 @@ func expandFileHandle(workspaceRoot, relPath string) (block, notice string) {
 	if err != nil {
 		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
 	}
-	f, err := os.Open(full) //nolint:gosec // full is validated by tools.SafeWorkspaceJoin to live under the conversation workspace root
+	// The workspace stays writable by the sandbox, so open the resolved path
+	// through os.Root (the open cannot leave the workspace) and check the type
+	// on the opened descriptor.
+	wsDir, err := tools.SafeWorkspaceJoin(workspaceRoot, ".")
+	if err != nil {
+		return "", fmt.Sprintf("@file could not be read: %s", relPath)
+	}
+	rel, err := filepath.Rel(wsDir, full)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Sprintf("@file path not allowed: %s", relPath)
+	}
+	root, err := os.OpenRoot(wsDir)
+	if err != nil {
+		return "", fmt.Sprintf("@file could not be read: %s", relPath)
+	}
+	defer root.Close()
+	f, _, err := tools.OpenRegularInRoot(root, rel)
 	if err != nil {
 		return "", fmt.Sprintf("@file could not be read: %s", relPath)
 	}

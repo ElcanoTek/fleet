@@ -94,7 +94,7 @@ open from the account menu, beside **Settings**.
 | --- | --- |
 | **Recent Tasks** | The ledger. Every task, newest first, with its status and history. This is where you will spend most of your time, and the rest of this guide assumes it. |
 | **Upcoming** | A forecast, not a log: the runs the scheduler is about to perform, grouped by day (Today, Tomorrow, then dates). It is computed from the current schedules, so editing a schedule updates it immediately. |
-| **Datasets** | Background row-by-row work over tables, when your deployment uses it. |
+| **Datasets** | Background row-by-row work over tables, when your deployment uses it. You see the datasets you created; administrators see all of them. |
 | **SLA**, **Usage**, **Adoption** | Tasks measured against an expected duration, and spend, prompt-cache efficiency, and activity reporting. In **Usage**, summary tiles include **Cache efficiency** (hit rate across chat prompt tokens, cached vs uncached input tokens), the bar chart can switch **Measure** to **Cache hit %**, and the breakdown table shows **Cached**, **Miss**, and **Hit %** alongside spend and token totals (**Settings → Admin** also provides a dedicated **Prompt Cache Efficiency** panel by date and by user). Admin-only: these tabs do not appear for other roles. |
 
 None of the tabs beyond the first two are required for daily work.

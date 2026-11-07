@@ -12,11 +12,23 @@ package handlers
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
+
+// bearerToken returns the token of an `Authorization: Bearer <token>` header.
+func bearerToken(r *http.Request) (string, bool) {
+	const prefix = "bearer "
+	a := strings.TrimSpace(r.Header.Get("Authorization"))
+	if len(a) <= len(prefix) || !strings.EqualFold(a[:len(prefix)], prefix) {
+		return "", false
+	}
+	token := strings.TrimSpace(a[len(prefix):])
+	return token, token != ""
+}
 
 // lookupMember resolves an email to a user for the header-trust membership
 // gate. In production it hits the users table (username == lowercase email);
@@ -28,13 +40,25 @@ func (h *Handlers) lookupMember(ctx context.Context, email string) (*models.User
 	return h.storage.GetUserByUsernameWithContext(ctx, strings.ToLower(email))
 }
 
-// ElcanoLogout handles GET /auth/logout. It deletes the shared elcano_auth
+// ElcanoLogout handles POST /auth/logout. It deletes the shared elcano_auth
 // cookie itself (rather than bouncing to auth) and returns the user to the
 // server's own login, mirroring chat's logout. Because the cookie lives on the
 // shared parent domain, deleting it signs the user out of EVERY Elcano service
 // — the expected meaning of "log out". The deletion only takes effect when
 // name + domain + path match how auth set the cookie, so we mirror them here.
+//
+// When the request carries an `Authorization: Bearer` token minted by Login,
+// that session is ended server-side too (the user's session_token and
+// token_expires_at are cleared), so the bearer stops authenticating at once
+// rather than at its expiry. Best effort: a token that matches no session, or
+// a store error, still answers with the cookie deletion and redirect, since a
+// sign-out must always complete for the browser.
 func (h *Handlers) ElcanoLogout(w http.ResponseWriter, r *http.Request) {
+	if token, ok := bearerToken(r); ok && h.storage != nil {
+		if _, err := h.storage.RevokeSessionToken(r.Context(), token); err != nil {
+			log.Printf("logout: end bearer session: %v", err)
+		}
+	}
 	secure := r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 	// G124: HttpOnly + SameSite are always set; Secure is conditional ON the
 	// request being HTTPS so plain-HTTP local dev still works. This is a

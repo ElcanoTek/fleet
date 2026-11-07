@@ -658,7 +658,8 @@ proposal" from an operational failure (5).
 
 There is **no** `notes proposal list` verb today — the CLI covers the decision,
 not the browsing. To find the ids awaiting a decision, read the orchestrator's
-`GET /notes/proposals?status=pending`.
+`GET /notes/proposals?status=pending` with an admin credential (the proposal
+queue, like the decisions, is admin-only).
 
 ## process logs — stderr by default, optional rotating file
 

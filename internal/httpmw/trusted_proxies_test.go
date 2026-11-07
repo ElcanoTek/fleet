@@ -105,3 +105,28 @@ func TestTrustedProxiesMiddlewareAgrees(t *testing.T) {
 		})
 	}
 }
+
+func TestTrustedProxiesClientAddrAndTrusts(t *testing.T) {
+	tp := NewTrustedProxies([]net.IP{net.ParseIP("127.0.0.1")})
+	req := func(remote, xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodGet, "/", nil)
+		r.RemoteAddr = remote
+		if xff != "" {
+			r.Header.Set("X-Forwarded-For", xff)
+		}
+		return r
+	}
+	if c, fwd := tp.ClientAddr(req("127.0.0.1:1", "203.0.113.9")); c.String() != "203.0.113.9" || !fwd {
+		t.Fatalf("forwarded: %v %v", c, fwd)
+	}
+	if c, fwd := tp.ClientAddr(req("127.0.0.1:1", "")); c.String() != "127.0.0.1" || fwd || !tp.Trusts(c) {
+		t.Fatalf("proxy without header: %v %v", c, fwd)
+	}
+	if c, fwd := tp.ClientAddr(req("198.51.100.2:1", "203.0.113.9")); c.String() != "198.51.100.2" || fwd || tp.Trusts(c) {
+		t.Fatalf("direct client: %v %v", c, fwd)
+	}
+	var none TrustedProxies
+	if c, fwd := none.ClientAddr(req("127.0.0.1:1", "203.0.113.9")); c.String() != "127.0.0.1" || fwd || none.Trusts(c) {
+		t.Fatalf("no proxies: %v %v", c, fwd)
+	}
+}

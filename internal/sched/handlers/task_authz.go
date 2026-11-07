@@ -84,3 +84,23 @@ func taskWritableByPrincipal(p principal, task *models.Task) bool {
 	}
 	return taskCreatedByPrincipal(p, task)
 }
+
+// taskStoppableByPrincipal reports whether the principal may stop (cancel) or
+// permanently delete the given task. Two ways in:
+//
+//   - PermissionCancelTask for a task the principal can see
+//     (taskVisibleToPrincipal) — so the operator grant reaches the same rows
+//     the principal can read: its own, or every task for the fleet-wide grant
+//     (admin, view_all_logs);
+//   - having created the task (taskCreatedByPrincipal), as a user or as an API
+//     key, so a job author — including a scoped task key — can stop and clean
+//     up its own run without the operator grant.
+//
+// This is the REST form of the rule A2A CancelTask already applies
+// (a2aCancelTask) and the same shape as taskResumableByPrincipal.
+func taskStoppableByPrincipal(p principal, task *models.Task) bool {
+	if p.hasPermission(models.PermissionCancelTask) && taskVisibleToPrincipal(p, task) {
+		return true
+	}
+	return taskCreatedByPrincipal(p, task)
+}

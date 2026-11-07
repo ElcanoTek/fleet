@@ -29,14 +29,18 @@ import (
 // by the authenticated user — cannot cover it. Two fixed windows:
 //   - per attempted email, so one account can't be brute-forced online;
 //   - global, so rotating emails can't turn the endpoint into a CPU DoS on
-//     the process that also runs the scheduler.
+//     the process that also runs the scheduler. It bounds bcrypt work (300
+//     compares a minute is about half a core) rather than any one source:
+//     the web tier, the only caller, limits each client address before it
+//     calls here (webui loginAttemptsPerClientPerMinute), so one client
+//     reaches only a small share of it.
 //
 // Keying by attempted email rather than source address is deliberate: the
 // only caller is the trusted web tier, so a client address here would
 // just be that proxy's.
 const (
 	verifyPerEmailPerMinute = 5
-	verifyGlobalPerMinute   = 30
+	verifyGlobalPerMinute   = 300
 )
 
 // verifyLimiter is a minimal fixed-window counter. A sliding window buys

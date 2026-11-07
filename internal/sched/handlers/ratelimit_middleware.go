@@ -3,23 +3,33 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
 // SchedRateLimitMiddleware throttles the high-cost orchestrator endpoints
 // (POST /tasks, POST /upload) with the shared sliding-window limiter
 // (internal/ratelimit) — the SAME implementation the chat server uses, so the
-// algorithm is single-sourced. Checks run in order: admin-key bypass → global
-// cap → per-identity cap.
+// algorithm is single-sourced. Checks run in order: admin-key bypass →
+// per-identity cap → process-wide cap.
 //
 // Identity is the authenticated API key's stable ID when an X-API-Key is present
 // and resolvable (and that key's own RateLimit, when > 0, overrides the
 // per-minute default for it); otherwise the client IP (cookie / bearer callers,
-// and unknown keys). The global window is a single process-wide counter so even
-// a fleet of legitimate keys can't collectively overwhelm the box.
+// and unknown keys).
+//
+// The process-wide window is charged only for a request the per-identity
+// window admitted, so a request refused per identity never counts against
+// anyone else. It is split in two buckets of the same size: one for callers
+// that presented a credential (a resolvable API key, the gateway's server
+// token, a password-login bearer token, or an identity an auth middleware
+// already established), and one for everything else — so unauthenticated
+// traffic draws only on its own bucket and never on the budget of
+// authenticated callers.
 //
 // A 429 carries the standard X-RateLimit-* headers, a Retry-After, and a JSON
 // body {"error":"rate_limit_exceeded","retry_after_seconds":N}. The existing
@@ -36,12 +46,6 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Global cap first — process-wide across every caller.
-		if ok, retry := h.taskGlobalRL.Allow("__global__"); !ok {
-			h.writeRateLimited(w, retry, h.config.SchedGlobalRateLimitPerMinute, "global")
-			return
-		}
-
 		// Resolve a per-identity bucket key and the per-minute cap for it.
 		perMin := h.config.SchedRateLimitPerMinute
 		perDay := h.config.SchedRateLimitPerDay
@@ -54,6 +58,7 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 				}
 			}
 		}
+		keyed := identity != ""
 		if identity == "" {
 			// Cookie/bearer callers and unknown keys: throttle by client IP.
 			identity = "ip:" + getClientIP(r)
@@ -63,8 +68,46 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 			h.writeRateLimited(w, retry, perMin, "minute")
 			return
 		}
+
+		// Process-wide cap, charged only once the per-identity window admitted
+		// the request, in the bucket for its caller class.
+		globalBucket := schedGlobalAnonymousBucket
+		if keyed || h.rateLimitCallerAuthenticated(r) {
+			globalBucket = schedGlobalAuthenticatedBucket
+		}
+		if ok, retry := h.taskGlobalRL.Allow(globalBucket); !ok {
+			h.writeRateLimited(w, retry, h.config.SchedGlobalRateLimitPerMinute, "global")
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// The two process-wide buckets SchedRateLimitMiddleware charges.
+const (
+	schedGlobalAuthenticatedBucket = "__global__"
+	schedGlobalAnonymousBucket     = "__global_unauthenticated__"
+)
+
+// rateLimitCallerAuthenticated reports whether r carries a credential other
+// than an API key (which the caller resolves itself): an identity an auth
+// middleware already put on the context, the web gateway's server token, or a
+// password-login bearer token. It only chooses a rate-limit bucket; it
+// authorizes nothing.
+func (h *Handlers) rateLimitCallerAuthenticated(r *http.Request) bool {
+	if GetUserFromContext(r.Context()) != nil || GetAPIKeyFromContext(r.Context()) != nil {
+		return true
+	}
+	if tok := r.Header.Get("X-Orchestrator-Server-Token"); tok != "" && h.config.SharedToken != "" &&
+		subtle.ConstantTimeCompare([]byte(tok), []byte(h.config.SharedToken)) == 1 {
+		return true
+	}
+	if h.storage != nil {
+		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok && bearer != "" {
+			return h.userFromPasswordToken(bearer) != nil
+		}
+	}
+	return false
 }
 
 // writeRateLimited emits a 429 with the full rate-limit header set and the

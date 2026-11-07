@@ -551,6 +551,19 @@ each piece yourself):
      the web UI is blocked) and cannot restrict browser users — they apply to
      the Caddy-routed API and webhook paths only.
 
+     **Password sign-in.** The web tier itself also reads this setting, for
+     one thing: it limits password sign-in attempts (`POST /api/auth/login`)
+     to 10 a minute per client address (an IPv6 client by its /64), before the
+     password is checked. The limit applies only when the address names one
+     client — read from `X-Forwarded-For` past a proxy listed here, or a
+     direct connection from a public address. A request from a listed proxy
+     with no usable header, or from a loopback, private or link-local address
+     with no listed proxy in front (the usual Caddy or ingress hop), is not
+     limited per address, because that would limit every browser together;
+     the web tier then logs one warning naming `FLEET_TRUSTED_PROXIES`. Sign-in
+     is always also bounded by the backend's process-wide guard: 5 attempts a
+     minute per email and 300 a minute in total.
+
    Blocked requests get a uniform `403 Access denied` (plain text, no reason
    leaked); `/healthz` is exempt so load-balancer probes keep working; a
    malformed CIDR/IP entry is a **fatal startup error** (a silently-dropped

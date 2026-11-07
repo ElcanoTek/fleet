@@ -118,6 +118,27 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 	if err != nil {
 		return "", err
 	}
+	// Email attachment paths were checked when the card was staged, but the
+	// workspace stays writable while the card waits. Resolve them again now,
+	// through the conversation's workspace, and send private copies of the
+	// files so the connector reads exactly what was checked. The copies stay
+	// on disk until the dispatch has let go of args (the argument hold below
+	// removes them); until the hold takes them over, any early return removes
+	// them here.
+	releaseAttachments := func() {}
+	if tools.IsEmailToolName(approval.ToolName) {
+		cleanup, err := tools.SnapshotEmailAttachments(approval.ConversationID, args, s.outboundAttachmentStagingDir())
+		if err != nil {
+			return "", err
+		}
+		releaseAttachments = cleanup
+	}
+	attachmentsHeld := false
+	defer func() {
+		if !attachmentsHeld {
+			releaseAttachments()
+		}
+	}()
 	// Reopen the seat the card was staged under (#167 residual 2). The turn
 	// scope that staged it is long gone, so this is a fresh short-lived scope
 	// carrying the same public {server, account} selection. A revoked account
@@ -174,12 +195,19 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 	// loop reads them just before its own dispatch (agentcore mcpTool.call):
 	// the card and the stored arguments keep the reference, and the bytes
 	// sent are the version its whole-file hash names. The windows stay
-	// charged until the dispatch has let go of args (mcp.WithArgumentHold).
+	// charged, and the attachment copies stay on disk, until the dispatch has
+	// let go of args: when CallMCP returns AND, for an out-of-process call
+	// cancelled mid-flight, when the broker child has answered
+	// (mcp.RetainArguments). The hold runs both releases then.
 	resolved, err := s.resolveStagedFileReferences(callCtx, approval, catalogInputSchema(catalog, server, tool), args)
 	if err != nil {
 		return "", err
 	}
-	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
+	attachmentsHeld = true
+	callCtx, hold := mcp.WithArgumentHold(callCtx, func() {
+		resolved()
+		releaseAttachments()
+	})
 	defer hold.Done()
 	// Reading may have run past the call's budget. Never dispatch then: an
 	// out-of-process call sends the request before it notices ctx.
@@ -810,4 +838,14 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)
 	}
+}
+
+// outboundAttachmentStagingDir is where an approved email's attachments are
+// copied for the send: under the host-side attachment directory, which no
+// sandbox mounts. Empty (no config) means the process temp dir.
+func (s *Server) outboundAttachmentStagingDir() string {
+	if s.cfg == nil {
+		return ""
+	}
+	return tools.OutboundAttachmentStagingDir(s.cfg.EmailAttachmentDir)
 }

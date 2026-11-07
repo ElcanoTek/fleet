@@ -270,19 +270,36 @@ func (h *Handlers) TaskWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := os.Stat(resolved) //nolint:gosec // resolved is validated by tools.SafeWorkspaceJoin to live under the workspace root
+	// SafeWorkspaceJoin gives clear errors, but a live sandbox can still change
+	// the workspace afterwards. Open through os.Root so the open cannot leave
+	// the workspace, and check the opened descriptor rather than the name.
+	wsRoot, err := os.OpenRoot(root)
 	if err != nil {
-		if os.IsNotExist(err) {
-			writeError(w, http.StatusNotFound, "file not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to stat file")
+		writeError(w, http.StatusInternalServerError, "failed to open workspace")
 		return
 	}
-	if info.IsDir() {
+	defer func() { _ = wsRoot.Close() }()
+	relResolved, err := filepath.Rel(root, resolved)
+	if err != nil || !filepath.IsLocal(relResolved) {
+		writeError(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	f, info, err := tools.OpenRegularInRoot(wsRoot, relResolved)
+	switch {
+	case errors.Is(err, tools.ErrNotRegularFile) && info != nil && info.IsDir():
 		writeError(w, http.StatusBadRequest, "path is a directory; use ?format=zip to download the workspace")
 		return
+	case errors.Is(err, tools.ErrNotRegularFile):
+		writeError(w, http.StatusBadRequest, "path is not a regular file")
+		return
+	case os.IsNotExist(err):
+		writeError(w, http.StatusNotFound, "file not found")
+		return
+	case err != nil:
+		writeError(w, http.StatusBadRequest, "file unavailable")
+		return
 	}
+	defer func() { _ = f.Close() }()
 
 	if maxBytes := workspaceDownloadMaxBytes(); info.Size() > maxBytes {
 		taskIDStr := chi.URLParam(r, "task_id")
@@ -306,13 +323,8 @@ func (h *Handlers) TaskWorkspaceFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", dlName))
 
-	f, err := os.Open(resolved) //nolint:gosec // resolved is validated by SafeWorkspaceJoin to live under the workspace root
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to open file")
-		return
-	}
-	defer func() { _ = f.Close() }()
-	http.ServeContent(w, r, filepath.Base(resolved), info.ModTime(), f)
+	// Serve exactly the size checked above, even if the file grows meanwhile.
+	http.ServeContent(w, r, filepath.Base(resolved), info.ModTime(), io.NewSectionReader(f, 0, info.Size()))
 }
 
 // streamWorkspaceZip streams the whole workspace as a ZIP archive. It honours the
@@ -327,9 +339,18 @@ func (h *Handlers) streamWorkspaceZip(w http.ResponseWriter, _ *http.Request, ta
 	var total int64
 	type zipItem struct {
 		rel  string
-		full string
+		size int64
 		info fs.FileInfo
 	}
+	// Every entry is examined and later opened through os.Root, so neither the
+	// pre-flight nor the copy can follow a link out of the workspace, even one
+	// that appears after the walk.
+	wsRoot, err := os.OpenRoot(root)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to open workspace")
+		return
+	}
+	defer func() { _ = wsRoot.Close() }()
 	var items []zipItem
 	//nolint:gosec // G703: root is the symlink-resolved workspace dir from loadWorkspaceTask (a DB-stored path), not raw request input; each entry is re-validated by SafeWorkspaceJoin below.
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -343,19 +364,20 @@ func (h *Handlers) streamWorkspaceZip(w http.ResponseWriter, _ *http.Request, ta
 		if rerr != nil {
 			return nil //nolint:nilerr // a single un-relativizable path is skipped, not fatal to the archive
 		}
-		full, jerr := tools.SafeWorkspaceJoin(root, rel)
-		if jerr != nil {
+		if _, jerr := tools.SafeWorkspaceJoin(root, rel); jerr != nil {
 			return nil //nolint:nilerr // skip anything that fails the guard (escaping symlink etc.); never abort the walk
 		}
-		info, ierr := d.Info()
-		if ierr != nil {
-			return nil //nolint:nilerr // a single stat failure is skipped, not fatal to the archive
+		// Size and type of what the entry names (an in-workspace link counts
+		// as its target), so the cap sums the bytes that will be copied.
+		info, ierr := wsRoot.Stat(rel)
+		if ierr != nil || !info.Mode().IsRegular() {
+			return nil //nolint:nilerr // a single stat failure or non-regular entry is skipped, not fatal to the archive
 		}
 		total += info.Size()
 		if total > maxBytes {
 			return errZipTooLarge
 		}
-		items = append(items, zipItem{rel: filepath.ToSlash(rel), full: full, info: info})
+		items = append(items, zipItem{rel: rel, size: info.Size(), info: info})
 		return nil
 	})
 	if errors.Is(walkErr, errZipTooLarge) {
@@ -371,21 +393,25 @@ func (h *Handlers) streamWorkspaceZip(w http.ResponseWriter, _ *http.Request, ta
 	zw := zip.NewWriter(w)
 	defer func() { _ = zw.Close() }()
 	for _, it := range items {
+		src, _, oerr := tools.OpenRegularInRoot(wsRoot, it.rel)
+		if oerr != nil {
+			continue // changed since the pre-flight: left out
+		}
 		hdr, herr := zip.FileInfoHeader(it.info)
 		if herr != nil {
+			_ = src.Close()
 			return
 		}
-		hdr.Name = it.rel
+		hdr.Name = filepath.ToSlash(it.rel)
 		hdr.Method = zip.Deflate
 		entry, eerr := zw.CreateHeader(hdr)
 		if eerr != nil {
+			_ = src.Close()
 			return
 		}
-		src, oerr := os.Open(it.full)
-		if oerr != nil {
-			return
-		}
-		_, cerr := io.Copy(entry, src)
+		// Copy no more than the pre-flight size, so the archive stays within
+		// the cap however the file changes while it is read.
+		_, cerr := io.Copy(entry, io.LimitReader(src, it.size))
 		_ = src.Close()
 		if cerr != nil {
 			return

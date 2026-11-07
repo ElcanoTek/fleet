@@ -29,11 +29,13 @@ func (g *Gateway) handleOrchLogin(w http.ResponseWriter, r *http.Request) {
 	g.dispatch(w, r, g.orch, "orchestrator", c, textJSON)
 }
 
-// handleOrchLogout is POST /api/orchestrator/auth/logout: ends the
-// orchestrator's own server-side state (best effort, called by every
-// surface's sign-out before the top-level /api/auth/logout form). Forwards a
-// presented Authorization header and any cookie deletion the orchestrator
-// answers with.
+// handleOrchLogout is POST /api/orchestrator/auth/logout: the orchestrator's
+// part of sign-out (best effort, called by every surface's sign-out before the
+// top-level /api/auth/logout form). It forwards a presented Authorization
+// header — the orchestrator ends that bearer's password-login session
+// server-side (ElcanoLogout) — and any cookie deletion the orchestrator
+// answers with. Without a bearer there is no orchestrator-side session to end:
+// cookie sessions are the gateway's, ended by /api/auth/logout.
 func (g *Gateway) handleOrchLogout(w http.ResponseWriter, r *http.Request) {
 	if !g.verifyOrigin(w, r) {
 		return

@@ -2,6 +2,7 @@ package playwrightrunner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -255,5 +256,57 @@ func TestRunAbortsSecretFillAfterCrossOriginRedirect(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cross-origin") {
 		t.Fatalf("expected cross-origin error, got: %v", err)
+	}
+}
+
+// TestRunnersLaunchWithSharedChromiumArgs pins the Chromium command line the
+// embedded scripts start with: the one-shot runners use chromiumLaunchArgs and
+// the live-session workers chromiumSessionLaunchArgs, both carrying the WebRTC
+// IP-handling policy in both spellings, rendered into each script with no
+// placeholder left behind.
+func TestRunnersLaunchWithSharedChromiumArgs(t *testing.T) {
+	for name, args := range map[string][]string{
+		"runner":  chromiumLaunchArgs,
+		"session": chromiumSessionLaunchArgs,
+	} {
+		for _, want := range []string{
+			"--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+			"--webrtc-ip-handling-policy=disable_non_proxied_udp",
+		} {
+			found := false
+			for _, arg := range args {
+				if arg == want {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s launch args %v are missing %s", name, args, want)
+			}
+		}
+	}
+
+	render := func(args []string) string {
+		raw, err := json.Marshal(args)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(raw)
+	}
+	runnerArgs, sessionArgs := render(chromiumLaunchArgs), render(chromiumSessionLaunchArgs)
+	scripts := []struct {
+		name, script, want string
+	}{
+		{"python runner", embeddedPythonRunner, "launch_args = list(" + runnerArgs + ")"},
+		{"node runner", embeddedNodeRunner, "const launchArgs = [..." + runnerArgs + "];"},
+		{"python session", embeddedPythonSessionWorker, "launch_args = list(" + sessionArgs + ")"},
+		{"node session", embeddedNodeSessionWorker, "const launchArgs = [..." + sessionArgs + "];"},
+	}
+	for _, sc := range scripts {
+		if strings.Contains(sc.script, launchArgsPlaceholder) || strings.Contains(sc.script, sessionLaunchArgsPlaceholder) {
+			t.Errorf("%s still carries a launch-args placeholder", sc.name)
+		}
+		if !strings.Contains(sc.script, sc.want) {
+			t.Errorf("%s does not build its launch args from the shared list (want %s)", sc.name, sc.want)
+		}
 	}
 }

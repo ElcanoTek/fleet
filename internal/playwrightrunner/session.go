@@ -718,7 +718,13 @@ func randomHex(nBytes int) (string, error) {
 	return hex.EncodeToString(buf), nil
 }
 
-const embeddedPythonSessionWorker = `
+// The live-session workers launch with chromiumSessionLaunchArgs (runner.go).
+var (
+	embeddedPythonSessionWorker = renderLaunchArgs(embeddedPythonSessionWorkerTemplate, sessionLaunchArgsPlaceholder, chromiumSessionLaunchArgs)
+	embeddedNodeSessionWorker   = renderLaunchArgs(embeddedNodeSessionWorkerTemplate, sessionLaunchArgsPlaceholder, chromiumSessionLaunchArgs)
+)
+
+const embeddedPythonSessionWorkerTemplate = `
 import asyncio
 import base64
 import json
@@ -929,12 +935,7 @@ async def main():
     parsed_base = urllib.parse.urlsplit(replace_secrets(init_cmd.get("url") or "", creds))
     base_origin = f"{parsed_base.scheme.lower()}://{parsed_base.netloc.lower()}" if parsed_base.scheme and parsed_base.netloc else ""
 
-    launch_args = [
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--disable-extensions",
-        "--no-first-run",
-    ]
+    launch_args = list(__FLEET_CHROMIUM_SESSION_LAUNCH_ARGS__)
     if proxy_server:
         launch_args.append(f"--proxy-server={proxy_server}")
         launch_args.append("--proxy-bypass-list=<-loopback>")
@@ -1123,7 +1124,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 `
 
-const embeddedNodeSessionWorker = `
+const embeddedNodeSessionWorkerTemplate = `
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
@@ -1366,12 +1367,7 @@ async function pushSnapshotFrame(page) {
     return;
   }
 
-  const launchArgs = [
-    "--disable-dev-shm-usage",
-    "--disable-gpu",
-    "--disable-extensions",
-    "--no-first-run",
-  ];
+  const launchArgs = [...__FLEET_CHROMIUM_SESSION_LAUNCH_ARGS__];
   if (proxyServer) {
     launchArgs.push("--proxy-server=" + proxyServer);
     launchArgs.push("--proxy-bypass-list=<-loopback>");

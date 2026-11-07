@@ -4,6 +4,7 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,6 +102,40 @@ func TestDeleteTaskMissing(t *testing.T) {
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 	if rr := deleteTaskRequest(t, r, uuid.New()); rr.Code != http.StatusNotFound {
+		t.Fatalf("DELETE unknown id = %d, want 404", rr.Code)
+	}
+}
+
+// The authorization lookup answers 404 only for a task that does not exist;
+// a lookup that fails (here, a request whose context is already cancelled)
+// is a 500 on both the cancel and the delete route.
+func TestCancelAndDeleteLookupFailureIsNotNotFound(t *testing.T) {
+	r, store, cleanup := setupTestHandlerWithStore(t)
+	defer cleanup()
+	task := models.NewTask(models.TaskCreate{Prompt: "still here"})
+	if _, err := store.AddTask(task); err != nil {
+		t.Fatalf("AddTask: %v", err)
+	}
+	for _, path := range []string{"/tasks/" + task.ID.String(), "/tasks/" + task.ID.String() + "/permanent"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		req := httptest.NewRequest(http.MethodDelete, path, nil).WithContext(ctx)
+		req.Header.Set("X-API-Key", "test-admin-key")
+		rr := httptest.NewRecorder()
+		r.ServeHTTP(rr, req)
+		if rr.Code != http.StatusInternalServerError {
+			t.Errorf("DELETE %s with a failing lookup = %d, want 500: %s", path, rr.Code, rr.Body.String())
+		}
+	}
+	if got, _ := store.GetTask(task.ID); got == nil || got.Status != task.Status {
+		t.Fatalf("a failed lookup must leave the task alone, got %+v", got)
+	}
+	// An unknown id on the cancel route is still a 404.
+	req := httptest.NewRequest(http.MethodDelete, "/tasks/"+uuid.NewString(), nil)
+	req.Header.Set("X-API-Key", "test-admin-key")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
 		t.Fatalf("DELETE unknown id = %d, want 404", rr.Code)
 	}
 }

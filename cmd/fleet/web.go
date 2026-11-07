@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/safe"
 	"github.com/ElcanoTek/fleet/internal/webui"
 )
@@ -86,6 +87,8 @@ func gatewayConfig(cfg *config.Config) webui.Config {
 	// Decided once by config.Load so the gateway and both backends agree.
 	wc.PasswordLoginDisabled = cfg.PasswordLoginDisabled
 	wc.AccountsManagedByAuth = cfg.AccountsManagedByAuth
+	// The same client-address resolver the backends use.
+	wc.TrustedProxies = httpmw.NewTrustedProxies(cfg.TrustedProxies)
 	return wc
 }
 

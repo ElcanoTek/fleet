@@ -871,3 +871,55 @@ read:
 		t.Errorf("missing the WORKING transition: %+v", frames)
 	}
 }
+
+// A streaming send or answer from a credential at its stream cap is refused
+// before the task is created or resumed: the refusal leaves nothing changed.
+func TestA2AStreamingRefusedAtCapChangesNothing(t *testing.T) {
+	store, keyMgr, mux, h := setupA2AHandlers(t, false)
+	rawA, keyA := mintTaskKey(t, keyMgr, "capped")
+	streamKey := a2aStreamKey(principal{apiKey: &apikeys.APIKey{KeyID: keyA}})
+	for i := 0; i < a2aMaxConcurrentStreamsPerPrincipal; i++ {
+		if !h.a2aStreamsBy.acquire(streamKey) {
+			t.Fatal("setup acquire refused")
+		}
+	}
+	countTasks := func() int {
+		t.Helper()
+		var n int
+		if err := store.DB().Conn().QueryRowContext(context.Background(), "SELECT count(*) FROM tasks").Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	paused := &models.Task{
+		ID: uuid.New(), Prompt: "needs a human answer", Status: models.TaskStatusPausedAwaitingInput,
+		CreatedAt: time.Now().UTC(), CreatedByKeyID: &keyA, Timezone: "UTC",
+	}
+	if _, err := store.AddTask(paused); err != nil {
+		t.Fatal(err)
+	}
+	before := countTasks()
+
+	rr, env := rpc(t, mux, rawA, "SendStreamingMessage", map[string]any{"message": userMessage("start something", "")})
+	if ct := rr.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatal("a refused stream must not start SSE")
+	}
+	wantRPCError(t, env, -32000, "")
+	if got := countTasks(); got != before {
+		t.Fatalf("task count = %d after a refused streaming send, want %d", got, before)
+	}
+
+	_, env = rpc(t, mux, rawA, "SendStreamingMessage", map[string]any{"message": userMessage("prod, please", paused.ID.String())})
+	wantRPCError(t, env, -32000, "")
+	row, err := store.GetTask(paused.ID)
+	if err != nil || row == nil {
+		t.Fatal(err)
+	}
+	if row.Status != models.TaskStatusPausedAwaitingInput {
+		t.Fatalf("task status = %s after a refused streaming answer, want it still awaiting input", row.Status)
+	}
+	if h.a2aStreams != 0 || h.a2aStreamsBy.byPrincipal[streamKey] != a2aMaxConcurrentStreamsPerPrincipal {
+		t.Fatalf("counts after refusals = %d / %d, want 0 / %d", h.a2aStreams, h.a2aStreamsBy.byPrincipal[streamKey], a2aMaxConcurrentStreamsPerPrincipal)
+	}
+}

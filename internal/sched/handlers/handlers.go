@@ -92,7 +92,7 @@ type Config struct {
 	// FLEET_SCHED_RATE_LIMIT_PER_MINUTE / _PER_DAY / _GLOBAL_PER_MINUTE.
 	SchedRateLimitPerMinute       int // default 60
 	SchedRateLimitPerDay          int // default 500
-	SchedGlobalRateLimitPerMinute int // default 200; process-wide across all keys
+	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
 	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
 	// the orchestrator's channel authenticator. The web tier — the SOLE
@@ -148,7 +148,8 @@ type Handlers struct {
 	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
 	// POST /upload), shared implementation with the chat server
 	// (internal/ratelimit). taskKeyRL is per-API-key (or per-IP for cookie/bearer
-	// callers); taskGlobalRL is a single process-wide window. See
+	// callers); taskGlobalRL holds the process-wide windows (one for
+	// authenticated callers, one for everyone else). See
 	// ratelimit_middleware.go.
 	taskKeyRL    *ratelimit.Limiter
 	taskGlobalRL *ratelimit.Limiter
@@ -211,6 +212,9 @@ type Handlers struct {
 	// A plain int64 driven by sync/atomic, not atomic.Int64: a test clones the
 	// Handlers value, and the embedded noCopy would flag that clone.
 	a2aStreams int64
+	// a2aStreamsBy counts the same streams per principal against
+	// a2aMaxConcurrentStreamsPerPrincipal (a2a.go).
+	a2aStreamsBy *a2aStreamCounter
 
 	// systemPromptForPersona resolves the assembled scheduled system prompt
 	// (default prompt + persona expertise) for a persona override, exactly as the
@@ -366,6 +370,7 @@ func New(cfg Config, store *storage.Storage, keyMgr *apikeys.Manager) *Handlers 
 		taskKeyRL:    ratelimit.New(cfg.SchedRateLimitPerMinute, cfg.SchedRateLimitPerDay),
 		taskGlobalRL: ratelimit.New(cfg.SchedGlobalRateLimitPerMinute, 0),
 		statsCache:   &statsCache{},
+		a2aStreamsBy: newA2AStreamCounter(),
 	}
 }
 
@@ -1656,21 +1661,29 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Admins and explicitly-scoped API keys retain the broad cancel permission.
-	// A normal member may stop only a task they personally created. This makes
-	// the live viewer's Stop control useful to job authors without granting them
-	// the ability to interrupt a teammate's run.
-	var taskForAuth *models.Task
-	if !p.hasPermission(models.PermissionCancelTask) {
-		taskForAuth, err = h.storage.GetTask(taskID)
-		if err != nil || taskForAuth == nil {
-			writeError(w, http.StatusNotFound, "Task not found")
-			return
-		}
-		if !p.ownsTask(taskForAuth) {
+	// The cancel permission reaches the tasks the principal can see (every
+	// task for admin and view_all_logs); the task's creator — user or API key
+	// — may always stop it (taskStoppableByPrincipal). A task outside both is
+	// a 404, like a task read the principal may not make; a visible task the
+	// principal may not stop (a fleet-wide reader without the cancel grant)
+	// keeps the explanatory 403. Only a missing row is a 404; a failed lookup
+	// is a 500, so a storage fault never reads as "no such task".
+	taskForAuth, err := h.storage.GetTaskWithContext(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to look up task")
+		return
+	}
+	if taskForAuth == nil {
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
+	}
+	if !taskStoppableByPrincipal(p, taskForAuth) {
+		if taskVisibleToPrincipal(p, taskForAuth) {
 			writeError(w, http.StatusForbidden, "Only the task creator or an admin can stop this run")
 			return
 		}
+		writeError(w, http.StatusNotFound, "Task not found")
+		return
 	}
 
 	// Atomic cancel with WHO-stopped-it attribution (#508): the reason lands on
@@ -1729,19 +1742,29 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.storage.GetTask(taskID)
-	if err != nil || task == nil {
+	// As in CancelTask, only a missing row is a 404.
+	task, err := h.storage.GetTaskWithContext(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to look up task")
+		return
+	}
+	if task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
 
-	// Same authorization as stopping: admins and explicitly-scoped API keys may
-	// remove any task; a member may remove one they created. Deleting is more
-	// destructive than cancelling, but it is destructive to the SAME task, so a
-	// stricter rule here would only mean a job author can kill their own run and
-	// then not clean it up.
-	if !p.hasPermission(models.PermissionCancelTask) && !p.ownsTask(task) {
-		writeError(w, http.StatusForbidden, "Only the task creator or an admin can delete this task")
+	// Same authorization as stopping (taskStoppableByPrincipal): the cancel
+	// permission over the tasks the principal can see, or having created the
+	// task. Deleting is more destructive than cancelling, but it is
+	// destructive to the SAME task, so a stricter rule here would only mean a
+	// job author can kill their own run and then not clean it up. Same 404 /
+	// 403 split as CancelTask.
+	if !taskStoppableByPrincipal(p, task) {
+		if taskVisibleToPrincipal(p, task) {
+			writeError(w, http.StatusForbidden, "Only the task creator or an admin can delete this task")
+			return
+		}
+		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
 

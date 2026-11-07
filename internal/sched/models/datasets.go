@@ -75,6 +75,13 @@ type Dataset struct {
 	Concurrency int             `json:"concurrency"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+	// CreatedByUserID / CreatedByKeyID record the principal that created the
+	// dataset — the creating user, or the creating API key — the same pair a
+	// task records (Task.CreatedBy / Task.CreatedByKeyID). They decide which
+	// principals may read and change the dataset; both nil (a dataset created
+	// before they existed) leaves it to fleet-wide grant holders.
+	CreatedByUserID *uuid.UUID `json:"created_by_user_id,omitempty"`
+	CreatedByKeyID  *string    `json:"created_by_key_id,omitempty"`
 	// RowCounts is populated on reads that aggregate row status (list/get).
 	RowCounts map[string]int `json:"row_counts,omitempty"`
 }

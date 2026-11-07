@@ -812,6 +812,12 @@ func (s *Storage) GetUserByToken(token string) (*models.User, error) {
 	return s.db.GetUserByToken(context.Background(), token)
 }
 
+// RevokeSessionToken clears the password-login session the bearer token
+// belongs to (see db.RevokeSessionToken).
+func (s *Storage) RevokeSessionToken(ctx context.Context, token string) (bool, error) {
+	return s.db.RevokeSessionToken(ctx, token)
+}
+
 // GetScheduledTasks gets scheduled tasks ready to run up to a limit, strictly
 // after the (afterScheduledFor, afterID) keyset cursor — zero values start from
 // the beginning. See db.GetScheduledTasks for why keyset paging (#566).
@@ -2438,9 +2444,10 @@ func (s *Storage) GetDataset(ctx context.Context, id uuid.UUID) (*models.Dataset
 	return s.db.GetDataset(ctx, id)
 }
 
-// ListDatasets returns every dataset, newest first.
-func (s *Storage) ListDatasets(ctx context.Context) ([]*models.Dataset, error) {
-	return s.db.ListDatasets(ctx)
+// ListDatasets returns the datasets in scope (the zero scope = every
+// dataset), newest first.
+func (s *Storage) ListDatasets(ctx context.Context, scope db.DatasetScope) ([]*models.Dataset, error) {
+	return s.db.ListDatasets(ctx, scope)
 }
 
 // UpdateDatasetStatus applies a guarded status transition.

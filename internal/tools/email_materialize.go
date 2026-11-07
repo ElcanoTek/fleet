@@ -2,9 +2,13 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -115,18 +119,18 @@ func MaterializeContentFile(convID, rawInput string) (string, error) {
 // attachment file not found." Doing this at staging time means the staged args
 // row carries absolute paths, and the replay after approval works.
 //
-// Symmetric with MaterializeContentFile on the two rules that matter: the same
-// convID workspace anchoring for relative paths, NO `~/` or `$VAR` expansion
-// (the path is model-authored, and os.ExpandEnv used to substitute host env
-// values — connector secrets — into persisted approval args), and the same
-// containment gate — every path, absolute ones included, must resolve under the
-// workspace root (attachmentPathContained), because the connector opens it
-// HOST-side at send time and an absolute path here is a request to email a host
-// file. Unlike content_file, whose bytes this process reads and inlines, the
-// path is only REWRITTEN here; the sendgrid MCP subprocess is what opens it, so
-// the file need not exist at staging time (preview_email stages before the file
-// is necessarily on disk in some flows). Skips unparseable args, missing
-// arrays, and non-string path fields.
+// No `~/` or `$VAR` expansion: the path is model-authored, and os.ExpandEnv
+// used to substitute host env values into persisted approval args.
+//
+// Every path, absolute ones included, must lie inside one of the two places an
+// agent's files legitimately live (attachmentBasesFor): the conversation's own
+// workspace directory, or the staged shared-file library. When the path already
+// exists, it is resolved through its symlinks and must still land inside one of
+// them as a regular file. The file need not exist at staging time (some flows
+// stage before the file is on disk), so this is a staging-time check only: the
+// authoritative gate is SnapshotEmailAttachments, which re-resolves each path
+// immediately before the send and hands the connector a private copy. Skips
+// unparseable args, missing arrays, and non-string path fields.
 func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 	var args map[string]any
 	if err := json.Unmarshal([]byte(rawInput), &args); err != nil {
@@ -140,11 +144,39 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 	if !hasA && !hasI {
 		return rawInput, nil
 	}
+	bases, err := attachmentBasesFor(convID)
+	if err != nil {
+		return "", err
+	}
+	changed, err := forEachAttachmentPath(args, func(file string) (string, error) {
+		path := bases.lexical(file)
+		if err := bases.checkStaged(path); err != nil {
+			return "", err
+		}
+		return path, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	if !changed {
+		return rawInput, nil
+	}
+	out, err := json.Marshal(args)
+	if err != nil {
+		return rawInput, err
+	}
+	return string(out), nil
+}
+
+// forEachAttachmentPath calls fn with every non-empty string `path` (trimmed)
+// in the `attachments` and `inline_attachments` arrays of args, writes the value
+// fn returns back in its place, and reports whether any value changed.
+func forEachAttachmentPath(args map[string]any, fn func(path string) (string, error)) (bool, error) {
 	changed := false
-	rewriteList := func(key string) error {
+	for _, key := range []string{"attachments", "inline_attachments"} {
 		raw, ok := args[key].([]any)
 		if !ok {
-			return nil
+			continue
 		}
 		for i, item := range raw {
 			obj, ok := item.(map[string]any)
@@ -159,71 +191,336 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 			if file == "" {
 				continue
 			}
-			// No $VAR / ~ expansion (the same rule content_file adopted in
-			// #573): the path is model-authored, and os.ExpandEnv substituted
-			// the VALUE of any fleet env var — every connector secret the
-			// host holds — into a string that was then persisted verbatim in
-			// approvals.args_json, shown on the approval card, and replayed
-			// to the connector.
-			path := filepath.Clean(file)
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(WorkspaceDirForConversation(convID), path)
+			next, err := fn(file)
+			if err != nil {
+				return false, err
 			}
-			if cerr := attachmentPathContained(path); cerr != nil {
-				return cerr
-			}
-			if path != obj["path"] {
-				obj["path"] = path
+			if next != obj["path"] {
+				obj["path"] = next
 				raw[i] = obj
 				changed = true
 			}
 		}
 		args[key] = raw
-		return nil
 	}
-	for _, key := range []string{"attachments", "inline_attachments"} {
-		if err := rewriteList(key); err != nil {
-			return "", err
-		}
-	}
-	if !changed {
-		return rawInput, nil
-	}
-	out, err := json.Marshal(args)
-	if err != nil {
-		return rawInput, err
-	}
-	return string(out), nil
+	return changed, nil
 }
 
-// attachmentPathContained refuses an attachment path that resolves outside
-// the workspace root. The connector opens the file host-side at send time, so
-// an absolute path here is a request to email a HOST file; the only files an
-// agent can legitimately attach are the ones it (or an upload / the shared
-// library) put under the workspace root. A prompt-injected
-// `/etc/fleet/fleet.env` used to sail through to the approval card, one
-// inattentive click from exfiltration. Lexical check (Clean + Rel), since the
-// file need not exist at staging time.
-func attachmentPathContained(path string) error {
-	root, err := filepath.Abs(workspaceRootForContainment())
-	if err != nil {
-		return fmt.Errorf("resolve workspace root for attachment %q: %w", path, err)
+// attachmentBases are the two directories an attachment may come from, both
+// absolute: the run's own working directory (a conversation's workspace, or a
+// scheduled job's) and the staged shared-file library (reachable through the
+// `shared` link and mounted into both kinds of sandbox). The library is a
+// legitimate source because the shared-files prompt block tells agents to use
+// `shared/<name>`. root is the workspace root they live under, which the
+// attachment copies must stay out of.
+type attachmentBases struct {
+	conv   string
+	shared string
+	root   string
+}
+
+func attachmentBasesFor(convID string) (attachmentBases, error) {
+	if !filepath.IsLocal(convID) || strings.ContainsAny(convID, `/\`) {
+		return attachmentBases{}, fmt.Errorf("attachments need a conversation workspace (conversation id %q is not usable)", convID)
 	}
-	abs, err := filepath.Abs(path)
+	conv, err := filepath.Abs(WorkspaceDirForConversation(convID))
 	if err != nil {
-		return fmt.Errorf("resolve attachment path %q: %w", path, err)
+		return attachmentBases{}, fmt.Errorf("resolve conversation workspace for attachments: %w", err)
 	}
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("attachment path %q is outside the workspace root %s — attach files the agent wrote to its workspace (or shared files) instead", path, root)
+	shared := SharedFilesDir(workspaceRootForContainment())
+	conv = filepath.Clean(conv)
+	return attachmentBases{conv: conv, shared: filepath.Clean(shared), root: filepath.Dir(conv)}, nil
+}
+
+// attachmentBasesForDir is attachmentBases for a run whose working directory
+// is workDir under workspaceRoot (a scheduled job's directory, a worktree, or
+// the root itself when the operator chose the shared workspace).
+func attachmentBasesForDir(workspaceRoot, workDir string) (attachmentBases, error) {
+	if strings.TrimSpace(workDir) == "" || strings.TrimSpace(workspaceRoot) == "" {
+		return attachmentBases{}, errors.New("attachments need the run's workspace directory")
+	}
+	dir, err := filepath.Abs(workDir)
+	if err != nil {
+		return attachmentBases{}, fmt.Errorf("resolve run workspace for attachments: %w", err)
+	}
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return attachmentBases{}, fmt.Errorf("resolve workspace root for attachments: %w", err)
+	}
+	return attachmentBases{conv: filepath.Clean(dir), shared: filepath.Clean(SharedFilesDir(root)), root: filepath.Clean(root)}, nil
+}
+
+// lexical anchors a model-authored path: relative paths are joined onto the
+// conversation workspace; absolute ones are only cleaned.
+func (b attachmentBases) lexical(file string) string {
+	path := filepath.Clean(file)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(b.conv, path)
+	}
+	return path
+}
+
+// checkStagingDir refuses an attachment staging directory (dir, which exists)
+// that lies inside the workspace root, the run's working directory or the
+// shared library. Each is compared both as written and with symlinks
+// resolved on both sides, so a staging parent that is (or sits under) a link
+// into a workspace is refused too. A path that cannot be resolved is refused,
+// except a base that does not exist, which can hold nothing.
+func (b attachmentBases) checkStagingDir(dir string) error {
+	refuse := func(cause error) error {
+		if cause != nil {
+			return fmt.Errorf("attachment staging directory must be outside the workspace root: %w", cause)
+		}
+		return errors.New("attachment staging directory must be outside the workspace root")
+	}
+	dirAbs, err := filepath.Abs(dir)
+	if err != nil {
+		return refuse(err)
+	}
+	dirReal, err := filepath.EvalSymlinks(dirAbs)
+	if err != nil {
+		return refuse(err)
+	}
+	if dirReal, err = filepath.Abs(dirReal); err != nil {
+		return refuse(err)
+	}
+	for _, base := range []string{b.root, b.conv, b.shared} {
+		if within(base, dirAbs) || within(base, dirReal) {
+			return refuse(nil)
+		}
+		baseReal, err := filepath.EvalSymlinks(base)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return refuse(err)
+		}
+		if baseReal, err = filepath.Abs(baseReal); err != nil {
+			return refuse(err)
+		}
+		if within(baseReal, dirReal) {
+			return refuse(nil)
+		}
 	}
 	return nil
 }
 
-// workspaceRootForContainment is the root every attachment must live under:
-// $FLEET_WORKSPACE_ROOT / $CHAT_WORKSPACE_ROOT, else ./workspace — the same
-// resolution WorkspaceDirForConversation applies before appending the id, so
-// shared-library files staged directly under the root qualify too.
+// within reports whether path is dir or lies under it (both cleaned, absolute).
+func within(dir, path string) bool {
+	return path == dir || strings.HasPrefix(path, dir+string(filepath.Separator))
+}
+
+func outsideErr(path string) error {
+	return fmt.Errorf("attachment path %q is outside this run's workspace — attach files the agent wrote to its workspace (or shared files) instead", path)
+}
+
+// checkStaged is the staging-time check: lexical containment always, and for
+// an existing entry, symlink resolution plus a regular-file check.
+func (b attachmentBases) checkStaged(path string) error {
+	if !within(b.conv, path) && !within(b.shared, path) {
+		return outsideErr(path)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil // need not exist yet; SnapshotEmailAttachments checks again before sending
+		}
+		return fmt.Errorf("attachment %q: %w", path, err)
+	}
+	base, rel, err := b.resolve(path)
+	if err != nil {
+		return err
+	}
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return fmt.Errorf("attachment %q: %w", path, err)
+	}
+	defer root.Close()
+	info, err := root.Stat(rel)
+	if err != nil {
+		return fmt.Errorf("attachment %q: %w", path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("attachment %q is not a regular file", path)
+	}
+	return nil
+}
+
+// resolve follows path's symlinks and returns the base directory it resolves
+// under (the conversation workspace or the shared library, as they resolve
+// themselves) and the path relative to that base. A path that resolves
+// anywhere else is refused.
+func (b attachmentBases) resolve(path string) (base, rel string, err error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", "", fmt.Errorf("attachment %q: %w", path, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", "", fmt.Errorf("attachment %q: %w", path, err)
+	}
+	for _, dir := range []string{b.conv, b.shared} {
+		dirResolved, derr := filepath.EvalSymlinks(dir)
+		if derr != nil {
+			continue
+		}
+		if dirResolved, derr = filepath.Abs(dirResolved); derr != nil {
+			continue
+		}
+		if !within(dirResolved, resolved) || resolved == dirResolved {
+			continue
+		}
+		r, rerr := filepath.Rel(dirResolved, resolved)
+		if rerr != nil || !filepath.IsLocal(r) {
+			continue
+		}
+		return dirResolved, r, nil
+	}
+	return "", "", outsideErr(path)
+}
+
+// OutboundAttachmentStagingDir is where SnapshotEmailAttachments puts the
+// copies an email is sent with: <emailAttachmentDir>/outbound, a host-side
+// directory no sandbox mounts. "" when emailAttachmentDir is unset (the
+// snapshot then uses the OS temp directory).
+func OutboundAttachmentStagingDir(emailAttachmentDir string) string {
+	if strings.TrimSpace(emailAttachmentDir) == "" {
+		return ""
+	}
+	return filepath.Join(emailAttachmentDir, "outbound")
+}
+
+// MaxEmailAttachmentBytes bounds the attachments one email may carry in total,
+// matching the ~30 MiB message ceiling of the email providers fleet targets.
+const MaxEmailAttachmentBytes = 30 << 20
+
+// SnapshotEmailAttachments is the send-time half of attachment handling. For
+// each attachment path in args it re-resolves the path against the
+// conversation's workspace (or the shared library), opens it through os.Root so
+// the open itself cannot leave that directory, requires a regular file on the
+// opened descriptor, and copies at most MaxEmailAttachmentBytes in total into
+// a fresh private directory under stagingParent. args is rewritten in place to
+// name those copies (keeping each file's base name, which the connector uses as
+// the attachment name), so the connector reads files nothing else can change
+// between this check and the send. The returned cleanup removes the copies; it
+// is non-nil whenever err is nil.
+func SnapshotEmailAttachments(convID string, args map[string]any, stagingParent string) (cleanup func(), err error) {
+	if !hasAttachmentLists(args) {
+		return func() {}, nil
+	}
+	bases, err := attachmentBasesFor(convID)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotAttachments(bases, args, stagingParent)
+}
+
+// SnapshotEmailAttachmentsInDir is SnapshotEmailAttachments for a run that
+// has no conversation: a scheduled task run, whose working directory workDir
+// (its job directory, a worktree, or the root under the shared-workspace
+// setting) is the directory its sandbox mounts. Attachments must resolve
+// inside workDir or the shared-file library under workspaceRoot.
+func SnapshotEmailAttachmentsInDir(workspaceRoot, workDir string, args map[string]any, stagingParent string) (cleanup func(), err error) {
+	if !hasAttachmentLists(args) {
+		return func() {}, nil
+	}
+	bases, err := attachmentBasesForDir(workspaceRoot, workDir)
+	if err != nil {
+		return nil, err
+	}
+	return snapshotAttachments(bases, args, stagingParent)
+}
+
+func hasAttachmentLists(args map[string]any) bool {
+	_, hasA := args["attachments"].([]any)
+	_, hasI := args["inline_attachments"].([]any)
+	return hasA || hasI
+}
+
+func snapshotAttachments(bases attachmentBases, args map[string]any, stagingParent string) (cleanup func(), err error) {
+	if stagingParent == "" {
+		stagingParent = os.TempDir()
+	}
+	if err := os.MkdirAll(stagingParent, 0o700); err != nil {
+		return nil, fmt.Errorf("prepare attachment staging: %w", err)
+	}
+	dir, err := os.MkdirTemp(stagingParent, "outbound-")
+	if err != nil {
+		return nil, fmt.Errorf("prepare attachment staging: %w", err)
+	}
+	cleanup = func() { _ = os.RemoveAll(dir) }
+	// The staging directory must not be somewhere a sandbox can see.
+	if err := bases.checkStagingDir(dir); err != nil {
+		cleanup()
+		return nil, err
+	}
+	var total int64
+	n := 0
+	_, err = forEachAttachmentPath(args, func(file string) (string, error) {
+		path := bases.lexical(file)
+		if !within(bases.conv, path) && !within(bases.shared, path) {
+			return "", outsideErr(path)
+		}
+		base, rel, err := bases.resolve(path)
+		if err != nil {
+			return "", err
+		}
+		n++
+		dst := filepath.Join(dir, strconv.Itoa(n), filepath.Base(rel))
+		copied, err := copyFromRoot(base, rel, dst, MaxEmailAttachmentBytes-total)
+		if err != nil {
+			return "", fmt.Errorf("attachment %q: %w", path, err)
+		}
+		total += copied
+		return dst, nil
+	})
+	if err != nil {
+		cleanup()
+		return nil, err
+	}
+	return cleanup, nil
+}
+
+// copyFromRoot copies base/rel to dst, opening the source through os.Root and
+// requiring a regular file on the opened descriptor. It refuses a source larger
+// than budget bytes and never copies more than that.
+func copyFromRoot(base, rel, dst string, budget int64) (int64, error) {
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
+	src, info, err := OpenRegularInRoot(root, rel)
+	if err != nil {
+		return 0, err
+	}
+	defer src.Close()
+	if info.Size() > budget {
+		return 0, fmt.Errorf("attachments exceed the %d-byte limit for one email", MaxEmailAttachmentBytes)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return 0, err
+	}
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // dst is under a directory this function's caller just created with MkdirTemp
+	if err != nil {
+		return 0, err
+	}
+	n, err := io.Copy(out, io.LimitReader(src, budget+1))
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return 0, err
+	}
+	if n > budget {
+		return 0, fmt.Errorf("attachments exceed the %d-byte limit for one email", MaxEmailAttachmentBytes)
+	}
+	return n, nil
+}
+
+// workspaceRootForContainment is the workspace root: $FLEET_WORKSPACE_ROOT /
+// $CHAT_WORKSPACE_ROOT, else ./workspace — the same resolution
+// WorkspaceDirForConversation applies before appending the id. The shared-file
+// library is staged directly under it.
 func workspaceRootForContainment() string {
 	if root := fleetEnv("WORKSPACE_ROOT"); root != "" {
 		return root

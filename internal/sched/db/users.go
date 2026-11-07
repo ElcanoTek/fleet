@@ -169,6 +169,26 @@ func (db *Database) CountUsers(ctx context.Context) (int, error) {
 	return n, err
 }
 
+// RevokeSessionToken ends the password-login session the given bearer token
+// belongs to: the user row whose session_token is that token's hash has its
+// session_token and token_expires_at cleared. Matching on the hash (rather
+// than resolving the user first) means a superseded token — one replaced by a
+// later Login — matches no row and leaves the current session alone. Reports
+// whether a session was ended.
+func (db *Database) RevokeSessionToken(ctx context.Context, token string) (bool, error) {
+	if token == "" {
+		return false, nil
+	}
+	res, err := db.conn.ExecContext(ctx,
+		"UPDATE users SET session_token = NULL, token_expires_at = NULL WHERE session_token = $1",
+		models.HashToken(token))
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // GetUserByToken gets a user by session token. Returns nil if token is expired.
 func (db *Database) GetUserByToken(ctx context.Context, token string) (*models.User, error) {
 	token = models.HashToken(token)

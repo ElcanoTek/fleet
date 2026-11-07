@@ -25,7 +25,9 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/ratelimit"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -72,6 +74,12 @@ type Gateway struct {
 	oidc     *oidcClient
 	jwks     *jwksCache
 	models   *modelCatalogs
+	// loginRL throttles password sign-in attempts per client address
+	// (handleLogin).
+	loginRL *ratelimit.Limiter
+	// loginRLWarn logs, once, that sign-in attempts cannot be told apart
+	// per client (loginClientFor).
+	loginRLWarn sync.Once
 }
 
 // Options are New's collaborators.
@@ -100,6 +108,7 @@ func New(cfg Config, opts Options) (*Gateway, error) {
 			ElcanoCookieName: cfg.elcanoCookieName(),
 			RefusePassword:   cfg.PasswordLoginDisabled,
 		},
+		loginRL: ratelimit.New(loginAttemptsPerClientPerMinute, 0),
 	}
 	client := opts.HTTPClient
 	if client == nil {

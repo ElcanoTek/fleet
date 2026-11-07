@@ -75,7 +75,7 @@ func TestDatasetCRUDAndImport(t *testing.T) {
 		t.Fatalf("append must continue indexes: %+v", rows[2])
 	}
 
-	list, err := db.ListDatasets(ctx)
+	list, err := db.ListDatasets(ctx, DatasetScope{})
 	if err != nil || len(list) != 1 || list[0].RowCounts[models.DatasetRowPending] != 3 {
 		t.Fatalf("ListDatasets: %v %v", list, err)
 	}
@@ -315,7 +315,7 @@ func TestListDatasetsRowCountsPerDataset(t *testing.T) {
 		t.Fatalf("claim: %+v %v", claimed, err)
 	}
 
-	list, err := db.ListDatasets(ctx)
+	list, err := db.ListDatasets(ctx, DatasetScope{})
 	if err != nil {
 		t.Fatalf("ListDatasets: %v", err)
 	}
@@ -341,5 +341,57 @@ func TestListDatasetsRowCountsPerDataset(t *testing.T) {
 	}
 	if counts := byID[empty.ID].RowCounts; counts == nil || len(counts) != 0 {
 		t.Fatalf("row-less dataset wants an empty non-nil map, got %#v", counts)
+	}
+}
+
+// TestListDatasetsScope pins the creator scope: a user scope lists the
+// datasets that user created, a key scope those that key created, and the
+// zero scope every dataset. The creator pair round-trips through GetDataset.
+func TestListDatasetsScope(t *testing.T) {
+	db, legacy := setupDatasetFixture(t) // no recorded creator
+	ctx := context.Background()
+
+	userID := uuid.New()
+	keyID := "key-" + uuid.NewString()[:8]
+	byUser := testDataset()
+	byUser.CreatedByUserID = &userID
+	byKey := testDataset()
+	byKey.CreatedByKeyID = &keyID
+	for _, d := range []*models.Dataset{byUser, byKey} {
+		if err := db.CreateDataset(ctx, d); err != nil {
+			t.Fatalf("CreateDataset: %v", err)
+		}
+	}
+
+	ids := func(scope DatasetScope) map[uuid.UUID]bool {
+		t.Helper()
+		list, err := db.ListDatasets(ctx, scope)
+		if err != nil {
+			t.Fatalf("ListDatasets: %v", err)
+		}
+		out := map[uuid.UUID]bool{}
+		for _, d := range list {
+			out[d.ID] = true
+		}
+		return out
+	}
+
+	if got := ids(DatasetScope{VisibleToUserID: &userID}); len(got) != 1 || !got[byUser.ID] {
+		t.Errorf("user scope = %v, want only %s", got, byUser.ID)
+	}
+	if got := ids(DatasetScope{VisibleToKeyID: &keyID}); len(got) != 1 || !got[byKey.ID] {
+		t.Errorf("key scope = %v, want only %s", got, byKey.ID)
+	}
+	if got := ids(DatasetScope{}); len(got) != 3 || !got[legacy.ID] {
+		t.Errorf("zero scope = %v, want all three", got)
+	}
+
+	got, err := db.GetDataset(ctx, byUser.ID)
+	if err != nil || got.CreatedByUserID == nil || *got.CreatedByUserID != userID || got.CreatedByKeyID != nil {
+		t.Fatalf("GetDataset creator = %+v, %v", got, err)
+	}
+	got, err = db.GetDataset(ctx, legacy.ID)
+	if err != nil || got.CreatedByUserID != nil || got.CreatedByKeyID != nil {
+		t.Fatalf("legacy dataset creator = %+v, %v", got, err)
 	}
 }

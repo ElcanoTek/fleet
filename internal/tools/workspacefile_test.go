@@ -6,7 +6,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // setupWorkspace builds a temp workspace root with a couple of regular files and
@@ -175,5 +177,72 @@ func TestSafeWorkspaceJoin_NotExist(t *testing.T) {
 	}
 	if got != "" {
 		t.Errorf("missing file returned non-empty path %q", got)
+	}
+}
+
+// OpenRegularInRoot opens only regular files inside the root, judged on the
+// opened descriptor — including when the name changes after SafeWorkspaceJoin
+// approved it.
+func TestOpenRegularInRoot(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	f, info, err := OpenRegularInRoot(root, "ok.txt")
+	if err != nil || info.Size() != 2 {
+		t.Fatalf("regular file: %v %v", info, err)
+	}
+	_ = f.Close()
+	if _, _, err := OpenRegularInRoot(root, "link"); err == nil {
+		t.Fatal("a link leaving the root must not open")
+	}
+	if _, _, err := OpenRegularInRoot(root, "sub"); !errors.Is(err, ErrNotRegularFile) {
+		t.Fatalf("directory: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := OpenRegularInRoot(root, "pipe")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrNotRegularFile) {
+			t.Fatalf("FIFO: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("opening a FIFO blocked")
+	}
+
+	// Approved by SafeWorkspaceJoin, then replaced by a link before the open.
+	if _, err := SafeWorkspaceJoin(dir, "ok.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "ok.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "ok.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := OpenRegularInRoot(root, "ok.txt"); err == nil {
+		t.Fatal("a name replaced by a link leaving the root must not open")
 	}
 }

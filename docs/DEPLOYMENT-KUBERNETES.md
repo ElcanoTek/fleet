@@ -243,6 +243,16 @@ podman backend guarantees (#796).
    `FLEET_IP_ALLOWLIST`/`DENYLIST` cannot tell browsers apart (exactly as
    behind the old separate web Deployment). Filter browser clients at the
    ingress controller instead.
+   - Password sign-in is the exception: the web listener limits attempts per
+     client address itself, reading `X-Forwarded-For` only from the proxies
+     `FLEET_TRUSTED_PROXIES` names. The chart sets none, so the web listener
+     sees the ingress controller's pod address, which is private, and skips
+     the per-address limit (logging one warning); sign-in is then bounded by
+     the backend's process-wide guard alone. To limit it per browser, set
+     `FLEET_TRUSTED_PROXIES` to the addresses your ingress controller pods
+     connect from, and make sure the controller sets `X-Forwarded-For`. The
+     setting takes single IPs, not ranges, so this suits controller pods
+     with stable addresses (for example host-network pods on fixed nodes).
    - A route you add yourself straight to the orchestrator port (the public
      `/v1` API) is the same case: name the proxy that connects to it.
 10. **Run `fleet validate-config`** (`kubectl -n fleet exec deploy/fleet --

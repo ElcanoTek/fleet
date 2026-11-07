@@ -10,6 +10,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -27,6 +28,10 @@ const (
 	maxBackendEnvelopeSize = 1 << 20
 	// maxLoginBody caps the password form's body (either encoding).
 	maxLoginBody = 64 << 10
+
+	// loginAttemptsPerClientPerMinute bounds password sign-in attempts from
+	// one client address (an IPv6 client is counted by its /64).
+	loginAttemptsPerClientPerMinute = 10
 	// maxBackendDocumentSize caps the two documents the gateway reads whole
 	// for its own use — a shared-conversation snapshot (embedded into the
 	// /shared page) and a scheduled run's task + log (digested by Discuss).
@@ -217,6 +222,17 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Each attempt costs a bcrypt compare in the backend, whose own guard is
+	// process-wide; bound each client address here first so that guard is
+	// shared fairly. Only an address that names one client is limited (see
+	// loginClientFor); otherwise the backend's guard is the only bound.
+	if key, perClient := g.loginClientFor(r); perClient {
+		if ok, _ := g.loginRL.Allow(key); !ok {
+			back("throttled")
+			return
+		}
+	}
+
 	h := g.chatHeaders(identity{Email: email})
 	h.Set("Content-Type", "application/json")
 	body, n := jsonReader(map[string]string{"email": email, "password": password})
@@ -368,4 +384,53 @@ func (g *Gateway) handleMCPOAuthCallback(w http.ResponseWriter, r *http.Request)
 		detail = firstNonEmpty(data.Detail, data.Error, detail)
 	}
 	settings("?error=" + encodeURIComponent(detail))
+}
+
+// loginClientFor returns the sign-in limiter's key for r, and whether the
+// request's address names one client. It does when the address was read from
+// X-Forwarded-For past a trusted proxy (FLEET_TRUSTED_PROXIES), or when the
+// request arrived directly from a public address. It does not when the address
+// is a trusted proxy itself (no usable header), or a loopback, private or
+// link-local peer with no trusted proxy in front: that is typically a reverse
+// proxy every browser shares, and limiting it would limit everyone together.
+// In that case sign-in is bounded only by the backend's process-wide guard,
+// and a warning naming FLEET_TRUSTED_PROXIES is logged once.
+func (g *Gateway) loginClientFor(r *http.Request) (string, bool) {
+	tp := g.cfg.TrustedProxies
+	client, forwarded := tp.ClientAddr(r)
+	switch {
+	case forwarded && !tp.Trusts(client):
+		return loginClientKey(client), true
+	case client.IsValid() && !tp.Trusts(client) && !sharedProxySpace(client):
+		return loginClientKey(client), true
+	}
+	g.loginRLWarn.Do(func() {
+		log.Printf("webui: password sign-in attempts arrive from a proxy or private address without a usable X-Forwarded-For, so they are not limited per client — only by the backend's process-wide guard. Set FLEET_TRUSTED_PROXIES to the address the reverse proxy connects from (docs/DEPLOYMENT.md).")
+	})
+	return "", false
+}
+
+// sharedProxySpace reports addresses a reverse proxy in front of the gateway
+// typically connects from: loopback, private (RFC 1918 / RFC 4193),
+// link-local and unspecified.
+func sharedProxySpace(addr netip.Addr) bool {
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast() || addr.IsUnspecified()
+}
+
+// loginClientKey is the sign-in limiter's key for a client address: the
+// address itself for IPv4, its /64 for IPv6 (one host typically holds a whole
+// /64), and a single shared key for an address that did not parse.
+func loginClientKey(addr netip.Addr) string {
+	switch {
+	case !addr.IsValid():
+		return "unknown"
+	case addr.Is4():
+		return addr.String()
+	default:
+		p, err := addr.Prefix(64)
+		if err != nil {
+			return addr.String()
+		}
+		return p.String()
+	}
 }

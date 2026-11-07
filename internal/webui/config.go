@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/httpmw"
 	"github.com/ElcanoTek/fleet/internal/websession"
 )
 
@@ -62,6 +63,12 @@ type Config struct {
 	// channel (the same secret unless ORCHESTRATOR_SERVER_TOKEN overrides it).
 	ChatToken         string
 	OrchestratorToken string
+
+	// TrustedProxies is config.Config.TrustedProxies (FLEET_TRUSTED_PROXIES),
+	// set by the caller: the proxies whose X-Forwarded-For the gateway reads
+	// to name a request's client, with the same resolver the backends use.
+	// The zero value trusts none (the client is the TCP peer).
+	TrustedProxies httpmw.TrustedProxies
 
 	// DevServer, when set (FLEET_WEB_DEV_SERVER, e.g. http://127.0.0.1:5173),
 	// makes the gateway fetch index.html and proxy module/asset requests from a
