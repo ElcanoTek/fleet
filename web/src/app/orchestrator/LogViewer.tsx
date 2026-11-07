@@ -492,6 +492,15 @@ const clampText = (s: string, max = 20_000) =>
     ? s.slice(0, max) + "\n… output capped at 20,000 characters"
     : s;
 
+// streamGoneMessage maps a stream failure that will not heal on reconnect to
+// the final message shown in place of "reconnecting…"; null means transient.
+function streamGoneMessage(err: unknown): string | null {
+  if (!(err instanceof OrchestratorError)) return null;
+  if (err.status === 401) return "Sign in again to keep watching this run.";
+  if (err.status === 403 || err.status === 404) return "This run is no longer available.";
+  return null;
+}
+
 // LiveTaskView attaches to GET /tasks/{id}/stream and renders the run's
 // tool-by-tool activity as it happens (#508): each tool call, its result, and
 // the assistant's text, chronologically, with an optional Stop control that
@@ -679,6 +688,15 @@ function LiveTaskView({
             await new Promise((resolve) => window.setTimeout(resolve, 500));
         } catch (err) {
           if (ac.signal.aborted) return;
+          // A refusal that retrying cannot change ends the watch with a final
+          // message instead of reconnecting forever: the run is gone or not
+          // ours (404/403), or the session lapsed (401). Network errors, 5xx,
+          // 408 and 429 stay transient and keep the backoff loop.
+          const gone = streamGoneMessage(err);
+          if (gone) {
+            setStreamError(gone);
+            return;
+          }
           failures += 1;
           setStreamError(
             `${errorMessage(err, "stream failed")}; reconnecting…`,
