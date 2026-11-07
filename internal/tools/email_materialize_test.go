@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -342,5 +343,172 @@ func TestIsEmailToolName(t *testing.T) {
 		if IsEmailToolName(name) {
 			t.Errorf("IsEmailToolName(%q) = true, want false", name)
 		}
+	}
+}
+
+// attachmentWorkspace builds a workspace root with two conversations and a
+// file outside the root, for the attachment containment tests.
+func attachmentWorkspace(t *testing.T) (root, outside string) {
+	t.Helper()
+	root = t.TempDir()
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	for _, conv := range []string{"conv-a", "conv-b"} {
+		if err := os.MkdirAll(filepath.Join(root, conv), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "conv-a", "report.csv"), []byte("a,b\n1,2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "conv-b", "notes.txt"), []byte("b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outside = filepath.Join(t.TempDir(), "host.txt")
+	if err := os.WriteFile(outside, []byte("host"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root, outside
+}
+
+func attachArgs(paths ...string) string {
+	items := make([]map[string]any, 0, len(paths))
+	for _, p := range paths {
+		items = append(items, map[string]any{"path": p})
+	}
+	raw, _ := json.Marshal(map[string]any{"subject": "s", "content": "c", "attachments": items})
+	return string(raw)
+}
+
+func TestMaterializeAttachmentPathsResolvesThroughConversationWorkspace(t *testing.T) {
+	root, outside := attachmentWorkspace(t)
+	if err := os.Symlink(outside, filepath.Join(root, "conv-a", "linked.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(root, "conv-b", "notes.txt"), filepath.Join(root, "conv-a", "sibling.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(root, "conv-a", "subdir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := MaterializeAttachmentPaths("conv-a", attachArgs("report.csv")); err != nil {
+		t.Fatalf("a file in the conversation workspace should be accepted: %v", err)
+	}
+	for name, p := range map[string]string{
+		"symlink leaving the root":         "linked.txt",
+		"symlink into another workspace":   "sibling.txt",
+		"another conversation by dot-dot":  "../conv-b/notes.txt",
+		"another conversation by absolute": filepath.Join(root, "conv-b", "notes.txt"),
+		"a directory":                      "subdir",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out, err := MaterializeAttachmentPaths("conv-a", attachArgs(p)); err == nil {
+				t.Fatalf("expected %q to be refused, got %s", p, out)
+			}
+		})
+	}
+}
+
+func TestMaterializeAttachmentPathsAcceptsSharedLibraryFiles(t *testing.T) {
+	root, _ := attachmentWorkspace(t)
+	shared := filepath.Join(root, SharedFilesDirName)
+	if err := os.MkdirAll(shared, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(shared, "deck.pdf"), []byte("%PDF"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The conversation reaches the library through its `shared` link.
+	if err := os.Symlink(shared, filepath.Join(root, "conv-a", SharedFilesDirName)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MaterializeAttachmentPaths("conv-a", attachArgs("shared/deck.pdf")); err != nil {
+		t.Fatalf("a shared-library file reached through the conversation link should be accepted: %v", err)
+	}
+	if _, err := MaterializeAttachmentPaths("conv-a", attachArgs(filepath.Join(shared, "deck.pdf"))); err != nil {
+		t.Fatalf("an absolute shared-library path should be accepted: %v", err)
+	}
+}
+
+func TestSnapshotEmailAttachmentsCopiesTheResolvedFile(t *testing.T) {
+	root, _ := attachmentWorkspace(t)
+	staged, err := MaterializeAttachmentPaths("conv-a", attachArgs("report.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(staged), &args); err != nil {
+		t.Fatal(err)
+	}
+	staging := t.TempDir()
+	cleanup, err := SnapshotEmailAttachments("conv-a", args, staging)
+	if err != nil {
+		t.Fatalf("snapshot: %v", err)
+	}
+	got := args["attachments"].([]any)[0].(map[string]any)["path"].(string)
+	if !strings.HasPrefix(got, staging+string(filepath.Separator)) || filepath.Base(got) != "report.csv" {
+		t.Fatalf("path should name a copy under the staging dir keeping its base name, got %q", got)
+	}
+	if strings.HasPrefix(got, root) {
+		t.Fatalf("copy must not live under the workspace root: %q", got)
+	}
+	if b, err := os.ReadFile(got); err != nil || string(b) != "a,b\n1,2\n" {
+		t.Fatalf("copy content = %q, %v", b, err)
+	}
+	cleanup()
+	if _, err := os.Stat(got); !os.IsNotExist(err) {
+		t.Fatalf("cleanup should remove the copy, stat err = %v", err)
+	}
+}
+
+func TestSnapshotEmailAttachmentsRechecksBeforeSending(t *testing.T) {
+	root, outside := attachmentWorkspace(t)
+	staged, err := MaterializeAttachmentPaths("conv-a", attachArgs("report.csv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The file is replaced by a link after the card was staged.
+	p := filepath.Join(root, "conv-a", "report.csv")
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, p); err != nil {
+		t.Fatal(err)
+	}
+	var args map[string]any
+	_ = json.Unmarshal([]byte(staged), &args)
+	if _, err := SnapshotEmailAttachments("conv-a", args, t.TempDir()); err == nil {
+		t.Fatal("a path that now resolves outside the workspace must be refused at send time")
+	}
+}
+
+func TestSnapshotEmailAttachmentsRefusesNonRegularFiles(t *testing.T) {
+	root, _ := attachmentWorkspace(t)
+	if err := syscall.Mkfifo(filepath.Join(root, "conv-a", "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	args := map[string]any{"attachments": []any{map[string]any{"path": filepath.Join(root, "conv-a", "pipe")}}}
+	if _, err := SnapshotEmailAttachments("conv-a", args, t.TempDir()); err == nil {
+		t.Fatal("a FIFO must be refused")
+	}
+	if _, err := MaterializeAttachmentPaths("conv-a", attachArgs("pipe")); err == nil {
+		t.Fatal("a FIFO must be refused at staging too")
+	}
+}
+
+func TestSnapshotEmailAttachmentsSizeBound(t *testing.T) {
+	root, _ := attachmentWorkspace(t)
+	big := filepath.Join(root, "conv-a", "big.bin")
+	f, err := os.Create(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(MaxEmailAttachmentBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	_ = f.Close()
+	args := map[string]any{"attachments": []any{map[string]any{"path": big}}}
+	if _, err := SnapshotEmailAttachments("conv-a", args, t.TempDir()); err == nil || !strings.Contains(err.Error(), "limit") {
+		t.Fatalf("an over-limit attachment must be refused, got %v", err)
 	}
 }

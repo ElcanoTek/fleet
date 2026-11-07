@@ -118,6 +118,17 @@ func (s *Server) runStagedTool(ctx context.Context, approval *store.Approval) (t
 	if err != nil {
 		return "", err
 	}
+	// Email attachment paths were checked when the card was staged, but the
+	// workspace stays writable while the card waits. Resolve them again now,
+	// through the conversation's workspace, and send private copies of the
+	// files so the connector reads exactly what was checked.
+	if tools.IsEmailToolName(approval.ToolName) {
+		cleanup, err := tools.SnapshotEmailAttachments(approval.ConversationID, args, s.outboundAttachmentStagingDir())
+		if err != nil {
+			return "", err
+		}
+		defer cleanup()
+	}
 	// Reopen the seat the card was staged under (#167 residual 2). The turn
 	// scope that staged it is long gone, so this is a fresh short-lived scope
 	// carrying the same public {server, account} selection. A revoked account
@@ -810,4 +821,14 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 	if _, err := st.AppendHistory(ctx, convID, []agent.HistoryEntry{entry}); err != nil {
 		log.Printf("AppendHistory (approval result): %v", err)
 	}
+}
+
+// outboundAttachmentStagingDir is where an approved email's attachments are
+// copied for the send: under the host-side attachment directory, which no
+// sandbox mounts. Empty (no config) means the process temp dir.
+func (s *Server) outboundAttachmentStagingDir() string {
+	if s.cfg == nil || strings.TrimSpace(s.cfg.EmailAttachmentDir) == "" {
+		return ""
+	}
+	return filepath.Join(s.cfg.EmailAttachmentDir, "outbound")
 }
