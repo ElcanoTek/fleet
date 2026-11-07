@@ -2476,6 +2476,11 @@ export function ChatExperience({
         setSelectedModel(conv.model || currentDefaultModel());
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
+      // This navigation just superseded any load still in flight, whose
+      // finally no longer owns the spinner — and it fetches nothing itself.
+      // Without this, opening a live chat while another was loading left
+      // "Loading conversation..." up for good.
+      if (claimsView) setIsLoadingHistory(false);
       settleNavigation();
       return;
     }

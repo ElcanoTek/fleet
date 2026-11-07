@@ -187,4 +187,45 @@ describe("loadConversation supersession (#2043)", () => {
     await act(async () => {});
     expect(headerTitle()).toHaveTextContent("Beta chat");
   });
+
+  it("opening a chat with a live stream while another loads clears the spinner", async () => {
+    mockBackend();
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    // Alpha's turn streams and never finishes, so Alpha stays attached.
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if ((init?.method ?? "GET") === "POST" && String(input) === "/api/chat") {
+        return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+          status: 200,
+          headers: { "content-type": "text/event-stream", "X-Fleet-Conversation-Id": "conv-a" },
+        });
+      }
+      return base(input, init);
+    });
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    const composer = await screen.findByRole("textbox", { name: /message/i });
+    fireEvent.change(composer, { target: { value: "keep going" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    const calls = () => vi.mocked(fetch).mock.calls.map(([u, i]) => `${i?.method ?? "GET"} ${String(u)}`);
+    await waitFor(() => expect(calls()).toContain("POST /api/chat"));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    const alphaReads = () => calls().filter((c) => c === "GET /api/conversations/conv-a").length;
+    const alphaReadsBefore = alphaReads();
+
+    // Open Beta (held), then go back to the live Alpha before Beta answers.
+    fireEvent.click(screen.getByRole("button", { name: "Beta chat" }));
+    await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-b")).toBe(true));
+    expect(screen.getByText("Loading conversation...")).toBeInTheDocument();
+    key("j"); // cursor on Alpha
+    key("Enter");
+    await waitFor(() => expect(screen.queryByText("Loading conversation...")).not.toBeInTheDocument());
+
+    await release("/api/conversations/conv-b");
+    expect(screen.queryByText("Loading conversation...")).not.toBeInTheDocument();
+    expect(headerTitle()).toHaveTextContent("Alpha chat");
+    // Alpha reopened through the attached short-circuit: no history refetch.
+    expect(alphaReads()).toBe(alphaReadsBefore);
+  });
 });
