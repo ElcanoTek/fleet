@@ -547,7 +547,9 @@ func deliver(ctx context.Context, c Config, to []string, msg []byte) (err error)
 		return err
 	}
 	if ok, _ := cl.Extension("STARTTLS"); ok {
-		if err := cl.StartTLS(&tls.Config{ServerName: c.SMTPHost}); err != nil {
+		// MinVersion pins the Go client default (TLS 1.2) explicitly; it is
+		// what smtp.SendMail negotiated, so delivery is unchanged.
+		if err := cl.StartTLS(&tls.Config{ServerName: c.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
 			return err
 		}
 	}
