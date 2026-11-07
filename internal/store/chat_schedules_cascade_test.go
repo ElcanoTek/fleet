@@ -6,7 +6,8 @@ import (
 	"time"
 )
 
-// TestConversationHardDeleteDropsChatSchedules pins chat migration 099: every
+// TestConversationHardDeleteDropsChatSchedules pins the conversation-delete
+// trigger sched migration 077 puts on chat.conversations: every
 // path that hard-deletes a conversation takes its chat schedules (live and
 // terminal) and their run history with it, now that sched.chat_schedules
 // cannot carry a foreign key to conversations.

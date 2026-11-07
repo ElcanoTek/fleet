@@ -74,7 +74,8 @@ are fired by it; the chat server is only the deliverer of a fire.**
   token into `lease_owner` with an expiry, as a task lease does; the chat
   server's `store.DeliverChatScheduleFire` enqueues the turn in a chat
   transaction that re-checks the lease and status under lock, keyed by the
-  idempotency key `chat-patrol:<id>:<run>:<fire_id>`; `db.SettleChatScheduleFire`
+  idempotency key `chat-patrol:<id>:<run>:<s|m>-<fire_id>` (the kind in the key keeps 077's
+  history backfill right on a re-upgrade after a rollback); `db.SettleChatScheduleFire`
   advances the row (run count, next slot or completion), appends the run
   history row and releases the lease — only while the row still carries the
   claim's token. A fire whose process died mid-way is not a new due fire:
@@ -175,11 +176,13 @@ copies, and drops it in the same transaction:
   `sched.chat_schedules`), so the chat store's own test template now migrates
   both stores (it is the same template `internal/testdb/fleetdb` builds).
 - `conversation_id` is no longer a foreign key (the conversation is in the
-  other schema). Chat migration 099 restores the cascade: a statement-level
-  `AFTER DELETE` trigger on `conversations` deletes the deleted rows'
+  other schema). Sched migration 077 restores the cascade: a statement-level
+  `AFTER DELETE` trigger on `chat.conversations` deletes the deleted rows'
   schedules (their history follows by sched's FK), so every hard-delete path
   — present and future — is covered by one mechanism; it is a no-op while
-  the sched table does not exist. Account erasure deletes a user's schedules
+  the sched table does not exist. It is created by the sched migration, not
+  a chat one, so 077's down drops it and a rollback never moves the chat
+  schema's version (the previous release refuses a newer chat schema). Account erasure deletes a user's schedules
   the same way (and tolerates a chat-only database, for the chat-only CLI
   verbs).
 - Pausing or cancelling a schedule revokes a fire in flight (its lease and

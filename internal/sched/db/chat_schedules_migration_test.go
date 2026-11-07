@@ -90,7 +90,7 @@ const (
 func seedOldChatSchedules(t *testing.T, chatConn *sql.DB, convA, convB string, now int64) {
 	t.Helper()
 	owner, teammate := ownerMv, teammateMv
-	seed := make([]string, 0, 12)
+	seed := make([]string, 0, 14)
 	seed = append(seed,
 		`INSERT INTO chat_schedules VALUES ('`+dueID+`', '`+convA+`', '`+owner+`', 'Deal sweep', 'Check pacing.', '0 */2 * * *', 'America/New_York', 0, 'active', `+itoa(now-90)+`, `+itoa(now-7200)+`, 7, 0, `+itoa(now-86400)+`, `+itoa(now-7200)+`)`,
 		`INSERT INTO chat_schedules VALUES ('`+futureID+`', '`+convA+`', '`+owner+`', 'Weekly', 'Summarize.', '0 9 * * 1', 'Europe/London', 0, 'active', `+itoa(now+86400)+`, NULL, 0, 4, `+itoa(now-600)+`, `+itoa(now-600)+`)`,
@@ -106,6 +106,10 @@ func seedOldChatSchedules(t *testing.T, chatConn *sql.DB, convA, convB string, n
 		{"in-junk", "chat-patrol:" + dueID + ":x"},
 		{"in-ghost", "chat-patrol:99999999-9999-4999-8999-999999999999:1"},
 		{"in-user", "ui-123"},
+		// Turns queued by the new engine before a rollback (upgrade, fire,
+		// roll back, upgrade again): keys carry the kind, s- or m-.
+		{"in-f1", "chat-patrol:" + futureID + ":1:s-0b5e4a5e-1111-4c1e-9d1e-0123456789ab"},
+		{"in-f2", "chat-patrol:" + futureID + ":2:m-0b5e4a5e-2222-4c1e-9d1e-0123456789ab"},
 	}
 	for i, in := range inputs {
 		seed = append(seed, `INSERT INTO chat_input_queue (id, conversation_id, user_email, client_input_id, message, attachments, mode, state, position, created_at, updated_at)
@@ -134,9 +138,21 @@ func assertBackfilledHistory(t *testing.T, d *Database) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("backfilled history = %v, want %v", got, want)
 	}
+	// A re-upgrade after a rollback: the new engine's keys keep their kind.
+	hist, err = d.ListChatScheduleRuns(context.Background(), futureID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = got[:0]
+	for _, r := range hist {
+		got = append(got, itoa(int64(r.RunNumber))+"/"+string(r.Trigger)+"/"+string(r.Outcome)+"/"+r.InputID)
+	}
+	if want := []string{"2/manual/queued/in-f2", "1/schedule/queued/in-f1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("backfilled history of new-engine keys = %v, want %v", got, want)
+	}
 	var total int
-	if err := d.conn.QueryRow(`SELECT count(*) FROM chat_schedule_runs`).Scan(&total); err != nil || total != 3 {
-		t.Fatalf("history rows = %d (err %v), want 3", total, err)
+	if err := d.conn.QueryRow(`SELECT count(*) FROM chat_schedule_runs`).Scan(&total); err != nil || total != 5 {
+		t.Fatalf("history rows = %d (err %v), want 5", total, err)
 	}
 }
 
@@ -233,8 +249,14 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 	if back := readChatScheduleRows(t, chatConn); !reflect.DeepEqual(back, before) {
 		t.Fatalf("down migration rows differ:\nbefore %+v\nafter  %+v", before, back)
 	}
+	if n := deleteTriggerCount(t, schedConn); n != 0 {
+		t.Fatalf("after 077 down the conversation-delete trigger/function remain (%d): a rollback must leave the chat schema as the previous release knows it", n)
+	}
 	if _, err := schedConn.Exec(string(up)); err != nil {
 		t.Fatalf("077 up after down: %v", err)
+	}
+	if n := deleteTriggerCount(t, schedConn); n != 2 {
+		t.Fatalf("after 077 up the conversation-delete trigger+function = %d, want 2", n)
 	}
 	if after := readChatScheduleRows(t, schedConn); !reflect.DeepEqual(after, before) {
 		t.Fatalf("up after down differs: %+v", after)
@@ -253,7 +275,7 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 		fires[0].Timezone != "America/New_York" || fires[0].Trigger != models.ChatScheduleTriggerSchedule {
 		t.Fatalf("first pass fires = %+v, want only %s as run 8", fires, dueID)
 	}
-	if key := store.ChatScheduleInputKey(fires[0]); key != "chat-patrol:"+dueID+":8:"+fires[0].FireID {
+	if key := store.ChatScheduleInputKey(fires[0]); key != "chat-patrol:"+dueID+":8:s-"+fires[0].FireID {
 		t.Fatalf("idempotency key = %q", key)
 	}
 	if again, err := d.ClaimDueChatSchedules(ctx, time.Unix(now, 0), time.Minute, 25, nil); err != nil || len(again) != 0 {
@@ -262,3 +284,17 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// deleteTriggerCount is how many conversation-delete triggers (and their
+// function) exist: 2 when 077 is applied, 0 when rolled back.
+func deleteTriggerCount(t *testing.T, conn *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := conn.QueryRow(`SELECT
+		(SELECT count(*) FROM pg_trigger WHERE tgname = 'conversations_delete_chat_schedules')
+		+ (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+		    WHERE n.nspname = 'chat' AND p.proname = 'conversations_delete_chat_schedules')`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}

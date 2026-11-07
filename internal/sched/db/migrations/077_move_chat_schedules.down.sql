@@ -5,7 +5,18 @@
 -- copies every schedule whose conversation still exists back (the chat
 -- table's foreign key cascaded the others away) and empties the sched tables,
 -- so a later up moves the then-current rows again. The run history has no
--- home in the old layout and is dropped.
+-- home in the old layout and is dropped. The conversation-delete trigger and
+-- its function (created by the up) are dropped first: the old table's own
+-- foreign key cascades again.
+DO $$
+BEGIN
+    IF to_regclass('chat.conversations') IS NOT NULL THEN
+        DROP TRIGGER IF EXISTS conversations_delete_chat_schedules ON chat.conversations;
+    END IF;
+    DROP FUNCTION IF EXISTS chat.conversations_delete_chat_schedules();
+END
+$$;
+
 DO $$
 BEGIN
     IF to_regclass('chat.conversations') IS NOT NULL THEN

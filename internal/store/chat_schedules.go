@@ -620,14 +620,20 @@ func (s *Store) CancelChatSchedule(ctx context.Context, userEmail, convID, sched
 }
 
 // ChatScheduleInputKey is the chat_input_queue idempotency key of a fire's
-// turn: chat-patrol:<schedule>:<run>:<fire id>. The fire id survives the
+// turn: chat-patrol:<schedule>:<run>:<s|m>-<fire id> — s for a scheduled
+// fire, m for Run now, so the key says which it was (sched migration 077's
+// run-history backfill reads it, on a re-upgrade after a rollback too). The fire id survives the
 // lease's expiry (the scheduler's recovery pass re-claims the same fire), so
 // a fire delivered twice — its claimer died, or a Run now's caller went away,
 // before it settled — finds its own row instead of queueing a second turn;
 // and a fire that was revoked (a pause or cancel) never lends its key to a
 // later fire of the same run number.
 func ChatScheduleInputKey(fire models.ChatScheduleFire) string {
-	return fmt.Sprintf("%s%s:%d:%s", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber, fire.FireID)
+	kind := "s"
+	if fire.Trigger == models.ChatScheduleTriggerManual {
+		kind = "m"
+	}
+	return fmt.Sprintf("%s%s:%d:%s-%s", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber, kind, fire.FireID)
 }
 
 // DeliverChatScheduleFire is the chat side of a chat schedule fire claimed by

@@ -40,7 +40,11 @@ BEGIN
             INSERT INTO chat_schedule_runs (schedule_id, run_number, trigger_kind, outcome, input_id, fired_at)
             SELECT cs.id,
                    split_part(q.client_input_id, ':', 3)::integer,
-                   CASE WHEN split_part(q.client_input_id, ':', 4) = '' THEN 'schedule' ELSE 'manual' END,
+                   -- Old keys: <run> (scheduled) and <run>:<unix> (Run now). Keys
+                   -- since the fold carry the kind: <run>:s-<fire> / <run>:m-<fire>.
+                   CASE WHEN split_part(q.client_input_id, ':', 4) = ''
+                          OR split_part(q.client_input_id, ':', 4) LIKE 's-%'
+                        THEN 'schedule' ELSE 'manual' END,
                    'queued',
                    q.id,
                    to_timestamp(q.created_at)
@@ -52,6 +56,43 @@ BEGIN
         END IF;
 
         DROP TABLE chat.chat_schedules;
+    END IF;
+END
+$$;
+
+-- A conversation's schedules go with it. conversation_id cannot be a foreign
+-- key across the schemas, so without the chat table's old ON DELETE CASCADE
+-- every path that hard-deletes conversations (single and bulk delete, the
+-- TTL sweep, the unpinned-cap eviction, the soft-delete purge, account
+-- erasure, webhook and attachment cleanup, and any added later) would leave
+-- the schedules and their run history — the user's prompt text — behind. One
+-- statement-level trigger on chat.conversations restores the cascade for all
+-- of them (run history follows by this schema's FK).
+--
+-- It lives here, not in a chat migration, so this migration's down removes it
+-- and a rollback never moves the chat schema's version (the previous release
+-- refuses to boot on a chat schema newer than it knows). The function lives in
+-- the chat schema beside its trigger and is a no-op if the sched table is
+-- gone. Skipped on a database without chat.conversations (sched-only).
+DO $$
+BEGIN
+    IF to_regclass('chat.conversations') IS NOT NULL THEN
+        CREATE OR REPLACE FUNCTION chat.conversations_delete_chat_schedules() RETURNS trigger
+        LANGUAGE plpgsql AS $fn$
+        BEGIN
+            IF to_regclass('sched.chat_schedules') IS NOT NULL THEN
+                EXECUTE 'DELETE FROM sched.chat_schedules WHERE conversation_id IN (SELECT id FROM deleted_conversations)';
+            END IF;
+            RETURN NULL;
+        END
+        $fn$;
+
+        DROP TRIGGER IF EXISTS conversations_delete_chat_schedules ON chat.conversations;
+        CREATE TRIGGER conversations_delete_chat_schedules
+            AFTER DELETE ON chat.conversations
+            REFERENCING OLD TABLE AS deleted_conversations
+            FOR EACH STATEMENT
+            EXECUTE FUNCTION chat.conversations_delete_chat_schedules();
     END IF;
 END
 $$;

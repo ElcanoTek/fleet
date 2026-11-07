@@ -122,13 +122,90 @@ func TestChatSchedules_RunNow(t *testing.T) {
 	if err != nil || first.Outcome != models.ChatScheduleQueued {
 		t.Fatalf("run now = %+v, %v", first, err)
 	}
-	second, err := s.RunChatScheduleNow(ctx, sc.ID)
-	if err != nil || second.Outcome != models.ChatScheduleCoalesced || second.InputID != first.InputID {
-		t.Fatalf("second run now = %+v, %v; want coalesced onto %s", second, err, first.InputID)
+	if _, err := s.RunChatScheduleNow(ctx, sc.ID); !errors.Is(err, models.ErrChatScheduleFiring) {
+		t.Fatalf("second run now while the first's turn is queued: err = %v, want ErrChatScheduleFiring", err)
 	}
 	list, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, false)
 	if len(list) != 1 || list[0].RunCount != 1 {
 		t.Fatalf("schedule = %+v; want one counted run", list)
+	}
+	if runs, _ := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 10); len(runs) != 1 {
+		t.Fatalf("run history = %+v; want only the counted run", runs)
+	}
+}
+
+// TestChatSchedules_ConcurrentRunNow is the rehearsal's race: just after a
+// Run now whose turn has finished, two Run nows at once. Exactly one runs
+// (queued) and the other is refused with ErrChatScheduleFiring; one turn, one
+// counted run and one history row are added, and no history row carries a run
+// number the next fire will take.
+func TestChatSchedules_ConcurrentRunNow(t *testing.T) {
+	t.Parallel()
+	s, chat, _, convID := newChatScheduleFleet(t)
+	ctx := context.Background()
+	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.RunChatScheduleNow(ctx, sc.ID)
+	if err != nil || first.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("run now = %+v, %v", first, err)
+	}
+	// The first turn ran to completion.
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat.chat_input_queue SET state = 'completed' WHERE id = $1`, first.InputID); err != nil {
+		t.Fatal(err)
+	}
+
+	for round := 0; round < 5; round++ {
+		var (
+			wg   sync.WaitGroup
+			mu   sync.Mutex
+			oks  int
+			fire int
+		)
+		for i := 0; i < 2; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				d, err := s.RunChatScheduleNow(ctx, sc.ID)
+				mu.Lock()
+				defer mu.Unlock()
+				switch {
+				case err == nil && d.Outcome == models.ChatScheduleQueued:
+					oks++
+				case errors.Is(err, models.ErrChatScheduleFiring):
+					fire++
+				default:
+					t.Errorf("round %d: run now = %+v, %v", round, d, err)
+				}
+			}()
+		}
+		wg.Wait()
+		if oks != 1 || fire != 1 {
+			t.Fatalf("round %d: %d queued and %d refused, want exactly one of each", round, oks, fire)
+		}
+		if _, err := s.storage.DB().Conn().Exec(`UPDATE chat.chat_input_queue SET state = 'completed' WHERE client_input_id LIKE $1`,
+			store.ChatPatrolInputKeyPrefix+sc.ID+":%"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
+	if len(all) != 1 || all[0].RunCount != 6 {
+		t.Fatalf("schedule = %+v; want 6 counted runs", all)
+	}
+	runs, err := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 50)
+	if err != nil || len(runs) != 6 {
+		t.Fatalf("run history = %+v, %v; want 6 rows", runs, err)
+	}
+	seen := map[int]bool{}
+	for _, r := range runs {
+		if r.Outcome != models.ChatScheduleQueued || r.RunNumber < 1 || r.RunNumber > 6 || seen[r.RunNumber] {
+			t.Fatalf("run history = %+v; want runs 1..6, each once, all queued", runs)
+		}
+		seen[r.RunNumber] = true
 	}
 }
 
