@@ -700,28 +700,27 @@ not replace — so journald/Docker log drivers keep working alongside the file. 
 file directory must be writable by the service user (the systemd unit's
 `StateDirectory`/`ReadWritePaths` model); a bad path fails loudly at startup.
 
-### structured JSON format (#178)
+### structured format and correlation ids (#178, #2052)
 
-As of #178 the `fleet serve` process log is emitted as **structured `log/slog`
-JSON by default** — every line is a JSON object (`time`/`level`/`msg`), which
-log aggregators (Loki, Datadog, CloudWatch, journald JSON mode) ingest and index
-natively. This applies to both stderr and the rotating file above.
+The `fleet serve` process log is **structured `log/slog`** — by default one JSON
+object per line (`time`/`level`/`msg` plus attributes), which log aggregators
+(Loki, Datadog, CloudWatch, journald JSON mode) ingest and index natively. This
+applies to both stderr and the rotating file above, and to the MCP broker
+child's lines (stderr only).
 
 ```
-FLEET_LOG_FORMAT=json                      # default; structured JSON. Use "text" for the legacy plaintext lines.
+FLEET_LOG_FORMAT=json                      # default; one JSON object per line. "text" = logfmt (key=value)
 FLEET_LOG_LEVEL=info                        # debug|info|warn|error (default info)
 ```
 
-Two operator notes:
-
-- **`FLEET_LOG_FORMAT=text`** restores the exact prior plaintext behavior if you
-  prefer it (or have tooling that parses the old format).
-- **`FLEET_LOG_LEVEL`** currently sets the threshold for *native* structured
-  (`slog`) call sites. The bulk of today's lines are emitted through a
-  compatibility bridge (the standard-`log`→`slog` conversion is ongoing) and
-  **always emit at info regardless of the level** — so raising the level will not
-  silently suppress existing diagnostics/error lines. Its reach grows as call
-  sites are converted to native `slog` (#178).
+Every line about a request, turn or task run carries the ids that tie it
+together — `request_id`, `user_id`, `conv_id`, `turn_id`, `task_id`, `run_id`,
+and `trace_id`/`span_id` when tracing is on — so
+`journalctl -u fleet -o cat | jq 'select(.turn_id=="…")'` is the whole story of
+one turn. `FLEET_LOG_LEVEL` gates every fleet line; only a third-party
+library's own `log` output is bridged in ungated at info. Secret-shaped values
+are redacted by the same rules that scrub tool output. Tracing (OTLP over TLS,
+`FLEET_OTEL_*`) and a local Collector setup: [`TELEMETRY.md`](TELEMETRY.md).
 
 CLI verbs (`fleet status`, `fleet migrate status`, …) are unaffected — they keep
 human-readable plaintext output.

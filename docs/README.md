@@ -37,6 +37,10 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   verifier, the optional "phone a friend" super-LLM review, git-worktree
   isolation): [`docs/AGENT-RUNTIME.md`](AGENT-RUNTIME.md)
 - **Architecture overview:** [`README.md`](../README.md) ("Architecture at a glance")
+- **Logs, traces and correlation** (the JSON log format and its `turn_id`/`run_id`/`trace_id`
+  keys, the log redactor, which spans exist, OTLP over TLS/mTLS, a local
+  Collector → Jaeger/Tempo setup): [`docs/TELEMETRY.md`](TELEMETRY.md) +
+  [ADR-0102](adr/0102-structured-logs-and-traces-across-the-broker.md)
 - **What does this environment variable do / what is it set to?** Every
   variable, generated from the one place it is declared:
   [`docs/CONFIGURATION.md`](CONFIGURATION.md); on a box, `fleet config explain
@@ -374,6 +378,7 @@ above fails otherwise.
 - [`TASK-TAGS.md`](TASK-TAGS.md) — Task tags on the board — chips, the tag filter, and the catalogue TTL
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles
 - [`TEAM-SHARING.md`](TEAM-SHARING.md) — Sharing work inside a project — team-shared chats and team learnings
+- [`TELEMETRY.md`](TELEMETRY.md) — Structured, correlated logs and traces: the log format and ids, the redactor, spans through the loop, sandbox, broker and DB, OTLP over TLS, a local Collector setup (#2052, ADR-0102)
 - [`TERMINAL-APPROVALS.md`](TERMINAL-APPROVALS.md) — Terminal chat and scheduled-task approvals
 - [`TEST-DATABASES.md`](TEST-DATABASES.md) — Test databases — a cloned database per test, templates keyed by migration set, parallel DB suites (#2049 M2)
 - [`TESTING-STRATEGY.md`](TESTING-STRATEGY.md) — Testing strategy — the layers, where a test goes, contracts

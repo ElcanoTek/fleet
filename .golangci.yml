@@ -75,13 +75,13 @@ linters:
       forbid:
         - pattern: ^os\.(Getenv|LookupEnv|Environ)$
           msg: read the environment through internal/config/envreg (Get/Lookup for a registered setting, Unregistered for a data-named variable) — docs/CONFIG-REGISTRY.md
-        # One way to log (#2052, internal/logging): structured log/slog
+        # One way to log (#2052, docs/TELEMETRY.md): structured log/slog
         # records through logging.From(ctx) (or slog.* where no context
         # exists), so every line carries its correlation ids and goes through
         # the redactor. The stdlib log package's print/fatal/panic helpers
         # produce an unstructured line with neither.
         - pattern: ^log\.(Print|Printf|Println|Fatal|Fatalf|Fatalln|Panic|Panicf|Panicln)$
-          msg: log through logging.From(ctx).Info/Warn/Error (or slog.* with no context) with key/value attributes; use logging.Fatal to exit — internal/logging
+          msg: log through logging.From(ctx).Info/Warn/Error (or slog.* with no context) with key/value attributes; use logging.Fatal to exit — docs/TELEMETRY.md
     exhaustive:
       # Treat a switch with a default case as exhaustive. Every enum switch in
       # this tree that exhaustive flagged already routes the remaining values

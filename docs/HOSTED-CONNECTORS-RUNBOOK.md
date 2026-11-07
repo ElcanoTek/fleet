@@ -197,8 +197,9 @@ The design behind the mechanics is in [ADR-0009](adr/0009-per-user-remote-mcp-oa
 
 ## When something fails
 
-Read `fleet.log` first (one structured line per event — JSON by default; every
-line of a turn carries its `conv_id`, `turn_id` and `trace_id`). The lines that matter, by message:
+Read `fleet.log` first (one structured line per event — JSON by default, see
+[TELEMETRY.md](TELEMETRY.md); every line of a turn carries its `conv_id`,
+`turn_id` and `trace_id`). The lines that matter, by message:
 
 - `remote-mcp: skipping server for — token unavailable` (`reg_name`, `email`) —
   refresh failed. For terminal OAuth failures (e.g. `invalid_grant`), the row is
