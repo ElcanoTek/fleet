@@ -110,8 +110,10 @@ type Scheduler struct {
 	// their fires (nil leaves them unfired), and the wake-up requests that
 	// let a schedule due before the next tick fire on time. See
 	// chat_schedules.go.
-	chatDeliverer ChatScheduleDeliverer
-	chatWake      chan time.Time
+	chatDeliverer   ChatScheduleDeliverer
+	chatWake        chan time.Time
+	chatLoopDone    chan struct{}
+	chatLoopStarted bool
 
 	// The daily maintenance (retention prune, chat run prune, log archival)
 	// runs off the loop, in its own goroutine, so its up-to-30-minute sweeps
@@ -248,6 +250,7 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 		ctx:                ctx,
 		cancel:             cancel,
 		loopDone:           make(chan struct{}),
+		chatLoopDone:       make(chan struct{}),
 		scheduledBatchSize: defaultScheduledBatchSize,
 		tickInterval:       defaultTickInterval,
 		gateSlots:          make(chan struct{}, maxConcurrentGateEvals),
@@ -256,10 +259,16 @@ func New(store *storage.Storage, timezone string) *Scheduler {
 	}
 }
 
-// Start starts the scheduler.
+// Start starts the scheduler: the task loop and, when a chat server is wired
+// in, the chat schedule loop (chat_schedules.go) — separate goroutines, so no
+// task-path work (promotion, claims, maintenance) can delay a chat fire.
 func (s *Scheduler) Start() {
 	log.Println("Starting scheduler...")
 	s.loopStarted = true
+	if s.chatDeliverer != nil {
+		s.chatLoopStarted = true
+		go s.runChatLoop()
+	}
 	go s.runLoop()
 }
 
@@ -294,6 +303,9 @@ func (s *Scheduler) Stop() {
 		if s.loopStarted {
 			<-s.loopDone
 		}
+		if s.chatLoopStarted {
+			<-s.chatLoopDone
+		}
 		s.gateWG.Wait()
 		s.maintWG.Wait()
 		close(settled)
@@ -303,6 +315,21 @@ func (s *Scheduler) Stop() {
 	case <-time.After(gateDrainTimeout):
 		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
+}
+
+// storeCtx is a context for one storage call or pass off the sweep helper:
+// a child of the scheduler's lifetime context (cancelled by Stop), bounded by
+// sweepTimeout.
+func (s *Scheduler) storeCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(s.ctx, sweepTimeout)
+}
+
+// settleCtx bounds a run_if gate's verdict write (promote, skip, end of
+// recurrence). Bounded by sweepTimeout but NOT cancelled by Stop: Stop drains
+// in-flight gate evaluations (gateDrainTimeout) precisely so a passing
+// gate's write lands before it returns.
+func (s *Scheduler) settleCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), sweepTimeout)
 }
 
 // startMaintenance runs the daily maintenance in its own goroutine, unless the
@@ -365,18 +392,6 @@ func (s *Scheduler) runLoop() {
 		log.Printf("scheduler: paused-task expiry ON (fail tasks awaiting input > %dm)", s.pausedExpiryMin)
 	}
 
-	// Chat schedule wake-ups (ADR-0104): between ticks, a pass runs at the
-	// earliest time a chat schedule is due — armed by the tick itself and by
-	// the chat server when a schedule is created or edited.
-	var chatWake chatWakeTimer
-	defer chatWake.stop()
-	// One pass right away: a schedule that fell due while the process was
-	// down, or is due before the first tick, fires now rather than a tick
-	// interval after boot.
-	if s.chatDeliverer != nil {
-		chatWake.request(time.Now())
-	}
-
 	for {
 		select {
 		case <-ticker.C:
@@ -402,15 +417,6 @@ func (s *Scheduler) runLoop() {
 				s.runStrandedWakeExpiry()
 				s.runRecurrenceReconciliation()
 				s.ProcessScheduledTasks()
-				s.runChatSchedules()
-			}()
-		case t := <-s.chatWake:
-			chatWake.request(t)
-		case <-chatWake.c():
-			chatWake.fired()
-			func() {
-				defer safe.Recover("scheduler.chat-schedules", nil)
-				s.runChatSchedules()
 			}()
 		case <-cleanupC:
 			s.startMaintenance()
@@ -595,6 +601,10 @@ func (s *Scheduler) RecoverExpiredLeases() {
 // promoted when the check passes (or when it errors under on_error:"run"),
 // skipped via handleSkip otherwise — so this tick never blocks on a gate.
 func (s *Scheduler) ProcessScheduledTasks() {
+	// Bounded and cancelled by Stop, like every other sweep: a row lock held
+	// by another transaction must not hang the tick (or Stop) forever.
+	ctx, cancel := s.storeCtx()
+	defer cancel()
 	now := time.Now().In(s.location)
 	batchSize := s.scheduledBatchSize
 	if batchSize <= 0 {
@@ -628,7 +638,7 @@ func (s *Scheduler) ProcessScheduledTasks() {
 			return
 		}
 
-		tasks, err := s.storage.GetScheduledTasks(now, cursorScheduledFor, cursorID, batchSize)
+		tasks, err := s.storage.GetScheduledTasksCtx(ctx, now, cursorScheduledFor, cursorID, batchSize)
 		if err != nil {
 			log.Printf("Error getting scheduled tasks: %v", err)
 			return
@@ -670,14 +680,17 @@ func (s *Scheduler) ProcessScheduledTasks() {
 		log.Printf("Processing %d scheduled tasks (%d recurring, %d gated dispatched async, %d gated deferred)",
 			len(tasks), recurringCount, gatedCount-deferredGates, deferredGates)
 
-		promoted, err := s.storage.UpdateTasksStatusBatch(promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
+		promoted, err := s.storage.UpdateTasksStatusBatchCtx(ctx, promoteIDs, models.TaskStatusScheduled, models.TaskStatusPending)
 		if err != nil {
 			log.Printf("Error updating scheduled tasks batch: %v", err)
 			// Fall back to per-task promotion so one bad row can't strand the batch.
 			// A row that still fails is already behind the cursor, so a persistent
 			// DB error can't re-loop it this tick.
 			for _, taskID := range promoteIDs {
-				n, perr := s.storage.UpdateTasksStatusBatch([]uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
+				if ctx.Err() != nil {
+					return
+				}
+				n, perr := s.storage.UpdateTasksStatusBatchCtx(ctx, []uuid.UUID{taskID}, models.TaskStatusScheduled, models.TaskStatusPending)
 				if perr != nil {
 					log.Printf("Error updating task %s: %v", taskID, perr)
 					continue
@@ -765,7 +778,9 @@ func (s *Scheduler) evalAndSettleGate(task *models.Task) {
 // makes a concurrent edit/reschedule win: a task postponed while its gate ran
 // must not run on the stale verdict (the next due tick re-evaluates it).
 func (s *Scheduler) promoteGatedTask(task *models.Task) {
-	n, err := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusPending)
+	ctx, cancel := s.settleCtx()
+	defer cancel()
+	n, err := s.storage.SettleGatedTaskCtx(ctx, task.ID, task.ScheduledFor, models.TaskStatusPending)
 	if err != nil {
 		log.Printf("Error promoting gated task %s: %v", task.ID, err)
 		return
@@ -882,7 +897,9 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 			// Settled conditionally like the other verdict writes: an edit or
 			// reschedule that landed while the gate ran (it may have changed the
 			// recurrence or its end date) invalidates this cancel too.
-			n, cerr := s.storage.SettleGatedTask(task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			sctx, scancel := s.settleCtx()
+			n, cerr := s.storage.SettleGatedTaskCtx(sctx, task.ID, task.ScheduledFor, models.TaskStatusCancelled)
+			scancel()
 			switch {
 			case cerr != nil:
 				log.Printf("Error ending recurrence for skipped task %s: %v", task.ID, cerr)
@@ -904,7 +921,8 @@ func (s *Scheduler) handleSkip(task *models.Task, reason string) {
 	if nextRun.IsZero() {
 		nextRun = time.Now().UTC().Add(gateSkipBackoff(task.SkipCount))
 	}
-	ctx := context.Background()
+	ctx, cancel := s.settleCtx()
+	defer cancel()
 	_, recorded, err := s.storage.RecordSkip(ctx, task.ID, reason, nextRun, task.ScheduledFor)
 	if err != nil {
 		log.Printf("Error recording skip for task %s: %v", task.ID, err)

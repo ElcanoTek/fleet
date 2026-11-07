@@ -39,7 +39,7 @@ possible without a cross-database protocol.
 ## Decision
 
 **The sched engine is the one scheduler. Chat schedules become its rows and
-are fired by its tick loop; the chat server is only the deliverer of a fire.**
+are fired by it; the chat server is only the deliverer of a fire.**
 
 - **Storage.** The table moves to the scheduler's schema:
   `sched.chat_schedules` (same columns, ids and values) plus the engine's
@@ -50,8 +50,15 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
   `busy` / `gone`, the input-queue row, due and fire times). Sched migration
   076 creates both; 077 **moves** every row from `chat.chat_schedules` in one
   transaction, then drops the chat table.
-- **One tick loop.** `Scheduler.runLoop` runs a chat-schedule phase on every
-  tick, once as soon as it starts, and on a wake-up the loop arms for the
+- **One scheduler, one tick for chat schedules.** The `Scheduler` owns two
+  goroutines, started and stopped together: the task loop (`runLoop`:
+  promotion, lease recovery, the task sweeps) and the chat schedule loop
+  (`runChatLoop`), so nothing on the task path — a promotion blocked on a row
+  lock, a long sweep — can delay a chat fire. Every task-path storage call
+  in the scheduler runs on its lifetime context (cancelled by Stop) with a
+  per-sweep timeout, so none can hang the task loop or Stop either. The chat
+  loop runs a pass on every tick interval, once as soon as it starts, and on
+  a wake-up it arms for the
   earliest work due before the next tick — an active schedule's slot, or a
   pending fire's retry (lease expiry) — (and that the chat server
   requests when a schedule is created, edited or resumed; a request is kept
@@ -83,10 +90,14 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
   when turns are taken again, a Run now on a paused schedule included. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
   its claim runs on the caller's context; delivery and settle run on a
   detached, bounded one, and a second Run now while a fire is pending is
-  refused rather than minting a new fire for the same run.
-- **One run history.** Every fire, scheduled or manual, settles into
-  `sched.chat_schedule_runs`, pruned by the scheduler's daily retention sweep
-  under the same policy as task runs (`FLEET_RUN_LOG_RETENTION_DAYS`,
+  refused rather than minting a new fire for the same run; so is a Run now
+  while the schedule's patrol turn is still queued or running (of two racing
+  Run nows exactly one runs, the other gets `ErrChatScheduleFiring`, a 409).
+- **One run history.** Every fire that did something, scheduled or manual,
+  settles into `sched.chat_schedule_runs` (a counted run with its run number;
+  a busy or gone fire with none, so no row ever claims a number a later run
+  takes), pruned by the scheduler's daily retention sweep under the same
+  policy as task runs (`FLEET_RUN_LOG_RETENTION_DAYS`,
   `FLEET_KEEP_RUNS_PER_TASK`). The migration seeds each schedule's history
   from the patrol turns still in `chat_input_queue`.
 - **What stays on the chat side, and why.** Editing a schedule's definition

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
@@ -23,6 +25,7 @@ type fakeDeliverer struct {
 	settled   []string
 	after     func()
 	deferAll  bool // the chat server is draining: every fire is deferred
+	coalesce  bool // a patrol turn is in flight: a manual fire coalesces
 }
 
 func newFakeDeliverer() *fakeDeliverer {
@@ -34,6 +37,10 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.fail[f.ScheduleID] {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{}, errors.New("delivery failed")
+	}
+	if d.coalesce && f.Trigger == models.ChatScheduleTriggerManual {
+		d.mu.Unlock()
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: "in-flight"}, nil
 	}
 	if d.deferAll {
 		d.mu.Unlock()
@@ -289,5 +296,88 @@ func TestChatSchedules_MaintenanceDoesNotBlockWake(t *testing.T) {
 	}
 	if d.deliveredTo("due") != 1 {
 		t.Fatal("a blocked maintenance run held up a due chat schedule")
+	}
+}
+
+// lockDueTask adds a due, ungated scheduled task and holds its row lock in
+// another transaction (released at cleanup), so promoting it blocks.
+func lockDueTask(t *testing.T, s *Scheduler) {
+	t.Helper()
+	task := &models.Task{ID: uuid.New(), Prompt: "locked", Status: models.TaskStatusScheduled, ScheduledFor: pastDue(), CreatedAt: time.Now().UTC()}
+	if _, err := s.storage.AddTask(task); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := s.storage.DB().Conn().BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tx.Rollback() })
+	var id string
+	if err := tx.QueryRow(`SELECT id::text FROM tasks WHERE id = $1 FOR UPDATE`, task.ID).Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A scheduled task's row held locked by another transaction blocks its
+// promotion; that must not delay a due chat fire (the chat schedules have a
+// loop of their own).
+func TestChatSchedules_TaskRowLockDoesNotDelayChatFire(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = 100 * time.Millisecond
+	lockDueTask(t, s)
+	s.Start()
+	t.Cleanup(s.Stop)
+	time.Sleep(400 * time.Millisecond) // a tick is now blocked on the lock
+
+	addChatSchedule(t, s, "due", "active", time.Now().Unix())
+	s.WakeChatSchedulesAt(time.Now())
+	deadline := time.Now().Add(5 * time.Second)
+	for d.deliveredTo("due") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d.deliveredTo("due") != 1 {
+		t.Fatal("a task row lock blocking promotion held up a due chat fire")
+	}
+}
+
+// Stop returns promptly — the task loop actually exits — while promotion is
+// blocked on a row lock: the promotion runs under the scheduler's context.
+func TestStop_ReturnsWhilePromotionBlockedOnRowLock(t *testing.T) {
+	t.Parallel()
+	s, _ := newEngineScheduler(t)
+	s.tickInterval = 100 * time.Millisecond
+	lockDueTask(t, s)
+	s.Start()
+	time.Sleep(400 * time.Millisecond)
+
+	start := time.Now()
+	s.Stop()
+	select {
+	case <-s.loopDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the task loop is still blocked on the row lock after Stop")
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Fatalf("Stop took %s", took)
+	}
+}
+
+// A Run now that finds its schedule's patrol turn still in flight is refused
+// (ErrChatScheduleFiring, a 409), not answered as a success, and leaves no
+// run-history row.
+func TestChatSchedules_RunNowOverInFlightTurnIsFiring(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	addChatSchedule(t, s, "p", "active", time.Now().Add(time.Hour).Unix())
+	d.coalesce = true
+	if _, err := s.RunChatScheduleNow(context.Background(), "p"); !errors.Is(err, models.ErrChatScheduleFiring) {
+		t.Fatalf("Run now over an in-flight turn: err = %v, want ErrChatScheduleFiring", err)
+	}
+	if runs, _ := s.storage.DB().ListChatScheduleRuns(context.Background(), "p", 10); len(runs) != 0 {
+		t.Fatalf("run history = %+v, want none", runs)
+	}
+	if n, leased := runCountOf(t, s, "p"); n != 0 || leased {
+		t.Fatalf("run count %d, leased %v", n, leased)
 	}
 }
