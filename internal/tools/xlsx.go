@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -118,21 +119,67 @@ type xlsxPackage struct {
 	files map[string][]byte
 }
 
+// MaxXLSXDecompressedBytes is the total decompressed budget for one workbook's
+// parts. Each part is held in memory while it is read, so this bound is also
+// the peak-RSS bound for a hostile file. Real spreadsheets are megabytes
+// decompressed; 512 MiB is far above any legitimate workbook while keeping a
+// zip bomb to a survivable allocation. Shared with the upload sanitizer
+// (internal/httpapi/xlsx_sanitize.go).
+const MaxXLSXDecompressedBytes = 512 << 20
+
+// MaxXLSXParts caps the number of zip entries parseXLSXPackage accepts. A
+// real workbook has tens of parts (one per sheet, plus styles, themes and
+// rels); the cap stops a package of millions of empty entries from costing
+// per-entry bookkeeping the byte budget does not see.
+const MaxXLSXParts = 10000
+
+// ErrXLSXTooLarge reports a workbook whose parts decompress past the budget.
+var ErrXLSXTooLarge = errors.New("workbook decompresses past the decompressed-size cap")
+
+// ReadXLSXPart reads one zip entry, charging its decompressed size against
+// *budget. It reads at most *budget+1 bytes, so a part that would exhaust the
+// budget errors without the whole of it ever being decompressed into memory.
+func ReadXLSXPart(f *zip.File, budget *int64) ([]byte, error) {
+	rc, err := f.Open()
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", f.Name, err)
+	}
+	defer rc.Close()
+	// +1 so exhausting the budget is distinguishable from landing exactly on it.
+	data, err := io.ReadAll(io.LimitReader(rc, *budget+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", f.Name, err)
+	}
+	*budget -= int64(len(data))
+	if *budget < 0 {
+		return nil, fmt.Errorf("read %s: %w", f.Name, ErrXLSXTooLarge)
+	}
+	return data, nil
+}
+
 // parseXLSXPackage unpacks an in-memory .xlsx (zip) into its parts. The bytes
 // arrive via the sandbox FileOp seam; nothing here touches the host filesystem.
 func parseXLSXPackage(raw []byte) (*xlsxPackage, error) {
+	return parseXLSXPackageWithin(raw, MaxXLSXDecompressedBytes)
+}
+
+// parseXLSXPackageWithin is parseXLSXPackage with an explicit decompressed
+// budget, so tests can prove the bound without allocating 512 MiB.
+func parseXLSXPackageWithin(raw []byte, limit int64) (*xlsxPackage, error) {
 	r, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return nil, err
 	}
+	if len(r.File) > MaxXLSXParts {
+		return nil, fmt.Errorf("workbook has %d parts, more than the %d-part cap", len(r.File), MaxXLSXParts)
+	}
 	out := &xlsxPackage{files: map[string][]byte{}}
+	// The raw bytes are model-controlled and bounded only COMPRESSED; deflate
+	// expands up to ~1000x, so every part is charged against one
+	// decompressed-bytes budget for the whole workbook.
+	budget := limit
 	for _, f := range r.File {
-		rc, err := f.Open()
-		if err != nil {
-			return nil, err
-		}
-		data, err := io.ReadAll(rc)
-		_ = rc.Close()
+		data, err := ReadXLSXPart(f, &budget)
 		if err != nil {
 			return nil, err
 		}
