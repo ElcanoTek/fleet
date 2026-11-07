@@ -142,7 +142,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
 | `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Also read as `DATA_DIR` (read only by the operator CLI's API-key store lookup (fleet sched apikey); the server ignores it). Deprecated aliases: `CHAT_DATA_DIR`, `CUTLASS_DATA_DIR` (process env only). Helm: set by the chart from `dataDir`. |
-| `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. Relative to the working directory, not FLEET_DATA_DIR. Helm: set by the chart from `dataDir (+ /attachments)`. |
+| `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. A relative value is resolved against the working directory (not FLEET_DATA_DIR) to an absolute path at load. Helm: set by the chart from `dataDir (+ /attachments)`. |
 | `CONVERSATION_TTL_DAYS` | int | `14` | server | Days an unpinned conversation is kept. *Validated at boot*. |
 | `CONVERSATION_UNPINNED_CAP` | int | `50` | server | Maximum unpinned conversations kept per user. *Validated at boot*. |
 | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | int | `30` | server | Days finished input-queue rows keep their idempotency keys; 0 disables the purge. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_INPUT_QUEUE_RETENTION_DAYS` (process env only), `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` (process env only). |
@@ -333,6 +333,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `TAVILY_API_KEY` | string | — | server | Tavily key for the web-search tool. **Secret.** |
 | `BROWSERBASE_API_KEY` | string | — | server | Browserbase key that mints live-view links (docs/BROWSERBASE.md). Set it with `fleet config set-browserbase-key`. **Secret.** |
 | `CUTLASS_ALLOWED_DIRS` | string | — | broker | Connector wire key: the workspace directories passed to cutlass-family MCP servers. A canonical name, not a legacy alias. |
+| `FLEET_MCP_OUTBOUND_ATTACHMENT_DIR` | path | — | broker | Internal: exported when the configuration loads (fleet serve and the MCP broker it starts, fleet task run, fleet mcp test) as the absolute EMAIL_ATTACHMENT_DIR/outbound; MCP spawns append it to connector *ALLOWED_DIRS lists that admit the workspace root (docs/MCP-BUNDLE-ENV.md). Not operator-facing: loading overwrites any value. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CUTLASS_IMAGE_OUTPUT` | path | — | broker | Connector wire key: image output directory for cutlass-family MCP servers. A canonical name, not a legacy alias. |
 | `CUTLASS_IMAGE_MODEL` | string | — | broker | Connector wire key: image model for cutlass-family MCP servers. A canonical name, not a legacy alias. |
 | `GH_TOKEN` | string | — | broker | GitHub token admitted from the env file for MCP servers that use the gh CLI; fleet itself does not read it. **Secret.** |

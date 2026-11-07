@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Reserved ${FLEET_WORKSPACE} manifest-env token.
@@ -174,6 +176,104 @@ func ExpandWorkspaceRootEnv(env map[string]string) map[string]string {
 	out := make(map[string]string, len(env))
 	for k, v := range env {
 		out[k] = strings.ReplaceAll(v, WorkspaceRootEnvToken, root)
+	}
+	return out
+}
+
+// OutboundAttachmentDirEnv names the env var that carries fleet's outbound
+// attachment staging directory (tools.OutboundAttachmentStagingDir) to every
+// process that spawns MCP servers. config.Load writes it
+// (PinOutboundAttachmentDir), so every entrypoint has it (fleet serve, fleet
+// task run, fleet mcp test), and the out-of-process MCP broker
+// inherits it from fleet serve. It is fleet-owned plumbing, not an operator
+// knob: loading the config overwrites whatever the environment held, and the
+// FLEET_ prefix keeps a bundle from claiming the name as connector env.
+const OutboundAttachmentDirEnv = "FLEET_MCP_OUTBOUND_ATTACHMENT_DIR"
+
+// allowedDirsKeySuffix marks a connector env key as a path-list read
+// allowlist (CUTLASS_ALLOWED_DIRS, FLEET_ALLOWED_DIRS, ...).
+const allowedDirsKeySuffix = "ALLOWED_DIRS"
+
+// PinOutboundAttachmentDir exports dir (made absolute) as the outbound
+// attachment staging directory AdmitOutboundAttachmentDir hands to
+// connectors; "" (no staging dir configured) unsets it.
+func PinOutboundAttachmentDir(dir string) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		_ = os.Unsetenv(OutboundAttachmentDirEnv)
+		return
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	_ = os.Setenv(OutboundAttachmentDirEnv, dir)
+}
+
+// outboundAttachmentDir returns the pinned staging directory, or "" when none
+// is pinned or the value is not a clean absolute path.
+func outboundAttachmentDir() string {
+	dir := strings.TrimSpace(envreg.Get(OutboundAttachmentDirEnv))
+	if dir == "" || !filepath.IsAbs(dir) || strings.ContainsAny(dir, "$"+string(os.PathListSeparator)) {
+		return ""
+	}
+	return filepath.Clean(dir)
+}
+
+// AdmitOutboundAttachmentDir appends fleet's outbound attachment staging
+// directory to every connector read allowlist that already admits the
+// workspace root, and to nothing else.
+//
+// Why: before an email is sent, fleet copies each attachment out of the run's
+// workspace into a fresh private directory under the staging dir
+// (tools.SnapshotEmailAttachments) and rewrites the tool arguments to name the
+// copies, so the connector reads files the sandbox can no longer change. That
+// staging dir is deliberately OUTSIDE the workspace root (no sandbox may see
+// it), so a connector that allowlists the paths it reads, such as an outbound
+// mailer's CUTLASS_ALLOWED_DIRS: "${CUTLASS_ALLOWED_DIRS}:${FLEET_WORKSPACE_ROOT}",
+// refused every rewritten path ("outside allowed directories" / "attachment
+// file not found") and no email with an attachment could be sent.
+//
+// The rule is narrow on purpose:
+//   - only a key named *ALLOWED_DIRS, the path-list allowlist convention
+//     (a single-directory key such as CUTLASS_REPORT_DIR is never touched);
+//   - only when its value already lists ${FLEET_WORKSPACE_ROOT} as a whole
+//     element, i.e. the bundle declared that the connector reads the run's
+//     files; a connector that did not opt in gains nothing;
+//   - only the outbound staging dir fleet itself writes the copies to, never
+//     the attachment data dir around it (uploads, downloads).
+//
+// It runs on the unexpanded values (before ExpandWorkspaceRootEnv), returns
+// env as-is when nothing applies, and adds the directory once.
+func AdmitOutboundAttachmentDir(env map[string]string) map[string]string {
+	dir := outboundAttachmentDir()
+	if dir == "" {
+		return env
+	}
+	sep := string(os.PathListSeparator)
+	var out map[string]string
+	for k, v := range env {
+		if !strings.HasSuffix(strings.ToUpper(k), allowedDirsKeySuffix) {
+			continue
+		}
+		admitsRoot, has := false, false
+		for _, part := range strings.Split(v, sep) {
+			part = strings.TrimSpace(part)
+			admitsRoot = admitsRoot || part == WorkspaceRootEnvToken
+			has = has || (part != "" && filepath.Clean(part) == dir)
+		}
+		if !admitsRoot || has {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string, len(env))
+			for kk, vv := range env {
+				out[kk] = vv
+			}
+		}
+		out[k] = v + sep + dir
+	}
+	if out == nil {
+		return env
 	}
 	return out
 }
