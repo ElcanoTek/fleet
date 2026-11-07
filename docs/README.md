@@ -86,7 +86,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
 - **Reading auth facts from the spec** (`x-fleet-permission` per operation,
   `x-fleet-api-version`, `x-fleet-key-types`, the tests that pin them, and the
   manifest contract-checker fact → spec-path map): [`docs/MANIFEST-CONTRACT.md`](MANIFEST-CONTRACT.md)
-- **One database** (both stores in one Postgres database, one schema each; moving a legacy two-database install with `fleet db consolidate`): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
+- **One database** (both stores in one Postgres database, one schema each; the two-database layout and `fleet db consolidate` were removed): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
 - **The browser tier** (the fleet binary serves the Vite SPA and every
@@ -322,7 +322,7 @@ above fails otherwise.
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
 - [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back, and how client bundles get their sandbox image (#2051, ADR-0100)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
-- [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), `fleet db consolidate` for legacy two-database installs, and removing the legacy layout (#2049, ADR-0098)
+- [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), configured by `DATABASE_URL` alone; the legacy two-database layout and `fleet db consolidate` were removed in phase 2 (#2049, ADR-0098)
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call

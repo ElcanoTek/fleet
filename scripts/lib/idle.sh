@@ -535,39 +535,6 @@ fleet_dsn_with_schema() {
   printf '%s' "${base}?${out}${frag}"
 }
 
-# fleet_identity_host HOST — "local" for every spelling of this box (no host,
-# a socket directory, localhost, a loopback address), else HOST lower-cased.
-fleet_identity_host() {
-  local h="$1"
-  if [[ -z "$h" || "$h" == /* || "${h,,}" == "localhost" || "$h" =~ ^127\.[0-9]+\.[0-9]+\.[0-9]+$ \
-        || "$h" == "::1" || "$h" == "0:0:0:0:0:0:0:1" || "${h,,}" =~ ^::ffff:127\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-    printf 'local'
-  else
-    printf '%s' "${h,,}"
-  fi
-}
-
-# fleet_dsn_identity DSN — "<host>:<port>/<dbname>" of the database a DSN
-# connects to, or "" when it names none: config.DSNIdentity. The answer
-# comes from the Go implementation itself — the hidden verb
-# `fleet db dsn-identity`, fed the DSN on stdin (never argv) — whenever a
-# fleet binary is at hand: FLEET_IDENTITY_BIN when set (set it empty to
-# force the shell fallback), else ${FLEET_INSTALL_DIR:-/opt/fleet}/fleet,
-# else `fleet` on PATH. Only before any binary exists (a first bootstrap),
-# or with one too old to know the verb, does fleet_dsn_identity_sh answer.
-fleet_dsn_identity() {
-  local bin="${FLEET_IDENTITY_BIN-__auto__}" id
-  if [[ "$bin" == "__auto__" ]]; then
-    bin="${FLEET_INSTALL_DIR:-/opt/fleet}/fleet"
-    [[ -x "$bin" ]] || bin="$(command -v fleet 2>/dev/null || true)"
-  fi
-  if [[ -n "$bin" && -x "$bin" ]] && id="$(printf '%s' "$1" | "$bin" db dsn-identity 2>/dev/null)"; then
-    printf '%s' "$id"
-    return 0
-  fi
-  fleet_dsn_identity_sh "$1"
-}
-
 # fleet_pgx_unescape S — a URL component decoded as pgx (and libpq) decode
 # it: leading and trailing spaces dropped, an interior space refused, %XX
 # decoded (%00 refused), "+" kept as "+". Returns 1 when pgx would refuse it.
@@ -579,175 +546,33 @@ fleet_pgx_unescape() {
   fleet_query_unescape "${s//+/%2B}"
 }
 
-# fleet_dsn_identity_sh DSN — the shell mirror of config.DSNIdentity, which
-# reads the DSN through pgconn.ParseConfig. It follows pgx's rules: the
-# userinfo ends at the first "@" before any "/"; a query parameter (host,
-# port, dbname/database, user) overrides the URL's own part, the last
-# occurrence winning; what the DSN leaves out comes from PGHOST, PGPORT,
-# PGDATABASE and PGUSER, then the defaults (a default socket or localhost —
-# "local" either way — port 5432, the OS user); the database defaults to the
-# role. It answers "" for what pgx refuses or this mirror cannot follow: a
-# malformed DSN, several hosts, a bad port, a service (PGSERVICE / service=).
-# TestIdleLibIdentityParity pins it to the Go answer.
-fleet_dsn_identity_sh() {
-  local LC_ALL=C dsn="$1" rest head auth netloc user="" host="" port="" db="" query p k v i
-  local hset=0 pset=0 dset=0 uset=0
-  dsn="${dsn#"${dsn%%[![:space:]]*}"}"
-  dsn="${dsn%"${dsn##*[![:space:]]}"}"
-  [[ -n "$dsn" ]] || return 0
-  case "$dsn" in
-    postgres://*|postgresql://*)
-      rest="${dsn#*://}"
-      head="${rest%%/*}"
-      if [[ "$head" == *@* ]]; then
-        auth="${rest%%@*}"
-        rest="${rest#*@}"
-        if [[ -n "${auth%%:*}" ]]; then
-          user="$(fleet_pgx_unescape "${auth%%:*}")" || return 0
-          uset=1
-        fi
-      fi
-      netloc="${rest%%[/?]*}"
-      rest="${rest:${#netloc}}"
-      [[ "$netloc" != *,* ]] || return 0
-      if [[ "$netloc" == \[* ]]; then
-        [[ "$netloc" == *\]* ]] || return 0
-        host="${netloc#\[}"
-        host="${host%%\]*}"
-        v="${netloc#*\]}"
-        if [[ -n "$v" ]]; then
-          [[ "$v" == :* ]] || return 0
-          port="${v#:}"
-        fi
-      else
-        host="${netloc%%:*}"
-        [[ "$netloc" == *:* ]] && port="${netloc#*:}"
-      fi
-      if [[ -n "$host" ]]; then host="$(fleet_pgx_unescape "$host")" || return 0; hset=1; fi
-      if [[ -n "$port" ]]; then port="$(fleet_pgx_unescape "$port")" || return 0; pset=1; fi
-      if [[ "$rest" == /* ]]; then
-        rest="${rest#/}"
-        v="${rest%%\?*}"
-        rest="${rest:${#v}}"
-        if [[ -n "$v" ]]; then db="$(fleet_pgx_unescape "$v")" || return 0; dset=1; fi
-      fi
-      if [[ "$rest" == \?* ]]; then
-        query="${rest#\?}"
-        while [[ -n "$query" ]]; do
-          p="${query%%&*}"
-          if [[ "$query" == *"&"* ]]; then query="${query#*&}"; else query=""; fi
-          [[ "$p" == *=* ]] || return 0
-          v="${p#*=}"
-          [[ "$v" != *=* ]] || return 0
-          k="$(fleet_pgx_unescape "${p%%=*}")" || return 0
-          v="$(fleet_pgx_unescape "$v")" || return 0
-          case "$k" in
-            host) host="$v" hset=1 ;;
-            port) port="$v" pset=1 ;;
-            dbname|database) db="$v" dset=1 ;;
-            user) user="$v" uset=1 ;;
-            service) return 0 ;;
-          esac
-        done
-      fi
-      ;;
-    *)
-      fleet_kv_parse "$dsn" || return 0
-      for i in "${!REPLY_KV_KEYS[@]}"; do
-        v="${REPLY_KV_VALS[i]}"
-        case "${REPLY_KV_KEYS[i]}" in
-          host) host="$v" hset=1 ;;
-          port) port="$v" pset=1 ;;
-          dbname|database) db="$v" dset=1 ;;
-          user) user="$v" uset=1 ;;
-          service) return 0 ;;
-        esac
-      done
-      ;;
-  esac
-  [[ -z "${PGSERVICE:-}" ]] || return 0
-  (( hset )) || host="${PGHOST:-}"
-  (( pset )) || port="${PGPORT:-}"
-  (( dset )) || db="${PGDATABASE:-}"
-  (( uset )) || user="${PGUSER:-}"
-  [[ -n "$user" ]] || user="$(id -un 2>/dev/null || true)"
-  [[ "$host$port" != *,* ]] || return 0
-  if [[ -z "$port" ]]; then
-    port=5432
-  else
-    [[ "$port" =~ ^[0-9]+$ ]] || return 0
-    while [[ "$port" == 0?* ]]; do port="${port#0}"; done
-    (( ${#port} <= 5 && port >= 1 && port <= 65535 )) || return 0
-  fi
-  [[ -n "$db" ]] || db="$user"
-  [[ -n "$db" ]] || return 0
-  printf '%s:%s/%s' "$(fleet_identity_host "$host")" "$port" "$db"
-}
-
-# fleet_same_database A B — true when two DSNs name the same database
-# (fleet_dsn_identity), or are identical. Mirrors the Go resolver's
-# sameDatabase.
-fleet_same_database() {
-  local a="$1" b="$2" ia
-  [[ -n "$a" && -n "$b" ]] || return 1
-  ia="$(fleet_dsn_identity "$a")"
-  [[ -n "$ia" && "$ia" == "$(fleet_dsn_identity "$b")" ]] && return 0
-  [[ "$a" == "$b" ]]
-}
-
-# LEGACY-DB-LAYOUT: remove after consolidation — fleet_resolve_dsn_legacy.
-# fleet_resolve_dsn_legacy ENV_FILE — the legacy two-database resolution
-# (config.resolveLegacyDSNs in internal/config/dsn_legacy.go): applies only
-# when a store-specific key is set, or neither DATABASE_URL nor DB_NAME is;
-# then sets REPLY_CHAT / REPLY_SCHED by the old per-store precedence and
-# per-store DB_* defaults and returns 0. Returns 1 when it does not apply.
-fleet_resolve_dsn_legacy() {
-  local env_file="$1"
-  REPLY_CHAT="" REPLY_SCHED=""
-  local fc fs ls
-  fc="$(fleet_env_or_file FLEET_CHAT_DATABASE_URL "$env_file")"
-  fs="$(fleet_env_or_file FLEET_SCHED_DATABASE_URL "$env_file")"
-  ls="$(fleet_env_or_file SCHED_DATABASE_URL "$env_file")"
-  if [[ -z "$fc$fs$ls" && ( -n "$(fleet_env_or_file DATABASE_URL "$env_file")" || -n "$(fleet_env_or_file DB_NAME "$env_file")" ) ]]; then
+# fleet_resolve_dsn STORE_KEY ENV_FILE — the DSN the store STORE_KEY selects
+# (FLEET_CHAT_DATABASE_URL selects chat, FLEET_SCHED_DATABASE_URL sched — the
+# names only pick the store; neither key is read) connects with, read from
+# the process environment first and then ENV_FILE. The configuration is one
+# DSN — DATABASE_URL, else the DB_* parts (default user and database fleet) —
+# with the store's schema (chat / sched) added. Like the Go resolver it
+# refuses a configuration that still sets a retired per-store key
+# (FLEET_CHAT_DATABASE_URL, FLEET_SCHED_DATABASE_URL, SCHED_DATABASE_URL):
+# it prints the reason to stderr and returns 1. Mirrors config.ResolveDSNs
+# (internal/config/dsn.go) — keep in step; TestIdleLib* pins the two
+# against each other.
+fleet_resolve_dsn() {
+  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" dsn schema="chat" k retired=""
+  [[ "$key" == "FLEET_SCHED_DATABASE_URL" ]] && schema="sched"
+  for k in FLEET_CHAT_DATABASE_URL FLEET_SCHED_DATABASE_URL SCHED_DATABASE_URL; do
+    if [[ -n "$(fleet_env_or_file "$k" "$env_file" | tr -d '[:space:]')" ]]; then
+      retired="${retired:+$retired, }$k"
+    fi
+  done
+  if [[ -n "$retired" ]]; then
+    printf 'error: %s is no longer supported: fleet keeps both stores in ONE database, configured by DATABASE_URL alone (the two-database layout was removed, ADR-0098) — set DATABASE_URL to that database and delete %s from the environment and %s (docs/ONE-DATABASE.md)\n' \
+      "$retired" "$retired" "$env_file" >&2
     return 1
   fi
-  REPLY_CHAT="$fc"
-  [[ -n "$REPLY_CHAT" ]] || REPLY_CHAT="$(fleet_env_or_file DATABASE_URL "$env_file")"
-  [[ -n "$REPLY_CHAT" ]] || REPLY_CHAT="$(fleet_db_parts_dsn chat chat "$env_file")"
-  REPLY_SCHED="$fs"
-  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$ls"
-  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$(fleet_env_or_file DATABASE_URL "$env_file")"
-  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$(fleet_db_parts_dsn fleet sched "$env_file")"
-  return 0
-}
-
-# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — the DSN the store PRIMARY_KEY names
-# (FLEET_CHAT_DATABASE_URL for chat, FLEET_SCHED_DATABASE_URL for sched)
-# connects with, read from the process environment first and then ENV_FILE.
-# The configuration is one DSN — DATABASE_URL, else the DB_* parts (default
-# user and database fleet) — with the store's schema (chat / sched) added.
-# A legacy two-database configuration resolves as it always did. Mirrors the
-# Go resolver, config.ResolveDSNs (internal/config/dsn.go) — keep in step;
-# TestIdleLib* pins the two against each other.
-fleet_resolve_dsn() {
-  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" chat sched schema="chat"
-  [[ "$key" == "FLEET_SCHED_DATABASE_URL" ]] && schema="sched"
-  if fleet_resolve_dsn_legacy "$env_file"; then # LEGACY-DB-LAYOUT: remove after consolidation
-    chat="$REPLY_CHAT" sched="$REPLY_SCHED"
-    if ! fleet_same_database "$chat" "$sched"; then
-      if [[ "$schema" == "sched" ]]; then printf '%s' "$sched"; else printf '%s' "$chat"; fi
-      return 0
-    fi
-  else
-    chat="$(fleet_env_or_file DATABASE_URL "$env_file")"
-    [[ -n "$chat" ]] || chat="$(fleet_db_parts_dsn fleet fleet "$env_file")"
-    sched="$chat"
-  fi
-  if [[ "$schema" == "sched" ]]; then
-    fleet_dsn_with_schema "$sched" sched
-  else
-    fleet_dsn_with_schema "$chat" chat
-  fi
+  dsn="$(fleet_env_or_file DATABASE_URL "$env_file")"
+  [[ -n "$dsn" ]] || dsn="$(fleet_db_parts_dsn fleet fleet "$env_file")"
+  fleet_dsn_with_schema "$dsn" "$schema"
 }
 
 FLEET_DRAIN_OWNER_TOKEN="${FLEET_DRAIN_OWNER_TOKEN:-pid-$$-${RANDOM:-0}}"
@@ -1089,8 +914,13 @@ fleet_active_work_summary() {
     items+=("in-memory healthz active-work probe failed while service is ${svc_state}")
   fi
 
-  sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")"
-  chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"
+  # A configuration the resolver refuses (a retired per-store DSN key) is
+  # reported as work that blocks: nothing can tell whether the box is idle.
+  if ! sched_dsn="$(fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$env_file")" \
+    || ! chat_dsn="$(fleet_resolve_dsn FLEET_CHAT_DATABASE_URL "$env_file")"; then
+    items+=("database configuration refused (a retired per-store DSN key is set; use DATABASE_URL)")
+    sched_dsn="" chat_dsn=""
+  fi
 
   if [[ -n "$sched_dsn" ]]; then
     if has_tbl="$(fleet_psql_query "$sched_dsn" "SELECT to_regclass('tasks') IS NOT NULL;")"; then

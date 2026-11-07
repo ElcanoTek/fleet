@@ -93,7 +93,7 @@ func cmdCacheStats(argv []string) int {
 
 func runCacheStats(argv []string, out io.Writer) int {
 	fs := flag.NewFlagSet("cache-stats", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
 	days := fs.Int("days", 14, "trailing window in UTC days (1..366)")
 	by := fs.String("by", "all", "dimension: all|day|user")
 	asJSON := fs.Bool("json", false, "machine-readable JSON output")

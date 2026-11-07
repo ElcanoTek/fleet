@@ -12,14 +12,14 @@ import (
 func TestOneDatabaseBothSchemas(t *testing.T) {
 	t.Parallel()
 	d := New(t)
-	r := config.ResolveDSNs(func(k string) string {
+	r, err := config.ResolveDSNs(func(k string) string {
 		if k == "DATABASE_URL" {
 			return d.DSN
 		}
 		return ""
 	})
-	if r.Layout != config.LayoutSchemas || r.Chat != d.ChatDSN() || r.Sched != d.SchedDSN() {
-		t.Fatalf("ResolveDSNs(DATABASE_URL=%s) = %+v, want schema mode with the fixture's DSNs", d.DSN, r)
+	if err != nil || r.Chat != d.ChatDSN() || r.Sched != d.SchedDSN() {
+		t.Fatalf("ResolveDSNs(DATABASE_URL=%s) = %+v, %v, want the fixture's DSNs", d.DSN, r, err)
 	}
 	chat, sched := d.Chat(t), d.SchedDB(t)
 	if _, err := chat.CreateUser(t.Context(), "fleetdb@example.com", "placeholder-password"); err != nil {

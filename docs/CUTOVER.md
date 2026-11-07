@@ -21,7 +21,7 @@ fleet's defaults were inherited from the legacy apps, so on a legacy box
 | Chat backend port | chat-server `127.0.0.1:8080` | — | `127.0.0.1:8080` | `FLEET_SERVER_ADDR` |
 | Orchestrator port | — | moc `127.0.0.1:8000` | `127.0.0.1:8000` | `FLEET_ORCHESTRATOR_ADDR` |
 | Web tier port | chat-web `:3000` | — | fleet `127.0.0.1:3000` (the fleet process serves the web UI, ADR-0091) | `FLEET_WEB_ADDR` |
-| Postgres role + DB | role `chat`, db `chat` | role `moc`, db `moc` | role `chat`, db `chat` (+ role `sched`, db `sched`) | `--chat-db-name/--chat-db-user` etc. |
+| Postgres role + DB | role `chat`, db `chat` | role `moc`, db `moc` | role `fleet`, db `fleet` (schemas `chat` + `sched`) | `--db-name/--db-user` |
 | `/etc/caddy/Caddyfile` | written by the legacy bootstraps (when Caddy TLS was chosen) | same | written by `--enable-web --domain` | `--force-caddy` (with a timestamped backup) |
 
 Two protections in `scripts/bootstrap.sh` exist specifically for this
@@ -101,28 +101,22 @@ sudo -u moc  sh -c 'cd /opt/moc  && set -a && . ./.env      && set +a && \
 ## 4. Bootstrap fleet with an explicit database decision
 
 Run bootstrap as documented in [`DEPLOYMENT.md`](DEPLOYMENT.md), plus the
-cutover-specific choices. **Recommended: fresh DB names + import** (the
-supported migration path — the legacy databases stay untouched as a fallback):
+cutover-specific choices. fleet's default role and database, `fleet`/`fleet`,
+do not collide with the legacy `chat`/`chat` or `moc`/`moc`, so the legacy
+databases stay untouched as a fallback and the data moves by export + import
+(step 5) — the supported migration path:
 
 ```sh
 sudo bash /opt/fleet/src/scripts/bootstrap.sh \
   --postgres=local --enable-web --domain fleet.example.com \
-  --client-config <your-bundle-url> \
-  --chat-db-name fleet_chat --chat-db-user fleet_chat
+  --client-config <your-bundle-url>
 ```
 
-(`sched`/`sched` does not collide with moc's `moc`/`moc`, so only the chat
-names need overriding; add `--sched-db-name/--sched-db-user` if your legacy
-install used non-default names that collide.)
-
-The alternative is **in-place adoption** — `--adopt-existing-chat-db` with
-`FLEET_CHAT_DATABASE_URL=<the legacy DSN, current password>`. Bootstrap then
-never creates or alters that role (no password rotation) and fleet runs its
-own migrations on that database at first start. Only adopt a database that is
-meant to *become* fleet's: you skip the chat export/import, but you also give
-up the untouched-legacy-DB fallback, and a later `fleet import` of a chat
-bundle exported from that same database is a no-op (every row already
-exists). When in doubt, use fresh names.
+Add `--db-name/--db-user` only if something on the box already owns a role or
+database named `fleet`. In-place adoption of a legacy chat or moc database is
+not possible: fleet keeps both stores in one database, in the schemas `chat`
+and `sched` (ADR-0098), and refuses a database whose `public` schema holds an
+older store.
 
 **Caddy:** the legacy bootstrap wrote `/etc/caddy/Caddyfile`, so
 `--enable-web --domain` will refuse. Re-run with `--force-caddy` once you are

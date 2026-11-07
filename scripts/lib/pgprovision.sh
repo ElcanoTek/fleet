@@ -1,24 +1,20 @@
 # shellcheck shell=bash
-# scripts/lib/pgprovision.sh — the local Postgres roles + databases bootstrap
-# provisions, without ever printing their passwords.
+# scripts/lib/pgprovision.sh — the local Postgres role + database bootstrap
+# provisions, without ever printing its password.
 #
 # Sourced (not executed). Sourced by bootstrap.sh only.
 #
-# On an installed box the passwords are the live ones, read back out of the
-# env file's DSNs, so neither the --dry-run plan nor a failed real run may show
-# them: the plan is built with placeholders, and psql's errors (which can quote
-# the failing statement, "LINE 1: ALTER ROLE ... PASSWORD '...'") are shown
-# with each password replaced by the same placeholder.
+# On an installed box the password is the live one, read back out of the env
+# file's DSN, so neither the --dry-run plan nor a failed real run may show it:
+# the plan is built with a placeholder, and psql's errors (which can quote the
+# failing statement, "LINE 1: ALTER ROLE ... PASSWORD '...'") are shown with
+# the password replaced by the same placeholder.
 
-# Never traced, whoever sources this: `set -x` would print the passwords these functions take.
+# Never traced, whoever sources this: `set -x` would print the password these functions take.
 { set +x; } 2>/dev/null
 
-# What the plan and a redacted psql error show in place of each password.
+# What the plan and a redacted psql error show in place of the password.
 FLEET_DB_PW_PLACEHOLDER='<db password>'
-# LEGACY-DB-LAYOUT: remove after consolidation — the per-store placeholders.
-FLEET_CHAT_PW_PLACEHOLDER='<chat db password>'
-# Kept apart from the line above: gitleaks reads a bare next line as its value.
-FLEET_SCHED_PW_PLACEHOLDER='<sched db password>'
 
 # fleet_role_db_sql USER PASSWORD DB — the SQL that provisions one role and
 # database: CREATE ROLE if missing, ALTER it to PASSWORD, CREATE DATABASE if
@@ -131,8 +127,8 @@ SQL
 #      them, which nothing short of ownership guarantees;
 #   1  no: CREATE on the database is missing for a schema that does not exist;
 #   2  no: the database's public schema holds a fleet store
-#      (public.schema_migrations) — a legacy two-database install's
-#      database, which the stores refuse to run next to;
+#      (public.schema_migrations) — a database of the removed two-database
+#      layout, which the stores refuse to run next to;
 #   3  the check could not run (psql failed);
 #   4  no: an existing store schema, or something in it, is owned by another
 #      role; what was found (up to five "x is owned by y") is printed.
@@ -169,19 +165,18 @@ fleet_db_store_readiness() {
 }
 
 
-# fleet_redact_db_passwords < TEXT — TEXT with every occurrence of the
-# passwords in FLEET_REDACT_CHAT_PW and FLEET_REDACT_SCHED_PW replaced by their
-# placeholders. The passwords come from the environment, never argv, and are
-# matched literally, byte for byte (index/substr under LC_ALL=C, never a regex,
-# so no character is special). The longer one is replaced first, so a password
-# that contains the other is still replaced whole. A password with a line break
-# cannot be matched line by line, so then nothing is shown but a notice.
-fleet_redact_db_passwords() {
-  if [[ "${FLEET_REDACT_CHAT_PW:-}" == *$'\n'* || "${FLEET_REDACT_SCHED_PW:-}" == *$'\n'* ]]; then
-    printf '%s\n' "(psql's error output withheld: a database password contains a line break)"
+# fleet_redact_db_password < TEXT — TEXT with every occurrence of the
+# password in FLEET_REDACT_DB_PW replaced by FLEET_DB_PW_PLACEHOLDER. The
+# password comes from the environment, never argv, and is matched literally,
+# byte for byte (index/substr under LC_ALL=C, never a regex, so no character
+# is special). A password with a line break cannot be matched line by line,
+# so then nothing is shown but a notice.
+fleet_redact_db_password() {
+  if [[ "${FLEET_REDACT_DB_PW:-}" == *$'\n'* ]]; then
+    printf '%s\n' "(psql's error output withheld: the database password contains a line break)"
     return 0
   fi
-  LC_ALL=C awk -v chat_ph="${FLEET_REDACT_CHAT_PH:-$FLEET_CHAT_PW_PLACEHOLDER}" -v sched_ph="${FLEET_REDACT_SCHED_PH:-$FLEET_SCHED_PW_PLACEHOLDER}" '
+  LC_ALL=C awk -v ph="$FLEET_DB_PW_PLACEHOLDER" '
     function literal(s, find, rep,    out, i) {
       if (find == "") return s
       out = ""
@@ -191,37 +186,23 @@ fleet_redact_db_passwords() {
       }
       return out s
     }
-    BEGIN {
-      first = ENVIRON["FLEET_REDACT_CHAT_PW"];   first_ph = chat_ph
-      second = ENVIRON["FLEET_REDACT_SCHED_PW"]; second_ph = sched_ph
-      if (length(second) > length(first)) {
-        t = first; first = second; second = t
-        t = first_ph; first_ph = second_ph; second_ph = t
-      }
-    }
-    { print literal(literal($0, first, first_ph), second, second_ph) }
+    BEGIN { pw = ENVIRON["FLEET_REDACT_DB_PW"] }
+    { print literal($0, pw, ph) }
   '
 }
 
-# fleet_psql_provision CHAT_PASSWORD SCHED_PASSWORD < SQL — run the SQL as the
-# postgres user, stopping at the first error, and return psql's status. Its
-# stdout is discarded. Its stderr is captured in memory, never in a file (a
-# temp file would outlive a SIGTERM or SIGKILL, which skip an EXIT trap), and
-# on failure is shown on stderr through fleet_redact_db_passwords.
-# VERBOSITY=terse already keeps libpq from quoting the statement; the
-# redaction is what guarantees it.
+# fleet_psql_provision PASSWORD < SQL — run the SQL as the postgres user,
+# stopping at the first error, and return psql's status. Its stdout is
+# discarded. Its stderr is captured in memory, never in a file (a temp file
+# would outlive a SIGTERM or SIGKILL, which skip an EXIT trap), and on failure
+# is shown on stderr through fleet_redact_db_password. VERBOSITY=terse
+# already keeps libpq from quoting the statement; the redaction is what
+# guarantees it.
 fleet_psql_provision() {
   local err rc=0
   err="$(runuser -u postgres -- psql -v ON_ERROR_STOP=1 -v VERBOSITY=terse 2>&1 >/dev/null)" || rc=$?
   if (( rc != 0 )); then
-    printf '%s\n' "$err" | FLEET_REDACT_CHAT_PW="$1" FLEET_REDACT_SCHED_PW="$2" fleet_redact_db_passwords >&2 || true
+    printf '%s\n' "$err" | FLEET_REDACT_DB_PW="$1" fleet_redact_db_password >&2 || true
   fi
   return "$rc"
-}
-
-# fleet_psql_provision_one PASSWORD < SQL — fleet_psql_provision for the one
-# role and database of the one-database layout: its password is shown as
-# FLEET_DB_PW_PLACEHOLDER in a redacted error.
-fleet_psql_provision_one() {
-  FLEET_REDACT_CHAT_PH="$FLEET_DB_PW_PLACEHOLDER" fleet_psql_provision "$1" ""
 }

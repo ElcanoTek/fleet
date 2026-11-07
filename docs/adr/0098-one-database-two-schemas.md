@@ -1,6 +1,6 @@
 # ADR-0098: One database, a schema per store
 
-- **Status:** Accepted
+- **Status:** Accepted (amended 2026-11-07: legacy layout removed)
 - **Date:** 2026-11-07
 - **Deciders:** fleet maintainers
 - **Supersedes:** [ADR-0005](0005-separate-chat-and-sched-databases.md)
@@ -62,9 +62,33 @@ box). The per-store keys `FLEET_CHAT_DATABASE_URL`,
 — or with the bare per-store `DB_*` defaults — fleet resolves exactly as
 before, logs a one-line notice at boot, and `fleet status` / `fleet doctor`
 recommend `fleet db consolidate`, an admin verb that moves the two databases
-into one (docs/ONE-DATABASE.md). All legacy code carries the marker
-`LEGACY-DB-LAYOUT: remove after consolidation` so deleting it is mechanical
-once every box has moved.
+into one (docs/ONE-DATABASE.md). All legacy code carried a grep-able
+"remove after consolidation" marker so deleting it would be mechanical once
+every box had moved — which it now has (below).
+
+## Update 2026-11-07: legacy layout removed
+
+Every box was consolidated (the owner confirmed all twelve: one database
+`fleet`, schemas `chat` and `sched`, the old `chat`/`sched` databases and
+`chat` role dropped, `DATABASE_URL` alone in each env file), so phase 2 of
+#2049 removed the legacy layout:
+
+- `config.ResolveDSNs` resolves only `DATABASE_URL` or the `DB_*` parts, whose
+  bare default is now one database, `fleet`/`fleet`. The per-store keys
+  `FLEET_CHAT_DATABASE_URL`, `FLEET_SCHED_DATABASE_URL` and
+  `SCHED_DATABASE_URL` are refused with an error naming `DATABASE_URL` (boot,
+  every CLI verb, the shell idle gate, doctor and bootstrap), so a stale env
+  file fails loudly instead of being ignored.
+- `fleet db consolidate`, `fleet db layout` and `fleet db dsn-identity` are
+  gone, with the legacy branches of bootstrap, update, doctor, the shell
+  resolver and the Helm chart.
+- `fleet restore` refuses a dump of the old layout (its store in `public`);
+  docs/BACKUP_RESTORE.md shows how to import one by hand.
+- The refusal of a database whose `public` holds a fleet store stays as a
+  cheap backstop.
+
+The decision above is unchanged; "keeps working until each box is
+consolidated" has run its course. Details: docs/ONE-DATABASE.md, "Phase 2".
 
 ## Consequences
 

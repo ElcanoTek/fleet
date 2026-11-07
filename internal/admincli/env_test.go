@@ -32,7 +32,7 @@ func TestRedactEnvValue(t *testing.T) {
 		{"password name masks", "SMTP_PASSWORD", "hunter2", "[REDACTED]"},
 		{"credential name masks", "GOOGLE_CREDENTIAL", "blob", "[REDACTED]"},
 		{"plain knob passes through", "FLEET_MAX_COST_USD", "5.0", "5.0"},
-		{"dsn userinfo is stripped", "FLEET_CHAT_DATABASE_URL", "postgres://chat:s3cret@127.0.0.1:5432/chat", "postgres://***@127.0.0.1:5432/chat"},
+		{"dsn userinfo is stripped", "DATABASE_URL", "postgres://chat:s3cret@127.0.0.1:5432/chat", "postgres://***@127.0.0.1:5432/chat"},
 		{"plain url untouched", "FLEET_PUBLIC_URL", "https://fleet.example.com", "https://fleet.example.com"},
 	}
 	for _, tc := range cases {
@@ -54,7 +54,7 @@ func TestPrintRedactedEnvFile_NeverPrintsSecrets(t *testing.T) {
 		"# provisioning comment",
 		"OPENROUTER_API_KEY=sk-or-verysecret",
 		"FLEET_SHARED_TOKEN='tok-3nvfile'",
-		"FLEET_CHAT_DATABASE_URL=postgres://chat:dbpass@127.0.0.1:5432/chat?sslmode=disable",
+		"DATABASE_URL=postgres://chat:dbpass@127.0.0.1:5432/chat?sslmode=disable",
 		"FLEET_MAX_COST_USD=2.5",
 		"",
 	}, "\n"))
@@ -72,7 +72,7 @@ func TestPrintRedactedEnvFile_NeverPrintsSecrets(t *testing.T) {
 		"# " + path,
 		"OPENROUTER_API_KEY=[REDACTED]",
 		"FLEET_SHARED_TOKEN=[REDACTED]",
-		"FLEET_CHAT_DATABASE_URL=postgres://***@127.0.0.1:5432/chat?sslmode=disable",
+		"DATABASE_URL=postgres://***@127.0.0.1:5432/chat?sslmode=disable",
 		"FLEET_MAX_COST_USD=2.5",
 	} {
 		if !strings.Contains(out, want) {

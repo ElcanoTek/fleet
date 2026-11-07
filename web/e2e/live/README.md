@@ -52,7 +52,7 @@ trap. It is also what `playwright.config.ts` launches as the live `webServer`.
 | `E2E_LIVE` | — | set to `1` to select the live project + boot webServer. |
 | `OPENROUTER_BASE_URL` | set by boot | points fleet's provider at the fake LLM (the one stub seam). Bare var, honored before the `FLEET_`/`CHAT_`/`CUTLASS_` family. |
 | `FLEET_SANDBOX_IMAGE` | `localhost/fleet-sandbox:latest` | the sandbox image; CI pulls from GHCR, else builds locally. |
-| `E2E_DATABASE_DSN` | local pg @ 5432 | admin DSN with CREATEDB; the boot makes `fleet_e2e_chat` + `fleet_e2e_sched`. |
+| `E2E_DATABASE_DSN` | local pg @ 5432 | admin DSN with CREATEDB; the boot makes `fleet_e2e` (schemas `chat` + `sched`). |
 | `E2E_WORKSPACE_BASE` | `$TMPDIR/fleet-e2e-<uid>` | sandbox workspace base; **must be world-traversable** (the container runs as uid 1000 and the workspace is bind-mounted at the same host path, so a path under a `0550` `$HOME` like `/root` breaks `run_python`'s chdir). |
 | `WEB_PORT` / `CHAT_PORT` / `ORCH_PORT` / `FAKE_LLM_ADDR` | 3100 / 18080 / 18000 / 127.0.0.1:18090 | fixed ports for determinism. |
 | `E2E_TEST_EMAIL` / `E2E_TEST_PASSWORD` | `e2e@example.com` / `e2e-test-password` | seeded chat user. |

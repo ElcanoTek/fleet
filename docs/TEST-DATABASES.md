@@ -24,9 +24,9 @@ template and dropped when the test ends, and the whole tree runs in one
   `Fingerprint`, `Migrate`) — `CREATE DATABASE fleet_t_<owner>_<n> TEMPLATE
   fleet_tmpl_<name>_<sha12>` — and drops it `WITH (FORCE)` at cleanup, so a
   goroutine that outlived its test cannot keep it alive.
-- `Empty(t)`, `LegacyPair(t)` (two empty databases — the legacy two-database
-  layout's stores, `LEGACY-DB-LAYOUT`), `Reserve(t)` (a name the code under
-  test creates; `fleet db consolidate`'s target), `MaintenanceDSN(t)`.
+- `Empty(t)`, `MaintenanceDSN(t)`. (`LegacyPair(t)` and `Reserve(t)`, which
+  only the legacy two-database layout's and `fleet db consolidate`'s tests
+  used, were removed with that layout in #2049 phase 2.)
 - **One knob:** `FLEET_TEST_DATABASE_URL`, redefined as the maintenance DSN —
   any database on a server whose role can `CREATE DATABASE`; testdb never
   writes to it. Unset: skip (#2019's rule, unchanged). Set: every connect,
@@ -77,7 +77,7 @@ consolidate end-to-end tests). **Deleted:** `TruncateAllForTest` and its
 retries, lock key and test; `testdb.ChatDSN` / `SchedDSN` / `SchedDB` /
 `SchedLockKey`; `acquireTestLock`, `cleanDB`, `isDatabaseUnavailable` and
 every per-setup `DELETE FROM`; the admincli `TestMain` that pinned its suites
-to the legacy layout (`LEGACY-DB-LAYOUT`). A verb under test that resolves
+to the legacy layout. A verb under test that resolves
 the deployment's DSNs now finds its fixture through `DATABASE_URL` alone —
 the one-database layout.
 
@@ -225,7 +225,7 @@ Honest reading:
 - **GC is liveness-based** (owner locks, `pg_locks`) instead of "older than
   6 h": the next run cleans a killed run immediately, and never a live one.
 - **`Reserve` and `MaintenanceDSN`** were added for the consolidate end-to-end
-  and pg_dump tests; `fleetdb` has no `Storage` helper (storage's own tests
+  and pg_dump tests (`Reserve` went with consolidate in #2049 phase 2); `fleetdb` has no `Storage` helper (storage's own tests
   must be able to import fleetdb), and `PoolMaxOpen` is 4, not 6, because
   dozens of processes' pools share one server.
 - **`--print-groups`** is deleted, not kept for a release: nothing outside the
@@ -235,8 +235,9 @@ Honest reading:
 
 ## Not done / follow-ups
 
-- The legacy two-database layout's tests (`LegacyPair`, the consolidate
-  tests) go with that layout ([ONE-DATABASE.md](ONE-DATABASE.md)).
+- ~~The legacy two-database layout's tests (`LegacyPair`, the consolidate
+  tests) go with that layout.~~ Done in #2049 phase 2
+  ([ONE-DATABASE.md](ONE-DATABASE.md)).
 - The serial httpapi tests that only shorten a timing knob could become
   parallel if the knob moved onto the `Server`; that is a refactor of
   production code, out of scope here.

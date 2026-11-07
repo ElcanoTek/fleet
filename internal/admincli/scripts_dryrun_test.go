@@ -102,40 +102,17 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 	}
 }
 
-// TestBootstrapFreshDBNameFlags — #718: --chat-db-name/--chat-db-user (and the
-// sched twins) must override the colliding legacy defaults, and the planned SQL
-// must provision exactly the overridden names.
-func TestBootstrapFreshDBNameFlags(t *testing.T) {
-	t.Parallel()
-
-	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local",
-		"--chat-db-name", "fleet_chat", "--chat-db-user", "fleet_chat_user",
-		"--sched-db-name", "fleet_sched", "--sched-db-user", "fleet_sched_user")
-	for _, want := range []string{
-		"CREATE ROLE fleet_chat_user",
-		"CREATE DATABASE fleet_chat OWNER fleet_chat_user",
-		"CREATE ROLE fleet_sched_user",
-		"CREATE DATABASE fleet_sched OWNER fleet_sched_user",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
-		}
-	}
-}
-
-// TestBootstrapRejectsUnsafeDBIdentifier — the names are interpolated into the
-// provisioning SQL, so anything beyond a plain identifier must die up front.
 // TestBootstrapDryRunHidesDBPasswords — the plan prints the role/database SQL,
-// and on an installed box its passwords are the live ones, read back out of the
-// env file's DSNs (env_dsn_password). A plan is something an operator pastes
-// into a ticket or a chat, so it must show a placeholder, never a password.
+// and on an installed box its password is the live one, read back out of the
+// env file's DATABASE_URL (env_dsn_password). A plan is something an operator
+// pastes into a ticket or a chat, so it must show a placeholder, never a
+// password.
 func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 	t.Parallel()
 
-	const chatPassword, schedPassword = "chatLivePw7Q2xR9", "schedLivePw9K4mT3"
+	const livePassword = "placeholder-not-a-secret-live"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + chatPassword + "@127.0.0.1:5432/chat?sslmode=disable\n" +
-		"FLEET_SCHED_DATABASE_URL=postgres://sched:" + schedPassword + "@127.0.0.1:5432/sched?sslmode=disable\n"
+	existing := "DATABASE_URL=postgres://fleet:" + livePassword + "@127.0.0.1:5432/fleet?sslmode=disable\n"
 	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -143,16 +120,12 @@ func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
 	}
-	for _, secret := range []string{chatPassword, schedPassword} {
-		if strings.Contains(out, secret) {
-			t.Errorf("bootstrap --dry-run printed a live DB password from the env file\n--- output ---\n%s", out)
-		}
+	if strings.Contains(out, livePassword) {
+		t.Errorf("bootstrap --dry-run printed the live DB password from the env file\n--- output ---\n%s", out)
 	}
 	for _, want := range []string{
-		"ALTER ROLE chat WITH LOGIN PASSWORD '<chat db password>'",
-		"ALTER ROLE sched WITH LOGIN PASSWORD '<sched db password>'",
-		"CREATE DATABASE chat OWNER chat",
-		"CREATE DATABASE sched OWNER sched",
+		"ALTER ROLE fleet WITH LOGIN PASSWORD '<db password>'",
+		"CREATE DATABASE fleet OWNER fleet",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("bootstrap --dry-run plan missing %q\n--- output ---\n%s", want, out)
@@ -162,7 +135,7 @@ func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 
 // TestBootstrapUnderXtraceHidesDBPasswords — an operator debugging a run with
 // `bash -x scripts/bootstrap.sh ...` gets every expanded command on stderr,
-// and the provisioning SQL and the passwords read back out of the env file are
+// and the provisioning SQL and the password read back out of the env file are
 // expanded long before any redaction. bootstrap turns tracing off first thing.
 func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 	t.Parallel()
@@ -171,10 +144,9 @@ func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 	if err != nil {
 		t.Skip("bash not available")
 	}
-	const chatPassword, schedPassword = "chatXtracePw4N8q", "schedXtracePw6M2v"
+	const livePassword = "placeholder-not-a-secret-xtrace"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + chatPassword + "@127.0.0.1:5432/chat?sslmode=disable\n" +
-		"FLEET_SCHED_DATABASE_URL=postgres://sched:" + schedPassword + "@127.0.0.1:5432/sched?sslmode=disable\n"
+	existing := "DATABASE_URL=postgres://fleet:" + livePassword + "@127.0.0.1:5432/fleet?sslmode=disable\n"
 	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -190,12 +162,10 @@ func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bash -x bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
 	}
-	for _, secret := range []string{chatPassword, schedPassword} {
-		if strings.Contains(string(out), secret) {
-			t.Errorf("bash -x bootstrap --dry-run printed a live DB password from the env file")
-		}
+	if strings.Contains(string(out), livePassword) {
+		t.Errorf("bash -x bootstrap --dry-run printed the live DB password from the env file")
 	}
-	if !strings.Contains(string(out), "<chat db password>") {
+	if !strings.Contains(string(out), "<db password>") {
 		t.Errorf("bash -x bootstrap --dry-run did not reach the plan\n--- output ---\n%s", out)
 	}
 }
@@ -229,13 +199,13 @@ func TestSecretHandlingScriptsStartUntraced(t *testing.T) {
 // TestBootstrapRefusesQuotedDBPassword — a single quote would end the
 // password's SQL literal early, and psql's error would then quote the rest of
 // the password as a token the redaction cannot recognise. The plan warns that
-// a real run refuses, naming the variable and never the value.
+// a real run refuses, never printing the value.
 func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
 	t.Parallel()
 
 	const quoted = "half'thenRest42"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + quoted + "@127.0.0.1:5432/chat?sslmode=disable\n"
+	existing := "DATABASE_URL=postgres://fleet:" + quoted + "@127.0.0.1:5432/fleet?sslmode=disable\n"
 	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +213,7 @@ func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bootstrap --dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
 	}
-	if !strings.Contains(out, "CHAT_DB_PASSWORD contains a single quote") || !strings.Contains(out, "a real run would REFUSE here") {
+	if !strings.Contains(out, "the database password contains a single quote") || !strings.Contains(out, "a real run would REFUSE here") {
 		t.Errorf("plan does not say a real run refuses the quoted password\n--- output ---\n%s", out)
 	}
 	for _, fragment := range []string{quoted, "thenRest42"} {
@@ -253,11 +223,13 @@ func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
 	}
 }
 
+// TestBootstrapRejectsUnsafeDBIdentifier — the names are interpolated into the
+// provisioning SQL, so anything beyond a plain identifier must die up front.
 func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
 	t.Parallel()
 
-	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=local",
-		"--chat-db-name", "bad-name;drop")
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env")}, "bootstrap.sh", "--dry-run", "--postgres=local",
+		"--db-user", "bad-name;drop")
 	if err == nil {
 		t.Fatalf("bootstrap accepted an unsafe DB identifier\n--- output ---\n%s", out)
 	}
@@ -266,35 +238,30 @@ func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
 	}
 }
 
-// TestBootstrapAdoptExistingDBFlags — #718: adoption must skip provisioning for
-// that pair (no CREATE, no ALTER — a pre-existing role's password is never
-// rotated) and validate the operator-supplied DSN instead.
+// TestBootstrapAdoptExistingDBFlags — #718: adoption must skip provisioning
+// (no CREATE, no ALTER — a pre-existing role's password is never rotated) and
+// validate the operator-supplied DSN instead.
 func TestBootstrapAdoptExistingDBFlags(t *testing.T) {
 	t.Parallel()
 
 	env := []string{
 		// An isolated env file so a developer's real .env.local can't leak DSNs in.
 		"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env"),
-		"FLEET_CHAT_DATABASE_URL=postgres://legacychat:pw@127.0.0.1:5432/legacychat?sslmode=disable",
-		"FLEET_SCHED_DATABASE_URL=postgres://legacysched:pw@127.0.0.1:5432/legacysched?sslmode=disable",
+		"DATABASE_URL=postgres://legacy:pw@127.0.0.1:5432/legacy?sslmode=disable",
 	}
-	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local",
-		"--adopt-existing-chat-db", "--adopt-existing-sched-db")
+	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local", "--adopt-existing-db")
 	if err != nil {
 		t.Fatalf("adopt dry-run exited non-zero: %v\n--- output ---\n%s", err, out)
 	}
 	for _, want := range []string{
-		"--adopt-existing-chat-db — skipping role/database provisioning",
-		"--adopt-existing-sched-db — skipping role/database provisioning",
-		"both databases adopted — nothing to provision",
-		"would validate the adopted chat DSN",
-		"would validate the adopted sched DSN",
+		"--adopt-existing-db — skipping role/database provisioning",
+		"would validate the adopted DSN",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("adopt dry-run plan missing %q\n--- output ---\n%s", want, out)
 		}
 	}
-	// The adopted pair must never appear in provisioning SQL.
+	// The adopted database must never appear in provisioning SQL.
 	for _, forbid := range []string{"CREATE ROLE", "ALTER ROLE"} {
 		if strings.Contains(out, forbid) {
 			t.Errorf("adopt dry-run plan still provisions roles (%q present)\n--- output ---\n%s", forbid, out)
@@ -307,26 +274,25 @@ func TestBootstrapAdoptExistingDBFlags(t *testing.T) {
 func TestBootstrapAdoptRequiresDSN(t *testing.T) {
 	t.Parallel()
 
-	env := []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env")}
-	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local",
-		"--adopt-existing-chat-db")
+	env := []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env"), "DATABASE_URL="}
+	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local", "--adopt-existing-db")
 	if err == nil {
-		t.Fatalf("bootstrap accepted --adopt-existing-chat-db without a DSN\n--- output ---\n%s", out)
+		t.Fatalf("bootstrap accepted --adopt-existing-db without a DSN\n--- output ---\n%s", out)
 	}
-	if !strings.Contains(out, "--adopt-existing-chat-db needs the existing database's working DSN") {
+	if !strings.Contains(out, "--adopt-existing-db needs the existing database's working DSN") {
 		t.Errorf("expected the missing-DSN error, got:\n%s", out)
 	}
 }
 
 // TestBootstrapAdoptRejectsExternalMode — external mode already takes the
-// operator's DSNs verbatim; combining it with adopt flags is a config error.
+// operator's DSN verbatim; combining it with the adopt flag is a config error.
 func TestBootstrapAdoptRejectsExternalMode(t *testing.T) {
 	t.Parallel()
 
-	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=external",
-		"--adopt-existing-chat-db")
+	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env")}, "bootstrap.sh", "--dry-run", "--postgres=external",
+		"--adopt-existing-db")
 	if err == nil {
-		t.Fatalf("bootstrap accepted adopt flags with --postgres=external\n--- output ---\n%s", out)
+		t.Fatalf("bootstrap accepted --adopt-existing-db with --postgres=external\n--- output ---\n%s", out)
 	}
 	if !strings.Contains(out, "applies to --postgres=local") {
 		t.Errorf("expected the external-mode rejection, got:\n%s", out)
@@ -349,10 +315,8 @@ func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
 	}
 	script := string(body)
 	for _, want := range []string{
-		"guard_preexisting chat",
-		"guard_preexisting sched",
-		"--adopt-existing-chat-db",
-		"--adopt-existing-sched-db",
+		"guard_preexisting db",
+		"--adopt-existing-db",
 		"--force-caddy",
 		"/etc/caddy/Caddyfile.fleet-backup.",
 		"caddyfile_is_foreign",

@@ -1,14 +1,15 @@
 // Package dbschema creates a store's Postgres schema before its migration
 // runner runs (#2049, ADR-0098).
 //
-// In the one-database layout (config.LayoutSchemas) each store connects with
-// its schema as the connection's only search_path, set by the DSN
-// (config.WithSchema). Postgres reports current_schema() as NULL while that
-// schema does not exist, so the first boot against a fresh database must
-// create it before either runner can create its schema_migrations table.
-// Both runners (internal/store and internal/sched/db) call Ensure on their
-// migration connection first; in the legacy layout — the default
-// search_path, "$user", public — Ensure does nothing.
+// Both stores live in one database, each connecting with its schema as the
+// connection's only search_path, set by the DSN (config.WithSchema).
+// Postgres reports current_schema() as NULL while that schema does not
+// exist, so the first boot against a fresh database must create it before
+// either runner can create its schema_migrations table. Both runners
+// (internal/store and internal/sched/db) call Ensure on their migration
+// connection first. A connection that names no store schema — the default
+// search_path, "$user", public, which the package test databases still use
+// (#2049 M2 moves them to schemas) — is left alone: Ensure does nothing.
 package dbschema
 
 import (
@@ -29,24 +30,24 @@ type Execer interface {
 
 // Configured returns the single schema the connection's search_path names,
 // or "" when it does not name exactly one plain schema other than public —
-// the legacy layout's default "$user", public among them.
+// the default "$user", public among them.
 func Configured(ctx context.Context, db Execer) (string, error) {
 	var sp string
 	if err := db.QueryRowContext(ctx, `SELECT current_setting('search_path')`).Scan(&sp); err != nil {
 		return "", fmt.Errorf("read search_path: %w", err)
 	}
 	sp = strings.TrimSpace(sp)
-	// The default search_path ("$user", public) is the legacy layout, whose
-	// store lives in public, which always exists.
-	if sp == "public" || !plainIdentifier(sp) { // LEGACY-DB-LAYOUT: remove after consolidation
+	// public (or the default "$user", public) always exists, so there is
+	// nothing to create; fleet's own DSNs always name a store schema.
+	if sp == "public" || !plainIdentifier(sp) {
 		return "", nil
 	}
 	return sp, nil
 }
 
 // PublicStoreSQL answers whether the database's public schema holds a fleet
-// store (a schema_migrations table) — a legacy two-database install's
-// database. It reads the catalogs, which every role may: to_regclass on
+// store (a schema_migrations table) — a database of the two-database layout
+// removed in #2049. It reads the catalogs, which every role may: to_regclass on
 // 'public.…' fails outright for a role without USAGE on public (a hardened
 // database), which would stop every store from opening.
 const PublicStoreSQL = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
@@ -60,17 +61,16 @@ const PublicStoreSQL = `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
 const lockKeyBase = "fleet.dbschema."
 
 // Ensure creates the connection's configured schema (Configured) when it
-// does not exist yet, and is a no-op otherwise or in the legacy layout.
+// does not exist yet, and is a no-op otherwise or for a connection that
+// names no store schema.
 //
 // It refuses one shape, on every open: a store schema in a database whose
 // public schema holds a fleet store (a schema_migrations table). That is a
-// legacy database someone pointed DATABASE_URL at — usually one of a
-// two-database install's pair — and running a store in an empty (or stray)
-// chat/sched schema next to the real data would boot an apparently empty
-// fleet over it. The probe runs even when the schema already exists: an
-// earlier boot, or a hand-made schema, must not turn the refusal into a
-// one-time check. The fix is `fleet db consolidate` (or the previous
-// per-store DSNs), never a schema silently shadowing the data.
+// database of the removed two-database layout someone pointed DATABASE_URL
+// at, and running a store in an empty (or stray) chat/sched schema next to
+// that data would boot an apparently empty fleet over it. The probe runs
+// even when the schema already exists: an earlier boot, or a hand-made
+// schema, must not turn the refusal into a one-time check.
 func Ensure(ctx context.Context, db Execer) error {
 	schema, err := Configured(ctx, db)
 	if err != nil || schema == "" {
@@ -120,8 +120,8 @@ type QueryRower interface {
 // Readiness is whether fleet's stores can run in a database as the
 // connection's role — the ONE definition, read-only:
 //
-//   - LegacyPublicStore: the public schema holds a fleet store (a legacy
-//     two-database install's database) — refused, whatever else holds;
+//   - LegacyPublicStore: the public schema holds a fleet store (a database
+//     of the removed two-database layout) — refused, whatever else holds;
 //   - MissingCreate: store schemas that do not exist yet while the role has
 //     no CREATE on the database (the store could not create them);
 //   - NotOwned: for store schemas that DO exist, the schema itself or a
@@ -214,8 +214,8 @@ type LegacyDatabaseError struct{ Schema string }
 
 func (e LegacyDatabaseError) Error() string {
 	return fmt.Sprintf("refusing to run a store in schema %q: this database's public schema holds a fleet store "+
-		"(a legacy two-database install's database). Point the per-store DSNs back at the two databases, "+
-		"or move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)", e.Schema)
+		"(a database of the removed two-database layout). Point DATABASE_URL at the one database whose "+
+		"schemas chat and sched hold the stores, or at a new database (docs/ONE-DATABASE.md)", e.Schema)
 }
 
 // IsLegacyDatabase reports whether err is (or wraps) LegacyDatabaseError.

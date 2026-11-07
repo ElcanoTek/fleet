@@ -36,24 +36,25 @@ func TestBootstrapEnvFileRecordsReadsLikeTheService(t *testing.T) {
 	}
 }
 
-// TestDoctorFindsTheFleetBinaryForTheLayout: doctor.sh asks `fleet db
-// layout` to tell a legacy pair from per-store keys naming one database; it
-// must find the binary where bootstrap puts it, or on PATH, rather than
-// assume one install directory (adversarial review, #2055).
-func TestDoctorFindsTheFleetBinaryForTheLayout(t *testing.T) {
+// TestDoctorRefusesRetiredDSNKeys: doctor.sh fails a box whose env file
+// still sets a per-store DSN key of the removed two-database layout (#2049
+// phase 2) — fleet refuses to boot with one — and names DATABASE_URL.
+func TestDoctorRefusesRetiredDSNKeys(t *testing.T) {
 	t.Parallel()
-
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "doctor.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	src := string(body)
-	at := strings.Index(src, `db layout --env-file`)
+	at := strings.Index(src, `for _k in FLEET_CHAT_DATABASE_URL FLEET_SCHED_DATABASE_URL SCHED_DATABASE_URL; do`)
 	if at < 0 {
-		t.Fatal("doctor.sh no longer asks `fleet db layout`")
+		t.Fatal("doctor.sh no longer checks every retired per-store DSN key")
 	}
-	block := src[max(0, at-400):at]
-	if !strings.Contains(block, `command -v fleet`) {
-		t.Error("doctor.sh looks for the fleet binary in one directory only")
+	block := src[at:min(len(src), at+600)]
+	if !strings.Contains(block, `fail "$_retired in $ENV_FILE: no longer supported`) || !strings.Contains(block, "set DATABASE_URL") {
+		t.Errorf("doctor.sh does not fail a retired per-store key naming DATABASE_URL:\n%s", block)
+	}
+	if strings.Contains(src, "db layout") || strings.Contains(src, "db consolidate") {
+		t.Error("doctor.sh still calls the removed `fleet db` verbs")
 	}
 }

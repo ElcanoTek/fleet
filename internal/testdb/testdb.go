@@ -22,13 +22,8 @@
 //     set and reused across processes, runs and worktrees: the template's
 //     name carries a hash of spec.Fingerprint (the embedded migration files),
 //     so two worktrees on different migration sets never share one.
-//   - Empty(t): a fresh empty database (migration-runner tests, consolidate
-//     tests that fill it themselves).
-//   - LegacyPair(t): two empty databases, the legacy two-database layout's
-//     chat and sched stores (#2049: kept until that layout is removed).
-//   - Reserve(t): a database NAME (and its DSN) that is dropped at cleanup
-//     and garbage-collected after a crash, for a test whose code under test
-//     creates the database itself.
+//   - Empty(t): a fresh empty database (migration-runner tests and others
+//     that fill it themselves).
 //
 // The stores' own internal tests build their single-store templates through
 // New (internal/store, internal/sched/db, which cannot import a package that
@@ -143,8 +138,8 @@ type Spec struct {
 var specName = regexp.MustCompile(`^[a-z]{1,12}$`)
 
 // cloneName parses a per-test database name: fleet_t_<owner hex>_<n>, plus
-// an optional suffix for databases a tool under test derives from a reserved
-// name (fleet db consolidate's <target>_consolidate_<store>).
+// an optional suffix for a database a tool under test derives from a
+// per-test name (garbage-collected with it).
 var cloneName = regexp.MustCompile(`^fleet_t_([0-9a-f]{8})_[0-9]+(_[a-z0-9_]+)?$`)
 
 // buildName parses a template build in progress:
@@ -654,25 +649,6 @@ func Empty(t testing.TB) string {
 		t.Fatalf("testdb: create empty database: %v", err)
 	}
 	return s.dsnFor(name)
-}
-
-// LegacyPair returns two fresh, empty databases — the chat and sched stores of
-// the legacy two-database layout (each store in its database's public
-// schema). LEGACY-DB-LAYOUT: remove with the legacy layout (#2049), together
-// with the tests of that layout and of `fleet db consolidate`.
-func LegacyPair(t testing.TB) (chatDSN, schedDSN string) {
-	t.Helper()
-	return Empty(t), Empty(t)
-}
-
-// Reserve returns a database name (and its DSN) that does not exist yet, for a
-// test whose code under test creates that database. It is dropped when the
-// test ends, and garbage-collected like any per-test database after a crash.
-func Reserve(t testing.TB) (name, dsn string) {
-	t.Helper()
-	s := get(t)
-	name = s.reserve(t)
-	return name, s.dsnFor(name)
 }
 
 // MaintenanceDSN returns FLEET_TEST_DATABASE_URL, skipping the test when it is

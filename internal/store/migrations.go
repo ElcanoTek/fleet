@@ -203,7 +203,7 @@ func applyMigrations(ctx context.Context, db *sql.DB) (err error) {
 	//
 	// In the one-database layout the connection's search_path names the chat
 	// schema, which must exist before anything can be created in it
-	// (internal/dbschema); in the legacy layout this is a no-op.
+	// (internal/dbschema); for a DSN that names no store schema it is a no-op.
 	if err := dbschema.Ensure(ctx, conn); err != nil {
 		return err
 	}

@@ -165,15 +165,15 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		t.Fatal("the role's own schemas were refused once the stray table was gone")
 	}
 
-	// #2055 review: a database whose public holds a fleet store is refused,
-	// pointing at consolidation, whatever the privileges.
+	// #2055 review: a database whose public holds a fleet store (the removed
+	// two-database layout) is refused, whatever the privileges.
 	if _, err := tdb.ExecContext(ctx, "CREATE TABLE public.schema_migrations (version int)"); err != nil {
 		t.Fatal(err)
 	}
 	if got := readiness(); got != 2 {
 		t.Fatalf("a legacy store in public: readiness %d, want 2", got)
 	}
-	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "fleet db consolidate") {
+	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "removed two-database layout") {
 		t.Fatalf("the gate did not refuse a legacy store in public: %v: %s", err, out)
 	}
 }

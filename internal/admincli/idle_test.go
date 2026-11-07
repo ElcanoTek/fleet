@@ -121,21 +121,21 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		t.Fatalf("fleet_split_dsn_password_vars multiline password failed: %v\n%s", nlErr, string(nlOut))
 	}
 
-	// Verify fleet_resolve_dsn prefers FLEET_SCHED_DATABASE_URL in the env file
-	// (including 'export ' prefix and inline '#comment') over a generic DATABASE_URL
-	// in the calling shell's environment.
+	// Verify fleet_resolve_dsn reads DATABASE_URL from the env file
+	// (including 'export ' prefix and inline '#comment') and adds the store's
+	// schema.
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
-	if err := os.WriteFile(envFile, []byte("export FLEET_SCHED_DATABASE_URL=postgres://specific@127.0.0.1:5432/sched # inline comment\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile, []byte("export DATABASE_URL=postgres://specific@127.0.0.1:5432/fleet # inline comment\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, envFile)
-	cmd.Env = append(os.Environ(), "DATABASE_URL=postgres://generic@127.0.0.1:5432/generic", "FLEET_SCHED_DATABASE_URL=")
+	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "FLEET_CHAT_DATABASE_URL=", "SCHED_DATABASE_URL=")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fleet_resolve_dsn: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "postgres://specific@127.0.0.1:5432/sched" {
-		t.Errorf("fleet_resolve_dsn got %q, want specific DSN from env file", got)
+	if got := strings.TrimSpace(string(out)); got != "postgres://specific@127.0.0.1:5432/fleet?options=-csearch_path%3Dsched" {
+		t.Errorf("fleet_resolve_dsn got %q, want the env file's DATABASE_URL in schema sched", got)
 	}
 
 	// Verify DB_HOST/DB_USER/DB_PASSWORD fallback in fleet_resolve_dsn (including UTF-8 bytes).
@@ -144,12 +144,12 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, dbPartsEnv)
-	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PASSWORD=")
+	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "FLEET_CHAT_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PASSWORD=")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fleet_resolve_dsn DB_* parts: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "postgres://fleet:p%C3%A4ss%3A1@db.internal:5432/sched?sslmode=disable" {
+	if got := strings.TrimSpace(string(out)); got != "postgres://fleet:p%C3%A4ss%3A1@db.internal:5432/fleet?sslmode=disable&options=-csearch_path%3Dsched" {
 		t.Errorf("fleet_resolve_dsn DB_* parts got %q", got)
 	}
 
@@ -159,12 +159,12 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, emptyEnv)
-	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
+	cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "FLEET_CHAT_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
 	out, err = cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("fleet_resolve_dsn default: %v\n%s", err, string(out))
 	}
-	if got := strings.TrimSpace(string(out)); got != "postgres://fleet@localhost:5432/sched?sslmode=disable" {
+	if got := strings.TrimSpace(string(out)); got != "postgres://fleet@localhost:5432/fleet?sslmode=disable&options=-csearch_path%3Dsched" {
 		t.Errorf("fleet_resolve_dsn default got %q", got)
 	}
 	// Socket-directory and IPv6 DB_HOST values build the same DSN as the Go
@@ -175,18 +175,21 @@ func TestIdleLibSplitDSNPassword(t *testing.T) {
 			t.Fatal(err)
 		}
 		cmd = exec.Command("bash", "-c", `. "$1"; fleet_resolve_dsn FLEET_SCHED_DATABASE_URL "$2"`, "_", lib, partsEnv)
-		cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
+		cmd.Env = append(os.Environ(), "DATABASE_URL=", "FLEET_SCHED_DATABASE_URL=", "FLEET_CHAT_DATABASE_URL=", "SCHED_DATABASE_URL=", "DB_HOST=", "DB_PORT=", "DB_USER=", "DB_PASSWORD=", "DB_NAME=", "DB_SSLMODE=")
 		out, err = cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("fleet_resolve_dsn DB_HOST=%s: %v\n%s", host, err, string(out))
 		}
-		want := config.ResolveDSNs(func(k string) string {
+		d, rerr := config.ResolveDSNs(func(k string) string {
 			if k == "DB_HOST" {
 				return host
 			}
 			return ""
-		}).Sched
-		if got := strings.TrimSpace(string(out)); got != want {
+		})
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		if got, want := strings.TrimSpace(string(out)), d.Sched; got != want {
 			t.Errorf("fleet_resolve_dsn DB_HOST=%s got %q, want the Go resolver's %q", host, got, want)
 		}
 	}
@@ -240,7 +243,7 @@ exit 0
 		t.Fatal(err)
 	}
 	envFile := filepath.Join(tmp, "fleet.env")
-	if err := os.WriteFile(envFile, []byte("FLEET_SCHED_DATABASE_URL=postgres://sched:pw@127.0.0.1:5432/sched?sslmode=disable\n"), 0o600); err != nil {
+	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://fleet:pw@127.0.0.1:5432/fleet?sslmode=disable\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	baseEnv := []string{

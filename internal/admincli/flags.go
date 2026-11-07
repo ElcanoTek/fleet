@@ -1,21 +1,17 @@
 package admincli
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"golang.org/x/term"
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
-	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
 
 // readStdinValue reads a secret/value from stdin (used when a flag is "-"),
@@ -78,11 +74,12 @@ func resolveSecret(flagVal, prompt string, confirm bool) (string, error) {
 }
 
 // resolvedDSNs is config.ResolveDSNs over envOrFile: the server's own DSN
-// precedence (#2018), read from the shell or else the deployment env file, so
+// resolution (#2018), read from the shell or else the deployment env file, so
 // a CLI verb can never point at a different database than `fleet serve`.
 // Process-env values get the server's quote stripping (config.ProcessEnv);
-// env-file values were already unquoted by the file reader.
-func resolvedDSNs() config.DSNs {
+// env-file values were already unquoted by the file reader. It fails, as
+// boot does, on a retired per-store DSN key.
+func resolvedDSNs() (config.DSNs, error) {
 	return config.ResolveDSNs(func(k string) string {
 		if v := config.ProcessEnv(k); v != "" {
 			return v
@@ -92,66 +89,50 @@ func resolvedDSNs() config.DSNs {
 }
 
 // chatDSN resolves the chat DB DSN: --database-url, else config.ResolveDSNs
-// (FLEET_CHAT_DATABASE_URL, DATABASE_URL, DB_* parts). Unlike the server it
-// refuses to fall through to the bare localhost defaults: a CLI verb aimed at
-// nothing in particular should say so rather than guess.
+// (DATABASE_URL, DB_* parts). Unlike the server it refuses to fall through to
+// the bare localhost defaults: a CLI verb aimed at nothing in particular
+// should say so rather than guess.
 //
-// In the one-database layout the result carries the chat schema. A
-// --database-url gets its layout from config.DSNs.OverrideFor: the
-// deployment's for the deployment's own database, the data's (probeDSN) for
-// any other — so a flag aimed at a DR host or a restored copy lands in the
-// chat schema of a one-database install and in public of a legacy store.
+// The result carries the chat schema: a --database-url gets it from
+// config.DSNs.OverrideFor (unless the override names its own schema).
 func chatDSN(dbURL string) (string, error) {
-	d := resolvedDSNs()
-	if v := strings.TrimSpace(dbURL); v != "" {
-		return d.OverrideFor(v, config.ChatSchema, probePublicStore), nil
-	}
-	if d.ChatConfigured() {
-		return d.Chat, nil
-	}
-	return "", fmt.Errorf("chat DB DSN unset — pass --database-url or set FLEET_CHAT_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
+	return storeDSN(dbURL, config.ChatSchema)
 }
 
-// schedDSN resolves the sched DB DSN: --database-url, else config.ResolveDSNs
-// (FLEET_SCHED_DATABASE_URL, SCHED_DATABASE_URL, DATABASE_URL, DB_* parts),
-// refusing the bare localhost defaults like chatDSN.
+// schedDSN resolves the sched DB DSN like chatDSN, in the sched schema.
 func schedDSN(dbURL string) (string, error) {
-	d := resolvedDSNs()
+	return storeDSN(dbURL, config.SchedSchema)
+}
+
+func storeDSN(dbURL, schema string) (string, error) {
+	d, err := resolvedDSNs()
+	if err != nil {
+		return "", err
+	}
 	if v := strings.TrimSpace(dbURL); v != "" {
-		return d.OverrideFor(v, config.SchedSchema, probePublicStore), nil
+		return d.OverrideFor(v, schema), nil
 	}
-	if d.SchedConfigured() {
-		return d.Sched, nil
+	if d.Configured() {
+		return d.OverrideFor("", schema), nil
 	}
-	return "", fmt.Errorf("sched DB DSN unset — pass --database-url or set FLEET_SCHED_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
+	return "", fmt.Errorf("%s DB DSN unset — pass --database-url or set DATABASE_URL (in the shell or in %s)", schema, serverEnvFile(""))
 }
 
 // idleChatDSN resolves the chat DB DSN including the unconditional
-// localhost:5432 default the server itself falls back to.
-func idleChatDSN(dbURL string) string {
-	return resolvedDSNs().OverrideFor(dbURL, config.ChatSchema, probePublicStore)
-}
+// localhost:5432 default the server itself falls back to. A configuration
+// the resolver refuses (a retired per-store key) yields "", which the idle
+// checks report as unreachable.
+func idleChatDSN(dbURL string) string { return idleDSN(dbURL, config.ChatSchema) }
 
-// idleSchedDSN resolves the sched DB DSN including the unconditional
-// localhost:5432 default the server itself falls back to.
-func idleSchedDSN(dbURL string) string {
-	return resolvedDSNs().OverrideFor(dbURL, config.SchedSchema, probePublicStore)
-}
+// idleSchedDSN is idleChatDSN for the sched store.
+func idleSchedDSN(dbURL string) string { return idleDSN(dbURL, config.SchedSchema) }
 
-// probePublicStore is the admin CLI's config.PublicStoreProbe: whether the
-// database dsn names holds a fleet store in public (a legacy store's
-// database). Read-only, bounded to 5s.
-var probePublicStore config.PublicStoreProbe = func(dsn string) (bool, error) {
-	db, err := sql.Open("pgx", dsn)
+func idleDSN(dbURL, schema string) string {
+	d, err := resolvedDSNs()
 	if err != nil {
-		return false, err
+		return ""
 	}
-	defer db.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	var legacy bool
-	err = db.QueryRowContext(ctx, dbschema.PublicStoreSQL).Scan(&legacy)
-	return legacy, err
+	return d.OverrideFor(dbURL, schema)
 }
 
 // envOrFile reads key from the process environment, falling back to the

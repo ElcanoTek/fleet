@@ -12,11 +12,11 @@ import (
 // ConnTarget is where a DSN connects: the server (host, port), database,
 // role and password the driver itself would use. It is the ONE extraction
 // of a DSN's target (#2055 review): every place that asks "which server,
-// database or role does this DSN name" — DSNIdentity and so the layout
-// decision, `fleet status`, validate-config, backup/restore's client tools,
-// consolidate's instance check — reads it from here, never from a
-// hand-written parser, so no question about a DSN can be answered
-// differently from how the server's own pgx connection answers it.
+// database or role does this DSN name" — DSNIdentity and so the
+// distinct-stores guard, `fleet status`, backup/restore's client tools —
+// reads it from here, never from a hand-written parser, so no question about
+// a DSN can be answered differently from how the server's own pgx connection
+// answers it.
 //
 // It is pgconn.ParseConfig's reading, so it is exactly pgx's:
 //   - a query parameter (?host=, ?port=, ?dbname=, ?user=, ?password=)
@@ -26,16 +26,13 @@ import (
 //     .pgpass for the password, and then libpq's defaults (the first
 //     existing default socket directory, port 5432, the OS user).
 //     Deliberately: the process that asks connects with the same
-//     environment, so its connections go where the target says. A command
-//     that must answer for ANOTHER process's environment (consolidate,
-//     which reads the service's env file) refuses to run with PG* target
-//     variables set rather than mix the two;
+//     environment, so its connections go where the target says;
 //   - Database is "" when nothing names one; the server then uses the role
 //     name (DB).
 //
 // A DSN listing several hosts (host=a,b or postgres://a,b/db) is refused
-// with ErrMultiHost: fleet's stores, backups and layout decisions each need
-// ONE server, and guessing the first would let two DSNs that share only a
+// with ErrMultiHost: fleet's stores, backups and the distinct-stores guard
+// each need ONE server, and guessing the first would let two DSNs that share only a
 // fallback host compare as one database.
 type ConnTarget struct {
 	Host     string // a host name, an IP address, or a Unix-socket directory ("/…")

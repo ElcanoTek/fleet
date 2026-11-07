@@ -115,14 +115,15 @@ func TestCloneDroppedAtCleanup(t *testing.T) {
 	}
 }
 
-// TestEmptyAndLegacyPairAreEmpty: no tables in either.
-func TestEmptyAndLegacyPairAreEmpty(t *testing.T) {
+// TestEmptyIsEmpty: no tables in an empty database, and two calls give two
+// databases.
+func TestEmptyIsEmpty(t *testing.T) {
 	t.Parallel()
-	chat, sched := LegacyPair(t)
-	if chat == sched {
-		t.Fatal("LegacyPair returned one database twice")
+	a, b := Empty(t), Empty(t)
+	if a == b {
+		t.Fatal("Empty returned one database twice")
 	}
-	for _, dsn := range []string{Empty(t), chat, sched} {
+	for _, dsn := range []string{a, b} {
 		var n int
 		if err := open(t, dsn).QueryRow(`SELECT count(*) FROM pg_tables WHERE schemaname = 'public'`).Scan(&n); err != nil {
 			t.Fatal(err)

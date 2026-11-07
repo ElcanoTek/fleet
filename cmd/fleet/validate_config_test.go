@@ -651,7 +651,7 @@ func TestCheckDatabaseSkipNetwork(t *testing.T) {
 }
 
 // TestCheckDatabaseSameDB: chat and sched resolving to the SAME database is a
-// blocking failure (the EnsureDistinctDatabases invariant), even with the probe
+// blocking failure (the EnsureDistinctStores invariant), even with the probe
 // skipped.
 func TestCheckDatabaseSameDB(t *testing.T) {
 	same := "postgres://u:p@localhost:5432/fleet?sslmode=disable"

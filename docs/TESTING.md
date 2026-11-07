@@ -304,9 +304,9 @@ the server and the role and prints the export line.
   gone is garbage), or by hand with `scripts/test-db-setup.sh --gc`
   (`--templates` drops the templates too). Neither ever touches a database
   that does not start with `fleet_t_` / `fleet_tmpl_`, or one a live run owns.
-- **The legacy two-database layout** is still tested where it matters — the
-  legacy DSN resolution and `fleet db consolidate` — on pairs of empty
-  databases from `testdb.LegacyPair` (LEGACY-DB-LAYOUT).
+- **The legacy two-database layout** is gone (#2049 phase 2); what is tested
+  is its refusal — a retired per-store DSN key fails resolution, bootstrap
+  and doctor, and `fleet restore` refuses an old `public`-schema dump.
 
 How to write a DB test is in
 [TESTING-STRATEGY.md](TESTING-STRATEGY.md#database-tests).

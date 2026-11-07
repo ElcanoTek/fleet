@@ -143,20 +143,14 @@ resolve the DSN the same way (`config.ResolveDSNs`): `DATABASE_URL`, else the
 flag naming the one database is given the store's schema. A verb refuses to
 fall through to the bare localhost defaults when nothing is set.
 
-**Legacy two-database installs (deprecated).** Every install bootstrapped
-before #2049 has two databases and the per-store keys
-`FLEET_CHAT_DATABASE_URL` / `FLEET_SCHED_DATABASE_URL` (or `SCHED_DATABASE_URL`).
-That layout keeps working unchanged — an upgrade never moves data — and the
-server, `fleet status` and `fleet doctor` say so and point at
-`fleet db consolidate`, which moves it into one database
-([ONE-DATABASE.md](ONE-DATABASE.md#moving-a-legacy-install-fleet-db-consolidate)).
-In that layout the old precedence still applies (chat:
-`FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`, else the `DB_*` parts; sched:
-`FLEET_SCHED_DATABASE_URL`, else `SCHED_DATABASE_URL`, else `DATABASE_URL`,
-else the `DB_*` parts), and with no `DB_NAME` the bare `DB_*` defaults are
-still `chat`/`chat` and `fleet`/`sched`. When the per-store keys name the same
-database, fleet uses its two schemas. What is refused is two DSNs that would
-put both stores in the same schema.
+**The two-database layout is gone (#2049).** The per-store keys
+`FLEET_CHAT_DATABASE_URL`, `FLEET_SCHED_DATABASE_URL` and `SCHED_DATABASE_URL`
+are no longer read: when one of them is still set (in the environment or the
+env file), `fleet serve`, `fleet validate-config` and every DSN-using CLI verb
+refuse with an error naming `DATABASE_URL`, `fleet doctor` fails the box, and
+`bootstrap.sh` refuses to run. Set `DATABASE_URL` to the one database and
+delete the old keys. With nothing configured at all, the bare default is one
+database, user and database `fleet` on `localhost:5432`.
 
 `fleet config set-env KEY` upserts one variable as exactly one line (value from
 stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer
@@ -293,11 +287,12 @@ resolve the client bundle (`--client-config`) → **the sandbox image** (the
 release's signed image for a bundle with no Containerfile or the generic one;
 otherwise built on the box with `scripts/build-sandbox-image.sh`, on top of the
 verified release image when the Containerfile declares `FLEET_SANDBOX_BASE`;
-skipped when the manifest pins a prebuilt `sandbox.image`) → provision both `chat`+`sched`
-roles/databases idempotently via `\gexec` (local) or validate the DSNs (external)
-→ write the resolved DSNs + `FLEET_CLIENT_CONFIG_DIR` into the env file →
-optionally `enable --now` the systemd unit. Local-mode role passwords are
-generated when unset; set `CHAT_DB_PASSWORD`/`SCHED_DB_PASSWORD` to pin them.
+skipped when the manifest pins a prebuilt `sandbox.image`) → provision the one
+role and database (default `fleet`/`fleet`) idempotently via `\gexec` (local)
+or validate `DATABASE_URL` (external) → write `DATABASE_URL` +
+`FLEET_CLIENT_CONFIG_DIR` into the env file → optionally `enable --now` the
+systemd unit. The local-mode role password is generated on the first run and
+reused from the env file's `DATABASE_URL` afterwards.
 
 With `--enable-web --domain <fqdn>`, bootstrap also names the box after that
 domain, so prompts stop reading `root@vultr`. It renames only when the current

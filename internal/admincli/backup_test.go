@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
@@ -169,7 +170,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 
 	// Two fresh scratch databases of this test's own.
-	srcDSN, dstDSN := testdb.Empty(t), testdb.Empty(t)
+	// A store's DSN names its schema (fleet backup dumps that schema only).
+	srcDSN := config.WithSchema(testdb.Empty(t), config.SchedSchema)
+	dstDSN := config.WithSchema(testdb.Empty(t), config.SchedSchema)
 	// Seed a sentinel row in the source DB, then close the connection so the dump
 	// (and later the destination restore) has no contention.
 	const sentinel = "round-trip-ok"
@@ -179,7 +182,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 			t.Fatalf("open src: %v", err)
 		}
 		defer src.Close()
-		if _, err := src.ExecContext(ctx, `CREATE TABLE sentinel (note text)`); err != nil {
+		if _, err := src.ExecContext(ctx, `CREATE SCHEMA sched; CREATE TABLE sentinel (note text)`); err != nil {
 			t.Fatalf("create sentinel table: %v", err)
 		}
 		if _, err := src.ExecContext(ctx, `INSERT INTO sentinel (note) VALUES ($1)`, sentinel); err != nil {

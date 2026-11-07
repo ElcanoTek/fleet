@@ -27,3 +27,12 @@ func fleetEnv(t *testing.T) fleetdb.DB {
 	t.Setenv("DATABASE_URL", d.DSN)
 	return d
 }
+
+// clearDSNEnv empties every DSN key either resolver reads (dsnEnvKeys), so
+// only what the test sets decides.
+func clearDSNEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range dsnEnvKeys {
+		t.Setenv(k, "")
+	}
+}
