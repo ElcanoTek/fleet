@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -1171,6 +1172,10 @@ type Config struct {
 	// EmailAttachmentDir is the host directory MCP tools write downloaded
 	// attachments to and where uploads are staged for the sandbox bind mount.
 	// Generic infrastructure, independent of any specific email connector.
+	// Load resolves it to an ABSOLUTE path against the process cwd: paths
+	// derived from it (the outbound attachment copies in particular) are handed
+	// to MCP subprocesses that run in a different cwd, where the relative
+	// default "./data/attachments" would not resolve.
 	EmailAttachmentDir string
 
 	// ── rate limit (interactive) ──
@@ -1850,7 +1855,7 @@ func Load(envFile string) (*Config, error) {
 		RemoteMCPAllowInsecureHTTP: lp.getenvFleetBool("REMOTE_MCP_ALLOW_INSECURE_HTTP", false),
 
 		// ── attachments / uploads (generic infra) ──
-		EmailAttachmentDir: getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments"),
+		EmailAttachmentDir: absoluteDir(getenvDefault("EMAIL_ATTACHMENT_DIR", "./data/attachments")),
 
 		// ── rate limit (interactive) ──
 		RatePerMinute:       lp.getenvInt("CHAT_RATE_PER_MIN", 40),
@@ -2354,6 +2359,20 @@ func boolKnobInEnv(key string) bool {
 // consistent). Numeric/bool/duration knobs are NOT read through these string
 // helpers — they parse through the envKnobs registry (knobs.go) via Load's
 // loadParser, which fails boot loudly on a set-but-malformed value.
+
+// absoluteDir resolves a configured directory against the process cwd. An
+// empty value stays empty (unset), and a cwd that cannot be read leaves the
+// value as written: every reader would fail the same way.
+func absoluteDir(dir string) string {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return ""
+	}
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
+}
 
 func getenvDefault(key, def string) string {
 	if v := os.Getenv(key); v != "" {

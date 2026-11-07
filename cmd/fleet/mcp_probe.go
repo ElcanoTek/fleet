@@ -50,6 +50,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
+	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 // mcpTestOptions are the parsed `fleet mcp test` flags + positional names.
@@ -136,10 +137,13 @@ func runMCPTest(args []string) int {
 	// folded the file in for its manifest interpolation, #1123; this re-read
 	// admits the literal-named keys too.)
 	config.RegisterAllowedEnvVars(bundle.EnvVarNames()...)
-	if _, err := config.Load(envFile); err != nil {
+	probeCfg, err := config.Load(envFile)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "load config: %v\n", err)
 		return 1
 	}
+	// Spawn each server with the env a real boot gives it (see run()).
+	agentcore.PinOutboundAttachmentDir(tools.OutboundAttachmentStagingDir(probeCfg.EmailAttachmentDir))
 	// The SAME resolved catalog a boot registers: enable gate applied, env
 	// interpolated, stdio Dir pinned to the bundle root.
 	catalog := bundle.MCPServerConfigs()

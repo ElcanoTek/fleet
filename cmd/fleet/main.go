@@ -303,6 +303,10 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.PinWorkspaceRoot()
+	// Before the MCP broker starts (it inherits the env): connectors whose
+	// read allowlist admits the workspace root must also admit the directory
+	// outbound email attachments are copied to (agentcore.AdmitOutboundAttachmentDir).
+	agentcore.PinOutboundAttachmentDir(tools.OutboundAttachmentStagingDir(cfg.EmailAttachmentDir))
 
 	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
 	// With the endpoint unset (the default) this is a complete no-op — no
