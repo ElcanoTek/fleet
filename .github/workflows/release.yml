@@ -445,9 +445,10 @@ jobs:
             podman manifest rm "${repo}:${TAG}" >/dev/null 2>&1 || true
             podman manifest create "${repo}:${TAG}"
             for arch in amd64 arm64; do
-              podman load -q -i "dist/${name}-image-linux-${arch}.oci.tar"
-              podman push --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
-                "localhost/${name}:build-${arch}" "docker://${repo}:${TAG}-${arch}"
+              # Straight from the build's OCI archive to the registry: no
+              # local store, no name to re-derive, the bytes the SBOM scanned.
+              skopeo copy --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
+                "oci-archive:dist/${name}-image-linux-${arch}.oci.tar" "docker://${repo}:${TAG}-${arch}"
               digest="$(cat "${RUNNER_TEMP}/${name}-${arch}.digest")"
               echo "${key}_${arch}=${repo}@${digest}" >> "${GITHUB_OUTPUT}"
               podman manifest add "${repo}:${TAG}" "docker://${repo}@${digest}"

@@ -1125,35 +1125,10 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 	}
 }
 
-// ── the node handoff ────────────────────────────────────────────────────────
-
-// fakeSrcDir builds the minimum a script needs to accept a --src/SRC_DIR: a
-// go.mod (so the "is this a fleet checkout?" guard passes) and a web/.nvmrc
-// declaring the node major. It is the only deterministic lever on the *refusal*
-// path — a runner that already has node 24 cannot be made to lack it, but it can
-// be pointed at a checkout demanding node 99.
-func fakeSrcDir(t *testing.T, nvmrc string) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "web"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range map[string]string{
-		"go.mod":           "module example.test\n",
-		"web/.nvmrc":       nvmrc + "\n",
-		"web/package.json": "{}\n",
-	} {
-		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return dir
-}
-
-// TestScriptHelpPrintsTheWholeHeaderAndNoShell — bootstrap/update/fleet-upgrade
-// all rendered --help with a HARDCODED `sed -n '2,Np'` range, which rots the
-// moment the header grows: update.sh silently dropped its last paragraph and
-// fleet-upgrade.sh printed raw shell out of its own help. FEATURE-NOTES records
+// TestScriptHelpPrintsTheWholeHeaderAndNoShell — bootstrap/update (and the since
+// removed fleet-upgrade) all rendered --help with a HARDCODED `sed -n '2,Np'`
+// range, which rots the moment the header grows: update.sh silently dropped its
+// last paragraph and fleet-upgrade.sh printed raw shell out of its own help. FEATURE-NOTES records
 // fixing this once already. The help is now derived from the header block, and
 // this pins both ends of the derivation.
 func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {

@@ -165,9 +165,9 @@ func updateCheck() int {
 	}
 	n, _ := strconv.Atoi(behind)
 	if n == 0 {
-		fmt.Printf("fleet is up to date (%s, even with upstream).\n", branch)
+		fmt.Printf("fleet checkout is even with upstream (%s).\n", branch)
 	} else {
-		fmt.Printf("fleet is %d commit(s) behind upstream on %s — run `fleet update` to upgrade.\n", n, branch)
+		fmt.Printf("fleet checkout is %d commit(s) behind upstream on %s — `fleet update` installs the newest RELEASE (below), which may not include the newest commits yet.\n", n, branch)
 	}
 	bundleStale := clientBundleCheck()
 	if rc := releaseCheck(); rc != 0 {

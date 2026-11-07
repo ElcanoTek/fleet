@@ -75,7 +75,7 @@ func TestReleaseLibRefusesUnsignedReleases(t *testing.T) {
 	cache := t.TempDir()
 	ver := release.PinnedCosign().Version
 	raw, _ := os.ReadFile(cosign)
-	if err := os.WriteFile(filepath.Join(cache, "cosign-"+ver+"-linux-"+arch), raw, 0o755); err != nil { //nolint:gosec // test copy of an executable
+	if err := os.WriteFile(filepath.Join(cache, "cosign-"+ver+"-linux-"+arch), raw, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	env := []string{"FLEET_RELEASE_BASE_URL=" + srv.URL, "CACHE=" + cache, "DIR=" + t.TempDir(), "TAG=" + tag,
