@@ -26,6 +26,7 @@ type fakeDeliverer struct {
 	after     func()
 	deferAll  bool // the chat server is draining: every fire is deferred
 	coalesce  bool // a patrol turn is in flight: a manual fire coalesces
+	queueFull bool // the conversation's input queue is full
 }
 
 func newFakeDeliverer() *fakeDeliverer {
@@ -37,6 +38,10 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.fail[f.ScheduleID] {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{}, errors.New("delivery failed")
+	}
+	if d.queueFull && f.Trigger == models.ChatScheduleTriggerManual {
+		d.mu.Unlock()
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleRejected, Reason: "queue_full"}, nil
 	}
 	if d.coalesce && f.Trigger == models.ChatScheduleTriggerManual {
 		d.mu.Unlock()
@@ -379,5 +384,36 @@ func TestChatSchedules_RunNowOverInFlightTurnIsFiring(t *testing.T) {
 	}
 	if n, leased := runCountOf(t, s, "p"); n != 0 || leased {
 		t.Fatalf("run count %d, leased %v", n, leased)
+	}
+}
+
+// A Run now the chat server rejects (a full input queue) is refused with
+// ErrChatScheduleQueueFull and ENDED: no lease or fire is kept, nothing is
+// recorded, and once the queue drains no pass runs it.
+func TestChatSchedules_RejectedRunNowIsTerminal(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	addChatSchedule(t, s, "p", "paused", time.Now().Add(time.Hour).Unix())
+	d.queueFull = true
+	if _, err := s.RunChatScheduleNow(context.Background(), "p"); !errors.Is(err, models.ErrChatScheduleQueueFull) {
+		t.Fatalf("Run now on a full queue: err = %v, want ErrChatScheduleQueueFull", err)
+	}
+	var fire *string
+	if err := s.storage.DB().Conn().QueryRow(`SELECT fire_id FROM chat_schedules WHERE id = 'p'`).Scan(&fire); err != nil || fire != nil {
+		t.Fatalf("rejected fire kept (fire_id %v, err %v)", fire, err)
+	}
+	d.mu.Lock()
+	d.queueFull = false
+	d.mu.Unlock()
+	expireChatLease(t, s, "p")
+	s.runChatSchedules()
+	if n := d.deliveredTo("p"); n != 0 {
+		t.Fatalf("the rejected Run now was delivered %d time(s) after the queue drained", n)
+	}
+	if n, leased := runCountOf(t, s, "p"); n != 0 || leased {
+		t.Fatalf("run count %d, leased %v; want 0, released", n, leased)
+	}
+	if runs, _ := s.storage.DB().ListChatScheduleRuns(context.Background(), "p", 10); len(runs) != 0 {
+		t.Fatalf("run history = %+v, want none", runs)
 	}
 }

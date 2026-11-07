@@ -105,12 +105,24 @@ func (s *Scheduler) RunChatScheduleNow(ctx context.Context, scheduleID string) (
 	fireCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chatScheduleFireTimeout)
 	defer cancel()
 	d, err := s.fireChatSchedule(fireCtx, fire, now)
-	if err == nil && d.Outcome == models.ChatScheduleCoalesced {
+	if err != nil {
+		return d, err
+	}
+	switch d.Outcome {
+	case models.ChatScheduleCoalesced:
 		// A patrol turn of this schedule is still queued or running: of two
 		// Run nows racing, exactly one runs and the other is told so.
 		return d, models.ErrChatScheduleFiring
+	case models.ChatScheduleRejected:
+		// Refused for good (the fire has ended): say why, never run it later.
+		if d.Reason == "queue_full" {
+			return d, models.ErrChatScheduleQueueFull
+		}
+		return d, fmt.Errorf("%w: %s", models.ErrChatScheduleNotRunnable, d.Reason)
+	case models.ChatScheduleQueued, models.ChatScheduleBusy, models.ChatScheduleGone,
+		models.ChatScheduleStale, models.ChatScheduleDeferred:
 	}
-	return d, err
+	return d, nil
 }
 
 type chatSchedError string
@@ -193,7 +205,7 @@ func (s *Scheduler) drainChatSchedules(ctx context.Context) (int, error) {
 			switch d.Outcome {
 			case models.ChatScheduleDeferred:
 				deferred = true
-			case models.ChatScheduleStale:
+			case models.ChatScheduleStale, models.ChatScheduleRejected:
 			default:
 				fired++
 			}
@@ -255,7 +267,7 @@ func (s *Scheduler) fireChatSchedule(ctx context.Context, fire models.ChatSchedu
 		return d, nil
 	}
 	switch d.Outcome {
-	case models.ChatScheduleStale, models.ChatScheduleDeferred:
+	case models.ChatScheduleStale, models.ChatScheduleDeferred, models.ChatScheduleRejected:
 		// Nothing changed that a client could see.
 	case models.ChatScheduleQueued:
 		log.Printf("audit: chat schedule %q (run #%d) queued for conversation %q as input %q",
