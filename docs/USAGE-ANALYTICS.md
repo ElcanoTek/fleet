@@ -41,7 +41,7 @@ Aggregation happens strictly over rows the governed core already writes:
   Model/project attribution falls into the documented empty bucket once the
   joined conversation is gone; user, cost, token, and time meters remain.
 
-The two sources live in **separate databases**, so the merge happens in the
+The two sources live in **separate stores** (schemas `chat` and `sched`, ADR-0098), so the merge happens in the
 handler (`internal/sched/handlers/usage.go`), keyed on the bucket key, with
 per-source subtotals (`task_cost_usd`/`chat_cost_usd`, `task_iterations`/
 `chat_turns`) preserved so the report is honest about where each number came

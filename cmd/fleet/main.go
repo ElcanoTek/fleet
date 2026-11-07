@@ -830,7 +830,7 @@ func run() error {
 	h.SetChatAccountsProvider(chatAccountsProvider(chatStore))
 	// Both planes are reached with the SAME session cookie, so the Operations
 	// Center checks the same revocation claim chat does. The epoch lives in the
-	// chat users table, which this plane cannot read (ADR-0005) — hand it the
+	// chat users table, which this plane does not read (separate stores, ADR-0098) — hand it the
 	// lookup, not the schema. Wired unconditionally: the chat store is open by
 	// the time these handlers exist, and a nil seam would silently stop checking.
 	h.SetChatSessionEpochProvider(chatStore.SessionEpoch)
@@ -1389,7 +1389,7 @@ func defaultTaskTimezone() string {
 // on every boot and idempotent; empty = no bootstrap. This is the ONLY automatic
 // orchestrator grant: a non-bootstrap chat user is still NOT a member (they get a
 // clear "ask an admin" page, never silent admin), preserving the deliberate
-// chat/orchestrator membership separation (ADR-0005). Extracted from run() to
+// chat/orchestrator membership separation (separate stores, ADR-0098). Extracted from run() to
 // keep it within the cyclomatic budget.
 func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) error {
 	admins := bootstrapAdmins()

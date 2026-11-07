@@ -1,6 +1,6 @@
 # ADR-0005: Separate Postgres databases for chat and sched
 
-- **Status:** Accepted
+- **Status:** Superseded by ADR-0098 ([one database, a schema per store](0098-one-database-two-schemas.md), 2026-11-07)
 - **Date:** 2026-06-28 (documents a decision that predates this record)
 - **Deciders:** fleet maintainers
 

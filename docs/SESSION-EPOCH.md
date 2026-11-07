@@ -40,7 +40,7 @@ salt, and not a credential `/auth/verify` would accept.
 | serve | `internal/httpapi` `/auth/session-epoch` | on `authMiddleware` alone (like `/auth/verify`) — the mint paths run before a session exists; an unprovisioned address gets the epoch of an empty hash, a real value no account can hold |
 | forward | `chatServerHeaders`, `orchestratorHeaders` | `X-User-Session-Epoch` beside `X-User-Email`; OIDC also forwards source, issuer, and subject over the same shared-token channel |
 | check (chat) | `membershipMiddleware` | compared inside the `GetUser` it already performs — no extra query |
-| check (ops center) | `headerTrustUser` → `checkSessionEpoch` | resolved through a chat-store lookup seam `cmd/fleet` injects; the two planes keep separate databases ([ADR-0005](adr/0005-separate-chat-and-sched-databases.md)), so this is a lookup, never a join — and it costs one chat-DB query per header-trust request |
+| check (ops center) | `headerTrustUser` → `checkSessionEpoch` | resolved through a chat-store lookup seam `cmd/fleet` injects; the two planes keep separate stores ([ADR-0098](adr/0098-one-database-two-schemas.md)), so this is a lookup, never a join — and it costs one chat-DB query per header-trust request |
 | verdict | both backends | `401 {"error":"session_revoked"}` + `X-Session-Revoked: 1`; both Next proxies then delete the cookie (`sessionRevocation.ts`), or the still-valid signature would bounce every visit to `/login` back into a 401 |
 
 Three rules keep the gate honest in the other direction:

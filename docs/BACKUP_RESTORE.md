@@ -1,12 +1,17 @@
 # Backup & restore (disaster recovery)
 
-fleet runs **one Postgres cluster with two logical databases**:
+fleet keeps **two stores in one Postgres database**, each in its own schema
+([ONE-DATABASE.md](ONE-DATABASE.md)):
 
-- **chat** — conversations, turn events, chat users (the `internal/store` pool).
-- **sched** — scheduled tasks, API keys, orchestrator users (the `internal/sched/db` pool).
+- **chat** (schema `chat`) — conversations, turn events, chat users (the `internal/store` pool).
+- **sched** (schema `sched`) — scheduled tasks, API keys, orchestrator users (the `internal/sched/db` pool).
 
-Losing the chat DB loses every conversation; losing the sched DB loses every
-scheduled task. There is no other copy. Back both up.
+(A legacy install that has not run `fleet db consolidate` yet keeps each store
+in its own database's `public` schema; everything below works the same there,
+store for store.)
+
+Losing the chat store loses every conversation; losing the sched store loses
+every scheduled task. There is no other copy. Back both up.
 
 The databases are **not** the whole state, though: fleet also persists plain
 files on disk that `fleet backup` does **not** capture — attachment/upload
@@ -24,19 +29,21 @@ files they reference (history replay silently drops a missing file).
 custom format) and `pg_restore`. (These are operator-CLI verbs of the unified
 `fleet` binary; the `fleet-admin` spelling was removed with the shim —
 [ADR-0060](adr/0060-remove-the-fleet-admin-shim.md).)
-Each database is dumped to its **own** file
-rather than a single cluster-wide `pg_dumpall`, because the two databases have
-independent DSNs (and, in `--postgres=external` deployments, independent
-credentials). One file per DB also lets you restore one database without
-touching the other.
+Each store is dumped to its **own** file — its schema (`pg_dump -n chat` /
+`-n sched`), or on a legacy box its database — so you can restore one store
+without touching the other. `fleet restore` reads the dump's table of contents
+first and refuses a dump whose tables are not in the schema the target store
+uses (the other store's dump, or a legacy `public` dump restored into the one
+database: restore that on a legacy box, then run `fleet db consolidate`).
 
 ## Prerequisites
 
 - The PostgreSQL client tools `pg_dump` and `pg_restore` on `PATH` (same major
   version as the server, or newer).
-- The same DSN resolution every other `fleet` operator verb uses:
-  - chat: `--chat-database-url`, else `FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`
-  - sched: `--sched-database-url`, else `FLEET_SCHED_DATABASE_URL`, else `DATABASE_URL`
+- The same DSN resolution every other `fleet` operator verb uses: `DATABASE_URL`
+  with the store's schema (a `--chat-database-url` / `--sched-database-url`
+  naming that database gets the schema too); on a legacy box the per-store
+  `FLEET_CHAT_DATABASE_URL` / `FLEET_SCHED_DATABASE_URL`.
 
   On a bootstrapped box these live in the env file, so the verbs need no extra
   flags when run from the fleet environment.
@@ -235,7 +242,7 @@ Be clear-eyed about the scope of a scheduled `fleet backup`:
   the volume, or the datacenter. Copy them somewhere else (object storage,
   another box, a snapshot of the backup volume) if that matters to you, and
   verify the copy by restoring it.
-- **It does not capture on-disk files.** `fleet backup` dumps the two databases
+- **It does not capture on-disk files.** `fleet backup` dumps the two stores
   and nothing else — no attachment/upload files, no workspaces (see the file
   list at the top of this page). Restoring the dumps brings back conversations
   and tasks but not the files they reference.
