@@ -552,6 +552,20 @@ jobs:
             dist/fleet-linux-amd64
             dist/fleet-linux-arm64
 
+      # The chart the build job packaged deploys these exact images: stamp
+      # the digests just pushed (and signed) into its values, so it renders
+      # repository@sha256:… and not a tag that could be moved. Data only: the
+      # script validates the digests and runs no release code.
+      - name: Stamp the Helm chart with the signed image digests
+        env:
+          FLEET_DIGEST: ${{ steps.images.outputs.fleet_digest }}
+          SANDBOX_DIGEST: ${{ steps.images.outputs.fleet_sandbox_digest }}
+        run: |
+          set -euo pipefail
+          chart="$(find dist -maxdepth 1 -name 'fleet-*.tgz' -print -quit)"
+          [ -n "${chart}" ] || { echo "::error::the build produced no Helm chart"; exit 1; }
+          scripts/helm-stamp-digests.sh "${chart}" "${FLEET_DIGEST}" "${SANDBOX_DIGEST}"
+
       # release.json is the signed statement of what this release IS: its tag
       # (the updater's replay check), its commit, and the image digests (what
       # the updater pulls). SHA256SUMS then covers every published file, and

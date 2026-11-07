@@ -73,20 +73,45 @@ from. A chart installed straight from a checkout is unstamped (appVersion
 {{- end -}}
 {{- end -}}
 
+{{/*
+A digest-pinned reference when a digest is set — the chart attached to a
+release has the signed image digests stamped in (scripts/helm-stamp-digests.sh,
+release.yml), so it deploys exactly the bytes that release signed — else the
+tag, which only an unstamped (checkout/dev) chart falls back to.
+*/}}
+{{- define "fleet.digestRef" -}}
+{{- $repo := index . 0 -}}{{- $digest := index . 1 -}}
+{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" $digest) -}}
+{{- fail (printf "%s: digest %q is not sha256:<64 hex>" $repo $digest) -}}
+{{- end -}}
+{{- printf "%s@%s" $repo $digest -}}
+{{- end -}}
+
 {{/* The control-plane image: the published ghcr.io/elcanotek/fleet by default. */}}
 {{- define "fleet.image" -}}
-{{- printf "%s:%s" (required "image.repository must not be empty" .Values.image.repository) (include "fleet.releaseTag" .) -}}
+{{- $repo := required "image.repository must not be empty" .Values.image.repository -}}
+{{- if .Values.image.digest -}}
+{{- include "fleet.digestRef" (list $repo .Values.image.digest) -}}
+{{- else -}}
+{{- printf "%s:%s" $repo (include "fleet.releaseTag" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
 The sandbox image: sandbox.image verbatim when set (a client bundle's own
-image), else the published sandbox repository at the same release tag as the
-control plane — the pair release.yml built together.
+image), else the published sandbox repository — by the stamped digest when
+there is one, else at the control plane's release tag: the pair release.yml
+built together.
 */}}
 {{- define "fleet.sandboxImage" -}}
 {{- if .Values.sandbox.image -}}
 {{- .Values.sandbox.image -}}
 {{- else -}}
-{{- printf "%s:%s" (required "sandbox.imageRepository must not be empty when sandbox.image is unset" .Values.sandbox.imageRepository) (include "fleet.releaseTag" .) -}}
+{{- $repo := required "sandbox.imageRepository must not be empty when sandbox.image is unset" .Values.sandbox.imageRepository -}}
+{{- if .Values.sandbox.imageDigest -}}
+{{- include "fleet.digestRef" (list $repo .Values.sandbox.imageDigest) -}}
+{{- else -}}
+{{- printf "%s:%s" $repo (include "fleet.releaseTag" .) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}

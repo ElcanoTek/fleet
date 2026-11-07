@@ -406,6 +406,19 @@ jobs:
           grep -q 'image: "ghcr.io/elcanotek/fleet:v2026.11.07.3"' <<<"$out"
           grep -q 'value: "ghcr.io/elcanotek/fleet-sandbox:v2026.11.07.3"' <<<"$out"
           kubeconform -strict -kubernetes-version 1.30.0 -summary <<<"$out"
+          # The chart a release attaches is stamped with the signed image
+          # digests (scripts/helm-stamp-digests.sh, release.yml) and must then
+          # deploy BY DIGEST, not by the movable tag.
+          fd="sha256:$(printf 'a%.0s' $(seq 64))"; sd="sha256:$(printf 'b%.0s' $(seq 64))"
+          scripts/helm-stamp-digests.sh "$tmp"/fleet-2026.1107.3.tgz "$fd" "$sd"
+          out=$(helm template ci "$tmp"/fleet-2026.1107.3.tgz --namespace fleet)
+          grep -q "image: \"ghcr.io/elcanotek/fleet@${fd}\"" <<<"$out"
+          grep -q "value: \"ghcr.io/elcanotek/fleet-sandbox@${sd}\"" <<<"$out"
+          if grep -q 'elcanotek/fleet:v2026.11.07.3\|elcanotek/fleet-sandbox:v2026.11.07.3' <<<"$out"; then
+            echo "::error::a digest-stamped chart still renders an image by tag"
+            exit 1
+          fi
+          kubeconform -strict -kubernetes-version 1.30.0 -summary <<<"$out"
           if helm template ci deploy/helm/fleet --namespace fleet >/dev/null 2>"$tmp/err"; then
             echo "::error::an unstamped chart rendered without image.tag"
             exit 1

@@ -151,6 +151,20 @@ restart it: `fleet release install --no-restart`. It says so and does not
 print the success banner; restart fleet with your supervisor, and if it does
 not come up, `fleet release rollback --no-restart` then restart again.
 
+**Where nothing unverified can run.** The release's staging dir lives under
+the root-owned release cache (`/var/cache/fleet/release/<tag>`), never under
+the checkout, and must be private — owned by root, mode 0700, every parent
+closed to other writers or sticky — or fetch, sandbox and install refuse it.
+Every staged file is opened without following links and must be a private
+regular file; `SHA256SUMS` and its signature are verified on a private copy of
+the exact bytes that are then parsed; the binary is hashed from an open
+descriptor and installed by copying from that same descriptor (hashed again
+while copying) — it is never reopened by name after it was verified. Before
+the checkout moves to a release tag, update and bootstrap check the tag's
+signed manifest (with the cosign pinned in the checkout already running) and
+require `release.json` to name the commit the tag resolves to locally, so a
+moved or locally created tag cannot get its code checked out, let alone run.
+
 ## Roll back
 
 ```sh
@@ -206,9 +220,14 @@ a bundle's image under its own name, and refuses
 ## Kubernetes
 
 The Helm chart defaults to `ghcr.io/elcanotek/fleet` and
-`ghcr.io/elcanotek/fleet-sandbox` at `image.tag`, which defaults to
-`v<appVersion>`. The chart attached to a release is stamped, so it installs
-that release with no image values; a chart from a checkout needs `image.tag`.
+`ghcr.io/elcanotek/fleet-sandbox`. The chart attached to a release is
+stamped with that release's signed image digests (`image.digest`,
+`sandbox.imageDigest` — release.yml runs `scripts/helm-stamp-digests.sh` before
+`SHA256SUMS` covers the chart), so it deploys both images BY DIGEST
+(`repository@sha256:…`), the exact bytes the release signed, with no image
+values. The tag (`image.tag`, defaulting to `v<appVersion>`) is only the
+fallback for an unstamped chart from a checkout, which then needs `image.tag`;
+CI renders a stamped chart and requires the digest form.
 See [DEPLOYMENT-KUBERNETES.md](DEPLOYMENT-KUBERNETES.md) for verifying the
 images and building a bundle image `FROM` them.
 

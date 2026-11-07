@@ -62,7 +62,10 @@ Both default to the images every release publishes, signed with keyless cosign
 and carrying an SBOM and SLSA provenance (ADR-0100):
 `ghcr.io/elcanotek/fleet` (the control plane, with the generic bundle) and
 `ghcr.io/elcanotek/fleet-sandbox`, at the same release tag. `image.repository`
-/ `image.tag` and `sandbox.image` still override them — for an image with your
+/ `image.tag` and `sandbox.image` still override them. The chart attached to a
+release deploys both images BY DIGEST (`image.digest` and `sandbox.imageDigest`
+are stamped in from the signed release); a chart from a checkout has no digests
+and falls back to the tag — clear the digests to deploy by tag on purpose. For an image with your
 client bundle baked in, build it `FROM` the published one. Verify the images
 before you deploy them; the deployment guide shows the `cosign verify` line.
 

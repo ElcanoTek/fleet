@@ -30,6 +30,11 @@ image:
   # from). Pin a release tag (vYYYY.MM.DD.N). Required when the chart is
   # unstamped (installed from a checkout).
   tag: ""
+  # The signed image digest (sha256:…). The chart attached to a release has it
+  # stamped in, and then the image is deployed BY DIGEST — the exact bytes the
+  # release signed — and tag is ignored. Empty (an unstamped chart from a
+  # checkout) falls back to the tag. Clear it to deploy by tag on purpose.
+  digest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -53,6 +58,10 @@ sandbox:
   # build-on-box tag cannot work here.
   image: ""
   imageRepository: ghcr.io/elcanotek/fleet-sandbox
+  # The signed sandbox image digest, stamped into a release's chart like
+  # image.digest; when set (and sandbox.image is not), the sandbox image is
+  # imageRepository@imageDigest.
+  imageDigest: ""
   # Backend is what this chart exists for; podman-in-a-pod is NOT a supported
   # chart topology (the podman backend's supported home is a VM —
   # docs/DEPLOYMENT.md).
