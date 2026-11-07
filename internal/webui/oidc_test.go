@@ -211,10 +211,27 @@ func TestOIDCStart(t *testing.T) {
 	if got := e3.do(req("GET", "/api/auth/oidc/start", "")).Header.Get("Location"); got != testOrigin+"/login?e=oidc_error" {
 		t.Fatalf("issuer mismatch: %q", got)
 	}
-	// A failed discovery is not cached.
-	e3.do(req("GET", "/api/auth/oidc/start", ""))
+	// A failed discovery is cached for oidcDiscoveryFailureTTL: the next
+	// attempt inside the window is answered without a new fetch...
+	if got := e3.do(req("GET", "/api/auth/oidc/start", "")).Header.Get("Location"); got != testOrigin+"/login?e=oidc_error" {
+		t.Fatalf("cached failure: %q", got)
+	}
+	if idp2.discoveries.Load() != 1 {
+		t.Fatalf("failure not cached: %d", idp2.discoveries.Load())
+	}
+	// ...and once the window has passed it is retried, and a now-good
+	// document replaces the failure.
+	e3.g.oidc.mu.Lock()
+	f := e3.g.oidc.failures[idp2.srv.URL]
+	f.at = time.Now().Add(-oidcDiscoveryFailureTTL - time.Second)
+	e3.g.oidc.failures[idp2.srv.URL] = f
+	e3.g.oidc.mu.Unlock()
+	idp2.issuer = ""
+	if got := e3.do(req("GET", "/api/auth/oidc/start", "")).Header.Get("Location"); !strings.HasPrefix(got, idp2.srv.URL+"/authorize?") {
+		t.Fatalf("retry after TTL: %q", got)
+	}
 	if idp2.discoveries.Load() != 2 {
-		t.Fatalf("failure cached: %d", idp2.discoveries.Load())
+		t.Fatalf("failure not retried after TTL: %d", idp2.discoveries.Load())
 	}
 }
 

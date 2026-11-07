@@ -44,17 +44,30 @@ type discoveryDoc struct {
 	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported,omitempty"`
 }
 
+// oidcDiscoveryFailureTTL is how long a failed discovery is served from
+// cache. Short, so a transient IdP blip clears quickly, but long enough that
+// an unreachable IdP costs one outbound attempt per window rather than one
+// (up to the client timeout) per login click.
+const oidcDiscoveryFailureTTL = 30 * time.Second
+
 // oidcClient memoizes each issuer's discovery document for the life of the
-// process (the endpoints are static config). A failure is not cached, so a
-// transient error does not poison every later attempt.
+// process (the endpoints are static config). A failure is cached only for
+// oidcDiscoveryFailureTTL, so a transient error does not poison every later
+// attempt.
 type oidcClient struct {
-	http *http.Client
-	mu   sync.Mutex
-	docs map[string]*discoveryDoc
+	http     *http.Client
+	mu       sync.Mutex
+	docs     map[string]*discoveryDoc
+	failures map[string]oidcDiscoveryFailure
+}
+
+type oidcDiscoveryFailure struct {
+	err error
+	at  time.Time
 }
 
 func newOIDCClient(c *http.Client) *oidcClient {
-	return &oidcClient{http: c, docs: map[string]*discoveryDoc{}}
+	return &oidcClient{http: c, docs: map[string]*discoveryDoc{}, failures: map[string]oidcDiscoveryFailure{}}
 }
 
 func defaultHTTPClient() *http.Client {
@@ -67,8 +80,25 @@ func (o *oidcClient) discover(issuer string) (*discoveryDoc, error) {
 		o.mu.Unlock()
 		return d, nil
 	}
+	if f, ok := o.failures[issuer]; ok && time.Since(f.at) < oidcDiscoveryFailureTTL {
+		o.mu.Unlock()
+		return nil, f.err
+	}
 	o.mu.Unlock()
 
+	doc, err := o.fetchDiscovery(issuer)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if err != nil {
+		o.failures[issuer] = oidcDiscoveryFailure{err: err, at: time.Now()}
+		return nil, err
+	}
+	delete(o.failures, issuer)
+	o.docs[issuer] = doc
+	return doc, nil
+}
+
+func (o *oidcClient) fetchDiscovery(issuer string) (*discoveryDoc, error) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, strings.TrimRight(issuer, "/")+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return nil, err
@@ -96,9 +126,6 @@ func (o *oidcClient) discover(issuer string) (*discoveryDoc, error) {
 	if strings.TrimRight(doc.Issuer, "/") != strings.TrimRight(issuer, "/") {
 		return nil, errors.New("OIDC discovery issuer does not match the configured issuer")
 	}
-	o.mu.Lock()
-	o.docs[issuer] = &doc
-	o.mu.Unlock()
 	return &doc, nil
 }
 
