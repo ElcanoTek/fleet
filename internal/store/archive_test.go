@@ -20,6 +20,8 @@ func backdate(ctx context.Context, t *testing.T, s *Store, id string, d time.Dur
 // asserts it leaves the active list, joins the archived list, and is unpinned
 // (#282: pinned and archived are mutually exclusive "keep" states).
 func TestSetArchived_HidesFromListAndUnpins(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -59,6 +61,8 @@ func TestSetArchived_HidesFromListAndUnpins(t *testing.T) {
 
 // TestSetArchived_WrongUser is a no-op-and-error on a foreign conversation.
 func TestSetArchived_WrongUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "owner@x.com", "", "victoria", "", false)
@@ -76,6 +80,8 @@ func TestSetArchived_WrongUser(t *testing.T) {
 // pinned, recent, and already-archived ones untouched; a non-positive duration
 // is a no-op.
 func TestAutoArchiveOlderThan(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -120,6 +126,8 @@ func TestAutoArchiveOlderThan(t *testing.T) {
 // TestSweep_ArchivedExemptFromTTL proves an archived conversation is NOT
 // TTL-hard-deleted even when long-stale — archive is a "keep" state like pin.
 func TestSweep_ArchivedExemptFromTTL(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c, _ := s.CreateConversation(ctx, "u@x.com", "", "victoria", "", false)
@@ -148,6 +156,8 @@ func TestSweep_ArchivedExemptFromTTL(t *testing.T) {
 // archived rows leaked into either the count or the delete, the assertions below
 // would catch it.
 func TestSweep_ArchivedExemptFromCap(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -204,6 +214,8 @@ func TestSweep_ArchivedExemptFromCap(t *testing.T) {
 // action leaves archived conversations alone (#282): the user can't see them
 // when triggering it, so silently destroying them would be surprising.
 func TestDeleteAllUnpinned_SkipsArchived(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

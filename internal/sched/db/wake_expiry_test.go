@@ -52,6 +52,8 @@ func ptr(t time.Time) *time.Time { return &t }
 // filters on `wake_at IS NOT NULL`, so a row without one could never wake and
 // never fail. It waited forever, silently.
 func TestExpireStrandedWakeTasks(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -119,6 +121,8 @@ func TestExpireStrandedWakeTasks(t *testing.T) {
 // before the expiry sweep for exactly this reason; this locks in that a row the
 // wake sweep handles is no longer a candidate.
 func TestWakeSweepWinsOverStrandedExpiry(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

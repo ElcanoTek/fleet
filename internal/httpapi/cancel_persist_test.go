@@ -113,6 +113,8 @@ func (f *fakeTurnEngine) ProviderHealth() []agentcore.ModelHealth      { return 
 // This is the fleet analog of cutlass's "partial work persisted on
 // cancellation" — here over the SSE/persistence seam the unified driver added.
 func TestChatCancel_PersistsPartialTurn(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	// Pre-create the conversation so postChat takes the existing-conversation
@@ -196,6 +198,8 @@ func TestChatCancel_PersistsPartialTurn(t *testing.T) {
 // (request context cancelled) must NOT cancel the run — the turn keeps going so
 // a later reattach can resume it. Only the explicit Stop button cancels.
 func TestChatClientDisconnect_TurnSurvives(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "bob@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "hi", "victoria", "openrouter/auto", false)

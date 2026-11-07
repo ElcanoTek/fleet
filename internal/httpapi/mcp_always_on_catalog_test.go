@@ -52,6 +52,8 @@ func catalogEntry(t *testing.T, servers []map[string]any, name string) map[strin
 }
 
 func TestMCPServerCatalogIncludesLiveAlwaysOnStatus(t *testing.T) {
+	t.Parallel()
+
 	srv := alwaysOnCatalogServer()
 	req := httptest.NewRequest(http.MethodGet, "/mcp-servers", nil)
 	req = req.WithContext(context.WithValue(req.Context(), ctxKeyUser, "u@x.com"))
@@ -71,6 +73,8 @@ func TestMCPServerCatalogIncludesLiveAlwaysOnStatus(t *testing.T) {
 }
 
 func TestConversationMCPServerCatalogKeepsAlwaysOnSeparateFromOptIns(t *testing.T) {
+	t.Parallel()
+
 	srv := alwaysOnCatalogServer()
 	req := httptest.NewRequest(http.MethodGet, "/conversations/c1/mcp-servers", nil)
 	w := httptest.NewRecorder()

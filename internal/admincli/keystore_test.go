@@ -13,6 +13,8 @@ import (
 // default; an explicit env override still wins but ServiceDir is reported so
 // the caller can warn; without a unit the historical ./data stays.
 func TestChooseKeyStore(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name          string
 		in            keyStoreInputs
@@ -91,6 +93,8 @@ func TestChooseKeyStore(t *testing.T) {
 // "which string am I looking for" is exactly what an operator handing a key to
 // a client gets wrong.
 func TestKeyFormatNoteNamesBothFamilies(t *testing.T) {
+	t.Parallel()
+
 	for _, want := range []string{"fleet_<type>_<base58>", "fleet_task_", "sk-", "X-API-Key"} {
 		if !strings.Contains(keyFormatNote, want) {
 			t.Errorf("keyFormatNote missing %q", want)

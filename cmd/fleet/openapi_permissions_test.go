@@ -37,7 +37,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/handlers"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // Non-permission values of x-fleet-permission (see the spec's info.description).
@@ -448,7 +448,7 @@ type probeEnv struct {
 
 func newProbeEnv(t *testing.T) probeEnv {
 	t.Helper()
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	database := fleetdb.SchedDB(t)
 	store := storage.New()
 	store.SetDatabase(database)
 

@@ -26,6 +26,8 @@ import (
 // an id every recovery endpoint is keyed by, instead of a pending key none of
 // them knows (#1591).
 func TestPostChat_NamesTheConversationOnTheResponseHeader(t *testing.T) {
+	t.Parallel()
+
 	s := mockServer(t)
 
 	w := postChatJSON(t, s, "u@x.com", map[string]any{
@@ -91,6 +93,8 @@ func conversationFrameID(t *testing.T, body string) string {
 // or the browser attaches its new bubble to a stranger's turn and renders that
 // turn's answer under a prompt it never saw.
 func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -149,6 +153,8 @@ func TestInflight_EchoesTheSubmissionTheRunningTurnBelongsTo(t *testing.T) {
 // minted, so the client read its OWN turn as a stranger's and kept polling
 // instead of attaching.
 func TestInflight_QueuedSubmissionKeepsItsIdentityAlongsideAnInputID(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -189,6 +195,8 @@ func TestInflight_QueuedSubmissionKeepsItsIdentityAlongsideAnInputID(t *testing.
 // input_id would otherwise dedup against each other and the second would
 // silently vanish instead of queueing.
 func TestBusySubmit_SubmissionIDIsNotAnIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -253,6 +261,8 @@ func inflightProbe(t *testing.T, s *Server, convID string) map[string]any {
 // "this turn is not yours" — webhook and scheduled turns name no submission,
 // and so does any client older than #1592.
 func TestInflight_OmitsSubmissionIDWhenTheTurnNamesNone(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {

@@ -20,6 +20,8 @@ func entry(t *testing.T, role, typ string, content any) agent.HistoryEntry {
 }
 
 func TestRenderConversationMarkdown(t *testing.T) {
+	t.Parallel()
+
 	conv := &store.Conversation{ID: "abc123def456", Title: "Debug session", Model: "anthropic/claude", Persona: "engineer"}
 	at := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 	history := []agent.HistoryEntry{
@@ -57,6 +59,8 @@ func TestRenderConversationMarkdown(t *testing.T) {
 }
 
 func TestRenderConversationMarkdown_Defaults(t *testing.T) {
+	t.Parallel()
+
 	// Empty title + no model/persona: header degrades gracefully, no panic on a
 	// malformed entry (skipped).
 	conv := &store.Conversation{ID: "x"}
@@ -77,6 +81,8 @@ func TestRenderConversationMarkdown_Defaults(t *testing.T) {
 }
 
 func TestExportFilename_Extension(t *testing.T) {
+	t.Parallel()
+
 	if got := exportFilename("My Chat!", "abcdef1234567890", "md", "chat"); got != "My-Chat-abcdef12.md" {
 		t.Errorf("got %q, want My-Chat-abcdef12.md", got)
 	}

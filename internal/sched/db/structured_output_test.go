@@ -16,6 +16,8 @@ import (
 // JSONB columns and reads them back unchanged (#244); a task with neither
 // round-trips as nil for both.
 func TestStructuredOutput_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

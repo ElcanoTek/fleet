@@ -19,6 +19,8 @@ import (
 // migration is scripts/lib/web-tier.sh's, run with update.sh's real
 // upsert_env_file, i.e. exactly what update.sh and bootstrap.sh execute.
 func TestWebEnvMigrationCarriesEveryKey(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	update, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {

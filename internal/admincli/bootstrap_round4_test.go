@@ -32,6 +32,8 @@ func mustQueryString(t *testing.T, db *sql.DB, q string) string {
 // config.Load and the admin CLI use: the scripts must decide from the value
 // fleet will see, not from raw text (#2055 review).
 func TestEnvValueMatchesFleetsParser(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -81,6 +83,8 @@ func TestEnvValueMatchesFleetsParser(t *testing.T) {
 // reads the env file as fleet does — FLEET_CHAT_DATABASE_URL="" is unset, a
 // commented-out key is absent, an `export`ed one counts.
 func TestBootstrapLayoutFromParsedValues(t *testing.T) {
+	t.Parallel()
+
 	const one = "DATABASE_URL=postgres://fleet:placeholder-not-a-secret@127.0.0.1:5432/fleet?sslmode=disable\n"
 	for name, tc := range map[string]struct {
 		extra  string
@@ -110,6 +114,8 @@ func TestBootstrapLayoutFromParsedValues(t *testing.T) {
 // port — 5432 exactly, never 54321 — from the authority and from a decoded
 // port query parameter.
 func TestDSNIsLocalDefault(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -145,6 +151,8 @@ func TestDSNIsLocalDefault(t *testing.T) {
 // TestDoctorDecidesLayoutFromParsedValues: doctor.sh's database check reads
 // the DSN keys with fleet_env_value, never raw text (#2055 review).
 func TestDoctorDecidesLayoutFromParsedValues(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "doctor.sh"))
 	if err != nil {
 		t.Fatal(err)

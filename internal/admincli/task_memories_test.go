@@ -10,10 +10,11 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestParseTaskID(t *testing.T) {
+	t.Parallel()
+
 	if _, ok := parseTaskID(uuid.New().String()); !ok {
 		t.Error("a valid UUID must parse")
 	}
@@ -27,7 +28,7 @@ func TestParseTaskID(t *testing.T) {
 // TestTaskMemoriesCLI_DB exercises the list/delete/clear dispatch + exit codes
 // against the sched test DB (gated on DATABASE_URL, the sched-suite convention).
 func TestTaskMemoriesCLI_DB(t *testing.T) {
-	database := testdb.SchedDB(t, "task_memories", "tasks")
+	database := fleetEnv(t).SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()

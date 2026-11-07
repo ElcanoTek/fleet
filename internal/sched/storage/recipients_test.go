@@ -42,6 +42,8 @@ func addRecipientTask(t *testing.T, store *Storage, prompt string, createdAt tim
 // delivery block only, counted once per job however many runs it has, newest
 // first, inside the window, and scoped to the caller's own tasks on request.
 func TestRecipientHistory(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()

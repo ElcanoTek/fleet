@@ -49,6 +49,8 @@ func decliningGate() *models.RunIf {
 // an infinite loop that hung the scheduler goroutine, and with it lease
 // recovery and starvation promotion for the whole box.
 func TestProcessScheduledTasksAllSoftHeldTerminates(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.scheduledBatchSize = 3 // a FULL batch of soft-held tasks with 3 rows
 
@@ -92,6 +94,8 @@ func TestProcessScheduledTasksAllSoftHeldTerminates(t *testing.T) {
 // promotable ones, advance the recurring one, soft-hold the one-shot, and
 // return.
 func TestProcessScheduledTasksMixedBatchPromotesAndTerminates(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.scheduledBatchSize = 4
 
@@ -143,6 +147,8 @@ func TestProcessScheduledTasksMixedBatchPromotesAndTerminates(t *testing.T) {
 // unreached. The widening fetch window must page past the held prefix and
 // promote them in the same tick.
 func TestProcessScheduledTasksHeldPrefixDoesNotStarve(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.scheduledBatchSize = 2
 
@@ -197,6 +203,8 @@ func TestProcessScheduledTasksHeldPrefixDoesNotStarve(t *testing.T) {
 // tied group exactly once — held ones skipped once each, promotable ones
 // promoted — across multiple pages.
 func TestProcessScheduledTasksTiedScheduledForNotMasked(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.scheduledBatchSize = 2
 
@@ -245,6 +253,8 @@ func TestProcessScheduledTasksTiedScheduledForNotMasked(t *testing.T) {
 // pending in one call (the fix must not turn the pagination into a single-batch
 // pass).
 func TestProcessScheduledTasksPagesThroughFullBatches(t *testing.T) {
+	t.Parallel()
+
 	s, store := newTestScheduler(t)
 	s.scheduledBatchSize = 2
 

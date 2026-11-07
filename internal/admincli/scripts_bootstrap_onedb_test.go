@@ -11,6 +11,8 @@ import (
 // ONE database and writes DATABASE_URL only (#2049); a re-run reuses the
 // password recorded in DATABASE_URL and never prints it.
 func TestBootstrapProvisionsOneDatabase(t *testing.T) {
+	t.Parallel()
+
 	const livePassword = "placeholder-not-a-secret"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://fleet:"+livePassword+"@127.0.0.1:5432/fleet?sslmode=disable\n"), 0o600); err != nil {
@@ -43,6 +45,8 @@ func TestBootstrapProvisionsOneDatabase(t *testing.T) {
 // TestBootstrapOneDatabaseNameFlags: --db-name/--db-user override the
 // defaults; the legacy per-store flags select the legacy layout.
 func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", "--dry-run", "--postgres=local", "--db-name", "fleet_prod", "--db-user", "fleet_owner")
 	if err != nil {
@@ -61,6 +65,8 @@ func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
 // the role and database from the DATABASE_URL a previous run recorded —
 // never the defaults — and refuses flags or a DSN it cannot honour.
 func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	write := func(dsn string) {
 		t.Helper()
@@ -108,6 +114,8 @@ func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
 // --db-name/--db-user would provision one name and write another into the
 // DSN.
 func TestBootstrapOneDatabaseRejectsMixedCaseNames(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	for _, args := range [][]string{{"--db-name", "Fleet"}, {"--db-user", "FleetOwner"}} {
 		out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", append([]string{"--dry-run", "--postgres=local"}, args...)...)
@@ -122,6 +130,8 @@ func TestBootstrapOneDatabaseRejectsMixedCaseNames(t *testing.T) {
 // it, and FLEET_DB_SUPERUSER_URL grants the DSN's role CREATE on the DSN's
 // own database.
 func TestBootstrapExternalOneDatabaseRerun(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://app:placeholder-not-a-secret@db.example.com:5432/appdb?sslmode=require\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -151,6 +161,8 @@ func TestBootstrapExternalOneDatabaseRerun(t *testing.T) {
 // (an upgrade alone must never move or strand data) and points at
 // `fleet db consolidate`; the one-database flags are refused there.
 func TestBootstrapKeepsALegacyInstallLegacy(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	legacy := "FLEET_CHAT_DATABASE_URL=postgres://chat:pwA1@127.0.0.1:5432/chat?sslmode=disable\n" +
 		"FLEET_SCHED_DATABASE_URL=postgres://sched:pwB2@127.0.0.1:5432/sched?sslmode=disable\n"

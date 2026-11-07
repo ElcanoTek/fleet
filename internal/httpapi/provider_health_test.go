@@ -11,6 +11,8 @@ import (
 )
 
 func TestHealthz_OKWhenHealthy(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	rr := httptest.NewRecorder()
 	s.healthz(rr, httptest.NewRequest("GET", "/healthz", nil))
@@ -20,6 +22,8 @@ func TestHealthz_OKWhenHealthy(t *testing.T) {
 }
 
 func TestHealthz_DegradedWhenCircuitOpen(t *testing.T) {
+	t.Parallel()
+
 	fe := &fakeEngine{providerHealth: []agentcore.ModelHealth{
 		{Slug: "anthropic/claude", State: "closed"},
 		{Slug: "openai/gpt", State: "open"},
@@ -40,6 +44,8 @@ func TestHealthz_DegradedWhenCircuitOpen(t *testing.T) {
 }
 
 func TestHealthz_HalfOpenIsHealthy(t *testing.T) {
+	t.Parallel()
+
 	fe := &fakeEngine{providerHealth: []agentcore.ModelHealth{{Slug: "m", State: "half-open"}}}
 	s := New(&config.Config{}, fe, nil)
 	rr := httptest.NewRecorder()

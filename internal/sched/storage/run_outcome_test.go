@@ -34,6 +34,8 @@ func newDailyTask(t *testing.T, store *Storage) *models.Task {
 // predecessor of the next dead-letter — one vendor blip no longer stops a
 // daily schedule until a human replays it.
 func TestConnectorOutageDeadLettersDoNotParkTheChain(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -100,6 +102,8 @@ func TestConnectorOutageDeadLettersDoNotParkTheChain(t *testing.T) {
 // consecutive outage dead-letter parks the chain with a reason that names the
 // connector and the streak (ADR-0077).
 func TestConnectorOutageParksAfterThreeConsecutiveOccurrences(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -144,6 +148,8 @@ func TestConnectorOutageParksAfterThreeConsecutiveOccurrences(t *testing.T) {
 // re-run increments infra_retry_count, never attempt_count, and a replay
 // clears it with the outcome.
 func TestInfraRequeueKeepsTheRetryBudgetAndReplayResetsIt(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	task := newDailyTask(t, store)
@@ -187,6 +193,8 @@ func TestInfraRequeueKeepsTheRetryBudgetAndReplayResetsIt(t *testing.T) {
 // blocked outcome persists it with its detail, an ordinary success clears it,
 // and BlockedStreak walks the lineage.
 func TestBlockedSuccessPersistsOutcomeAndCountsTheStreak(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

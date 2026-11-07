@@ -8,6 +8,8 @@ import "testing"
 // keeps starting the daemon — otherwise a restart mid-upgrade would brick the
 // box. `fleet serve` is the explicit equivalent; admin verbs route to admincli.
 func TestClassifyInvocation(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		argv []string

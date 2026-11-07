@@ -11,6 +11,8 @@ import (
 // Regression: inferTerminalStatus defaulted it to completed, sealing the turn
 // with history_committed_at NULL and making RecoverStrandedTurns skip it.
 func TestInferTerminalStatusModelRequired(t *testing.T) {
+	t.Parallel()
+
 	events := []bufferedEvent{
 		{Name: "turn.started"},
 		{Name: "turn.model_required"},

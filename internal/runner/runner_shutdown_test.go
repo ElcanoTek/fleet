@@ -13,6 +13,8 @@ import (
 // period — so a SIGINT / listener-error shutdown drains promptly instead of
 // blocking out the whole grace window.
 func TestForceCancelDrainsImmediately(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -49,6 +51,8 @@ func TestForceCancelDrainsImmediately(t *testing.T) {
 // TestActiveTasks pins the diagnostic counter behind the SIGUSR1 status log: it
 // reflects exactly the tasks currently executing.
 func TestActiveTasks(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -84,6 +88,8 @@ func TestActiveTasks(t *testing.T) {
 // outcome (success) rather than being marked interrupted — the decoupled task
 // context is NOT cancelled by the claim-ctx shutdown.
 func TestDrainWaitsForNaturalCompletionWithinGrace(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -136,6 +142,8 @@ func TestDrainWaitsForNaturalCompletionWithinGrace(t *testing.T) {
 // expire mid-run and a replacement process re-queue it while this one was
 // still finishing.
 func TestLeaseRenewalContinuesThroughDrain(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedPending(t, store, 1)[0]
 

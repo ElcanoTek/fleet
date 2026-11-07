@@ -26,6 +26,8 @@ func validPersonaInput(name string) UserPersonaInput {
 
 // User-persona CRUD: validation, defaults, per-user scoping and the fixed name.
 func TestUserPersonasCRUD(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "Me@Elcano.com"
@@ -113,6 +115,8 @@ func TestUserPersonasCRUD(t *testing.T) {
 // Proposals are inert until approved; a proposal that edits a live persona is
 // staged as "<name>-draft" and approving it rewrites the live persona in place.
 func TestUserPersonaProposals(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "me@elcano.com"
@@ -177,6 +181,8 @@ func TestUserPersonaProposals(t *testing.T) {
 }
 
 func TestUserPersonaCapacity(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "cap@elcano.com"
@@ -198,6 +204,8 @@ func TestUserPersonaCapacity(t *testing.T) {
 // The digest carries only what the user typed: no assistant text, no patrol
 // wakeups, nothing from lockdown chats.
 func TestUserChatDigest(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "digest@elcano.com"

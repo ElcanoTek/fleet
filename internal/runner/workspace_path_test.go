@@ -14,6 +14,8 @@ import (
 // workspace path (#287) onto the leased task row, and that a later terminal
 // status update does NOT wipe it (the nil-WorkspacePath guard in storage).
 func TestReportWorkspacePath_Persists(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 
 	task := &models.Task{ID: uuid.New(), Prompt: "produce report", Status: models.TaskStatusPending, Priority: 1, CreatedAt: time.Now().UTC()}
@@ -62,6 +64,8 @@ func TestReportWorkspacePath_Persists(t *testing.T) {
 
 // TestReportWorkspacePath_EmptyNoop verifies an empty path is never written.
 func TestReportWorkspacePath_EmptyNoop(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := &models.Task{ID: uuid.New(), Prompt: "x", Status: models.TaskStatusPending, Priority: 1, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {

@@ -13,6 +13,8 @@ import (
 // rendered inline in a table cell and a calendar tile — a pasted multi-line
 // prompt must be rejected rather than silently mangled.
 func TestValidateTaskCreate_Title(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
@@ -62,6 +64,8 @@ func TestValidateTaskCreate_Title(t *testing.T) {
 // collide with the row it was copied from) but MUST carry Title, so every
 // occurrence, re-run and clone of one job lists under the same label.
 func TestTitleSurvivesCopiesUnlikeName(t *testing.T) {
+	t.Parallel()
+
 	src := &models.Task{
 		Name:       "reklaim-daily-health-scan",
 		Title:      "Reklaim daily health scan",

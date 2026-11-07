@@ -28,6 +28,8 @@ func importEnvelope(t *testing.T, records ...models.TaskExportRecord) string {
 // applies per record, and an exhausted budget refuses the whole envelope with
 // the create path's 402 before any row is written.
 func TestTaskImportRunsTheCreateGates(t *testing.T) {
+	t.Parallel()
+
 	env := setupGovernedCreate(t)
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, env.keyMgr, "client")
 

@@ -29,6 +29,8 @@ func allocatedBy(f func()) uint64 {
 // a few kilobytes allocated, not the hundreds of megabytes a materialized
 // slice would take.
 func TestBoundedDecoding_RefusesPastTheBoundWhileReading(t *testing.T) {
+	t.Parallel()
+
 	raw := manyEmptyStrings(4_000_000)
 	var ids approvalIDList
 	var err error
@@ -60,6 +62,8 @@ func TestBoundedDecoding_RefusesPastTheBoundWhileReading(t *testing.T) {
 // Every count is bounded: the narrow map's cards, its values summed across
 // cards, and narrow_args' entries.
 func TestBoundedDecoding_Counts(t *testing.T) {
+	t.Parallel()
+
 	keys := func(n int, value string) string {
 		var b strings.Builder
 		b.WriteString("{")
@@ -95,6 +99,8 @@ func TestBoundedDecoding_Counts(t *testing.T) {
 
 // Within the bounds the types decode as plain JSON would, null included.
 func TestBoundedDecoding_MatchesPlainJSON(t *testing.T) {
+	t.Parallel()
+
 	var req approvalGroupRequest
 	body := `{"approve":["ap-1","ap-2"],"decline":null,"narrow":{"ap-1":["k1","k2"],"ap-2":null},"narrow_args":{"ap-1":"deal_ids"}}`
 	if err := json.Unmarshal([]byte(body), &req); err != nil {

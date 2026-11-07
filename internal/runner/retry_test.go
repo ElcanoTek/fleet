@@ -11,6 +11,8 @@ import (
 )
 
 func TestClassifyFailure(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		err   error
 		class string
@@ -52,6 +54,8 @@ func TestClassifyFailure(t *testing.T) {
 // stop race) and must not page, while a budget stop remains a reportable
 // failure — matching the structured-output path that always surfaced it.
 func TestReportableRunFailure_CancelVsBudget(t *testing.T) {
+	t.Parallel()
+
 	cancelErr := fmt.Errorf("%w: shutdown", agentcore.ErrRunCancelled)
 	if reportableRunFailure(cancelErr, false, false) {
 		t.Error("a surfaced cancel must not be captured as an application failure")
@@ -76,6 +80,8 @@ func withinJitter(t *testing.T, d, base time.Duration, label string) {
 }
 
 func TestRetryBackoff_LegacyNilPolicy(t *testing.T) {
+	t.Parallel()
+
 	// nil policy reproduces the legacy curve: 30s base, double per attempt, cap 10m.
 	withinJitter(t, retryBackoff(0, nil), 30*time.Second, "attempt0")
 	withinJitter(t, retryBackoff(1, nil), 60*time.Second, "attempt1")
@@ -85,6 +91,8 @@ func TestRetryBackoff_LegacyNilPolicy(t *testing.T) {
 }
 
 func TestRetryBackoff_CustomExponential(t *testing.T) {
+	t.Parallel()
+
 	p := &models.RetryPolicy{Backoff: models.BackoffExponential, InitialDelaySeconds: 60, MaxDelaySeconds: 3600}
 	withinJitter(t, retryBackoff(0, p), 60*time.Second, "exp-attempt0")
 	withinJitter(t, retryBackoff(2, p), 240*time.Second, "exp-attempt2") // 60<<2
@@ -92,6 +100,8 @@ func TestRetryBackoff_CustomExponential(t *testing.T) {
 }
 
 func TestRetryBackoff_Fixed(t *testing.T) {
+	t.Parallel()
+
 	p := &models.RetryPolicy{Backoff: models.BackoffFixed, InitialDelaySeconds: 120, MaxDelaySeconds: 240}
 	// Fixed: same base every attempt, never escalating.
 	withinJitter(t, retryBackoff(0, p), 120*time.Second, "fixed-attempt0")
@@ -101,6 +111,8 @@ func TestRetryBackoff_Fixed(t *testing.T) {
 // TestRetryBackoff_NeverNonPositive guards the scheduler invariant: a re-queued
 // task must land strictly in the future, so backoff is always > 0.
 func TestRetryBackoff_NeverNonPositive(t *testing.T) {
+	t.Parallel()
+
 	for attempt := 0; attempt < 12; attempt++ {
 		for _, p := range []*models.RetryPolicy{
 			nil,

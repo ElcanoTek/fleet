@@ -53,6 +53,8 @@ func (e *scopedApprovalEngine) OpenApprovalMCPScope(_ context.Context, selection
 }
 
 func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
+	t.Parallel()
+
 	scoped := &fakeMCPBroker{text: "sent from client-a"}
 	engine := &scopedApprovalEngine{
 		fakeEngine: &fakeEngine{},
@@ -97,6 +99,8 @@ func TestRunStagedTool_ReopensTheStagedSeat(t *testing.T) {
 }
 
 func TestRunStagedTool_FailsClosedWhenTheStagedSeatIsGone(t *testing.T) {
+	t.Parallel()
+
 	engine := &scopedApprovalEngine{
 		fakeEngine: &fakeEngine{},
 		shared:     &fakeMCPBroker{text: "sent from the default seat"},
@@ -122,6 +126,8 @@ func TestRunStagedTool_FailsClosedWhenTheStagedSeatIsGone(t *testing.T) {
 // A row staged before the seat columns existed (or by a native tool) has no
 // seat to reopen, and must keep working on the shared broker.
 func TestRunStagedTool_LegacyRowWithoutASeatUsesTheSharedBroker(t *testing.T) {
+	t.Parallel()
+
 	shared := &fakeMCPBroker{text: "sent"}
 	engine := &scopedApprovalEngine{
 		fakeEngine: &fakeEngine{},
@@ -149,6 +155,8 @@ func TestRunStagedTool_LegacyRowWithoutASeatUsesTheSharedBroker(t *testing.T) {
 // Before this, the stager held the process-wide default-seat catalog, in which
 // a named-account tool identity does not appear at all.
 func TestApprovalStager_BindTurnMCPScopeRecordsTheTurnSeat(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{
 		mcpCatalog: []mcp.ServerTool{{ServerName: "send_grid", Tool: mcp.Tool{Name: "send_email"}}},
 	}
@@ -176,6 +184,8 @@ func TestApprovalStager_BindTurnMCPScopeRecordsTheTurnSeat(t *testing.T) {
 // empty account, so execution reopens that server rather than falling through
 // to the shared client.
 func TestApprovalStager_DefaultSeatIsStillRecorded(t *testing.T) {
+	t.Parallel()
+
 	stager := &approvalStager{}
 	stager.BindTurnMCPScope(agent.TurnMCPScope{
 		Catalog:   []mcp.ServerTool{{ServerName: "send_grid", Tool: mcp.Tool{Name: "send_email"}}},

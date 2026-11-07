@@ -14,6 +14,8 @@ import (
 // sites were routed through these helpers, a plain Set would have silently
 // downgraded the header to bare `application/json`.
 func TestWriteJSONKeepsExplicitContentType(t *testing.T) {
+	t.Parallel()
+
 	t.Run("defaults when unset", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		writeJSON(rec, map[string]string{"ok": "yes"})
@@ -53,6 +55,8 @@ func TestWriteJSONKeepsExplicitContentType(t *testing.T) {
 // the client gets a committed status with an empty body and the server records
 // nothing at all.
 func TestWriteJSONLogsEncodeFailure(t *testing.T) {
+	t.Parallel()
+
 	rec := httptest.NewRecorder()
 	// A channel is not JSON-encodable; Encode fails before emitting bytes.
 	writeJSON(rec, map[string]any{"bad": make(chan int)})

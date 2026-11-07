@@ -15,6 +15,8 @@ type routingTestEngine struct {
 }
 
 func TestModelDiscoveryUsesActiveResolver(t *testing.T) {
+	t.Parallel()
+
 	base := []agentcore.ProviderConfig{{
 		Name: "bundle-openai", Type: agentcore.ProviderTypeOpenAI,
 		APIKey: "test-key-not-for-disclosure", BaseURL: "https://private-endpoint.invalid/v1",

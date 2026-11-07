@@ -13,6 +13,8 @@ import (
 // pair on every invocation. The public key must be a 65-byte uncompressed
 // P-256 point (what pushManager.subscribe expects as applicationServerKey).
 func TestRunGenerateVAPIDKeys(t *testing.T) {
+	t.Parallel()
+
 	var out, errOut bytes.Buffer
 	if code := runGenerateVAPIDKeys(&out, &errOut); code != 0 {
 		t.Fatalf("exit code %d, want 0\noutput: %s", code, out.String())
@@ -63,6 +65,8 @@ func TestRunGenerateVAPIDKeys(t *testing.T) {
 // operator's env file. The message used to go to stdout, so a failed run
 // appended "generate VAPID keys: ..." to the env file as a garbage line.
 func TestGenerateVAPIDKeysErrorGoesToStderr(t *testing.T) {
+	t.Parallel()
+
 	var out, errOut bytes.Buffer
 	code := generateVAPIDKeysWith(func() (string, string, error) {
 		return "", "", errors.New("no entropy")

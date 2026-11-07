@@ -16,6 +16,8 @@ func testCatalog() []agent.OptionalServerInfo {
 }
 
 func TestRecommendConnectors_Match(t *testing.T) {
+	t.Parallel()
+
 	recs := recommendConnectors("please post this update to our slack channel", testCatalog(), nil, 2)
 	if len(recs) == 0 || recs[0].Name != "slack" {
 		t.Fatalf("expected slack recommended first, got %+v", recs)
@@ -28,6 +30,8 @@ func TestRecommendConnectors_Match(t *testing.T) {
 }
 
 func TestRecommendConnectors_ExcludesEnabled(t *testing.T) {
+	t.Parallel()
+
 	// slack is already enabled for this turn → never recommended.
 	recs := recommendConnectors("post to slack", testCatalog(), map[string]bool{"slack": true}, 2)
 	for _, r := range recs {
@@ -38,12 +42,16 @@ func TestRecommendConnectors_ExcludesEnabled(t *testing.T) {
 }
 
 func TestRecommendConnectors_NoOverlapNoRecs(t *testing.T) {
+	t.Parallel()
+
 	if recs := recommendConnectors("the weather is nice today", testCatalog(), nil, 2); len(recs) != 0 {
 		t.Errorf("a message with no connector overlap should recommend nothing, got %+v", recs)
 	}
 }
 
 func TestRecommendConnectors_EmptyInputs(t *testing.T) {
+	t.Parallel()
+
 	if recs := recommendConnectors("", testCatalog(), nil, 2); recs != nil {
 		t.Errorf("empty message → nil, got %+v", recs)
 	}
@@ -56,6 +64,8 @@ func TestRecommendConnectors_EmptyInputs(t *testing.T) {
 }
 
 func TestRecommendConnectors_Cap(t *testing.T) {
+	t.Parallel()
+
 	// All three mention "calendar/meeting/event"-ish? Use a query hitting several.
 	catalog := []agent.OptionalServerInfo{
 		{Name: "a", Description: "sync data to warehouse"},
@@ -69,6 +79,8 @@ func TestRecommendConnectors_Cap(t *testing.T) {
 }
 
 func TestAppendConnectorRecommendationBlock(t *testing.T) {
+	t.Parallel()
+
 	if got := appendConnectorRecommendationBlock("hi", nil); got != "hi" {
 		t.Errorf("no recs → no-op, got %q", got)
 	}
@@ -93,6 +105,8 @@ func TestAppendConnectorRecommendationBlock(t *testing.T) {
 // their bundle spelling; a case-sensitive lookup used to recommend "Slack" to
 // a chat that already had "slack" enabled.
 func TestRecommendConnectors_ExcludesEnabledCaseInsensitively(t *testing.T) {
+	t.Parallel()
+
 	catalog := []agent.OptionalServerInfo{
 		{Name: "Slack", DisplayName: "Slack", Description: "send and read Slack messages and channels"},
 	}
@@ -107,6 +121,8 @@ func TestRecommendConnectors_ExcludesEnabledCaseInsensitively(t *testing.T) {
 // conversation's PERSISTED list with the request seed — either source alone
 // counts as enabled.
 func TestEnabledConnectorSet_UnionsPersistedAndRequest(t *testing.T) {
+	t.Parallel()
+
 	got := enabledConnectorSet([]string{"slack"}, []string{" Jira ", ""})
 	for _, want := range []string{"slack", "jira"} {
 		if !got[want] {

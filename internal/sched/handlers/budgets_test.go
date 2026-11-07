@@ -34,6 +34,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/budget"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // recordingNotifier captures budget soft alerts (the enforcer runs with
@@ -75,14 +76,10 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		t.Fatalf("temp dir: %v", err)
 	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
 		t.Fatalf("storage init: %v", err)
 	}
-	acquireTestLock(t, store)
 
 	keyMgr, err := apikeys.NewManager(
 		filepath.Join(tmpDir, "api_keys.json"),
@@ -92,13 +89,6 @@ func setupBudgetEnv(t *testing.T) (*budgetTestEnv, func()) {
 		store.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("key manager: %v", err)
-	}
-
-	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM budgets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup %q: %v", q, err)
-		}
 	}
 
 	env := &budgetTestEnv{
@@ -216,6 +206,8 @@ func (env *budgetTestEnv) putBudget(t *testing.T, body string) models.Budget {
 }
 
 func TestBudgetCRUDEndpoints(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 
@@ -278,6 +270,8 @@ func TestBudgetCRUDEndpoints(t *testing.T) {
 // POST /tasks and POST /tasks/batch refuse with 402 + Retry-After — and the
 // window rollover lifts the refusal.
 func TestBudgetHardRefusal_SingleAndBatch(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 	keyID, raw := env.createKey(t)
@@ -339,6 +333,8 @@ func TestBudgetHardRefusal_SingleAndBatch(t *testing.T) {
 // spend is zero (the #289 honest-scope case — native-provider runs accrue $0
 // without a pricing override).
 func TestBudgetTokenHardRefusal(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 	keyID, raw := env.createKey(t)
@@ -355,6 +351,8 @@ func TestBudgetTokenHardRefusal(t *testing.T) {
 // silent, a process restart (fresh enforcer, same DB) cannot re-alert because
 // the marker is persisted, and the next window re-arms.
 func TestBudgetSoftAlert_OncePerWindow_AcrossRestart(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 	keyID, raw := env.createKey(t)
@@ -412,6 +410,8 @@ func TestBudgetSoftAlert_OncePerWindow_AcrossRestart(t *testing.T) {
 // budget hard bound ABOVE the live global ceiling is clamped down to it, and a
 // live reload of the ceiling is honored on the very next create.
 func TestBudgetNeverExceedsGlobalCeiling(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 	keyID, raw := env.createKey(t)
@@ -435,6 +435,8 @@ func TestBudgetNeverExceedsGlobalCeiling(t *testing.T) {
 // TestNoBudgetBehaviorUnchanged: with the gate wired but no budget rows, every
 // create path behaves exactly as before — no refusal, no alert.
 func TestNoBudgetBehaviorUnchanged(t *testing.T) {
+	t.Parallel()
+
 	env, cleanup := setupBudgetEnv(t)
 	defer cleanup()
 	keyID, raw := env.createKey(t)

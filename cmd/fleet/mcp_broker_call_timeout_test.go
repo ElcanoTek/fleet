@@ -45,6 +45,8 @@ for line in sys.stdin:
 // wire's callTimeoutMs the 300 ms budget is dropped and the call runs the
 // server's full 3 s.
 func TestBrokerScope_CallBudgetCrossesTheWire(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")
 	}

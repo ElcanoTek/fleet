@@ -9,6 +9,8 @@ import (
 // attributed events (#795) and never stores a raw stack — only opaque
 // attribution and the bounded class cross the persistence boundary.
 func TestRecordPanicEvent_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

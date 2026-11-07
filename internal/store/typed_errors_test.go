@@ -11,6 +11,8 @@ import (
 // text, so rewording one silently turned a 400 into a 500 — and that the
 // messages read exactly as before, since they are shown to the caller.
 func TestValidationErrorsAreTyped(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 

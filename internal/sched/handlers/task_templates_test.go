@@ -16,6 +16,8 @@ import (
 )
 
 func TestExtractTemplateVars(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		prompt string
@@ -38,6 +40,8 @@ func TestExtractTemplateVars(t *testing.T) {
 }
 
 func TestListTaskTemplates_EmptyWhenNoProvider(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{} // nil taskTemplates provider
 	rr := httptest.NewRecorder()
 	h.ListTaskTemplates(rr, httptest.NewRequest(http.MethodGet, "/task-templates", nil))
@@ -59,6 +63,8 @@ func TestListTaskTemplates_EmptyWhenNoProvider(t *testing.T) {
 }
 
 func TestListTaskTemplates_FromProvider(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 	h.SetTaskTemplateProvider(func() []clientconfig.TaskTemplate {
 		return []clientconfig.TaskTemplate{
@@ -121,6 +127,8 @@ func TestListTaskTemplates_FromProvider(t *testing.T) {
 // understands. Per-invocation substitution of {variable} placeholders is a
 // UI-side concern; here we substitute then assert the create path accepts it.
 func TestTaskTemplateAppliesToTaskCreate(t *testing.T) {
+	t.Parallel()
+
 	tmpl := clientconfig.TaskTemplate{
 		Name: "Code Review",
 		Task: clientconfig.TaskTemplateTask{

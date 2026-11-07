@@ -106,6 +106,8 @@ func seedStorageLifecycleRow(t *testing.T, store *Storage, database *db.Database
 // non-active one, and the worker-report writer is the only one moving between
 // the two active statuses.
 func TestLifecycleLeaseInvariant(t *testing.T) {
+	t.Parallel()
+
 	for _, tr := range models.TaskLifecycle {
 		toActive := statusInSet(tr.To, models.ActiveTaskStatuses)
 		fromActive := tr.From != models.TaskLifecycleStart && statusInSet(tr.From, models.ActiveTaskStatuses)
@@ -132,6 +134,8 @@ func statusInSet(s models.TaskStatus, set []models.TaskStatus) bool {
 // outcomes match the lifecycle table exactly (BEHAVIORAL: the guard that runs
 // is the production row-locked transaction).
 func TestLifecycleStorageWriterMatrix(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 
@@ -309,6 +313,8 @@ func TestLifecycleStorageWriterMatrix(t *testing.T) {
 // ErrTaskNotReportableStatus before the transaction opens, so the refusal is
 // uniform across seeded statuses instead of depending on the lease check.
 func TestLifecycleWorkerReportRefusesUnreportableTargets(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 
@@ -350,6 +356,8 @@ func TestLifecycleWorkerReportRefusesUnreportableTargets(t *testing.T) {
 // things an operator can actually do. The message must keep the "cannot cancel"
 // substring the HTTP CancelTask handler maps to 400 rather than 500.
 func TestCancelRefusesDeadLetteredTask(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 

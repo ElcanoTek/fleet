@@ -20,6 +20,8 @@ import (
 )
 
 func TestSplitAttachmentsByKind(t *testing.T) {
+	t.Parallel()
+
 	atts := []chatAttachment{
 		{Name: "a.png", Path: "/uploads/a.png", Size: 100, MIME: "image/png"},
 		{Name: "b.jpg", Path: "/uploads/b.jpg", Size: 100, MIME: ""}, // ext fallback
@@ -42,6 +44,8 @@ func TestSplitAttachmentsByKind(t *testing.T) {
 }
 
 func TestToAgentImageAttachments(t *testing.T) {
+	t.Parallel()
+
 	in := []chatAttachment{
 		{Name: "x.png", Path: "/p/x.png", Size: 1, MIME: "image/png"},
 		{Name: "y.JPG", Path: "/p/y.JPG", Size: 1, MIME: ""},
@@ -65,6 +69,8 @@ func TestToAgentImageAttachments(t *testing.T) {
 // file (e.g. a secret) into a turn's attachment set. This is the confinement
 // the filepath.Rel + filepath.IsLocal gate enforces.
 func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
+	t.Parallel()
+
 	const owner = "alice@example.com"
 	base := t.TempDir()
 	uploads := filepath.Join(userUploadsRoot(base, owner), "tok")
@@ -108,6 +114,8 @@ func TestValidateAttachments_ConfinesToUploadsRoot(t *testing.T) {
 // (agent.loadImageAttachments reads a validated path host-side with no further
 // ownership check — its documented caller contract).
 func TestValidateAttachments_RefusesAnotherUsersUpload(t *testing.T) {
+	t.Parallel()
+
 	base := t.TempDir()
 	const owner, other = "alice@example.com", "bob@example.com"
 
@@ -158,6 +166,8 @@ func TestValidateAttachments_RefusesAnotherUsersUpload(t *testing.T) {
 // path. The segment is derived from the authenticated identity, so it is not
 // something a request body can choose.
 func TestPostAttachments_ScopesPathsPerUser(t *testing.T) {
+	t.Parallel()
+
 	s := attachmentServerFixture(t, 1<<20)
 	const alice, bob = "alice@example.com", "bob@example.com"
 
@@ -247,6 +257,8 @@ func TestStagedAttachmentsAreScopedPerConversation(t *testing.T) {
 }
 
 func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
+	t.Parallel()
+
 	images := []chatAttachment{{Name: "shot.png", Size: 100}}
 	others := []chatAttachment{{Name: "data.csv", Path: "/uploads/abc/data.csv", Size: 1024}}
 	got := appendAttachmentsBlock("hi", images, others)
@@ -268,6 +280,8 @@ func TestAppendAttachmentsBlock_ImagesAndOthers(t *testing.T) {
 }
 
 func TestAppendAttachmentsBlock_NoAttachmentsIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	got := appendAttachmentsBlock("hello", nil, nil)
 	if got != "hello" {
 		t.Errorf("expected unchanged, got %q", got)
@@ -275,6 +289,8 @@ func TestAppendAttachmentsBlock_NoAttachmentsIsNoOp(t *testing.T) {
 }
 
 func TestAppendWorkspaceInventory_EmptyDirIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	got := appendWorkspaceInventoryBlock("hi", dir)
 	if got != "hi" {
@@ -283,6 +299,8 @@ func TestAppendWorkspaceInventory_EmptyDirIsNoOp(t *testing.T) {
 }
 
 func TestAppendWorkspaceInventory_MissingDirIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	// First turn of a new conv: the workspace dir doesn't exist yet.
 	got := appendWorkspaceInventoryBlock("hi", filepath.Join(t.TempDir(), "does-not-exist"))
 	if got != "hi" {
@@ -291,6 +309,8 @@ func TestAppendWorkspaceInventory_MissingDirIsNoOp(t *testing.T) {
 }
 
 func TestAppendWorkspaceInventory_BlankWorkspaceDirIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	got := appendWorkspaceInventoryBlock("hi", "")
 	if got != "hi" {
 		t.Errorf("expected unchanged when workspaceDir is blank, got:\n%s", got)
@@ -298,6 +318,8 @@ func TestAppendWorkspaceInventory_BlankWorkspaceDirIsNoOp(t *testing.T) {
 }
 
 func TestAppendWorkspaceInventory_ListsRegularFilesNewestFirst(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	// Older file first, then newer — write order shouldn't matter.
 	if err := os.WriteFile(filepath.Join(dir, "older.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
@@ -326,6 +348,8 @@ func TestAppendWorkspaceInventory_ListsRegularFilesNewestFirst(t *testing.T) {
 }
 
 func TestAppendWorkspaceInventory_SkipsSymlinksAndDotfilesAndEmptyFiles(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	// Symlink targeting an external dir — the protocols/personas/system_prompts
 	// symlinks EnsureWorkspaceDir installs should never be surfaced as state.
@@ -359,6 +383,8 @@ func TestAppendWorkspaceInventory_SkipsSymlinksAndDotfilesAndEmptyFiles(t *testi
 }
 
 func TestAppendWorkspaceInventory_CapsLongListings(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	for i := 0; i < maxWorkspaceInventoryEntries+5; i++ {
 		name := filepath.Join(dir, "file-"+strings.Repeat("x", i+1)+".csv")
@@ -413,6 +439,8 @@ func countUploadedFiles(t *testing.T, s *Server) int {
 }
 
 func TestPostAttachments_SavesFilesUnderLimit(t *testing.T) {
+	t.Parallel()
+
 	s := attachmentServerFixture(t, 1024)
 	body, ct := multipartBody(t, map[string][]byte{
 		"report.csv": []byte("a,b\n1,2\n"),
@@ -444,6 +472,8 @@ func TestPostAttachments_SavesFilesUnderLimit(t *testing.T) {
 }
 
 func TestPostAttachments_OversizeIs413WithReadableMessage(t *testing.T) {
+	t.Parallel()
+
 	// Cap 1 KiB → request cap 2 KiB. A 1.5 KiB file clears the request
 	// cap (with multipart overhead) but trips the per-file check.
 	s := attachmentServerFixture(t, 1024)
@@ -466,6 +496,8 @@ func TestPostAttachments_OversizeIs413WithReadableMessage(t *testing.T) {
 }
 
 func TestPostAttachments_OversizeBatchSavesNothing(t *testing.T) {
+	t.Parallel()
+
 	// An oversize file anywhere in the batch must reject the whole
 	// request BEFORE any file is written, so no orphans wait on the
 	// TTL sweep.
@@ -489,6 +521,8 @@ func TestPostAttachments_OversizeBatchSavesNothing(t *testing.T) {
 }
 
 func TestPostAttachments_RequestCapIs413NotOpaque400(t *testing.T) {
+	t.Parallel()
+
 	// A batch whose combined size trips http.MaxBytesReader used to
 	// surface as `400 parse multipart: ... request body too large`.
 	// It must come back as a 413 with actionable copy.
@@ -516,6 +550,8 @@ func TestPostAttachments_RequestCapIs413NotOpaque400(t *testing.T) {
 }
 
 func TestPostAttachments_ZeroConfigFallsBackToDefault(t *testing.T) {
+	t.Parallel()
+
 	// A zero-value config (old deployments, tests) must fall back to
 	// defaultMaxUploadBytes rather than rejecting everything.
 	s := attachmentServerFixture(t, 0)
@@ -681,6 +717,8 @@ func TestStageAttachmentsIntoWorkspace_RefusesEscapedSource(t *testing.T) {
 }
 
 func TestAppendAttachmentsBlock_StagedTrailer(t *testing.T) {
+	t.Parallel()
+
 	others := []chatAttachment{{Name: "d.csv", Path: "/ws/conv/attachments/d.csv", Size: 8}}
 	got := appendAttachmentsBlock("hi", nil, others)
 	if !strings.Contains(got, "conversation's workspace") {
@@ -751,6 +789,8 @@ func TestStageAttachmentsIntoWorkspace_RefusesDestinationSymlinks(t *testing.T) 
 // the byte slice it replaces produced invalid UTF-8 that Postgres refused
 // when the attachment path was persisted.
 func TestSanitizeFilename_CapsAtRuneBoundary(t *testing.T) {
+	t.Parallel()
+
 	got := sanitizeFilename(strings.Repeat("é", 150) + ".pdf")
 	if !utf8.ValidString(got) {
 		t.Fatalf("sanitizeFilename produced invalid UTF-8: %q", got)

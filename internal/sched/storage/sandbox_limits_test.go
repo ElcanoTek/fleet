@@ -12,6 +12,8 @@ import (
 )
 
 func TestUpdateTaskSandboxLimits(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

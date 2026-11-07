@@ -14,6 +14,8 @@ import (
 )
 
 func TestMemoryAndProjectStoreErrorStatuses(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "owner@x.com", "mate@x.com")
 	setRole(t, s, "owner@x.com", "member", "quant")
 	setRole(t, s, "mate@x.com", "member", "quant")

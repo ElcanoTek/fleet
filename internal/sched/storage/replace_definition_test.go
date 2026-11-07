@@ -16,6 +16,8 @@ import (
 // `scheduled` with a NULL scheduled_for — a state GetScheduledTasks (which
 // requires scheduled_for IS NOT NULL) can never promote.
 func TestReplaceTaskDefinition_DerivesDispatchState(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -76,6 +78,8 @@ func TestReplaceTaskDefinition_DerivesDispatchState(t *testing.T) {
 // serialization_key): the CLI overlay used to drop several of these entirely
 // (#1104), and even a complete overlay is only as good as the write underneath.
 func TestReplaceTaskDefinition_PersistsFullDefinition(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -114,6 +118,8 @@ func TestReplaceTaskDefinition_PersistsFullDefinition(t *testing.T) {
 // to `scheduled` with its lease nulled (which re-dispatched a live run) or
 // flipped from terminal back to runnable (which erased its result).
 func TestReplaceTaskDefinition_RefusesNonEditable(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

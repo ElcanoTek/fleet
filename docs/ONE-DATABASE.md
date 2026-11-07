@@ -299,16 +299,22 @@ when the test runs as root with a local cluster.
 
 ## The rest of #2049 (follow-up PRs, in this order)
 
-This PR is phase 1. The remaining phases ship as their own PRs under the same
-issue, each updating this note:
+Phase 1 shipped first. The remaining phases ship as their own PRs under the
+same issue, each updating this note:
+
+- **M2 — template test databases: shipped.** Every DB test gets a fresh
+  database cloned from a migrated template — the one-database layout, schemas
+  `chat` and `sched` — and the DB test packages run in parallel in one
+  `go test` ([TEST-DATABASES.md](TEST-DATABASES.md)). The admin CLI suites'
+  legacy-layout `TestMain` is gone with it.
+
+Still to come:
 
 1. **Removing the legacy layout** (below), once every box is consolidated.
-2. **M2 — template test databases:** each test gets a fresh database cloned
-   from a migrated template, so the DB test packages run in parallel.
-3. **M4 — one identity table:** one `users` table and one role vocabulary;
+2. **M4 — one identity table:** one `users` table and one role vocabulary;
    the shadow sync and the identity seams go.
-4. **M5 — one scheduler:** chat patrols run on the sched engine.
-5. **One migration runner** and one migration layout.
+3. **M5 — one scheduler:** chat patrols run on the sched engine.
+4. **One migration runner** and one migration layout.
 
 ## Removing the legacy layout
 
@@ -321,11 +327,9 @@ Once every box reports `fleet db layout` → `schemas`:
    `internal/admincli/db_consolidate.go`, `db_consolidate_linux.go`,
    `db_consolidate_other.go`, `db_consolidate_test.go`,
    `db_consolidate_e2e_test.go` (the tool goes with the layout, or stays only
-   while it is useful), and `internal/admincli/main_test_env_test.go` — the
-   `TestMain` that pins the admin CLI suites to the CI test databases'
-   legacy layout (`FLEET_TEST_DATABASE_URL` = chat, `DATABASE_URL` = sched,
-   both in `public`). Removing it means moving those suites to one test
-   database with schemas, which is M2's job.
+   while it is useful), and `testdb.LegacyPair` (`internal/testdb`), which
+   only the legacy-layout tests use. (The admin CLI suites' legacy-layout
+   `TestMain` already went with M2.)
 3. Delete the marked lines/branches: the `resolveLegacyDSNs` call in
    `ResolveDSNs`; `LayoutOf`/`LayoutLegacy` uses in `cmd/fleet/main.go`,
    `validate_config.go`, `internal/admincli/status.go`; the `db` verb and its

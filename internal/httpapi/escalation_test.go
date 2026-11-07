@@ -31,6 +31,8 @@ func toolResult(t *testing.T, text string, isErr bool) agent.HistoryEntry {
 // failures, loop-guard refusals, the call count, plus the compactions the
 // stream counted. The strongest one names the card's reason.
 func TestStruggleSignals(t *testing.T) {
+	t.Parallel()
+
 	ok := toolResult(t, "fine", false)
 	fail := toolResult(t, "error: no such file", true)
 	loop := toolResult(t, "LOOP_GUARD (block #1): this exact call…", true)
@@ -179,6 +181,8 @@ func pendingSuggestion(t *testing.T, s *Server, user, convID string) map[string]
 // reason, and the struggle is recorded for the user; a classifier "yes" in
 // the same turn is recorded too, but does not stage a second card.
 func TestEscalateAfterTurn_SignalStagesAndRecords(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
@@ -231,6 +235,8 @@ func TestEscalateAfterTurn_SignalStagesAndRecords(t *testing.T) {
 // Observe mode records the classifier's "yes" without showing a card; a "no"
 // and an error record nothing.
 func TestEscalateAfterTurn_ClassifierModes(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	const user = "observer@x.com"
@@ -260,6 +266,8 @@ func TestEscalateAfterTurn_ClassifierModes(t *testing.T) {
 // On the advanced model the struggle is still recorded, but no card offers
 // the model the user is already on.
 func TestEscalateAfterTurn_AdvancedModelRecordsOnly(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
@@ -306,6 +314,8 @@ func TestHandleAdminDecisionModels(t *testing.T) {
 // open (the client blocks the next message until it closes): past the grace
 // the result is recorded in the background, without a card.
 func TestEscalateAfterTurn_LateClassifierRecordsWithoutCard(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	const user = "late@x.com"
@@ -421,6 +431,8 @@ func TestEscalateAfterTurn_CountsEachLateCheck(t *testing.T) {
 // A stopped turn shows no card and records nothing, but the classifier
 // request it already sent is still counted by its outcome.
 func TestEscalateAfterTurn_CancelledTurnCountsCheck(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	const user = "stopped@x.com"
@@ -492,6 +504,8 @@ func TestFailedTurnCountsStartedClassifierCheck(t *testing.T) {
 // the struggle signal for admin stats without stacking a suggest_advanced_model
 // card underneath the pending tool approval card.
 func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true
@@ -520,6 +534,8 @@ func TestEscalateAfterTurn_SuppressesCardWhenTurnStagedApproval(t *testing.T) {
 // still record struggle signals for admin observability, but never stage a
 // suggest_advanced_model card that nobody is at the keyboard to answer.
 func TestEscalateAfterTurn_SuppressesCardOnBackgroundTurn(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.agent = &fakeTurnEngine{}
 	s.cfg.EscalationSignalsEnabled = true

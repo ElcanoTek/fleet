@@ -5,9 +5,7 @@ package admincli
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"net/url"
 	"os"
 	"os/exec"
@@ -23,21 +21,16 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-// consolidateServer returns the test server's DSN and an execPG that runs
-// the client tools against it as the test role (standing in for
-// `runuser -u postgres`), skipping when no server, no client tools or no
-// CREATE DATABASE privilege is available.
+// consolidateServer returns the test server's maintenance DSN
+// (internal/testdb) and an execPG that runs the client tools against it as
+// the test role (standing in for `runuser -u postgres`), skipping when no
+// server or no client tools are available.
 func consolidateServer(t *testing.T) (*url.URL, *execPG, *sql.DB) {
 	t.Helper()
-	base := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if base == "" {
-		base = os.Getenv("DATABASE_URL")
-	}
-	if base == "" {
-		t.Skip("no FLEET_TEST_DATABASE_URL / DATABASE_URL test server")
-	}
+	base := testdb.MaintenanceDSN(t)
 	for _, b := range []string{"psql", "pg_dump", "pg_restore"} {
 		if _, err := exec.LookPath(b); err != nil {
 			t.Skipf("%s not installed", b)
@@ -179,23 +172,19 @@ func runConsolidateE2E(t *testing.T, pgFor func(*consolidatePlan) pgSuper) {
 	base, pg, admin := consolidateServer(t)
 	clearDSNEnv(t)
 	ctx := t.Context()
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	suffix := hex.EncodeToString(b)
-	chatDB, schedDB, target := "cons_chat_"+suffix, "cons_sched_"+suffix, "cons_fleet_"+suffix
-	for _, n := range []string{chatDB, schedDB} {
-		if _, err := admin.Exec(`CREATE DATABASE ` + n); err != nil {
-			t.Fatalf("create %s: %v", n, err)
-		}
-	}
+	// The legacy pair and the target are per-test databases (internal/testdb):
+	// dropped at cleanup, garbage-collected after a crash. The target does not
+	// exist yet — the tool creates it, and its scratch copies are named after
+	// it (<target>_consolidate_<store>), inside testdb's prefix too.
+	chatDSN, schedDSN := testdb.LegacyPair(t)
+	target, _ := testdb.Reserve(t)
 	t.Cleanup(func() {
 		cctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-		for _, n := range []string{chatDB, schedDB, target, target + "_consolidate_chat", target + "_consolidate_sched"} {
+		for _, n := range []string{target + "_consolidate_chat", target + "_consolidate_sched"} {
 			_, _ = admin.ExecContext(cctx, `DROP DATABASE IF EXISTS `+n+` WITH (FORCE)`)
 		}
 	})
-	chatDSN, schedDSN := dbURL(base, chatDB), dbURL(base, schedDB)
 	seqName := seedLegacyPair(t, chatDSN, schedDSN)
 
 	envFile := filepath.Join(t.TempDir(), "fleet.env")

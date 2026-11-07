@@ -40,6 +40,8 @@ func mustCreateTypedKeyWithID(t *testing.T, keyMgr *apikeys.Manager, kt apikeys.
 // AdminOrUserAuthMiddleware routes: an under-scoped typed key is a definitive
 // 403 (not the 401 fall-through), while an in-scope key proceeds normally.
 func TestTypedKeyRouteScope(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 
@@ -111,6 +113,8 @@ func TestTypedKeyRouteScope(t *testing.T) {
 // the 401 fall-through) for a valid but under-scoped typed key — the shared
 // scopedKeyCannotCreate gate (#190). The 403 fires before any DB work.
 func TestTypedKeyCannotCreateTask(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 

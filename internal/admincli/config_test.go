@@ -23,6 +23,8 @@ func testPubkey(t *testing.T) string {
 }
 
 func TestParseAuthPubkey(t *testing.T) {
+	t.Parallel()
+
 	key := testPubkey(t)
 
 	t.Run("accepts bare base64", func(t *testing.T) {
@@ -108,6 +110,8 @@ func TestSetAuthPubkeyWritesEnvFile(t *testing.T) {
 }
 
 func TestSplitPositionalValueFlags(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name     string
 		argv     []string

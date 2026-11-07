@@ -7,6 +7,8 @@ import (
 )
 
 func TestRecoveryRetractsFlushedAndUnflushedDrafts(t *testing.T) {
+	t.Parallel()
+
 	events := []TurnEvent{
 		{Name: "text.delta", Data: []byte(`{"text":"superseded before tool"}`)},
 		{Name: "tool.call", Data: []byte(`{"id":"call","name":"bash","input":"{}"}`)},

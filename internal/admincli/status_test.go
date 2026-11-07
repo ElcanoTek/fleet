@@ -6,6 +6,8 @@ import (
 )
 
 func TestRedactDSN(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		in, want string
 	}{
@@ -29,6 +31,8 @@ func TestRedactDSN(t *testing.T) {
 }
 
 func TestFirstLine(t *testing.T) {
+	t.Parallel()
+
 	if got := firstLine("one\ntwo\nthree"); got != "one" {
 		t.Errorf("firstLine multi = %q, want %q", got, "one")
 	}
@@ -41,6 +45,8 @@ func TestFirstLine(t *testing.T) {
 }
 
 func TestTruthy(t *testing.T) {
+	t.Parallel()
+
 	for _, v := range []string{"1", "true", "TRUE", "yes", "on", " On "} {
 		if !truthy(v) {
 			t.Errorf("truthy(%q) = false, want true", v)

@@ -18,6 +18,8 @@ import (
 // that a rerun's immediate run must use ScheduledFor=nil (NOT &now), so it
 // passes validateTaskCreate's "not in the past" check.
 func TestBuildRerunTaskCreate(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	src := &models.Task{
 		Prompt:     "do the work for the team",
@@ -163,6 +165,8 @@ func TestBuildRerunTaskCreate(t *testing.T) {
 }
 
 func TestApplyRerunOverrides(t *testing.T) {
+	t.Parallel()
+
 	base := func() models.TaskCreate {
 		return models.TaskCreate{Prompt: "orig", Priority: 1, Tags: []string{"a"}}
 	}
@@ -225,6 +229,8 @@ func TestApplyRerunOverrides(t *testing.T) {
 // Exercise the wire format as well as the shared create validator: omitted,
 // empty, and replacement attachments must not collapse to the same operation.
 func TestRerunAttachmentOverrides(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	h.config.DataDir = t.TempDir()
 	uploads := filepath.Join(h.config.DataDir, "temp_uploads")
@@ -285,6 +291,8 @@ func TestRerunAttachmentOverrides(t *testing.T) {
 // an explicit null / zero = clear. Before, the struct had no such fields and
 // the UI dropped them silently.
 func TestApplyRerunOverridesAdvancedSection(t *testing.T) {
+	t.Parallel()
+
 	ten := 10
 	base := func() models.TaskCreate {
 		return models.TaskCreate{
@@ -369,6 +377,8 @@ func TestApplyRerunOverridesAdvancedSection(t *testing.T) {
 // new_lineage asks for a job of its own, in which case the recipe carries
 // none and NewTask makes the copy its own lineage.
 func TestBuildRerunTaskCreateLineage(t *testing.T) {
+	t.Parallel()
+
 	src := &models.Task{ID: uuid.New(), Prompt: "refresh the dashboard", Recurrence: "0 9 * * *", Timezone: "UTC"}
 	src.LineageID = uuid.New()
 

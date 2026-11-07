@@ -52,6 +52,8 @@ func seedConvWithEvents(t *testing.T, s *Store, email string, turns, perTurn int
 // derives a contiguous, gap-free per-conversation sequence and copies the
 // owning turn's conversation_id + turn_index onto each event row.
 func TestInsertTurnEvents_AssignsSequenceAndTurnIndex(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	convID, total := seedConvWithEvents(t, s, "seq@example.com", 3, 4) // 12 events
 	if total != 12 {
@@ -89,6 +91,8 @@ func TestInsertTurnEvents_AssignsSequenceAndTurnIndex(t *testing.T) {
 // TestGetTurnEventPage_Table drives the cursor contract across directions and
 // boundaries on a fixed 10-event conversation (sequences 1..10).
 func TestGetTurnEventPage_Table(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	convID, total := seedConvWithEvents(t, s, "page@example.com", 1, 10) // seq 1..10
 	if total != 10 {
@@ -198,6 +202,8 @@ func TestGetTurnEventPage_Table(t *testing.T) {
 // TestGetTurnEventPage_EmptyConversation: a conversation with no events yields
 // an empty page and a zero cursor in both directions.
 func TestGetTurnEventPage_EmptyConversation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "empty@example.com", "password123"); err != nil {
@@ -222,6 +228,8 @@ func TestGetTurnEventPage_EmptyConversation(t *testing.T) {
 // limit-sized pages by chasing nextCursor, and confirms it visits every event
 // exactly once in order — the cursor round-trip the issue calls for.
 func TestGetTurnEventPage_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	convID, total := seedConvWithEvents(t, s, "roundtrip@example.com", 5, 7) // 35 events
 	ctx := context.Background()

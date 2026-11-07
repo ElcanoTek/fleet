@@ -14,6 +14,8 @@ import (
 // TestShutdownGrace resolves the grace period from config and treats a
 // non-positive value as "no wait" (0).
 func TestShutdownGrace(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		secs int
 		want time.Duration
@@ -69,6 +71,8 @@ func TestSDNotify_SendsToSocket(t *testing.T) {
 
 // TestCloseServers shuts running listeners down within the budget and returns.
 func TestCloseServers(t *testing.T) {
+	t.Parallel()
+
 	mk := func() *http.Server {
 		ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 		t.Cleanup(ts.Close)
@@ -91,6 +95,8 @@ func TestCloseServers(t *testing.T) {
 // TestCloseServers_ZeroBudgetFallsBack ensures a non-positive budget still
 // produces a bounded Shutdown (no infinite/zero deadline).
 func TestCloseServers_ZeroBudgetFallsBack(t *testing.T) {
+	t.Parallel()
+
 	ts := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {}))
 	t.Cleanup(ts.Close)
 

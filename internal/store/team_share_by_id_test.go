@@ -43,6 +43,8 @@ func teamShareReadable(t *testing.T, f teamFixture, caller, convID string) bool 
 // anyone who then created a team called "quant" matched it and could read the
 // original team's chats and shared outputs.
 func TestRenameTeamKeepsSharesAndAFreedNameInheritsNothing(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	if !teamShareReadable(t, f, "alice@x.com", c.ID) {
@@ -82,6 +84,8 @@ func TestRenameTeamKeepsSharesAndAFreedNameInheritsNothing(t *testing.T) {
 // stamp whose id is not the id currently registered under that label is not a
 // share anyone can read.
 func TestTeamShareGateRequiresTheTeamID(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	if _, err := f.s.db.ExecContext(f.ctx,
@@ -101,6 +105,8 @@ func TestTeamShareGateRequiresTheTeamID(t *testing.T) {
 // person to take that name forms a NEW team: the old row is retired, its
 // leftover shares are unshared, and nothing is inherited.
 func TestJoiningAnUnheldTeamNameRetiresTheOldTeam(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	// Simulate the members vanishing without the unshare path running (an
@@ -141,6 +147,8 @@ func TestJoiningAnUnheldTeamNameRetiresTheOldTeam(t *testing.T) {
 // Renaming onto an existing team is a merge (RenameTeam's documented
 // behavior): the merged team is the audience, and the old row goes away.
 func TestRenameOntoExistingTeamMergesShares(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	// ops gets a teams row of its own (a share of dana's) so the merge path runs.
@@ -170,6 +178,8 @@ func TestRenameOntoExistingTeamMergesShares(t *testing.T) {
 // unshared rather than guessed at. Applied in a rolled-back transaction, like
 // TestMigration055UnfilesChatsTheirOwnersCannotSee.
 func TestMigration084StampsIDsAndUnsharesRenameOrphans(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	orphan := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	opsProject, err := f.s.CreateProject(f.ctx, &Project{OwnerEmail: "dana@x.com", Name: "Ops", TeamID: "ops"})
@@ -319,6 +329,8 @@ func TestFirstShareRacingRenameIsCarriedByTheRename(t *testing.T) {
 // so the move gets the row first and asks for the name lock the rename holds.
 // With "team-name locks before user rows" both complete.
 func TestTeamMoveRacingRenameDoesNotDeadlock(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	waiting := func() int {
 		var n int

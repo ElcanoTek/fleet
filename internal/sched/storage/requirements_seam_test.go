@@ -21,6 +21,8 @@ const malformedRequirementsPrompt = "Refresh the page.\n\nEXECUTION REQUIREMENTS
 // REQUIREMENTS line themselves (#1601), before any database work: a nil-DB
 // Storage proves the check runs first.
 func TestStorageSeamsRefuseMalformedRequirements(t *testing.T) {
+	t.Parallel()
+
 	s := &Storage{}
 	if _, _, _, err := s.EnqueueTaskAs(context.Background(), models.TaskCreate{Prompt: malformedRequirementsPrompt}, nil); err == nil || !strings.Contains(err.Error(), "files + file_helpers") {
 		t.Fatalf("EnqueueTaskAs must refuse the malformed line and name it, got %v", err)

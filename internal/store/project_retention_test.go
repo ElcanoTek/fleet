@@ -28,6 +28,8 @@ func projectChat(ctx context.Context, t *testing.T, s *Store, email string) *Con
 // filing into a project is a "keep" state like pin/archive (#509). Red/green:
 // before the project_id IS NULL filter, the sweep deleted it.
 func TestSweep_ProjectChatExemptFromTTL(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c := projectChat(ctx, t, s, "u@x.com")
@@ -49,6 +51,8 @@ func TestSweep_ProjectChatExemptFromTTL(t *testing.T) {
 // targeted by the cap eviction — mirroring the archived exemption. 4 plain
 // active > cap 3 so the eviction loop actually runs.
 func TestSweep_ProjectChatExemptFromCap(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -88,6 +92,8 @@ func TestSweep_ProjectChatExemptFromCap(t *testing.T) {
 // Auto-archive must leave project conversations alone: archiving one would
 // silently pull it out of its project's rail tree.
 func TestAutoArchive_ProjectChatExempt(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	c := projectChat(ctx, t, s, "u@x.com")

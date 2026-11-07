@@ -22,6 +22,8 @@ import (
 // UpdateTask only edits pending or scheduled tasks. Deleting was the missing
 // operation, and fleet had it nowhere.
 func TestDeleteTaskFreesTheName(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -53,6 +55,8 @@ func TestDeleteTaskFreesTheName(t *testing.T) {
 // A live run still holds its lease and is writing to the row. Pulling it out
 // from under the worker is refused with an instruction, not a 500 later.
 func TestDeleteTaskRefusesALiveRun(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -78,6 +82,8 @@ func TestDeleteTaskRefusesALiveRun(t *testing.T) {
 // A terminal task is exactly the case this exists for: the broken job someone
 // is trying to clear out of the way.
 func TestDeleteTaskAcceptsTerminalStatuses(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -99,6 +105,8 @@ func TestDeleteTaskAcceptsTerminalStatuses(t *testing.T) {
 
 // Unknown ids and double-clicks report "gone", not a server error.
 func TestDeleteTaskMissing(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 	if rr := deleteTaskRequest(t, r, uuid.New()); rr.Code != http.StatusNotFound {
@@ -110,6 +118,8 @@ func TestDeleteTaskMissing(t *testing.T) {
 // a lookup that fails (here, a request whose context is already cancelled)
 // is a 500 on both the cancel and the delete route.
 func TestCancelAndDeleteLookupFailureIsNotNotFound(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 	task := models.NewTask(models.TaskCreate{Prompt: "still here"})

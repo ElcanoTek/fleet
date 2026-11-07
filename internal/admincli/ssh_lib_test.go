@@ -105,6 +105,8 @@ printf 'RC=%s\n' "$?"
 // reverts on a failed sshd -t, falls back to the ssh unit, and warns when an
 // earlier directive still wins.
 func TestSSHKeyOnly(t *testing.T) {
+	t.Parallel()
+
 	t.Run("applies, then idempotent", func(t *testing.T) {
 		b := newSSHBox(t, true)
 		b.addKey(t, "root/.ssh/authorized_keys")
@@ -227,6 +229,8 @@ func TestSSHKeyOnly(t *testing.T) {
 
 // TestSSHKeyOnlyIsBootstrapOnly — update never touches sshd.
 func TestSSHKeyOnlyIsBootstrapOnly(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	boot, _ := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
 	if !strings.Contains(string(boot), "\nssh_key_only\n") {
@@ -239,6 +243,8 @@ func TestSSHKeyOnlyIsBootstrapOnly(t *testing.T) {
 }
 
 func TestSSHDAcceptsPasswords(t *testing.T) {
+	t.Parallel()
+
 	for in, want := range map[string]bool{
 		"passwordauthentication no\npermitrootlogin prohibit-password\n":  false,
 		"passwordauthentication yes\npermitrootlogin prohibit-password\n": true,

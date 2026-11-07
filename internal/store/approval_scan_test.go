@@ -56,6 +56,8 @@ func scanTestConversation(t *testing.T) (*Store, string) {
 
 // A pending card past its deadline, carrying every staging-time column.
 func TestApprovalReadersScanIdenticalStructs_Pending(t *testing.T) {
+	t.Parallel()
+
 	s, convID := scanTestConversation(t)
 	ctx := context.Background()
 	const user = scanTestUser
@@ -97,6 +99,8 @@ func TestApprovalReadersScanIdenticalStructs_Pending(t *testing.T) {
 // A settled card carrying every execution-time column: approved narrowed,
 // progress, stop requested, result card and outcome.
 func TestApprovalReadersScanIdenticalStructs_Settled(t *testing.T) {
+	t.Parallel()
+
 	s, convID := scanTestConversation(t)
 	ctx := context.Background()
 	const user = scanTestUser

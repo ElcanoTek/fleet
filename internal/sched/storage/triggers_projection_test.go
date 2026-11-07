@@ -25,6 +25,8 @@ import (
 )
 
 func TestTriggerRunProjectionAccountsForEveryField(t *testing.T) {
+	t.Parallel()
+
 	var template models.Task
 	fillTaskNonZero(reflect.ValueOf(&template).Elem())
 
@@ -87,6 +89,8 @@ func TestTriggerRunProjectionAccountsForEveryField(t *testing.T) {
 // end: a webhook-spawned run must execute under the template's pinned persona
 // (and keep the operator-facing definition fields), not the global defaults.
 func TestSpawnTriggerRun_CarriesDefinitionFields(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	expected := 45
 	template := models.NewTask(models.TaskCreate{

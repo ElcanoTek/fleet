@@ -89,6 +89,8 @@ func TestIdleLibIdentityParity(t *testing.T) {
 // `fleet db dsn-identity` (the DSN on stdin), and falls back to the shell
 // mirror only when the binary cannot answer.
 func TestIdleLibIdentityAsksTheBinary(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -130,6 +132,8 @@ func TestIdleLibIdentityAsksTheBinary(t *testing.T) {
 // TestDBDSNIdentityVerb: the hidden verb prints config.DSNIdentity of the DSN
 // on stdin, and refuses a DSN given as an argument.
 func TestDBDSNIdentityVerb(t *testing.T) {
+	t.Parallel()
+
 	for _, dsn := range identityParityDSNs {
 		var out bytes.Buffer
 		if code := cmdDBDSNIdentity(nil, strings.NewReader(dsn), &out); code != 0 {

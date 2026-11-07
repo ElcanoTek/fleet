@@ -8,6 +8,8 @@ import (
 )
 
 func TestDurationUntilHour(t *testing.T) {
+	t.Parallel()
+
 	base := func(h, m int) time.Time {
 		return time.Date(2026, 1, 1, h, m, 0, 0, time.UTC)
 	}
@@ -40,6 +42,8 @@ func TestDurationUntilHour(t *testing.T) {
 // database (modelled as a fn waiting on its ctx) is released by Stop instead
 // of holding the tick forever.
 func TestStopReleasesBlockedSweep(t *testing.T) {
+	t.Parallel()
+
 	s := New(nil, "UTC")
 	entered := make(chan struct{})
 	done := make(chan error, 1)
@@ -68,6 +72,8 @@ func TestStopReleasesBlockedSweep(t *testing.T) {
 // TestSweepCountsOnlyNonZero pins the quiet-queue contract the collapsed
 // wrappers relied on: onCount runs only for a successful sweep touching rows.
 func TestSweepCountsOnlyNonZero(t *testing.T) {
+	t.Parallel()
+
 	s := New(nil, "UTC")
 	defer s.Stop()
 	var calls []int

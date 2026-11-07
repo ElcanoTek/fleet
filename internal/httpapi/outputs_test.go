@@ -16,6 +16,8 @@ import (
 // (resolveScopedWorkspaceHref) on every shape: what the owner sees as a file
 // chip is exactly what can become a shared output, and nothing else.
 func TestResolveWorkspaceRelPath(t *testing.T) {
+	t.Parallel()
+
 	const id = "0f8fad5b-d9cb-469f-a165-70867728950e"
 	cases := []struct {
 		raw  string
@@ -73,6 +75,8 @@ func TestResolveWorkspaceRelPath(t *testing.T) {
 }
 
 func TestMarkdownDestinations(t *testing.T) {
+	t.Parallel()
+
 	md := "Here is the [report](out/report.xlsx \"Q3\") and a chart:\n" +
 		"![chart](chart.png)\n" +
 		"[![thumb](thumb.png)](full.png)\n" +
@@ -116,6 +120,8 @@ func TestMarkdownDestinations(t *testing.T) {
 // web's react-markdown + remark-gfm) renders as no link at all — so the file
 // was never a chip, and must never become a shared output.
 func TestMarkdownDestinationsOnlyRenderedLinks(t *testing.T) {
+	t.Parallel()
+
 	notLinks := map[string]string{
 		"backslash-escaped bracket": `See \[x](secret.csv) here.`,
 		"escaped image bracket":     `See !\[x](secret.png) here.`,
@@ -177,6 +183,8 @@ func TestMarkdownDestinationsOnlyRenderedLinks(t *testing.T) {
 // discovery parses them as one: a fence opened in one entry and closed in the
 // next is one code block on screen, and a link inside it is not a chip.
 func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		textEntry("assistant", "Here is the raw output:\n```\n"),
 		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`{"id":"1","name":"bash","input":"{}"}`)},
@@ -205,6 +213,8 @@ func TestPresentedWorkspacePathsGroupsLikeTheChat(t *testing.T) {
 // summary splits exactly as the summary does: an unclosed fence before it does
 // not swallow a link after it.
 func TestPresentedWorkspacePathsSplitsAtSummaryBoundary(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		textEntry("assistant", "```\n[hidden](inside.csv)"),
 		{Role: "assistant", Type: agent.EntryTypeSummaryBoundary, Content: json.RawMessage(`{}`)},
@@ -220,6 +230,8 @@ func TestPresentedWorkspacePathsSplitsAtSummaryBoundary(t *testing.T) {
 // stops, reports truncated, and keeps only the newest whole replies — a reply
 // the byte budget would cut is dropped, never parsed headless.
 func TestRecentRenderedRepliesBudget(t *testing.T) {
+	t.Parallel()
+
 	var history []agent.HistoryEntry
 	for i := 0; i < 5; i++ {
 		history = append(history, textEntry("user", "q"), textEntry("assistant", fmt.Sprintf("[f](f%d.csv)", i)))
@@ -266,6 +278,8 @@ func textEntry(role, text string) agent.HistoryEntry {
 // Only the assistant's TEXT replies present files: a link in the user's own
 // message, a tool result or reasoning is not a chip.
 func TestPresentedWorkspacePathsOnlyAssistantText(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		textEntry("user", "look at [mine](user.csv)"),
 		{Role: "assistant", Type: "tool_result", Content: json.RawMessage(`{"text":"[t](tool.csv)"}`)},
@@ -334,6 +348,8 @@ func TestConversationOutputsFiltersOnDisk(t *testing.T) {
 // The strict opener refuses a symlink at ANY component — including one that
 // stays inside the workspace, which os.Root alone would follow.
 func TestOpenWorkspaceFileNoFollow(t *testing.T) {
+	t.Parallel()
+
 	ws := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(ws, "out"), 0o755); err != nil {
 		t.Fatal(err)

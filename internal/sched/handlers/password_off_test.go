@@ -21,6 +21,8 @@ import (
 // middleware, task creation, which sits outside it, and upload), while the
 // admin API key keeps working.
 func TestPasswordLoginDisabledRefusesLoginAndItsBearer(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	create := httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "ops@x.com", "password": "testpassword123", "role": "client"}`))
@@ -109,6 +111,8 @@ func TestPasswordLoginDisabledRefusesLoginAndItsBearer(t *testing.T) {
 // creates no Operations Center identity: one named like a Chat account would
 // give it an Ops role Auth never granted.
 func TestAccountsManagedByAuthRefusesOpsUserCreation(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	h.config.AccountsManagedByAuth = true
 	r := httptest.NewRequest("POST", "/users", bytes.NewBufferString(`{"username": "ann@x.com", "password": "testpassword123", "role": "admin"}`))

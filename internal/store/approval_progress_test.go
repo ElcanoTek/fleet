@@ -9,6 +9,8 @@ import (
 // executing sentinel, no outcome yet), read back by the approval reads the
 // web uses, and refused once the outcome is recorded.
 func TestSetApprovalProgress(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)

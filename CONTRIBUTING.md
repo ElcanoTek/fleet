@@ -24,9 +24,12 @@ Before opening a PR: `make build && make lint && make test && make ci-web`
 (or `make ci-local`, the whole gate). `make build` is not decoration: lint and
 tests compile with the `fleet_host_executor` tag, the release binary
 deliberately does not, and only `make build` / `make compile` checks that
-tree. Tests skip silently without a database — set `DATABASE_URL` and
-`FLEET_TEST_DATABASE_URL` and check with `-v` that the suites you care about
-print `PASS`, not `SKIP`.
+tree. Tests skip silently without a database — set
+`FLEET_TEST_DATABASE_URL` (any database on a server whose role can
+`CREATE DATABASE`; `scripts/test-db-setup.sh` checks it) and check with `-v`
+that the suites you care about print `PASS`, not `SKIP`. Every DB test gets a
+database of its own, so worktrees and branches share one server safely
+(docs/TESTING.md).
 
 ## Branches and pull requests
 

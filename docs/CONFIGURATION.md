@@ -513,7 +513,6 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `HTTPAPI_TEST_DATABASE_URL` | dsn | — | test | Postgres DSN of the httpapi test suite; go-test.sh runs those packages in their own serial group when it is set. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `ORCH_PORT` | int | `18000` | test | e2e-boot-server.sh: orchestrator port of the e2e server. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `WEB_PORT` | int | `3100` | test | e2e-boot-server.sh: browser-tier port of the e2e server. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_DATABASE_DSN` | dsn | — | test | e2e-boot-server.sh: base Postgres DSN with CREATEDB rights; unset uses a local instance. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -526,7 +525,8 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `E2E_REUSE_DB` | bool | `0` | test | e2e-boot-server.sh: keep the chat and scheduler test databases instead of recreating them. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_CANARY` | bool | `0` | test | e2e-boot-server.sh: canary mode — the real OpenRouter upstream and the operator's key instead of the fake LLM. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CANARY_MODEL` | string | — | test | e2e-boot-server.sh canary mode: model to run; empty leaves the choice to Fleet's defaults. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_TEST_DATABASE_URL` | dsn | — | test | Postgres DSN of the chat test suites (internal/testdb). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_TEST_DATABASE_URL` | dsn | — | test | Maintenance DSN of the Go test suites (internal/testdb): any database on a server whose role can CREATE DATABASE; every DB test clones a database of its own through it. Unset, the DB tests skip. go-test.sh also sizes -p/-parallel from the server's free connections. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_TEST_DB_STRATEGY` | string | — | test | internal/testdb: CREATE DATABASE strategy for per-test clones, wal_log or file_copy; empty uses the server's default (WAL_LOG on Postgres 15+). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_PORT` | int | `18080` | test | e2e-boot-server.sh: port of the e2e chat server. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DSN` | dsn | — | test | e2e-boot-server.sh: chat DSN of the e2e server. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FAKE_LLM_ADDR` | string | `127.0.0.1:18090` | test | cmd/fake-llm listen address. *Process env only* (fleet's env-file loader does not admit it; export it). |

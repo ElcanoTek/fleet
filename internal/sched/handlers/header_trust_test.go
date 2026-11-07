@@ -34,6 +34,8 @@ func newHeaderTrustHandler() *Handlers {
 }
 
 func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
+	t.Parallel()
+
 	h := newHeaderTrustHandler()
 	var seenUser string
 	final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +113,8 @@ func TestAdminOrUserAuthMiddleware_HeaderTrust(t *testing.T) {
 // now share headerTrustUser), or the web UI's elcano-cookie login path clears
 // the CSRF gate only to die with 401 here.
 func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
+	t.Parallel()
+
 	h := newHeaderTrustHandler()
 	do := func(token, email string) (*httptest.ResponseRecorder, taskCreator, bool) {
 		req := httptest.NewRequest(http.MethodPost, "/tasks", nil)
@@ -170,6 +174,8 @@ func TestAuthorizeTaskCreator_HeaderTrust(t *testing.T) {
 // /upload also lives outside the auth group and stages files consumed only by
 // a later task create, so it honors the same header-trust path.
 func TestHandleUpload_HeaderTrust(t *testing.T) {
+	t.Parallel()
+
 	h := newHeaderTrustHandler()
 	do := func(token, email string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/upload", nil)
@@ -216,6 +222,8 @@ func TestHandleUpload_HeaderTrust(t *testing.T) {
 // but broken. It now shares authorizeTaskCreator, including the session-epoch
 // revocation gate.
 func TestEstimateTask_HeaderTrust(t *testing.T) {
+	t.Parallel()
+
 	newEstimateHandler := func() *Handlers {
 		h := newHeaderTrustHandler()
 		h.config.DefaultTaskModel = "anthropic/claude-haiku-4-5"

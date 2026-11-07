@@ -87,6 +87,8 @@ func addStreamTask(t *testing.T, store *storage.Storage, taskID uuid.UUID, statu
 // TestStreamTaskLogs_LivePath: when the task is in flight the handler attaches to
 // the injected live buffer and streams its frames.
 func TestStreamTaskLogs_LivePath(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	taskID := uuid.New()
 	addStreamTask(t, store, taskID, models.TaskStatusRunning)
@@ -115,6 +117,8 @@ func TestStreamTaskLogs_LivePath(t *testing.T) {
 // TestStreamTaskLogs_LastEventIDReplay: the Last-Event-ID header is parsed and
 // forwarded to Attach so a reconnect resumes past the events already seen.
 func TestStreamTaskLogs_LastEventIDReplay(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	taskID := uuid.New()
 	addStreamTask(t, store, taskID, models.TaskStatusRunning)
@@ -143,6 +147,8 @@ func TestStreamTaskLogs_LastEventIDReplay(t *testing.T) {
 // TestStreamTaskLogs_FallbackToStoredLog: with no live buffer the handler replays
 // the persisted log as SSE frames, ending with a terminal status. Requires the DB.
 func TestStreamTaskLogs_FallbackToStoredLog(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	taskID := uuid.New()
 	addStreamTask(t, store, taskID, models.TaskStatusSuccess)
@@ -175,6 +181,8 @@ func TestStreamTaskLogs_FallbackToStoredLog(t *testing.T) {
 // TestStreamTaskLogs_NotFound: an unknown task with no live buffer and no stored
 // log returns 404.
 func TestStreamTaskLogs_NotFound(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	req := httptest.NewRequest("GET", "/tasks/"+uuid.New().String()+"/stream", nil)
 	req.Header.Set("X-API-Key", "admin-key")
@@ -188,6 +196,8 @@ func TestStreamTaskLogs_NotFound(t *testing.T) {
 // TestStreamTaskLogs_Forbidden: a request without view-logs permission is rejected
 // before any stream lookup or DB access.
 func TestStreamTaskLogs_Forbidden(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	called := false
 	h.SetTaskStreamProvider(func(uuid.UUID) (TaskStream, bool) { called = true; return nil, false })

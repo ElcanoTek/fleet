@@ -33,6 +33,8 @@ import (
 // they were built from — positional agreement by construction, verified once
 // more here so a regression in the builders is a readable test failure.
 func TestTaskColumnRegistryConsistent(t *testing.T) {
+	t.Parallel()
+
 	if err := validateTaskColumnRegistry(); err != nil {
 		t.Fatalf("registry invalid: %v", err)
 	}
@@ -102,6 +104,8 @@ func TestTaskColumnRegistryConsistent(t *testing.T) {
 // fails here until the record carries it, and the record cannot carry a
 // field the overlay/create recipe drop.
 func TestTaskRegistryExportSetMatchesExportRecord(t *testing.T) {
+	t.Parallel()
+
 	recordCols := make(map[string]bool)
 	rt := reflect.TypeOf(models.TaskExportRecord{})
 	for i := 0; i < rt.NumField(); i++ {
@@ -134,12 +138,14 @@ func TestTaskRegistryExportSetMatchesExportRecord(t *testing.T) {
 // columns. A migration that adds a column without a registry row fails here,
 // as does a registry row whose column was never migrated (or was dropped).
 func TestTaskRegistrySchemaAgreement(t *testing.T) {
+	t.Parallel()
+
 	d := setupTestDB(t)
 	defer d.Close()
 
 	rows, err := d.conn.QueryContext(context.Background(),
 		`SELECT column_name FROM information_schema.columns
-		 WHERE table_schema = 'public' AND table_name = 'tasks'`)
+		 WHERE table_schema = current_schema() AND table_name = 'tasks'`)
 	if err != nil {
 		t.Fatalf("information_schema query: %v", err)
 	}
@@ -190,6 +196,8 @@ func TestTaskRegistrySchemaAgreement(t *testing.T) {
 // instead of silently arming the stale-copy clobber the registry exists to
 // prevent.
 func TestTaskRegistryRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	d := setupTestDB(t)
 	defer d.Close()
 	ctx := context.Background()
@@ -516,6 +524,8 @@ func strPtr(s string) *string { return &s }
 // instead of shipping a statement the server rejects. DB-free: the guard runs
 // before any connection is touched, so a zero Database is enough.
 func TestMaxTaskBatchRowsTracksRegistry(t *testing.T) {
+	t.Parallel()
+
 	cols := len(taskInsertSet)
 	limit := MaxTaskBatchRows()
 	if limit < 1 {

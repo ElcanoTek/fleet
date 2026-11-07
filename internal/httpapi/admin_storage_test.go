@@ -9,6 +9,8 @@ import (
 )
 
 func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.bin"), make([]byte, 100), 0o600); err != nil {
 		t.Fatal(err)
@@ -31,6 +33,8 @@ func TestDuTree_SumsRegularFilesRecursively(t *testing.T) {
 }
 
 func TestDuTree_MissingDirIsZeroNotError(t *testing.T) {
+	t.Parallel()
+
 	got := duTree(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
 	if got.Bytes != 0 || got.Files != 0 {
 		t.Errorf("missing dir should account as empty, got %+v", got)
@@ -38,6 +42,8 @@ func TestDuTree_MissingDirIsZeroNotError(t *testing.T) {
 }
 
 func TestSweepTempUploads_RemovesOldKeepsFresh(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	stale := filepath.Join(dir, "old.bin")
 	if err := os.WriteFile(stale, []byte("x"), 0o600); err != nil {

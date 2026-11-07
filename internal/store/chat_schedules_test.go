@@ -8,6 +8,8 @@ import (
 )
 
 func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -127,6 +129,8 @@ func TestChatSchedules_LifecycleAndClaim(t *testing.T) {
 // recurring patrols across chats, with each chat's title — not timers, not
 // cancelled patrols, not another user's, and not patrols in deleted chats.
 func TestListUserPatrols(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me, other = "me@elcanotek.com", "other@elcanotek.com"
@@ -222,6 +226,8 @@ func TestListUserPatrols(t *testing.T) {
 // Sequential scans are disabled for the check, since a tiny test table would
 // otherwise be scanned regardless.
 func TestListUserPatrols_UsesItsIndex(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -259,6 +265,8 @@ func TestListUserPatrols_UsesItsIndex(t *testing.T) {
 }
 
 func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "patroller@elcanotek.com"

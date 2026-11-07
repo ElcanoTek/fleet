@@ -14,6 +14,8 @@ import (
 // endpoint must fail closed with 503 and a machine-readable reason — never panic
 // or touch the store. DB-independent: the disabled check short-circuits first.
 func TestRemoteMCPEndpointsDisabledReturn503(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{} // remoteMCP nil → feature disabled
 
 	cases := []struct {
@@ -43,6 +45,8 @@ func TestRemoteMCPEndpointsDisabledReturn503(t *testing.T) {
 }
 
 func TestOperatorOAuthClientFor(t *testing.T) {
+	t.Parallel()
+
 	catalog := []clientconfig.RemoteMCPCatalogEntry{
 		{
 			Name:               "slack",

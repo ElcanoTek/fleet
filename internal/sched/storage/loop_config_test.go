@@ -13,6 +13,8 @@ import (
 // TestLoopConfigRoundTrip pins the nullable loop_config JSONB column (#179): nil
 // (one-shot) and a populated loop config must round-trip without corruption.
 func TestLoopConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -55,6 +57,8 @@ func TestLoopConfigRoundTrip(t *testing.T) {
 // created at iteration start is finalized at iteration end, and List returns
 // them in iteration order.
 func TestTaskIterationsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

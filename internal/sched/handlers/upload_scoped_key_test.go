@@ -8,13 +8,13 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupUploadTest mirrors setupTest but also returns the key manager so tests
@@ -23,15 +23,8 @@ func setupUploadTest(t *testing.T) (*Handlers, *apikeys.Manager) {
 	t.Helper()
 	tmpDir := t.TempDir()
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		t.Fatalf("Failed to init storage: %v", err)
-	}
-	acquireTestLock(t, store)
-	if err := cleanDB(store); err != nil {
-		t.Fatalf("Failed to clean database: %v", err)
 	}
 	keyMgr, err := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 	if err != nil {
@@ -66,6 +59,8 @@ func multipartUploadRequest(t *testing.T, apiKey string) *http.Request {
 // paths honor), so an external intake app can attach files without holding the
 // full-access admin key.
 func TestUpload_ScopedCreateTaskKey(t *testing.T) {
+	t.Parallel()
+
 	h, keyMgr := setupUploadTest(t)
 
 	_, raw, err := keyMgr.CreateKey("intake", []models.Permission{models.PermissionCreateTask}, nil, 0, nil, "")
@@ -84,6 +79,8 @@ func TestUpload_ScopedCreateTaskKey(t *testing.T) {
 // upload path: a VALID typed key without create_task permission (readonly) is
 // 403 (wrong scope), not 401 (bad credentials).
 func TestUpload_UnderScopedTypedKey(t *testing.T) {
+	t.Parallel()
+
 	h, keyMgr := setupUploadTest(t)
 
 	_, raw, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
@@ -101,6 +98,8 @@ func TestUpload_UnderScopedTypedKey(t *testing.T) {
 // TestUpload_InvalidScopedKeyStays401 keeps the existing contract: a garbage
 // key is still an authentication failure, not a scope failure.
 func TestUpload_InvalidScopedKeyStays401(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupUploadTest(t)
 
 	w := httptest.NewRecorder()

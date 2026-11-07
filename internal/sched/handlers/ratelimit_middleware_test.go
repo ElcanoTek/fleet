@@ -24,6 +24,8 @@ func okHandler() http.Handler {
 // throttled by the per-identity (here, per-IP) window, and that the 429 carries
 // the full header set and JSON body.
 func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 2, SchedGlobalRateLimitPerMinute: 1000}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	do := func() *httptest.ResponseRecorder {
@@ -66,6 +68,8 @@ func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
 // TestSchedRateLimitMiddleware_AdminBypass verifies the admin key is never
 // throttled, even past a tiny limit.
 func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "admin-secret", SchedRateLimitPerMinute: 1, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 	for i := 0; i < 5; i++ {
@@ -83,6 +87,8 @@ func TestSchedRateLimitMiddleware_AdminBypass(t *testing.T) {
 // TestSchedRateLimitMiddleware_GlobalCap verifies the process-wide cap blocks a
 // second caller even from a different identity.
 func TestSchedRateLimitMiddleware_GlobalCap(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 1000, SchedGlobalRateLimitPerMinute: 1}, nil, nil)
 	mw := h.SchedRateLimitMiddleware(okHandler())
 
@@ -114,6 +120,8 @@ func TestSchedRateLimitMiddleware_GlobalCap(t *testing.T) {
 // TestSchedRateLimitMiddleware_PerKeyOverride verifies an API key's own
 // RateLimit overrides the global per-minute default for that key.
 func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	mgr, err := apikeys.NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {
@@ -148,6 +156,8 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 // IP unaffected. The bodies are malformed so the allowed attempts stop at the
 // 400 before any storage lookup — the throttle runs first either way.
 func TestLogin_RateLimitedPerIP(t *testing.T) {
+	t.Parallel()
+
 	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
 	login := func(remote string) int {
 		req := httptest.NewRequest("POST", "/login", strings.NewReader("not json"))
@@ -174,6 +184,8 @@ func TestLogin_RateLimitedPerIP(t *testing.T) {
 // unauthenticated requests draw on their own process-wide bucket, so a caller
 // with a valid key from another address is still admitted.
 func TestSchedRateLimitMiddleware_GlobalChargedAfterPerIdentity(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	mgr, err := apikeys.NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
 	if err != nil {

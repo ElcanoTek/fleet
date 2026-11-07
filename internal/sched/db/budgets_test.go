@@ -24,6 +24,8 @@ func f64(v float64) *float64 { return &v }
 func i64(v int64) *int64     { return &v }
 
 func TestBudgetCRUDAndUpsert(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanBudgets(t, db)
@@ -107,6 +109,8 @@ func TestBudgetCRUDAndUpsert(t *testing.T) {
 }
 
 func TestMarkBudgetSoftAlert_OncePerWindow(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanBudgets(t, db)

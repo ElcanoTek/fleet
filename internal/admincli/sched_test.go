@@ -13,6 +13,8 @@ import (
 // The alias fills in only when the primary is absent, warns on stderr (stdout
 // stays clean for the shown-once secret), and passing both is refused.
 func TestEffectiveRateLimit(t *testing.T) {
+	t.Parallel()
+
 	parse := func(t *testing.T, argv ...string) (int, string, error) {
 		t.Helper()
 		fs, f := newAPIKeyCreateFlagSet()

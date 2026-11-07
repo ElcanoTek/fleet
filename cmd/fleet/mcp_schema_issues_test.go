@@ -62,6 +62,8 @@ func schemaVendorTools(t *testing.T) []map[string]any {
 // boundary's schema check on every listed tool and reports findings without
 // failing the server — it is reachable and its other tools work.
 func TestMCPTestVerb_ReportsSchemaIssues(t *testing.T) {
+	t.Parallel()
+
 	srv := schemaVendor(t, schemaVendorTools(t))
 	res := probeBundleServer("pages", config.MCPServerConfig{Type: "http", URL: srv.URL}, 10*time.Second, false)
 	if !res.Connected || res.ToolCount != 3 {
@@ -102,6 +104,8 @@ func TestMCPTestVerb_ReportsSchemaIssues(t *testing.T) {
 // its start time, and an empty record as [] (not null) so `jq '.issues |
 // length'` in fleet doctor reads 0.
 func TestMCPSchemaIssuesHandler(t *testing.T) {
+	t.Parallel()
+
 	rec := httptest.NewRecorder()
 	mcpSchemaIssuesHandler(rec, httptest.NewRequest(http.MethodGet, "/admin/mcp-servers/schema-issues", nil))
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
@@ -127,6 +131,8 @@ func TestMCPSchemaIssuesHandler(t *testing.T) {
 // group of the real orchestrator mux: refused without the admin key, served
 // with it.
 func TestMCPSchemaIssuesRouteIsAdminGated(t *testing.T) {
+	t.Parallel()
+
 	h := handlers.New(handlers.Config{AdminAPIKey: "test-admin-key"}, nil, nil)
 	notes := handlers.NewNotesHandlers(nil, h)
 	mux := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil)

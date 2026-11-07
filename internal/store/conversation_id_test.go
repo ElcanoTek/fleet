@@ -10,6 +10,8 @@ import (
 // creates: stable for a user and key, different across users or keys, and a
 // second create with a taken ID is refused rather than duplicated.
 func TestConversationIDForCreateKey(t *testing.T) {
+	t.Parallel()
+
 	a := ConversationIDForCreateKey("Me@X.com", "k")
 	if a != ConversationIDForCreateKey("me@x.com", "k") {
 		t.Error("the same user (any case) and key must give the same ID")

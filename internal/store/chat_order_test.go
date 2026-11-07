@@ -13,6 +13,8 @@ import (
 // — a foreign, unpinned, deleted, unknown or repeated ID is dropped, never
 // stored.
 func TestChatOrder_Pinned(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "trader@elcanotek.com"
@@ -97,6 +99,8 @@ func TestChatOrder_Pinned(t *testing.T) {
 // chats filed in THAT project are kept, and deleting the project removes the
 // order.
 func TestChatOrder_Project(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "builder@elcanotek.com"
@@ -143,6 +147,8 @@ func TestChatOrder_Project(t *testing.T) {
 // TestChatOrder_GoesWithTheAccount pins that deleting an account purges its
 // saved orders, so an address re-provisioned later never reads the old IDs.
 func TestChatOrder_GoesWithTheAccount(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const me = "leaver@elcanotek.com"

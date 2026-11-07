@@ -36,6 +36,8 @@ func llmFixture(t *testing.T) (*Server, http.Handler) {
 }
 
 func TestAdminLLMProvidersCRUD(t *testing.T) {
+	t.Parallel()
+
 	s, h := llmFixture(t)
 
 	swaps := 0
@@ -158,6 +160,8 @@ func TestAdminLLMProvidersCRUD(t *testing.T) {
 // member-level read but IS listed in `providers` with catch_all=true, so the
 // web tier can expand it from the catwalk catalog.
 func TestLLMProviderModelsCatchAll(t *testing.T) {
+	t.Parallel()
+
 	_, h := llmFixture(t)
 
 	w := do(t, h, http.MethodPost, "/admin/llm-providers", map[string]any{
@@ -197,6 +201,8 @@ func TestLLMProviderModelsCatchAll(t *testing.T) {
 // bad request rather than a server error. Nothing refused is persisted or
 // swapped in.
 func TestAdminLLMProviderBaseURL(t *testing.T) {
+	t.Parallel()
+
 	s, h := llmFixture(t)
 	swaps := 0
 	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
@@ -239,6 +245,8 @@ func TestAdminLLMProviderBaseURL(t *testing.T) {
 // turn before sending a request. A disabled row may be saved without one, a
 // negative value is a bad request, and OpenRouter rows never need one.
 func TestAdminLLMProviderContextWindow(t *testing.T) {
+	t.Parallel()
+
 	s, h := llmFixture(t)
 	swaps := 0
 	s.llmProvidersChanged = func(context.Context) error { swaps++; return nil }
@@ -411,6 +419,8 @@ func TestAdminLLMProviderRegion(t *testing.T) {
 // key-free summary. End-to-end against a local httptest endpoint — no seam
 // stub, so the store-decrypt → agentcore-probe path is genuinely exercised.
 func TestAdminLLMProviderTest(t *testing.T) {
+	t.Parallel()
+
 	_, h := llmFixture(t)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

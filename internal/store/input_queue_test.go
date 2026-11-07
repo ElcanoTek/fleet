@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func enqueue(t *testing.T, s *Store, convID, clientID, msg, mode string) InputQueueRow {
@@ -30,6 +28,8 @@ func enqueue(t *testing.T, s *Store, convID, clientID, msg, mode string) InputQu
 }
 
 func TestEnqueueInput_IdempotentOnClientID(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -61,6 +61,8 @@ func TestEnqueueInput_IdempotentOnClientID(t *testing.T) {
 // submissions must therefore receive distinct FIFO keys instead of surfacing a
 // unique-index error or leaving drain order dependent on a query plan.
 func TestEnqueueInput_ConcurrentPositionsAreUnique(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -113,6 +115,8 @@ func TestEnqueueInput_ConcurrentPositionsAreUnique(t *testing.T) {
 }
 
 func TestPromoteQueuedInput_ConcurrentPromotionsBothSucceed(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -162,6 +166,8 @@ func TestPromoteQueuedInput_ConcurrentPromotionsBothSucceed(t *testing.T) {
 }
 
 func TestPurgeTerminalInputs_OnlyOldTerminalRows(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -212,6 +218,8 @@ func TestPurgeTerminalInputs_OnlyOldTerminalRows(t *testing.T) {
 }
 
 func TestClaimNextQueuedInput_FIFOAndExactlyOnce(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -238,6 +246,8 @@ func TestClaimNextQueuedInput_FIFOAndExactlyOnce(t *testing.T) {
 // front, and injected, claimed and Stop-stamped rows neither run ahead of
 // anyone nor have a place of their own.
 func TestInputsAhead_CountsOnlyRowsThatDrainFirst(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -327,6 +337,8 @@ func TestInputsAhead_CountsOnlyRowsThatDrainFirst(t *testing.T) {
 }
 
 func TestQueueLifecycleGuards(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -355,6 +367,8 @@ func TestQueueLifecycleGuards(t *testing.T) {
 }
 
 func TestCancelQueuedInputs_CoversQueueOnly(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -378,6 +392,8 @@ func TestCancelQueuedInputs_CoversQueueOnly(t *testing.T) {
 // sweep compares is the acceptance sequence EnqueueInput allocates, not
 // created_at.
 func TestCancelQueuedInputs_SparesRowsAcceptedAfterStop(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -412,6 +428,8 @@ func TestCancelQueuedInputs_SparesRowsAcceptedAfterStop(t *testing.T) {
 // A row written without accepted_seq (an older binary mid-deploy) reads back
 // as 0 and is inside every Stop's swept set — the pre-#1477 behaviour for it.
 func TestCancelQueuedInputs_LegacyRowsAlwaysSwept(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -434,7 +452,9 @@ func TestCancelQueuedInputs_LegacyRowsAlwaysSwept(t *testing.T) {
 // hands a new row a sequence that a Stop in the previous process would have
 // swept — and never one at or below a row the previous process accepted.
 func TestAcceptedInputSeq_SeededFromTableAtOpen(t *testing.T) {
-	s := newTestStore(t)
+	t.Parallel()
+
+	s, dsn := newTestStoreDSN(t)
 	convID := seedConvAndTurn(t, s, "t1")
 	enqueue(t, s, convID, "cli-1", "a", InputModeQueued)
 	last := enqueue(t, s, convID, "cli-2", "b", InputModeQueued)
@@ -447,7 +467,7 @@ func TestAcceptedInputSeq_SeededFromTableAtOpen(t *testing.T) {
 		`UPDATE chat_input_queue SET accepted_seq = $2 WHERE id = $1`, last.ID, last.AcceptedSeq+1000); err != nil {
 		t.Fatal(err)
 	}
-	restarted, err := Open(testdb.ChatDSN(t), DefaultPoolConfig())
+	restarted, err := Open(dsn, testPool())
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -462,6 +482,8 @@ func TestAcceptedInputSeq_SeededFromTableAtOpen(t *testing.T) {
 }
 
 func TestRecoverInputQueue_ResolvesAgainstDurableRecord(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -513,6 +535,8 @@ func steerIntent(t *testing.T, s *Store, seq int64, callID string) {
 // steer was injected are below the watermark and must not block the requeue —
 // the durable next-turn fallback stays intact where it is provably safe.
 func TestSettleTurnInputs_SteerRequeuedWhenNoPostInjectionIntent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -543,6 +567,8 @@ func TestSettleTurnInputs_SteerRequeuedWhenNoPostInjectionIntent(t *testing.T) {
 // the failed turn (#820), so re-queuing would re-execute the instruction
 // (at-least-once "send that email"). The row must cancel instead.
 func TestSettleTurnInputs_SteerCancelledAfterPostInjectionIntent(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -575,6 +601,8 @@ func TestSettleTurnInputs_SteerCancelledAfterPostInjectionIntent(t *testing.T) {
 // #823 at boot: RecoverInputQueue applies the same watermark split to rows a
 // dead process left injected on turns that never committed history.
 func TestRecoverInputQueue_SteerWatermarkSplit(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")
@@ -616,6 +644,8 @@ func TestRecoverInputQueue_SteerWatermarkSplit(t *testing.T) {
 // the old behaviour (re-queued), a row whose input committed completes, and
 // a finished row is not marked at all.
 func TestStopRequested_CancelsInsteadOfRequeuing(t *testing.T) {
+	t.Parallel()
+
 	for _, recover := range []bool{false, true} {
 		t.Run(map[bool]string{false: "settlement", true: "boot recovery"}[recover], func(t *testing.T) {
 			s := newTestStore(t)
@@ -697,6 +727,8 @@ func TestStopRequested_CancelsInsteadOfRequeuing(t *testing.T) {
 // good) and claims the row behind it. Boot recovery cancels one a process
 // died holding, before any drain runs.
 func TestStopRequested_QueuedRowIsNeverLaunched(t *testing.T) {
+	t.Parallel()
+
 	for _, recover := range []bool{false, true} {
 		t.Run(map[bool]string{false: "drain", true: "boot recovery"}[recover], func(t *testing.T) {
 			s := newTestStore(t)
@@ -730,6 +762,8 @@ func TestStopRequested_QueuedRowIsNeverLaunched(t *testing.T) {
 // A row's view context (migration 094) is kept as given and comes back on the
 // claim that drains it; a row without one reads back as "".
 func TestEnqueueInput_ViewContextRoundTrips(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convID := seedConvAndTurn(t, s, "t1")

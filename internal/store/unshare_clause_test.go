@@ -29,6 +29,8 @@ var allowedPartialClears = map[string]string{
 // literal clear of any of the four columns outside the constant fails here,
 // including a copy that forgot a column.
 func TestUnshareClauseIsSpelledOnce(t *testing.T) {
+	t.Parallel()
+
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)

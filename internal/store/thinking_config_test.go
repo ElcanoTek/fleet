@@ -6,6 +6,8 @@ import (
 )
 
 func TestScanThinkingConfig(t *testing.T) {
+	t.Parallel()
+
 	if got := scanThinkingConfig(nil); got != nil {
 		t.Errorf("nil → %+v, want nil", got)
 	}
@@ -32,6 +34,8 @@ func TestScanThinkingConfig(t *testing.T) {
 // against a real Postgres: set an override, read it back via Get, change it,
 // then clear it back to nil (inherit global default).
 func TestSetThinkingConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const email = "brad@elcano.com"

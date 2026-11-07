@@ -11,6 +11,8 @@ import (
 )
 
 func TestGetMCPServers_EmptyWhenNoProvider(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{} // nil mcpCatalog provider
 	rr := httptest.NewRecorder()
 	h.GetMCPServers(rr, httptest.NewRequest(http.MethodGet, "/mcp-servers", nil))
@@ -34,6 +36,8 @@ func TestGetMCPServers_EmptyWhenNoProvider(t *testing.T) {
 }
 
 func TestGetMCPServersAndAccounts_FromProvider(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 	h.SetMCPCatalogProvider(func() []MCPServerCatalogEntry {
 		return []MCPServerCatalogEntry{

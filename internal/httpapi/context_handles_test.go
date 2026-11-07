@@ -14,6 +14,8 @@ import (
 )
 
 func TestExpandContextHandles_File(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "report.txt"), []byte("Q3 revenue up 12%"), 0o600); err != nil {
 		t.Fatal(err)
@@ -31,6 +33,8 @@ func TestExpandContextHandles_File(t *testing.T) {
 }
 
 func TestExpandContextHandles_FileTraversalBlocked(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	// A path escaping the workspace must be rejected by SafeWorkspaceJoin.
 	blocks, notices := expandContextHandles(context.Background(), `@file:"../../etc/passwd"`, dir)
@@ -43,6 +47,8 @@ func TestExpandContextHandles_FileTraversalBlocked(t *testing.T) {
 }
 
 func TestExpandContextHandles_FileMissing(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	blocks, notices := expandContextHandles(context.Background(), `@file:"nope.txt"`, dir)
 	if len(blocks) != 0 || len(notices) != 1 || !strings.Contains(notices[0], "not found") {
@@ -51,6 +57,8 @@ func TestExpandContextHandles_FileMissing(t *testing.T) {
 }
 
 func TestExpandContextHandles_FileNoWorkspace(t *testing.T) {
+	t.Parallel()
+
 	blocks, notices := expandContextHandles(context.Background(), `@file:"report.txt"`, "")
 	if len(blocks) != 0 || len(notices) != 1 || !strings.Contains(notices[0], "unavailable") {
 		t.Errorf("empty workspace should disable @file with a notice, got blocks=%v notices=%v", blocks, notices)
@@ -58,6 +66,8 @@ func TestExpandContextHandles_FileNoWorkspace(t *testing.T) {
 }
 
 func TestExpandContextHandles_FileTruncated(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	big := strings.Repeat("x", maxContextFileBytes+1000)
 	if err := os.WriteFile(filepath.Join(dir, "big.txt"), []byte(big), 0o600); err != nil {
@@ -70,6 +80,8 @@ func TestExpandContextHandles_FileTruncated(t *testing.T) {
 }
 
 func TestExpandContextHandles_URLSSRFNotice(t *testing.T) {
+	t.Parallel()
+
 	// A loopback httptest URL is refused by the SSRF-guarded fetcher → notice.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprint(w, "internal")
@@ -86,6 +98,8 @@ func TestExpandContextHandles_URLSSRFNotice(t *testing.T) {
 }
 
 func TestExpandContextHandles_None(t *testing.T) {
+	t.Parallel()
+
 	blocks, notices := expandContextHandles(context.Background(), "just a normal message with an email a@b.com", "/tmp")
 	if blocks != nil || notices != nil {
 		t.Errorf("no handles should expand to nothing, got blocks=%v notices=%v", blocks, notices)
@@ -93,6 +107,8 @@ func TestExpandContextHandles_None(t *testing.T) {
 }
 
 func TestExpandContextHandles_Cap(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	var msg strings.Builder
 	for i := 0; i < maxContextHandles+3; i++ {
@@ -114,6 +130,8 @@ func TestExpandContextHandles_Cap(t *testing.T) {
 // first maxContextHandles the user wrote. Collecting per kind (all URLs, then
 // all files) put every @file last and — with 8+ URLs — dropped every file.
 func TestExpandContextHandles_MessageOrderAcrossKinds(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	for _, name := range []string{"first.txt", "last.txt"} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(name+" body"), 0o600); err != nil {
@@ -151,6 +169,8 @@ func TestExpandContextHandles_MessageOrderAcrossKinds(t *testing.T) {
 }
 
 func TestAppendContextHandleBlocks(t *testing.T) {
+	t.Parallel()
+
 	// No-op when nothing to append.
 	if got := appendContextHandleBlocks("hi", nil, nil); got != "hi" {
 		t.Errorf("expected no-op, got %q", got)
@@ -164,6 +184,8 @@ func TestAppendContextHandleBlocks(t *testing.T) {
 // @file reads only regular files inside the workspace: a link leaving it and
 // a FIFO are both refused, and neither holds the expansion.
 func TestExpandContextHandles_FileLinkAndFIFORefused(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "outside.txt")
 	if err := os.WriteFile(outside, []byte("OUTSIDE"), 0o600); err != nil {

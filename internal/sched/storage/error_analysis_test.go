@@ -15,6 +15,8 @@ import (
 // written only while the task is in a terminal-FAILURE state (the guard), read
 // back via GetTask, and a REPLAY clears it so a re-run starts clean.
 func TestSetTaskErrorAnalysis(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

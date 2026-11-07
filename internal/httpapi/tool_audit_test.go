@@ -17,6 +17,8 @@ import (
 // before they would ever reach the ledger — the core host-side-credentials
 // guarantee for this feature.
 func TestDeriveToolCallEntries(t *testing.T) {
+	t.Parallel()
+
 	mk := func(role, typ string, content any) agent.HistoryEntry {
 		raw, _ := json.Marshal(content)
 		return agent.HistoryEntry{Role: role, Type: typ, Content: raw}
@@ -91,6 +93,8 @@ func TestDeriveToolCallEntries(t *testing.T) {
 // TestTurnBufferToolDurations checks the buffer keeps every tool.result's
 // duration_ms by call id, even after the sliding window evicts the frame.
 func TestTurnBufferToolDurations(t *testing.T) {
+	t.Parallel()
+
 	b := newTurnBuffer("conv", "turn")
 	b.maxBytes = 1 // evict everything but the newest frame
 	b.Emit("tool.call", map[string]any{"id": "a", "name": "bash"})
@@ -107,6 +111,8 @@ func TestTurnBufferToolDurations(t *testing.T) {
 // real store: the owner gets 200 + paginated rows, a different user gets 404
 // (membership scope), and the tool filter narrows results.
 func TestConversationAuditEndpoint(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	st := s.concreteStore(t)

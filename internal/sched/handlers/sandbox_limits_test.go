@@ -10,6 +10,8 @@ import (
 // nil / all-zero (use globals) and in-range values pass; sub-floor and
 // over-ceiling values are rejected.
 func TestValidateSandboxLimits(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{SandboxMemoryMaxMB: 8192, SandboxCPUsMax: 16, SandboxPidsMax: 1024}}
 
 	valid := []*models.TaskSandboxLimits{
@@ -43,6 +45,8 @@ func TestValidateSandboxLimits(t *testing.T) {
 // TestValidateSandboxLimits_NoCeiling: with the operator maxima unset (0), any
 // in-floor value is accepted, but the floors still apply (#205).
 func TestValidateSandboxLimits_NoCeiling(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{}} // all *Max == 0 → uncapped
 	if err := h.validateSandboxLimits(&models.TaskSandboxLimits{MemoryMB: 1 << 20, CPUs: 999, Pids: 1 << 20}); err != nil {
 		t.Errorf("uncapped should accept large values, got %v", err)

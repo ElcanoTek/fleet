@@ -18,6 +18,8 @@ import (
 // owner shares → public token read works → ownership is enforced → revoke makes
 // the link 404.
 func TestConversationShare_EndToEnd(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	st := s.concreteStore(t)
 	ctx := context.Background()
@@ -95,6 +97,8 @@ func TestConversationShare_EndToEnd(t *testing.T) {
 // TestSharedConversation_ExpiredToken404 confirms server-side expiry: a token
 // whose share_expires_at is in the past returns 404 through the public route.
 func TestSharedConversation_ExpiredToken404(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	st := s.concreteStore(t)
 	ctx := context.Background()
@@ -115,6 +119,8 @@ func TestSharedConversation_ExpiredToken404(t *testing.T) {
 // gated by the per-token limiter (the abuse gate). Uses a tiny limiter to keep
 // the test fast: the wiring, not the exact 120/min bound, is what matters.
 func TestSharedConversation_PerTokenRateLimit(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.shareRL = ratelimit.New(3, 0) // 3/min for the test
 	st := s.concreteStore(t)
@@ -143,6 +149,8 @@ func TestSharedConversation_PerTokenRateLimit(t *testing.T) {
 // the account-less /shared page) must not grow the key map, or the limiter
 // itself becomes a memory-DoS lever. A resolved token still gets its bucket.
 func TestSharedConversation_InvalidTokensCreateNoBuckets(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.shareRL = ratelimit.New(3, 0)
 	st := s.concreteStore(t)
@@ -179,6 +187,8 @@ func TestSharedConversation_InvalidTokensCreateNoBuckets(t *testing.T) {
 // still behind the token-only gate (only the trusted web tier reaches it):
 // a request with no shared secret is rejected before any token lookup.
 func TestSharedEndpoint_RequiresSharedSecret(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/shared/anything", nil)

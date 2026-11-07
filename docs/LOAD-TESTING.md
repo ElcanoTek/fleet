@@ -72,8 +72,9 @@ Focused Go benchmarks for the two highest-leverage throughput paths:
   In-process, no DB.
 
 ```sh
-# scheduler claim throughput (needs a sched Postgres)
-DATABASE_URL=postgres://…/fleet_sched_test go test -run '^$' \
+# scheduler claim throughput (needs a test Postgres server; the benchmark
+# clones a database of its own, internal/testdb)
+FLEET_TEST_DATABASE_URL=postgres://…/postgres go test -run '^$' \
   -bench BenchmarkClaimNextPendingTask -benchmem ./internal/sched/db/
 
 # SSE fan-out (1/10/100 subscribers)

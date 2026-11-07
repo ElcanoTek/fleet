@@ -46,6 +46,8 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 })
 
 func TestIPFilterMiddleware(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name       string
 		allow      []*net.IPNet
@@ -251,6 +253,8 @@ func TestIPFilterMiddleware(t *testing.T) {
 // is a pass-through (the middleware returns next unwrapped), so the hot path adds
 // no per-request work when no lists are configured.
 func TestIPFilterMiddleware_NoConfigReturnsUnwrapped(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{cfg: &config.Config{}}
 	got := s.ipFilterMiddleware(okHandler)
 	if reflect.ValueOf(got).Pointer() != reflect.ValueOf(okHandler).Pointer() {
@@ -261,6 +265,8 @@ func TestIPFilterMiddleware_NoConfigReturnsUnwrapped(t *testing.T) {
 // TestClientIP exercises the IP-resolution seam directly: trust gating,
 // rightmost-untrusted XFF selection (#1111), and unparseable input.
 func TestClientIP(t *testing.T) {
+	t.Parallel()
+
 	trusted := []net.IP{net.ParseIP("127.0.0.1")}
 	multiHop := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}
 	tests := []struct {
@@ -314,6 +320,8 @@ func TestClientIP(t *testing.T) {
 // They were two implementations of one contract until they shared
 // httpmw.TrustedProxies, and differed on an unparseable X-Forwarded-For entry.
 func TestClientIPAgreesWithOrchestrator(t *testing.T) {
+	t.Parallel()
+
 	loop := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")}
 	multi := []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("10.0.0.1")}
 	for _, tc := range []struct {

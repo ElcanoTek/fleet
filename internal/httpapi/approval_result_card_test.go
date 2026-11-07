@@ -61,6 +61,8 @@ func envelopeWith(card string) string {
 }
 
 func TestParseApprovalResultCard_AcceptsTheSchema(t *testing.T) {
+	t.Parallel()
+
 	for name, raw := range map[string]string{"done": goodResultCard, "partial with retry": failedResultCard} {
 		card, canonical, err := parseApprovalResultCard([]byte(raw))
 		if err != nil {
@@ -76,6 +78,8 @@ func TestParseApprovalResultCard_AcceptsTheSchema(t *testing.T) {
 }
 
 func TestParseApprovalResultCard_Refusals(t *testing.T) {
+	t.Parallel()
+
 	item := func(extra string) string {
 		return `{"outcome":"partial","title":"t","items":[{"key":"A","label":"A","status":"done"},{"key":"B","label":"B","status":"failed"}` + extra + `]}`
 	}
@@ -142,6 +146,8 @@ func TestParseApprovalResultCard_Refusals(t *testing.T) {
 }
 
 func TestExtractResultCard(t *testing.T) {
+	t.Parallel()
+
 	if card, ok, reason := extractResultCard(envelopeWith(goodResultCard)); !ok || reason != "" || !strings.Contains(string(card), "IX151710246087067804") {
 		t.Fatalf("envelope: ok=%v reason=%q card=%s", ok, reason, card)
 	}
@@ -302,6 +308,8 @@ func TestExecuteClaimedApproval_ResultCardStoreErrorKeepsTheOutcome(t *testing.T
 // The stored card is served only on a success fleet recorded, and is
 // re-validated on every read.
 func TestApprovalResultCardPayload_OnlyOnARecordedSuccess(t *testing.T) {
+	t.Parallel()
+
 	_, canonical, err := parseApprovalResultCard([]byte(goodResultCard))
 	if err != nil {
 		t.Fatal(err)
@@ -443,6 +451,8 @@ func TestRecordActionResult_NeverOffersARetry(t *testing.T) {
 // unchanged (and then ignored by extractResultCard), never re-wrapped into a
 // small card that would slip past the bound (Codex on #1722).
 func TestWithoutRetry_KeepsTheScanBound(t *testing.T) {
+	t.Parallel()
+
 	big := `{"pad": "` + strings.Repeat("x", approvalResultMaxScanBytes) + `", "result_card": ` + failedResultCard + `}`
 	if got := withoutRetry(big); got != big {
 		t.Fatal("an oversized result must come back unchanged")

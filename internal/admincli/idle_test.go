@@ -17,7 +17,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestIdleLibSplitDSNPassword(t *testing.T) {
@@ -326,7 +325,7 @@ exit 0
 }
 
 func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
-	database := testdb.SchedDB(t, "dataset_rows", "datasets", "logs", "tasks", "users")
+	database := fleetEnv(t).SchedDB(t)
 	t.Cleanup(ClearUpdateDrain)
 	ctx := context.Background()
 

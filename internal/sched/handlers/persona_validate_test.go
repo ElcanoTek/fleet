@@ -10,6 +10,8 @@ import (
 // TestValidateTaskCreate_Persona pins the #221 persona override validation:
 // empty/clean names accepted, path-bearing names rejected.
 func TestValidateTaskCreate_Persona(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
@@ -37,6 +39,8 @@ func TestValidateTaskCreate_Persona(t *testing.T) {
 // global default); a known persona still passes, and an empty persona never
 // consults the catalog.
 func TestValidateTaskCreate_PersonaCatalog(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	h.SetPersonaCatalog(func() []string { return []string{"assistant", "security-auditor"} })
 	prompt := "do the thing for the team"

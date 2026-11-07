@@ -61,6 +61,8 @@ func (p *gatedPersister) InsertTurnEvents(ctx context.Context, events []store.Tu
 // permanently-dropped events) and the turn is NOT flagged lossy — the heal
 // succeeded. Core acceptance for issue #32.
 func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -151,6 +153,8 @@ func TestPersister_BackfillHealsDropsUnderBackpressure(t *testing.T) {
 // but is flagged lossy=true — an honest "the persisted history is incomplete"
 // signal instead of a silent gap. Issue #32 acceptance (the unhealable case).
 func TestPersister_LossyWhenBackfillFails(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -215,6 +219,8 @@ func TestPersister_LossyWhenBackfillFails(t *testing.T) {
 // up in the turn_events table once the goroutine flushes, and the
 // `turns` row should be marked completed after Finish.
 func TestPersister_EventsPersistThenFinish(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -277,6 +283,8 @@ func TestPersister_EventsPersistThenFinish(t *testing.T) {
 // reading turn_events from Postgres. The client supplies turn_id so
 // the handler knows which row to read.
 func TestStreamEndpoint_DBFallback(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	expiredBefore := metricValue(`fleet_sse_reconnects_total{outcome="buffer_expired"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
@@ -341,6 +349,8 @@ func TestStreamEndpoint_DBFallback(t *testing.T) {
 // counter reports — it is written on every /stream reattach, so a mislabelled
 // outcome would otherwise go unnoticed.
 func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	noContentBefore := metricValue(`fleet_sse_reconnects_total{outcome="no_content"}`)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
@@ -369,6 +379,8 @@ func TestStreamEndpoint_NoContentReconnectIsTallied(t *testing.T) {
 // exercises the same sweepRetention call both turn paths run, so the ledger
 // can never silently return to unbounded growth.
 func TestSweepRetention_PrunesAgedTurnLedger(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.cfg.TurnEventRetentionDays = 14
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)

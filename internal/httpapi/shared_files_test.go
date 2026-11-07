@@ -75,6 +75,8 @@ func uploadShared(t *testing.T, h http.Handler, user, folder, description string
 }
 
 func TestSharedFilesLifecycle(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	stagedRoot := srv.sharedFilesLibrary().StagedRoot
 
@@ -161,6 +163,8 @@ func TestSharedFilesLifecycle(t *testing.T) {
 }
 
 func TestSharedFilesAuthorization(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 
 	// A member cannot mutate — and the 403 happens before any side effect.
@@ -193,6 +197,8 @@ func TestSharedFilesAuthorization(t *testing.T) {
 }
 
 func TestSharedFilesQuota(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	srv.cfg.SharedFilesMaxTotalMB = 1 // 1 MiB library cap
 
@@ -224,6 +230,8 @@ func TestSharedFilesQuota(t *testing.T) {
 }
 
 func TestSharedFilesSyncSelfHeals(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	if w := uploadShared(t, h, "admin@x", "", "", map[string]string{"heal.txt": "content"}); w.Code != http.StatusOK {
 		t.Fatalf("upload: status %d", w.Code)
@@ -245,6 +253,8 @@ func TestSharedFilesSyncSelfHeals(t *testing.T) {
 // and — because the upload streams bytes before the row is written — the
 // refused upload must leave neither canonical bytes nor a staged file behind.
 func TestSharedFilesPathNamespaceConflict409(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	lib := srv.sharedFilesLibrary()
 
@@ -298,6 +308,8 @@ func TestSharedFilesPathNamespaceConflict409(t *testing.T) {
 // Every request fits by itself, but admission must reserve capacity through
 // persistence so overlapping admin uploads cannot exceed the library cap.
 func TestSharedFilesQuotaConcurrentUploads(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	srv.cfg.SharedFilesMaxTotalMB = 1
 	const workers = 8
@@ -341,6 +353,8 @@ func TestSharedFilesQuotaConcurrentUploads(t *testing.T) {
 // files 1..N-1 were already durably created — unreported in the response and
 // invisible to the admin until a refetch.
 func TestSharedFilesBatchUploadIsAllOrNothing(t *testing.T) {
+	t.Parallel()
+
 	srv, h := sharedFilesFixture(t)
 	stagedRoot := srv.sharedFilesLibrary().StagedRoot
 
@@ -385,6 +399,8 @@ func TestSharedFilesBatchUploadIsAllOrNothing(t *testing.T) {
 // (200 bytes, extension kept). The byte-slice cap it replaces produced
 // invalid UTF-8 that Postgres refused, so this upload used to 500.
 func TestSharedFilesUploadLongNonASCIINameIsCappedValidUTF8(t *testing.T) {
+	t.Parallel()
+
 	_, h := sharedFilesFixture(t)
 	w := uploadShared(t, h, "admin@x", "", "", map[string]string{strings.Repeat("é", 150) + ".csv": "x"})
 	if w.Code != http.StatusOK {
@@ -449,6 +465,8 @@ func (f *failNthCreateSharedFile) CreateSharedFile(ctx context.Context, row stor
 // on the dead request context made every delete fail instantly and left the
 // half-written library the "nothing was saved" contract rules out.
 func TestSharedFilesBatchUploadRollsBackAfterContextCancel(t *testing.T) {
+	t.Parallel()
+
 	srv, _ := sharedFilesFixture(t)
 	lib := srv.sharedFilesLibrary()
 
@@ -494,6 +512,8 @@ func TestSharedFilesBatchUploadRollsBackAfterContextCancel(t *testing.T) {
 }
 
 func TestSharedFilesBatchUploadRollsBackOnMidLoopFailure(t *testing.T) {
+	t.Parallel()
+
 	srv, _ := sharedFilesFixture(t)
 	failing := &failNthCreateSharedFile{chatStore: srv.store, failAt: 2}
 	srv.store = failing

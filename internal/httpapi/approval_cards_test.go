@@ -18,6 +18,8 @@ import (
 // A preview is display-only — there is no action for default-deny to protect
 // against — so it stages with NO deadline. Everything else keeps its window.
 func TestExpiryUnixFor_PreviewNeverExpires(t *testing.T) {
+	t.Parallel()
+
 	a := &approvalStager{globalTimeoutSeconds: 120}
 	if got := a.expiryUnixFor("preview_email"); got != 0 {
 		t.Errorf("preview_email expiry = %d, want 0 (no deadline)", got)
@@ -31,6 +33,8 @@ func TestExpiryUnixFor_PreviewNeverExpires(t *testing.T) {
 // expiring) must sweep with honest copy: nothing was denied because nothing
 // was ever going to run.
 func TestTimeoutResultTextFor(t *testing.T) {
+	t.Parallel()
+
 	if got := timeoutResultTextFor("preview_email"); got != previewExpiredResultText {
 		t.Errorf("preview text = %q, want the display-only wording", got)
 	}
@@ -46,6 +50,8 @@ func TestTimeoutResultTextFor(t *testing.T) {
 // be recorded as "User declined to send this email" — wrong in the transcript
 // and wrong for the next turn's model.
 func TestRejectionMessagesPerToolKind(t *testing.T) {
+	t.Parallel()
+
 	if _, history := rejectionMessages("mcp_sendgrid_send_email"); !strings.Contains(history, "email") {
 		t.Errorf("email decline = %q, want email wording", history)
 	}
@@ -66,6 +72,8 @@ func TestRejectionMessagesPerToolKind(t *testing.T) {
 // cannot know what a bundle tool's arguments mean, so verbatim is the honest
 // floor for a human review step.
 func TestSummarizeGenericToolInput(t *testing.T) {
+	t.Parallel()
+
 	sum := summarizeGenericToolInput("mcp_pages_deploy_page",
 		`{"slug":"q3-report","config":{"campaign":"fall"},"publish":true}`)
 	if sum["tool"] != "mcp_pages_deploy_page" {
@@ -103,6 +111,8 @@ func TestSummarizeGenericToolInput(t *testing.T) {
 // everything else routes to the generic tool summary. This is the server half
 // of retiring the "pages deploy renders as 'Send this email?'" fallthrough.
 func TestSummarizeApprovalInput_RoutesNonEmailToolsGeneric(t *testing.T) {
+	t.Parallel()
+
 	generic := summarizeApprovalInput("mcp_pages_deploy_page", `{"slug":"x"}`, "")
 	if _, hasSubject := generic["subject"]; hasSubject {
 		t.Error("generic tool summary must not carry email fields")
@@ -119,6 +129,8 @@ func TestSummarizeApprovalInput_RoutesNonEmailToolsGeneric(t *testing.T) {
 // Notify-mode records are recognized by their stable result prefix — the one
 // durable trace of HOW the row resolved (the table stores no mode column).
 func TestIsNotifyRecordResult(t *testing.T) {
+	t.Parallel()
+
 	if !isNotifyRecordResult(notifyRecordResultPrefix + ": this tool is declared notify-mode in the client bundle. Undo with rollback.") {
 		t.Error("record text must be recognized")
 	}
@@ -168,6 +180,8 @@ func (f *expiredClickFakeStore) AppendHistory(_ context.Context, _ string, entri
 // card silently reset and the user could click forever. It now resolves the
 // row as timed out at click time, deterministically.
 func TestHandleApproval_ExpiredClickResolvesTimeoutNow(t *testing.T) {
+	t.Parallel()
+
 	fake := &expiredClickFakeStore{approval: store.Approval{
 		ID:             "ap1",
 		ConversationID: "c1",
@@ -213,6 +227,8 @@ func TestHandleApproval_ExpiredClickResolvesTimeoutNow(t *testing.T) {
 // mid-character into a replacement glyph; the 1 MiB email content cap is a
 // byte budget snapped back to a rune boundary.
 func TestCardPreviewsTruncateOnRuneBoundaries(t *testing.T) {
+	t.Parallel()
+
 	if got := excerpt(strings.Repeat("é", 50), 10); !utf8.ValidString(got) || utf8.RuneCountInString(got) != 11 {
 		t.Errorf("excerpt = %q (runes=%d), want 10 runes + ellipsis, valid UTF-8", got, utf8.RuneCountInString(got))
 	}
@@ -246,6 +262,8 @@ func TestCardPreviewsTruncateOnRuneBoundaries(t *testing.T) {
 // Terminal email review marshals this summary. Omitting the frozen attachment
 // arrays hid workspace files that runStagedTool still sends from ArgsJSON.
 func TestSummarizeSendEmailInputIncludesFrozenAttachments(t *testing.T) {
+	t.Parallel()
+
 	raw := `{"to_email":"primary@example.com","cc_emails":["copy@example.com"],"bcc_emails":["hidden@example.com"],"subject":"Q","content":"hello","content_type":"text/plain","attachments":[{"path":"report.csv"}],"inline_attachments":[{"path":"chart.png","cid":"logo"}]}`
 	got := summarizeSendEmailInput("mcp_sendgrid_send_email", raw, "")
 	if got["to"] != "primary@example.com" {
@@ -269,6 +287,8 @@ func TestSummarizeSendEmailInputIncludesFrozenAttachments(t *testing.T) {
 // A generic value over genericArgValueMax and a schedule prompt over the
 // 200-rune preview must still appear in frozen_args with complete:true.
 func TestFrozenApprovalArgsExposesWhatSummarizersTruncate(t *testing.T) {
+	t.Parallel()
+
 	hiddenHTML := "HIDDEN_DEPLOY_TARGET"
 	genericRaw := `{"html":"` + strings.Repeat("x", genericArgValueMax) + hiddenHTML + `","url":"https://evil.example"}`
 	sum := summarizeGenericToolInput("mcp_pages_deploy_page", genericRaw)
@@ -317,6 +337,8 @@ func TestFrozenApprovalArgsExposesWhatSummarizersTruncate(t *testing.T) {
 }
 
 func TestFrozenApprovalArgsFailClosed(t *testing.T) {
+	t.Parallel()
+
 	for _, raw := range []string{"", "null", "[]", "true", "{", `{"x":`, `{"x":1}{"y":2}`, `{"x":1} true`} {
 		got := frozenApprovalArgs(raw)
 		if got["complete"] != false {
@@ -339,6 +361,8 @@ func TestFrozenApprovalArgsFailClosed(t *testing.T) {
 }
 
 func TestFrozenApprovalArgsPreservesJSONNumberLiterals(t *testing.T) {
+	t.Parallel()
+
 	const big = "9007199254740993"
 	raw := `{"nested":{"id":` + big + `},"n":` + big + `,"rate":1e2}`
 	frozen := frozenApprovalArgs(raw)
@@ -361,6 +385,8 @@ func TestFrozenApprovalArgsPreservesJSONNumberLiterals(t *testing.T) {
 }
 
 func TestApprovalRequiredEventCarriesFrozenArgs(t *testing.T) {
+	t.Parallel()
+
 	raw := `{"command":"echo secret-suffix"}`
 	ev := approvalRequiredEvent(&store.Approval{ID: "a", ToolName: "bash", ArgsJSON: raw}, raw, "")
 	frozen, _ := ev["frozen_args"].(map[string]any)

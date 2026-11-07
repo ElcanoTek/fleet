@@ -17,6 +17,8 @@ func newAuthTestServer() *Server {
 }
 
 func TestAuth_RejectsMissingToken(t *testing.T) {
+	t.Parallel()
+
 	s := newAuthTestServer()
 	h := s.authMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("handler must not be called")
@@ -31,6 +33,8 @@ func TestAuth_RejectsMissingToken(t *testing.T) {
 }
 
 func TestAuth_RejectsWrongToken(t *testing.T) {
+	t.Parallel()
+
 	s := newAuthTestServer()
 	h := s.authMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("handler must not be called")
@@ -46,6 +50,8 @@ func TestAuth_RejectsWrongToken(t *testing.T) {
 }
 
 func TestAuth_RejectsMissingUserEmail(t *testing.T) {
+	t.Parallel()
+
 	s := newAuthTestServer()
 	h := s.authMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		t.Fatal("handler must not be called")
@@ -60,6 +66,8 @@ func TestAuth_RejectsMissingUserEmail(t *testing.T) {
 }
 
 func TestAuth_PassesAndInjectsUser(t *testing.T) {
+	t.Parallel()
+
 	s := newAuthTestServer()
 	var seenUser string
 	h := s.authMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -81,6 +89,8 @@ func TestAuth_PassesAndInjectsUser(t *testing.T) {
 }
 
 func TestUserFromCtx_Empty(t *testing.T) {
+	t.Parallel()
+
 	if got := userFromCtx(context.Background()); got != "" {
 		t.Errorf("empty ctx: got %q", got)
 	}

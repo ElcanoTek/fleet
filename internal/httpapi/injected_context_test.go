@@ -20,6 +20,8 @@ import (
 )
 
 func TestInjectedContextComposesToTheOldBytes(t *testing.T) {
+	t.Parallel()
+
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "report.csv"), []byte("a,b\n1,2\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -60,6 +62,8 @@ func TestInjectedContextComposesToTheOldBytes(t *testing.T) {
 // lifetime on both backends — the uploads area is not a place a sandbox can
 // read from any more (ADR-0058).
 func TestAttachmentBlockAdvertisesTheStagedPath(t *testing.T) {
+	t.Parallel()
+
 	staged := "/var/lib/fleet/workspace/conv-a/attachments/spend.csv"
 	got := appendAttachmentsBlock("", nil, []chatAttachment{{Name: "spend.csv", Path: staged, Size: 1234}})
 	if !strings.Contains(got, staged) {
@@ -77,6 +81,8 @@ func TestAttachmentBlockAdvertisesTheStagedPath(t *testing.T) {
 // and for the owner it publishes it as its OWN field — never merged back into
 // the user's text.
 func TestHistoryForParticipantExposesOwnerInjectedContextSeparately(t *testing.T) {
+	t.Parallel()
+
 	entries := []agent.HistoryEntry{
 		{ID: 7, Role: "user", Type: "text", Content: []byte(`{"text":"hi"}`), InjectedContext: "\n\n---\n**User attached files:**\n"},
 		{ID: 8, Role: "assistant", Type: "text", Content: []byte(`{"text":"hello"}`)},

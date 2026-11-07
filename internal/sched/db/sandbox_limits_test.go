@@ -14,6 +14,8 @@ import (
 // reads them back unchanged through the JSONB column (#205); a task with no
 // override round-trips as nil.
 func TestSandboxLimits_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

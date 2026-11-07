@@ -13,7 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // writeBundle marshals a bundle to a temp file and returns its path.
@@ -72,16 +72,10 @@ func TestImportBundle_Validation(t *testing.T) {
 // pinned flags / timestamps, messages keep content + timing, memories keep
 // ids — and that a re-run skips everything instead of duplicating.
 func TestImportBundle_ChatSection(t *testing.T) {
-	dsn := testdb.ChatDSN(t)
+	d := fleetdb.New(t)
+	dsn := d.ChatDSN()
 	ctx := context.Background()
-	s, err := store.Open(dsn, store.DefaultPoolConfig())
-	if err != nil {
-		t.Fatalf("open chat store: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if err := s.TruncateAllForTest(ctx); err != nil {
-		t.Fatalf("truncate: %v", err)
-	}
+	s := d.Chat(t)
 
 	convID := uuid.NewString()
 	memID := uuid.NewString()
@@ -160,7 +154,8 @@ func TestImportBundle_ChatSection(t *testing.T) {
 // re-run skips already-present rows instead of duplicating (state-preservation
 // is covered by TestImportBundle_SchedRerunPreservesLiveState).
 func TestImportBundle_SchedSection(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -201,7 +196,7 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	}
 	path := writeBundle(t, bundle)
 
-	if code := cmdImport([]string{path, "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("import: exit %d", code)
 	}
 
@@ -241,7 +236,7 @@ func TestImportBundle_SchedSection(t *testing.T) {
 	}
 
 	// Re-run: idempotent upserts, no duplicates, user still matched by name.
-	if code := cmdImport([]string{path, "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("re-import: exit %d", code)
 	}
 	var nTasks, nUsers int
@@ -261,6 +256,8 @@ func TestImportBundle_SchedSection(t *testing.T) {
 // positional must keep its own argument, and a boolean flag must never swallow
 // the positional.
 func TestSplitPositionalMixed(t *testing.T) {
+	t.Parallel()
+
 	bools := map[string]bool{"dry-run": true, "live-only": true, "overwrite": true}
 	cases := []struct {
 		argv      []string
@@ -319,7 +316,8 @@ func TestImportBundle_SingleSectionSameDSNGuard(t *testing.T) {
 // terminal status/result and fleet's log must survive. --overwrite restores
 // the old upsert for the restore use case.
 func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -341,7 +339,7 @@ func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
 		},
 	}
 	path := writeBundle(t, bundle)
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := d.SchedDSN()
 
 	if code := cmdImport([]string{path, "--sched-database-url", dsn}); code != 0 {
 		t.Fatalf("import: exit %d", code)
@@ -419,7 +417,8 @@ func TestImportBundle_SchedRerunPreservesLiveState(t *testing.T) {
 // TestImportBundle_SchedLiveOnly proves --live-only skips terminal tasks and
 // logs but still imports live definitions.
 func TestImportBundle_SchedLiveOnly(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	d := fleetdb.New(t)
+	database := d.SchedDB(t)
 	ctx := context.Background()
 
 	liveID, doneID := uuid.New(), uuid.New()
@@ -435,7 +434,7 @@ func TestImportBundle_SchedLiveOnly(t *testing.T) {
 		},
 	}
 	path := writeBundle(t, bundle)
-	if code := cmdImport([]string{path, "--live-only", "--sched-database-url", os.Getenv("DATABASE_URL")}); code != 0 {
+	if code := cmdImport([]string{path, "--live-only", "--sched-database-url", d.SchedDSN()}); code != 0 {
 		t.Fatalf("import: exit %d", code)
 	}
 

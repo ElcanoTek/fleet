@@ -3,10 +3,12 @@ package admincli
 import (
 	"database/sql"
 	"net/url"
-	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestBackupFollowsQueryOverrides (#2055 review round 6): pg_dump and
@@ -16,17 +18,15 @@ import (
 // backup and the restore, or they would fail (or, worse, reach another
 // cluster).
 func TestBackupFollowsQueryOverrides(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	t.Parallel()
 	for _, b := range []string{"pg_dump", "pg_restore"} {
 		if _, err := exec.LookPath(b); err != nil {
 			t.Skipf("%s not installed", b)
 		}
 	}
 	ctx := t.Context()
-	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
+	base := testdb.MaintenanceDSN(t)
+	admin, err := sql.Open("pgx", base)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,20 +34,16 @@ func TestBackupFollowsQueryOverrides(t *testing.T) {
 	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
 		t.Skipf("pg_dump major %d != server major %d", cm, sm)
 	}
-	const src, dst = "fleet_bk_override_src", "fleet_bk_override_dst"
-	drop := func() {
-		for _, db := range []string{src, dst} {
-			_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
+	srcDSN, dstDSN := testdb.Empty(t), testdb.Empty(t)
+	dbName := func(dsn string) string {
+		u, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
 		}
+		return strings.TrimPrefix(u.Path, "/")
 	}
-	drop()
-	t.Cleanup(drop)
-	for _, db := range []string{src, dst} {
-		if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil {
-			t.Skipf("cannot create a scratch database: %v", err)
-		}
-	}
-	srcDB, err := sql.Open("pgx", withDBName(t, base, src))
+	src, dst := dbName(srcDSN), dbName(dstDSN)
+	srcDB, err := sql.Open("pgx", srcDSN)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +74,7 @@ func TestBackupFollowsQueryOverrides(t *testing.T) {
 	if err := runPgRestore(ctx, override(dst)+"&options=-csearch_path%3Dpublic", dump); err != nil {
 		t.Fatalf("pg_restore did not follow the query override: %v", err)
 	}
-	dstDB, err := sql.Open("pgx", withDBName(t, base, dst))
+	dstDB, err := sql.Open("pgx", dstDSN)
 	if err != nil {
 		t.Fatal(err)
 	}

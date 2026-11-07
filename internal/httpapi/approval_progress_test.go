@@ -185,6 +185,8 @@ func waitWrites(t *testing.T, st *progressStore, n int) {
 // A progress message is plain, bounded text: control and bidi characters
 // become spaces, a long one is cut, and one carrying a secret is dropped.
 func TestProgressMessage(t *testing.T) {
+	t.Parallel()
+
 	if got := progressMessage("deal\u202e 12\n\tof 24"); got != "deal 12 of 24" {
 		t.Errorf("sanitized = %q", got)
 	}
@@ -235,6 +237,8 @@ func TestWithApprovalProgress(t *testing.T) {
 // A push names the call by its readable card title when there is one, else
 // by the tool, and never by its arguments.
 func TestApprovalPushLabel(t *testing.T) {
+	t.Parallel()
+
 	withCard := &store.Approval{ToolName: "mcp_deals_create_deal", ArgsJSON: `{"secret_arg":"x"}`, CardJSON: `{"title":"Create 24 deals on PubMatic","items":[]}`}
 	if got := approvalPushLabel(withCard); got != "Create 24 deals on PubMatic" {
 		t.Fatalf("label = %q", got)
@@ -344,6 +348,8 @@ func (r resumeSkipStore) HasArmedApprovals(context.Context, string) (bool, error
 // A resume blocked by the hourly cap (or a full queue) tells the owner with a
 // high-urgency push: the task now waits for them. A deleted conversation does not.
 func TestDecideApprovalResume_PushesWhenTheContinueIsSkipped(t *testing.T) {
+	t.Parallel()
+
 	for skipped, want := range map[string]int{
 		store.ApprovalResumeSkipRateLimited:      1,
 		store.ApprovalResumeSkipQueueFull:        1,

@@ -28,6 +28,8 @@ import (
 )
 
 func TestA2APushConfigCRUD(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2AWith(t, true)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "pusher")
 	rawOther, _ := mintTaskKey(t, keyMgr, "outsider")
@@ -138,6 +140,8 @@ func TestA2APushConfigCRUD(t *testing.T) {
 }
 
 func TestA2APushInlineConfigOnSendMessage(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2AWith(t, true)
 	rawKey, _ := mintTaskKey(t, keyMgr, "inliner")
 
@@ -215,6 +219,8 @@ func waitFor(t *testing.T, cond func() bool) bool {
 }
 
 func TestA2APushDeliveryLifecycle(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2AWith(t, true)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "deliveree")
 
@@ -297,6 +303,8 @@ func TestA2APushDeliveryLifecycle(t *testing.T) {
 }
 
 func TestA2APushSSRFGuardBlocksLoopback(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2AWith(t, true)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "guarded")
 

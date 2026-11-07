@@ -14,6 +14,8 @@ import (
 )
 
 func TestGetCurrentUser(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 
 	t.Run("user in context -> identity returned", func(t *testing.T) {

@@ -19,12 +19,14 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
+	t.Parallel()
+
 	store := storage.New()
-	store.SetDatabase(testdb.SchedDB(t, "budgets", "logs", "tasks", "users"))
+	store.SetDatabase(fleetdb.SchedDB(t))
 	ctx := context.Background()
 
 	// alice has a $10/day budget and has already spent $12 today — seeded as a
@@ -159,8 +161,10 @@ func assertChatTaskTitle(t *testing.T, store *storage.Storage, taskID, wantTitle
 // (blank servers dropped), so the scheduled run binds the same connectors the
 // chat had. Gated on DATABASE_URL like the budget test above.
 func TestTaskSchedulerProvider_CarriesConnectors(t *testing.T) {
+	t.Parallel()
+
 	store := storage.New()
-	store.SetDatabase(testdb.SchedDB(t, "budgets", "logs", "tasks", "users"))
+	store.SetDatabase(fleetdb.SchedDB(t))
 	ctx := context.Background()
 	provider := taskSchedulerProvider(store, budget.New(budget.Config{Store: store, Now: time.Now}))
 

@@ -10,6 +10,8 @@ import (
 // failures today", which is precisely the false reassurance this filter exists
 // to remove.
 func TestParseCompletedStatuses(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		raw  string

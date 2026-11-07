@@ -6,6 +6,8 @@ import (
 )
 
 func TestAccountAccessIncludesDisabledRows(t *testing.T) {
+	t.Parallel()
+
 	st := newTestStore(t)
 	ctx := context.Background()
 	if _, found, err := st.AccountAccess(ctx, "nobody@x.com"); err != nil || found {

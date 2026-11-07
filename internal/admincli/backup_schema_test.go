@@ -3,7 +3,6 @@ package admincli
 import (
 	"context"
 	"database/sql"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -11,9 +10,12 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestParseTOCSchemas(t *testing.T) {
+	t.Parallel()
+
 	toc := `;
 ; Archive created at 2026-11-07 10:00:00 UTC
 ;     dbname: fleet
@@ -45,47 +47,27 @@ func TestParseTOCSchemas(t *testing.T) {
 // its schema only, it restores into that store's schema of another database,
 // and a dump of the other store is refused before anything is dropped.
 func TestBackupRestoreSchemaMode(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	t.Parallel()
 	for _, b := range []string{"pg_dump", "pg_restore"} {
 		if _, err := exec.LookPath(b); err != nil {
 			t.Skipf("%s not found", b)
 		}
 	}
 	ctx := context.Background()
-	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
+	admin, err := sql.Open("pgx", testdb.MaintenanceDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admin.Close()
-	if err := admin.PingContext(ctx); err != nil {
-		t.Skipf("admin DB unreachable: %v", err)
-	}
 	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
 		t.Skipf("pg_dump major %d != server major %d", cm, sm)
 	}
-	const srcDB, dstDB = "fleet_backup_schema_src_test", "fleet_backup_schema_dst_test"
-	for _, db := range []string{srcDB, dstDB} {
-		_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db)
-		if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil {
-			if isPermissionError(err) {
-				t.Skipf("cannot CREATE DATABASE: %v", err)
-			}
-			t.Fatal(err)
-		}
-	}
-	defer func() {
-		for _, db := range []string{srcDB, dstDB} {
-			_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
-		}
-	}()
-	srcChat := config.WithSchema(withDBName(t, base, srcDB), config.ChatSchema)
-	srcSched := config.WithSchema(withDBName(t, base, srcDB), config.SchedSchema)
-	dstChat := config.WithSchema(withDBName(t, base, dstDB), config.ChatSchema)
+	srcDB, dstDB := testdb.Empty(t), testdb.Empty(t)
+	srcChat := config.WithSchema(srcDB, config.ChatSchema)
+	srcSched := config.WithSchema(srcDB, config.SchedSchema)
+	dstChat := config.WithSchema(dstDB, config.ChatSchema)
 	func() {
-		src, err := sql.Open("pgx", withDBName(t, base, srcDB))
+		src, err := sql.Open("pgx", srcDB)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,7 +94,7 @@ func TestBackupRestoreSchemaMode(t *testing.T) {
 	// An empty schema's dump has no TABLE entry — only its SCHEMA entry —
 	// and must still be recognised as that schema's (#2055 review).
 	emptyDump := filepath.Join(t.TempDir(), "empty.dump")
-	if err := runPgDump(ctx, config.WithSchema(withDBName(t, base, srcDB), "sched_empty"), emptyDump); err != nil {
+	if err := runPgDump(ctx, config.WithSchema(srcDB, "sched_empty"), emptyDump); err != nil {
 		t.Fatalf("dump an empty schema: %v", err)
 	}
 	if got, err := dumpSchemas(ctx, emptyDump); err != nil || !reflect.DeepEqual(got, []string{"sched_empty"}) {
@@ -122,7 +104,7 @@ func TestBackupRestoreSchemaMode(t *testing.T) {
 	// The destination is a live one-database install: both stores present,
 	// the chat store with stale rows, the sched store with rows of its own
 	// that a chat restore must not touch.
-	dst, err := sql.Open("pgx", withDBName(t, base, dstDB))
+	dst, err := sql.Open("pgx", dstDB)
 	if err != nil {
 		t.Fatal(err)
 	}

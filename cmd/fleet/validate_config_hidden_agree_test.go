@@ -12,6 +12,8 @@ import (
 // a suffix on a "_" boundary). Each case states what the gate hides, so a
 // change to either side that makes them disagree fails here.
 func TestInteractiveHiddenUnmatched_FollowsTheRunGateRule(t *testing.T) {
+	t.Parallel()
+
 	bundle := &clientconfig.Bundle{
 		MCPCatalog: []clientconfig.ServerDef{
 			{Name: "openx", Tools: []string{"ox_create_deal", "ox_get_deal"}},
@@ -46,6 +48,8 @@ func TestInteractiveHiddenUnmatched_FollowsTheRunGateRule(t *testing.T) {
 // and names the tool to list instead. A tool whose own name starts with its
 // server's name (ix's ix_merge_deal_domains) is not mistaken for one.
 func TestInteractiveHiddenServerPinned(t *testing.T) {
+	t.Parallel()
+
 	bundle := &clientconfig.Bundle{
 		MCPCatalog: []clientconfig.ServerDef{
 			{Name: "openx", Tools: []string{"ox_create_deal"}},

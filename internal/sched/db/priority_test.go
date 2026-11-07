@@ -34,6 +34,8 @@ func seedPending(t *testing.T, db *Database, prio, effective int, createdAt time
 // high-urgency task that arrives LATER is still claimed before an already-queued
 // low-urgency (bulk) task — urgency beats FIFO across tiers.
 func TestClaimOrdersByEffectivePriority(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -62,6 +64,8 @@ func TestClaimOrdersByEffectivePriority(t *testing.T) {
 // TestClaimFIFOWithinTier: two tasks at the same effective priority are claimed
 // oldest-first (#230).
 func TestClaimFIFOWithinTier(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -84,6 +88,8 @@ func TestClaimFIFOWithinTier(t *testing.T) {
 // bulk task and an already-urgent task are left alone; the sweep is idempotent
 // and a non-positive window is a no-op (#230).
 func TestPromoteStarvedTasks(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -137,6 +143,8 @@ func TestPromoteStarvedTasks(t *testing.T) {
 // excluded from that upsert — otherwise a routine update carrying a stale
 // in-memory copy would silently undo an anti-starvation promotion.
 func TestUpdateTaskPreservesPromotion(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -170,6 +178,8 @@ func TestUpdateTaskPreservesPromotion(t *testing.T) {
 
 // TestPendingQueueStats rolls pending tasks up per effective priority (#230).
 func TestPendingQueueStats(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

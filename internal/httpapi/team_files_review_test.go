@@ -53,6 +53,8 @@ func filterLikeDiscoveryStore(history []agent.HistoryEntry, more func(agent.Hist
 // answers exactly what it answers over the full history — replies and the
 // truncated flag alike.
 func TestDiscoveryCutoffMatchesTheFullWalk(t *testing.T) {
+	t.Parallel()
+
 	rng := rand.New(rand.NewSource(1))
 	kinds := []struct{ role, typ string }{
 		{"user", "text"}, {"assistant", "text"}, {"assistant", "text"}, {"assistant", "text"},
@@ -796,6 +798,8 @@ func TestProjectFilesFocusIncludedPastCap(t *testing.T) {
 // slot held (stuck calls on a stalled mount), a file is withheld rather than
 // starting another worker, and no partial copy is left behind.
 func TestCopyOneOutputRespectsTheWorkerCap(t *testing.T) {
+	t.Parallel()
+
 	srcDir, dstDir := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(srcDir, "a.csv"), []byte("abc"), 0o644); err != nil {
 		t.Fatal(err)

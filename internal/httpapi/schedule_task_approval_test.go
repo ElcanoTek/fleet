@@ -18,6 +18,8 @@ import (
 // fake so no DB is needed — exactly the in-process round-trip the production
 // wiring performs.
 func TestRunStagedScheduleTask(t *testing.T) {
+	t.Parallel()
+
 	var got TaskScheduleRequest
 	s := &Server{
 		cfg: &config.Config{PublicBaseURL: "https://fleet.example.com"},
@@ -71,6 +73,8 @@ func TestRunStagedScheduleTask(t *testing.T) {
 }
 
 func TestRunStagedScheduleTask_OneTimeRunAt(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		cfg: &config.Config{}, // no PublicBaseURL → no link, but still succeeds
 		scheduleTask: func(_ context.Context, req TaskScheduleRequest) (*TaskScheduleResult, error) {
@@ -94,6 +98,8 @@ func TestRunStagedScheduleTask_OneTimeRunAt(t *testing.T) {
 }
 
 func TestRunStagedScheduleTask_RejectsInvalidArgs(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		cfg: &config.Config{},
 		scheduleTask: func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
@@ -112,6 +118,8 @@ func TestRunStagedScheduleTask_RejectsInvalidArgs(t *testing.T) {
 }
 
 func TestRunStagedScheduleTask_NilSeam(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{cfg: &config.Config{}} // scheduleTask nil → feature unconfigured
 	approval := &store.Approval{ToolName: "schedule_task", ArgsJSON: `{"prompt":"x"}`}
 	_, err := s.runStagedScheduleTask(context.Background(), approval, nil)
@@ -123,6 +131,8 @@ func TestRunStagedScheduleTask_NilSeam(t *testing.T) {
 // TestRunStagedScheduleTask_SeamErrorPropagates ensures a storage failure (e.g. a
 // duplicate task name) surfaces to the caller rather than being swallowed.
 func TestRunStagedScheduleTask_SeamErrorPropagates(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		cfg: &config.Config{},
 		scheduleTask: func(context.Context, TaskScheduleRequest) (*TaskScheduleResult, error) {
@@ -137,6 +147,8 @@ func TestRunStagedScheduleTask_SeamErrorPropagates(t *testing.T) {
 }
 
 func TestSummarizeScheduleTaskInput(t *testing.T) {
+	t.Parallel()
+
 	// Recurring task: carries cron + a runs-per-month estimate.
 	got := summarizeScheduleTaskInput("schedule_task",
 		`{"name":"daily","prompt":"`+strings.Repeat("p", 250)+`","cron":"0 0 * * *"}`)
@@ -213,6 +225,8 @@ func TestSummarizeScheduleTaskInput(t *testing.T) {
 }
 
 func TestRejectionMessages(t *testing.T) {
+	t.Parallel()
+
 	claim, history := rejectionMessages("schedule_task")
 	if !strings.Contains(claim, "scheduled task") || !strings.Contains(history, "scheduled task") {
 		t.Errorf("schedule_task rejection wording wrong: %q / %q", claim, history)
@@ -228,6 +242,8 @@ func TestRejectionMessages(t *testing.T) {
 // edited args pass the SAME validation the staged ones did (a bad cron edit is
 // rejected, nothing is created).
 func TestRunStagedScheduleTask_AppliesEdits(t *testing.T) {
+	t.Parallel()
+
 	var got TaskScheduleRequest
 	calls := 0
 	s := &Server{

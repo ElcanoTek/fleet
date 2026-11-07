@@ -19,6 +19,8 @@ import (
 // (and check the close of) the file before reporting success, and a failure
 // mid-copy must leave no partial file under the name a task would attach.
 func TestWriteUploadFile(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 
 	t.Run("success returns the size and checksum of the closed file", func(t *testing.T) {

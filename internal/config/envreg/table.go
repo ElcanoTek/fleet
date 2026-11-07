@@ -982,8 +982,6 @@ var table = []Entry{
 		Description: "generate-tui-screenshot.sh: version of the freeze tool used to render the screenshot."},
 
 	// ───────────────────────────── Tests and harnesses ─────────────────────────────
-	{Name: "HTTPAPI_TEST_DATABASE_URL", Group: GroupTest, Scope: ScopeTest, Type: TypeDSN, ProcessOnly: true, Secret: true,
-		Description: "Postgres DSN of the httpapi test suite; go-test.sh runs those packages in their own serial group when it is set."},
 	{Name: "ORCH_PORT", Group: GroupTest, Scope: ScopeTest, Type: TypeInt, ProcessOnly: true, Default: "18000",
 		Description: "e2e-boot-server.sh: orchestrator port of the e2e server."},
 	{Name: "WEB_PORT", Group: GroupTest, Scope: ScopeTest, Type: TypeInt, ProcessOnly: true, Default: "3100",
@@ -1009,7 +1007,9 @@ var table = []Entry{
 	{Name: "CANARY_MODEL", Group: GroupTest, Scope: ScopeTest, Type: TypeString, ProcessOnly: true,
 		Description: "e2e-boot-server.sh canary mode: model to run; empty leaves the choice to Fleet's defaults."},
 	{Name: "FLEET_TEST_DATABASE_URL", Group: GroupTest, Scope: ScopeTest, Type: TypeDSN, ProcessOnly: true, Secret: true,
-		Description: "Postgres DSN of the chat test suites (internal/testdb)."},
+		Description: "Maintenance DSN of the Go test suites (internal/testdb): any database on a server whose role can CREATE DATABASE; every DB test clones a database of its own through it. Unset, the DB tests skip. go-test.sh also sizes -p/-parallel from the server's free connections."},
+	{Name: "FLEET_TEST_DB_STRATEGY", Group: GroupTest, Scope: ScopeTest, Type: TypeString, ProcessOnly: true,
+		Description: "internal/testdb: CREATE DATABASE strategy for per-test clones, wal_log or file_copy; empty uses the server's default (WAL_LOG on Postgres 15+)."},
 	{Name: "CHAT_PORT", Group: GroupTest, Scope: ScopeTest, Type: TypeInt, ProcessOnly: true, Default: "18080",
 		Description: "e2e-boot-server.sh: port of the e2e chat server."},
 	{Name: "CHAT_DSN", Group: GroupTest, Scope: ScopeTest, Type: TypeDSN, ProcessOnly: true, Secret: true,

@@ -9,6 +9,8 @@ import (
 // TestTaskLocation pins the one zone-resolution rule every next-fire path
 // shares (#1947): the task's own zone, else the fallback, else UTC.
 func TestTaskLocation(t *testing.T) {
+	t.Parallel()
+
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("tzdata unavailable")
@@ -36,6 +38,8 @@ func TestTaskLocation(t *testing.T) {
 // TestNextRun covers a normal fire in the task's zone, a DST gap, a
 // recurrence that never fires, and an unparseable one.
 func TestNextRun(t *testing.T) {
+	t.Parallel()
+
 	ny, err := time.LoadLocation("America/New_York")
 	if err != nil {
 		t.Skip("tzdata unavailable")

@@ -9,6 +9,8 @@ import (
 )
 
 func TestApplyExternalAccessIsOrderedAndNonDestructive(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const email = "alice@example.com"
@@ -90,6 +92,8 @@ func TestApplyExternalAccessIsOrderedAndNonDestructive(t *testing.T) {
 // (issuer, subject) and the upsert's version guard make the newer version win
 // whatever the commit order.
 func TestApplyExternalAccessSerializesFirstEvents(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const rounds = 25

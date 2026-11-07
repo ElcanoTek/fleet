@@ -12,6 +12,8 @@ import (
 // workflow and saving a question: the tools the run used have to survive into
 // the transcript, because they are what makes the saved entry reproducible.
 func TestWorkflowTranscript_CarriesTheMethod(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		entry(t, "user", "text", agent.TextContent{Text: "forecast the achievable CPA"}),
 		entry(t, "assistant", "reasoning", agent.ReasoningContent{Text: "internal deliberation"}),
@@ -49,6 +51,8 @@ func TestWorkflowTranscript_CarriesTheMethod(t *testing.T) {
 // "ran bash 40 times" is the signal; forty near-identical lines is the same
 // signal at forty times the cost.
 func TestWorkflowTranscript_CollapsesRepeatedTools(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		entry(t, "user", "text", agent.TextContent{Text: "profile the data"}),
 	}
@@ -78,6 +82,8 @@ func TestWorkflowTranscript_CollapsesRepeatedTools(t *testing.T) {
 // TestWorkflowTranscript_KeepsErrors: what went wrong mid-run is exactly the
 // kind of thing a template should warn the next person about.
 func TestWorkflowTranscript_KeepsErrors(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		entry(t, "assistant", "tool_call", agent.ToolCallContent{Name: "bash", Input: `{"command":"cat big.csv"}`}),
 		entry(t, "tool", "tool_result", agent.ToolResultContent{Name: "bash", Text: "UnicodeDecodeError: invalid start byte", IsErr: true}),
@@ -91,6 +97,8 @@ func TestWorkflowTranscript_KeepsErrors(t *testing.T) {
 // TestWorkflowTranscript_Bounds keeps one enormous turn or a pasted payload
 // from crowding the rest of the run out of the budget.
 func TestWorkflowTranscript_Bounds(t *testing.T) {
+	t.Parallel()
+
 	huge := strings.Repeat("x", workflowTurnMaxRunes*3)
 	history := []agent.HistoryEntry{
 		entry(t, "user", "text", agent.TextContent{Text: huge}),
@@ -114,6 +122,8 @@ func TestWorkflowTranscript_Bounds(t *testing.T) {
 // TestWorkflowTranscript_Degrades: an entry whose content will not decode is
 // skipped, never fatal — the same best-effort posture as the exporters.
 func TestWorkflowTranscript_Degrades(t *testing.T) {
+	t.Parallel()
+
 	history := []agent.HistoryEntry{
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`not valid json`)},
 		{Role: "assistant", Type: "tool_call", Content: json.RawMessage(`also not valid`)},

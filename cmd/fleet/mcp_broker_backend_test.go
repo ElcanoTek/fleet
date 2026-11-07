@@ -18,7 +18,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 const brokerScopeServerScript = `
@@ -115,6 +115,8 @@ func TestBrokerBackend_ScopeOwnsAccountTaskAndWorkspace(t *testing.T) {
 }
 
 func TestBrokerBackend_OpenScopeRefusesUnknownServer(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForScopeTest(t)
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -134,6 +136,8 @@ func TestBrokerBackend_OpenScopeRefusesUnknownServer(t *testing.T) {
 }
 
 func TestBrokerBackend_RemoteScopeFailsWhenDisabled(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForScopeTest(t)
 	t.Cleanup(func() { _ = b.Close() })
 	_, _, _, err := b.OpenScope(context.Background(), mcpbroker.ScopeSpec{
@@ -169,6 +173,8 @@ func (r *brokerRemoteResolver) AcquireTokenByID(_ context.Context, _, id string)
 func (*brokerRemoteResolver) SafeHTTPClient() *http.Client { return http.DefaultClient }
 
 func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
+	t.Parallel()
+
 	const token = "test-remote-bearer"
 	var sawBearer atomic.Bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -272,6 +278,8 @@ func TestBrokerBackend_RemoteScopeOwnsCredentialedClient(t *testing.T) {
 }
 
 func TestBrokerBackend_RemoteScopePreservesFilterAndSkippedSemantics(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForScopeTest(t)
 	resolver := &brokerRemoteResolver{
 		conns:    []agent.RemoteMCPConn{{ID: "dead-id", Name: "dead", URL: "https://dead.example.com"}},
@@ -314,6 +322,8 @@ func TestBrokerBackend_RemoteScopePreservesFilterAndSkippedSemantics(t *testing.
 }
 
 func TestBrokerBackend_RemoteScopeErrorIsValueFree(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForScopeTest(t)
 	const sensitiveDetail = "database-detail-must-not-cross-broker"
 	b.remoteMCP = &brokerRemoteResolver{listErr: errors.New(sensitiveDetail)}
@@ -331,6 +341,8 @@ func TestBrokerBackend_RemoteScopeErrorIsValueFree(t *testing.T) {
 }
 
 func TestOpenMCPBrokerRemoteStore(t *testing.T) {
+	t.Parallel()
+
 	if st, resolver, err := openMCPBrokerRemoteStore(&config.Config{}); err != nil || st != nil || resolver != nil {
 		t.Fatalf("disabled store = (%v, %v, %v), want nils", st, resolver, err)
 	}
@@ -349,7 +361,7 @@ func TestOpenMCPBrokerRemoteStore(t *testing.T) {
 		}
 	})
 
-	dsn := testdb.ChatDSN(t)
+	dsn := fleetdb.New(t).ChatDSN()
 	pool := config.DBPoolConfig{
 		MaxOpenConns:    2,
 		MaxIdleConns:    1,
@@ -395,6 +407,8 @@ func TestMCPBrokerRemoteConfigured(t *testing.T) {
 }
 
 func TestBrokerBackend_CloseReapsOutstandingScopes(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForScopeTest(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

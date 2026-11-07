@@ -12,6 +12,8 @@ import (
 
 // TestRetryPolicyRoundTrip pins the nullable retry_policy JSONB column (#201).
 func TestRetryPolicyRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

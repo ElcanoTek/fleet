@@ -741,6 +741,8 @@ func postChatRequest(t *testing.T, srv *Server, body map[string]any) *httptest.R
 // turn row, appended history, recorded metrics, sealed turn) — all by default,
 // with no provider and no DB env var.
 func TestChatTurnPersistsTranscript_NoDBNoProvider(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, engine, st)
@@ -840,6 +842,8 @@ func eventually(t *testing.T, cond func() bool, msg string) {
 // second turn on the same conversation must hand the prior turn's persisted
 // transcript to RunTurn as TurnInput.History.
 func TestChatSecondTurnReplaysHistory(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, engine, st)
@@ -899,6 +903,8 @@ func decodeLockdownRefusal(t *testing.T, w *httptest.ResponseRecorder) map[strin
 // conversation create. A disallowed override on a lockdown conversation is a
 // 400 that neither persists the model nor runs the turn.
 func TestPostChat_LockdownModelOverrideGuard(t *testing.T) {
+	t.Parallel()
+
 	seed := func(st *fakeChatStore, lockdown bool) {
 		st.convs["conv-1"] = &store.Conversation{
 			ID: "conv-1", UserEmail: "u@x.com", Title: "t",
@@ -1677,6 +1683,8 @@ func TestDirectClaim_RaceLoserWithoutReleaseFails(t *testing.T) {
 // whether it lands before the gate check or while the turn is prepared: the
 // claim is cancelled and the turn never runs.
 func TestDirectClaim_StopBeforeLaunchCancelsIt(t *testing.T) {
+	t.Parallel()
+
 	for _, when := range []string{"after the claim", "during preparation"} {
 		t.Run(when, func(t *testing.T) {
 			eng := &fakeEngine{}
@@ -1725,6 +1733,8 @@ func (s *fakeChatStore) createdConversations() int {
 // registers, a key marked before its submission arrives never launches, and
 // a running turn for the key is cancelled.
 func TestCancelByInputKey(t *testing.T) {
+	t.Parallel()
+
 	t.Run("claim still being prepared", func(t *testing.T) {
 		eng := &fakeEngine{}
 		st := newFakeChatStore()
@@ -1814,6 +1824,8 @@ func TestDirectClaim_SettleIsRetried(t *testing.T) {
 // Two concurrent first submissions of one key (no conversation yet) run once:
 // the second waits on the key's lock, then finds the first one's claim.
 func TestFirstSubmission_ConcurrentSendsRunOnce(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -1876,6 +1888,8 @@ func TestDirectClaim_BoundClaimOfAnAbortedLaunchIsSettled(t *testing.T) {
 // no turn, so it is settled "did not run" rather than left "running" to answer
 // every resend of its key "already running".
 func TestDirectClaim_LostClaimAckIsSettled(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	st.claimLostAcks = 1
@@ -1899,6 +1913,8 @@ func TestDirectClaim_LostClaimAckIsSettled(t *testing.T) {
 // a client that numbers keys per conversation reusing "1" for a new
 // conversation starts that conversation, not another one's replay.
 func TestFirstSubmission_KeysStayConversationScopedByDefault(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -1919,6 +1935,8 @@ func TestFirstSubmission_KeysStayConversationScopedByDefault(t *testing.T) {
 // in-memory mark; the row is withdrawn when it is inserted, so it cannot
 // outwait the mark behind a long turn and run after the confirmed Stop.
 func TestCancelByInputKey_LateQueuedRowIsWithdrawn(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
@@ -1940,6 +1958,8 @@ func TestCancelByInputKey_LateQueuedRowIsWithdrawn(t *testing.T) {
 // withdrawal still cancels it durably, so the drain's bind finds it no longer
 // running and does not launch it (the in-memory mark alone expires).
 func TestCancelByInputKey_LateRowClaimedByADrainIsCancelled(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	st.claimAfterEnqueue = true
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
@@ -1960,6 +1980,8 @@ func TestCancelByInputKey_LateRowClaimedByADrainIsCancelled(t *testing.T) {
 // A drained row cancelled after its claim is not launched: the bind finds it
 // no longer running.
 func TestQueuedLaunch_CancelledRowIsNotLaunched(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -1986,6 +2008,8 @@ func TestQueuedLaunch_CancelledRowIsNotLaunched(t *testing.T) {
 // input_id is indexed, so an oversized one is refused up front instead of
 // failing as a database error mid-submission.
 func TestChat_OversizedInputIDIsRefused(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2005,6 +2029,8 @@ func TestChat_OversizedInputIDIsRefused(t *testing.T) {
 // deleted: a concurrent resend may already have been told it is running, and
 // its next look must find an outcome rather than a missing row.
 func TestDirectClaim_PrepFailureLeavesAnOutcome(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	st.memoriesErr = errors.New("fake: memories unavailable")
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
@@ -2019,6 +2045,8 @@ func TestDirectClaim_PrepFailureLeavesAnOutcome(t *testing.T) {
 // Stop-by-key marks are bounded however many distinct keys are stopped, and an
 // oversized key is refused at the endpoint.
 func TestCancelByInputKey_MarksAreBounded(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	for i := range maxCancelledInputs + 100 {
@@ -2047,6 +2075,8 @@ func TestCancelByInputKey_MarksAreBounded(t *testing.T) {
 // gone by the time the turn registers — evicted by many other Stops, or past
 // its TTL.
 func TestCancelByInputKey_UnboundClaimIsCancelledDurably(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2130,6 +2160,8 @@ func TestDirectLaunchDroppedAfterRegistration_RekicksTheQueue(t *testing.T) {
 // A Stop by key never marks a bound claim cancelled: its turn may have run,
 // and a resend of the key reading "cancelled" would run it a second time.
 func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
@@ -2148,6 +2180,8 @@ func TestCancelByInputKey_BoundClaimIsNotMarkedCancelled(t *testing.T) {
 // registered cancels the row durably, so the launch is refused even if the
 // in-memory mark is gone by then.
 func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2183,6 +2217,8 @@ func TestCancelByInputKey_DrainedRowIsCancelledDurably(t *testing.T) {
 // the launch re-kicks it itself, or an input queued behind the refused one —
 // which deferred to that registered turn — would wait for an unrelated kick.
 func TestCancelByInputKey_RefusedDrainRekicksTheQueue(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2219,6 +2255,8 @@ func TestCancelByInputKey_RefusedDrainRekicksTheQueue(t *testing.T) {
 // never runs even when the in-memory mark was evicted in between — whether
 // it arrives on an idle conversation or behind another surface's turn.
 func TestCancelByInputKey_KeyIsTakenBeforeTheSubmission(t *testing.T) {
+	t.Parallel()
+
 	for _, busy := range []bool{false, true} {
 		t.Run(map[bool]string{false: "idle", true: "busy"}[busy], func(t *testing.T) {
 			eng := &fakeEngine{}
@@ -2256,6 +2294,8 @@ func TestCancelByInputKey_KeyIsTakenBeforeTheSubmission(t *testing.T) {
 // conversation: it does not roll the model back to the original request's,
 // nor un-archive a conversation archived since.
 func TestReplay_DoesNotMutateTheConversation(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2281,6 +2321,8 @@ func TestReplay_DoesNotMutateTheConversation(t *testing.T) {
 // conversation accepted it: a resend posted to another conversation is
 // answered with that input, never run there a second time.
 func TestReplay_UserScopedKeyIsFoundAcrossConversations(t *testing.T) {
+	t.Parallel()
+
 	for _, scope := range []string{"user", ""} {
 		t.Run("scope="+scope, func(t *testing.T) {
 			eng := &fakeEngine{}
@@ -2312,6 +2354,8 @@ func TestReplay_UserScopedKeyIsFoundAcrossConversations(t *testing.T) {
 // and then refused by it is settled "cancelled", not left without a row: a
 // concurrent resend already told "running" finds an outcome.
 func TestDirectClaim_RaceLoserRefusedByTheQueueIsSettled(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	st.onClaim = func(r store.InputQueueRow) {
@@ -2344,6 +2388,8 @@ func TestDirectClaim_RaceLoserRefusedByTheQueueIsSettled(t *testing.T) {
 // caller that watched the turn reads its real outcome instead of calling it
 // cancelled.
 func TestCancelByTurnID_ReportsANoOp(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, _ := st.CreateConversation(context.Background(), "u@x.com", "t", "generic", "", false)
@@ -2376,6 +2422,8 @@ func TestCancelByTurnID_ReportsANoOp(t *testing.T) {
 // with it, rather than both claiming the key (the database's uniqueness is
 // per conversation) and running the input twice.
 func TestUserScopedKey_ConcurrentSendsIntoTwoConversationsRunOnce(t *testing.T) {
+	t.Parallel()
+
 	eng := &fakeEngine{}
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, eng, st)
@@ -2409,6 +2457,8 @@ func TestUserScopedKey_ConcurrentSendsIntoTwoConversationsRunOnce(t *testing.T) 
 // stopped): a completed row, or a row bound to a turn that is no longer
 // registered (it ended; settlement pending). One it did stop is a 204.
 func TestCancelByInputKey_ReportsAFinishedInput(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name string
 		row  store.InputQueueRow
@@ -2482,6 +2532,8 @@ func TestDirectClaim_RefusedRaceLoserSettlementIsRetried(t *testing.T) {
 // once the finished row is purged, a later submission reusing the key is new
 // and must run, not be cancelled by a stale mark.
 func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		state string
 		want  inputStop
@@ -2521,6 +2573,8 @@ func TestCancelByInputKey_FinishedInputLeavesNoMark(t *testing.T) {
 // loser's re-queued copy is refused. A key whose row keeps changing is
 // reported unconfirmed, the mark still in force.
 func TestCancelByInputKey_ReleasedClaimIsReadAgain(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name           string
 		drained, churn bool
@@ -2581,6 +2635,8 @@ func TestCancelByInputKey_ReleasedClaimIsReadAgain(t *testing.T) {
 // if the turn had already ended, nothing was stopped (409) and the row is
 // left to the turn's own settlement to record whether the steer ran.
 func TestCancelByInputKey_InjectedSteer(t *testing.T) {
+	t.Parallel()
+
 	for _, running := range []bool{true, false} {
 		t.Run(map[bool]string{true: "turn running", false: "turn already ended"}[running], func(t *testing.T) {
 			st := newFakeChatStore()
@@ -2624,6 +2680,8 @@ func TestCancelByInputKey_InjectedSteer(t *testing.T) {
 // the input ran (its user entry committed), when the turn completed anyway,
 // and when the stop is unconfirmed.
 func TestCancelByInputKey_StoppedDrainIsNeverRequeued(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name      string
 		frame     string // "" = no terminal frame in time
@@ -2692,6 +2750,8 @@ func TestCancelByInputKey_StoppedDrainIsNeverRequeued(t *testing.T) {
 // the stop is unconfirmed — and never on a turn that already ended: that Stop
 // stopped nothing, and the settlement alone records whether the steer ran.
 func TestCancelSteerTurn_FlagsOnlyATurnItCancels(t *testing.T) {
+	t.Parallel()
+
 	for _, running := range []bool{true, false} {
 		t.Run(map[bool]string{true: "running", false: "already ended"}[running], func(t *testing.T) {
 			srv := newDefaultChatServer(t, &fakeEngine{}, newFakeChatStore())
@@ -2720,6 +2780,8 @@ func TestCancelSteerTurn_FlagsOnlyATurnItCancels(t *testing.T) {
 // cancellation. A Stop by key still flags the turn, so its settlement does
 // not re-queue the input it named.
 func TestStop_TurnThatAlreadyFailedIsNotReportedStopped(t *testing.T) {
+	t.Parallel()
+
 	for _, frame := range []string{"turn.error", "turn.model_required", "turn.cancelled"} {
 		for _, keyed := range []bool{true, false} {
 			t.Run(frame+map[bool]string{true: "/by key", false: "/by turn"}[keyed], func(t *testing.T) {
@@ -2853,6 +2915,8 @@ func TestStopCausedEngineErrorIsAdvertisedCancelled(t *testing.T) {
 // still stops the turn — the in-memory record covers this process — but the
 // Stop is not reported as landed.
 func TestStopByKey_RecordsItsIntentBeforeTheCancel(t *testing.T) {
+	t.Parallel()
+
 	for _, fails := range []bool{false, true} {
 		t.Run(map[bool]string{false: "recorded", true: "record fails"}[fails], func(t *testing.T) {
 			st := newFakeChatStore()
@@ -2897,6 +2961,8 @@ func TestStopByKey_RecordsItsIntentBeforeTheCancel(t *testing.T) {
 // them after the turn's Finish, so one landing after the seal would never be
 // seen, and the Stop must treat the turn as ended instead.
 func TestStopRecords_RefuseASealedBuffer(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("c", "t")
 	if !buf.markStoppedByKey() || !buf.addStoppedSteer("s-1") {
 		t.Fatal("an open buffer refused a Stop record")
@@ -2920,6 +2986,8 @@ func TestStopRecords_RefuseASealedBuffer(t *testing.T) {
 // nothing. A turn that emits no terminal frame in time is unconfirmed, never
 // assumed stopped.
 func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name  string
 		frame string // "" = no terminal frame in time
@@ -2963,6 +3031,8 @@ func TestStop_ConfirmsTheCancelAgainstTheTurnsEnd(t *testing.T) {
 }
 
 func TestApplyInitialTurnPersona(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	conv, err := st.CreateConversation(context.Background(), "u@x.com", "New conversation", "generic", "", false)

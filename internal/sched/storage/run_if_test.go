@@ -15,6 +15,8 @@ import (
 // round-trips through AddTask + GetTask, and a plain task reads them back
 // nil/zero (the legacy unconditional promotion path).
 func TestRunIfColumnsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -66,6 +68,8 @@ func TestRunIfColumnsRoundTrip(t *testing.T) {
 // scheduled task's scheduled_for advances to nextRun, skip_count increments,
 // and last_skip_at + last_skip_reason are stamped — status stays scheduled.
 func TestRecordSkipAdvancesScheduledFor(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -121,6 +125,8 @@ func TestRecordSkipAdvancesScheduledFor(t *testing.T) {
 // scheduled state (e.g. it was promoted to pending, cancelled, or claimed), a
 // concurrent RecordSkip is a no-op rather than resurrecting a stale skip.
 func TestRecordSkipNoopAfterPromotion(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -155,6 +161,8 @@ func TestRecordSkipNoopAfterPromotion(t *testing.T) {
 // backoff clobber the operator's new scheduled_for. The skip is a no-op and
 // the next due tick re-evaluates the current definition.
 func TestRecordSkipNoopAfterReschedule(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -195,6 +203,8 @@ func TestRecordSkipNoopAfterReschedule(t *testing.T) {
 // increments the skip count and sets the last skip fields, but leaves its
 // scheduled_for timestamp unchanged (without advancing it).
 func TestRecordSkipOneShot(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -237,6 +247,8 @@ func TestRecordSkipOneShot(t *testing.T) {
 // the next occurrence is computed in the task's own timezone and returned as a
 // UTC instant in the future.
 func TestComputeNextRun(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 

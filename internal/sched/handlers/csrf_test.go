@@ -15,6 +15,8 @@ import (
 // authenticated by a token that the browser does not auto-attach (API key,
 // bearer) and safe methods stay exempt. Mirrors chat's verifyOrigin contract.
 func TestCSRFMiddlewareOrigin(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 	reached := false
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

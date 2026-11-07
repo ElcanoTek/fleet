@@ -38,6 +38,8 @@ func seedPendingScheduled(t *testing.T, db *Database, createdAt, scheduledFor ti
 // floor-promote it instantly (priority inversion); keying on eligibility does
 // not. A row whose eligibility time is genuinely old is still promoted.
 func TestPromoteStarvedTasks_MeasuresFromEligibility(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

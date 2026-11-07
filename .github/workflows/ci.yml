@@ -468,36 +468,15 @@ jobs:
     # Skipped for a docs-only change; the `CI gate` job treats a skip as a pass.
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
 
-    services:
-      postgres:
-        # Pulled through Google's Docker Hub mirror, not docker.io: an anonymous
-        # Docker Hub pull limit (`toomanyrequests`) once failed every job with a
-        # Postgres service before any step ran, on a run and on its re-run.
-        # mirror.gcr.io serves Docker Hub's official images unchanged.
-        image: mirror.gcr.io/library/postgres:18
-        env:
-          POSTGRES_USER: fleet
-          POSTGRES_PASSWORD: fleet
-          POSTGRES_DB: fleet
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fleet"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
+    # Postgres is started by a step (Start Postgres), not a `services:`
+    # container: a service container cannot pass server flags.
 
     env:
-      # Chat suites (internal/store, internal/httpapi) read FLEET_TEST_DATABASE_URL
-      # and the sched suite (internal/sched/*, internal/runner) reads DATABASE_URL,
-      # both through internal/testdb. The chat and sched migration systems
-      # both use a table named schema_migrations with INCOMPATIBLE schemas, so they
-      # MUST point at separate databases. Both suites auto-migrate from an empty DB.
-      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
-      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
-      # internal/httpapi gets a database of its own so it runs alongside
-      # internal/store instead of queuing behind it (scripts/go-test.sh).
-      HTTPAPI_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_httpapi_test?sslmode=disable
+      # The one DSN the DB suites need (internal/testdb, #2049 M2): a
+      # maintenance connection to the test server. Every DB test clones a
+      # database of its own from a migrated template through it; nothing is
+      # written to `fleet` itself.
+      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet?sslmode=disable
       # The clientconfig tests self-resolve config/default, but point the binaries at
       # the in-repo bundle explicitly for any code path that reads it.
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
@@ -505,6 +484,31 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start Postgres 18 (test-speed settings)
+        # A step rather than a `services:` container, because a service cannot
+        # pass server flags and the parallel DB suite needs some: every DB test
+        # clones a database of its own (internal/testdb), so dozens of tests and
+        # their pools run at once — max_connections=300 — and durability is
+        # pointless for a throwaway CI server, so fsync, synchronous_commit and
+        # full_page_writes are off (CREATE DATABASE and DROP DATABASE are most
+        # of a DB test's server cost). Started right after checkout so its init
+        # overlaps the Go setup; "Wait for Postgres" gates the tests on it.
+        # Pulled through Google's Docker Hub mirror, not docker.io: an
+        # anonymous Docker Hub pull limit (`toomanyrequests`) once failed every
+        # job with a Postgres container before any step ran. mirror.gcr.io
+        # serves Docker Hub's official images unchanged.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            docker pull -q mirror.gcr.io/library/postgres:18 && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 10
+          done
+          docker run -d --name fleet-postgres -p 5432:5432 \
+            -e POSTGRES_USER=fleet -e POSTGRES_PASSWORD=fleet -e POSTGRES_DB=fleet \
+            mirror.gcr.io/library/postgres:18 \
+            -c max_connections=300 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -651,12 +655,19 @@ jobs:
             exit 1
           }
 
-      - name: Create test databases
+      - name: Wait for Postgres
+        # TCP on 127.0.0.1 answers only once the image's init (which runs a
+        # socket-only temporary server) has finished and the real server is up.
         run: |
-          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
-            -c 'CREATE DATABASE fleet_chat_test;' \
-            -c 'CREATE DATABASE fleet_sched_test;' \
-            -c 'CREATE DATABASE fleet_httpapi_test;'
+          for _ in $(seq 1 90); do
+            if docker exec fleet-postgres pg_isready -h 127.0.0.1 -U fleet >/dev/null 2>&1; then
+              PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -Atc 'SHOW max_connections'
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs fleet-postgres
+          exit 1
 
       - name: Disable podman so container sandbox tests self-skip
         # GitHub's ubuntu-latest runner ships podman, but building the ~1.3GB
@@ -710,9 +721,8 @@ jobs:
       - name: go test
         # Tagged: compiles the host-mode fixtures + MockMode tests. The release
         # binary above is built untagged; here we exercise the full suite (#159).
-        # scripts/go-test.sh keeps -p 1 only for packages that share a Postgres
-        # DSN and runs the rest at default package parallelism; chat-serial and
-        # sched-serial overlap because they use different databases (ADR-0005).
+        # scripts/go-test.sh is one `go test` over the tree at default package
+        # parallelism: every DB test clones a database of its own (#2049 M2).
         # -coverprofile / -covermode=atomic: emit coverage data for the two
         # coverage-summary steps below (issue #249). The sibling `go-race` job
         # is intentionally NOT instrumented — `go tool cover` on this non-race
@@ -798,40 +808,46 @@ jobs:
     # in-process coordination (worker pool, SSE fan-out, single-owner DB leases,
     # the admission semaphore). It used to run AFTER the plain `go test` step in
     # the same job, so the ~18 min race suite added end-to-end to the Go lane
-    # instead of overlapping it. Same DSNs, same tag, same podman mask; a
-    # dedicated Postgres service so the two jobs cannot TRUNCATE each other.
+    # instead of overlapping it. Same DSN, same tag, same podman mask; it is
+    # a separate runner, so it starts its own Postgres.
     name: Go test -race
     runs-on: ubuntu-latest
     timeout-minutes: 35
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
 
-    services:
-      postgres:
-        image: mirror.gcr.io/library/postgres:18  # see the go job's service
-        env:
-          POSTGRES_USER: fleet
-          POSTGRES_PASSWORD: fleet
-          POSTGRES_DB: fleet
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fleet"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-
     env:
-      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
-      DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
-      # internal/httpapi gets a database of its own so it runs alongside
-      # internal/store instead of queuing behind it (scripts/go-test.sh).
-      HTTPAPI_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_httpapi_test?sslmode=disable
+      FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet?sslmode=disable  # see the go job
       FLEET_CLIENT_CONFIG_DIR: ${{ github.workspace }}/config/default
 
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Start Postgres 18 (test-speed settings)
+        # A step rather than a `services:` container, because a service cannot
+        # pass server flags and the parallel DB suite needs some: every DB test
+        # clones a database of its own (internal/testdb), so dozens of tests and
+        # their pools run at once — max_connections=300 — and durability is
+        # pointless for a throwaway CI server, so fsync, synchronous_commit and
+        # full_page_writes are off (CREATE DATABASE and DROP DATABASE are most
+        # of a DB test's server cost). Started right after checkout so its init
+        # overlaps the Go setup; "Wait for Postgres" gates the tests on it.
+        # Pulled through Google's Docker Hub mirror, not docker.io: an
+        # anonymous Docker Hub pull limit (`toomanyrequests`) once failed every
+        # job with a Postgres container before any step ran. mirror.gcr.io
+        # serves Docker Hub's official images unchanged.
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            docker pull -q mirror.gcr.io/library/postgres:18 && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 10
+          done
+          docker run -d --name fleet-postgres -p 5432:5432 \
+            -e POSTGRES_USER=fleet -e POSTGRES_PASSWORD=fleet -e POSTGRES_DB=fleet \
+            mirror.gcr.io/library/postgres:18 \
+            -c max_connections=300 -c fsync=off -c synchronous_commit=off -c full_page_writes=off
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -916,12 +932,19 @@ jobs:
             exit 1
           }
 
-      - name: Create test databases
+      - name: Wait for Postgres
+        # TCP on 127.0.0.1 answers only once the image's init (which runs a
+        # socket-only temporary server) has finished and the real server is up.
         run: |
-          PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -v ON_ERROR_STOP=1 \
-            -c 'CREATE DATABASE fleet_chat_test;' \
-            -c 'CREATE DATABASE fleet_sched_test;' \
-            -c 'CREATE DATABASE fleet_httpapi_test;'
+          for _ in $(seq 1 90); do
+            if docker exec fleet-postgres pg_isready -h 127.0.0.1 -U fleet >/dev/null 2>&1; then
+              PGPASSWORD=fleet psql -h localhost -U fleet -d fleet -Atc 'SHOW max_connections'
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs fleet-postgres
+          exit 1
 
       - name: Disable podman so container sandbox tests self-skip
         run: |

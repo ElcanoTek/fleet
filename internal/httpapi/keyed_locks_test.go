@@ -8,6 +8,8 @@ import (
 // keyedLocks serializes one key, leaves other keys alone, and drops a key's
 // entry once nobody holds or waits on it.
 func TestKeyedLocks(t *testing.T) {
+	t.Parallel()
+
 	var k keyedLocks
 	unlockA := k.lock("a")
 	unlockB := k.lock("b") // another key is not blocked

@@ -51,7 +51,7 @@ func runScript(t *testing.T, extraEnv []string, script string, args ...string) (
 	cmd.Dir = root
 	// A dry-run reads the bundle manifest; point at the in-repo generic bundle so
 	// the test is self-contained and never depends on an external checkout.
-	cmd.Env = append(scriptEnviron(),
+	cmd.Env = append(os.Environ(),
 		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
 		"TERM=dumb",
 	)
@@ -77,6 +77,8 @@ func runScriptDryRun(t *testing.T, script string, args ...string) string {
 // include the steps the readiness audit fixed — the pg_hba scram rewrite (#78)
 // and, with --enable-service, the build+install of the fleet binary (#71).
 func TestBootstrapDryRunSmoke(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
 	for _, want := range []string{
 		// The toolchain-install STEP must be in the plan. We assert only the
@@ -104,6 +106,8 @@ func TestBootstrapDryRunSmoke(t *testing.T) {
 // sched twins) must override the colliding legacy defaults, and the planned SQL
 // must provision exactly the overridden names.
 func TestBootstrapFreshDBNameFlags(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--chat-db-name", "fleet_chat", "--chat-db-user", "fleet_chat_user",
 		"--sched-db-name", "fleet_sched", "--sched-db-user", "fleet_sched_user")
@@ -126,6 +130,8 @@ func TestBootstrapFreshDBNameFlags(t *testing.T) {
 // env file's DSNs (env_dsn_password). A plan is something an operator pastes
 // into a ticket or a chat, so it must show a placeholder, never a password.
 func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
+	t.Parallel()
+
 	const chatPassword, schedPassword = "chatLivePw7Q2xR9", "schedLivePw9K4mT3"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + chatPassword + "@127.0.0.1:5432/chat?sslmode=disable\n" +
@@ -159,6 +165,8 @@ func TestBootstrapDryRunHidesDBPasswords(t *testing.T) {
 // and the provisioning SQL and the passwords read back out of the env file are
 // expanded long before any redaction. bootstrap turns tracing off first thing.
 func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
+	t.Parallel()
+
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -173,7 +181,7 @@ func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 	root := repoRootFromTest(t)
 	cmd := exec.Command(bash, "-x", filepath.Join(root, "scripts", "bootstrap.sh"), "--dry-run", "--postgres=local")
 	cmd.Dir = root
-	cmd.Env = append(scriptEnviron(),
+	cmd.Env = append(os.Environ(),
 		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
 		"TERM=dumb",
 		"FLEET_ENV_FILE="+envFile,
@@ -197,6 +205,8 @@ func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 // pgprovision lib it sources, and doctor.sh (which reads the env file's DSNs).
 // Anything that ran before it would still be traced.
 func TestSecretHandlingScriptsStartUntraced(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	for _, rel := range []string{"scripts/bootstrap.sh", "scripts/lib/pgprovision.sh", "scripts/doctor.sh"} {
 		body, err := os.ReadFile(filepath.Join(root, rel))
@@ -221,6 +231,8 @@ func TestSecretHandlingScriptsStartUntraced(t *testing.T) {
 // the password as a token the redaction cannot recognise. The plan warns that
 // a real run refuses, naming the variable and never the value.
 func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
+	t.Parallel()
+
 	const quoted = "half'thenRest42"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	existing := "FLEET_CHAT_DATABASE_URL=postgres://chat:" + quoted + "@127.0.0.1:5432/chat?sslmode=disable\n"
@@ -242,6 +254,8 @@ func TestBootstrapRefusesQuotedDBPassword(t *testing.T) {
 }
 
 func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
+	t.Parallel()
+
 	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--chat-db-name", "bad-name;drop")
 	if err == nil {
@@ -256,6 +270,8 @@ func TestBootstrapRejectsUnsafeDBIdentifier(t *testing.T) {
 // that pair (no CREATE, no ALTER — a pre-existing role's password is never
 // rotated) and validate the operator-supplied DSN instead.
 func TestBootstrapAdoptExistingDBFlags(t *testing.T) {
+	t.Parallel()
+
 	env := []string{
 		// An isolated env file so a developer's real .env.local can't leak DSNs in.
 		"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env"),
@@ -289,6 +305,8 @@ func TestBootstrapAdoptExistingDBFlags(t *testing.T) {
 // TestBootstrapAdoptRequiresDSN — adoption without the operator's DSN must fail
 // fast (before any provisioning work), never guess a password.
 func TestBootstrapAdoptRequiresDSN(t *testing.T) {
+	t.Parallel()
+
 	env := []string{"FLEET_ENV_FILE=" + filepath.Join(t.TempDir(), "fleet.env")}
 	out, err := runScript(t, env, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--adopt-existing-chat-db")
@@ -303,6 +321,8 @@ func TestBootstrapAdoptRequiresDSN(t *testing.T) {
 // TestBootstrapAdoptRejectsExternalMode — external mode already takes the
 // operator's DSNs verbatim; combining it with adopt flags is a config error.
 func TestBootstrapAdoptRejectsExternalMode(t *testing.T) {
+	t.Parallel()
+
 	out, err := runScript(t, nil, "bootstrap.sh", "--dry-run", "--postgres=external",
 		"--adopt-existing-chat-db")
 	if err == nil {
@@ -320,6 +340,8 @@ func TestBootstrapAdoptRejectsExternalMode(t *testing.T) {
 // the Caddy path refuses to overwrite a foreign /etc/caddy/Caddyfile without
 // --force-caddy (and then keeps a timestamped backup).
 func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
 	if err != nil {
@@ -350,6 +372,8 @@ func TestBootstrapDBGuardAndCaddyProtectionPresent(t *testing.T) {
 // has none), including the sensitive-by-default backup directory and the env
 // keys the unit resolves its output directory and retention from.
 func TestBootstrapInstallsBackupTimer(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-service")
 	for _, want := range []string{
 		"Scheduled database backups",
@@ -367,6 +391,8 @@ func TestBootstrapInstallsBackupTimer(t *testing.T) {
 // TestBootstrapNoBackupTimerOptOut — the opt-out must skip the whole timer path
 // (no unit install, no env keys) and say what the operator now owns.
 func TestBootstrapNoBackupTimerOptOut(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local",
 		"--enable-service", "--no-backup-timer")
 	if !strings.Contains(out, "--no-backup-timer: no scheduled backup on this box") {
@@ -387,6 +413,8 @@ func TestBootstrapNoBackupTimerOptOut(t *testing.T) {
 // the timer reads: a relative directory would put dumps in the unit's "/" cwd,
 // and a non-numeric retention would make --prune's cutoff silently default.
 func TestBootstrapRejectsUnsafeBackupSettings(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct{ env, wantErr string }{
 		{"FLEET_BACKUP_DIR=backups", "FLEET_BACKUP_DIR must be an absolute path"},
 		{"FLEET_BACKUP_RETENTION_DAYS=0", "FLEET_BACKUP_RETENTION_DAYS must be a positive integer"},
@@ -415,6 +443,8 @@ func TestBootstrapRejectsUnsafeBackupSettings(t *testing.T) {
 // are generate-if-absent). The backup settings must too: resetting a relocated
 // FLEET_BACKUP_DIR would silently move the dumps back onto the boot volume.
 func TestBootstrapKeepsOperatorBackupSettings(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	const existing = "FLEET_BACKUP_DIR=/mnt/backup-volume\nFLEET_BACKUP_RETENTION_DAYS=14\n"
 	if err := os.WriteFile(envFile, []byte(existing), 0o600); err != nil {
@@ -445,6 +475,8 @@ func TestBootstrapKeepsOperatorBackupSettings(t *testing.T) {
 // directory has an in-unit default the env file overrides, and the timer is the
 // enable-able half.
 func TestBackupUnitsShipped(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	service, err := os.ReadFile(filepath.Join(root, "deploy", "fleet-backup.service"))
 	if err != nil {
@@ -487,6 +519,8 @@ func TestBackupUnitsShipped(t *testing.T) {
 // TestFleetServiceWantsPostgres — #718: After= only orders units; Wants= is
 // what pulls the local cluster up with fleet after a reboot.
 func TestFleetServiceWantsPostgres(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "deploy", "fleet.service"))
 	if err != nil {
@@ -504,6 +538,8 @@ func TestFleetServiceWantsPostgres(t *testing.T) {
 }
 
 func TestBootstrapWiresRemoteMCPPublicOrigin(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
 	if err != nil {
@@ -521,6 +557,8 @@ func TestBootstrapWiresRemoteMCPPublicOrigin(t *testing.T) {
 }
 
 func TestUpdateReconcilesRemoteMCPPublicOrigin(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -542,6 +580,8 @@ func TestUpdateReconcilesRemoteMCPPublicOrigin(t *testing.T) {
 // build + the install-to-deploy-path step (#71 — without which an update is a
 // silent no-op against the live binary).
 func TestUpdateDryRunSmoke(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull")
 	for _, want := range []string{
 		"would install fleet",                      // the install-to-ExecStart step (#71)
@@ -714,6 +754,8 @@ func TestUpdateCustomContainerfileLayersOnTheRelease(t *testing.T) {
 // output (the tag a build would produce), so the query mode must resolve the
 // manifest's sandbox.tag without podman and without building anything.
 func TestBuildSandboxImagePrintTag(t *testing.T) {
+	t.Parallel()
+
 	out, err := runScript(t, nil, "build-sandbox-image.sh", "--print-tag")
 	if err != nil {
 		t.Fatalf("--print-tag exited non-zero: %v\n--- output ---\n%s", err, out)
@@ -728,6 +770,8 @@ func TestBuildSandboxImagePrintTag(t *testing.T) {
 // that resolution is what forces update.sh to rebuild instead of leaving the
 // service asking podman for an image that was never built.
 func TestBuildSandboxImagePrintTagRenamedBundle(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	manifest := "sandbox:\n  containerfile: sandbox/Containerfile\n  tag: localhost/fleet-sandbox-renamed:latest\n"
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o644); err != nil {
@@ -748,6 +792,8 @@ func TestBuildSandboxImagePrintTagRenamedBundle(t *testing.T) {
 // pins the load-bearing strings instead (the TestBootstrapDBGuardAnd-
 // CaddyProtectionPresent style for un-dry-runnable paths).
 func TestBuildSandboxImageTargetsServiceStore(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "build-sandbox-image.sh"))
 	if err != nil {
@@ -771,6 +817,8 @@ func TestBuildSandboxImageTargetsServiceStore(t *testing.T) {
 // Containerfile, or an image lost to a prune/pre-fix root build, otherwise
 // boots clean and breaks only on the first tool call).
 func TestUpdateSandboxGatePresent(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -797,6 +845,8 @@ func TestUpdateSandboxGatePresent(t *testing.T) {
 // key its rebuild gate on sandbox.tag and burn a multi-GB on-box build the
 // service will never read. Mirrors bootstrap.sh's resolve_sandbox_image skip.
 func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	// The bundle ships a Containerfile TOO: image must win over the
 	// build-on-box path, not merely cover the no-Containerfile case.
@@ -872,6 +922,8 @@ func TestUpdatePrebuiltImageSkipsSandboxBuild(t *testing.T) {
 // The failure path needs a real failing podman build, so this pins the
 // load-bearing lines the way TestUpdateSandboxGatePresent does.
 func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -914,6 +966,8 @@ func TestUpdateFailedSandboxBuildRefusesRestart(t *testing.T) {
 // vouched for). The age path needs a real image in a real store, so this pins
 // the load-bearing lines plus the dry-run plan text.
 func TestUpdateSandboxFreshnessBackstop(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -994,6 +1048,8 @@ func TestUpdateSandboxFreshnessBackstop(t *testing.T) {
 // applies. Absent units are skipped by the loop's both-files-exist check, so a
 // box that declined a timer is never force-installed by the drift pass.
 func TestUpdateAdoptsBackupUnits(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -1023,6 +1079,8 @@ func TestUpdateAdoptsBackupUnits(t *testing.T) {
 // delegates to `fleet timers install` — one implementation, not a second
 // inline copy of the install.
 func TestUpdateOffersMissingTimers(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -1073,6 +1131,8 @@ func sliceBetween(t *testing.T, s, start, end string) string {
 // rather than hardcoding a list: a NEW flag fails this test until it is either
 // forwarded or given a documented reason not to be.
 func TestUpdateReexecForwardsFlagState(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -1131,6 +1191,8 @@ func TestUpdateReexecForwardsFlagState(t *testing.T) {
 // box that updates cleanly every day. It must warn instead, and say what was
 // skipped.
 func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {
@@ -1172,6 +1234,8 @@ func TestUpdateUnresolvedSandboxTagIsNotUpToDate(t *testing.T) {
 // fixing this once already. The help is now derived from the header block, and
 // this pins both ends of the derivation.
 func TestScriptHelpPrintsTheWholeHeaderAndNoShell(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	for _, script := range []string{"bootstrap.sh", "update.sh"} {
 		out, err := runScript(t, nil, script, "--help")
@@ -1245,6 +1309,8 @@ func toolsOnlyPath(t *testing.T, tools ...string) string {
 // and a box without rsync is refused rather than swapped by rename (which
 // would empty the mounts of running sandboxes).
 func TestStageDefaultBundle(t *testing.T) {
+	t.Parallel()
+
 	me, err := exec.Command("id", "-un").Output()
 	if err != nil {
 		t.Skip("id -un unavailable")
@@ -1489,6 +1555,8 @@ func assertPartialSourceRefused(t *testing.T, path, src, dst, owner string) {
 // under the checkout is in it; and doctor's checkout-independent test keys on
 // the fleet module two levels up.
 func TestBundlePathPredicates(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	path := os.Getenv("PATH")
 	def := filepath.Join(root, "config", "default")
@@ -1534,6 +1602,8 @@ func TestBundlePathPredicates(t *testing.T) {
 // user's tree, so a root read through it could print a root-only file. A
 // regular marker yields its first line; a symlinked one yields nothing.
 func TestBundleMarkerSourceNeverFollowsALink(t *testing.T) {
+	t.Parallel()
+
 	me, err := exec.Command("id", "-un").Output()
 	if err != nil {
 		t.Skip("id -un unavailable")
@@ -1602,6 +1672,8 @@ func TestBundleMarkerSourceNeverFollowsALink(t *testing.T) {
 // recreate it rather than restart the service onto a bundle that does not
 // exist.
 func TestUpdateDryRunRestagesAMissingStagedCopy(t *testing.T) {
+	t.Parallel()
+
 	const stage = "/var/lib/fleet/bundle"
 	if _, err := os.Stat(stage); err == nil {
 		t.Skip(stage + " exists on this box; the case needs it absent")
@@ -1624,6 +1696,8 @@ func TestUpdateDryRunRestagesAMissingStagedCopy(t *testing.T) {
 // `fleet update` must plan to stage it, and never for an explicit
 // --client-config.
 func TestUpdateDryRunPlansBundleStagingForAPreStagingBox(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default")+"\n"), 0o600); err != nil {
@@ -1654,6 +1728,8 @@ func TestUpdateDryRunPlansBundleStagingForAPreStagingBox(t *testing.T) {
 // restaged, so update must report it as not advanced rather than print
 // "refreshed … above" over a copy it never touched.
 func TestUpdateDryRunDoesNotClaimAStaleStagedCopyWasRefreshed(t *testing.T) {
+	t.Parallel()
+
 	stage := t.TempDir()
 	if err := os.WriteFile(filepath.Join(stage, ".fleet-staged-from"), []byte("/old/fleet/config/default\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -1678,6 +1754,8 @@ func TestUpdateDryRunDoesNotClaimAStaleStagedCopyWasRefreshed(t *testing.T) {
 // stamp of mcp/requirements.txt and update.sh re-runs pip install when the
 // bundle's mcp/requirements.txt hash changes (or has no stored stamp yet).
 func TestUpdateMCPRequirementsGate(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	updateBody, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {

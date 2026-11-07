@@ -10,7 +10,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // listAllTasks returns every task row through the production listing query
@@ -22,13 +22,15 @@ func listAllTasks(s *Storage) ([]*models.Task, error) {
 
 func newTestStore(t *testing.T) (*Storage, *db.Database) {
 	t.Helper()
-	database := testdb.SchedDB(t, "prompt_library", "logs", "tasks", "users")
+	database := fleetdb.SchedDB(t)
 	store := New()
 	store.SetDatabase(database)
 	return store, database
 }
 
 func TestStorage(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	// A pending task is claimed via ClaimNextPendingTask (no node routing).
@@ -59,6 +61,8 @@ func TestStorage(t *testing.T) {
 }
 
 func TestRecurringTaskRescheduling(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -159,6 +163,8 @@ func TestRecurringTaskRescheduling(t *testing.T) {
 // rather than reverting to the server-global zone). Server tz is deliberately
 // set to a DIFFERENT zone to prove the per-task value, not s.location, is used.
 func TestRecurringTaskPreservesTimezone(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 
@@ -197,6 +203,8 @@ func TestRecurringTaskPreservesTimezone(t *testing.T) {
 }
 
 func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	owner := uuid.New()
@@ -256,6 +264,8 @@ func TestUpdateTaskStatusAtomicIgnoresStaleRunningAfterSuccess(t *testing.T) {
 // aggregate. It also confirms an SLA-configured task round-trips its expected
 // duration + multipliers through the DB.
 func TestTerminalTransitionComputesActualDuration(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	owner := uuid.New()

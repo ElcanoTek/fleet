@@ -15,6 +15,8 @@ import (
 // password reset evict outstanding sessions.
 
 func TestSessionEpoch_MovesOnPasswordChange(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -47,6 +49,8 @@ func TestSessionEpoch_MovesOnPasswordChange(t *testing.T) {
 }
 
 func TestExternalSessionEpochIsIndependentAndRevocable(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
@@ -115,6 +119,8 @@ func TestExternalSessionEpochIsIndependentAndRevocable(t *testing.T) {
 // A central logout for an email with no Fleet user row (Auth admits people
 // Fleet has not provisioned) must still rotate the external epoch and not fail.
 func TestRevokeExternalSessionsWithoutFleetUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	epoch, applied, err := s.RevokeExternalSessions(ctx, "event-789", "https://auth.example.com", "account-789", "ghost@x.com")
@@ -129,6 +135,8 @@ func TestRevokeExternalSessionsWithoutFleetUser(t *testing.T) {
 // The default ” salt keeps the historical derivation byte-for-byte, so the
 // migration that added users.session_salt signs nobody out.
 func TestSessionEpochDefaultSaltIsBackwardCompatible(t *testing.T) {
+	t.Parallel()
+
 	const hash = "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	sum := sha256.Sum256([]byte(hash))
 	if got, want := sessionEpochFor(hash, ""), hex.EncodeToString(sum[:sessionEpochBytes]); got != want {
@@ -143,6 +151,8 @@ func TestSessionEpochDefaultSaltIsBackwardCompatible(t *testing.T) {
 // epoch. An operator who resets an account to its existing password during an
 // incident still evicts the attacker.
 func TestSessionEpoch_MovesWhenPasswordIsReusedVerbatim(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
@@ -167,6 +177,8 @@ func TestSessionEpoch_MovesWhenPasswordIsReusedVerbatim(t *testing.T) {
 // Routine admin edits (role, team) must not move the epoch, or they would log
 // people out. Only a password write and a central logout (the session salt) may.
 func TestSessionEpoch_SurvivesRoleAndTeamEdits(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
@@ -190,6 +202,8 @@ func TestSessionEpoch_SurvivesRoleAndTeamEdits(t *testing.T) {
 // Every constructor of store.User populates SessionEpoch, so the middleware's
 // plain mismatch check can never be satisfied by an unpopulated field.
 func TestSessionEpoch_PopulatedByEveryUserRead(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
@@ -225,6 +239,8 @@ func TestSessionEpoch_PopulatedByEveryUserRead(t *testing.T) {
 // every real account's so a cookie minted in that window stops working once the
 // account exists.
 func TestSessionEpoch_UnknownEmailIsWellFormedAndDistinct(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -254,6 +270,8 @@ func TestSessionEpoch_UnknownEmailIsWellFormedAndDistinct(t *testing.T) {
 // byte — a drift would revoke every outstanding session the moment a request
 // crossed from one derivation to the other.
 func TestSessionEpochSQLMatchesGo(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -301,6 +319,8 @@ func TestSessionEpochSQLMatchesGo(t *testing.T) {
 // Two accounts must not share an epoch, or a reset on one would leave the other
 // admitting a cookie minted for it.
 func TestSessionEpoch_DistinctPerAccount(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	for _, e := range []string{"a@x.com", "b@x.com"} {
@@ -322,6 +342,8 @@ func TestSessionEpoch_DistinctPerAccount(t *testing.T) {
 }
 
 func TestLookupExternalSessionEpochNeverWrites(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {

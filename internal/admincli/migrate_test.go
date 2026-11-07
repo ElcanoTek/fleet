@@ -18,6 +18,8 @@ import (
 // when one did, so a CI consumer could not tell "sched unreachable" from
 // "sched fine, key missing".
 func TestMigrateStatusEnvelope(t *testing.T) {
+	t.Parallel()
+
 	decode := func(t *testing.T, env migrateStatusJSON) map[string]map[string]any {
 		t.Helper()
 		b, err := json.Marshal(env)

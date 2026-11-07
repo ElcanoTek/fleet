@@ -20,6 +20,8 @@ import (
 // and silently fall back to the default on a typo; it is now bounded to
 // [0, 168] with a 400 naming the range, like GetAuditLog's ?hours=.
 func TestRotateAPIKeyGracePeriodBounds(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	t.Cleanup(cleanup)
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)

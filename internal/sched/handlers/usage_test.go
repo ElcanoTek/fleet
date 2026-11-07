@@ -21,6 +21,8 @@ import (
 // API key OR an admin-role user passes; a non-admin member gets 403; an
 // unauthenticated request gets 401 from the middleware.
 func TestUsageReportAdminGate(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	addUser := func(username, role, token string) {
@@ -80,6 +82,8 @@ func TestUsageReportAdminGate(t *testing.T) {
 // TestUsageReportParamValidation covers the query-param contract: the closed
 // group_by set, the two timestamp formats, from<to, and the defaults.
 func TestUsageReportParamValidation(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	do := func(query string) *httptest.ResponseRecorder {
@@ -149,6 +153,8 @@ func TestUsageReportParamValidation(t *testing.T) {
 // rows merge into the task buckets by key, per-source subtotals survive, and a
 // chat-side failure is a 500 (never a silent under-count).
 func TestUsageReportMergesChatSource(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	ctx := context.Background()
 
@@ -229,6 +235,8 @@ func TestUsageReportMergesChatSource(t *testing.T) {
 // TestUsageReportCSVExport: ?format=csv returns a text/csv attachment with the
 // header row + a trailing TOTAL row; an unknown format is a 400.
 func TestUsageReportCSVExport(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	do := func(query string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/admin/usage"+query, nil)

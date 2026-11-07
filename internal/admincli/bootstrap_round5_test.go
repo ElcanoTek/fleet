@@ -14,6 +14,8 @@ import (
 // two databases stay the legacy layout; one database under two roles is
 // refused (bootstrap converges one role).
 func TestBootstrapPerStoreKeysNamingOneDatabase(t *testing.T) {
+	t.Parallel()
+
 	const pw = "placeholder-not-a-secret"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	run := func(chat, sched string) (string, error) {

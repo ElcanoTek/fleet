@@ -42,6 +42,8 @@ func (f *fakeCleanupHost) host() cleanupHost {
 // succeeded, when no step applied (tools absent), and on --dry-run (which
 // never prunes, so it has nothing to fail).
 func TestRunCleanupExitContract(t *testing.T) {
+	t.Parallel()
+
 	const (
 		imagePrune  = "podman image prune -f"
 		systemPrune = "podman system prune -f"

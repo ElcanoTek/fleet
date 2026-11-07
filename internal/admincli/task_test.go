@@ -13,7 +13,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // fakeDefinitionStore is an in-memory definitionStore for DB-free tests of the
@@ -92,6 +92,8 @@ func (f *fakeDefinitionStore) ReplaceTaskDefinition(_ context.Context, taskID uu
 }
 
 func TestExportTaskDefinitions_JSON(t *testing.T) {
+	t.Parallel()
+
 	orig := &models.Task{ID: uuid.New(), Name: "daily", Prompt: "do it", Recurrence: "0 9 * * *", Priority: 3}
 	st := newFakeDefinitionStore(orig)
 	var buf bytes.Buffer
@@ -112,6 +114,8 @@ func TestExportTaskDefinitions_JSON(t *testing.T) {
 }
 
 func TestExportTaskDefinitions_YAML(t *testing.T) {
+	t.Parallel()
+
 	orig := &models.Task{ID: uuid.New(), Name: "weekly", Prompt: "report", Recurrence: "0 9 * * MON"}
 	st := newFakeDefinitionStore(orig)
 	var buf bytes.Buffer
@@ -124,6 +128,8 @@ func TestExportTaskDefinitions_YAML(t *testing.T) {
 }
 
 func TestImportTaskDefinitions_CreateAndConflict(t *testing.T) {
+	t.Parallel()
+
 	env := models.TaskExportEnvelope{
 		Version: models.TaskExportVersion,
 		Tasks: []models.TaskExportRecord{
@@ -214,6 +220,8 @@ func TestImportTaskDefinitions_CreateAndConflict(t *testing.T) {
 }
 
 func TestImportTaskDefinitions_RejectsUnknownVersion(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeDefinitionStore()
 	body := []byte(`{"version":"99","tasks":[]}`)
 	if _, err := importTaskDefinitions(context.Background(), st, bytes.NewReader(body), "", false, models.TaskImportConflictError); err == nil {
@@ -222,6 +230,8 @@ func TestImportTaskDefinitions_RejectsUnknownVersion(t *testing.T) {
 }
 
 func TestImportTaskDefinitions_RejectsIntraBatchDupe(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeDefinitionStore()
 	env := models.TaskExportEnvelope{Version: models.TaskExportVersion, Tasks: []models.TaskExportRecord{
 		{Name: "dup", Prompt: "a", Recurrence: "0 9 * * *"},
@@ -236,7 +246,7 @@ func TestImportTaskDefinitions_RejectsIntraBatchDupe(t *testing.T) {
 // TestExportImportDefinitions_DB is the end-to-end proof against the real sched
 // DB (gated on DATABASE_URL — the sched-suite convention; skips when absent).
 func TestExportImportDefinitions_DB(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	database := fleetEnv(t).SchedDB(t)
 	ctx := context.Background()
 
 	st := storage.New()
@@ -257,7 +267,7 @@ func TestExportImportDefinitions_DB(t *testing.T) {
 	}
 
 	// Wipe, then import the export back.
-	testdb.DeleteRows(t, database, "logs", "tasks", "users")
+	fleetdb.DeleteRows(t, database, "logs", "tasks", "users")
 	resp, err := importTaskDefinitions(ctx, st, bytes.NewReader(buf.Bytes()), "", false, models.TaskImportConflictError)
 	if err != nil {
 		t.Fatalf("import: %v", err)

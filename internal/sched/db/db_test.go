@@ -5,53 +5,51 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-func setupTestDB(t testing.TB) *Database {
-	connStr := os.Getenv("DATABASE_URL")
-	if connStr == "" {
-		t.Skip("DATABASE_URL not set, skipping integration tests")
-	}
-
-	db := New()
-	if err := db.Init(connStr, DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Database unavailable, skipping integration tests: %v", err)
+// schedTemplate is the scheduler alone, migrated in schema sched — the
+// production layout (ADR-0098). This package cannot use
+// internal/testdb/fleetdb (it imports this package), so its tests clone a
+// template of their own.
+var schedTemplate = testdb.Spec{
+	Name:        "sched",
+	Fingerprint: MigrationFingerprint,
+	Migrate: func(_ context.Context, dsn string) error {
+		db := New()
+		if err := db.Init(config.WithSchema(dsn, config.SchedSchema), PoolConfig{MaxOpenConns: 2, MaxIdleConns: 1, ConnectTimeout: 10 * time.Second}); err != nil {
+			return err
 		}
+		return db.Close()
+	},
+}
+
+// setupTestDB opens the scheduler on a fresh, migrated database of the test's
+// own, closed (and the database dropped) when the test ends. It skips only
+// when FLEET_TEST_DATABASE_URL is unset (internal/testdb).
+func setupTestDB(t testing.TB) *Database {
+	t.Helper()
+	db := New()
+	pool := DefaultPoolConfig()
+	pool.MaxOpenConns, pool.MaxIdleConns = testdb.PoolMaxOpen, testdb.PoolMaxIdle
+	if err := db.Init(config.WithSchema(testdb.New(t, schedTemplate), config.SchedSchema), pool); err != nil {
 		t.Fatalf("Failed to init db: %v", err)
 	}
-
-	ctx := context.Background()
-	queries := []string{
-		"DELETE FROM run_logs",
-		"DELETE FROM logs",
-		"DELETE FROM tasks",
-		"DELETE FROM users",
-	}
-	for _, q := range queries {
-		if _, err := db.conn.ExecContext(ctx, q); err != nil {
-			t.Fatalf("Failed to clean up tables: %v", err)
-		}
-	}
+	t.Cleanup(func() { _ = db.Close() })
 	return db
 }
 
-func isDatabaseUnavailable(err error) bool {
-	errMsg := err.Error()
-	return strings.Contains(errMsg, "failed to connect to database") ||
-		strings.Contains(errMsg, "connection refused") ||
-		strings.Contains(errMsg, "no such host")
-}
-
 func TestTaskOperations(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -106,6 +104,8 @@ func TestTaskOperations(t *testing.T) {
 // TestTaskMCPSelectionRoundTrip verifies the new mcp_selection column round-trips
 // through AddTask/GetTask (the schema change that replaced target_node_*).
 func TestTaskMCPSelectionRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -147,6 +147,8 @@ func TestTaskMCPSelectionRoundTrip(t *testing.T) {
 // persists: an opt-in task round-trips AllowNetwork=true, and the default seals
 // to false (the --network=none posture).
 func TestTaskAllowNetworkRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -181,6 +183,8 @@ func TestTaskAllowNetworkRoundTrip(t *testing.T) {
 // persists: an opted-in task round-trips AllowDelegation=true, and the default is
 // false (delegation off) so an existing task's behaviour is unchanged.
 func TestTaskAllowDelegationRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -213,6 +217,8 @@ func TestTaskAllowDelegationRoundTrip(t *testing.T) {
 }
 
 func TestTaskTimezoneRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -245,6 +251,8 @@ func TestTaskTimezoneRoundTrip(t *testing.T) {
 }
 
 func TestTaskCreatedByKeyIDRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -277,6 +285,8 @@ func TestTaskCreatedByKeyIDRoundTrip(t *testing.T) {
 }
 
 func TestUserOperations(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -394,6 +404,8 @@ func TestUserOperations(t *testing.T) {
 // scoped node-targeting visibility is gone with target_node_*; scoped users now
 // see their own tasks plus all untargeted tasks, which is every task.)
 func TestGetTasksFilteredCreatorVisibility(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -428,6 +440,8 @@ func TestGetTasksFilteredCreatorVisibility(t *testing.T) {
 }
 
 func TestLogOperations(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -458,6 +472,8 @@ func TestLogOperations(t *testing.T) {
 // supersedes, the per-task cap trims oldest-first, and entries are scoped to
 // their task id.
 func TestRunLogHistory(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -538,6 +554,8 @@ func TestRunLogHistory(t *testing.T) {
 // TestRunLogHistoryPrunedWithTask confirms both retention paths delete a
 // task's run_logs alongside its logs row.
 func TestRunLogHistoryPrunedWithTask(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -613,6 +631,8 @@ func fetchLogRow(t *testing.T, db *Database, taskID uuid.UUID) (sessionData *str
 // than the threshold are archived; a recent terminal task and a non-terminal
 // task are left live; GetLog returns identical content for an archived row.
 func TestArchiveOldLogsRoundtripAndAgeThreshold(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -717,6 +737,8 @@ func TestArchiveOldLogsRoundtripAndAgeThreshold(t *testing.T) {
 // 32-byte key configured, the stored bytes are encrypted and GetLog still
 // transparently inflates+decrypts to the original session.
 func TestArchiveOldLogsEncryptedRoundtrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -766,6 +788,8 @@ func TestArchiveOldLogsEncryptedRoundtrip(t *testing.T) {
 
 // TestArchiveOldLogsDisabled confirms days<=0 is inert (no scan, no writes).
 func TestArchiveOldLogsDisabled(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -783,6 +807,8 @@ func TestArchiveOldLogsDisabled(t *testing.T) {
 // TestAddLogResetsArchiveColumns confirms re-writing a previously archived row
 // returns it to the live, uncompressed state (AddLog clears the archive columns).
 func TestAddLogResetsArchiveColumns(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -819,6 +845,8 @@ func TestAddLogResetsArchiveColumns(t *testing.T) {
 }
 
 func TestUpdateTasksStatusBatch(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -863,6 +891,8 @@ func TestUpdateTasksStatusBatch(t *testing.T) {
 // transaction must skip the locked row and pick a different task (never double-
 // lease the same one).
 func TestClaimNextPendingTask(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -947,6 +977,8 @@ func TestClaimNextPendingTask(t *testing.T) {
 // and the #1120 omit-vs-clear contract: nil fallback leaves existing values,
 // empty string clears them to NULL.
 func TestUpdateTasksModelBatch(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -1020,6 +1052,8 @@ func TestUpdateTasksModelBatch(t *testing.T) {
 // TestCarryContextRoundTrip pins #504's carry_context threading through the
 // full insert/scan path (the fragile 58-column seam).
 func TestCarryContextRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -1051,6 +1085,8 @@ func TestCarryContextRoundTrip(t *testing.T) {
 }
 
 func TestTaskFileNamesRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	task := &models.Task{

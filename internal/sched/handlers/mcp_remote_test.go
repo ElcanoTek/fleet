@@ -19,6 +19,8 @@ import (
 // connected in chat shows up in the task form too. A principal with no user (an
 // admin API key) sees only the bundle catalog.
 func TestGetMCPServers_MergesRemoteForUser(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 	h.SetMCPCatalogProvider(func() []MCPServerCatalogEntry {
 		return []MCPServerCatalogEntry{{Name: "xandr", Description: "DSP", Enabled: false}}
