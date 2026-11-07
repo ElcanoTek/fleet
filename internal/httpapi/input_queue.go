@@ -14,7 +14,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -487,7 +486,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 	claimTurnID := store.ClaimTurnPrefix + uuid.NewString()
 	row, err := s.store.ClaimNextQueuedInput(dctx, convID, claimTurnID)
 	if err != nil {
-		slog.Error("input queue claim", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		logging.From(dctx).Error("input queue claim", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		return
 	}
 	if row == nil {
@@ -499,7 +498,7 @@ func (s *Server) maybeDrainQueue(convID string) {
 		// covers a winner whose tail already ran before our un-claim landed.
 		rctx, rcancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.store.MarkInputTerminal(rctx, row.ID, store.InputStateQueued); err != nil {
-			slog.Error("input queue unclaim", "conv_id", safe.LogSafe(convID), "input", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(rctx).Error("input queue unclaim", "conv_id", safe.LogSafe(convID), "input", safe.LogSafe(row.ID), "err", safe.LogSafe(err.Error()))
 		}
 		rcancel()
 		s.rekickDrainAfter(convID, 2*time.Second)
@@ -551,7 +550,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	if err != nil {
 		// TRANSIENT store failure: the 202-acknowledged input must survive.
 		// Back to queued + a bounded re-kick; never cancelled for weather.
-		slog.Error("input queue: conversation load failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+		logging.From(lctx).Error("input queue: conversation load failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 		s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 		s.rekickDrainAfter(convID, 3*time.Second)
 		return true
@@ -564,7 +563,7 @@ func (s *Server) launchQueuedTurn(convID string, row *store.InputQueueRow) bool 
 	if strings.TrimSpace(conv.Model) == "" && !conv.Lockdown {
 		defaultModel := agentcore.CurrentDefaultModel()
 		if err := s.store.SetModel(lctx, convOwnerEmail(conv, user), convID, defaultModel); err != nil {
-			slog.Error("input queue: conversation set default model failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
+			logging.From(lctx).Error("input queue: conversation set default model failed", "conv_id", safe.LogSafe(convID), "err", safe.LogSafe(err.Error()))
 			s.terminalizeQueueRow(convID, row.ID, row.TurnID, store.InputStateQueued)
 			s.rekickDrainAfter(convID, 3*time.Second)
 			return true

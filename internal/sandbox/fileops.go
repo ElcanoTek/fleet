@@ -360,7 +360,9 @@ var fileOpsScript []byte
 // Returns ErrClosed if the sandbox was torn down, ErrPoisoned if a cancelled
 // command left it in an unproven state, and one of the typed FileOp sentinels
 // for semantic failures (missing file, directory, old_text absent).
-func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (FileOpResult, error) {
+func (s *Sandbox) RunFileOp(ctx context.Context, req FileOpRequest) (res FileOpResult, err error) {
+	ctx, span := s.startExecSpan(ctx, "fileop."+string(req.Op), 0, len(req.Data))
+	defer func() { endFileOpSpan(span, res, err) }()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

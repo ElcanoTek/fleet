@@ -13,6 +13,10 @@ import (
 // ONLY protocol frames to stdout, so it runs and exits before m.Run() — no test
 // framework output ever reaches the stream the parent decodes.
 func TestMain(m *testing.M) {
+	if os.Getenv("MCPBROKER_TEST_CHILD") == "trace" {
+		serveTraceChild()
+		os.Exit(0)
+	}
 	if os.Getenv("MCPBROKER_TEST_CHILD") == "1" {
 		_ = ServeStdio(context.Background(), &fakeBroker{echoTagAsText: true})
 		os.Exit(0)

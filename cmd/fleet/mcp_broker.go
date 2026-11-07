@@ -10,6 +10,11 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/ElcanoTek/fleet/internal/logging"
+	"github.com/ElcanoTek/fleet/internal/otelsetup"
+	"github.com/ElcanoTek/fleet/internal/version"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -36,9 +41,34 @@ const (
 // parent's agent loop then holds no connector secrets: it delegates every MCP call
 // here, so "in-process" means only where the loop runs, not where secrets live.
 //
-// Frames ride stdin/stdout; all logging goes to stderr (the std logger's default)
-// so it never corrupts the frame stream the parent decodes.
+// Frames ride stdin/stdout; all logging goes to stderr (the parent hands the
+// child its own stderr) so it never corrupts the frame stream the parent
+// decodes. The child logs in the parent's format and level (FLEET_LOG_FORMAT /
+// FLEET_LOG_LEVEL), and exports its spans to the parent's collector as
+// service "<FLEET_SERVICE_NAME>" with fleet.process=mcp-broker, so a
+// delegated call's span lands in the trace of the turn or run that made it
+// (#2052, internal/mcpbroker/telemetry.go).
 func runMCPBroker() error {
+	if _, err := logging.Configure(logging.Config{
+		Format: envreg.Get("FLEET_LOG_FORMAT"),
+		Level:  envreg.Get("FLEET_LOG_LEVEL"),
+	}); err != nil {
+		return fmt.Errorf("configure broker logging: %w", err)
+	}
+	shutdownTracing, err := otelsetup.InitWith(context.Background(), otelsetup.Options{ServiceVersion: version.String(), Process: "mcp-broker"})
+	if err != nil {
+		// Tracing is optional observability, exactly as in the parent: a bad
+		// exporter configuration disables it rather than the broker.
+		slog.Error("mcp-broker: otel init failed, tracing disabled", "err", err)
+		shutdownTracing = func(context.Context) error { return nil }
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			slog.Warn("mcp-broker: otel shutdown error", "err", err)
+		}
+	}()
 	cfg, err := loadMCPBrokerConfig()
 	if err != nil {
 		return err

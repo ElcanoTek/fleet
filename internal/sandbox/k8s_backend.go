@@ -943,7 +943,7 @@ func (k *k8sImpl) deletePodNow(podName string) bool {
 		// stragglers running. The caller reports that honestly to the user
 		// ("could not be confirmed killed"); queue a retry so it also stops
 		// being true as soon as the apiserver answers again.
-		slog.Warn("sandbox: cancelled-exec pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
+		logging.From(delCtx).Warn("sandbox: cancelled-exec pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
 		k.backend.scheduleReap(podName)
 		return false
 	}
@@ -1456,7 +1456,7 @@ func (k *k8sImpl) close() {
 		delCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := k.backend.client.deletePod(delCtx, k.backend.cfg.Namespace, podName); err != nil && !isK8sNotFound(err) {
-			slog.Warn("sandbox: close-time pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
+			logging.From(delCtx).Warn("sandbox: close-time pod delete unconfirmed — retrying in the background", "pod_name", podName, "err", err)
 			k.backend.scheduleReap(podName)
 		}
 	}

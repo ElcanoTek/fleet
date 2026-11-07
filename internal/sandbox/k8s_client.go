@@ -106,7 +106,7 @@ func (c *k8sClient) bearerToken() (string, error) {
 	if c.cachedToken != "" && time.Since(c.tokenRead) < tokenRefreshInterval {
 		return c.cachedToken, nil
 	}
-	raw, err := os.ReadFile(c.tokenFile)
+	raw, err := os.ReadFile(c.tokenFile) //nolint:gosec // G703: tokenFile is the operator kubeconfig's tokenFile or the in-cluster service-account path, never request input.
 	if err != nil {
 		return "", fmt.Errorf("read service-account token: %w", err)
 	}

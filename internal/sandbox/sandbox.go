@@ -322,7 +322,9 @@ func (s *Sandbox) ModeName() string {
 // ErrPoisoned if an earlier cancelled/timed-out invocation could not be
 // proved dead (fail closed: the suspect container must be retired, not
 // reused, so a stopped turn's stragglers can't overlap fresh work).
-func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (BashResult, error) {
+func (s *Sandbox) RunBash(ctx context.Context, req BashRequest) (res BashResult, err error) {
+	ctx, span := s.startExecSpan(ctx, "bash", req.Timeout, len(req.Command))
+	defer func() { endBashSpan(span, res, err) }()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -362,7 +364,9 @@ func (s *Sandbox) ReapDetachedProcesses() bool {
 // RunPython dispatches one run_python invocation through the active
 // backend. Bridge stdin/stdout serialization is the backend's problem,
 // not the caller's.
-func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (PythonResult, error) {
+func (s *Sandbox) RunPython(ctx context.Context, req PythonRequest) (res PythonResult, err error) {
+	ctx, span := s.startExecSpan(ctx, "python", req.Timeout, len(req.Code))
+	defer func() { endPythonSpan(span, res, err) }()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

@@ -1633,7 +1633,7 @@ func (s *Server) executeClaimedApproval(execCtx context.Context, user, convID, a
 		resultCard = s.recordApprovalResultCard(execCtx, user, approval, governed)
 	}
 	if err := s.store.SetApprovalResult(execCtx, user, approvalID, resultText, isErr); err != nil {
-		slog.Error("SetApprovalResult", "err", err)
+		logging.From(actionCtx).Error("SetApprovalResult", "err", err)
 		s.approvalPersistenceFailures.Store(approvalID, true)
 		return withApprovalNarrowed(map[string]any{
 			"status": "approved", "execution_unknown": true,

@@ -15,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/httpapi"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/runner"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -63,9 +64,9 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		cancel()
 		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
 		if chatSrv.DrainTurns(graceCtx) {
-			slog.Info("fleet: all in-flight chat turns drained within grace")
+			logging.From(graceCtx).Info("fleet: all in-flight chat turns drained within grace")
 		} else {
-			slog.Info("fleet: grace period expired; force-cancelled in-flight chat turn(s)", "grace", grace, "cancel_inflight_turns", chatSrv.CancelInflightTurns())
+			logging.From(graceCtx).Info("fleet: grace period expired; force-cancelled in-flight chat turn(s)", "grace", grace, "cancel_inflight_turns", chatSrv.CancelInflightTurns())
 		}
 		// An approved card's call can outlive its POST (a long deal write
 		// answers "executing" and finishes detached), so the HTTP handler
@@ -73,7 +74,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		// still running when the process exits keeps its executing sentinel,
 		// which the next boot records as outcome unknown.
 		if !chatSrv.DrainApprovalRuns(graceCtx) {
-			slog.Info("fleet: grace period expired with approved actions still executing; their outcome will be recorded as unknown at the next start", "grace", grace)
+			logging.From(graceCtx).Info("fleet: grace period expired with approved actions still executing; their outcome will be recorded as unknown at the next start", "grace", grace)
 		}
 		graceStop()
 		// After the turns, not before: a turn's completion tail can schedule a

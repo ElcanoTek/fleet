@@ -32,6 +32,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/telemetry"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/getsentry/sentry-go"
 	"github.com/google/uuid"
 
@@ -760,6 +764,19 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	taskCtx, cancelWall := p.withWallDeadline(taskCtx)
 	defer cancelWall()
 
+	// Correlation (#2052): every log line of this run carries task_id and
+	// run_id (the claim's lease token, unique per attempt), and the run is one
+	// trace — the task.run span is its root, the agent loop, model, tool,
+	// sandbox, broker and DB spans its descendants.
+	taskCtx = logging.WithTask(taskCtx, task.ID.String(), token.String())
+	taskCtx, runSpan := telemetry.Start(taskCtx, "task.run", trace.WithAttributes(
+		telemetry.AttrTaskID.String(task.ID.String()),
+		telemetry.AttrRunID.String(token.String()),
+		attribute.Int("fleet.attempt", task.AttemptCount),
+	))
+	var runSpanErr error
+	defer func() { telemetry.End(runSpan, runSpanErr) }()
+
 	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
 	// event in the Sentry UI shows what the runner did immediately before the
 	// crash. No-op when FLEET_SENTRY_DSN is unset (the SDK checks internally).
@@ -790,7 +807,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 
 	// Report running (sets StartedAt + renews lease).
 	if _, err := p.reportStatus(task.ID, token, models.TaskStatusRunning, "Starting task execution"); err != nil {
-		slog.Error("runner: failed to report running for task", "task_id", task.ID, "err", err)
+		logging.From(taskCtx).Error("runner: failed to report running for task", "task_id", task.ID, "err", err)
 	}
 	// Resumed-after-ask (#510): the run injects the pending Q&A from the
 	// in-memory task struct. The DB columns are cleared at the TERMINAL
@@ -910,6 +927,7 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	// beat the transient-retry branches, which would otherwise re-queue a run
 	// that told us plainly it was done.
 	auditAborted := errors.Is(runErr, agentcore.ErrAuditAborted)
+	runSpanErr = runErr
 	switch {
 	case wallExpired:
 		p.failWallTimeout(task, session, token, start)

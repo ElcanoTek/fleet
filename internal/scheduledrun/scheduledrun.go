@@ -2012,6 +2012,8 @@ func convertLogSession(ls *agent.LogSession) *models.LogSession {
 		// corrupted-but-schema-shaped output.
 		OutputJSON: agentcore.RedactSecrets(ls.SnapshotOutputJSON()),
 	}
+	// The run's trace and run ids (#2052): ids, never secrets, so carried as-is.
+	out.TraceID, out.RunID, _ = ls.SnapshotCorrelation()
 	// The declared run outcome (completion.blocked_when) rides to the runner
 	// like output_json; the detail quotes a tool argument, so it is redacted.
 	if outcome, detail := ls.SnapshotRunOutcome(); outcome != "" {

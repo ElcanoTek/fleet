@@ -100,6 +100,7 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), ctxKeyUser, user)
+		ctx = logging.WithUser(ctx, user) // user_id on every log line of the request (#2052)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

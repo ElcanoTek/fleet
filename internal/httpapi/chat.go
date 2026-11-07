@@ -10,12 +10,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/telemetry"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
@@ -553,7 +555,7 @@ func (s *Server) prepareRegisteredTurn(ctx context.Context, user string, conv *s
 func (s *Server) attachTurnPersister(buf *turnBuffer, user, convID string) {
 	persistCtx, persistCancelAttach := context.WithTimeout(context.Background(), 5*time.Second)
 	if err := buf.attachPersister(persistCtx, s.store); err != nil {
-		slog.Error("attachPersister", "user", user, "conv_id", convID, "err", err)
+		logging.From(persistCtx).Error("attachPersister", "user", user, "conv_id", convID, "err", err)
 	}
 	persistCancelAttach()
 }
@@ -672,6 +674,13 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	}
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
+	// Correlation (#2052): the turn's context is detached from the request's
+	// lifetime, not from its identity. Every log line of the turn carries
+	// conv_id, turn_id, user_id and the request_id that started it, and the
+	// turn's spans continue the request's trace.
+	turnCtx = logging.WithTurn(turnCtx, conv.ID, turnID)
+	turnCtx = logging.WithAttrs(turnCtx, logging.Attrs(reqCtx)...)
+	turnCtx = telemetry.ContextWithRemoteParent(turnCtx, reqCtx)
 	if swept && queued == nil {
 		// A Stop scope=all began while this direct claim's turn was being
 		// prepared, or a Stop named its key: the claim belongs to the
@@ -865,6 +874,11 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	turnStarted := map[string]any{
 		"turn_id": turnID,
 		"persona": conv.Persona,
+	}
+	// The trace this turn's spans join (#2052), when tracing is on, so a
+	// client or an operator can go from the turn to its trace.
+	if traceID := telemetry.TraceID(turnCtx); traceID != "" {
+		turnStarted["trace_id"] = traceID
 	}
 	if queueRowID != "" {
 		// Queue-drained turns carry their input id so clients correlate the
@@ -1095,6 +1109,14 @@ func (s *Server) runTurnAsync(
 	// deriveToolCallEntries).
 	startedAtUnix := time.Now().Unix()
 	buf.inputKind = inputKind
+	// The turn's root span (#2052): the agent loop, model, tool, sandbox,
+	// broker and DB spans of this turn are its descendants. Ended last (the
+	// first defer), so it covers the cleanup the deferred calls below do.
+	turnCtx, turnSpan := telemetry.Start(turnCtx, "chat.turn", trace.WithAttributes(
+		telemetry.AttrConvID.String(conv.ID),
+		telemetry.AttrTurnID.String(buf.turnID),
+	))
+	defer turnSpan.End()
 	// Order matters: finishTurn must seal the buffer and schedule
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.

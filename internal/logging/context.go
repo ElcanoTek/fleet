@@ -32,7 +32,9 @@ type ctxAttrs []slog.Attr
 // WithAttrs returns a child of ctx whose context logger (From) also carries
 // attrs. An attribute whose key is already present replaces the earlier value,
 // so re-attaching (e.g. the turn id of a resumed turn) never duplicates a key.
-// Empty-string values are skipped: an unset id is absent, not "".
+// Empty-string values are skipped: an unset id is absent, not "". trace_id and
+// span_id are skipped too — they always come from the context's span, so
+// WithAttrs(ctx, Attrs(other)...) copies another context's ids safely.
 func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -43,6 +45,11 @@ func WithAttrs(ctx context.Context, attrs ...slog.Attr) context.Context {
 	changed := false
 	for _, a := range attrs {
 		if a.Key == "" || (a.Value.Kind() == slog.KindString && a.Value.String() == "") {
+			continue
+		}
+		if a.Key == KeyTraceID || a.Key == KeySpanID {
+			// Always derived from the live span (Attrs), never stored: a
+			// stored copy would go stale the moment a child span starts.
 			continue
 		}
 		changed = true

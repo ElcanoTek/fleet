@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
 
@@ -143,7 +144,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// commit's cctx was just cancelled.
 			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				slog.Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
+				logging.From(qctx).Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
 			}
 			qcancel()
 			return nil
@@ -157,7 +158,7 @@ func (c *turnCommits) commitTerminal(entries []agent.HistoryEntry, _ bool) error
 			// snapshot until the next boot recovery.
 			qctx, qcancel := context.WithTimeout(context.Background(), 5*time.Second)
 			if cerr := c.store.CompleteInjectedInputs(qctx, c.turnID); cerr != nil {
-				slog.Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
+				logging.From(qctx).Error("complete injected inputs", "turn_id", c.turnID, "err", cerr)
 			}
 			qcancel()
 			return nil

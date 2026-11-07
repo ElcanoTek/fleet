@@ -257,7 +257,7 @@ func (s *Server) bindQueuedInputIf(queued *queuedLaunch, turnID string) bool {
 	bound, err := s.store.BindInputTurn(bctx, queued.rowID, turnID)
 	bcancel()
 	if err != nil {
-		slog.Error("bind input turn", "input", queued.rowID, "turn_id", turnID, "err", err)
+		logging.From(bctx).Error("bind input turn", "input", queued.rowID, "turn_id", turnID, "err", err)
 		return true
 	}
 	if bound {

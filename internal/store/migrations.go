@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/dbschema"
+	"github.com/ElcanoTek/fleet/internal/logging"
 )
 
 // Migrations live as `NNN_name.sql` files under migrations/. They run in
@@ -146,7 +146,7 @@ func acquireMigrationLock(ctx context.Context, conn *sql.Conn) error {
 				migrationLockTimeout, migrationLockKey)
 		}
 		if !now.Before(nextLog) {
-			slog.Warn("waiting for chat migration lock", "key", migrationLockKey,
+			logging.From(ctx).Warn("waiting for chat migration lock", "key", migrationLockKey,
 				"waited", now.Sub(start).Round(time.Second), "timeout", migrationLockTimeout)
 			nextLog = now.Add(migrationLockLogInterval)
 		}

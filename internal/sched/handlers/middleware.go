@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
+
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
@@ -40,7 +42,8 @@ func (h *Handlers) AdminAuthMiddleware(next http.Handler) http.Handler {
 			valid, key, _ := h.apiKeys.ValidateKey(apiKey, nil, nil, nil)
 			if valid && key != nil {
 				if key.Type == apikeys.KeyTypeAdmin {
-					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					// user_id for an API-key call is the key's id — never the key (#2052).
+					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), "apikey:"+key.KeyID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -125,7 +128,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 			if user == nil {
 				return // rejected fail-closed; response already written
 			}
-			ctx := context.WithValue(r.Context(), userContextKey, user)
+			ctx := logging.WithUser(context.WithValue(r.Context(), userContextKey, user), user.Username)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
@@ -157,7 +160,8 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 				}
 				if authorized {
 					// Store the API key in context for the handler to use.
-					ctx := context.WithValue(r.Context(), apiKeyContextKey, key)
+					// user_id for an API-key call is the key's id — never the key (#2052).
+					ctx := logging.WithUser(context.WithValue(r.Context(), apiKeyContextKey, key), "apikey:"+key.KeyID)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
@@ -169,7 +173,7 @@ func (h *Handlers) AdminOrUserAuthMiddleware(next http.Handler) http.Handler {
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
 			if user := h.userFromPasswordToken(token); user != nil {
-				ctx := context.WithValue(r.Context(), userContextKey, user)
+				ctx := logging.WithUser(context.WithValue(r.Context(), userContextKey, user), user.Username)
 				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
