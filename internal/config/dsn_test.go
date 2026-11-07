@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -70,6 +69,20 @@ func TestResolveDSNsOneDatabase(t *testing.T) {
 			from:  DSNFromDBParts,
 		},
 		{
+			name:  "nothing configured: the bare defaults are ONE database, fleet/fleet",
+			env:   map[string]string{},
+			chat:  "postgres://fleet@localhost:5432/fleet?sslmode=disable&" + chatOpt,
+			sched: "postgres://fleet@localhost:5432/fleet?sslmode=disable&" + schedOpt,
+			from:  DSNFromDefaults,
+		},
+		{
+			name:  "DB_USER alone keeps the fleet database",
+			env:   map[string]string{"DB_USER": "app"},
+			chat:  "postgres://app@localhost:5432/fleet?sslmode=disable&" + chatOpt,
+			sched: "postgres://app@localhost:5432/fleet?sslmode=disable&" + schedOpt,
+			from:  DSNFromDBParts,
+		},
+		{
 			name:  "DB_PASSWORD keeps surrounding whitespace (an opaque secret)",
 			env:   map[string]string{"DB_HOST": " db ", "DB_PASSWORD": " pw ", "DB_NAME": "fleet"},
 			chat:  "postgres://fleet:%20pw%20@db:5432/fleet?sslmode=disable&" + chatOpt,
@@ -79,15 +92,15 @@ func TestResolveDSNsOneDatabase(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			d := ResolveDSNs(func(k string) string { return tc.env[k] })
+			d, err := ResolveDSNs(func(k string) string { return tc.env[k] })
+			if err != nil {
+				t.Fatalf("ResolveDSNs: %v", err)
+			}
 			if d.Chat != tc.chat || d.Sched != tc.sched {
 				t.Errorf("DSNs = (%q, %q), want (%q, %q)", d.Chat, d.Sched, tc.chat, tc.sched)
 			}
-			if d.ChatFrom != tc.from || d.SchedFrom != tc.from {
-				t.Errorf("From = (%q, %q), want %q", d.ChatFrom, d.SchedFrom, tc.from)
-			}
-			if d.Layout != LayoutSchemas || d.ChatSchema != ChatSchema || d.SchedSchema != SchedSchema {
-				t.Errorf("layout = %q (%q, %q), want schemas (chat, sched)", d.Layout, d.ChatSchema, d.SchedSchema)
+			if d.From != tc.from {
+				t.Errorf("From = %q, want %q", d.From, tc.from)
 			}
 			if DSNSchema(d.Chat) != ChatSchema || DSNSchema(d.Sched) != SchedSchema {
 				t.Errorf("DSNSchema = (%q, %q)", DSNSchema(d.Chat), DSNSchema(d.Sched))
@@ -150,42 +163,63 @@ func TestWithSchemaAndDSNSchema(t *testing.T) {
 	}
 }
 
-// TestOverrideFor pins how a --database-url override's layout is decided
-// (#2055 review: an override naming another database used to stay in
-// public even on a one-database deployment).
+// TestResolveDSNsRefusesRetiredKeys: the per-store keys of the removed
+// two-database layout fail loudly, naming DATABASE_URL and never a value —
+// alone, next to DATABASE_URL, or naming one database (#2049 phase 2).
+func TestResolveDSNsRefusesRetiredKeys(t *testing.T) {
+	for _, env := range []map[string]string{
+		{"FLEET_CHAT_DATABASE_URL": "postgres://c:s3cret@h:5432/chat"},
+		{"FLEET_SCHED_DATABASE_URL": "postgres://s:s3cret@h:5432/sched", "DATABASE_URL": "postgres://u@h/fleet"},
+		{"SCHED_DATABASE_URL": "postgres://s:s3cret@h:5432/sched"},
+		{"FLEET_CHAT_DATABASE_URL": "postgres://a:s3cret@h/one", "FLEET_SCHED_DATABASE_URL": "postgres://a:s3cret@h/one"},
+	} {
+		_, err := ResolveDSNs(func(k string) string { return env[k] })
+		if err == nil {
+			t.Errorf("ResolveDSNs(%v) accepted a retired per-store key", env)
+			continue
+		}
+		for k := range env {
+			if k != "DATABASE_URL" && !strings.Contains(err.Error(), k) {
+				t.Errorf("error %q does not name %s", err, k)
+			}
+		}
+		if !strings.Contains(err.Error(), "set DATABASE_URL") || strings.Contains(err.Error(), "s3cret") {
+			t.Errorf("error %q must name DATABASE_URL and no value", err)
+		}
+	}
+	// Set but empty (KEY="" in an env file, whitespace) is unset, as everywhere.
+	if _, err := ResolveDSNs(func(k string) string {
+		return map[string]string{"FLEET_CHAT_DATABASE_URL": "  ", "DATABASE_URL": "postgres://u@h/fleet"}[k]
+	}); err != nil {
+		t.Errorf("an empty retired key was refused: %v", err)
+	}
+}
+
+// TestOverrideFor pins how a --database-url override is resolved: verbatim
+// when it names its own schema, else in the store's schema — whatever
+// database it names (#2055 review: an override naming another database used
+// to stay in public).
 func TestOverrideFor(t *testing.T) {
-	one := ResolveDSNs(func(k string) string {
+	one, err := ResolveDSNs(func(k string) string {
 		return map[string]string{"DATABASE_URL": "postgres://u:pw@h:5432/fleet"}[k]
 	})
-	legacy := ResolveDSNs(func(k string) string {
-		return map[string]string{"FLEET_CHAT_DATABASE_URL": "postgres://c@h:5432/chat", "FLEET_SCHED_DATABASE_URL": "postgres://s@h:5432/sched"}[k]
-	})
-	publicStore := func(string) (bool, error) { return true, nil }
-	empty := func(string) (bool, error) { return false, nil }
-	unreachable := func(string) (bool, error) { return false, errors.New("connection refused") }
+	if err != nil {
+		t.Fatal(err)
+	}
 	const other = "postgres://u@dr-host:5432/fleet"
 	cases := []struct {
 		name     string
-		d        DSNs
 		override string
-		probe    PublicStoreProbe
-		want     string // the schema the result names ("" = verbatim, public)
+		want     string // the schema the result names
 	}{
-		{"no override is the resolved DSN", one, "", nil, ChatSchema},
-		{"same database, one-database deployment", one, "postgres://x@h:5432/fleet", publicStore, ChatSchema},
-		{"same database, legacy deployment", legacy, "postgres://x@h:5432/chat", empty, ""},
-		{"own schema is verbatim", one, other + "?options=-csearch_path%3Dpublic", empty, PublicSchema},
-		{"other database holding a one-database install", one, other, empty, ChatSchema},
-		{"other database holding a legacy store", one, other, publicStore, ""},
-		{"DR host from a legacy (or unconfigured) box, one-database data", legacy, other, empty, ChatSchema},
-		{"DR host from a legacy box, legacy data", legacy, other, publicStore, ""},
-		{"probe fails: the deployment decides (one database)", one, other, unreachable, ChatSchema},
-		{"probe fails: the deployment decides (legacy)", legacy, other, unreachable, ""},
-		{"no probe: the deployment decides", one, other, nil, ChatSchema},
+		{"no override is the resolved DSN", "", ChatSchema},
+		{"same database", "postgres://x@h:5432/fleet", ChatSchema},
+		{"own schema is verbatim", other + "?options=-csearch_path%3Dpublic", PublicSchema},
+		{"another database", other, ChatSchema},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.d.OverrideFor(tc.override, ChatSchema, tc.probe)
+			got := one.OverrideFor(tc.override, ChatSchema)
 			if s := DSNSchema(got); s != tc.want {
 				t.Errorf("OverrideFor(%q) = %q (schema %q), want schema %q", tc.override, got, s, tc.want)
 			}
@@ -194,15 +228,15 @@ func TestOverrideFor(t *testing.T) {
 			}
 		})
 	}
-	if got := one.ForSched(other); DSNSchema(got) != SchedSchema {
-		t.Errorf("ForSched(other) = %q, want the sched schema", got)
+	if got := one.OverrideFor(other, SchedSchema); DSNSchema(got) != SchedSchema {
+		t.Errorf("OverrideFor(other, sched) = %q, want the sched schema", got)
 	}
 }
 
 // TestDSNIdentityNormalises: spellings of one database compare equal (a
 // default port, every local host form, URL vs key=value, the user as the
-// default database), so neither the layout decision nor the distinct-stores
-// guard can be fooled into treating one database as two (#2055 review).
+// default database), so the distinct-stores guard cannot be fooled into
+// treating one database as two (#2055 review).
 func TestDSNIdentityNormalises(t *testing.T) {
 	same := [][]string{
 		{"postgres://u@h/db", "postgres://v:pw@H:5432/db?sslmode=require", "host=h dbname=db", "host=h port=5432 dbname=db user=x"},
@@ -229,15 +263,9 @@ func TestDSNIdentityNormalises(t *testing.T) {
 			t.Errorf("%q and %q compare as one database", pair[0], pair[1])
 		}
 	}
-	// The guard and the layout both see through the spelling.
+	// The guard sees through the spelling.
 	if err := EnsureDistinctStores("postgres://u@h/x", "postgres://u@h:5432/x"); err == nil {
 		t.Error("two spellings of one database, both in public, were not refused")
-	}
-	d := ResolveDSNs(func(k string) string {
-		return map[string]string{"FLEET_CHAT_DATABASE_URL": "postgres://a@localhost/one", "FLEET_SCHED_DATABASE_URL": "postgres://b@127.0.0.1:5432/one"}[k]
-	})
-	if d.Layout != LayoutSchemas {
-		t.Errorf("two spellings of one local database resolved to layout %q", d.Layout)
 	}
 }
 

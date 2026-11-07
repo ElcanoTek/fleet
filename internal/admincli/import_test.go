@@ -291,25 +291,27 @@ func TestSplitPositionalMixed(t *testing.T) {
 	}
 }
 
-// TestImportBundle_SingleSectionSameDSNGuard proves the same-DSN guard also
-// covers the documented runbook's single-section bundles (#714): with only the
-// generic DATABASE_URL set, importing either single-section bundle would write
-// that store's schema into the shared database, so the import must refuse
-// before opening any store. An explicit --sched-database-url names the target
-// unambiguously and is honored (the guard must fail BEFORE any DB dial, so a
-// non-routable DSN proves it).
-func TestImportBundle_SingleSectionSameDSNGuard(t *testing.T) {
-	t.Setenv("DATABASE_URL", "postgres://shared-host/shared_db")
-	t.Setenv("FLEET_CHAT_DATABASE_URL", "")
-	t.Setenv("FLEET_SCHED_DATABASE_URL", "")
-
-	sched := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Sched: &schedSection{}})
-	if code := cmdImport([]string{sched}); code != 1 {
-		t.Errorf("sched-only bundle on generic DATABASE_URL fallback: got exit %d, want 1", code)
+// TestImportBundle_SameSchemaGuard: a dual-section bundle whose two
+// --*-database-url flags name one schema of one database would mix the two
+// stores' tables, so the import refuses before opening any store (the guard
+// must fail BEFORE any DB dial, so a non-routable DSN proves it). With only
+// DATABASE_URL set the stores get their own schemas (#2049), and a retired
+// per-store key is refused like everywhere else.
+func TestImportBundle_SameSchemaGuard(t *testing.T) {
+	for _, k := range dsnEnvKeys {
+		t.Setenv(k, "")
 	}
-	chat := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Chat: &chatSection{}})
-	if code := cmdImport([]string{chat}); code != 1 {
-		t.Errorf("chat-only bundle on generic DATABASE_URL fallback: got exit %d, want 1", code)
+	t.Setenv("FLEET_ENV_FILE", filepath.Join(t.TempDir(), "none.env"))
+	resetEnvFileCache()
+	t.Cleanup(resetEnvFileCache)
+	both := writeBundle(t, migrationBundle{Format: migrationBundleFormat, Version: 1, Chat: &chatSection{}, Sched: &schedSection{}})
+	pub := "postgres://shared-host/shared_db?options=-csearch_path%3Dpublic"
+	if code := cmdImport([]string{both, "--chat-database-url", pub, "--sched-database-url", pub}); code != 1 {
+		t.Errorf("dual-section bundle into one schema: got exit %d, want 1", code)
+	}
+	t.Setenv("FLEET_SCHED_DATABASE_URL", "postgres://shared-host/sched")
+	if code := cmdImport([]string{both}); code != 1 {
+		t.Errorf("a retired per-store key: got exit %d, want 1", code)
 	}
 }
 

@@ -325,7 +325,7 @@ func withMigrationLock(ctx context.Context, db *sql.DB, fn func(*migrationRun) e
 
 	// In the one-database layout the connection's search_path names the
 	// sched schema; CURRENT_SCHEMA() is NULL until it exists, so create it
-	// first (internal/dbschema). A no-op in the legacy layout.
+	// first (internal/dbschema). A no-op for a DSN that names no store schema.
 	if err := dbschema.Ensure(ctx, conn); err != nil {
 		return err
 	}

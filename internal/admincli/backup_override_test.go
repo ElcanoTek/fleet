@@ -66,13 +66,14 @@ func TestBackupFollowsQueryOverrides(t *testing.T) {
 			q.Set("port", p)
 		}
 		q.Set("dbname", db)
+		q.Del("options")
 		u.Host = "nowhere.invalid:1"
 		u.Path = "/decoy"
 		u.RawQuery = q.Encode()
 		return u.String()
 	}
 	dump := filepath.Join(t.TempDir(), "override.dump")
-	if err := runPgDump(ctx, override(src), dump); err != nil {
+	if err := runPgDump(ctx, override(src)+"&options=-csearch_path%3Dpublic", dump); err != nil {
 		t.Fatalf("pg_dump did not follow the query override: %v", err)
 	}
 	if err := runPgRestore(ctx, override(dst)+"&options=-csearch_path%3Dpublic", dump); err != nil {

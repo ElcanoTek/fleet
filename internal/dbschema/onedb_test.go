@@ -68,14 +68,14 @@ func scratchDatabase(t *testing.T) string {
 func TestBothStoresInOneDatabase(t *testing.T) {
 	dsn := scratchDatabase(t)
 	ctx := t.Context()
-	d := config.ResolveDSNs(func(k string) string {
+	d, err := config.ResolveDSNs(func(k string) string {
 		if k == "DATABASE_URL" {
 			return dsn
 		}
 		return ""
 	})
-	if d.Layout != config.LayoutSchemas {
-		t.Fatalf("DATABASE_URL alone resolved to layout %q", d.Layout)
+	if err != nil {
+		t.Fatalf("ResolveDSNs: %v", err)
 	}
 	if err := config.EnsureDistinctStores(d.Chat, d.Sched); err != nil {
 		t.Fatalf("EnsureDistinctStores: %v", err)
@@ -179,7 +179,7 @@ func TestEnsureRefusesALegacyDatabase(t *testing.T) {
 	if !dbschema.IsLegacyDatabase(err) {
 		t.Fatalf("store.Open in schema mode over a legacy database = %v, want the legacy refusal", err)
 	}
-	if !strings.Contains(err.Error(), "fleet db consolidate") {
+	if !strings.Contains(err.Error(), "removed two-database layout") {
 		t.Errorf("refusal %q does not name the fix", err)
 	}
 	sched := &scheddb.Database{}

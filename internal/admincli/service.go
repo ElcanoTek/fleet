@@ -97,6 +97,11 @@ func systemctlVerb(verb string, argv []string) int {
 			}
 			maxWait = *waitTimeout
 		}
+		// The idle check needs the stores; a configuration the resolver
+		// refuses (a retired per-store DSN key) cannot show the box idle.
+		if _, err := resolvedDSNs(); err != nil {
+			return errf(2, "%v", err)
+		}
 		sDSN := idleSchedDSN("")
 		cDSN := idleChatDSN("")
 		clearDrain = true

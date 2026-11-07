@@ -11,131 +11,69 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
-// DSN sources ResolveDSNs reports in DSNs.ChatFrom / DSNs.SchedFrom: the env
-// key that decided the DSN, the DB_* parts, or the pure localhost defaults.
+// DSN sources ResolveDSNs reports in DSNs.From: the env key that decided the
+// DSN, the DB_* parts, or the pure localhost defaults.
 const (
 	DSNFromDBParts  = "DB_*"
 	DSNFromDefaults = "defaults"
 )
 
-// Layout is how the chat and sched stores share Postgres (#2049, ADR-0098).
-type Layout string
-
-const (
-	// LayoutSchemas is the supported layout: ONE database, the chat store in
-	// schema "chat" and the sched store in schema "sched". fleet runs it
-	// whenever the resolved chat and sched DSNs name the same database —
-	// DATABASE_URL alone, the documented configuration, is exactly that.
-	LayoutSchemas Layout = "schemas"
-)
-
-// The per-store schemas of LayoutSchemas, and Postgres' default schema (where
-// a DSN without a schema lands).
+// The per-store schemas of the one database (#2049, ADR-0098), and Postgres'
+// default schema (where a DSN without a schema lands).
 const (
 	ChatSchema   = "chat"
 	SchedSchema  = "sched"
 	PublicSchema = "public"
 )
 
-// DSNs is the resolved chat + sched Postgres DSN pair (URL form when built
-// from the DB_* parts). ChatFrom / SchedFrom name what decided each one: an
-// env key ("FLEET_CHAT_DATABASE_URL", "DATABASE_URL", …), DSNFromDBParts, or
-// DSNFromDefaults when nothing at all was configured.
-//
-// Layout says how the two stores share Postgres. In LayoutSchemas, Chat and
-// Sched are the one configured DSN with the store's schema added as its only
-// search_path (WithSchema), so every consumer that connects with them — the
-// stores, the admin CLI's raw queries, psql in the shell helpers — lands in
-// the right schema without deciding anything itself. ChatSchema / SchedSchema
-// name the schema each store's tables live in ("public" in the legacy
-// layout, dsn_legacy.go).
+// RetiredDSNKeys are the per-store DSN keys of the two-database layout that
+// #2049 removed (ADR-0098). fleet no longer reads them for a DSN: one that is
+// still set is refused (ResolveDSNs), so a stale env file fails loudly
+// instead of silently pointing fleet at another database.
+var RetiredDSNKeys = []string{"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL"}
+
+// DSNs is the resolved chat + sched Postgres DSN pair: the ONE configured
+// database (URL form when built from the DB_* parts), each store's DSN with
+// its schema as the connection's only search_path (WithSchema), so every
+// consumer that connects with them — the stores, the admin CLI's raw
+// queries, psql in the shell helpers — lands in the right schema without
+// deciding anything itself. From names what decided the DSN: an env key
+// ("DATABASE_URL"), DSNFromDBParts, or DSNFromDefaults when nothing at all
+// was configured.
 type DSNs struct {
-	Chat, Sched             string
-	ChatFrom, SchedFrom     string
-	Layout                  Layout
-	ChatSchema, SchedSchema string
+	Chat, Sched string
+	From        string
 }
 
-// ChatConfigured reports whether the chat DSN came from configuration rather
-// than the bare localhost defaults.
-func (d DSNs) ChatConfigured() bool { return d.ChatFrom != DSNFromDefaults }
-
-// SchedConfigured reports whether the sched DSN came from configuration rather
-// than the bare localhost defaults.
-func (d DSNs) SchedConfigured() bool { return d.SchedFrom != DSNFromDefaults }
-
-// ChatFromGeneric reports whether the chat DSN reached the generic fallbacks
-// (DATABASE_URL, DB_* parts, defaults) shared with the sched resolver, rather
-// than a chat-specific key.
-func (d DSNs) ChatFromGeneric() bool { return d.ChatFrom != "FLEET_CHAT_DATABASE_URL" }
-
-// SchedFromGeneric is ChatFromGeneric for the sched DSN.
-func (d DSNs) SchedFromGeneric() bool {
-	return d.SchedFrom != "FLEET_SCHED_DATABASE_URL" && d.SchedFrom != "SCHED_DATABASE_URL"
-}
-
-// ForChat returns the DSN a chat-store consumer connects with when an
-// operator passed override (a --database-url flag); it decides the
-// override's layout as OverrideFor does without a probe. Callers
-// that can reach the database use OverrideFor with one.
-func (d DSNs) ForChat(override string) string { return d.OverrideFor(override, ChatSchema, nil) }
-
-// ForSched is ForChat for the sched store.
-func (d DSNs) ForSched(override string) string { return d.OverrideFor(override, SchedSchema, nil) }
-
-// PublicStoreProbe reports whether the database a DSN names holds a fleet
-// store in its public schema (a public.schema_migrations table) — i.e. it is
-// a legacy store's database. The admin CLI supplies one that connects.
-type PublicStoreProbe func(dsn string) (bool, error)
+// Configured reports whether the DSN came from configuration rather than
+// the bare localhost defaults.
+func (d DSNs) Configured() bool { return d.From != DSNFromDefaults }
 
 // OverrideFor is the DSN a store consumer connects with when an operator
 // passed override (a --database-url flag) for the store whose schema is
-// schema ("chat" / "sched"). It is the one place an override's layout is
-// decided:
-//
-//  1. no override: the resolved DSN;
-//  2. an override that names its own schema (a search_path in its options) is
-//     used verbatim — `options=-csearch_path%3Dpublic` is how to address a
-//     legacy store explicitly;
-//  3. an override naming the deployment's own database follows the
-//     deployment's layout (the store's schema in LayoutSchemas, verbatim in
-//     the legacy layout);
-//  4. an override naming ANY other database (a DR host with no env, a
-//     restored copy) is decided by its data: probe reports whether that
-//     database's public schema holds a fleet store. If it does, it is a legacy
-//     store and is used verbatim; if not — a one-database install, or an empty
-//     database being restored into — it gets the store's schema, because the
-//     one-database layout is the only one fleet provisions. Without a probe,
-//     or when the probe fails (the verb will then fail to connect anyway), the
-//     deployment's layout decides as in 3.
-func (d DSNs) OverrideFor(override, schema string, probe PublicStoreProbe) string {
+// schema ("chat" / "sched"): the resolved DSN when override is empty; an
+// override that names its own schema (a search_path in its options)
+// verbatim — `options=-csearch_path%3Dpublic` addresses public explicitly;
+// any other override with the store's schema, because one database with a
+// schema per store is the only layout fleet runs.
+func (d DSNs) OverrideFor(override, schema string) string {
 	override = strings.TrimSpace(override)
-	resolved := d.Chat
-	if schema == SchedSchema {
-		resolved = d.Sched
-	}
 	if override == "" {
-		return resolved
+		if schema == SchedSchema {
+			return d.Sched
+		}
+		return d.Chat
 	}
 	if DSNSchema(override) != "" {
 		return override
 	}
-	schemaMode := d.Layout == LayoutSchemas
-	if !sameDatabase(override, resolved) && probe != nil {
-		if legacy, err := probe(override); err == nil {
-			schemaMode = !legacy
-		}
-	}
-	if schemaMode {
-		return WithSchema(override, schema)
-	}
-	return override
+	return WithSchema(override, schema)
 }
 
 // ResolveDSNs is the ONE place fleet turns the environment into the chat and
-// sched Postgres DSNs and their layout (#2018, #2049). `fleet serve`, the MCP
-// broker, validate-config, eval, the doctor and every admin CLI verb call it,
-// so no two of them can disagree about which database — or which schema — a
+// sched Postgres DSNs (#2018, #2049). `fleet serve`, the MCP broker,
+// validate-config, eval, the doctor and every admin CLI verb call it, so no
+// two of them can disagree about which database — or which schema — a
 // deployment points at; scripts/lib/idle.sh's fleet_resolve_dsn mirrors it
 // for the shell, and a parity test pins the two.
 //
@@ -145,41 +83,49 @@ func (d DSNs) OverrideFor(override, schema string, probe PublicStoreProbe) strin
 // the password escaped). Both stores connect to that database, the chat
 // store in schema "chat" and the sched store in schema "sched" (WithSchema).
 //
-// Until every box is consolidated, the legacy two-database configuration —
-// the deprecated FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL /
-// SCHED_DATABASE_URL keys, or the bare per-store DB_* defaults — is resolved
-// first by resolveLegacyDSNs (dsn_legacy.go), which keeps such a box exactly
-// as it was.
+// It fails when one of RetiredDSNKeys is set (RetiredDSNKeysError): the
+// two-database layout is gone, and a stale per-store key must not be
+// ignored silently.
 //
 // getenv supplies the values: ProcessEnv for the server, the admin CLI's
 // env-or-env-file lookup for its verbs. Values are whitespace-trimmed here,
 // except DB_PASSWORD, an opaque secret whose surrounding whitespace may be
 // part of it; quote stripping is getenv's job.
-func ResolveDSNs(getenv func(string) string) DSNs {
+func ResolveDSNs(getenv func(string) string) (DSNs, error) {
 	get := func(k string) string {
 		if k == "DB_PASSWORD" {
 			return getenv(k)
 		}
 		return strings.TrimSpace(getenv(k))
 	}
-	if d, ok := resolveLegacyDSNs(get); ok { // LEGACY-DB-LAYOUT: remove after consolidation
-		return d
+	if err := RetiredDSNKeysError(get); err != nil {
+		return DSNs{}, err
 	}
 	dsn, from := firstDSN(get, "DATABASE_URL")
 	if dsn == "" {
 		dsn, from = dbPartsDSN(get, "fleet", "fleet")
 	}
-	return schemaDSNs(dsn, dsn, from, from)
+	return DSNs{Chat: WithSchema(dsn, ChatSchema), Sched: WithSchema(dsn, SchedSchema), From: from}, nil
 }
 
-// schemaDSNs is the one-database layout over the configured DSN(s): each
-// store's DSN with its schema.
-func schemaDSNs(chat, sched, chatFrom, schedFrom string) DSNs {
-	return DSNs{
-		Chat: WithSchema(chat, ChatSchema), Sched: WithSchema(sched, SchedSchema),
-		ChatFrom: chatFrom, SchedFrom: schedFrom,
-		Layout: LayoutSchemas, ChatSchema: ChatSchema, SchedSchema: SchedSchema,
+// RetiredDSNKeysError is the refusal of a configuration that still sets one
+// of RetiredDSNKeys (non-empty after trimming), naming the keys — never
+// their values, which carry a password — and DATABASE_URL, the key that
+// replaces them. nil when none is set.
+func RetiredDSNKeysError(getenv func(string) string) error {
+	var set []string
+	for _, k := range RetiredDSNKeys {
+		if strings.TrimSpace(getenv(k)) != "" {
+			set = append(set, k)
+		}
 	}
+	if len(set) == 0 {
+		return nil
+	}
+	keys := strings.Join(set, ", ")
+	return fmt.Errorf("%s is no longer supported: fleet keeps both stores in ONE database, configured by DATABASE_URL alone "+
+		"(the two-database layout was removed, ADR-0098) — set DATABASE_URL to that database and delete %s "+
+		"from the environment and the env file (docs/ONE-DATABASE.md)", keys, keys)
 }
 
 // ProcessEnv is the getenv ResolveDSNs takes for the server process: the
@@ -244,9 +190,7 @@ func orDefault(v, def string) string {
 // localhost, a loopback address — is "local" (one box, one cluster per
 // port); other hosts are lower-cased; the database defaults to the role.
 // It is "" for a DSN pgx cannot parse, an empty one, or one listing several
-// hosts (ErrMultiHost). The hidden verb "fleet db dsn-identity" prints it
-// for the shell scripts; scripts/lib/idle.sh's fleet_dsn_identity mirrors it
-// only as the fallback before a fleet binary exists.
+// hosts (ErrMultiHost).
 func DSNIdentity(dsn string) string {
 	t, err := ParseConnTarget(dsn)
 	if err != nil || t.DB() == "" {
@@ -285,10 +229,10 @@ func sameDatabase(a, b string) bool {
 // stores' tables in the SAME schema of the SAME database. The two stores
 // have structurally incompatible `users` tables and `schema_migrations`
 // tables of different shapes, so one schema shared by both corrupts startup.
-// One database is fine — that is LayoutSchemas, where ResolveDSNs gives each
-// store its own schema — so this only fires for a pair assembled some other
-// way: two hand-written DSNs to one database with no schema, or one schema
-// forced on both. Pass the RESOLVED DSNs. The error names host:port/db and
+// ResolveDSNs always gives each store its own schema, so this only fires
+// for a pair assembled some other way — two `fleet import` flags naming one
+// schema, or a hand-built Config (boot, the broker and validate-config keep
+// it as a cheap backstop). The error names host:port/db and
 // the schema, never the DSN itself, which can carry the password.
 func EnsureDistinctStores(chatDSN, schedDSN string) error {
 	chatDSN, schedDSN = strings.TrimSpace(chatDSN), strings.TrimSpace(schedDSN)

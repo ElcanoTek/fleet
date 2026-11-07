@@ -202,28 +202,23 @@ ensure_postgres() {
   log "postgres: admin=$admin_dsn host=$host port=$port"
 
   if [[ "${E2E_REUSE_DB:-0}" != "1" ]]; then
-    log "postgres: (re)creating fresh chat + sched databases"
+    log "postgres: (re)creating a fresh database (both stores, schemas chat + sched)"
     psql "$admin_dsn" -v ON_ERROR_STOP=1 >/dev/null 2>&1 <<'SQL' || true
-DROP DATABASE IF EXISTS fleet_e2e_chat;
-DROP DATABASE IF EXISTS fleet_e2e_sched;
+DROP DATABASE IF EXISTS fleet_e2e;
 SQL
     psql "$admin_dsn" -v ON_ERROR_STOP=1 <<'SQL' >>"$LOG_DIR/pg.log" 2>&1
-CREATE DATABASE fleet_e2e_chat;
-CREATE DATABASE fleet_e2e_sched;
+CREATE DATABASE fleet_e2e;
 SQL
   fi
 
-  CHAT_DSN="postgres://${host}:${port}/fleet_e2e_chat?sslmode=disable"
-  SCHED_DSN="postgres://${host}:${port}/fleet_e2e_sched?sslmode=disable"
+  DB_DSN="postgres://${host}:${port}/fleet_e2e?sslmode=disable"
   # Preserve the admin DSN's user if it had one (e.g. postgres@).
   if printf '%s' "$admin_dsn" | grep -q '://[^/@]*@'; then
     local cred
     cred="$(printf '%s' "$admin_dsn" | sed -E 's#^postgres(ql)?://([^@]+)@.*#\2#')"
-    CHAT_DSN="postgres://${cred}@${host}:${port}/fleet_e2e_chat?sslmode=disable"
-    SCHED_DSN="postgres://${cred}@${host}:${port}/fleet_e2e_sched?sslmode=disable"
+    DB_DSN="postgres://${cred}@${host}:${port}/fleet_e2e?sslmode=disable"
   fi
-  log "postgres: chat DSN  = $CHAT_DSN"
-  log "postgres: sched DSN = $SCHED_DSN"
+  log "postgres: DSN = $DB_DSN"
 }
 
 # ── 2. build Go binaries ──
@@ -409,9 +404,7 @@ start_fleet() {
   FLEET_ORCHESTRATOR_ADDR="127.0.0.1:$ORCH_PORT" \
   FLEET_WEB_ADDR="$web_addr" \
   APP_SESSION_SECRET="$APP_SESSION_SECRET" \
-  FLEET_CHAT_DATABASE_URL="$CHAT_DSN" \
-  FLEET_SCHED_DATABASE_URL="$SCHED_DSN" \
-  DATABASE_URL="$SCHED_DSN" \
+  DATABASE_URL="$DB_DSN" \
   OPENROUTER_API_KEY="$llm_key" \
   OPENROUTER_BASE_URL="$llm_base" \
   FLEET_SANDBOX_IMAGE="$FLEET_SANDBOX_IMAGE" \
@@ -433,16 +426,16 @@ start_fleet() {
 # ── seed test users (chat + sched) ──
 seed_users() {
   log "seed: chat user $E2E_TEST_EMAIL + sched admin $E2E_TEST_EMAIL (and legacy $E2E_SCHED_USERNAME)"
-  FLEET_CHAT_DATABASE_URL="$CHAT_DSN" \
+  DATABASE_URL="$DB_DSN" \
     "$BIN_DIR/fleet" chat user add "$E2E_TEST_EMAIL" --password - <<<"$E2E_TEST_PASSWORD" \
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: chat user may already exist (continuing)"
   # Cookie/OIDC is the Operations Center path: lookupMember matches X-User-Email
   # to sched users.username, so the chat email MUST be a sched admin or /me
   # returns 403 not_a_member and the live suite cannot create tasks.
-  FLEET_SCHED_DATABASE_URL="$SCHED_DSN" \
+  DATABASE_URL="$DB_DSN" \
     "$BIN_DIR/fleet" sched user add "$E2E_TEST_EMAIL" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched email user may already exist (continuing)"
-  FLEET_SCHED_DATABASE_URL="$SCHED_DSN" \
+  DATABASE_URL="$DB_DSN" \
     "$BIN_DIR/fleet" sched user add "$E2E_SCHED_USERNAME" --role admin --password - <<<"$E2E_TEST_PASSWORD" \
     >>"$LOG_DIR/seed.log" 2>&1 || log "seed: sched user may already exist (continuing)"
 }

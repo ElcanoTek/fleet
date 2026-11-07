@@ -382,10 +382,12 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   key=value DSNs) widened to any `scheme://` URL and to credential-shaped
   query keys matched decoded, each masked as `***`.
 - **The keys ADR-0098 added are registered**: the libpq/pgx `PG*` target
-  variables `fleet db consolidate` refuses (`PGHOST`, `PGPORT`,
-  `PGDATABASE`, `PGUSER`, `PGSERVICE`, `PGSERVICEFILE`), and the script
-  inputs `FLEET_IDENTITY_BIN`, `FLEET_REDACT_CHAT_PH` and
-  `FLEET_REDACT_SCHED_PH`; `fleet db consolidate` reads them through `envreg`.
+  variables (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGSERVICE`,
+  `PGSERVICEFILE`). (Phase 2 of #2049 later removed `fleet db consolidate`,
+  which read them, and the script inputs `FLEET_IDENTITY_BIN`,
+  `FLEET_REDACT_CHAT_PH` and `FLEET_REDACT_SCHED_PH` with the legacy layout;
+  the per-store DSN keys stay registered as retired, so a stale value is
+  refused.)
 - **Four more settings are secrets** (`OPENAI_CUSTOM_HEADERS`,
   `FLEET_WEBHOOK_URL`, `FLEET_WEBHOOK_BODY_TEMPLATE`, plus the internal
   `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm

@@ -1818,14 +1818,6 @@ say
 # bundle — so an update that advanced fleet while the bundle stood still is a
 # half-update, and saying "✓ fleet updated" alone is how that goes unnoticed.
 report_bundle_state
-# LEGACY-DB-LAYOUT: remove after consolidation. An update never moves data
-# between databases: a two-database box keeps working as it is, and is only
-# told how to move into one (docs/ONE-DATABASE.md).
-if [[ -x "$INSTALL_DIR/fleet" ]] \
-  && [[ "$("$INSTALL_DIR/fleet" db layout --env-file "$backend_env_file" 2>/dev/null || true)" == "legacy" ]]; then
-  say "  Database:  ${c_yellow}legacy two-database layout${c_reset} — still supported; move it into one database with"
-  say "             ${c_dim}fleet db consolidate${c_reset} (dry run first; docs/ONE-DATABASE.md)"
-fi
 say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
 if [[ "$before_sha" != "$after_sha" ]]; then

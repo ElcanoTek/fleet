@@ -42,8 +42,8 @@ func cmdAdmin(argv []string) int {
 // interactively (hidden, double-entered) unless --password - reads it from stdin.
 func adminAdd(argv []string) int {
 	fs := flag.NewFlagSet("admin add", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	pw := fs.String("password", "", `password ("-" reads from stdin; omit to prompt)`)
 	email, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
@@ -123,8 +123,8 @@ func adminAdd(argv []string) int {
 // the same email is an Operations Center admin — the two-plane view in one place.
 func adminList(argv []string) int {
 	fs := flag.NewFlagSet("admin list", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	// No positional: a stray argument is an error, not silently discarded (the
 	// same rule as `sched apikey list`).
@@ -198,8 +198,8 @@ func adminList(argv []string) int {
 // still cleaned up rather than aborting on the first "not found".
 func adminRm(argv []string) int {
 	fs := flag.NewFlagSet("admin rm", flag.ContinueOnError)
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	email, flagArgs := splitPositionalValueFlags(argv)
 	if err := fs.Parse(flagArgs); err != nil {
 		return 1

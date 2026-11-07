@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+
+	"github.com/ElcanoTek/fleet/internal/config"
 )
 
 func TestParsePGConn(t *testing.T) {
@@ -138,6 +140,12 @@ func withDBName(t *testing.T, dsn, db string) string {
 		t.Fatalf("parse dsn: %v", err)
 	}
 	u.Path = "/" + db
+	// The suite's DATABASE_URL names a store schema (TestMain); a scratch
+	// database starts without one, so the helper gives the database's
+	// default search_path and each test names the schema it uses.
+	q := u.Query()
+	q.Del("options")
+	u.RawQuery = q.Encode()
 	return u.String()
 }
 
@@ -165,8 +173,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	const srcDB = "fleet_backup_src_test"
 	const dstDB = "fleet_backup_dst_test"
 	adminDSN := withDBName(t, base, "postgres")
-	srcDSN := withDBName(t, base, srcDB)
-	dstDSN := withDBName(t, base, dstDB)
+	// A store's DSN names its schema (fleet backup dumps that schema only).
+	srcDSN := config.WithSchema(withDBName(t, base, srcDB), config.SchedSchema)
+	dstDSN := config.WithSchema(withDBName(t, base, dstDB), config.SchedSchema)
 
 	admin, err := sql.Open("pgx", adminDSN)
 	if err != nil {
@@ -213,7 +222,7 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 			t.Fatalf("open src: %v", err)
 		}
 		defer src.Close()
-		if _, err := src.ExecContext(ctx, `CREATE TABLE sentinel (note text)`); err != nil {
+		if _, err := src.ExecContext(ctx, `CREATE SCHEMA sched; CREATE TABLE sentinel (note text)`); err != nil {
 			t.Fatalf("create sentinel table: %v", err)
 		}
 		if _, err := src.ExecContext(ctx, `INSERT INTO sentinel (note) VALUES ($1)`, sentinel); err != nil {

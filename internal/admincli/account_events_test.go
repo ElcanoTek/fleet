@@ -25,8 +25,9 @@ func exportCLIFixture(t *testing.T) (*store.Store, *storage.Storage) {
 		t.Fatal(err)
 	}
 	t.Setenv("FLEET_ENV_FILE", envFile)
-	t.Setenv("FLEET_CHAT_DATABASE_URL", chatDsn)
-	t.Setenv("FLEET_SCHED_DATABASE_URL", schedDsn)
+	// One database: the chat and sched fixtures are its two schemas
+	// (TestMain), so DATABASE_URL naming it resolves both stores.
+	t.Setenv("DATABASE_URL", schedDsn)
 
 	ctx := context.Background()
 	chat, err := store.Open(chatDsn, store.DefaultPoolConfig())

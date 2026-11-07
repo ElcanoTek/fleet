@@ -53,7 +53,7 @@ func TestCheckDatabaseRunsStoreReadiness(t *testing.T) {
 		SchedDatabaseURL: config.WithSchema(at(db), config.SchedSchema),
 	}
 	res := checkDatabase(t.Context(), cfg, nil, validateOptions{})
-	if res.Status != statusFail || !strings.Contains(res.Detail, "fleet db consolidate") {
+	if res.Status != statusFail || !strings.Contains(res.Detail, "removed two-database layout") {
 		t.Fatalf("a legacy store in public = %s: %s, want a failure pointing at consolidation", res.Status, res.Detail)
 	}
 	if _, err := scratch.ExecContext(t.Context(), "DROP TABLE public.schema_migrations"); err != nil {

@@ -1270,7 +1270,7 @@ jobs:
           --health-retries 10
 
     env:
-      # The boot script creates the fleet_e2e_chat + fleet_e2e_sched DBs on this
+      # The boot script creates the fleet_e2e database (schemas chat + sched) on this
       # admin DSN (the service container's superuser has CREATEDB).
       E2E_DATABASE_DSN: postgres://fleet:fleet@127.0.0.1:5432/postgres?sslmode=disable
       # Sandbox image: built locally from the default client bundle

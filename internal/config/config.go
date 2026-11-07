@@ -1262,7 +1262,10 @@ func Load(envFile string) (*Config, error) {
 	// even on a box without SSO.
 	generic := lp.getenvBool("FLEET_OIDC_GENERIC", false)
 	centralAuth := OIDCConfigured() && !generic
-	dsns := ResolveDSNs(ProcessEnv)
+	dsns, err := ResolveDSNs(ProcessEnv)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := &Config{
 		MCPServers: make(map[string]MCPServerConfig),
@@ -1695,7 +1698,7 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("FLEET_UPLOAD_MAX_BYTES must be positive")
 	}
 	if c.DatabaseURL == "" {
-		return fmt.Errorf("FLEET_CHAT_DATABASE_URL / DATABASE_URL (or DB_HOST/DB_USER/DB_NAME parts) is required")
+		return fmt.Errorf("DATABASE_URL (or the DB_HOST/DB_USER/DB_NAME parts) is required")
 	}
 	if err := c.validateTLS(); err != nil {
 		return err

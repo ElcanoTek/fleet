@@ -42,8 +42,8 @@ import (
 func cmdDiagnose(argv []string) int {
 	fs := flag.NewFlagSet("diagnose", flag.ContinueOnError)
 	out := fs.String("output", "", "output tarball path (default fleet-diagnose-<UTC stamp>.tar.gz in the current dir)")
-	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL / DATABASE_URL)")
-	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL / DATABASE_URL)")
+	chatURL := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedURL := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	bundleDir := fs.String("client-config", "", "client bundle dir (default FLEET_CLIENT_CONFIG_DIR / config/default)")
 	service := fs.String("service", "", "systemd unit to inspect (default FLEET_SERVICE_NAME / fleet)")
 	skipSandbox := fs.Bool("no-sandbox", false, "skip the podman sandbox checks (status + sandbox sections)")

@@ -41,7 +41,6 @@
 //	fleet backup  [--db=chat|sched|all] [--out DIR]
 //	fleet restore  --db=chat|sched <dump-file>
 //	fleet import <bundle.json> [--dry-run] [--live-only]
-//	fleet db consolidate|layout   (LEGACY-DB-LAYOUT: remove after consolidation)
 //
 // The operator lifecycle is bootstrap → update → status/doctor: bootstrap
 // provisions a box, update rolls a new version in place, status reports health
@@ -136,8 +135,6 @@ func Run(argv []string) int {
 		return cmdRestore(argv[1:])
 	case "import":
 		return cmdImport(argv[1:])
-	case "db": // LEGACY-DB-LAYOUT: remove after consolidation
-		return cmdDB(argv[1:])
 	case "version", "--version", "-v":
 		// Build identity: the date-based release stamped by scripts/version.sh
 		// at build time (there is no VERSION file — ADR-0059), plus the VCS
@@ -321,17 +318,12 @@ Backup / restore (pg_dump -Fc / pg_restore; one dump file per store):
   fleet backup  [--db=chat|sched|all] [--out DIR]   (writes fleet-<db>-<stamp>.dump; prints each path)
   fleet restore  --db=chat|sched <dump-file>         (--clean --if-exists; overwrites the live store)
 
-One database (docs/ONE-DATABASE.md):
-  fleet db consolidate [--apply] [--target-db fleet] [--force-clean] [--env-file <path>]
-                                                        (move a legacy two-database install into one database; dry run unless --apply)
-  fleet db layout [--env-file <path>]                   (print the env file's layout: schemas | legacy)
-
 Legacy migration (one-time; docs/LEGACY-IMPORT.md):
   fleet import <bundle.json> [--dry-run] [--live-only]   (ingest a chat/moc migration bundle; idempotent re-runs)
 
 Connection:
-  Chat DB:  --database-url or FLEET_CHAT_DATABASE_URL / DATABASE_URL / DB_* parts
-  Sched DB: --database-url or FLEET_SCHED_DATABASE_URL / SCHED_DATABASE_URL / DATABASE_URL / DB_* parts
+  Database: --database-url, else DATABASE_URL / DB_* parts — ONE database, the chat store in
+            schema chat and the sched store in schema sched (docs/ONE-DATABASE.md)
   Env file: --env-file, else FLEET_ENV_FILE, else /etc/fleet/fleet.env when /etc/fleet exists, else .env.local
             (one resolution for config set-*, env, mcp account, and the validate-config/eval/mcp test preflights)
 

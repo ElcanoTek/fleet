@@ -484,11 +484,12 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 	names := []string{
 		"FLEET_ENV_FILE", clientconfig.EnvDir,
 		"OPENROUTER_API_KEY", "FLEET_SERVER_TOKEN", "ADMIN_API_KEY",
-		"DATABASE_URL", "FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL", "DB_PASSWORD",
+		"DATABASE_URL", "DB_PASSWORD",
 		"TAVILY_API_KEY", "BROWSERBASE_API_KEY", "FLEET_SMTP_PASSWORD", "FLEET_WEBHOOK_SECRET", "FLEET_VAPID_PRIVATE_KEY",
-		// Retired (ADR-0096) but still stripped: systemd hands a stale value in
-		// the env file to the process all the same.
+		// Retired (ADR-0096, ADR-0098) but still stripped: systemd hands a
+		// stale value in the env file to the process all the same.
 		"FLEET_ACCOUNT_EVENTS_URL", "FLEET_ACCOUNT_EVENTS_SECRET",
+		"FLEET_CHAT_DATABASE_URL", "FLEET_SCHED_DATABASE_URL", "SCHED_DATABASE_URL",
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
 		// Scheduled-task inputs the boot loader reads verbatim under their
 		// legacy names (exact os.Getenv, outside the alias machinery).
@@ -510,7 +511,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		// claim one of these because removing it would mutate parent behavior.
 		"HOME", "PATH", "TMPDIR", "SHELL", "USER", "LANG", "TZ", "NOTIFY_SOCKET",
 		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
-		"SSL_CERT_FILE", "SSL_CERT_DIR", "SCHED_DATABASE_URL",
+		"SSL_CERT_FILE", "SSL_CERT_DIR",
 		"LLM_MAX_TOKENS", "SYSTEM_PROMPT",
 		// The default-persona knobs resolve through the alias machinery AND their
 		// bare historical spelling (config.getenvFleetOrBare), so both forms are

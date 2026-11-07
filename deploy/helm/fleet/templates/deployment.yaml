@@ -173,25 +173,11 @@ spec:
               value: {{ .Values.sandbox.warmSize | int | quote }}
             {{- end }}
             {{- if .Values.postgres.enabled }}
-            {{- if include "fleet.postgresLegacyLayout" . }}
-            {{- /* LEGACY-DB-LAYOUT: remove after consolidation — a pre-#2049 release keeps its two databases. */}}
-            - name: FLEET_CHAT_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "fleet.fullname" . }}-postgres
-                  key: chat-url
-            - name: FLEET_SCHED_DATABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "fleet.fullname" . }}-postgres
-                  key: sched-url
-            {{- else }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: {{ include "fleet.fullname" . }}-postgres
                   key: url
-            {{- end }}
             {{- end }}
             {{- range $k, $v := .Values.config.env }}
             - name: {{ $k }}

@@ -162,8 +162,8 @@ func (st *importStats) errorf(format string, a ...any) {
 
 func cmdImport(argv []string) int {
 	fs := flag.NewFlagSet("import", flag.ContinueOnError)
-	chatDB := fs.String("chat-database-url", "", "chat Postgres DSN (default FLEET_CHAT_DATABASE_URL, then DATABASE_URL)")
-	schedDB := fs.String("sched-database-url", "", "sched Postgres DSN (default FLEET_SCHED_DATABASE_URL, then DATABASE_URL)")
+	chatDB := fs.String("chat-database-url", "", "chat Postgres DSN (default DATABASE_URL, schema chat)")
+	schedDB := fs.String("sched-database-url", "", "sched Postgres DSN (default DATABASE_URL, schema sched)")
 	dryRun := fs.Bool("dry-run", false, "validate and print the plan without writing")
 	liveOnly := fs.Bool("live-only", false, "sched section: import only live (pending/scheduled) tasks; skip terminal tasks and run logs")
 	overwrite := fs.Bool("overwrite", false, "restore mode: replace sched tasks and run logs whose UUID already exists in fleet (default is to skip them, so a re-run never reverts live state). A task that is running/leased here is still never overwritten, and lease columns are never imported onto an existing row.")
@@ -199,29 +199,19 @@ func cmdImport(argv []string) int {
 		return errf(1, "bundle has neither a chat nor a sched section — nothing to import")
 	}
 
-	// The chat and sched stores need DISTINCT schemas (cmd/fleet asserts the
-	// same at serve time). The resolved DSNs always give them that: one
-	// database gets a chat and a sched schema (config.ResolveDSNs, #2049), and
-	// a --*-database-url naming that database inherits its store's schema
-	// (chatDSN / schedDSN). What is left is two DSNs that would land both
-	// stores in ONE schema — explicit flags to one database on a legacy box,
-	// say — via a dual-section bundle in a single run, or via the documented
-	// runbook's two single-section bundles across two runs (#714). Refuse
-	// both shapes. For a single-section bundle the guard fires only when that
-	// section's DSN came from the generic fallback: an explicit
-	// --*-database-url flag or store-specific FLEET_*_DATABASE_URL /
-	// SCHED_DATABASE_URL var names the target unambiguously and is honored.
-	{
+	// The chat and sched stores need DISTINCT schemas. The resolved DSNs
+	// always give them that: one database with a chat and a sched schema
+	// (config.ResolveDSNs, #2049), and a --*-database-url gets its store's
+	// schema (chatDSN / schedDSN). What is left is two flags that name their
+	// own schema and land both stores in ONE schema of one database. A
+	// dual-section bundle would then mix the two stores' tables in a single
+	// run, so it is refused; a single-section bundle's flag names its target
+	// explicitly and is honored.
+	if bundle.Chat != nil && bundle.Sched != nil {
 		cdsn, cerr := chatDSN(*chatDB)
 		sdsn, serr := schedDSN(*schedDB)
 		if cerr == nil && serr == nil && config.EnsureDistinctStores(cdsn, sdsn) != nil {
-			d := resolvedDSNs()
-			sameDB := (bundle.Chat != nil && bundle.Sched != nil) ||
-				(bundle.Chat != nil && strings.TrimSpace(*chatDB) == "" && d.ChatFromGeneric()) ||
-				(bundle.Sched != nil && strings.TrimSpace(*schedDB) == "" && d.SchedFromGeneric())
-			if sameDB {
-				return errf(1, "chat and sched DSNs resolve to the same schema of one database, which would mix the two stores' tables — set only DATABASE_URL (fleet then uses schemas chat and sched), or point the --*-database-url flags at distinct databases")
-			}
+			return errf(1, "chat and sched DSNs resolve to the same schema of one database, which would mix the two stores' tables — set only DATABASE_URL (fleet then uses schemas chat and sched), or drop the schema from the --*-database-url flags")
 		}
 	}
 

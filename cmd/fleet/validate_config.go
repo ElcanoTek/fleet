@@ -5,7 +5,7 @@ package main
 // after `systemctl start fleet` — a missing MCP executable, an unset credential
 // gate, a wrong DATABASE_URL, podman absent. It reuses the SAME loaders the
 // server boots through (clientconfig.Load, config.Load + cfg.Validate, the
-// config.ResolveDSNs/EnsureDistinctStores logic) rather than reinventing them,
+// config.ResolveDSNs logic) rather than reinventing them,
 // so a green run here means the real boot path will get past these gates.
 //
 // It is a read-only diagnostic: it never starts the servers, never runs
@@ -1297,11 +1297,11 @@ func interactiveHiddenServerPinned(bundle *clientconfig.Bundle, members []string
 
 // checkDatabase validates the chat + sched DSNs and (unless --skip-network-checks)
 // runs a SELECT 1 against each within a 5s budget. It reuses the SAME DSN
-// resolution and the EnsureDistinctStores invariant the server boots through,
-// but does NOT run migrations — it is a read-only probe. The DB is BLOCKING (the
-// issue lists it so); --skip-network-checks keeps it blocking but skips only the
-// live probe, still validating the DSNs + the distinct-stores invariant. The
-// detail names the layout (one database, or the legacy two).
+// resolution the server boots through (config.ResolveDSNs, via config.Load —
+// a retired per-store key already failed there) and the distinct-stores
+// check, but does NOT run migrations — it is a read-only probe. The DB is
+// BLOCKING (the issue lists it so); --skip-network-checks keeps it blocking
+// but skips only the live probe, still validating the DSNs.
 func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts validateOptions) checkResult {
 	res := checkResult{Name: "database", Blocking: true}
 	if cfgErr != nil || cfg == nil {
@@ -1310,14 +1310,9 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		return res
 	}
 	chat, sched := strings.TrimSpace(cfg.DatabaseURL), strings.TrimSpace(cfg.SchedDatabaseURL)
-	if chat == "" {
+	if chat == "" || sched == "" {
 		res.Status = statusFail
-		res.Detail = "chat DSN is empty (set FLEET_CHAT_DATABASE_URL or DATABASE_URL)"
-		return res
-	}
-	if sched == "" {
-		res.Status = statusFail
-		res.Detail = "sched DSN is empty (set FLEET_SCHED_DATABASE_URL or DATABASE_URL)"
+		res.Detail = "DSN is empty (set DATABASE_URL)"
 		return res
 	}
 	if err := config.EnsureDistinctStores(chat, sched); err != nil {
@@ -1325,10 +1320,7 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		res.Detail = err.Error()
 		return res
 	}
-	layout := "one database, schemas chat + sched"
-	if config.LayoutOf(chat, sched) == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
-		layout = "legacy two-database layout; `fleet db consolidate` moves it into one"
-	}
+	const layout = "one database, schemas chat + sched"
 	if opts.skipNetworkChecks {
 		res.Status = statusOK
 		res.Detail = "DSNs valid, " + layout + " (live probe skipped)"
@@ -1373,7 +1365,7 @@ func probeDB(ctx context.Context, dsn string) error {
 	// every store open (and bootstrap's shell gate mirrors), so a green
 	// validate-config predicts a boot — not only that the database answers.
 	// Configured reads the connection's own search_path, exactly as Ensure
-	// does, so the legacy layout (no store schema) is skipped as at boot.
+	// does, so a DSN that names no store schema is skipped as at boot.
 	schema, err := dbschema.Configured(probeCtx, db)
 	if err != nil || schema == "" {
 		return err
