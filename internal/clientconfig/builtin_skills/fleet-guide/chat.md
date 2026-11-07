@@ -703,9 +703,12 @@ A connection that needs you to sign in has an amber outline and shows **Sign in*
 (**Sign in again** while it is connected, to refresh the sign-in). **Show all**
 opens a popup with every workspace connector and the same availability,
 new-chat, and default-account controls. A link to a connector outside the
-preview opens that popup automatically. **Credential accounts** also previews
-four accounts; **Show all** expands the list below it and **Show less** folds it
-back up.
+preview opens that popup automatically. **Credential accounts** lists the named
+accounts your connectors can use (one per client seat, for example), four at
+first; **Show all** expands the list below it and **Show less** folds it back
+up. The list is read-only: your administrator adds and removes these accounts
+on the fleet server (`fleet mcp account set`), and their secrets are never
+shown in the browser.
 
 **Find more connections** starts with eight curated **Popular** picks:
 Microsoft 365 (Outlook), GitHub, Slack, Gmail, Google Drive, Notion, Linear, and

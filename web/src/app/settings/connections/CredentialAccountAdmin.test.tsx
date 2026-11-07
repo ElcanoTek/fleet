@@ -1,110 +1,45 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
+import { render, screen, fireEvent, cleanup } from "@testing-library/react";
 import { CredentialAccountAdmin } from "./CredentialAccountAdmin";
 import type { McpServer } from "@/app/shared/lib/orchestratorApi";
-
-// Mock the API client so we can assert the EXACT payload sent upstream.
-const createAccount = vi.fn().mockResolvedValue({ server: "xandr", account: "client_a" });
-const deleteAccount = vi.fn().mockResolvedValue({ deleted: true });
-vi.mock("@/app/shared/lib/orchestratorApi", () => ({
-  orchestratorApi: {
-    createAccount: (...args: unknown[]) => createAccount(...args),
-    deleteAccount: (...args: unknown[]) => deleteAccount(...args),
-  },
-}));
 
 const SERVERS: McpServer[] = [
   { name: "xandr", accounts: ["existing_acct"] },
   { name: "magnite", accounts: [] },
 ];
 
-// The add-account form sits behind the panel's "Add account" reveal.
-function openForm() {
-  fireEvent.click(screen.getByTestId("credential-account-add"));
-}
-
-describe("CredentialAccountAdmin — write-only secrets", () => {
-  beforeEach(() => {
-    createAccount.mockClear();
-    deleteAccount.mockClear();
-  });
+describe("CredentialAccountAdmin — read-only account seats", () => {
   afterEach(() => cleanup());
 
-  it("lists existing account NAMES only and NEVER renders a secret value", () => {
-    render(<CredentialAccountAdmin servers={SERVERS} />);
-    // The catalog shows the account name…
+  it("lists existing account NAMES only and renders no secret input", () => {
+    const { container } = render(<CredentialAccountAdmin servers={SERVERS} />);
     expect(screen.getByTestId("credential-account-xandr-existing_acct")).toBeInTheDocument();
-    // …and there is no element anywhere echoing a secret value back. The only
-    // secret inputs are the empty write-only fields in the create form.
-    openForm();
-    const secretInputs = screen.getAllByTestId(/credential-secret-value-/);
-    for (const el of secretInputs) {
-      expect((el as HTMLInputElement).value).toBe("");
-      expect(el).toHaveAttribute("type", "password");
-    }
+    // No browser write path: no form, no secret field, no add/delete control.
+    expect(container.querySelector("input")).toBeNull();
+    expect(container.querySelector("form")).toBeNull();
+    expect(screen.queryByRole("button", { name: /add account|delete/i })).toBeNull();
   });
 
-  it("starts the secret value field EMPTY (never pre-filled from storage)", () => {
+  it("tells the reader how accounts are provisioned on the server", () => {
     render(<CredentialAccountAdmin servers={SERVERS} />);
-    openForm();
-    const secret = screen.getByTestId("credential-secret-value-0") as HTMLInputElement;
-    expect(secret.value).toBe("");
-    expect(secret.type).toBe("password");
-  });
-
-  it("associates the form fields with their labels via stable ids", () => {
-    render(<CredentialAccountAdmin servers={SERVERS} />);
-    openForm();
-    expect(screen.getByLabelText("Server")).toHaveAttribute(
-      "id",
-      "credentialAccountServer",
-    );
-    expect(screen.getByLabelText("Account name")).toHaveAttribute(
-      "id",
-      "credentialAccountName",
+    expect(screen.getByTestId("credential-account-howto")).toHaveTextContent(
+      "fleet mcp account set <server> <account> --secret KEY=-",
     );
   });
 
-  it("submits secrets as a write-only payload (key+value forwarded, never read back)", async () => {
-    render(<CredentialAccountAdmin servers={SERVERS} />);
-    openForm();
-    fireEvent.change(screen.getByLabelText("Account name"), { target: { value: "client_a" } });
-    fireEvent.change(screen.getByLabelText("Secret key"), { target: { value: "XANDR_API_KEY" } });
-    fireEvent.change(screen.getByTestId("credential-secret-value-0"), {
-      target: { value: "super-secret" },
-    });
-    fireEvent.click(screen.getByText("Save account"));
-
-    await waitFor(() => expect(createAccount).toHaveBeenCalledTimes(1));
-    expect(createAccount).toHaveBeenCalledWith("xandr", {
-      account: "client_a",
-      secrets: { XANDR_API_KEY: "super-secret" },
-    });
+  it("shows the empty state when no server has accounts", () => {
+    render(<CredentialAccountAdmin servers={[{ name: "magnite", accounts: [] }]} />);
+    expect(screen.getByText("No accounts yet.")).toBeInTheDocument();
   });
 
-  it("drops empty secret values (never writes a key with '')", async () => {
-    render(<CredentialAccountAdmin servers={SERVERS} />);
-    openForm();
-    fireEvent.change(screen.getByLabelText("Account name"), { target: { value: "client_a" } });
-    fireEvent.change(screen.getByLabelText("Secret key"), { target: { value: "XANDR_API_KEY" } });
-    // Leave the value EMPTY → the submit must be rejected (no createAccount),
-    // with the reason surfaced inline.
-    fireEvent.click(screen.getByText("Save account"));
-    // give any async a tick
-    await Promise.resolve();
-    expect(createAccount).not.toHaveBeenCalled();
-    expect(screen.getByText("Add at least one secret KEY=value")).toBeInTheDocument();
-  });
-
-  it("deletes an account by name after an inline confirm (no window.confirm)", async () => {
-    render(<CredentialAccountAdmin servers={SERVERS} />);
-    const del = screen.getByTestId("credential-account-delete-xandr-existing_acct");
-    // First click only ARMS the button…
-    fireEvent.click(del);
-    expect(deleteAccount).not.toHaveBeenCalled();
-    expect(del).toHaveTextContent("Confirm delete");
-    // …the second click fires the DELETE.
-    fireEvent.click(del);
-    await waitFor(() => expect(deleteAccount).toHaveBeenCalledWith("xandr", "existing_acct"));
+  it("previews four accounts and expands to all of them", () => {
+    const many: McpServer[] = [{ name: "xandr", accounts: ["a1", "a2", "a3", "a4", "a5", "a6"] }];
+    render(<CredentialAccountAdmin servers={many} />);
+    expect(screen.queryByTestId("credential-account-xandr-a5")).toBeNull();
+    const toggle = screen.getByRole("button", { name: /show all \(6\)/i });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(screen.getByTestId("credential-account-xandr-a6")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /show less/i })).toHaveAttribute("aria-expanded", "true");
   });
 });

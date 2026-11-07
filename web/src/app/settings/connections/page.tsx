@@ -1165,7 +1165,7 @@ function ConnectionsPageInner() {
   const [accountLabel, setAccountLabel] = useState("");
   // The MCP server catalog (names + credential-account names, never secrets)
   // feeds the credential-accounts panel, same as the old General page did.
-  const { servers: mcpServers, reload: reloadMcpServers } = useMcpServers(true);
+  const { servers: mcpServers } = useMcpServers(true);
 
   // apply/refresh are memoized so the focus-refresh effect below can list
   // refresh as its one dependency and subscribe once, instead of tearing down
@@ -1193,16 +1193,6 @@ function ConnectionsPageInner() {
     setLoading(true);
     apply(() => false);
   }, [apply, setError]);
-
-  // refreshCatalog re-reads bundled accounts + third-party entries — called
-  // after credential-account changes so new seats appear in the card selects.
-  const refreshCatalog = () => {
-    fetchCatalog()
-      .then((c) => {
-        if (c) setCatalog(c);
-      })
-      .catch(() => {});
-  };
 
   useEffect(() => {
     let stale = false;
@@ -2497,17 +2487,11 @@ function ConnectionsPageInner() {
       {/* ── Group 2 — Credential accounts ── */}
       <ConnGroup>
         <ConnGroupHead title="Credential accounts">
-          Named sign-ins your connectors use — e.g. one per client seat. Secret
-          values are write-only; they are never displayed after saving.
+          Named sign-ins your connectors use — e.g. one per client seat. Your
+          administrator provisions them on the server; secret values are never
+          displayed.
         </ConnGroupHead>
-        <CredentialAccountAdmin
-          servers={mcpServers}
-          onChanged={() => {
-            void reloadMcpServers();
-            // Bundled cards offer accounts as default seats — refresh them too.
-            refreshCatalog();
-          }}
-        />
+        <CredentialAccountAdmin servers={mcpServers} />
       </ConnGroup>
 
       {/* ── Group 3 — Connector directory (collapsible) ── */}

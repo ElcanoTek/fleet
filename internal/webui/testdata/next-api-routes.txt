@@ -1,6 +1,9 @@
 # Every /api route handler the Next.js tier served (method + path), generated
 # from web/src/app/api/**/route.ts at the commit that removed it (ADR-0091).
 # routes_test.go asserts the gateway registers exactly this set.
+# A "# retired: METHOD PATH" line is a route that tier carried but that no
+# fleet backend ever served; the gateway deliberately does NOT register it
+# (it answers the JSON 404), and routes_test.go asserts that too.
 GET /api/admin/decision-models
 GET /api/admin/doctor
 POST /api/admin/guardrail/test
@@ -135,10 +138,10 @@ GET /api/orchestrator/datasets
 POST /api/orchestrator/datasets
 GET /api/orchestrator/logs/{taskId}
 GET /api/orchestrator/logs/{taskId}/subagents/{childId}
-PUT /api/orchestrator/mcp-servers/{server}/accounts/{account}
-DELETE /api/orchestrator/mcp-servers/{server}/accounts/{account}
-GET /api/orchestrator/mcp-servers/{server}/accounts
-POST /api/orchestrator/mcp-servers/{server}/accounts
+# retired: PUT /api/orchestrator/mcp-servers/{server}/accounts/{account}
+# retired: DELETE /api/orchestrator/mcp-servers/{server}/accounts/{account}
+# retired: GET /api/orchestrator/mcp-servers/{server}/accounts
+# retired: POST /api/orchestrator/mcp-servers/{server}/accounts
 GET /api/orchestrator/mcp-servers
 GET /api/orchestrator/me
 PUT /api/orchestrator/prompts/{promptId}
