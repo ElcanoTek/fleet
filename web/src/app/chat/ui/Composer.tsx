@@ -38,7 +38,8 @@ import type { ModelPrices } from "@/app/shared/lib/modelCost";
 import type { ContextUsage } from "@/app/lib/contextUsage";
 import type { NudgeDecision } from "@/app/lib/spreadsheetNudge";
 import type { Message } from "./history";
-import type { MCPServerInfo, RankedModel } from "./chat-experience";
+import type { MCPServerInfo } from "./chat-experience";
+import type { ComposerModelCatalog } from "./useChatModelCatalog";
 import {
   completeSkill,
   filterSkills,
@@ -212,17 +213,10 @@ export type ComposerProps = {
   // The selected model is an operator pin marked free: the chip reads "Free".
   selectedModelFree?: boolean;
   modelError: { message: string; modelsUrl: string } | null;
-  modelPickerOpen: boolean;
-  setModelPickerOpen: Dispatch<SetStateAction<boolean>>;
+  // The model picker's state, rows and loaders (useChatModelCatalog).
+  modelCatalog: ComposerModelCatalog;
   modelPickerRef: RefObject<HTMLDivElement | null>;
   modelInputRef: RefObject<HTMLInputElement | null>;
-  modelSearchQuery: string;
-  setModelSearchQuery: Dispatch<SetStateAction<string>>;
-  filteredRankedModels: RankedModel[];
-  isLoadingRankedModels: boolean;
-  isLoadingCatalog: boolean;
-  loadRankedModels: () => void | Promise<void>;
-  loadCatalogModels: () => void | Promise<void>;
 
   // Bundle skill roster for the "/" autocomplete (#513). Fetched once by
   // ChatExperience; empty when the bundle ships no skills (popover never opens).
@@ -333,17 +327,9 @@ export function Composer({
   selectedModelPrices,
   selectedModelFree,
   modelError,
-  modelPickerOpen,
-  setModelPickerOpen,
+  modelCatalog,
   modelPickerRef,
   modelInputRef,
-  modelSearchQuery,
-  setModelSearchQuery,
-  filteredRankedModels,
-  isLoadingRankedModels,
-  isLoadingCatalog,
-  loadRankedModels,
-  loadCatalogModels,
   skills,
   mcpServers,
   mcpPickerOpen,
@@ -375,6 +361,17 @@ export function Composer({
   showDetails = false,
   onToggleShowDetails,
 }: ComposerProps) {
+  const {
+    modelPickerOpen,
+    setModelPickerOpen,
+    modelSearchQuery,
+    setModelSearchQuery,
+    filteredRankedModels,
+    isLoadingRankedModels,
+    isLoadingCatalog,
+    loadRankedModels,
+    loadCatalogModels,
+  } = modelCatalog;
   // Multi-line composer UX (issue #315):
   // - `isComposerFocused` drives the keyboard-hint line under the composer:
   //   it fades in while the textarea has focus and out on blur (the design's

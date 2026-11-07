@@ -3,6 +3,7 @@ import { DEFAULT_MODEL, DEFAULT_MODEL_LABEL, setModelTiers, _resetModelTiersForT
 import {
   compactModelLabel,
   filterModels,
+  loadCatalogModels,
   loadModels,
   normaliseCatalogModel,
   scoreMatch,
@@ -389,5 +390,43 @@ describe("loadModels (fetch + fallback)", () => {
     );
     const models = await loadModels();
     expect(models).toEqual(seedModels());
+  });
+});
+
+describe("loadCatalogModels (the shared /api/model-catalog client)", () => {
+  beforeEach(() => {
+    _resetModelCacheForTests();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    _resetModelCacheForTests();
+  });
+
+  it("shares one request between concurrent callers and caches the result", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ models: [{ slug: "acme/a", name: "Acme: A" }] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const [a, b] = await Promise.all([loadCatalogModels(), loadCatalogModels()]);
+    expect(a).toBe(b);
+    expect(a.map((m) => m.id)).toEqual(["acme/a"]);
+    await loadCatalogModels();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // The cache lapses after 30s.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 31_000);
+    await loadCatalogModels();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects on a failed fetch and does not cache the failure", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 502, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ models: [{ slug: "acme/a", name: "A" }] }) });
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(loadCatalogModels()).rejects.toThrow("status 502");
+    expect((await loadCatalogModels()).map((m) => m.id)).toEqual(["acme/a"]);
   });
 });
