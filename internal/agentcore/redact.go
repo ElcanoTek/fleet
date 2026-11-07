@@ -4,6 +4,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/redact"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -36,7 +37,10 @@ func init() { tools.ShowUIRedactor = func(s string) string { return toolRedactor
 func toolRedactor() *redact.Redactor {
 	redactorOnce.Do(func() {
 		r := redact.NewRedactor(nil)
-		r.RegisterEnvLiterals(os.Environ())
+		environ := os.Environ()
+		r.RegisterEnvLiterals(environ)
+		// The process log redacts by the same literal set (#2052).
+		logging.RegisterEnvLiterals(environ)
 		// Publish under pendingMu, and drain under the same lock: that is what
 		// makes RegisterSecretLiteral's nil-check safe against a racing
 		// construction, so a value offered concurrently is either buffered here
@@ -95,6 +99,10 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	if len(kept) == 0 && !rotated {
 		return
 	}
+	// Every literal the tool-output scrubber learns is also a log scrub
+	// target (#2052): a credential that must not reach the model must not
+	// reach the process log either.
+	logging.RegisterSecretLiterals(scope, rotated, kept...)
 	pendingMu.Lock()
 	if sharedRedactor == nil {
 		pendingLiterals = append(pendingLiterals, pendingLiteral{scope: scope, rotated: rotated, values: kept})

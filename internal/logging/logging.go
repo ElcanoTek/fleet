@@ -1,20 +1,32 @@
-// Package logging provides an OPT-IN rotating file sink for fleet's process log.
+// Package logging owns fleet's process log: its format, its level, its secret
+// redactor, the optional rotating file sink, and the context logger every call
+// site uses (#2052, completing #178).
 //
-// fleet logs startup diagnostics and operational lines through the standard
-// library log package (and structured panic events through log/slog in
-// internal/safe), all of which land on stderr by default — which, under the
-// shipped systemd unit, journald captures and rotates for free (ADR-0004). That
-// default is unchanged: with FLEET_LOG_FILE unset, Configure is a no-op and the
-// process keeps writing exactly to stderr as before.
+// Every server log line is a log/slog record. Call sites log through
+// From(ctx), which returns the default logger already carrying the request's
+// correlation attributes (conv_id, turn_id, task_id, run_id, user_id,
+// request_id, and trace_id/span_id when a span is active — see context.go), or
+// through the package-level slog functions where no context exists. The
+// standard library log package's print and fatal functions are banned by a
+// forbidigo rule (.golangci.yml); whatever a third-party library still writes
+// through it is bridged into slog by logBridge, so the stream stays one format.
 //
-// When an operator sets FLEET_LOG_FILE — typically a container/non-systemd
-// deployment where journald is not doing the rotation — this package additionally
-// tees the standard log output to a size-rotated file (internal/logging/rotate,
-// in-housed from lumberjack) with operator-tunable
-// size/age/backup/compress knobs. It deliberately does NOT change the log FORMAT:
-// it rotates the existing log lines as-is. Converting every call site to
-// structured slog JSON is a separate migration (issue #178); this file sink is
-// orthogonal to it and makes no claim to perform it.
+// FORMAT. FLEET_LOG_FORMAT=json (the default) emits one JSON object per line
+// ({"time":…,"level":…,"msg":…,<attrs>}), which journald stores verbatim and
+// Loki/Datadog/Vector parse natively. FLEET_LOG_FORMAT=text emits slog's logfmt
+// lines (time=… level=… msg="…" key=value) for an operator reading journalctl
+// by eye. Both formats go through the same redactor and level gate.
+//
+// DESTINATION. stderr, which journald captures and rotates under the shipped
+// systemd unit (ADR-0004). When an operator sets FLEET_LOG_FILE (typically a
+// container/non-systemd deployment) the same lines are also teed to a
+// size-rotated file (internal/logging/rotate, in-housed from lumberjack).
+//
+// REDACTION. replaceAttr (redact.go) runs on every attribute and on the
+// message: a value whose KEY names a secret is blanked, and every string value
+// is passed through internal/redact — the same canonical patterns and literal
+// set that scrub tool output (agentcore/redact.go) and broker errors
+// (mcpbroker/redact.go).
 package logging
 
 import (
@@ -29,8 +41,7 @@ import (
 )
 
 // Config holds the process-log knobs. The zero value (File == "") means the file
-// sink is OFF; Format defaults to structured JSON (#178) when unset via the
-// caller.
+// sink is OFF; Format defaults to structured JSON when unset.
 type Config struct {
 	// File is the path to the active log file. EMPTY DISABLES the file sink
 	// entirely (the default) — the only switch that turns the feature on.
@@ -45,11 +56,9 @@ type Config struct {
 	MaxBackups int
 	// Compress gzips rotated files when true.
 	Compress bool
-	// Format is "json" (default; structured log/slog JSON) or "text" (legacy
-	// plaintext, exactly the prior behavior). Empty is treated as "json".
+	// Format is "json" (default) or "text" (slog logfmt). Empty is "json".
 	Format string
-	// Level is the minimum level for JSON output: debug|info|warn|error. Empty
-	// defaults to info. Ignored for the text format.
+	// Level is the minimum level: debug|info|warn|error. Empty defaults to info.
 	Level string
 }
 
@@ -70,24 +79,19 @@ func ParseLevel(s string) slog.Level {
 // Enabled reports whether the file sink is configured on.
 func (c Config) Enabled() bool { return c.File != "" }
 
-// Configure sets up process logging (#178 + #298). The destination is stderr,
-// plus a size/age/backup-rotated file when cfg.File is set. The FORMAT is chosen
-// by cfg.Format:
-//
-//   - "json" (default): the standard log package AND log/slog are routed through
-//     an slog JSON handler at the destination — every existing log.Printf line
-//     becomes a structured JSON object (aggregation-friendly for Loki/Datadog/
-//     journald-json), the level is FLEET_LOG_LEVEL (set at boot), and
-//     secret-keyed attributes are redacted (defense-in-depth).
-//   - "text": the legacy plaintext behavior, byte-for-byte — the standard log
-//     package writes its usual lines to the destination and slog is untouched.
+// Configure sets up process logging. The destination is stderr, plus a
+// size/age/backup-rotated file when cfg.File is set. The format is cfg.Format
+// ("json" by default, or "text" for logfmt); both install a redacting slog
+// handler as the default logger, gated by cfg.Level, and route the standard
+// log package (third-party code only — fleet's own call sites are slog) into
+// an ungated bridge logger of the same format.
 //
 // It returns an io.Closer for the rotating file (nil when the file sink is off)
 // for the caller to defer-close, and any error opening the file.
 //
 // internal/safe keeps its OWN slog handler bound to stderr by design (a recovered
 // panic must still reach stderr/journald even if a misconfigured file sink is
-// failing), so panic events are unaffected by the format choice here.
+// failing), so panic events are unaffected by the choices here.
 func Configure(cfg Config) (io.Closer, error) {
 	// Destination: stderr, plus the rotating file when configured.
 	var dest io.Writer = os.Stderr
@@ -110,51 +114,58 @@ func Configure(cfg Config) (io.Closer, error) {
 		closer = rotor
 	}
 
-	// Legacy plaintext: standard log writes as-is to the destination; no slog.
+	newHandler := newJSONHandler
 	if strings.EqualFold(strings.TrimSpace(cfg.Format), "text") {
-		log.SetOutput(dest)
-		return closer, nil
+		newHandler = newTextHandler
 	}
-
-	// Structured JSON (default): install an slog JSON handler + redactor as the
-	// default logger (gated by FLEET_LOG_LEVEL, for native slog call sites), plus
-	// an UNGATED bridge logger so the standard log package emits JSON without
-	// being rewritten AND without being level-filtered — see bridgeLogger.
 	levelVar.Set(ParseLevel(cfg.Level))
-	slog.SetDefault(slog.New(newJSONHandler(dest, levelVar)))
-	bridgeLogger = slog.New(newJSONHandler(dest, slog.LevelInfo))
+	slog.SetDefault(slog.New(newHandler(dest, levelVar)))
+	bridgeLogger = slog.New(newHandler(dest, slog.LevelInfo))
 	log.SetFlags(0) // slog stamps its own time; drop the stdlib "2006/01/02 …" prefix
 	log.SetOutput(logBridge{})
 	return closer, nil
 }
 
-// bridgeLogger emits bridged standard-library log lines. It is deliberately
-// pinned to a fixed info threshold and is NOT gated by FLEET_LOG_LEVEL: today
-// the bulk of the process log still flows through the standard `log` package
-// (the per-call-site slog conversion is ongoing, #178) and a bridged line's TRUE
-// severity is unknown (assumed info). Gating it by level would let
-// FLEET_LOG_LEVEL=warn silently erase the ENTIRE legacy diagnostic stream —
-// including error/warning lines and a fatal-startup explanation. So legacy lines
-// always emit; FLEET_LOG_LEVEL gates only native slog call sites. Reassigned once
-// in Configure (before any concurrent logging); defaults to stderr pre-Configure.
+// bridgeLogger emits bridged standard-library log lines. Fleet's own code no
+// longer writes through the log package (forbidigo bans it), so what arrives
+// here is a third-party library's diagnostic — net/http's server error log, a
+// driver's warning — whose TRUE severity is unknown (assumed info). It is
+// deliberately NOT gated by FLEET_LOG_LEVEL: raising the level to warn must not
+// silently erase a library's report of a failure it could only express as a
+// plain print. Reassigned once in Configure (before any concurrent logging);
+// defaults to stderr pre-Configure.
 var bridgeLogger = slog.New(newJSONHandler(os.Stderr, slog.LevelInfo))
 
-// newJSONHandler builds the structured-JSON handler stack: an slog JSON handler
-// at dest, gated by level, wrapped in the secret redactor. Extracted so tests
-// can exercise it over a buffer without touching process-global logger state.
+// newJSONHandler builds the structured-JSON handler: an slog JSON handler at
+// dest, gated by level, with the secret redactor as its ReplaceAttr. Extracted
+// so tests can exercise it over a buffer without touching process-global state.
 func newJSONHandler(dest io.Writer, level slog.Leveler) slog.Handler {
-	return redactingHandler{Handler: slog.NewJSONHandler(dest, &slog.HandlerOptions{Level: level})}
+	return slog.NewJSONHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
 }
 
-// logBridge routes standard-library log output into slog as Info records, so
-// legacy log.Printf/Println call sites emit structured JSON without being
-// rewritten. One Write == one log line == one slog record.
+// newTextHandler is newJSONHandler's logfmt sibling (FLEET_LOG_FORMAT=text).
+func newTextHandler(dest io.Writer, level slog.Leveler) slog.Handler {
+	return slog.NewTextHandler(dest, &slog.HandlerOptions{Level: level, ReplaceAttr: replaceAttr})
+}
+
+// NewHandler returns a redacting handler of the named format ("json" or
+// "text") at dest — the same handler Configure installs, for a process that
+// must log to a destination of its own (tests, a subprocess).
+func NewHandler(format string, dest io.Writer, level slog.Leveler) slog.Handler {
+	if strings.EqualFold(strings.TrimSpace(format), "text") {
+		return newTextHandler(dest, level)
+	}
+	return newJSONHandler(dest, level)
+}
+
+// logBridge routes standard-library log output into slog as Info records, so a
+// library writing through log.Printf still emits a line in the configured
+// format. One Write == one log line == one slog record.
 //
 // Interior CR/LF in the message are flattened to spaces before it reaches the
 // handler (log-injection guard). The JSON handler already escapes them, so this
-// is defense-in-depth for the many legacy call sites that interpolate request
-// data; strings.ReplaceAll is the spelling CodeQL's go/log-injection query
-// models as a sanitizer.
+// is defense-in-depth; strings.ReplaceAll is the spelling CodeQL's
+// go/log-injection query models as a sanitizer.
 type logBridge struct{}
 
 func (logBridge) Write(p []byte) (int, error) {
@@ -164,55 +175,12 @@ func (logBridge) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// redactingHandler wraps an slog.Handler and replaces the value of any attribute
-// whose key looks secret with "[REDACTED]" — defense-in-depth for the
-// credentials-never-in-logs invariant. Call sites are still expected not to log
-// secret VALUES; this catches an accidental slog.String("token", …).
-type redactingHandler struct{ slog.Handler }
-
-func (h redactingHandler) Handle(ctx context.Context, r slog.Record) error {
-	nr := slog.NewRecord(r.Time, r.Level, r.Message, r.PC)
-	r.Attrs(func(a slog.Attr) bool {
-		nr.AddAttrs(redactAttr(a))
-		return true
-	})
-	return h.Handler.Handle(ctx, nr)
-}
-
-func (h redactingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	red := make([]slog.Attr, len(attrs))
-	for i, a := range attrs {
-		red[i] = redactAttr(a)
-	}
-	return redactingHandler{Handler: h.Handler.WithAttrs(red)}
-}
-
-func (h redactingHandler) WithGroup(name string) slog.Handler {
-	return redactingHandler{Handler: h.Handler.WithGroup(name)}
-}
-
-func redactAttr(a slog.Attr) slog.Attr {
-	if secretAttrKey(a.Key) {
-		return slog.String(a.Key, "[REDACTED]")
-	}
-	if a.Value.Kind() == slog.KindGroup {
-		gs := a.Value.Group()
-		red := make([]slog.Attr, len(gs))
-		for i, g := range gs {
-			red[i] = redactAttr(g)
-		}
-		return slog.Attr{Key: a.Key, Value: slog.GroupValue(red...)}
-	}
-	return a
-}
-
-// secretAttrKey reports whether an attribute key names a likely secret.
-func secretAttrKey(key string) bool {
-	k := strings.ToLower(key)
-	for _, s := range []string{"secret", "token", "password", "passwd", "apikey", "api_key", "authorization", "bearer", "credential"} {
-		if strings.Contains(k, s) {
-			return true
-		}
-	}
-	return false
+// Fatal logs msg at error level with args (slog key/value pairs or Attrs) on
+// the default logger and exits the process with status 1 — the structured
+// replacement for log.Fatalf. Like log.Fatal it does not run deferred calls,
+// so use it only where the process has nothing left to unwind (main, a CLI
+// verb's top level).
+func Fatal(msg string, args ...any) {
+	slog.Error(msg, args...)
+	os.Exit(1)
 }

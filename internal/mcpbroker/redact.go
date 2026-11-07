@@ -1,10 +1,11 @@
 package mcpbroker
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 
+	"github.com/ElcanoTek/fleet/internal/logging"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
@@ -23,7 +24,9 @@ import (
 // The error is scrubbed before it reaches the log, not merely trusted to be
 // clean: internal/logging's slog handler only blanks attributes whose KEY looks
 // secret, and fleet's convention here is stdlib log.Printf, whose message text
-// that handler does not touch. brokerRedactor's env literals matter most — this
+// that handler did not touch. (Since #2052 the log handler also scrubs every
+// string value with internal/redact; the explicit scrub here stays because this
+// process's literal set is the one that knows the connector credentials.) brokerRedactor's env literals matter most — this
 // process is the one that holds the connector credentials, so the exact bearer
 // token that might appear inside a failed request URL is registered by value and
 // replaced even when its shape matches no known vendor pattern.
@@ -37,10 +40,10 @@ func logMasked(op, detail string, err error) {
 	}
 	scrubbed := brokerRedactor().Redact(err.Error())
 	if detail == "" {
-		log.Printf("mcpbroker: %s failed (masked to the caller): %s", op, scrubbed)
+		slog.Warn("mcpbroker: call failed (masked to the caller)", "op", op, "err", scrubbed)
 		return
 	}
-	log.Printf("mcpbroker: %s failed (masked to the caller): %s: %s", op, detail, scrubbed)
+	slog.Warn("mcpbroker: call failed (masked to the caller)", "op", op, "detail", detail, "err", scrubbed)
 }
 
 // logPassed is logMasked's sibling for the classes describeCallError lets
@@ -51,7 +54,7 @@ func logPassed(op, detail string, err error, told string) {
 		return
 	}
 	scrubbed := brokerRedactor().Redact(err.Error())
-	log.Printf("mcpbroker: %s failed (passed to the caller as %q): %s: %s", op, told, detail, scrubbed)
+	slog.Warn("mcpbroker: call failed (passed to the caller as told)", "op", op, "told", told, "detail", detail, "err", scrubbed)
 }
 
 // RegisterSecretLiteral adds a runtime-acquired secret — a per-user OAuth
@@ -65,6 +68,7 @@ func logPassed(op, detail string, err error, told string) {
 // The value is retained only inside the redactor and is never logged.
 func RegisterSecretLiteral(value string) {
 	brokerRedactor().AddLiteral(value)
+	logging.RegisterSecretLiterals("", false, value)
 }
 
 // RedactSecrets scrubs text with the broker's process-wide redactor — the one
@@ -87,6 +91,7 @@ func RedactSecrets(text string) string {
 // registers permanently, like RegisterSecretLiteral.
 func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 	brokerRedactor().RegisterSecrets(scope, rotated, values...)
+	logging.RegisterSecretLiterals(scope, rotated, values...)
 }
 
 // brokerRedactor returns the process-wide scrubber for masked-error logging: the
@@ -98,7 +103,10 @@ func RegisterSecretLiterals(scope string, rotated bool, values ...string) {
 func brokerRedactor() *redact.Redactor {
 	redactorOnce.Do(func() {
 		r := redact.NewRedactor(nil)
-		r.RegisterEnvLiterals(os.Environ())
+		environ := os.Environ()
+		r.RegisterEnvLiterals(environ)
+		// The process log redacts by the same literal set (#2052).
+		logging.RegisterEnvLiterals(environ)
 		sharedRedactor = r
 	})
 	return sharedRedactor
