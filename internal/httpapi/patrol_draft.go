@@ -15,17 +15,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
-
-// patrolDraftInFlight holds the users with a draft being synthesized. A
-// draft is a model call of up to 45 seconds; one at a time per user is all
-// the wizard needs, and anything more is spend nobody asked for. (The route's
-// rateLimitMiddleware bounds the rate; this bounds concurrency.)
-var patrolDraftInFlight sync.Map
 
 // patrolDraftMaxBody bounds the request: a dozen goals, a notes box, a few
 // dozen connector descriptions and memories fit comfortably.
@@ -111,11 +104,11 @@ func (s *Server) handlePatrolDraft(w http.ResponseWriter, r *http.Request) {
 		}
 		in.Memories = memoryContentsCapped(mems, patrolDraftMemoryRunes)
 	}
-	if _, busy := patrolDraftInFlight.LoadOrStore(user, struct{}{}); busy {
+	if _, busy := s.patrolDraftInFlight.LoadOrStore(user, struct{}{}); busy {
 		http.Error(w, "a draft is already being written; wait for it to finish", http.StatusTooManyRequests)
 		return
 	}
-	defer patrolDraftInFlight.Delete(user)
+	defer s.patrolDraftInFlight.Delete(user)
 
 	draft, err := s.agent.SuggestPatrolDraft(r.Context(), in)
 	if err != nil || draft == nil {
