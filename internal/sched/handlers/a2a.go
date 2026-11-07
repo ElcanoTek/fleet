@@ -172,6 +172,49 @@ func (c *a2aStreamCounter) release(key string) {
 	c.byPrincipal[key]--
 }
 
+// a2aStreamSlot is one place held under both stream ceilings (the process-wide
+// a2aMaxConcurrentStreams and the per-credential cap). A streaming method
+// reserves it before it creates or resumes a task, so a refusal arrives
+// before anything has changed; the stream then holds it until it closes.
+// release is idempotent, so the caller may also defer it to cover a failure
+// between the reservation and the stream.
+type a2aStreamSlot struct {
+	h    *Handlers
+	key  string
+	once sync.Once
+}
+
+func (s *a2aStreamSlot) release() {
+	s.once.Do(func() {
+		s.h.a2aStreamsBy.release(s.key)
+		atomic.AddInt64(&s.h.a2aStreams, -1)
+	})
+}
+
+// a2aReserveStream takes a stream slot for p. When either ceiling is
+// reached (or w cannot stream) it writes the refusal — an ordinary JSON-RPC
+// error, never a started SSE stream — and returns nil.
+func (h *Handlers) a2aReserveStream(w http.ResponseWriter, p principal, rpcID json.RawMessage) *a2aStreamSlot {
+	if _, ok := w.(http.Flusher); !ok {
+		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
+		return nil
+	}
+	if n := atomic.AddInt64(&h.a2aStreams, 1); n > a2aMaxConcurrentStreams {
+		atomic.AddInt64(&h.a2aStreams, -1)
+		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+			fmt.Sprintf("this server is at its concurrent A2A stream ceiling (%d); retry shortly, or poll GetTask", a2aMaxConcurrentStreams), nil))
+		return nil
+	}
+	key := a2aStreamKey(p)
+	if !h.a2aStreamsBy.acquire(key) {
+		atomic.AddInt64(&h.a2aStreams, -1)
+		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
+			fmt.Sprintf("this credential already holds %d concurrent A2A streams; close one, or poll GetTask", a2aMaxConcurrentStreamsPerPrincipal), nil))
+		return nil
+	}
+	return &a2aStreamSlot{h: h, key: key}
+}
+
 // a2aStreamKey names the principal a stream is counted against: the API key's
 // stable id, the user's id, or "" for the admin key (not counted).
 func a2aStreamKey(p principal) string {
@@ -485,6 +528,16 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 		return
 	}
 
+	// A streaming send reserves its stream slot before the task exists, so
+	// a caller at a stream ceiling is refused with nothing created.
+	var slot *a2aStreamSlot
+	if streaming {
+		if slot = h.a2aReserveStream(w, p, req.ID); slot == nil {
+			return
+		}
+		defer slot.release()
+	}
+
 	tc := models.TaskCreate{
 		Prompt:             prompt,
 		Title:              a2aTitle(prompt),
@@ -512,7 +565,7 @@ func (h *Handlers) a2aSendMessage(w http.ResponseWriter, r *http.Request, p prin
 	}
 
 	if streaming {
-		h.a2aStreamTask(w, r, p, req.ID, task.ID)
+		h.a2aStreamTask(w, r, slot, req.ID, task.ID)
 		return
 	}
 	// Spec: a unary SendMessage with returnImmediately false — the DEFAULT —
@@ -594,6 +647,16 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 			fmt.Sprintf("task %s is not awaiting input (state %s): a follow-up message is only accepted while the task asks a question", task.ID, task.Status), nil))
 		return
 	}
+	// A streaming answer reserves its stream slot before the task is
+	// resumed, so a caller at a stream ceiling is refused with the task still
+	// awaiting input.
+	var slot *a2aStreamSlot
+	if streaming {
+		if slot = h.a2aReserveStream(w, p, req.ID); slot == nil {
+			return
+		}
+		defer slot.release()
+	}
 	resumed, err := h.storage.ResumeTask(r.Context(), task.ID, answer)
 	if err != nil {
 		a2aWrite(w, a2abridge.NewErrorResponse(req.ID, wire.ErrInternalError, "failed to resume the task", nil))
@@ -620,7 +683,7 @@ func (h *Handlers) a2aAnswerTask(w http.ResponseWriter, r *http.Request, p princ
 		}
 	}
 	if streaming {
-		h.a2aStreamTask(w, r, p, req.ID, task.ID)
+		h.a2aStreamTask(w, r, slot, req.ID, task.ID)
 		return
 	}
 	updated, err := h.storage.GetTask(task.ID)
@@ -924,7 +987,11 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 			fmt.Sprintf("task %s is already terminal (state %s); use GetTask for the result", task.ID, task.Status), nil))
 		return
 	}
-	h.a2aStreamTask(w, r, p, req.ID, task.ID)
+	slot := h.a2aReserveStream(w, p, req.ID)
+	if slot == nil {
+		return
+	}
+	h.a2aStreamTask(w, r, slot, req.ID, task.ID)
 }
 
 // a2aStreamTask serves one task-lifecycle SSE stream (spec §3.1.2): it MUST
@@ -938,28 +1005,16 @@ func (h *Handlers) a2aSubscribeToTask(w http.ResponseWriter, r *http.Request, p 
 // second, at the cost of merging two event sources — and it evicts after two
 // minutes, while the row never lies. Nothing is lost to a dropped connection:
 // SubscribeToTask re-reads the row.
-func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, p principal, rpcID json.RawMessage, taskID uuid.UUID) {
+//
+// slot is the stream's reservation (a2aReserveStream), taken by the caller
+// before it created or resumed anything; the stream releases it on return.
+func (h *Handlers) a2aStreamTask(w http.ResponseWriter, r *http.Request, slot *a2aStreamSlot, rpcID json.RawMessage, taskID uuid.UUID) {
+	defer slot.release()
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "Streaming unsupported")
 		return
 	}
-	// Refused BEFORE the SSE headers, so the ceiling comes back as an
-	// ordinary JSON-RPC error the client can act on, not a dead stream.
-	if n := atomic.AddInt64(&h.a2aStreams, 1); n > a2aMaxConcurrentStreams {
-		atomic.AddInt64(&h.a2aStreams, -1)
-		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
-			fmt.Sprintf("this server is at its concurrent A2A stream ceiling (%d); retry shortly, or poll GetTask", a2aMaxConcurrentStreams), nil))
-		return
-	}
-	defer atomic.AddInt64(&h.a2aStreams, -1)
-	streamKey := a2aStreamKey(p)
-	if !h.a2aStreamsBy.acquire(streamKey) {
-		a2aWrite(w, a2abridge.NewErrorResponse(rpcID, wire.ErrServerError,
-			fmt.Sprintf("this credential already holds %d concurrent A2A streams; close one, or poll GetTask", a2aMaxConcurrentStreamsPerPrincipal), nil))
-		return
-	}
-	defer h.a2aStreamsBy.release(streamKey)
 	lifetime := time.NewTimer(a2aStreamMaxLifetime)
 	defer lifetime.Stop()
 	w.Header().Set("Content-Type", "text/event-stream")
