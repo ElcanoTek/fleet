@@ -52,16 +52,22 @@ var preRegistryAllowedEnvVars = map[string]bool{
 	"SCHED_DATABASE_URL": true,
 	// Other keys boot reads via os.Getenv that predated this allowlist (an
 	// env-file value was silently ignored; only the process env worked).
-	"ADMIN_API_KEY":                        true,
-	"CUTLASS_LOG_FILE":                     true,
-	"FLEET_BACKUP_DIR":                     true,
-	"FLEET_BACKUP_RETENTION_DAYS":          true,
-	"FLEET_DEFAULT_TIMEZONE":               true,
-	"FLEET_TIMEZONE":                       true,
-	"FLEET_ORCHESTRATOR_ADDR":              true,
-	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS":  true,
-	"FLEET_OTEL_ENDPOINT":                  true,
-	"FLEET_OTEL_SAMPLE_RATIO":              true,
+	"ADMIN_API_KEY":                       true,
+	"CUTLASS_LOG_FILE":                    true,
+	"FLEET_BACKUP_DIR":                    true,
+	"FLEET_BACKUP_RETENTION_DAYS":         true,
+	"FLEET_DEFAULT_TIMEZONE":              true,
+	"FLEET_TIMEZONE":                      true,
+	"FLEET_ORCHESTRATOR_ADDR":             true,
+	"FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS": true,
+	"FLEET_OTEL_ENDPOINT":                 true,
+	"FLEET_OTEL_SAMPLE_RATIO":             true,
+	// Added after the registry (#2052, OTLP over TLS/mTLS): a deliberate
+	// registry change, recorded here per the rule above.
+	"FLEET_OTEL_INSECURE":                  true,
+	"FLEET_OTEL_CA_FILE":                   true,
+	"FLEET_OTEL_CLIENT_CERT_FILE":          true,
+	"FLEET_OTEL_CLIENT_KEY_FILE":           true,
 	"FLEET_SERVICE_NAME":                   true,
 	"FLEET_SANDBOX_STATS_INTERVAL_SECONDS": true,
 	"FLEET_TOOL_DISCLOSURE_THRESHOLD":      true,
@@ -748,6 +754,9 @@ var preRegistryEnvKnobs = []envKnob{
 	// ── documented-lenient (#1273) ── the ONE knob whose leniency is
 	// deliberate. Registered so validate-config preflights the syntax as an
 	// advisory; boot does not refuse.
+	// Added after the registry (#2052): the OTLP exporter's plaintext switch.
+	{key: "FLEET_OTEL_INSECURE", kind: kindBool,
+		scope: scopeExternal, readBy: "internal/otelsetup (exporter transport)"},
 	{key: "FLEET_OTEL_SAMPLE_RATIO", kind: kindFloat,
 		scope: scopeExternal, readBy: "internal/otelsetup (head sampler)",
 		lenient: true,
