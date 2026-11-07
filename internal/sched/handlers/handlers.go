@@ -28,6 +28,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/httpmw"
@@ -507,6 +508,20 @@ type createRefusalError struct {
 
 func (e *createRefusalError) Error() string { return e.detail }
 
+// taskNameUniqueIndex is the partial unique index on tasks.name (migration
+// 036): two tasks may not share a non-empty name.
+const taskNameUniqueIndex = "idx_tasks_name_unique"
+
+// isTaskNameConflict reports whether a task insert failed because the name is
+// already taken — a unique_violation (SQLSTATE 23505) on taskNameUniqueIndex.
+// That is the caller's mistake (409), not a server fault (500). Matched on the
+// typed pgconn error and the constraint name, so no other unique violation is
+// reported as a name clash.
+func isTaskNameConflict(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == taskNameUniqueIndex
+}
+
 // createTaskGoverned is the ONE create pipeline behind POST /tasks and the A2A
 // SendMessage method: validate → run_if admin gate → per-principal budget gate
 // → models.NewTask + creator attribution → per-key priority ceiling → persist.
@@ -593,6 +608,9 @@ func (h *Handlers) createTaskGovernedFrom(ctx context.Context, creator taskCreat
 	}
 
 	if _, err := h.storage.AddTaskWithContext(ctx, task); err != nil {
+		if isTaskNameConflict(err) {
+			return nil, &createRefusalError{status: http.StatusConflict, detail: fmt.Sprintf("a task named %q already exists; choose another name, or permanently delete that task to reuse it", task.Name)}
+		}
 		return nil, &createRefusalError{status: http.StatusInternalServerError, detail: "Failed to create task"}
 	}
 	// A create that lands claimable (pending, not scheduled-for-later or

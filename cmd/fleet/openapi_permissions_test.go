@@ -444,6 +444,9 @@ type probeEnv struct {
 	keyMgr   *apikeys.Manager
 	router   http.Handler
 	adminKey string
+	// sharedToken is the web tier's X-Orchestrator-Server-Token, so a probe
+	// can drive the header-trust (session) user path.
+	sharedToken string
 }
 
 func newProbeEnv(t *testing.T) probeEnv {
@@ -458,8 +461,10 @@ func newProbeEnv(t *testing.T) probeEnv {
 		t.Fatalf("key manager: %v", err)
 	}
 	const adminKey = "openapi-permissions-admin-key"
+	const sharedToken = "openapi-permissions-shared-token"
 	h := handlers.New(handlers.Config{
 		AdminAPIKey:      adminKey,
+		SharedToken:      sharedToken,
 		DefaultTaskModel: "test/model",
 		Version:          "0.0.0-test",
 		DataDir:          tmp,
@@ -467,10 +472,11 @@ func newProbeEnv(t *testing.T) probeEnv {
 	notes := handlers.NewNotesHandlers(sched.NewStore(database), h)
 	noop := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	return probeEnv{
-		store:    store,
-		keyMgr:   keyMgr,
-		router:   apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
-		adminKey: adminKey,
+		store:       store,
+		keyMgr:      keyMgr,
+		router:      apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
+		adminKey:    adminKey,
+		sharedToken: sharedToken,
 	}
 }
 
