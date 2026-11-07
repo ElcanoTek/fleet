@@ -20,6 +20,7 @@
   - `POST /v1/chat`, webhook turn admission, queued turn handoff (`input_queue.go`), and approval execution/resumption return `503 server_draining` while draining.
   - `diskAdmissionGate` in `cmd/fleet/main.go` returns `(false, "update drain active")` to `runner.Pool` while `httpapi.UpdateDrainActive()` is true, pausing new scheduled-task claims without cancelling in-flight runs.
 - The drain sentinel is removed automatically on exit (`trap ... EXIT` / `defer ClearUpdateDrain()`) and immediately after `systemctl restart` or `systemctl stop` completes.
+- `fleet update` must not start the new process under the sentinel: fleet reads it on every `/readyz`, so a process started while it exists answers `503 draining` and fails the install's readiness gate. `update.sh` therefore hands the sentinel to `fleet release install` (`FLEET_UPDATE_DRAIN_FILE` + `FLEET_DRAIN_OWNER_TOKEN`), which runs `systemctl stop`, removes the sentinel, then `systemctl start` — also for its automatic rollback and for `fleet release rollback` (the `--from-source` path that restarted on its own was removed by ADR-0101). Only this update's sentinel, or one whose owner process is gone, is removed. `scripts/update_drain_order_test.go` pins the order.
 
 ### 3. Operator CLI & status visibility
 
