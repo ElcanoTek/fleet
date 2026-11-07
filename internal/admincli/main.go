@@ -76,6 +76,8 @@ func Run(argv []string) int {
 		return cmdBootstrap(argv[1:])
 	case "update":
 		return cmdUpdate(argv[1:])
+	case "release":
+		return cmdRelease(argv[1:])
 	case "cleanup":
 		return cmdCleanup(argv[1:])
 	case "status":

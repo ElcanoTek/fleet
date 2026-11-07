@@ -127,6 +127,11 @@ func main() {
 			// Exit 1 when the binary carries no bundle.
 			os.Exit(printWebBundle(os.Stdout))
 		}
+		if len(argv) > 1 && argv[1] == "--build-info" {
+			// JSON build facts, including the host-executor compile-time
+			// marker release.yml and `fleet release fetch` refuse on.
+			os.Exit(printBuildInfo(os.Stdout))
+		}
 		fmt.Println("fleet " + version.String())
 	case invokeMCPBroker:
 		// The out-of-process MCP credential broker over stdio (issue #167): it holds
