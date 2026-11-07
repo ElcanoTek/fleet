@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -58,32 +60,67 @@ func newWebhookServer(t *testing.T, engine turnEngine, st chatStore) *Server {
 
 // The webhook delivery claim, modelled in memory (the SQL is covered by the
 // store's own tests against Postgres).
+type fakeWebhookDelivery struct{ conv, token string }
+
 func (s *fakeChatStore) ClaimWebhookDelivery(_ context.Context, slug, key string) (store.WebhookClaim, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.webhookDeliveries == nil {
-		s.webhookDeliveries = map[string]string{}
+		s.webhookDeliveries = map[string]*fakeWebhookDelivery{}
 	}
 	k := slug + "\x00" + key
-	if conv, ok := s.webhookDeliveries[k]; ok {
-		return store.WebhookClaim{ConversationID: conv}, nil
+	if d, ok := s.webhookDeliveries[k]; ok && (d.conv != "" || !s.webhookClaimsStale) {
+		return store.WebhookClaim{ConversationID: d.conv}, nil
 	}
-	s.webhookDeliveries[k] = ""
-	return store.WebhookClaim{Claimed: true}, nil
+	s.webhookTokens++
+	tok := fmt.Sprintf("tok-%d", s.webhookTokens)
+	s.webhookDeliveries[k] = &fakeWebhookDelivery{token: tok}
+	return store.WebhookClaim{Claimed: true, Token: tok}, nil
 }
 
-func (s *fakeChatStore) SetWebhookDeliveryConversation(_ context.Context, slug, key, convID string) error {
+func (s *fakeChatStore) CreateWebhookConversation(ctx context.Context, slug, key, token, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
+	if s.beforeWebhookBind != nil {
+		hook := s.beforeWebhookBind
+		s.beforeWebhookBind = nil
+		hook()
+	}
+	s.mu.Lock()
+	if err := s.webhookBindErr; err != nil {
+		s.webhookBindErr = nil
+		s.mu.Unlock()
+		return nil, err
+	}
+	d := s.webhookDeliveries[slug+"\x00"+key]
+	if d == nil || d.token != token || d.conv != "" {
+		s.mu.Unlock()
+		return nil, store.ErrWebhookClaimLost
+	}
+	s.mu.Unlock()
+	conv, err := s.CreateConversation(ctx, userEmail, title, persona, model, lockdown)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	d.conv = conv.ID
+	s.mu.Unlock()
+	return conv, nil
+}
+
+func (s *fakeChatStore) ReleaseWebhookDelivery(_ context.Context, slug, key, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.webhookDeliveries[slug+"\x00"+key] = convID
+	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && d.conv == "" {
+		delete(s.webhookDeliveries, slug+"\x00"+key)
+	}
 	return nil
 }
 
-func (s *fakeChatStore) ReleaseWebhookDelivery(_ context.Context, slug, key string) error {
+func (s *fakeChatStore) AbandonWebhookConversation(_ context.Context, slug, key, token, convID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.webhookDeliveries[slug+"\x00"+key] == "" {
+	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && d.conv == convID {
 		delete(s.webhookDeliveries, slug+"\x00"+key)
+		delete(s.convs, convID)
 	}
 	return nil
 }
@@ -570,5 +607,103 @@ func TestWebhookSlackRetryIsDuplicate(t *testing.T) {
 	defer st.mu.Unlock()
 	if st.created != 2 {
 		t.Fatalf("CreateConversation calls = %d, want 2", st.created)
+	}
+}
+
+// A request that outlives its claim (a repeat took the stale claim over and
+// rotated its token) cannot bind a conversation or drop the new owner's
+// claim: only the repeat starts a turn.
+func TestWebhookStaleClaimTakeoverStartsOneTurn(t *testing.T) {
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	st.webhookClaimsStale = true
+	srv := newWebhookServer(t, engine, st)
+
+	body := []byte(`{"title":"slow"}`)
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body), "X-GitHub-Delivery": "d-1"}
+	var retry *httptest.ResponseRecorder
+	// The original stalls just before binding; meanwhile the sender retries.
+	st.beforeWebhookBind = func() { retry = postWebhook(t, srv, "gh", body, hdr) }
+
+	original := postWebhook(t, srv, "gh", body, hdr)
+	if retry == nil || retry.Code != http.StatusAccepted {
+		t.Fatalf("retry that took the claim over: %v, want 202", retry)
+	}
+	if original.Code != http.StatusConflict {
+		t.Fatalf("original that lost its claim: status %d, want 409: %s", original.Code, original.Body.String())
+	}
+	retryConv, _ := webhookResult(t, retry)
+
+	eventually(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		return engine.turns == 1
+	}, "the retry's turn never ran")
+	time.Sleep(50 * time.Millisecond)
+	engine.mu.Lock()
+	turns := engine.turns
+	engine.mu.Unlock()
+	st.mu.Lock()
+	created, rec := st.created, st.webhookDeliveries["gh\x00"+deliveryKeyFor(t, body, hdr)]
+	st.mu.Unlock()
+	if turns != 1 || created != 1 {
+		t.Fatalf("turns=%d conversations=%d, want 1 and 1", turns, created)
+	}
+	// The original's deferred release was a no-op: the record still names
+	// the retry's conversation.
+	if rec == nil || rec.conv != retryConv {
+		t.Fatalf("delivery record = %+v, want bound to %q", rec, retryConv)
+	}
+}
+
+// deliveryKeyFor computes the handler's delivery key for a request.
+func deliveryKeyFor(t *testing.T, body []byte, hdr map[string]string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/gh", bytes.NewReader(body))
+	for k, v := range hdr {
+		req.Header.Set(k, v)
+	}
+	var payload map[string]any
+	_ = json.Unmarshal(body, &payload)
+	return webhookDeliveryKey(req, body, payload, clientconfig.WebhookTriggerDef{Slug: "gh"})
+}
+
+// When the conversation cannot be created and bound, no turn starts and the
+// claim is given back, so the sender's retry runs exactly once.
+func TestWebhookBindFailureStartsNoTurn(t *testing.T) {
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	st.webhookBindErr = errors.New("database unavailable")
+	srv := newWebhookServer(t, engine, st)
+
+	body := []byte(`{"title":"x"}`)
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body)}
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusInternalServerError {
+		t.Fatalf("bind failure: status %d, want 500: %s", w.Code, w.Body.String())
+	}
+	time.Sleep(50 * time.Millisecond)
+	engine.mu.Lock()
+	turns := engine.turns
+	engine.mu.Unlock()
+	if turns != 0 {
+		t.Fatalf("a turn started without a bound delivery (turns=%d)", turns)
+	}
+
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusAccepted {
+		t.Fatalf("retry after a bind failure: status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusOK {
+		t.Fatalf("repeat of the accepted retry: status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	eventually(t, func() bool {
+		engine.mu.Lock()
+		defer engine.mu.Unlock()
+		return engine.turns == 1
+	}, "the retry's turn never ran")
+	time.Sleep(50 * time.Millisecond)
+	engine.mu.Lock()
+	defer engine.mu.Unlock()
+	if engine.turns != 1 {
+		t.Fatalf("turns = %d, want 1", engine.turns)
 	}
 }

@@ -543,11 +543,19 @@ func (s *Store) RecordPanicEvent(ctx context.Context, event PanicEventRecord) er
 // mutated afterward — matches how persona is locked after the first
 // turn.
 func (s *Store) CreateConversation(ctx context.Context, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
-	id := newConversationID(ctx)
+	return insertConversation(ctx, s.db, newConversationID(ctx), userEmail, title, persona, model, lockdown)
+}
+
+// insertConversation is CreateConversation's body against any executor, so a
+// caller can make the insert part of its own transaction
+// (CreateWebhookConversation).
+func insertConversation(ctx context.Context, db interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, id, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
 	now := time.Now().Unix()
 	// optional_mcp_servers_enabled gets the column default ('[]'::jsonb);
 	// we don't need to write it explicitly on insert.
-	_, err := s.db.ExecContext(ctx,
+	_, err := db.ExecContext(ctx,
 		`INSERT INTO conversations (id, user_email, title, persona, model, pinned, lockdown, created_at, updated_at)
 		 VALUES ($1, $2, $3, $4, $5, FALSE, $6, $7, $8)`,
 		id, userEmail, title, persona, model, lockdown, now, now,

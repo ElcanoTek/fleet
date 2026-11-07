@@ -9,13 +9,17 @@
 --
 -- delivery_key is "<source>:<sha256 hex>" (source = github | slack | body).
 -- conversation_id is '' while the claiming request is still creating the
--- conversation. No FK to conversations: deleting the conversation must not make
+-- conversation. claim_token is a random value the claiming request holds;
+-- binding the conversation and releasing the claim both require it, and a
+-- takeover of a stale claim rotates it, so a request that lost its claim can
+-- neither complete nor drop the claim of the request that took it over. No FK to conversations: deleting the conversation must not make
 -- a later repeat of the same delivery start a new one. Rows are kept for 24 h,
 -- then removed by the retention sweep (Store.SweepWebhookDeliveries).
 CREATE TABLE IF NOT EXISTS webhook_deliveries (
     slug            TEXT   NOT NULL,
     delivery_key    TEXT   NOT NULL,
     conversation_id TEXT   NOT NULL DEFAULT '',
+    claim_token     TEXT   NOT NULL DEFAULT '',
     created_at      BIGINT NOT NULL,
     PRIMARY KEY (slug, delivery_key)
 );

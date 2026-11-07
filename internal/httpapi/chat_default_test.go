@@ -168,9 +168,18 @@ type fakeChatStore struct {
 	committedTurns map[string]bool
 	// stoppedDrainFailures makes that many CancelStoppedDrain calls fail.
 	stoppedDrainFailures int
-	// webhookDeliveries models the webhook_deliveries table: slug+"\x00"+key
-	// → conversation id ("" while claimed but unfinished).
-	webhookDeliveries map[string]string
+	// webhookDeliveries models the webhook_deliveries table, keyed by
+	// slug+"\x00"+key.
+	webhookDeliveries map[string]*fakeWebhookDelivery
+	// webhookClaimsStale makes every unfinished claim read as stale, so a
+	// repeat takes it over (as one would after a minute).
+	webhookClaimsStale bool
+	// webhookBindErr makes the next CreateWebhookConversation fail with it.
+	webhookBindErr error
+	// beforeWebhookBind runs (unlocked) at the start of
+	// CreateWebhookConversation.
+	beforeWebhookBind func()
+	webhookTokens     int
 	// stopRequested lists MarkInputStopRequested calls (conv/key);
 	// stopRequestFailures makes that many fail first.
 	stopRequested       []string

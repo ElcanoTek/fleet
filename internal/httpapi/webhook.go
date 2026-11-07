@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/safe"
+	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 	"github.com/ElcanoTek/fleet/internal/webhooks"
 )
@@ -119,8 +121,10 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// Redeliver re-sends the same X-GitHub-Delivery). Claim the delivery before
 	// anything else so a repeat of an accepted one answers 200 with the
 	// original conversation and starts nothing — and spends none of the slug's
-	// rate budget. Every early return below releases the claim, so a delivery
-	// that was not accepted is processed afresh when it comes again.
+	// rate budget. Every early return below gives the claim back (and discards
+	// a conversation created for it without a turn), so a delivery that was
+	// not accepted is processed afresh when it comes again. The claim token
+	// makes those calls no-ops once a repeat has taken a stale claim over.
 	deliveryKey := webhookDeliveryKey(r, body, payload, trig)
 	claim, err := s.store.ClaimWebhookDelivery(r.Context(), trig.Slug, deliveryKey)
 	if err != nil {
@@ -140,10 +144,17 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusOK, map[string]any{"conversation_id": claim.ConversationID, "duplicate": true})
 		return
 	}
-	accepted := false
+	var (
+		boundConvID string // set once the conversation exists and is bound to the claim
+		launched    bool   // set once the turn goroutine is started
+	)
 	defer func() {
-		if !accepted {
-			s.releaseWebhookClaim(trig.Slug, deliveryKey)
+		switch {
+		case launched:
+		case boundConvID == "":
+			s.releaseWebhookClaim(trig.Slug, deliveryKey, claim.Token)
+		default:
+			s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, boundConvID)
 		}
 	}()
 
@@ -216,32 +227,37 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conv, err := s.store.CreateConversation(r.Context(), user, agent.HeuristicTitle(prompt), persona, model, lockdown)
+	memories, err := s.store.ListMemories(r.Context(), user)
 	if err != nil {
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// The conversation exists: from here on the delivery counts as accepted,
-	// and a repeat is answered with this conversation even if a later step
-	// fails (the conversation is in the owner's list either way).
-	accepted = true
-	if err := s.store.SetWebhookDeliveryConversation(r.Context(), trig.Slug, deliveryKey, conv.ID); err != nil {
-		// Not fatal: the claim then reads as unfinished and lapses after a
-		// minute, after which a repeat would start a second conversation.
-		log.Printf("webhook trigger %q: record delivery conversation: %v", safe.LogSafe(trig.Slug), err)
+
+	// Create the conversation and bind it to the delivery claim in one
+	// transaction: a turn is only ever launched for a delivery whose record
+	// names its conversation, so no repeat can take the claim over and start
+	// a second one.
+	conv, err := s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token,
+		user, agent.HeuristicTitle(prompt), persona, model, lockdown)
+	if errors.Is(err, store.ErrWebhookClaimLost) {
+		// This request outlived its claim and a repeat now owns the delivery.
+		releaseTurn()
+		metrics.RecordWebhookTrigger(trig.Slug, "conflict")
+		writeJSONStatus(w, http.StatusConflict, map[string]any{"error": "this delivery is already being processed"})
+		return
 	}
+	if err != nil {
+		releaseTurn()
+		metrics.RecordWebhookTrigger(trig.Slug, "error")
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	boundConvID = conv.ID
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 
 	history, err := s.store.LoadHistory(r.Context(), conv.ID)
-	if err != nil {
-		releaseTurn()
-		metrics.RecordWebhookTrigger(trig.Slug, "error")
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	memories, err := s.store.ListMemories(r.Context(), user)
 	if err != nil {
 		releaseTurn()
 		metrics.RecordWebhookTrigger(trig.Slug, "error")
@@ -287,6 +303,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// trigger prompt itself, exactly as the chat path does (ADR-0058).
 	injected := appendWorkspaceInventoryBlock("", tools.WorkspaceDirForConversation(conv.ID))
 
+	launched = true
 	go func() {
 		defer releaseTurn()
 		// No signed-in sender: the trigger owner is the conversation's user
@@ -306,11 +323,23 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 // start a conversation, so the sender's retry is processed afresh.
 // Background-rooted: the request context may already be cancelled, and a
 // leaked claim would refuse the retry until it goes stale.
-func (s *Server) releaseWebhookClaim(slug, deliveryKey string) {
+func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey); err != nil {
+	if err := s.store.ReleaseWebhookDelivery(ctx, slug, deliveryKey, token); err != nil {
 		log.Printf("webhook trigger: release delivery claim: %v", err)
+	}
+}
+
+// abandonWebhookConversation discards a conversation created for a claimed
+// delivery whose turn could not be started, together with its delivery
+// record, so the sender's retry is processed afresh instead of being answered
+// with a conversation in which nothing ran.
+func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, convID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, convID); err != nil {
+		log.Printf("webhook trigger: discard unstarted conversation: %v", err)
 	}
 }
 

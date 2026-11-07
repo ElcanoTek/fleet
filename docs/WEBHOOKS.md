@@ -130,9 +130,14 @@ per delivery. A delivery is identified, per slug, by the first of:
 
 A repeat of an accepted delivery is answered `200` with the original
 `conversation_id` (see Responses) and does not count against the per-slug rate
-limit. A delivery that was **not** accepted — throttled, refused, or failed
-before its conversation was created — is not remembered, so the sender's retry
-is processed normally. Two different events with byte-identical bodies and no
+limit. The conversation is created and recorded against the delivery in one
+database transaction, and its turn starts only after that commits. A delivery
+that was **not** accepted — throttled, refused, or failed before its turn
+started — is not remembered (a conversation created for it is discarded), so
+the sender's retry is processed normally. Each claim carries a random token: a
+request that is still unfinished after a minute loses its claim to a repeat,
+and from then on can neither record a conversation nor drop the repeat's claim
+(it answers `409` and starts nothing). Two different events with byte-identical bodies and no
 delivery id (case 3) within 24 hours are treated as one; senders that need
 otherwise should send a distinguishing field or header.
 

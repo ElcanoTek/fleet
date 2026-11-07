@@ -115,9 +115,13 @@ small `webhook_deliveries` table (migration 098) before it starts anything, and
 answers a repeat of an accepted delivery `200` with the original
 `conversation_id`. The key is `X-GitHub-Delivery`, else a Slack trigger's
 payload `event_id`, else the SHA-256 of the signature header and body; records
-are kept 24 hours and expire through the existing retention sweep. A delivery
-that was not accepted (throttled, failed before its conversation existed)
-releases its claim so the sender's retry is processed. The table, rather than
+are kept 24 hours and expire through the existing retention sweep. The
+conversation is created and bound to the claim in one transaction, and the
+turn launches only after that; a claim carries a random token that a takeover
+of a stale (over a minute old, unfinished) claim rotates, and binding,
+releasing and discarding all require it. A delivery that was not accepted
+(throttled, failed before its turn started) gives its claim back and discards
+any conversation created for it, so the sender's retry is processed. The table, rather than
 process memory, holds the records because fleet runs as one replica that
 restarts on every release: an in-memory set would forget accepted deliveries
 across exactly the restarts a retry window can span. See `docs/WEBHOOKS.md`.

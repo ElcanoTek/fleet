@@ -383,8 +383,9 @@ type chatStore interface {
 	PurgeTerminalInputs(ctx context.Context, retention time.Duration) (int, error)
 	// Webhook delivery idempotency (migration 098, docs/WEBHOOKS.md).
 	ClaimWebhookDelivery(ctx context.Context, slug, deliveryKey string) (store.WebhookClaim, error)
-	SetWebhookDeliveryConversation(ctx context.Context, slug, deliveryKey, convID string) error
-	ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey string) error
+	CreateWebhookConversation(ctx context.Context, slug, deliveryKey, token, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error)
+	ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error
+	AbandonWebhookConversation(ctx context.Context, slug, deliveryKey, token, convID string) error
 	SweepWebhookDeliveries(ctx context.Context, ttl time.Duration) (int, error)
 	// SweepTurnEvents prunes the durable SSE ledger (turns + turn_events +
 	// turn_journal via cascade) for turns terminal longer than ttl; a
