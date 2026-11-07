@@ -372,6 +372,30 @@ describe("LogViewer task-detail modal", () => {
     expect(metrics).toHaveTextContent("4"); // messages
   });
 
+  it("shows the run and trace ids with copy actions (#2052)", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    mockSession({
+      ...RICH_SESSION,
+      run_id: "7d0c1c1e-0000-4000-8000-000000000001",
+      trace_id: "0af7651916cd43dd8448eb211c80319c",
+    });
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    const ids = await screen.findByTestId("log-correlation");
+    expect(ids).toHaveTextContent("7d0c1c1e-0000-4000-8000-000000000001");
+    expect(ids).toHaveTextContent("0af7651916cd43dd8448eb211c80319c");
+    fireEvent.click(within(ids).getByRole("button", { name: "Copy Trace ID" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith("0af7651916cd43dd8448eb211c80319c"));
+    expect(await within(ids).findByText("Copied")).toBeInTheDocument();
+  });
+
+  it("shows no correlation strip for a run that recorded no ids", async () => {
+    mockSession(RICH_SESSION);
+    render(<LogViewer task={DONE_TASK} onClose={() => {}} />);
+    await screen.findByTestId("log-metrics");
+    expect(screen.queryByTestId("log-correlation")).toBeNull();
+  });
+
   it("filters the transcript by interaction chips (union) and clears", async () => {
     mockSession(RICH_SESSION);
     render(<LogViewer task={DONE_TASK} onClose={() => {}} />);

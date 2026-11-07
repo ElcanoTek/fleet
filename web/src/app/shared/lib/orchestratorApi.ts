@@ -538,6 +538,11 @@ export type LogMessage = {
 export type LogSession = {
   id?: string;
   title?: string;
+  // The run's id (the claim's lease token) and the trace its spans joined
+  // (#2052): what an operator searches the process log (run_id=…) and the
+  // trace backend (trace id) for. trace_id is absent when tracing is off.
+  run_id?: string;
+  trace_id?: string;
   prompt_tokens?: number;
   completion_tokens?: number;
   cached_tokens?: number;

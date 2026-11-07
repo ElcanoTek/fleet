@@ -41,6 +41,7 @@ import { ToolStepCard, TranscriptTimeline } from "./LogTimeline";
 import { formatDuration, unwrapDeferredCall } from "./logTimeline";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { saveBlob } from "@/app/shared/lib/downloadFile";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // The transcript itself — tool steps, events, the prompt, filters — renders in
 // LogTimeline.tsx; this file owns the modal around it. The ReactMarkdown
@@ -229,6 +230,55 @@ function SessionMetrics({ session }: { session: LogSession }) {
           <span className="log-metric-value">{t.value}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+// RunCorrelation — the ids that join this run to the process log and to its
+// trace (#2052): every log line of the run carries run_id=…, and every span of
+// it (model calls, tools, sandbox, broker, DB) is in the one trace. Shown only
+// when the run recorded them (runs before #2052 did not; trace_id only when
+// tracing is on), each with a copy action.
+function RunCorrelation({ session }: { session: LogSession }) {
+  const ids: Array<{ label: string; value: string }> = [];
+  if (session.run_id) ids.push({ label: "Run ID", value: session.run_id });
+  if (session.trace_id) ids.push({ label: "Trace ID", value: session.trace_id });
+  if (ids.length === 0) return null;
+  return (
+    <div className="log-correlation" data-testid="log-correlation">
+      {ids.map((id) => (
+        <CorrelationID key={id.label} label={id.label} value={id.value} />
+      ))}
+    </div>
+  );
+}
+
+function CorrelationID({ label, value }: { label: string; value: string }) {
+  const [state, setState] = useState<"idle" | "ok" | "err">("idle");
+  const resetRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (resetRef.current) window.clearTimeout(resetRef.current);
+    },
+    [],
+  );
+  const onCopy = async () => {
+    setState((await copyText(value)) ? "ok" : "err");
+    if (resetRef.current) window.clearTimeout(resetRef.current);
+    resetRef.current = window.setTimeout(() => setState("idle"), 1500);
+  };
+  return (
+    <div className="log-correlation-item">
+      <span className="log-metric-label">{label}</span>
+      <code className="log-correlation-value">{value}</code>
+      <button
+        type="button"
+        className="btn btn-small"
+        aria-label={`Copy ${label}`}
+        onClick={() => void onCopy()}
+      >
+        {state === "idle" ? "Copy" : state === "ok" ? "Copied" : "Copy failed"}
+      </button>
     </div>
   );
 }
@@ -1177,6 +1227,7 @@ function LogViewerBody({
             <TaskRunHistory task={task} onSelectTask={onSelectTask} />
           ) : null}
           {session ? <SessionMetrics session={session} /> : null}
+          {session ? <RunCorrelation session={session} /> : null}
           <SelfImprovePanel task={task} canManage={canStop} />
           <TaskRunIfBanner task={task} />
           {loading ? (

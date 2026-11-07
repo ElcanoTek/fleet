@@ -286,6 +286,13 @@ record carries its own action strip, so **Edit**, **Resubmit**, **Delete**,
 **History**, **Discuss in chat**, and **Download logs** are all reachable from
 here without returning to the board.
 
+Under the token and cost figures, a run recorded since this release shows its
+**Run ID**, and its **Trace ID** when your deployment has tracing turned on,
+each with a **Copy** button. Your administrator can use them to find that run's
+lines in the server log and its timeline in the tracing tool, so copy them into
+anything you report about the run. An older run, or one on a deployment
+without tracing, shows only what it recorded.
+
 When your deployment puts a link in task notifications, by email or in the
 browser, the link opens the same record: the board loads with that task open.
 Clicking a browser notification about a task opens the record in the board's tab
@@ -415,9 +422,12 @@ a section is empty, what a step did. Interrogating the run beats re-reading it.
 
 **5 · Escalate.** If the cause is outside the task — a feed that stopped
 arriving, a connection that needs attention — bring it to your administrator
-with the task title, the run's date, and the run's downloaded logs
-(**Download logs** in the task's record). The logs are the most helpful thing you
-can attach: they carry everything needed to trace it.
+with the task title, the run's date, the run's downloaded logs
+(**Download logs** in the task's record), and its **Run ID** and **Trace ID**
+(the **Copy** buttons under the run's figures). The logs are the most helpful
+thing you can attach: they carry everything needed to trace it, and the two ids
+take your administrator straight to the run in the server log and the tracing
+tool.
 
 ## 7. Working conventions
 
