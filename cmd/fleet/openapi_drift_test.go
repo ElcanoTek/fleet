@@ -36,6 +36,8 @@ var httpMethods = map[string]bool{
 // separately and statically by TestOpenAPISchemaDrift (reusable component
 // schemas vs. their backing Go models); status codes remain documentary.
 func TestOpenAPIRouteParity(t *testing.T) {
+	t.Parallel()
+
 	codeRoutes := liveRoutes(t)
 	specRoutes := specRoutes(t)
 
@@ -127,6 +129,8 @@ func specRoutes(t *testing.T) map[string]bool {
 // operation must be defined in components.securitySchemes — the spec can't invent
 // auth. (Self-consistency, so the documented auth stays honest.)
 func TestOpenAPISecuritySchemesDefined(t *testing.T) {
+	t.Parallel()
+
 	doc := loadOpenAPI(t)
 	defined := map[string]bool{}
 	for name := range doc.Components.SecuritySchemes {
@@ -311,6 +315,8 @@ var schemaExcluded = map[string]string{
 // TestOpenAPISchemaDrift is the body-schema half of the drift gate. See the
 // block comment above for the precise scope (and its honest limits).
 func TestOpenAPISchemaDrift(t *testing.T) {
+	t.Parallel()
+
 	doc := loadOpenAPI(t)
 
 	// Coverage: every spec schema must be a registered model or an explicit,

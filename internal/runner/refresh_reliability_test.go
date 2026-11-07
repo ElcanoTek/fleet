@@ -40,6 +40,8 @@ func runPoolUntil(t *testing.T, store *storage.Storage, runner TaskRunner, notif
 // on the infra budget — attempt_count and max_retries untouched — instead of
 // dead-lettering it as "non-retryable failure (terminal)".
 func TestConnectorOutageReRunsWithoutSpendingRetries(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 0) // max_retries 0: the task's own budget is empty
 
@@ -74,6 +76,8 @@ func TestConnectorOutageReRunsWithoutSpendingRetries(t *testing.T) {
 // connector_unavailable (which the park breaker skips) and a reason that
 // names the outage.
 func TestConnectorOutageDeadLettersAsSuchOnceTheInfraBudgetIsSpent(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 0)
 	if _, err := store.DB().Conn().ExecContext(t.Context(), `UPDATE tasks SET infra_retry_count = $1`, maxConnectorInfraRetries); err != nil {
@@ -101,6 +105,8 @@ func TestConnectorOutageDeadLettersAsSuchOnceTheInfraBudgetIsSpent(t *testing.T)
 }
 
 func TestClassifyConnectorUnavailable(t *testing.T) {
+	t.Parallel()
+
 	if got := classifyFailure(connectorOutageErr()); got != models.FailureConnectorUnavailable {
 		t.Fatalf("classifyFailure = %q, want %q", got, models.FailureConnectorUnavailable)
 	}
@@ -124,6 +130,8 @@ func blockedSession(id uuid.UUID) *models.LogSession {
 // occurrence of a recurring lineage notifies as blocked with a message that
 // names the streak — without parking.
 func TestBlockedRunIsRecordedAndTheThirdInARowAlerts(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	// Two earlier blocked occurrences of the lineage, then the current one.
 	var prev *uuid.UUID
@@ -180,6 +188,8 @@ func TestBlockedRunIsRecordedAndTheThirdInARowAlerts(t *testing.T) {
 // recorded a blocked outcome notifies with status blocked (not success), and
 // its message is the recorded reason itself (ADR-0092).
 func TestSingleBlockedRunNotifiesAsBlocked(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := seedRecurringTask(t, store)
 	notif := &fakeNotifier{}
@@ -198,6 +208,8 @@ func TestSingleBlockedRunNotifiesAsBlocked(t *testing.T) {
 // TestBlockedMessageIsCollapsedAndCapped: the recorded reason is
 // whitespace-collapsed and length-capped before it reaches a notification.
 func TestBlockedMessageIsCollapsedAndCapped(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedRecurringTask(t, store)
 	notif := &fakeNotifier{}

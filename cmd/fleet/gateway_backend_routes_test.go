@@ -33,6 +33,8 @@ import (
 //     handlers, so for those this proves the prefix is served, not the
 //     sub-route.
 func TestGatewayRowsResolveOnBackends(t *testing.T) {
+	t.Parallel()
+
 	h := handlers.New(handlers.Config{}, nil, nil)
 	orch, ok := buildOrchestratorMux(h, handlers.NewNotesHandlers(nil, h), reloadConfigHandler(nil), mcpReloadHandler(nil), nil).(chi.Routes)
 	if !ok {

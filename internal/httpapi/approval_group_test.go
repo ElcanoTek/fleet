@@ -378,6 +378,8 @@ func lastApprovalRequired(t *testing.T, sink *eventSink) map[string]any {
 
 // The group id rides every client payload of a grouped card and no other.
 func TestWithApprovalGroup(t *testing.T) {
+	t.Parallel()
+
 	if got := withApprovalGroup(map[string]any{}, &store.Approval{GroupID: "turn-1"}); got["group_id"] != "turn-1" {
 		t.Fatalf("grouped card payload = %v", got)
 	}

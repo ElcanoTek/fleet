@@ -35,6 +35,8 @@ func makeRunningTask(t *testing.T, db *Database, owner uuid.UUID) *models.Task {
 // wake sweep re-queues with reason → resumed run clears state under lease,
 // cycles survive.
 func TestTaskWakeTimerLifecycle(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -109,6 +111,8 @@ func TestTaskWakeTimerLifecycle(t *testing.T) {
 // timeout → wrong key is a no-op → right key wakes early with the event
 // reason; a timed-out event wait names the missing event.
 func TestTaskWakeEventLifecycle(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

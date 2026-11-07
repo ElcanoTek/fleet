@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 
 // useKeyboardShortcuts — a single, declarative keyboard-shortcut layer for the
 // unified shell (#306). Before this hook each shortcut was an ad-hoc
@@ -117,9 +117,16 @@ export function matchesShortcut(event: KeyboardEvent, shortcut: KeyboardShortcut
  */
 export function useKeyboardShortcuts(shortcuts: KeyboardShortcut[]): void {
   const shortcutsRef = useRef(shortcuts);
-  // Written in an effect (never during render) so it doesn't trip the
-  // react-hooks refs rule; the listener always reads the latest committed list.
-  useEffect(() => {
+  // Written in a LAYOUT effect: it runs inside the commit, before the browser
+  // can paint or dispatch another event, so a key pressed after a render is
+  // on screen always reads that render's list. A passive useEffect runs
+  // later, in its own task, for a non-urgent render (a fetch landing): a key
+  // pressed in that gap ran the previous list, whose handlers close over the
+  // previous state. That is how j on a rail that had just filled from the
+  // conversation list did nothing — its moveFocus still saw an empty list —
+  // and the Enter after it found no cursor. Never written during render, so
+  // the react-hooks refs rule holds.
+  useLayoutEffect(() => {
     shortcutsRef.current = shortcuts;
   });
 

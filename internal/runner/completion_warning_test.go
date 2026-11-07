@@ -14,6 +14,8 @@ import (
 // terminal message leads with the warning flag (#1602); the final answer the
 // flag is prefixed to is left as the agent wrote it.
 func TestSuccessMessageFlagsVerifierOutage(t *testing.T) {
+	t.Parallel()
+
 	flag := agentcore.MessageTypeCompletionUnverifiedVerifierError
 	session := &models.LogSession{Messages: []models.LogMessage{
 		{Role: "assistant", Content: "Published v874."},
@@ -44,6 +46,8 @@ func TestSuccessMessageFlagsVerifierOutage(t *testing.T) {
 
 // The completion predicate's event reaches an operator tailing the run.
 func TestTaskStreamBuffer_ForwardsCompletionPredicateFrame(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Observe("fleet.completion_predicate", map[string]any{"tool": "mcp_pages_record_refresh_check", "clause": "any_succeeded"})
 	buf.Finish()

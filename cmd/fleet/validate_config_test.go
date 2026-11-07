@@ -13,12 +13,14 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // TestParseValidateFlags covers the verb's flag surface: defaults, each flag, and
 // an unknown flag erroring.
 func TestParseValidateFlags(t *testing.T) {
+	t.Parallel()
+
 	got, err := parseValidateFlags(nil)
 	if err != nil {
 		t.Fatalf("parse defaults: %v", err)
@@ -243,6 +245,8 @@ func TestSchedRateLimits(t *testing.T) {
 // TestEmitReportExitCode verifies the exit-code contract: a blocking failure → 1,
 // a non-blocking warn → 0.
 func TestEmitReportExitCode(t *testing.T) {
+	t.Parallel()
+
 	allOK := []checkResult{{Name: "a", Status: statusOK, Blocking: true}}
 	if code := emitReport(&bytes.Buffer{}, allOK, false); code != 0 {
 		t.Errorf("all-ok exit = %d, want 0", code)
@@ -275,6 +279,8 @@ func TestEmitReportExitCode(t *testing.T) {
 
 // TestEmitReportJSON pins the --json envelope shape + values.
 func TestEmitReportJSON(t *testing.T) {
+	t.Parallel()
+
 	results := []checkResult{
 		{Name: "env_vars", Status: statusOK, Blocking: true, Detail: "ok"},
 		{Name: "database", Status: statusFail, Blocking: true, Detail: "refused"},
@@ -301,6 +307,8 @@ func TestEmitReportJSON(t *testing.T) {
 
 // TestStatusGlyph covers the glyph mapping.
 func TestStatusGlyph(t *testing.T) {
+	t.Parallel()
+
 	cases := map[checkStatus]string{statusOK: "✓", statusFail: "✗", statusWarn: "⚠"}
 	for s, want := range cases {
 		if got := statusGlyph(s); got != want {
@@ -311,6 +319,8 @@ func TestStatusGlyph(t *testing.T) {
 
 // TestSortedServerNames verifies stable alphabetical ordering.
 func TestSortedServerNames(t *testing.T) {
+	t.Parallel()
+
 	m := map[string]config.MCPServerConfig{"web": {}, "bash": {}, "python": {}}
 	got := sortedServerNames(m)
 	want := []string{"bash", "python", "web"}
@@ -321,6 +331,8 @@ func TestSortedServerNames(t *testing.T) {
 
 // TestFileAndExecHelpers covers fileExists / isExecutableFile against a temp dir.
 func TestFileAndExecHelpers(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	plain := filepath.Join(dir, "plain.txt")
 	if err := os.WriteFile(plain, []byte("x"), 0o600); err != nil {
@@ -351,6 +363,8 @@ func TestFileAndExecHelpers(t *testing.T) {
 // TestCheckManifestGoodBundle runs the manifest check against the shipped generic
 // bundle — it must pass with the persona + system prompts present.
 func TestCheckManifestGoodBundle(t *testing.T) {
+	t.Parallel()
+
 	dir := repoConfigDefault(t)
 	bundle, err := clientconfig.Load(dir)
 	if err != nil {
@@ -373,6 +387,8 @@ func TestCheckManifestGoodBundle(t *testing.T) {
 // "unknown field" error class, never a green validate followed by a
 // crash-looping restart.
 func TestCheckManifestUnknownFieldFailsLikeBoot(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	manifest := "branding:\n  logo_typo: \"x\"\n"
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
@@ -396,6 +412,8 @@ func TestCheckManifestUnknownFieldFailsLikeBoot(t *testing.T) {
 // validate-config reports it as a blocking manifest failure naming the key,
 // before a restart would crash-loop on it.
 func TestCheckManifestReportsApprovedCallTimeoutOutOfRange(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	manifest := "mcp_servers:\n  - name: deals_mcp\n    command: deals\n    always: true\n    approved_call_timeout_seconds: 1801\n"
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
@@ -444,6 +462,8 @@ func personaBundle(t *testing.T, personaFiles ...string) *clientconfig.Bundle {
 // interactive default is not in the bundle fails EVERY chat turn. The check used
 // to look at cfg.Persona only, leaving that with no exit-code signal at all.
 func TestCheckManifestInteractivePersonaDefaultMissingBlocks(t *testing.T) {
+	t.Parallel()
+
 	bundle := personaBundle(t, "victoria.yaml")
 	for _, name := range []string{"assistant", "does-not-exist"} {
 		cfg := &config.Config{PersonaDefault: name, Persona: "personas/victoria.yaml"}
@@ -467,6 +487,8 @@ func TestCheckManifestInteractivePersonaDefaultMissingBlocks(t *testing.T) {
 // driver ignores its persona ReadFile error, so a miss is a warning — carrying
 // blocking=false, since #248's --json contract exposes that flag on its own.
 func TestCheckManifestScheduledPersonaMissingIsAdvisory(t *testing.T) {
+	t.Parallel()
+
 	bundle := personaBundle(t, "victoria.yaml")
 	for _, persona := range []string{"personas/assistant.yaml", "personas/does-not-exist.yaml"} {
 		cfg := &config.Config{PersonaDefault: "victoria", Persona: persona}
@@ -492,6 +514,8 @@ func TestCheckManifestScheduledPersonaMissingIsAdvisory(t *testing.T) {
 // interactive reader appends .yaml, so only that knob takes an extensionless
 // name; cfg.Persona always arrives with one (config.Load appends it).
 func TestCheckManifestPersonaResolvesLikeTheReaders(t *testing.T) {
+	t.Parallel()
+
 	bundle := personaBundle(t, "victoria.yaml")
 	for _, spelling := range []string{"personas/victoria.yaml", "victoria.yaml", "victoria"} {
 		cfg := &config.Config{PersonaDefault: spelling, Persona: "personas/victoria.yaml"}
@@ -511,6 +535,8 @@ func TestCheckManifestPersonaResolvesLikeTheReaders(t *testing.T) {
 // scheduled persona miss must not soften a genuinely missing system prompt
 // sharing the check, and must not drop the advisory from the report either.
 func TestCheckManifestBlockingProblemOutranksPersonaAdvisory(t *testing.T) {
+	t.Parallel()
+
 	bundle := personaBundle(t, "victoria.yaml")
 	if err := os.Remove(filepath.Join(bundle.SystemPromptsDir, "chat.md")); err != nil {
 		t.Fatal(err)
@@ -533,6 +559,8 @@ func TestCheckManifestBlockingProblemOutranksPersonaAdvisory(t *testing.T) {
 // the suggestion still resolves to a victoria.yaml that does not exist — while
 // chat's roster was empty. Such a bundle must report as shipping no personas.
 func TestCheckManifestYmlPersonasAreNotOffered(t *testing.T) {
+	t.Parallel()
+
 	bundle := personaBundle(t, "victoria.yml")
 	cfg := &config.Config{PersonaDefault: "victoria", Persona: "personas/assistant.yaml"}
 	res := checkManifest(bundle, nil, cfg)
@@ -657,6 +685,8 @@ func TestCheckEnvVarsMockMode(t *testing.T) {
 // TestCheckEnvVarsMissingToken: a missing FLEET_SERVER_TOKEN is a blocking
 // failure surfaced via cfg.Validate.
 func TestCheckEnvVarsMissingToken(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		MockMode:        true,
 		ConversationTTL: 14,
@@ -692,6 +722,8 @@ func TestCheckEnvVarsKnobProblemsReportedWhenLoadFails(t *testing.T) {
 // nil and checkSandbox must degrade to a non-blocking warn instead of
 // dereferencing it — env_vars already reports the blocking failure.
 func TestCheckSandboxNilConfigWarns(t *testing.T) {
+	t.Parallel()
+
 	res := checkSandbox(context.Background(), nil, nil)
 	if res.Status != statusWarn {
 		t.Errorf("status = %q, want %q", res.Status, statusWarn)
@@ -781,6 +813,8 @@ func TestPinBundleDirFromEnvFile(t *testing.T) {
 // sandbox.ServiceStorePodmanExec — the same contract the removed
 // serviceStorePodmanCmd helper pinned, on the surface the preflights now share.
 func TestServiceStorePodmanExecRunsFromServiceHome(t *testing.T) {
+	t.Parallel()
+
 	execCtx, _ := sandbox.ServiceStorePodmanExec("fleet", "/var/lib/fleet", true)
 	if got := execCtx.CommandContext(context.Background(), "", "info").Dir; got != "/var/lib/fleet" {
 		t.Errorf("root + non-root service user: Dir = %q, want the service home", got)
@@ -802,6 +836,8 @@ func TestServiceStorePodmanExecRunsFromServiceHome(t *testing.T) {
 // driven against an in-memory bundle; Dir points at a temp dir so
 // ValidateMCPArgPaths has a real root for its relative script-arg lookups.
 func TestCheckMCPCatalog(t *testing.T) {
+	t.Parallel()
+
 	catalog := func(servers ...clientconfig.ServerDef) *clientconfig.Bundle {
 		return &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: servers}
 	}
@@ -1303,6 +1339,8 @@ func TestCheckMCPCatalog(t *testing.T) {
 // this, a future "harmless" PATH-lookup addition would silently turn the CI
 // gate red on every real bundle.
 func TestCheckMCPCatalogNeverChecksCommandInstallation(t *testing.T) {
+	t.Parallel()
+
 	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
 		{Name: "uvx_server", Command: "uvx", Args: []string{"some-mcp-package"}, Always: true},
 		{Name: "node_server", Command: "npx", Args: []string{"-y", "another-mcp-package"}, Always: true},
@@ -1414,6 +1452,8 @@ func TestCheckMCPCatalogFailsWhenOnlyPluginServerIsRejected(t *testing.T) {
 // job summaries and journals. Every URL diagnostic must name the server and
 // never the URL — including the *url.Error text, which embeds it.
 func TestCheckMCPCatalogNeverEchoesURL(t *testing.T) {
+	t.Parallel()
+
 	const secret = "s3cr3t-token-value"
 	for _, u := range []string{
 		" https://user:" + secret + "@example.com/mcp",    // padded → whitespace branch
@@ -1438,6 +1478,8 @@ func TestCheckMCPCatalogNeverEchoesURL(t *testing.T) {
 // CI gates: the two prompt files every box reads. A missing chat.md fails
 // every interactive turn, yet Load and mcp_catalog both succeed without it.
 func TestCheckManifestFiles(t *testing.T) {
+	t.Parallel()
+
 	withPrompts := func(names ...string) *clientconfig.Bundle {
 		dir := t.TempDir()
 		for _, n := range names {
@@ -1546,6 +1588,8 @@ func TestCheckMCPCatalogGatesMissingRelativePluginRoot(t *testing.T) {
 // into JSON and journal output. A name that fails the provider shape is
 // identified by index and its text must appear nowhere in the detail.
 func TestCheckMCPCatalogNeverEchoesInvalidName(t *testing.T) {
+	t.Parallel()
+
 	const leaked = "sk-live.s3cr3t/value with space"
 	bundle := &clientconfig.Bundle{Dir: t.TempDir(), MCPCatalog: []clientconfig.ServerDef{
 		{Name: leaked, Command: "a", Always: true, EnabledEnv: []string{" PAD "}, Tools: []string{"bad.tool"},
@@ -1600,6 +1644,8 @@ func TestCheckMCPCatalogGatesEscapingRelativePluginRoot(t *testing.T) {
 // carries on, which a CI gate reading the JSON report never sees. The check
 // must turn ValidateSkills into a result the floor can gate.
 func TestCheckBundleSkills(t *testing.T) {
+	t.Parallel()
+
 	skillsDir := func(withSkillMD bool) string {
 		d := t.TempDir()
 		if err := os.MkdirAll(filepath.Join(d, "my-skill"), 0o755); err != nil {
@@ -1648,6 +1694,8 @@ func TestCheckBundleSkills(t *testing.T) {
 // just logged at boot (#1604): a typo there silently leaves the wrong-variant
 // wedge the alias exists to end.
 func TestCheckAgentPolicy(t *testing.T) {
+	t.Parallel()
+
 	policy := func(aliases map[string][]string) *clientconfig.Bundle {
 		return &clientconfig.Bundle{Dir: t.TempDir(), AgentPolicyConfig: clientconfig.AgentPolicy{
 			CriticalToolSuffixes: []string{"update_page_data", "update_page_data_upload"},
@@ -1685,6 +1733,8 @@ func TestCheckAgentPolicy(t *testing.T) {
 // P1 on #1710: Bundle.AgentPolicy() dropped them, so a typo'd member could
 // never be reported), and a well-formed pair passes.
 func TestCheckAgentPolicy_EmailLastListsFromManifest(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1721,6 +1771,8 @@ agent_policy:
 // not a critical suffix: at boot it would do nothing, leaving the intended
 // tool's cards with apply-all.
 func TestCheckAgentPolicy_NoSessionApproval(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1756,6 +1808,8 @@ agent_policy:
 // fails the agent_policy check, read from the manifest itself; a well-formed
 // declaration passes.
 func TestCheckAgentPolicy_ResumeAfterApproval(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1808,6 +1862,8 @@ agent_policy:
 // validate-config reports a critical_tool_group_approval member that stages no
 // card (not critical, or notify mode); critical members pass.
 func TestCheckAgentPolicy_GroupApproval(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1857,6 +1913,8 @@ agent_policy:
 
 // validate-config reports a critical_tool_progress member that stages no card.
 func TestCheckAgentPolicy_ApprovalProgress(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	body := `
 agent_policy:
@@ -1878,6 +1936,8 @@ agent_policy:
 // validate-config reports a critical_tool_result_cards member that settles
 // no card: one not in critical_tools, or a handler-only card.
 func TestCheckAgentPolicy_ResultCards(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	body := `
 agent_policy:
@@ -1901,6 +1961,8 @@ agent_policy:
 // critical describer (it runs without approval) or one missing from
 // parallel_safe_tools fails the agent_policy check; a well-formed entry passes.
 func TestCheckAgentPolicy_CardDescribers(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1949,6 +2011,8 @@ agent_policy:
 // validate-config reports a critical_tool_narrowable_args entry that stages no
 // card for an MCP call or names no plain argument.
 func TestCheckAgentPolicy_NarrowableArgs(t *testing.T) {
+	t.Parallel()
+
 	load := func(body string) *clientconfig.Bundle {
 		t.Helper()
 		dir := t.TempDir()
@@ -1994,6 +2058,8 @@ agent_policy:
 
 // validate-config reports a critical_tool_stop member that stages no card.
 func TestCheckAgentPolicy_ApprovalStop(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte(`
 agent_policy:
@@ -2017,7 +2083,7 @@ agent_policy:
 // A reachable chat DB plus an unreachable sched DSN must fail on the sched
 // probe.
 func TestCheckDatabaseProbesSched(t *testing.T) {
-	chat := testdb.ChatDSN(t)
+	chat := fleetdb.New(t).ChatDSN()
 	cfg := &config.Config{
 		DatabaseURL:      chat,
 		SchedDatabaseURL: "postgres://nobody@127.0.0.1:1/nope?sslmode=disable&connect_timeout=1",

@@ -17,6 +17,8 @@ import (
 // configured operator reach the Operations Center through the chat session
 // cookie without a manual `fleet sched user add`.
 func TestEnsureAdminUser(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -97,6 +99,8 @@ func TestEnsureAdminUser(t *testing.T) {
 // TestOpsRoleReportsEnabledRoleOnly pins the export's Ops role read: a
 // missing row and a centrally disabled row both read as "none".
 func TestOpsRoleReportsEnabledRoleOnly(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	const email = "Ops-Role@Example.com"

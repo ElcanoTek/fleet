@@ -19,6 +19,8 @@ import (
 )
 
 func TestA2AExtendedAgentCard(t *testing.T) {
+	t.Parallel()
+
 	_, keyMgr, mux := setupA2A(t)
 	rawKey, _ := mintTaskKey(t, keyMgr, "card-reader")
 
@@ -66,6 +68,8 @@ func TestA2AExtendedAgentCard(t *testing.T) {
 }
 
 func TestA2AExtendedCardNotConfigured(t *testing.T) {
+	t.Parallel()
+
 	// Declared-but-unconfigured (spec §3.1.11): -32007, never MethodNotFound.
 	h := New(Config{AdminAPIKey: "admin-key"}, nil, nil)
 	h.SetA2A(&A2AConfig{CardJSON: []byte(`{}`), CardETag: `"x"`})
@@ -76,6 +80,8 @@ func TestA2AExtendedCardNotConfigured(t *testing.T) {
 }
 
 func TestA2AContextIDRules(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux := setupA2A(t)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "contexter")
 
@@ -131,6 +137,8 @@ func TestA2AContextIDRules(t *testing.T) {
 }
 
 func TestA2AUnaryWaitBudgetKnob(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux, h := setupA2AHandlers(t, false)
 	rawKey, _ := mintTaskKey(t, keyMgr, "waiter")
 	_ = store

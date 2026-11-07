@@ -34,15 +34,17 @@ with each other, on purpose.
 1. A PR squash-merges into `main` behind the full `CI gate` (`main` is the
    only branch, [ADR-0062](adr/0062-trunk-based-development.md)).
 2. `CI` goes green on that push to `main`.
-3. **[`release.yml`](../.github/workflows/release.yml) tags it.** It fires on
-   `CI`'s completion, checks the run was a green *push* to `main`, computes the
-   next unused ordinal for today, tags the exact SHA CI certified, and publishes
-   a GitHub release whose notes are generated from the commits since the
-   previous tag.
+3. **[`release.yml`](../.github/workflows/release.yml) tags it and publishes
+   its artifacts.** It fires on `CI`'s completion, checks the run was a green
+   *push* to `main`, computes the next unused ordinal for today, tags the exact
+   SHA CI certified, builds the static binaries and the GHCR images from that
+   tag, signs them, and publishes a GitHub release carrying every file, whose
+   notes are generated from the commits since the previous tag
+   ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0100).
 
-Nothing else is a release step. There is no release commit, no version-bump PR,
-and no artifact upload — fleet's deploy path is a git checkout that
-`fleet update` pulls and rebuilds in place, so the tag *is* the release.
+Nothing else is a release step. There is no release commit and no version-bump
+PR. Boxes install the release's signed binary (`fleet update`); the tag is what
+the binary's version is stamped from.
 
 Two properties worth knowing:
 
@@ -51,13 +53,14 @@ Two properties worth knowing:
   than a gap.
 - **Re-runs are idempotent.** If the commit already carries a release tag, the
   workflow says so and exits. It cannot open a second ordinal for one tree.
-- **Only the newest release is listed — best-effort.** After publishing, the
-  workflow deletes every older release *object*. The prune is housekeeping:
-  a failure to list or delete warns in the job log instead of failing the
-  release, and the next run (a re-run of the same one included) retries, so
-  the Releases page shows exactly the current release except in the window
-  between a failed prune and the next run. **Tags are never deleted** — they
-  are what builds and `fleet update` derive identity from.
+- **The newest ten releases are listed — best-effort.** After publishing, the
+  workflow deletes older release *objects* beyond ten (release objects carry
+  the downloadable artifacts, so ten is the window `fleet update --tag
+  <older> --allow-downgrade` can reach; it was one before ADR-0100). The prune
+  is housekeeping: a failure to list or delete warns in the job log instead of
+  failing the release, and the next run (a re-run of the same one included)
+  retries. **Tags are never deleted** — they are what builds and `fleet
+  update` derive identity from. GHCR images are kept for every tag.
 
   What an older release said is recovered from git, with one caveat. From
   `v2026.09.07.3` on, its prose is its commit message, `git log -1 <tag>`;
@@ -127,22 +130,19 @@ The `dev` sentinel is deliberate: an unstamped binary says so instead of
 claiming a release it was not built from.
 
 > **Tags are load-bearing for builds.** A clone with no tags stamps `dev+g<sha>`.
-> `scripts/update.sh` fetches `--tags` on every update for exactly this reason,
-> and `scripts/bootstrap.sh` already did. If you build from a source tarball with
+> `scripts/update.sh` fetches `--tags` on every update for exactly this reason
+> (it also moves the checkout to the release tag it installs). If you build from a source tarball with
 > no `.git`, you get `dev` — visibly unversioned rather than silently wrong.
 
-### "My box is on a release but says `dev+g<sha>`"
+### "My box says `dev+g<sha>`"
 
-The tag arrives **after** the build that most operators take. `release.yml`
-tags a push to `main` only once its `CI` run has gone green — minutes after the
-push — so a `fleet update` run right after a merge fetches the new commit,
-finds no tag on it yet, and stamps `dev+g<sha>` into a binary that is running
-exactly the tree `v2026.09.04.1` will name. Nothing is wrong with the checkout.
-`update` says so at build time when the stamp carries no release, and
-`fleet doctor` (step 9) compares the installed binary's stamp with what the
-checkout would build **now** and advises a rebuild when they differ. The
-rebuild is `sudo fleet update` again; `update` always rebuilds, even when no
-new commits arrived.
+A release box cannot: `fleet update` installs a binary release.yml stamped from
+its tag. A development box that builds `--from-source` right after a merge
+can — release.yml tags a push to `main` only once its `CI` run has gone green,
+minutes after the push, so a from-source build of the new commit finds no tag
+and stamps `dev+g<sha>`. Rebuild once the tag exists. `fleet doctor` (step 9)
+reports the installed release against the newest published one and the
+checkout's.
 
 ### "…and `.dirty`, but I edited nothing"
 

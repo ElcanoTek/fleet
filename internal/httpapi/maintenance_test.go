@@ -17,6 +17,8 @@ func withMinInterval(t *testing.T, d time.Duration) {
 }
 
 func TestClaimMaintenanceSlotFirstCallAlwaysWins(t *testing.T) {
+	t.Parallel()
+
 	withMinInterval(t, time.Hour)
 	var s Server
 
@@ -28,6 +30,8 @@ func TestClaimMaintenanceSlotFirstCallAlwaysWins(t *testing.T) {
 }
 
 func TestClaimMaintenanceSlotRateLimits(t *testing.T) {
+	t.Parallel()
+
 	withMinInterval(t, time.Hour)
 	var s Server
 
@@ -47,6 +51,8 @@ func TestClaimMaintenanceSlotRateLimits(t *testing.T) {
 // matters: N turns finishing at the same instant all read the same stale
 // timestamp, and a load-then-store check would let every one of them through.
 func TestClaimMaintenanceSlotConcurrentSingleWinner(t *testing.T) {
+	t.Parallel()
+
 	withMinInterval(t, time.Hour)
 	var s Server
 
@@ -81,6 +87,8 @@ func TestClaimMaintenanceSlotConcurrentSingleWinner(t *testing.T) {
 // A non-positive interval restores the pre-gate behaviour (every turn sweeps)
 // for operators who want it back.
 func TestClaimMaintenanceSlotDisabledGate(t *testing.T) {
+	t.Parallel()
+
 	withMinInterval(t, 0)
 	var s Server
 
@@ -96,6 +104,8 @@ func TestClaimMaintenanceSlotDisabledGate(t *testing.T) {
 // two drivers share one notion of "recently swept" instead of doing twice the
 // work.
 func TestNoteMaintenanceRunSuppressesPostTurnPass(t *testing.T) {
+	t.Parallel()
+
 	withMinInterval(t, time.Hour)
 	var s Server
 

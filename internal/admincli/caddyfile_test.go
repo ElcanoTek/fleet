@@ -51,6 +51,8 @@ func functionalLines(s string) string {
 // (the printf only knew the web tier, so /v1 404'd at Next on every
 // bootstrapped box) — this pins them to the same functional body.
 func TestCaddyfileRendererMatchesDeployReference(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	ref, err := os.ReadFile(filepath.Join(root, "deploy", "Caddyfile"))
 	if err != nil {
@@ -67,6 +69,8 @@ func TestCaddyfileRendererMatchesDeployReference(t *testing.T) {
 // the Next-proxy header-trust channel is stripped on both (ADR-0053), the SSE
 // settings survive on the API route, and the web tier stays the fallback.
 func TestCaddyfileRendererRoutesTheAPI(t *testing.T) {
+	t.Parallel()
+
 	out := renderCaddyfile(t, "render_fleet_caddyfile", "fleet.example.com")
 	if !strings.HasPrefix(out, boxdoctor.CaddyMarker+"\n") {
 		t.Errorf("rendered file must start with the marker line; got %q", strings.SplitN(out, "\n", 2)[0])
@@ -107,6 +111,8 @@ func TestCaddyfileRendererRoutesTheAPI(t *testing.T) {
 // to re-render an installed file recover the domain + email exactly (so a
 // repair keeps the operator's Let's Encrypt contact).
 func TestCaddyfileRendererRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	out := renderCaddyfile(t, "render_fleet_caddyfile", "ops.example.org", "ops@example.org", "127.0.0.1:9080", "127.0.0.1:9000", "127.0.0.1:4000")
 	for _, want := range []string{
 		"{\n\temail ops@example.org\n}\n",
@@ -158,6 +164,8 @@ func TestCaddyfileRendererRoundTrip(t *testing.T) {
 // the same marker the shell renderer writes; the Go constant is a copy, so pin
 // it to the lib's CADDY_MARKER line.
 func TestCaddyfileMarkerParity(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "lib", "caddyfile.sh"))
 	if err != nil {
@@ -178,6 +186,8 @@ func TestCaddyfileMarkerParity(t *testing.T) {
 // layout (the printf that only knew the web tier is how the API stopped
 // routing in the first place).
 func TestOperatorScriptsShareTheCaddyfileRenderer(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	for name, wants := range map[string][]string{
 		"bootstrap.sh": {
@@ -230,6 +240,8 @@ func TestOperatorScriptsShareTheCaddyfileRenderer(t *testing.T) {
 // Caddyfile layout check and the through-caddy /api-info probe, so an operator
 // reading the plan learns doctor covers "is the API routing".
 func TestDoctorDryRunPlansCaddyfileCheck(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "doctor.sh", "--dry-run")
 	for _, want := range []string{
 		"matches scripts/lib/caddyfile.sh",
@@ -244,6 +256,8 @@ func TestDoctorDryRunPlansCaddyfileCheck(t *testing.T) {
 // TestBootstrapDryRunPlansAPIRouting — with --enable-web --domain the plan
 // must state where the API goes, and that a running caddy is reloaded.
 func TestBootstrapDryRunPlansAPIRouting(t *testing.T) {
+	t.Parallel()
+
 	out := runScriptDryRun(t, "bootstrap.sh", "--dry-run", "--postgres=local", "--enable-web", "--domain", "fleet.example.com")
 	for _, want := range []string{
 		"would write /etc/caddy/Caddyfile from scripts/lib/caddyfile.sh",
@@ -310,6 +324,8 @@ func stubPackageManagers(t *testing.T, rpmDigest, dpkgMD5 string) string {
 // one edit still is, and a file no package knows stays foreign as before.
 // rpm and dpkg are stubbed on PATH so both lookups actually run.
 func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -410,6 +426,8 @@ func TestCaddyfilePackageDefaultIsNotForeign(t *testing.T) {
 // — including an explicit empty value — is the operator's "other", which none
 // of them rewrites. Last assignment wins, as systemd's EnvironmentFile= does.
 func TestCaddyTrustedProxiesState(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	for _, tc := range []struct {
 		name, body, want string
@@ -441,6 +459,8 @@ func TestCaddyTrustedProxiesState(t *testing.T) {
 // deploy/Caddyfile and deploy/fleet.service tell an operator about, and it
 // names exactly the loopback peers the rendered Caddyfile dials from.
 func TestCaddyTrustedProxiesValueParity(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	lib, err := os.ReadFile(filepath.Join(root, "scripts", "lib", "caddyfile.sh"))
 	if err != nil {
@@ -469,6 +489,8 @@ func TestCaddyTrustedProxiesValueParity(t *testing.T) {
 // --adopt-units or a TTY yes) add it to an older fleet-managed front. All three
 // decide through the shared predicate and write only when it says "unset".
 func TestOperatorScriptsSetTrustedProxies(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	for name, wants := range map[string][]string{
 		"bootstrap.sh": {
@@ -530,6 +552,8 @@ func TestOperatorScriptsSetTrustedProxies(t *testing.T) {
 // write FLEET_TRUSTED_PROXIES when the env file lacks it, and that it leaves
 // an operator's value alone when present.
 func TestBootstrapDryRunPlansTrustedProxies(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	args := []string{"--dry-run", "--postgres=local", "--enable-web", "--domain", "fleet.example.com"}
 	out, err := runScript(t, []string{"FLEET_ENV_FILE=" + envFile}, "bootstrap.sh", args...)
@@ -556,6 +580,8 @@ func TestBootstrapDryRunPlansTrustedProxies(t *testing.T) {
 // the renderer's defaults (callers pass env-file values verbatim); a listener
 // on an interface address — or on every interface — is not loopback.
 func TestCaddyUpstreamsLoopback(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		chat, orch string
 		want       bool
@@ -580,6 +606,8 @@ func TestCaddyUpstreamsLoopback(t *testing.T) {
 // moved off loopback means Caddy connects from an interface address, so the
 // plan must not claim it writes 127.0.0.1,::1.
 func TestBootstrapDryRunNonLoopbackUpstreamWritesNothing(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("FLEET_ORCHESTRATOR_ADDR=10.0.0.5:8000\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -599,6 +627,8 @@ func TestBootstrapDryRunNonLoopbackUpstreamWritesNothing(t *testing.T) {
 // proxying to 127.0.0.1:3000 while fleet listened elsewhere. A wildcard bind
 // is dialled on loopback; "off" and empty fall back to the default.
 func TestCaddyfileFollowsTheWebListener(t *testing.T) {
+	t.Parallel()
+
 	for in, want := range map[string]string{
 		"":               "",
 		"off":            "",

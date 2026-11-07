@@ -10,6 +10,8 @@ import "testing"
 // behaviour a foot-gun: the verb went to the database on a command line it
 // had not understood). `sched apikey list` set the pattern.
 func TestListVerbsRefuseStrayPositionals(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		run  func([]string) int

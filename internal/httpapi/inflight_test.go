@@ -16,6 +16,8 @@ import (
 // finish semantics of registerTurn / finishTurn. Each call returns a
 // fresh buffer plus a monotonic token the finish call must present.
 func TestInflightRegistry_RefusesWhileRunning(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 
 	// Register a turn for conv "A".
@@ -64,6 +66,8 @@ func TestInflightRegistry_RefusesWhileRunning(t *testing.T) {
 }
 
 func TestInflightRegistry_FinishScopedByToken(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 
 	_, cancel1 := context.WithCancel(context.Background())
@@ -94,6 +98,8 @@ func TestInflightRegistry_FinishScopedByToken(t *testing.T) {
 }
 
 func TestInflightRegistry_CancelInflight(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -114,6 +120,8 @@ func TestInflightRegistry_CancelInflight(t *testing.T) {
 // A finished buffer is retained in the map but cancelInflight should
 // report it as no-op (nothing to stop).
 func TestInflightRegistry_CancelAfterFinishIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 
 	_, cancel := context.WithCancel(context.Background())
@@ -143,6 +151,8 @@ func TestInflightRegistry_CancelAfterFinishIsNoOp(t *testing.T) {
 // conversation owned by someone else (so a token leak can't be used to
 // kill another tenant's work).
 func TestCancelEndpoint_OwnerScoped(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -181,6 +191,8 @@ func TestCancelEndpoint_OwnerScoped(t *testing.T) {
 // saying so (409) — so a client stopping the turn it watched can never cancel
 // a successor, and learns its own turn had already finished.
 func TestCancelEndpoint_TurnTargeted(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -216,6 +228,8 @@ func TestCancelEndpoint_TurnTargeted(t *testing.T) {
 // A Stop naming an input by its key withdraws that input from the queue, and
 // leaves a running turn that is not the input's alone.
 func TestCancelEndpoint_InputTargeted(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -248,6 +262,8 @@ func TestCancelEndpoint_InputTargeted(t *testing.T) {
 // it: a Stop naming its key cancels the row (so the turn's settlement cannot
 // re-queue it) and stops the turn carrying it.
 func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -284,6 +300,8 @@ func TestCancelEndpoint_InputTargetedInjectedSteer(t *testing.T) {
 }
 
 func TestCancelEndpoint_NoInflightStillReturns204(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -301,6 +319,8 @@ func TestCancelEndpoint_NoInflightStillReturns204(t *testing.T) {
 // /inflight returns a JSON probe the client uses to decide whether to
 // open a reattach stream.
 func TestInflightEndpoint_ReportsStatus(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -351,6 +371,8 @@ func TestInflightEndpoint_ReportsStatus(t *testing.T) {
 
 // Cross-user probes are 404. Prevents a token leak probing other tenants.
 func TestInflightEndpoint_OwnerScoped(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -367,6 +389,8 @@ func TestInflightEndpoint_OwnerScoped(t *testing.T) {
 // Stream reattach with Last-Event-ID should only replay events AFTER
 // the given id.
 func TestStreamEndpoint_ReplaysFromLastEventID(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {

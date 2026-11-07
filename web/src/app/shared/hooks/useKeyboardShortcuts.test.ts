@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderHook, cleanup, act } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import {
   matchesShortcut,
   useKeyboardShortcuts,
@@ -184,6 +185,30 @@ describe("useKeyboardShortcuts", () => {
     });
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalledTimes(1);
+  });
+
+  it("a key pressed once a render has committed reads that render's list", () => {
+    // A layout effect declared after the hook runs in the same commit, before
+    // any passive effect: it stands for a key pressed between a non-urgent
+    // render reaching the screen and its passive effects running. With the
+    // list written in a passive effect, the key ran the PREVIOUS list — the
+    // rail's j then walked a conversation list that was still empty (#2043
+    // load-race flake).
+    const seen: string[] = [];
+    const { rerender } = renderHook(
+      ({ value }) => {
+        useKeyboardShortcuts([{ key: "?", handler: () => seen.push(value) }]);
+        useLayoutEffect(() => {
+          window.dispatchEvent(keyEvent({ key: "?" }, document.body));
+        }, [value]);
+      },
+      { initialProps: { value: "first" } },
+    );
+    // (The mount commit's key is not asserted: the window listener itself is
+    // attached after mount. The flake was an update, not a mount.)
+    seen.length = 0;
+    rerender({ value: "second" });
+    expect(seen).toEqual(["second"]);
   });
 
   it("removes its listener on unmount", () => {

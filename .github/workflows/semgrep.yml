@@ -119,7 +119,7 @@ jobs:
           SEMGREP_VERSION: '1.174.0'
         run: |
           set -euo pipefail
-          python3 -m pip install --user --quiet "semgrep==${SEMGREP_VERSION}"
+          python3 -m pip install --user --quiet --retries 5 --timeout 30 "semgrep==${SEMGREP_VERSION}"
           # GITHUB_PATH only affects LATER steps, so export for this one too.
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:$PATH"

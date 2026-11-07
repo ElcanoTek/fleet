@@ -20,6 +20,8 @@ func mustTouch(t *testing.T, path, content string, mtime time.Time) {
 }
 
 func TestSweepAttachments_RemovesOldKeepsFresh(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	now := time.Now()
 
@@ -57,6 +59,8 @@ func TestSweepAttachments_RemovesOldKeepsFresh(t *testing.T) {
 }
 
 func TestSweepAttachments_MissingDirIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	removed, err := SweepAttachments(filepath.Join(t.TempDir(), "does-not-exist"), 14*24*time.Hour)
 	if err != nil {
 		t.Fatalf("missing dir should not error, got: %v", err)
@@ -67,6 +71,8 @@ func TestSweepAttachments_MissingDirIsNoOp(t *testing.T) {
 }
 
 func TestSweepAttachments_NotADirIsError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	notDir := filepath.Join(dir, "regular.file")
 	mustTouch(t, notDir, "x", time.Now())
@@ -78,6 +84,8 @@ func TestSweepAttachments_NotADirIsError(t *testing.T) {
 }
 
 func TestLooksLikeConversationID(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		in   string
@@ -100,6 +108,8 @@ func TestLooksLikeConversationID(t *testing.T) {
 }
 
 func TestSweepOrphanWorkspaces(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -157,6 +167,8 @@ func TestSweepOrphanWorkspaces(t *testing.T) {
 // fails there, and the sweep used to drop that error, so the dir — 4.8 GB of
 // it on one production box — was retried and silently kept forever.
 func TestSweepOrphanWorkspacesReadOnlySubdir(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	root := t.TempDir()
 	orphan := filepath.Join(root, "0a3c2f6e-5b1d-4c8e-9f7a-2d4b6e8a0c1f")
@@ -192,6 +204,8 @@ func TestSweepOrphanWorkspacesReadOnlySubdir(t *testing.T) {
 // owner read (`chmod 000 .` / `chmod 0111 .` by the sandbox) cannot be opened
 // to walk, so its mode is repaired through the parent before the walk.
 func TestSweepOrphanWorkspacesUnreadableOrphan(t *testing.T) {
+	t.Parallel()
+
 	for _, mode := range []os.FileMode{0o000, 0o111} {
 		t.Run(mode.String(), func(t *testing.T) {
 			s := newTestStore(t)
@@ -227,6 +241,8 @@ func TestSweepOrphanWorkspacesUnreadableOrphan(t *testing.T) {
 // directory chmodded or deleted: every operation goes through an os.Root at the
 // workspace root, which refuses to resolve an escaping name.
 func TestRemoveWorkspaceTreeSymlinkCannotEscape(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	outside := t.TempDir()
 	victim := filepath.Join(outside, "locked")
@@ -260,6 +276,8 @@ func TestRemoveWorkspaceTreeSymlinkCannotEscape(t *testing.T) {
 }
 
 func TestSweepOrphanWorkspacesMissingRoot(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	n, err := s.SweepOrphanWorkspaces(context.Background(), filepath.Join(t.TempDir(), "does-not-exist"))
 	if err != nil {
@@ -283,6 +301,8 @@ func backdateConversation(t *testing.T, s *Store, id string, when int64) {
 }
 
 func TestDeleteUnpinnedOlderThan_SparesProtectedRows(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
@@ -326,6 +346,8 @@ func TestDeleteUnpinnedOlderThan_SparesProtectedRows(t *testing.T) {
 }
 
 func TestStorageConversationStats_CountsReclaimable(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	old := time.Now().Add(-90 * 24 * time.Hour).Unix()
@@ -368,6 +390,8 @@ func TestStorageConversationStats_CountsReclaimable(t *testing.T) {
 }
 
 func TestConversationStorageMetaByIDs(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -389,6 +413,8 @@ func TestConversationStorageMetaByIDs(t *testing.T) {
 }
 
 func TestSweepStaleDownloadPartials(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	conv := filepath.Join(root, "conv", "sub")
 	if err := os.MkdirAll(conv, 0o700); err != nil {

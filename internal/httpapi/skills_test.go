@@ -35,6 +35,8 @@ func writeTestSkill(t *testing.T, dir, name, description string) {
 }
 
 func TestMatchSkillInvocation_Match(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name    string
 		message string
@@ -79,12 +81,16 @@ func TestMatchSkillInvocation_Match(t *testing.T) {
 }
 
 func TestMatchSkillInvocation_NoSkills(t *testing.T) {
+	t.Parallel()
+
 	if block, matched := matchSkillInvocation("/deploy", nil); block != "" || matched != "" {
 		t.Errorf("empty roster must never match, got (%q, %q)", block, matched)
 	}
 }
 
 func TestApplySkillInvocation(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	writeTestSkill(t, dir, "deploy", "roll a release out")
 	s := &Server{clientConfig: &clientconfig.Bundle{SkillsDir: dir}}
@@ -112,6 +118,8 @@ func TestApplySkillInvocation(t *testing.T) {
 }
 
 func TestListSkills(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	writeTestSkill(t, dir, "deploy", "roll a release out")
 	writeTestSkill(t, dir, "audit", "review the books")
@@ -140,6 +148,8 @@ func TestListSkills(t *testing.T) {
 }
 
 func TestListSkills_NilBundleIsEmptyArray(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/skills", nil)
 	w := httptest.NewRecorder()
@@ -154,6 +164,8 @@ func TestListSkills_NilBundleIsEmptyArray(t *testing.T) {
 }
 
 func TestListSkills_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/skills", nil)
 	w := httptest.NewRecorder()
@@ -166,6 +178,8 @@ func TestListSkills_MethodNotAllowed(t *testing.T) {
 // The library endpoints: the roster carries provenance and GET /skills/{name}
 // returns the SKILL.md body for roster names only (never raw paths).
 func TestSkillByNameAndSource(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "manifest.yaml"), []byte("skills_builtin: false\n"), 0o600); err != nil {
 		t.Fatal(err)

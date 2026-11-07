@@ -12,12 +12,12 @@
 # Go would otherwise do on its own.
 #
 # The env var takes precedence over that go.env default, so setting it here is
-# what makes `fleet update` work on a stock Fedora box. It belongs in the
+# what makes `fleet update --from-source` work on a stock Fedora dev box. It belongs in the
 # Makefile rather than in each caller because every build path funnels through
-# here — scripts/update.sh, scripts/fleet-upgrade.sh, bootstrap.sh, and CI all
-# shell out to `make build`. (bootstrap.sh already passed GOTOOLCHAIN=auto by
-# hand for exactly this reason; `fleet update` did not, so a box would install
-# fine and then fail every upgrade.)
+# here — CI, and the development-only `--from-source` paths of
+# scripts/update.sh and bootstrap.sh, all shell out to `make build`. (A release
+# box builds nothing: it installs the signed binary release.yml publishes —
+# ADR-0100.)
 #
 # `?=` so an operator who has deliberately chosen a value — an air-gapped host
 # pinned to `local`, or a specific `go1.27.0` — keeps it.
@@ -176,11 +176,10 @@ install: web
 # tests compile. The release binary (`make build`/`bins`) is built WITHOUT it, so
 # the unsandboxed host executor never ships (#159).
 #
-# scripts/go-test.sh is what CI runs: it keeps -p 1 only for packages that share
-# a Postgres DSN (chat TRUNCATE vs sched advisory lock) and runs the rest at
-# default package parallelism. Chat-serial and sched-serial overlap — they use
-# different databases (ADR-0005). Do not replace this with a bare
-# `go test -p 1 ./...`; that serializes all ~68 packages for no reason.
+# scripts/go-test.sh is what CI runs: one `go test` over the whole tree at
+# default package parallelism. Every Postgres-backed test clones a database of
+# its own from a migrated template (internal/testdb, #2049 M2), so no package
+# waits for another; FLEET_TEST_DATABASE_URL names the test server.
 test:
 	scripts/go-test.sh
 
@@ -295,9 +294,9 @@ clean:
 #
 # These delegate to the EXACT commands .github/workflows/ci.yml runs so a
 # contributor can reproduce "the same thing CI runs" locally. docs/TESTING.md
-# documents each CI lane and how these targets map onto it, including the two
-# Postgres DSNs the Go suites require (FLEET_TEST_DATABASE_URL for the chat
-# suites, DATABASE_URL for the sched suite)
+# documents each CI lane and how these targets map onto it, including the one
+# Postgres DSN the Go suites need (FLEET_TEST_DATABASE_URL: any database on a
+# server whose role can CREATE DATABASE; every DB test clones its own)
 # and FLEET_CLIENT_CONFIG_DIR=config/default. Set those in your environment
 # before `make ci-go` / `make ci-local`; see docs/TESTING.md for the values.
 # ---------------------------------------------------------------------------

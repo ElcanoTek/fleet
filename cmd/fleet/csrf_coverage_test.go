@@ -17,6 +17,8 @@ import (
 // request is blocked by CSRF before reaching the handler, while a same-origin
 // request clears the CSRF gate (and only then meets the handler's own auth).
 func TestOrchestratorCSRFCoverage(t *testing.T) {
+	t.Parallel()
+
 	h := handlers.New(handlers.Config{}, nil, nil)
 	notes := handlers.NewNotesHandlers(nil, h)
 	mux := buildOrchestratorMux(h, notes, reloadConfigHandler(nil), mcpReloadHandler(nil), nil)

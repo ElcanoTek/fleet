@@ -12,6 +12,8 @@ import (
 // ADMIN_EMAILS allowlist OR a users.role = 'admin' account, with the
 // allowlist ignored where central Auth manages accounts.
 func TestCallerIsAdmin(t *testing.T) {
+	t.Parallel()
+
 	ctxFor := func(email, role string) context.Context {
 		ctx := context.WithValue(context.Background(), ctxKeyUser, email)
 		if role != "" {

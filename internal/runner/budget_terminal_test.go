@@ -23,6 +23,8 @@ import (
 // the cost_ceiling class (non-retryable by default), fire the FAILURE
 // notification, and never reply to the triggering email.
 func TestBudgetStoppedRunFailsNotSucceeds(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -110,6 +112,8 @@ func TestBudgetStoppedRunFailsNotSucceeds(t *testing.T) {
 // classified as a cancel) must land as a terminal failure — previously the nil
 // error fell through to the success branch with a truncated transcript.
 func TestCancelledRunWithoutMarkerFailsNotSucceeds(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 

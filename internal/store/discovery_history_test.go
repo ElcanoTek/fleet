@@ -113,6 +113,8 @@ func TestLoadDiscoveryHistory(t *testing.T) {
 // The branch no longer loads the transcript to authorize a teammate: the
 // meta read is the same gate as the full read.
 func TestGetTeamVisibleConversationMetaSameGate(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "alice@x.com", f.project.ID, "Q3")
 	for _, who := range []string{"alice@x.com", "bob@x.com", "dana@x.com", "carol@x.com", "nobody@x.com"} {

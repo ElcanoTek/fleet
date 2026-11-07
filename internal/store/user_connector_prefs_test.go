@@ -10,6 +10,8 @@ import (
 // operator default (delete reverts), remote rows may not carry a seat, and
 // rows die with the user.
 func TestConnectorPrefs(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const email = "Brad@Elcano.com"

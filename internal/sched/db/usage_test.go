@@ -75,6 +75,8 @@ var (
 // TestTaskUsageGroupByPrincipal covers the who-spent-it dimensions: user
 // (including the deleted-user UUID fallback) and API key.
 func TestTaskUsageGroupByPrincipal(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -143,6 +145,8 @@ func TestTaskUsageGroupByPrincipal(t *testing.T) {
 // project (which tasks don't have), day/week time bucketing, and the
 // closed-set group_by validation.
 func TestTaskUsageGroupByDimensions(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -214,6 +218,8 @@ func TestTaskUsageGroupByDimensions(t *testing.T) {
 // aggregation: rows keyed by (user, UTC day), the deleted-user/orphan
 // provenance rules unchanged from TaskUsage, and [from, to) filtering.
 func TestTaskUsageByUserDay(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -257,6 +263,8 @@ func TestTaskUsageByUserDay(t *testing.T) {
 }
 
 func TestTaskUsageRangeFiltering(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

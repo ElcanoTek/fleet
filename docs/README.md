@@ -63,7 +63,8 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   chat-stream contract every consumer replays, and the rules a test must meet
   to be able to fail): [`docs/TESTING-STRATEGY.md`](TESTING-STRATEGY.md); the
   CI lanes themselves (unit / fake-LLM / mocked + live Playwright / canary)
-  and how to run each: [`docs/TESTING.md`](TESTING.md)
+  and how to run each: [`docs/TESTING.md`](TESTING.md); how every DB test gets
+  a database of its own: [`docs/TEST-DATABASES.md`](TEST-DATABASES.md)
 - **The scanning stack** (who checks what, why ruff owns Python lint, why
   Semgrep runs all four registry packs — `p/github-actions`, `p/golang`,
   `p/javascript`, `p/python` — and blocks with 7 false positives waived at the
@@ -319,7 +320,7 @@ above fails otherwise.
 - [`MODEL-COST-INDICATORS.md`](MODEL-COST-INDICATORS.md) — Model cost indicators ($ … $$$$)
 - [`MODEL-DEFAULTS.md`](MODEL-DEFAULTS.md) — Claude Haiku 5.5 as the everyday default (2026-10-15), Gemini 4 Argon as the strong tier (2026-10-14); the earlier Luna Pro / Opus swaps (2026-09-21, 2026-09-22), and why; plus the self-correcting refusal a lockdown conversation returns for a model its allow-list forbids
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
-- [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
+- [`RELEASE-ARTIFACTS.md`](RELEASE-ARTIFACTS.md) — Signed release artifacts: what each release publishes (binaries, GHCR images, SBOMs, provenance), how `fleet update` verifies, swaps and rolls back, and how client bundles get their sandbox image (#2051, ADR-0100)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
 - [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), configured by `DATABASE_URL` alone; the legacy two-database layout and `fleet db consolidate` were removed in phase 2 (#2049, ADR-0098)
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
@@ -374,6 +375,7 @@ above fails otherwise.
 - [`TASK-TITLES.md`](TASK-TITLES.md) — Task titles
 - [`TEAM-SHARING.md`](TEAM-SHARING.md) — Sharing work inside a project — team-shared chats and team learnings
 - [`TERMINAL-APPROVALS.md`](TERMINAL-APPROVALS.md) — Terminal chat and scheduled-task approvals
+- [`TEST-DATABASES.md`](TEST-DATABASES.md) — Test databases — a cloned database per test, templates keyed by migration set, parallel DB suites (#2049 M2)
 - [`TESTING-STRATEGY.md`](TESTING-STRATEGY.md) — Testing strategy — the layers, where a test goes, contracts
 - [`TESTING.md`](TESTING.md) — Testing fleet
 - [`TIMERS.md`](TIMERS.md) — `fleet timers install` — one-command setup for the scheduled-maintenance timers

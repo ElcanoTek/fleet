@@ -11,7 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // newSelfImproveStore mirrors newNotesStore but also cleans the self-improvement
@@ -20,7 +20,7 @@ import (
 // notes tests use (the sched suite runs -p 1).
 func newSelfImproveStore(t *testing.T) (*Store, *db.Database) {
 	t.Helper()
-	database := testdb.SchedDB(t, "task_memories", "tasks")
+	database := fleetdb.SchedDB(t)
 	return NewStore(database), database
 }
 
@@ -34,6 +34,8 @@ func makeTask(t *testing.T, database *db.Database) uuid.UUID {
 }
 
 func TestTaskMemory_UpsertGetList(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)
@@ -71,6 +73,8 @@ func TestTaskMemory_UpsertGetList(t *testing.T) {
 }
 
 func TestTaskMemory_ValueCapAndKeyValidation(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)
@@ -93,6 +97,8 @@ func TestTaskMemory_ValueCapAndKeyValidation(t *testing.T) {
 }
 
 func TestTaskMemory_LRUEviction(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)
@@ -131,6 +137,8 @@ func TestTaskMemory_LRUEviction(t *testing.T) {
 }
 
 func TestTaskMemory_DeleteAndClear(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)
@@ -153,6 +161,8 @@ func TestTaskMemory_DeleteAndClear(t *testing.T) {
 // TestTaskMemory_CascadeOnTaskDelete proves the FK ON DELETE CASCADE: deleting a
 // task removes its memories (they are the task's own state).
 func TestTaskMemory_CascadeOnTaskDelete(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)
@@ -172,6 +182,8 @@ func TestTaskMemory_CascadeOnTaskDelete(t *testing.T) {
 // whole overflow at once, in the same oldest-first order the previous
 // delete-one-per-round-trip loop used.
 func TestTaskMemory_LRUEvictionBulk(t *testing.T) {
+	t.Parallel()
+
 	s, database := newSelfImproveStore(t)
 	ctx := context.Background()
 	taskID := makeTask(t, database)

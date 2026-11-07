@@ -29,6 +29,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrationFingerprint identifies this binary's sched migration set (a hash of
+// the embedded files). internal/testdb keys its migrated template databases
+// by it.
+func MigrationFingerprint() string { return dbschema.Fingerprint(migrationsFS) }
+
 // The sched DB's migration runner. It replaces golang-migrate v4 (whose pgx/v5
 // driver was the only reason lib/pq and pgerrcode were in go.mod) with the
 // subset fleet used — Up over an embedded directory — and is deliberately

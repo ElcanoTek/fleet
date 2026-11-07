@@ -8,6 +8,8 @@ import (
 )
 
 func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "alice@example.com"
@@ -78,6 +80,8 @@ func TestListExecutingApprovalsExcludesCompletedBodies(t *testing.T) {
 }
 
 func TestApprovalRecoveryIsolatesUnrecoveredConversations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "u@example.com"
@@ -114,6 +118,8 @@ func TestApprovalRecoveryIsolatesUnrecoveredConversations(t *testing.T) {
 // from this listing so the transcript keeps the shape it had live — including
 // a notify-mode record whose undo hint has no other durable delivery (#1153).
 func TestListResolvedApprovals_ReturnsResolvedRowsOldestFirst(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const user = "alice@example.com"

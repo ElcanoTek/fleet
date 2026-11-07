@@ -37,6 +37,11 @@ import (
 //go:embed migrations/*.sql
 var migrationsFS embed.FS
 
+// MigrationFingerprint identifies this binary's chat migration set (a hash of
+// the embedded files). internal/testdb keys its migrated template databases
+// by it.
+func MigrationFingerprint() string { return dbschema.Fingerprint(migrationsFS) }
+
 // migrationFilenamePattern — two groups: the zero-padded number and the
 // human-readable suffix. Anything else in migrations/ is ignored so we
 // can drop README.md etc. in there without breaking the scanner.

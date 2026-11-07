@@ -47,6 +47,8 @@ func (r *testRecorder) Body() string {
 }
 
 func TestTurnBuffer_AttachReplaysFromZero(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	buf.Emit("a", map[string]any{"n": 1})
 	buf.Emit("b", map[string]any{"n": 2})
@@ -65,6 +67,8 @@ func TestTurnBuffer_AttachReplaysFromZero(t *testing.T) {
 }
 
 func TestTurnBuffer_AttachRespectsLastEventID(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	for i := 1; i <= 5; i++ {
 		buf.Emit("delta", map[string]any{"i": i})
@@ -92,6 +96,8 @@ func TestTurnBuffer_AttachRespectsLastEventID(t *testing.T) {
 // Attach on an already-finished buffer must return immediately after
 // replay — no hanging waiting on subscriber channel.
 func TestTurnBuffer_AttachAfterFinishReturns(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	buf.Emit("x", nil)
 	buf.Finish()
@@ -113,6 +119,8 @@ func TestTurnBuffer_AttachAfterFinishReturns(t *testing.T) {
 
 // Emit must fan out to every live subscriber in order.
 func TestTurnBuffer_FanOutToMultipleSubscribers(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	var wg sync.WaitGroup
 	rws := []*testRecorder{newRecorder(), newRecorder()}
@@ -148,6 +156,8 @@ func TestTurnBuffer_FanOutToMultipleSubscribers(t *testing.T) {
 // Client disconnect (ctx cancel) must release the subscriber slot so
 // the publisher can keep working without blocking.
 func TestTurnBuffer_ClientDisconnectReleasesSubscriber(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -175,6 +185,8 @@ func TestTurnBuffer_ClientDisconnectReleasesSubscriber(t *testing.T) {
 
 // Emit after Finish is a no-op (does not panic, does not grow buffer).
 func TestTurnBuffer_EmitAfterFinishIsNoOp(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	buf.Emit("a", nil)
 	buf.Finish()
@@ -218,6 +230,8 @@ func (p *failingCreateTurnPersister) FinishTurn(context.Context, string, store.T
 // The persister used to be assigned before CreateTurn ran, so the abandoned
 // turn still tried to seal a row that did not exist.
 func TestTurnBuffer_AttachPersisterFailureLeavesNoPersister(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("conv-1", "turn-1")
 	p := &failingCreateTurnPersister{}
 	if err := buf.attachPersister(context.Background(), p); err == nil {
@@ -269,6 +283,8 @@ func (p *recordingPersister) FinishTurn(context.Context, string, store.TurnStatu
 // deterministic reproduction; the assertion at the end only proves the turn
 // still seals with a persister wired.
 func TestTurnBuffer_AttachPersisterConcurrentWithEmit(t *testing.T) {
+	t.Parallel()
+
 	for round := 0; round < 20; round++ {
 		buf := newTurnBuffer("conv-1", fmt.Sprintf("turn-%d", round))
 		p := &recordingPersister{}

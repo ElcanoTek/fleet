@@ -36,6 +36,8 @@ func captureStdout(t *testing.T, fn func()) string {
 }
 
 func TestSchedTaskEstimateUsageErrors(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		argv []string

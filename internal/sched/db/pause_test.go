@@ -12,6 +12,8 @@ import (
 
 // #510: ask → pause (lease released) → resume with answer → run consumes + clears.
 func TestTaskPauseResumeLifecycle(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()
@@ -98,6 +100,8 @@ func TestTaskPauseResumeLifecycle(t *testing.T) {
 // paused one (however long its run executed beforehand) and a disabled window
 // are left alone.
 func TestExpirePausedTasks(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

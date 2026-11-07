@@ -81,6 +81,8 @@ func settingsFixture(t *testing.T) (http.Handler, *fakeSettingsService) {
 }
 
 func TestAdminSettingsGate(t *testing.T) {
+	t.Parallel()
+
 	h, _ := settingsFixture(t)
 
 	// Non-admin member: 403 on both the list and item surfaces.
@@ -94,6 +96,8 @@ func TestAdminSettingsGate(t *testing.T) {
 }
 
 func TestAdminSettingsUnwired501(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes() // no WithWorkspaceSettings
@@ -106,6 +110,8 @@ func TestAdminSettingsUnwired501(t *testing.T) {
 }
 
 func TestAdminSettingsRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	h, svc := settingsFixture(t)
 
 	// List: every registered setting, default-sourced.
@@ -157,6 +163,8 @@ func TestAdminSettingsRoundTrip(t *testing.T) {
 // Postgres store (migration 035) — proving the full slice: handler → service →
 // validation → workspace_settings row → apply hook, and reset back to default.
 func TestAdminSettingsEndToEnd(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 
@@ -229,6 +237,8 @@ func TestAdminSettingsEndToEnd(t *testing.T) {
 }
 
 func TestAdminSettingsErrorTaxonomy(t *testing.T) {
+	t.Parallel()
+
 	h, _ := settingsFixture(t)
 
 	if w := do(t, h, http.MethodPut, "/admin/settings/not_a_setting",

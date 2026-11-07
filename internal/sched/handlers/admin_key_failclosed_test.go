@@ -12,6 +12,8 @@ import (
 // a deployment that simply left the key unconfigured. Regression guard for the
 // source-level fix that closes all six call sites at once.
 func TestVerifyAdminKey_FailsClosedWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{AdminAPIKey: ""}}
 
 	// No header at all — the exact empty/empty match that used to pass.
@@ -27,6 +29,8 @@ func TestVerifyAdminKey_FailsClosedWhenUnconfigured(t *testing.T) {
 }
 
 func TestVerifyAdminKey_MatchesWhenConfigured(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{AdminAPIKey: "s3cret"}}
 
 	ok := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -49,6 +53,8 @@ func TestVerifyAdminKey_MatchesWhenConfigured(t *testing.T) {
 // The middleware that gates the admin-only routes must reject when no key is
 // configured, exercising the fail-closed guard through the real entry point.
 func TestAdminAuthMiddleware_RejectsWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{AdminAPIKey: ""}}
 	reached := false
 	handler := h.AdminAuthMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

@@ -19,23 +19,27 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
+
+	"github.com/ElcanoTek/fleet/internal/release"
+	"github.com/ElcanoTek/fleet/internal/version"
 )
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
-// (--no-pull / --dry-run / --client-config / --service / --branch / --yes /
-// --sandbox-max-age / ...) to the shell script, which owns the in-place
-// update: pull the fleet + client-config checkouts, rebuild the binary + web
-// app, rebuild the sandbox image when its Containerfile or resolved tag
-// changed, the tag is missing from the service user's image store, or the
-// installed image aged past FLEET_SANDBOX_MAX_AGE_DAYS (the freshness
-// backstop: an unchanged bundle must not mean an unpatched image), and
-// restart the service. Like bootstrap, the CLI runs NO migrations (services
-// self-migrate on restart).
+// (--tag / --allow-downgrade / --from-source / --no-pull / --dry-run /
+// --client-config / --service / --branch / --yes / --sandbox-max-age / ...) to
+// the shell script, which owns the in-place update. By default (--artifact)
+// that is a SIGNED RELEASE: advance the fleet + client-config checkouts to the
+// release, download and verify the binary (`fleet release fetch`), verify and
+// pull the release's sandbox image or build a custom bundle's on top of it, then
+// swap the binary in atomically, restart, wait for /readyz and roll back
+// automatically (`fleet release install`) — no Go or Node on the box
+// (docs/RELEASE-ARTIFACTS.md, ADR-0100). --from-source keeps the old on-box
+// build for development boxes. Like bootstrap, the CLI runs NO migrations
+// (services self-migrate on restart).
 //
-// `--check` short-circuits to a READ-ONLY report (how many commits the local
-// checkout is behind its upstream, plus whether this box can actually build the
-// web tier) and mutates nothing — handy on a dev box to see whether an update is
-// even needed before running the real thing.
+// `--check` short-circuits to a READ-ONLY report (the release this box runs
+// against the newest published one, how many commits the checkout is behind,
+// and the client bundle's freshness) and mutates nothing.
 func cmdUpdate(argv []string) int {
 	for _, a := range argv {
 		if a == "--check" {
@@ -162,16 +166,40 @@ func updateCheck() int {
 	}
 	n, _ := strconv.Atoi(behind)
 	if n == 0 {
-		fmt.Printf("fleet is up to date (%s, even with upstream).\n", branch)
+		fmt.Printf("fleet checkout is even with upstream (%s).\n", branch)
 	} else {
-		fmt.Printf("fleet is %d commit(s) behind upstream on %s — run `fleet update` to upgrade.\n", n, branch)
+		fmt.Printf("fleet checkout is %d commit(s) behind upstream on %s — `fleet update` installs the newest RELEASE (below), which may not include the newest commits yet.\n", n, branch)
 	}
 	bundleStale := clientBundleCheck()
-	if rc := nodeReadiness(); rc != 0 {
+	if rc := releaseCheck(); rc != 0 {
 		return rc
 	}
 	if bundleStale {
 		return 5
+	}
+	return 0
+}
+
+// releaseCheck compares the release this binary is with the newest published
+// one. An unreachable GitHub API is reported, not fatal: --check must still
+// answer the local questions on an offline box.
+func releaseCheck() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	running := version.Version()
+	latest, err := release.NewDownloader().LatestTag(ctx)
+	if err != nil {
+		fmt.Printf("release: running %s; could not ask GitHub for the newest release (%v).\n", running, err)
+		return 0
+	}
+	cur, ok := release.ParseVersion(running)
+	switch {
+	case !ok:
+		fmt.Printf("release: running an unstamped build (%s); the newest release is %s — `sudo fleet update` installs it.\n", running, latest)
+	case cur.Compare(latest) < 0:
+		fmt.Printf("release: running %s, %s is published — `sudo fleet update` installs it (signed, verified, rolled back if not ready).\n", cur, latest)
+	default:
+		fmt.Printf("release: running %s, the newest published release.\n", cur)
 	}
 	return 0
 }
@@ -253,39 +281,6 @@ func clientBundleCheck() bool {
 	}
 	fmt.Printf("client bundle is up to date (%s at %s, %s).\n", bundleBranch, head, dir)
 	return false
-}
-
-// nodeReadiness runs the read-only node probe and returns 0 when this box can
-// build the web tier, 5 when it cannot.
-//
-// Counting commits used to be the whole of `--check`, which made it possible for
-// the command an operator runs to ask "is an update needed, and will it work?"
-// to print "run `fleet update` to upgrade" and exit 0 on a box where that update
-// refuses to build the web tier. Recommending a command that cannot succeed is
-// the same class of fault as a plan describing work it never does.
-//
-// It delegates to `doctor.sh --node --check` rather than re-deriving the floor
-// in Go: scripts/lib/node-version.sh is deliberately the ONE implementation of
-// "which node?", and a copy here would be a fourth call site to keep in
-// lockstep — exactly what that file exists to prevent. --node --check installs
-// nothing and needs no root. A packaged install with no checkout has no script
-// to run and no web tier to build, so the absence is not a failure.
-func nodeReadiness() int {
-	script := findScript("doctor.sh")
-	if script == "" {
-		return 0
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	//nolint:gosec // G204: fixed "bash" binary; args are the repo-local script path plus literal flags, never request input.
-	cmd := exec.CommandContext(ctx, "bash", script, "--node", "--check")
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "fleet update --check: this box cannot build the web tier yet — `sudo fleet update` repairs the node toolchain in place (or run `sudo fleet doctor --node` first).")
-		return 5
-	}
-	return 0
 }
 
 // repoRoot resolves the fleet source checkout: FLEET_ROOT if set, else the parent

@@ -57,6 +57,8 @@ func pauseTaskPastWindow(t *testing.T, store *Storage, recurrence string) *model
 // paused occurrence of a RECURRING task must spawn the next occurrence, so an
 // unattended overnight ask-pause no longer silently kills the whole schedule.
 func TestExpirePausedTasks_PreservesRecurrenceChain(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 
@@ -105,6 +107,8 @@ func TestExpirePausedTasks_PreservesRecurrenceChain(t *testing.T) {
 // TestExpirePausedTasks_NonRecurringSpawnsNothing proves a one-shot paused task
 // that expires does NOT spawn a phantom successor.
 func TestExpirePausedTasks_NonRecurringSpawnsNothing(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 

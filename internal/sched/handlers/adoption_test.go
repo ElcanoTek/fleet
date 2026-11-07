@@ -20,6 +20,8 @@ import (
 // posture — AdminOrUserAuthMiddleware for proxy reachability, PermissionAdmin
 // enforced in-handler.
 func TestAdoptionReportAdminGate(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	addUser := func(username, role, token string) {
@@ -81,6 +83,8 @@ func TestAdoptionReportAdminGate(t *testing.T) {
 // /admin/usage rules verbatim (there is no group_by here; the grouping is
 // fixed at user × day).
 func TestAdoptionReportParamValidation(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	do := func(query string) *httptest.ResponseRecorder {
@@ -157,6 +161,8 @@ func TestAdoptionReportParamValidation(t *testing.T) {
 // per-user daily series, previous-window comparators, and the inactive-seat
 // roster.
 func TestAdoptionReportMergesSources(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	ctx := context.Background()
 
@@ -303,6 +309,8 @@ func assertAdoptionDailyAndTotals(t *testing.T, rep *models.AdoptionReport) {
 // TestAdoptionReportSeamFailures: a failing chat or roster seam is a 500 —
 // never a silent under-count or a zero seat denominator.
 func TestAdoptionReportSeamFailures(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 
 	do := func() int {
@@ -337,6 +345,8 @@ func TestAdoptionReportSeamFailures(t *testing.T) {
 // listed and totaled — spend never disappears — but never counts toward the
 // adoption headcounts.
 func TestAdoptionUnattributedSpend(t *testing.T) {
+	t.Parallel()
+
 	from := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 8, 0, 0, 0, 0, time.UTC)
 	rep := buildAdoptionReport(from, to, from.AddDate(0, 0, -7),
@@ -362,6 +372,8 @@ func TestAdoptionUnattributedSpend(t *testing.T) {
 // TestAdoptionReportCSVExport: ?format=csv returns a text/csv attachment with
 // the per-user header row + a trailing TOTAL row.
 func TestAdoptionReportCSVExport(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	req := httptest.NewRequest("GET", "/admin/usage/adoption?format=csv", nil)
 	req.Header.Set("X-API-Key", "admin-key")

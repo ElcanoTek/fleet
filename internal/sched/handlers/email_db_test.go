@@ -20,6 +20,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupEmailTest builds a router with only the email-trigger route, against the
@@ -31,28 +32,16 @@ func setupEmailTest(t *testing.T) (*chi.Mux, *storage.Storage, func()) {
 		t.Fatalf("temp dir: %v", err)
 	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping: database unavailable: %v", err)
-		}
 		t.Fatalf("init storage: %v", err)
 	}
-	acquireTestLock(t, store)
 
 	keyMgr, err := apikeys.NewManager(filepath.Join(tmpDir, "api_keys.json"), filepath.Join(tmpDir, "audit_log.jsonl"))
 	if err != nil {
 		store.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("key mgr: %v", err)
-	}
-
-	// Clean shared tables (task_triggers/trigger_events cascade off tasks).
-	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup: %v", err)
-		}
 	}
 
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
@@ -123,6 +112,8 @@ func goodEmail() InboundEmail {
 }
 
 func TestHandleEmailTrigger_HappyPath(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	secret := seedEmailTrigger(t, store, "hp", validPolicy(), false, nil)
@@ -160,6 +151,8 @@ func TestHandleEmailTrigger_HappyPath(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_BadSignature(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	seedEmailTrigger(t, store, "bad", validPolicy(), false, nil)
@@ -171,6 +164,8 @@ func TestHandleEmailTrigger_BadSignature(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_UnknownSlug(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupEmailTest(t)
 	defer cleanup()
 	// No trigger seeded — any signature fails closed with 401 (no enumeration).
@@ -181,6 +176,8 @@ func TestHandleEmailTrigger_UnknownSlug(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_WrongKindSlug(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	// Seed a WEBHOOK-kind trigger, then hit the email endpoint: must be an
@@ -200,6 +197,8 @@ func TestHandleEmailTrigger_WrongKindSlug(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_UnapprovedSender(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	secret := seedEmailTrigger(t, store, "sndr", validPolicy(), false, nil)
@@ -213,6 +212,8 @@ func TestHandleEmailTrigger_UnapprovedSender(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_DKIMFail(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	secret := seedEmailTrigger(t, store, "dkim", validPolicy(), false, nil)
@@ -226,6 +227,8 @@ func TestHandleEmailTrigger_DKIMFail(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_AttachmentTooLarge(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	pol := &models.EmailTriggerPolicy{ApprovedSenders: []string{"corp.com"}, RequireDKIM: true, MaxAttachments: 1, MaxAttachmentBytes: 100}
@@ -240,6 +243,8 @@ func TestHandleEmailTrigger_AttachmentTooLarge(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_Dedup(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 	secret := seedEmailTrigger(t, store, "dup", validPolicy(), false, nil)
@@ -274,6 +279,8 @@ func TestHandleEmailTrigger_Dedup(t *testing.T) {
 }
 
 func TestHandleEmailTrigger_ConnectorOptIn(t *testing.T) {
+	t.Parallel()
+
 	mcp := models.MCPSelection{{Server: "github", Account: "default"}}
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
@@ -312,6 +319,8 @@ func TestHandleEmailTrigger_ConnectorOptIn(t *testing.T) {
 // a nil allowlist means "inherit global". Asserting the run merely "inherited
 // nothing" is what let the code and its own comment drift apart.
 func TestHandleEmailTrigger_OptOutRunReachesZeroConnectorSeats(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupEmailTest(t)
 	defer cleanup()
 

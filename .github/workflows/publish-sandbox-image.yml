@@ -73,9 +73,10 @@ name: Publish sandbox image (reusable)
 # org rather than a portable guarantee: after a first publish of a new name,
 # CHECK the package's visibility instead of assuming either way.
 #
-# What this means in practice. The image contents carry nothing sensitive — no
-# shipped Containerfile has a COPY or ADD, so every one of these is Fedora plus
-# RPMs. What a public package would disclose is its NAME: a public
+# What this means in practice. The image contents carry nothing sensitive — the
+# only COPY in a shipped Containerfile is the generic one's hash-locked
+# requirements.txt, so every one of these is Fedora, RPMs and pinned PyPI
+# packages. What a public package would disclose is its NAME: a public
 # fleet-sandbox-<client> tells the world that client is a customer. Private
 # bundle repo -> private package handles that without anyone configuring it, but
 # it is worth verifying for a new bundle rather than trusted blindly.
@@ -306,14 +307,21 @@ jobs:
           repository: ElcanoTek/fleet
           ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
+          # Everything build-sandbox-image.sh sources or reads from the fleet
+          # checkout: its helper library, and the generic bundle's manifest
+          # and sandbox/ (built for a bundle that ships no Containerfile).
+          # scripts/check_sandbox_sparse_test.go keeps this list complete.
           sparse-checkout: |
             scripts/build-sandbox-image.sh
+            scripts/lib/sandbox-bundle.sh
+            config/default/manifest.yaml
+            config/default/sandbox/
           sparse-checkout-cone-mode: false
 
       - name: Ensure podman
         run: |
           command -v podman >/dev/null 2>&1 \
-            || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+            || (sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq podman)
           podman --version
 
       # Inputs are read from env, never interpolated into the script body: a
@@ -356,6 +364,14 @@ jobs:
           case "$name" in
             ""|*[!a-z0-9./_-]*|*:*)
               echo "::error::implausible image name '$name' (expected a tagless ref)"
+              exit 1
+              ;;
+            # release.yml publishes this name on every release — signed, with
+            # an SBOM and provenance, as the base boxes pull and bundles
+            # layer FROM (ADR-0100). An ad-hoc publish here would move its
+            # :latest to an unsigned build.
+            ghcr.io/elcanotek/fleet-sandbox)
+              echo "::error::ghcr.io/elcanotek/fleet-sandbox is published by release.yml (signed, per release). Publish a bundle's image under its own name."
               exit 1
               ;;
           esac

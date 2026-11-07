@@ -13,6 +13,8 @@ import (
 // or invalid JSON used to fall through to DeleteAllUnpinned (200 + wipe).
 // Non-EOF decode errors must now 400 and touch nothing.
 func TestDeleteConversations_MalformedJSONDoesNotWipe(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		body string
@@ -49,6 +51,8 @@ func TestDeleteConversations_MalformedJSONDoesNotWipe(t *testing.T) {
 // DELETE /conversations affordance: io.EOF (empty body) still means
 // "delete all unpinned".
 func TestDeleteConversations_EmptyBodyKeepsLegacyWipe(t *testing.T) {
+	t.Parallel()
+
 	st := newFakeChatStore()
 	srv := newDefaultChatServer(t, &fakeEngine{}, st)
 	w := do(t, srv.Routes(), http.MethodDelete, "/conversations", nil, "u@x.com")
@@ -67,6 +71,8 @@ func TestDeleteConversations_EmptyBodyKeepsLegacyWipe(t *testing.T) {
 // 1 MiB JSON-body cap as POST/PUT/PATCH (#1110). An oversized body must
 // not be fully readable by the handler.
 func TestBodyLimitMiddleware_CapsDELETE(t *testing.T) {
+	t.Parallel()
+
 	var read int64
 	var readErr error
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

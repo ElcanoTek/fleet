@@ -87,6 +87,8 @@ func (b *hostnameBox) cloudCfg() string {
 // the name against cloud-init, fixes the loopback lines in /etc/hosts, and
 // does it once.
 func TestSetHostname(t *testing.T) {
+	t.Parallel()
+
 	const wantCfg = "# The hostname is set by hand; do not let cloud-init reset it from Vultr metadata.\npreserve_hostname: true\nmanage_etc_hosts: false\n"
 
 	t.Run("vultr default is renamed, pinned and written to hosts, once", func(t *testing.T) {
@@ -181,6 +183,8 @@ func TestSetHostname(t *testing.T) {
 
 // TestHostnameStepIsBootstrapOnly — bootstrap names the box; update never does.
 func TestHostnameStepIsBootstrapOnly(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	boot, err := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
 	if err != nil {

@@ -17,6 +17,8 @@ import (
 // the reason collapsed to one line. It used to print headerless tab-joined
 // lines with ad-hoc "attempts=" / "tags=" prefixes.
 func TestRenderDLQTable(t *testing.T) {
+	t.Parallel()
+
 	when := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
 	reason := "boom\nsecond line"
 	id := uuid.MustParse("cccccccc-1111-2222-3333-444444444444")
@@ -70,6 +72,8 @@ func TestSchedDLQListRejectsBadLimit(t *testing.T) {
 // held to the same length limits as creating or editing a task, so replay cannot
 // install a prompt the HTTP path would refuse; the limit itself is accepted.
 func TestReadReplayPromptHoldsTheTaskPromptBound(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	write := func(name, body string) string {
 		t.Helper()

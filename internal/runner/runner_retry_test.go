@@ -37,6 +37,8 @@ func retryableErr() error {
 // with retries left re-queues the SAME task to Scheduled with a future
 // ScheduledFor and an incremented AttemptCount — NOT a terminal error.
 func TestRetryableFailureRequeuesWithBackoff(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 2)
 
@@ -81,6 +83,8 @@ func TestRetryableFailureRequeuesWithBackoff(t *testing.T) {
 // the next transient failure is routed to the dead-letter queue (#253), not bare
 // error and not another requeue. The DLQ columns record the quarantine context.
 func TestRetriesExhaustedIsDeadLettered(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	// AttemptCount==MaxRetries==1 → the gate AttemptCount<MaxRetries is false.
 	seedTask(t, store, 1, 1)
@@ -127,6 +131,8 @@ func TestRetriesExhaustedIsDeadLettered(t *testing.T) {
 // is dead-lettered immediately (#253) even when retries remain — we never re-run
 // a deterministically-failing task, and a terminal failure is now reviewable.
 func TestNonRetryableFailureIsDeadLettered(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 3) // 3 retries available
 
@@ -171,6 +177,8 @@ func TestNonRetryableFailureIsDeadLettered(t *testing.T) {
 // to a fresh pending slate (attempt_count=0, DLQ columns cleared) so the
 // scheduler claims it again — the replay round-trip from #253.
 func TestReplayDeadLetteredReEnqueues(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 1, 1) // exhausted: AttemptCount==MaxRetries
 
@@ -232,6 +240,8 @@ func TestReplayDeadLetteredReEnqueues(t *testing.T) {
 // now succeeds lands terminal Success with its AttemptCount preserved — proving
 // only the final attempt is terminal.
 func TestRetriedAttemptCompletes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 1, 2) // already retried once
 
@@ -261,6 +271,8 @@ func TestRetriedAttemptCompletes(t *testing.T) {
 // TestRequeueRespectsLeaseOwnership: a requeue by a node that does NOT own the
 // lease is rejected, leaving the task untouched (mirrors the atomic-status guard).
 func TestRequeueRespectsLeaseOwnership(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	owner := uuid.New()
 	// Claim the task so it has a real lease owner, then attempt a stale requeue.

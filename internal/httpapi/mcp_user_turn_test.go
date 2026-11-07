@@ -11,6 +11,8 @@ import (
 // signed-in user sent hands that user to the engine as TurnInput.MCPUser — the
 // value the turn's MCP scope substitutes for ${FLEET_USER_EMAIL}.
 func TestChatTurnCarriesSignedInSender(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	srv := newDefaultChatServer(t, engine, newFakeChatStore())
 

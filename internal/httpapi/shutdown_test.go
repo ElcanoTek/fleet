@@ -16,6 +16,8 @@ import (
 // shutdown begins (#278), so a load balancer / readiness probe stops routing new
 // traffic here while the box drains.
 func TestHealthz_ShuttingDown(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	s.shuttingDown.Store(true)
 
@@ -36,6 +38,8 @@ func TestHealthz_ShuttingDown(t *testing.T) {
 // TestPostChat_RejectedWhileShuttingDown pins that new turns are refused with 503
 // during drain — the shutdown check sits before any auth/store work.
 func TestPostChat_RejectedWhileShuttingDown(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	s.shuttingDown.Store(true)
 
@@ -50,6 +54,8 @@ func TestPostChat_RejectedWhileShuttingDown(t *testing.T) {
 // TestBeginShutdown sets the draining flag, broadcasts a one-shot shutdown frame
 // to live subscribers of in-flight turns, and is idempotent.
 func TestBeginShutdown(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 
 	buf := newTurnBuffer("c1", "t1")
@@ -83,6 +89,8 @@ func TestBeginShutdown(t *testing.T) {
 // TestDrainTurns covers both outcomes: an immediate drain when nothing is in
 // flight, and a successful drain once an active turn finishes.
 func TestDrainTurns(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -111,6 +119,8 @@ func TestDrainTurns(t *testing.T) {
 // TestDrainTurns_GraceExpires pins that DrainTurns reports false when a stuck
 // turn outlasts the grace deadline — the caller then force-cancels.
 func TestDrainTurns_GraceExpires(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	s.activeTurns.Add(1)
 	s.activeTurnCount.Add(1)
@@ -133,6 +143,8 @@ func TestDrainTurns_GraceExpires(t *testing.T) {
 // TestCancelInflightTurns fires every running turn's cancel func and returns the
 // count cancelled.
 func TestCancelInflightTurns(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 
 	cancelled := make(chan struct{})
@@ -154,6 +166,8 @@ func TestCancelInflightTurns(t *testing.T) {
 // WITHOUT entering the replay buffer or advancing the Last-Event-ID — a
 // reconnecting client must resume exactly where it left off.
 func TestBroadcastControl(t *testing.T) {
+	t.Parallel()
+
 	b := newTurnBuffer("c1", "t1")
 	b.Emit("turn.started", map[string]any{"x": 1})
 	highBefore := b.HighestID()

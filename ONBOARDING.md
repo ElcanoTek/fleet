@@ -97,28 +97,24 @@ one).
 
 ---
 
-## 4. Local databases (the two-database split)
+## 4. A local test database server
 
-The store / HTTP / scheduler suites need Postgres. The **chat** and **scheduler**
-migration systems both use a table named `schema_migrations` with *incompatible*
-schemas, so they **must** point at separate databases. Both suites auto-migrate
-from an empty database, so you only need to create two empty DBs.
-
-Create them (adjust user/password to your cluster; CI uses `fleet:fleet`):
+The store / HTTP / scheduler suites need Postgres — a server, not particular
+databases: every DB test clones a database of its own from a migrated template
+and drops it afterwards (`internal/testdb`). You need a role that can create
+databases (adjust user/password to your cluster; CI uses `fleet:fleet`):
 
 ```sh
-createdb fleet_chat_test
-createdb fleet_sched_test
+sudo -u postgres psql -c "CREATE ROLE fleet LOGIN PASSWORD 'fleet' CREATEDB"
 ```
 
-Export the DSNs and the client-config dir. These mirror CI exactly — the chat
-suites read `FLEET_TEST_DATABASE_URL`; the scheduler suite reads
-`DATABASE_URL` (both through `internal/testdb`, which skips only when the
-variable is unset and fails the test on any other database error):
+Export the one DSN — any database on that server; the tests only create and
+drop `fleet_tmpl_*` / `fleet_t_*` databases through it — and the client-config
+dir. `scripts/test-db-setup.sh` checks the server and role and prints the
+export line. Unset, the DB tests skip; set, any database error fails them:
 
 ```sh
-export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable"
-export DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable"
+export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/postgres?sslmode=disable"
 export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
 ```
 
@@ -130,16 +126,16 @@ bare without any external config.
 ## 5. Test
 
 ```sh
-make test       # scripts/go-test.sh (tagged; DSN-aware parallelism)
+make test       # scripts/go-test.sh (tagged; one parallel run)
 ```
 
 Run tests in the **foreground** — do not background `go test`. `make test` sets
 the `fleet_host_executor` build tag (so the host-mode fixtures and `MockMode`
 tests compile; the shipped binary from `make build` is built **without** that
-tag, so the unsandboxed host executor never ships) and serializes only the
-packages that share a Postgres DSN (`scripts/go-test.sh`). The podman-gated
-`internal/sandbox` integration tests self-skip when podman is masked; the
-store/HTTP/scheduler suites need the two databases from step 4.
+tag, so the unsandboxed host executor never ships) and runs the whole tree in
+one `go test` (`scripts/go-test.sh`). The podman-gated `internal/sandbox`
+integration tests self-skip when podman is masked; the store/HTTP/scheduler
+suites need the test server from step 4.
 
 At this point you have reached a passing `make test` — the first acceptance
 milestone.
@@ -276,7 +272,7 @@ no secrets in the repo, honest docs, client content stays external).
 ```sh
 make build                              # ./fleet (compile-check too)
 make lint                               # golangci-lint (must pass clean)
-make test                               # scripts/go-test.sh (tagged; DSN-aware parallelism)
+make test                               # scripts/go-test.sh (tagged; one parallel run)
 make test-race                          # same, with the race detector
 scripts/build-sandbox-image.sh          # build the sandbox image
 gitleaks dir . --redact --exit-code 1   # secret scan (CI gate)

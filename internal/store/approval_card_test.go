@@ -8,6 +8,8 @@ import (
 // A describer's card is stored on a pending row only, comes back on every
 // approval read, and is absent (empty) for a row that never got one.
 func TestSetApprovalCard(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv, err := s.CreateConversation(ctx, "alice@example.com", "t", "victoria", "m", false)

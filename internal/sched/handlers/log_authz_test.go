@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupLogAuthz wires the four transcript routes behind the real
@@ -35,17 +35,10 @@ func setupLogAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux) 
 	tmpDir := t.TempDir()
 
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		t.Fatalf("init storage: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	acquireTestLock(t, store)
-	if err := cleanDB(store); err != nil {
-		t.Fatalf("clean db: %v", err)
-	}
 
 	keyMgr, err := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 	if err != nil {
@@ -135,6 +128,8 @@ func logRequest(t *testing.T, r *chi.Mux, path, header, value string) int {
 // create the task is refused its transcript on every transcript route, while the
 // creating key still reads its own.
 func TestRunLogReadIsCreatorScoped(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r := setupLogAuthz(t)
 
 	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
@@ -185,6 +180,8 @@ func TestRunLogReadIsCreatorScoped(t *testing.T) {
 // TestRunLogFleetWideGrants pins who may still read every transcript: the admin
 // key, and a key minted with the explicit view_all_logs permission.
 func TestRunLogFleetWideGrants(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r := setupLogAuthz(t)
 
 	task := addLoggedTask(t, store, nil, nil) // created out-of-band; owned by nobody
@@ -217,6 +214,8 @@ func TestRunLogFleetWideGrants(t *testing.T) {
 // TestRunLogUserScoping covers the user (web UI) credential class: a non-admin
 // user reads its own tasks' transcripts only; an admin-role user reads all.
 func TestRunLogUserScoping(t *testing.T) {
+	t.Parallel()
+
 	store, _, r := setupLogAuthz(t)
 
 	alice := addLogUser(t, store, "alice", "client", "alice-token")
@@ -241,6 +240,8 @@ func TestRunLogUserScoping(t *testing.T) {
 // transcript (or no task at all) still degrades to a clean 404 rather than a
 // 5xx — the ownership gate must not turn a missing row into a server error.
 func TestRunLogUnknownTaskIs404(t *testing.T) {
+	t.Parallel()
+
 	_, _, r := setupLogAuthz(t)
 
 	if code := logRequest(t, r, "/logs/"+uuid.New().String(), "X-API-Key", "admin-key"); code != http.StatusNotFound {
@@ -252,6 +253,8 @@ func TestRunLogUnknownTaskIs404(t *testing.T) {
 // auditor key: an explicit permission set is honored, and the ambiguous
 // combinations are rejected instead of silently resolved.
 func TestCreateKeyExplicitPermissions(t *testing.T) {
+	t.Parallel()
+
 	_, _, r := setupLogAuthz(t)
 
 	post := func(t *testing.T, body models.APIKeyCreate) (int, models.APIKeyCreated) {

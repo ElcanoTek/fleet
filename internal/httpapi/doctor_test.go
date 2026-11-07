@@ -18,6 +18,8 @@ import (
 // non-GET methods. Auth/admin gating is applied at route registration (same
 // wrapper as /admin/health-summary) and covered by the middleware tests.
 func TestHandleDoctor(t *testing.T) {
+	t.Parallel()
+
 	st := &healthStubStore{}
 	s := New(&config.Config{}, &fakeEngine{}, st)
 
@@ -61,6 +63,8 @@ func TestHandleDoctor(t *testing.T) {
 // TestHandleDoctorNoStore — a server without a store must still answer (the
 // chat-DB check reports skip, not a panic or a 500).
 func TestHandleDoctorNoStore(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 	rr := httptest.NewRecorder()
 	s.handleDoctor(rr, httptest.NewRequest(http.MethodGet, "/admin/doctor?deep=0", nil))

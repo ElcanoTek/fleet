@@ -10,6 +10,8 @@ import (
 )
 
 func TestCreateUserAndVerify(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -41,6 +43,8 @@ func TestCreateUserAndVerify(t *testing.T) {
 }
 
 func TestIsUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -75,6 +79,8 @@ func TestIsUser(t *testing.T) {
 }
 
 func TestVerifyUser_MissingUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -88,6 +94,8 @@ func TestVerifyUser_MissingUser(t *testing.T) {
 }
 
 func TestVerifyUser_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 
 	// Create a context that is already canceled to trigger a db error that is not ErrNoRows.
@@ -101,6 +109,8 @@ func TestVerifyUser_DBError(t *testing.T) {
 }
 
 func TestCreateUser_UniqueViolation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -123,6 +133,8 @@ func TestCreateUser_UniqueViolation(t *testing.T) {
 }
 
 func TestCreateUser_WeakPasswordRejected(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -137,6 +149,8 @@ func TestCreateUser_WeakPasswordRejected(t *testing.T) {
 }
 
 func TestCreateUser_EmptyEmail(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -146,6 +160,8 @@ func TestCreateUser_EmptyEmail(t *testing.T) {
 }
 
 func TestCreateUser_PasswordTooLong(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -156,6 +172,8 @@ func TestCreateUser_PasswordTooLong(t *testing.T) {
 }
 
 func TestCreateUser_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 
 	// Create a context that is already canceled to trigger a db error that is not a unique violation.
@@ -168,6 +186,8 @@ func TestCreateUser_DBError(t *testing.T) {
 }
 
 func TestUpdatePassword(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "original1"); err != nil {
@@ -185,6 +205,8 @@ func TestUpdatePassword(t *testing.T) {
 }
 
 func TestUpdatePassword_Missing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	err := s.UpdatePassword(context.Background(), "nope@x.com", "anything8")
 	if !errors.Is(err, ErrUserNotFound) {
@@ -193,6 +215,8 @@ func TestUpdatePassword_Missing(t *testing.T) {
 }
 
 func TestDeleteUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "u@x.com", "password123"); err != nil {
@@ -208,6 +232,8 @@ func TestDeleteUser(t *testing.T) {
 }
 
 func TestDeleteUserCascadesConversations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "cascade@x.com", "password123"); err != nil {
@@ -236,6 +262,8 @@ func TestDeleteUserCascadesConversations(t *testing.T) {
 // the same address can never inherit the previous holder's credentials or
 // workspaces.
 func TestDeleteUser_PurgesRemoteMCPCredentialsAndProjects(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 	const alice, bob = "alice@x.com", "bob@x.com"
@@ -326,6 +354,8 @@ func TestDeleteUser_PurgesRemoteMCPCredentialsAndProjects(t *testing.T) {
 }
 
 func TestListAndCountUsers(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -356,6 +386,8 @@ func TestListAndCountUsers(t *testing.T) {
 }
 
 func TestNormalizeEmail(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		input    string
@@ -440,6 +472,8 @@ func TestNormalizeEmail(t *testing.T) {
 // TestRenameTeam pins the atomic relabel: users AND team-shared projects move
 // together; unknown teams error; merging onto an existing team is allowed.
 func TestRenameTeam(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	mk := func(email, team string) {

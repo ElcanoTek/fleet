@@ -15,6 +15,8 @@ import (
 // task round-trips with no source; a re-run carries source_task_id; and the
 // ?source_task_id filter lists exactly the re-runs of a given source.
 func TestSourceTaskIDRoundTripAndFilter(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 

@@ -55,6 +55,8 @@ func decodePage(t *testing.T, body []byte) turnEventPageResponse {
 }
 
 func TestTurnEventsPage_Ordering_Limit_HasMore(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const owner = "owner@x.com"
@@ -93,6 +95,8 @@ func TestTurnEventsPage_Ordering_Limit_HasMore(t *testing.T) {
 }
 
 func TestTurnEventsPage_ScrollUpToLastPage(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const owner = "scroll@x.com"
@@ -120,6 +124,8 @@ func TestTurnEventsPage_ScrollUpToLastPage(t *testing.T) {
 }
 
 func TestTurnEventsPage_AscCatchUpRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const owner = "catchup@x.com"
@@ -157,6 +163,8 @@ func TestTurnEventsPage_AscCatchUpRoundTrip(t *testing.T) {
 }
 
 func TestTurnEventsPage_BadRequests(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const owner = "bad@x.com"
@@ -184,6 +192,8 @@ func TestTurnEventsPage_BadRequests(t *testing.T) {
 }
 
 func TestTurnEventsPage_UnknownConversation(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	seedUser(t, s.concreteStore(t), "ghost@x.com")
@@ -194,6 +204,8 @@ func TestTurnEventsPage_UnknownConversation(t *testing.T) {
 }
 
 func TestTurnEventsPage_CrossUserIsolation(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	convID := seedConvWithTurnEvents(t, s.concreteStore(t), "alice@x.com", 1, 3)
@@ -208,6 +220,8 @@ func TestTurnEventsPage_CrossUserIsolation(t *testing.T) {
 }
 
 func TestTurnEventsPage_LastPageHasMoreFalse(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	const owner = "lastpage@x.com"

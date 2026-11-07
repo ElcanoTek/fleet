@@ -10,12 +10,14 @@ name: Build sandbox image (reusable, no push)
 #
 # Every bundle's sandbox image derives from exactly two inputs: the `FROM` base
 # and the Containerfile's own RUN lines. build-sandbox-image.sh sets the build
-# context to the Containerfile's own directory, and no shipped Containerfile has
-# a single COPY or ADD — so nothing outside <bundle>/sandbox/** can change the
+# context to the Containerfile's own directory, and the only COPY a shipped
+# Containerfile has is of a file in that directory (the generic one's
+# requirements.txt) — so nothing outside <bundle>/sandbox/** can change the
 # image. That is why the publisher's trigger is `paths: ["sandbox/**"]` and not
 # every push: a commit elsewhere cannot alter the image.
 #
-# But every shipped Containerfile tracks `fedora-minimal:latest` unpinned, so the
+# But a Containerfile that tracks an unpinned base (client bundles may; the
+# generic one pins its base by digest and still runs `microdnf upgrade`), so the
 # image content drifts with TIME rather than with commits. Rebuild the same
 # Containerfile a month later and the RPMs differ. If Fedora renames or drops a
 # package one of those RUN lines installs, the build breaks — and the build is
@@ -184,14 +186,21 @@ jobs:
           repository: ElcanoTek/fleet
           ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
+          # Everything build-sandbox-image.sh sources or reads from the fleet
+          # checkout: its helper library, and the generic bundle's manifest
+          # and sandbox/ (built for a bundle that ships no Containerfile).
+          # scripts/check_sandbox_sparse_test.go keeps this list complete.
           sparse-checkout: |
             scripts/build-sandbox-image.sh
+            scripts/lib/sandbox-bundle.sh
+            config/default/manifest.yaml
+            config/default/sandbox/
           sparse-checkout-cone-mode: false
 
       - name: Ensure podman
         run: |
           command -v podman >/dev/null 2>&1 \
-            || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+            || (sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq podman)
           podman --version
 
       # No IMAGE_NAME override: the script derives the tag from the bundle

@@ -14,6 +14,8 @@ import (
 // The shaping rules are the whole point of the endpoint, so they are tested
 // without a database: a client's verdict on a turn is built from these.
 func TestNewTurnOutcomeResponse_Shaping(t *testing.T) {
+	t.Parallel()
+
 	modelRequired := `{"reason":"provider_refused","failed_model":"acme/whizz","message":"Pick a different model."}`
 
 	tests := []struct {
@@ -118,6 +120,8 @@ func TestNewTurnOutcomeResponse_Shaping(t *testing.T) {
 // A payload the ledger cannot hand back as JSON must not take the state with
 // it: the state is what the client decides on.
 func TestNewTurnOutcomeResponse_DropsUnparseableDetail(t *testing.T) {
+	t.Parallel()
+
 	got := newTurnOutcomeResponse(&store.TurnOutcomeRecord{
 		TurnRecord:    store.TurnRecord{TurnID: "t", Status: store.TurnStatusError},
 		TerminalEvent: "turn.error",
@@ -134,6 +138,8 @@ func TestNewTurnOutcomeResponse_DropsUnparseableDetail(t *testing.T) {
 // finished_at is omitted rather than reported as 0 when the row has none —
 // a client reading 0 as a timestamp would place the turn in 1970.
 func TestNewTurnOutcomeResponse_OmitsAbsentFinishedAt(t *testing.T) {
+	t.Parallel()
+
 	with := newTurnOutcomeResponse(&store.TurnOutcomeRecord{
 		TurnRecord: store.TurnRecord{
 			TurnID:     "t",
@@ -158,6 +164,8 @@ func TestNewTurnOutcomeResponse_OmitsAbsentFinishedAt(t *testing.T) {
 // call it a failure and say why, or the UI shows a question with no answer and
 // no Retry (#1593).
 func TestTurnOutcomeEndpoint_ReportsAFailureWithNoReply(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -229,6 +237,8 @@ func TestTurnOutcomeEndpoint_ReportsAFailureWithNoReply(t *testing.T) {
 // prompt not yet committed says so, which is what lets a client tell "the
 // transcript does not hold my question yet" from "my turn never started".
 func TestTurnOutcomeEndpoint_RunningTurnHasNoOutcomeYet(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {
@@ -267,6 +277,8 @@ func TestTurnOutcomeEndpoint_RunningTurnHasNoOutcomeYet(t *testing.T) {
 // Ownership: another tenant's probe must not confirm that a turn exists, and
 // an unknown turn id is a clean 404 rather than an invented verdict.
 func TestTurnOutcomeEndpoint_ScopedAndAbsent(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv, err := s.store.CreateConversation(t.Context(), "alice@x.com", "hi", "victoria", "", false)
 	if err != nil {

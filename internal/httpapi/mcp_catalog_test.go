@@ -15,6 +15,8 @@ import (
 // flow is unconfigured — so the UI can render Connect vs. a disabled hint.
 // DB-independent: the handler reads only in-memory catalog snapshots.
 func TestMCPCatalogTrustLabeledClasses(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		clientConfig: &clientconfig.Bundle{
 			RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
@@ -80,6 +82,8 @@ func TestMCPCatalogTrustLabeledClasses(t *testing.T) {
 // server that only accepts query auth. That exact omission shipped once; this
 // pins the projection field-by-field so it cannot ship again.
 func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{
 		clientConfig: &clientconfig.Bundle{
 			RemoteMCPCatalog: []clientconfig.RemoteMCPCatalogEntry{
@@ -142,6 +146,8 @@ func TestMCPCatalogProjectsAPIKeyOnboardingFields(t *testing.T) {
 // A non-GET is refused; a Server with no bundle and no agent still answers an
 // empty, well-formed directory (the generic no-config boot must not 500).
 func TestMCPCatalogMethodAndEmpty(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 
 	req := httptest.NewRequest(http.MethodPost, "/mcp-catalog", nil)

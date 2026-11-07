@@ -15,6 +15,8 @@ import (
 // or none, makes a new one; a key never answers with a deleted chat; and keys
 // are per user.
 func TestCreateConversation_IdempotencyKey(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const me = "idem@x.com"
 	create := func(body string) (int, string) {

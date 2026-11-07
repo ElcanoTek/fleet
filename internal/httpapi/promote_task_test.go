@@ -144,6 +144,8 @@ func TestPromoteToTask_StagesScheduleApproval(t *testing.T) {
 // is replaced with the safe daily default so the staged card always shows a
 // valid recurring cadence.
 func TestPromoteToTask_InvalidCronFallsBack(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "bob@x.com"
 	conv := seedConv(t, s, user)
@@ -172,6 +174,8 @@ func TestPromoteToTask_InvalidCronFallsBack(t *testing.T) {
 
 // TestPromoteToTask_EmptyConversation returns 422 when there's nothing to promote.
 func TestPromoteToTask_EmptyConversation(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "carol@x.com"
 	ctx := context.Background()
@@ -194,6 +198,8 @@ func TestPromoteToTask_EmptyConversation(t *testing.T) {
 
 // TestPromoteToTask_NotOwned returns 404 for a conversation the caller doesn't own.
 func TestPromoteToTask_NotOwned(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	conv := seedConv(t, s, "owner@x.com")
 	s.agent = &fakeTurnEngine{recurringProposal: &agent.RecurringTaskProposal{Prompt: "x", Cron: "0 9 * * *"}}

@@ -17,6 +17,8 @@ import (
 // (and no declaration) keeps the ADR-0070 behaviour: the first dead-letter
 // spawns.
 func TestDeadLetterBreakerParksMalformedRequirementsOnFirstDeadLetter(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

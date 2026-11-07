@@ -29,6 +29,8 @@ func seedConvs(t *testing.T, s *Server, userEmail string, n int) []string {
 // TestBulkDelete_Targeted proves DELETE /conversations with conversation_ids
 // deletes exactly those IDs and returns {"deleted": N}.
 func TestBulkDelete_Targeted(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	ids := seedConvs(t, s, "u@x.com", 3)
@@ -54,6 +56,8 @@ func TestBulkDelete_Targeted(t *testing.T) {
 // TestBulkDelete_ForeignIDRejected proves a foreign ID in the list returns 403
 // and deletes nothing (the whole request is a no-op).
 func TestBulkDelete_ForeignIDRejected(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	ownerIDs := seedConvs(t, s, "owner@x.com", 2)
@@ -73,6 +77,8 @@ func TestBulkDelete_ForeignIDRejected(t *testing.T) {
 
 // TestBulkDelete_TooManyIDs proves the 100-ID cap returns 400.
 func TestBulkDelete_TooManyIDs(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	seedConvs(t, s, "u@x.com", 1)
@@ -91,6 +97,8 @@ func TestBulkDelete_TooManyIDs(t *testing.T) {
 // TestBulkDelete_AllMatchingRequiresConfirm proves all_matching without
 // confirm:true is rejected with 400.
 func TestBulkDelete_AllMatchingRequiresConfirm(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	seedConvs(t, s, "u@x.com", 1)
@@ -104,6 +112,8 @@ func TestBulkDelete_AllMatchingRequiresConfirm(t *testing.T) {
 
 // TestBulkDelete_AllMatching deletes conversations matching the label filter.
 func TestBulkDelete_AllMatching(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	st := s.concreteStore(t)
@@ -138,6 +148,8 @@ func TestBulkDelete_AllMatching(t *testing.T) {
 // TestBulkPatch_AppliesChanges proves PATCH /conversations/bulk writes the
 // supplied fields to every ID and returns {"updated": N}.
 func TestBulkPatch_AppliesChanges(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	ids := seedConvs(t, s, "u@x.com", 2)
@@ -177,6 +189,8 @@ func TestBulkPatch_AppliesChanges(t *testing.T) {
 // TestBulkPatch_ForeignIDRejected proves a foreign ID in the bulk-patch list
 // returns 403 and rolls the transaction back (no row is mutated).
 func TestBulkPatch_ForeignIDRejected(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 	ownerIDs := seedConvs(t, s, "owner@x.com", 1)

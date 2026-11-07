@@ -19,6 +19,8 @@ import (
 // runs, match the path literally (a '.' in a path is not a regex wildcard), and
 // leave every other entry and key alone.
 func TestGitTrustDirIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}

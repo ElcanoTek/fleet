@@ -70,7 +70,8 @@ holds a fleet store — `DATABASE_URL` pointed at a database of the removed
 two-database layout — because empty new schemas would boot an apparently
 empty fleet over that data. The check is one catalog query per store open and
 stays as a backstop after phase 2. A DSN that names no store schema (the
-package test databases until M2) is left in `public`: `Ensure` does nothing.
+stores' own single-store test templates) is left in `public`: `Ensure` does
+nothing.
 
 Verified, not assumed: neither migration set uses an extension or a
 schema-qualified name, and `gen_random_uuid` is in `pg_catalog`, which
@@ -174,14 +175,11 @@ nothing in fleet assumes the role's name — it only ever uses `DATABASE_URL`.
   `fleet_db_store_readiness` refuse a database whose `public` holds a fleet
   store): it costs one catalog query and still catches `DATABASE_URL` pointed
   at an old database. A DSN without a store schema is still left in `public`
-  rather than refused, because the package test suites still open their
-  stores that way; M2 moves them to schemas, and can then make it a refusal.
-- **The admin CLI suites** run in one scratch database with both schemas:
-  `internal/admincli`'s `TestMain` creates `<DATABASE_URL's db>_admincli`,
-  points `FLEET_TEST_DATABASE_URL` at its `chat` schema and `DATABASE_URL` at
-  its `sched` schema, and drops it afterwards (the CI test databases hold
-  other packages' stores in `public`, which the stores refuse to run next
-  to). M2's template databases replace this.
+  rather than refused, because the stores' own internal tests still migrate
+  their single-store templates (`internal/testdb`, M2) that way.
+- **Test helpers:** M2's `testdb.LegacyPair` and `testdb.Reserve`, used only
+  by the legacy-layout and consolidate tests, are removed; every other test
+  already runs on the one-database template (`internal/testdb/fleetdb`).
 - `scripts/e2e-boot-server.sh` boots the live e2e suite on one database,
   `fleet_e2e`, with `DATABASE_URL` alone.
 - The per-store `--chat-database-url` / `--sched-database-url` flags and
@@ -212,10 +210,15 @@ one database, as in [BACKUP_RESTORE.md](BACKUP_RESTORE.md).
 Phases 1 and 2 have shipped. The remaining phases ship as their own PRs under
 the same issue, each updating this note:
 
-1. **M2 — template test databases:** each test gets a fresh database cloned
-   from a migrated template, so the DB test packages run in parallel (and the
-   admin CLI's scratch-database `TestMain` goes).
-2. **M4 — one identity table:** one `users` table and one role vocabulary;
+- **M2 — template test databases: shipped.** Every DB test gets a fresh
+  database cloned from a migrated template — the one-database layout, schemas
+  `chat` and `sched` — and the DB test packages run in parallel in one
+  `go test` ([TEST-DATABASES.md](TEST-DATABASES.md)). Phase 2 then removed
+  its legacy-layout helpers (`testdb.LegacyPair`, `testdb.Reserve`).
+
+Still to come:
+
+1. **M4 — one identity table:** one `users` table and one role vocabulary;
    the shadow sync and the identity seams go.
-3. **M5 — one scheduler:** chat patrols run on the sched engine.
-4. **One migration runner** and one migration layout.
+2. **M5 — one scheduler:** chat patrols run on the sched engine.
+3. **One migration runner** and one migration layout.

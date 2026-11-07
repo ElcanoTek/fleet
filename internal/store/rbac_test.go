@@ -11,6 +11,8 @@ import (
 func strptr(s string) *string { return &s }
 
 func TestGetUser_DefaultsAndNotFound(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -44,6 +46,8 @@ func TestGetUser_DefaultsAndNotFound(t *testing.T) {
 }
 
 func TestSetUserRoleTeam(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "ed@x.com", "password123"); err != nil {
@@ -95,6 +99,8 @@ func TestSetUserRoleTeam(t *testing.T) {
 }
 
 func TestTeamVisibleConversations(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -196,6 +202,8 @@ func TestTeamVisibleConversations(t *testing.T) {
 }
 
 func TestListTeamConversations_NoTeam(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	if _, err := s.CreateUser(ctx, "loner@x.com", "password123"); err != nil {
@@ -207,6 +215,8 @@ func TestListTeamConversations_NoTeam(t *testing.T) {
 }
 
 func TestSetConversationTeamVisible_OwnershipGate(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	for _, e := range []string{"owner@x.com", "intruder@x.com"} {
@@ -234,6 +244,8 @@ func TestSetConversationTeamVisible_OwnershipGate(t *testing.T) {
 // ErrTeamExists — a shared team_id is what exposes team-visible conversations
 // and team-shared projects, so it cannot be claimable by typing a name.
 func TestSetOwnTeam(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

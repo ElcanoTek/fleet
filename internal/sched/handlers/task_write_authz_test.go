@@ -64,6 +64,8 @@ func decodeTasks(t *testing.T, body []byte) []*models.Task {
 // selects on status alone with no principal predicate in SQL. Before the fix a
 // client-role key read every principal's paused prompts — and their task UUIDs.
 func TestListPausedTasksIsScopedToOwnRows(t *testing.T) {
+	t.Parallel()
+
 	r, h, cleanup := taskAuthzRouter(t)
 	defer cleanup()
 
@@ -99,6 +101,8 @@ func TestListPausedTasksIsScopedToOwnRows(t *testing.T) {
 // An admin must still see the whole queue: a fleet-wide view is the point of the
 // "needs a human answer" surface.
 func TestListPausedTasksAdminSeesEveryRow(t *testing.T) {
+	t.Parallel()
+
 	r, h, cleanup := taskAuthzRouter(t)
 	defer cleanup()
 
@@ -124,6 +128,8 @@ func TestListPausedTasksAdminSeesEveryRow(t *testing.T) {
 // victim's prompt, so it is own-rows. 404 rather than 403 so the surface does
 // not confirm that an unowned task id exists.
 func TestFeedbackAndLearnedInstructionsAreScopedToOwnRows(t *testing.T) {
+	t.Parallel()
+
 	r, h, cleanup := taskAuthzRouter(t)
 	defer cleanup()
 
@@ -152,6 +158,8 @@ func TestFeedbackAndLearnedInstructionsAreScopedToOwnRows(t *testing.T) {
 
 // The owning principal must still be able to use both surfaces.
 func TestFeedbackOnOwnTaskIsAllowed(t *testing.T) {
+	t.Parallel()
+
 	r, h, cleanup := taskAuthzRouter(t)
 	defer cleanup()
 
@@ -217,6 +225,8 @@ func addPausedTaskOwnedBy(t *testing.T, store interface {
 // performs, so a cancel_task key could steer ANY principal's task. The gate is
 // now CancelTask-shaped: cancel_task AND row visibility, OR the creating user.
 func TestResumeAndWakeAreScopedPerTask(t *testing.T) {
+	t.Parallel()
+
 	r, h, owner := resumeWakeRouter(t)
 	post := func(path, body string, auth func(*http.Request)) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(body))

@@ -45,6 +45,8 @@ func createConv(t *testing.T, h http.Handler, user, title string) string {
 // TestViewerCannotWrite verifies the read-only role gate (#237): a viewer keeps
 // full read access but is 403 {"error":"read_only"} on any mutating method.
 func TestViewerCannotWrite(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "viewer@x.com", "member@x.com")
 	setRole(t, s, "viewer@x.com", "viewer", "")
 	h := s.Routes()
@@ -71,6 +73,8 @@ func TestViewerCannotWrite(t *testing.T) {
 // TestAdminGateHonorsDBRole verifies admin endpoints accept a users.role=admin
 // account even with an empty ADMIN_EMAILS allowlist (#237), and reject a member.
 func TestAdminGateHonorsDBRole(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com", "peon@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes()
@@ -99,6 +103,8 @@ func TestAdminGateHonorsDBRole(t *testing.T) {
 
 // TestAdminUserPatch verifies PATCH /admin/users/{email} assigns role + team.
 func TestAdminUserPatch(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "boss@x.com", "target@x.com")
 	setRole(t, s, "boss@x.com", "admin", "")
 	h := s.Routes()
@@ -135,6 +141,8 @@ func TestAdminUserPatch(t *testing.T) {
 // conversations teammates shared (and only those), and POST .../share-with-team
 // toggles the opt-in (#237).
 func TestTeamScopeEndpoint(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "alice@x.com", "bob@x.com", "loner@x.com")
 	setRole(t, s, "alice@x.com", "member", "blue")
 	setRole(t, s, "bob@x.com", "member", "blue")

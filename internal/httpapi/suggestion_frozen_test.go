@@ -62,6 +62,8 @@ func TestSuggestionFreezesConfiguredTargetAtStaging(t *testing.T) {
 }
 
 func TestLegacySuggestionWithoutTargetFailsClosed(t *testing.T) {
+	t.Parallel()
+
 	const raw = `{"reason":"legacy"}`
 	fields := approvalClientFields("suggest_advanced_model", raw, "c")
 	if fields["frozen_args"].(map[string]any)["complete"] != false {

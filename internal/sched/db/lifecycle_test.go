@@ -131,6 +131,8 @@ func taskStatusLiteralsIn(sql string) []string {
 // scanned: they are immutable history and legitimately mention retired
 // statuses (063 itself does).
 func TestLifecycleSQLStatusLiteralsKnown(t *testing.T) {
+	t.Parallel()
+
 	dirs := []string{".", "../storage", "../scheduler"}
 	found := 0
 	for _, dir := range dirs {
@@ -157,6 +159,8 @@ func TestLifecycleSQLStatusLiteralsKnown(t *testing.T) {
 // directly; DeleteOldHistory / archiveCandidatesPage bind the same set as
 // parameters and are covered by the source scan + compile.
 func TestLifecycleCleanupSetPinned(t *testing.T) {
+	t.Parallel()
+
 	got := taskStatusLiteralsIn(cleanupEligibleSubquery)
 	if len(got) != len(models.CleanupEligibleTaskStatuses) {
 		t.Fatalf("cleanupEligibleSubquery lists statuses %v; models.CleanupEligibleTaskStatuses has %v", got, models.CleanupEligibleTaskStatuses)
@@ -174,6 +178,8 @@ func TestLifecycleCleanupSetPinned(t *testing.T) {
 // set ever grows, this fails until the $2..$N list (and the claim query's
 // argument splice) grows with it.
 func TestLifecycleSerializationPlaceholders(t *testing.T) {
+	t.Parallel()
+
 	m := regexp.MustCompile(`(?i)status\s+IN\s*\(([^)]*)\)`).FindStringSubmatch(serializationNotBlockedSQL)
 	if m == nil {
 		t.Fatalf("serializationNotBlockedSQL no longer contains a status IN (...) clause: %q", serializationNotBlockedSQL)
@@ -187,6 +193,8 @@ func TestLifecycleSerializationPlaceholders(t *testing.T) {
 // predicate to the lifecycle set (STRONG, set-derivation): a row is born
 // settled exactly when its status is one that would have spawned.
 func TestLifecycleRecurrenceSpawnPredicate(t *testing.T) {
+	t.Parallel()
+
 	for _, s := range models.AllTaskStatuses {
 		want := statusIn(s, models.RecurrenceSpawnTaskStatuses)
 		if got := recurrenceSpawnedInsertValue(&models.Task{Status: s}); got != want {
@@ -207,6 +215,8 @@ func TestLifecycleRecurrenceSpawnPredicate(t *testing.T) {
 // gains a call site outside that package, extend the scanned dirs here or
 // the new caller's edges go unpinned.
 func TestLifecycleSchedulerCallerPins(t *testing.T) {
+	t.Parallel()
+
 	var source strings.Builder
 	for _, lit := range sourceTextOfDir(t, "../scheduler") {
 		source.WriteString(lit)
@@ -390,6 +400,8 @@ func assertLifecycleOutcome(t *testing.T, d *Database, writer string, target mod
 // production SQL). Each subtest starts from a clean tasks table because the
 // sweep writers (wake/expiry/recovery) act globally.
 func TestLifecycleDBWriterMatrix(t *testing.T) {
+	t.Parallel()
+
 	d := setupTestDB(t)
 	defer d.Close()
 	ctx := context.Background()

@@ -13,16 +13,35 @@
 #      secret mounts — only the shared workspace claim. MCP credentials stay
 #      in the control-plane process (ADR-0003).
 #
-# You build the images yourself — fleet does not publish images:
-#   control plane:  a container image with the `fleet` binary + the client
-#                   bundle (see docs/DEPLOYMENT-KUBERNETES.md §images)
-#   sandbox:        scripts/build-sandbox-image.sh, pushed to your registry
+# Images default to the ones every fleet release publishes, signed, with an
+# SBOM and SLSA provenance (docs/RELEASE-ARTIFACTS.md, ADR-0100):
+#   control plane:  ghcr.io/elcanotek/fleet          (binary + generic bundle)
+#   sandbox:        ghcr.io/elcanotek/fleet-sandbox  (the generic bundle's image)
+# both at the same release tag. The chart attached to a release is stamped with
+# that release, so it installs that release's images with no image values at
+# all; a chart installed from a checkout needs image.tag. Verify the images
+# before you deploy them (docs/DEPLOYMENT-KUBERNETES.md, "Verify the images").
 
 image:
-  # REQUIRED: your fleet control-plane image (binary + bundle baked in or
-  # mounted). Example: 123456789.dkr.ecr.us-east-1.amazonaws.com/fleet:v42
-  repository: ""
+  # The published control-plane image. Point it at your own registry to run
+  # an image with your client bundle baked in (FROM ghcr.io/elcanotek/fleet).
+  repository: ghcr.io/elcanotek/fleet
+  # Empty = "v" + the chart's appVersion (the release the chart was packaged
+  # from). Pin a release tag (vYYYY.MM.DD.N). Required when the chart is
+  # unstamped (installed from a checkout).
   tag: ""
+  # Your own digest pin (sha256:…) for the repository above: when set, the
+  # image is repository@digest and tag is ignored. Set it when you point
+  # repository at your own image (or a mirror) — the official digest below is
+  # never applied to another repository.
+  digest: ""
+  # Stamped into the chart attached to a release (scripts/helm-stamp-digests.sh):
+  # the digest that release SIGNED for signedRepository. It applies only while
+  # repository is signedRepository — then the image is deployed BY DIGEST, the
+  # exact bytes the release signed. Empty (a chart from a checkout) falls back
+  # to the tag. Do not set these by hand.
+  signedRepository: ghcr.io/elcanotek/fleet
+  signedDigest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -38,10 +57,21 @@ serviceAccount:
   annotations: {}
 
 sandbox:
-  # REQUIRED: the sandbox image sandbox pods run
-  # (FLEET_SANDBOX_IMAGE). Must live in a registry the sandbox nodes can
-  # pull from — a localhost/ build-on-box tag cannot work here.
+  # The sandbox image sandbox pods run (FLEET_SANDBOX_IMAGE). Empty = the
+  # published sandbox image (imageRepository) at the control plane's release
+  # tag. Set a full ref to run your client bundle's own image — one built
+  # `FROM ghcr.io/elcanotek/fleet-sandbox:<tag>` keeps the release's base.
+  # Must live in a registry the sandbox nodes can pull from — a localhost/
+  # build-on-box tag cannot work here.
   image: ""
+  imageRepository: ghcr.io/elcanotek/fleet-sandbox
+  # Your own digest pin for imageRepository, like image.digest: when set (and
+  # sandbox.image is not), the sandbox image is imageRepository@imageDigest.
+  imageDigest: ""
+  # Stamped into a release's chart like image.signedDigest; applies only while
+  # imageRepository is signedImageRepository. Do not set these by hand.
+  signedImageRepository: ghcr.io/elcanotek/fleet-sandbox
+  signedImageDigest: ""
   # Backend is what this chart exists for; podman-in-a-pod is NOT a supported
   # chart topology (the podman backend's supported home is a VM —
   # docs/DEPLOYMENT.md).

@@ -14,25 +14,22 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // serverFixture wires a Server around a fresh Postgres store + nil Manager.
 // Handlers that don't invoke the agent (list/create/get/delete/pin) work
 // with a nil manager; /chat is covered by live smoke tests, not this suite.
 //
-// Skips when the test DSN (testdb.ChatDSN) is unset so laptops without a running
+// Skips when FLEET_TEST_DATABASE_URL is unset (internal/testdb) so laptops without a running
 // Postgres still pass `go test ./...`.
 func serverFixture(t *testing.T) *Server {
 	t.Helper()
-	dsn := testdb.ChatDSN(t)
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	// A database of the test's own (fleetdb), so nothing is shared with any
+	// other test and nothing needs wiping.
+	st, err := store.Open(fleetdb.New(t).ChatDSN(), fleetdb.ChatPool())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if err := st.TruncateAllForTest(context.Background()); err != nil {
-		_ = st.Close()
-		t.Fatalf("truncate: %v", err)
 	}
 	cfg := &config.Config{
 		SharedToken:     "tok",
@@ -106,6 +103,8 @@ func do(t *testing.T, h http.Handler, method, path string, body any, user string
 }
 
 func TestHealthz_NoAuth(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/healthz", nil)
 	w := httptest.NewRecorder()
@@ -116,6 +115,8 @@ func TestHealthz_NoAuth(t *testing.T) {
 }
 
 func TestConversationsLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 
@@ -190,6 +191,8 @@ func TestConversationsLifecycle(t *testing.T) {
 // one user text message WITHOUT running a turn (the "Discuss this run" bridge,
 // docs/DISCUSS-RUN.md), and that an oversized seed is clamped keeping the tail.
 func TestConversationCreate_Seed(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 
@@ -280,6 +283,8 @@ func TestConversationCreate_Seed(t *testing.T) {
 // title_locked (#302) so the background auto-titler can't later clobber the
 // user's chosen name.
 func TestConversationRename_LocksTitle(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 
@@ -318,6 +323,8 @@ func TestConversationRename_LocksTitle(t *testing.T) {
 // Share-first chat created with "New conversation" gets upgraded to a heuristic
 // title on its first POST /chat turn.
 func TestConversationCreate_PreChatSeedsAndHeuristicTitle(t *testing.T) {
+	t.Parallel()
+
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	s := newDefaultChatServer(t, engine, st)
@@ -362,6 +369,8 @@ func TestConversationCreate_PreChatSeedsAndHeuristicTitle(t *testing.T) {
 // the default list, unpins it, and surfaces it in the archived list;
 // unarchiving restores it; a foreign user cannot archive it.
 func TestConversationArchiveRoute(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 
@@ -436,6 +445,8 @@ func TestConversationArchiveRoute(t *testing.T) {
 }
 
 func TestConversations_AuthEnforced(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	h := s.Routes()
 
@@ -451,6 +462,8 @@ func TestConversations_AuthEnforced(t *testing.T) {
 // ensureStoreReady is a no-op sanity check that the fixture wiring is
 // correct; used as a compile-time check that package imports resolve.
 func TestFixtureReady(t *testing.T) {
+	t.Parallel()
+
 	_ = context.Background()
 	s := serverFixture(t)
 	if s.store == nil || s.cfg == nil {
@@ -463,6 +476,8 @@ func TestFixtureReady(t *testing.T) {
 // the lockdown affordance, and we promise three states (unavailable /
 // available-as-option / available-and-forced).
 func TestServerConfig_LockdownAvailability(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name              string
 		image             string
@@ -554,6 +569,8 @@ func TestServerConfig_LockdownListDefaultsToLiveTiers(t *testing.T) {
 // conversation migrates when its next turn launches, which is also when the
 // client is told.
 func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
@@ -600,6 +617,8 @@ func TestSummarize_LockdownDelistedModelRunsOnTheDefault(t *testing.T) {
 // is stateless on purpose: it holds across a process restart, for a second tab,
 // and after any number of migrations.
 func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
@@ -702,6 +721,8 @@ func TestLockdownMigration_StaleEchoIsRecognisedAfterTheEventIsMissed(t *testing
 // never saw, that slug differs from the stored model, so the pre-migration
 // equality test could not recognise it and Compact 400ed.
 func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
@@ -730,6 +751,8 @@ func TestSummarize_LockdownStaleEchoAfterMigration(t *testing.T) {
 // unavailable, model allow-list enforcement, and the LockdownOnly
 // force-flag.
 func TestCreateConversation_Lockdown(t *testing.T) {
+	t.Parallel()
+
 	t.Run("rejects lockdown when unavailable", func(t *testing.T) {
 		s := serverFixture(t)
 		s.cfg.SandboxImage = "" // lockdown unavailable
@@ -801,6 +824,8 @@ func TestCreateConversation_Lockdown(t *testing.T) {
 // roster is consulted (it used to answer 200 to POST/PUT/DELETE). DB- and
 // engine-independent: the method check runs first, so a bare Server suffices.
 func TestPersonas_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/personas", nil)

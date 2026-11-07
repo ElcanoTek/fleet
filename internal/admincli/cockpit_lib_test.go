@@ -16,6 +16,8 @@ import (
 // silent without rpm or cockpit, prints instead of running under --dry-run,
 // and only warns when dnf fails.
 func TestCockpitUninstall(t *testing.T) {
+	t.Parallel()
+
 	bash, err := exec.LookPath("bash")
 	if err != nil {
 		t.Skip("bash not available")
@@ -84,6 +86,8 @@ printf 'RC=%s\n' "$?"
 
 // TestCockpitUninstallIsBootstrapOnly — update never touches Cockpit.
 func TestCockpitUninstallIsBootstrapOnly(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	boot, _ := os.ReadFile(filepath.Join(root, "scripts", "bootstrap.sh"))
 	if !strings.Contains(string(boot), "\ncockpit_uninstall\n") {

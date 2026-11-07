@@ -18,6 +18,8 @@ import (
 // Before the fix, Timezone persisted as "UTC" and the first fire used the server
 // clock zone, so a "9am" recurring task drifted to 9am UTC after occurrence #1.
 func TestEnqueueTask_AppliesDefaultTimezone(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetDefaultTaskTimezone("America/New_York")
 	ny, err := time.LoadLocation("America/New_York")
@@ -51,6 +53,8 @@ func TestEnqueueTask_AppliesDefaultTimezone(t *testing.T) {
 // TestEnqueueTask_ExplicitTimezoneWins proves an explicit tc.Timezone is honored
 // over the org default and persisted for the recurrence path.
 func TestEnqueueTask_ExplicitTimezoneWins(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetDefaultTaskTimezone("America/New_York")
 
@@ -75,6 +79,8 @@ func TestEnqueueTask_ExplicitTimezoneWins(t *testing.T) {
 // the create_task tool calls (#277) persists the spawn lineage + capability flags
 // and reads them back, so audit queries and a re-run keep the right posture.
 func TestEnqueueTask_LineageRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -110,6 +116,8 @@ func TestEnqueueTask_LineageRoundTrip(t *testing.T) {
 // TestEnqueueTask_RejectsBadCron proves an invalid recurrence is rejected before
 // anything is persisted.
 func TestEnqueueTask_RejectsBadCron(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	if _, _, _, err := store.EnqueueTask(context.Background(), models.TaskCreate{
 		Prompt:     "bad cron",
@@ -123,6 +131,8 @@ func TestEnqueueTask_RejectsBadCron(t *testing.T) {
 // created without the flags has both capability bits false (so it cannot
 // self-schedule when later run).
 func TestEnqueueTask_DefaultsNoCapabilityFlags(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	id, _, _, err := store.EnqueueTask(context.Background(), models.TaskCreate{Prompt: "plain task"})
 	if err != nil {

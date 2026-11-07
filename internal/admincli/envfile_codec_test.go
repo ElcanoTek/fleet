@@ -169,6 +169,8 @@ func TestEnvFileShellWriterRefusesUnrepresentable(t *testing.T) {
 // TestEnvFileSystemdDecoder pins fleet_env_decode to systemd's EnvironmentFile=
 // semantics (src/basic/env-file.c): the vectors are what systemd hands a unit.
 func TestEnvFileSystemdDecoder(t *testing.T) {
+	t.Parallel()
+
 	prelude := envCodecShell(t)
 	for raw, want := range map[string]string{
 		`plain`:                    "plain",
@@ -200,6 +202,8 @@ func TestEnvFileSystemdDecoder(t *testing.T) {
 // parser cuts `abc # def` at ` #` and trims edge spaces — an upgrade would
 // silently change the OIDC client secret and break sign-in.
 func TestWebEnvMigrationKeepsQuotedValues(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	dir := t.TempDir()
 	oldEnv := filepath.Join(dir, "fleet-web.env")

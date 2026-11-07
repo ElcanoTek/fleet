@@ -67,6 +67,8 @@ func workspaceRouter(h *Handlers) *chi.Mux {
 }
 
 func TestWorkspaceList_Admin(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 	r := workspaceRouter(h)
@@ -102,6 +104,8 @@ func TestWorkspaceList_Admin(t *testing.T) {
 }
 
 func TestWorkspaceDownload_Admin(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, _ := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 	r := workspaceRouter(h)
@@ -126,6 +130,8 @@ func TestWorkspaceDownload_Admin(t *testing.T) {
 // the HTTP layer: every traversal attempt must be rejected (400/404), never a
 // 200 with file contents from outside the workspace.
 func TestWorkspaceDownload_TraversalRejected(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 
@@ -176,6 +182,8 @@ func TestWorkspaceDownload_TraversalRejected(t *testing.T) {
 // TestWorkspaceOwnership: a non-owner scoped key (with view perms) must be
 // refused even though it could see the task via GetTask; the owning key gets in.
 func TestWorkspaceOwnership(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	// Use the authz harness's key manager via setupTest's handler: create two
 	// keys, attribute the task to one of them.
@@ -246,6 +254,8 @@ func TestWorkspaceOwnership(t *testing.T) {
 
 // TestWorkspaceRunningTask: a non-completed task's workspace is not browsable.
 func TestWorkspaceRunningTask(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, _ := seedWorkspaceTask(t, store, models.TaskStatusRunning)
 	r := workspaceRouter(h)
@@ -261,6 +271,8 @@ func TestWorkspaceRunningTask(t *testing.T) {
 
 // TestWorkspaceNoPath: a completed task with no recorded workspace returns 404.
 func TestWorkspaceNoPath(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task := &models.Task{
 		ID:        uuid.New(),
@@ -284,6 +296,8 @@ func TestWorkspaceNoPath(t *testing.T) {
 
 // TestWorkspaceZip: ?format=zip streams a valid archive containing the files.
 func TestWorkspaceZip(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, _ := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 	r := workspaceRouter(h)
@@ -353,6 +367,8 @@ func serveWithin(t *testing.T, r http.Handler, req *http.Request) *httptest.Resp
 // TestWorkspaceDownload_NonRegularRefused: only regular files are served; the
 // type is checked on the opened descriptor.
 func TestWorkspaceDownload_NonRegularRefused(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 	if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
@@ -370,6 +386,8 @@ func TestWorkspaceDownload_NonRegularRefused(t *testing.T) {
 // TestWorkspaceZip_OnlyRegularFilesInsideTheWorkspace: the archive leaves out
 // links that leave the workspace and non-regular files.
 func TestWorkspaceZip_OnlyRegularFilesInsideTheWorkspace(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
 	outside := filepath.Join(t.TempDir(), "outside.txt")

@@ -16,6 +16,8 @@ import (
 // at `fleet generate-vapid-keys` — never panic or touch the store.
 // DB-independent: the disabled check short-circuits first.
 func TestPushEndpointsDisabledReturn501(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{} // push nil → feature disabled
 
 	cases := []struct {
@@ -50,6 +52,8 @@ func TestPushEndpointsDisabledReturn501(t *testing.T) {
 // answers 405 (not the 501 that misreported a routing bug as a missing
 // feature). DB-independent like the 501 test above.
 func TestPushEndpointsWrongMethodIs405EvenWhenDisabled(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{} // push nil → feature disabled
 
 	cases := []struct {
@@ -94,6 +98,8 @@ func pushFixture(t *testing.T) (*Server, http.Handler) {
 // subscribe (204, row visible), re-subscribe (idempotent upsert), the
 // user-scoped unsubscribe, and the public-key read.
 func TestPushSubscribeLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s, h := pushFixture(t)
 	ctx := context.Background()
 	st := s.concreteStore(t)
@@ -144,6 +150,8 @@ func TestPushSubscribeLifecycle(t *testing.T) {
 // caller's own rows only, so a browser holding another account's subscription
 // (a shared browser) or one the server dropped reads as not subscribed.
 func TestPushStatus(t *testing.T) {
+	t.Parallel()
+
 	_, h := pushFixture(t)
 	sub := map[string]any{
 		"endpoint": "https://fcm.googleapis.com/fcm/send/ep-status",
@@ -187,6 +195,8 @@ func TestPushStatus(t *testing.T) {
 // read, so the viewer-write guard must not sit in front of it, while the
 // write routes keep it.
 func TestPushStatus_ViewerCanAsk(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "viewer@x.com")
 	setRole(t, s, "viewer@x.com", "viewer", "")
 	s.push = webpush.New(webpush.Config{
@@ -210,6 +220,8 @@ func TestPushStatus_ViewerCanAsk(t *testing.T) {
 // caller's row follows the new subscription, and a browser holding someone
 // else's subscription cannot hand it to the account signed in now.
 func TestPushRenew(t *testing.T) {
+	t.Parallel()
+
 	s, h := pushFixture(t)
 	st := s.concreteStore(t)
 	keys := map[string]string{"auth": "auth-b64", "p256dh": "p256dh-b64"}
@@ -245,6 +257,8 @@ func TestPushRenew(t *testing.T) {
 // and renew refuse one that is not on a browser's push service: 400 with the
 // message the settings switch shows, and nothing stored or moved.
 func TestPushSubscribeAndRenew_RefuseAnEndpointNotOnAPushService(t *testing.T) {
+	t.Parallel()
+
 	s, h := pushFixture(t)
 	ctx := context.Background()
 	st := s.concreteStore(t)
@@ -281,6 +295,8 @@ func TestPushSubscribeAndRenew_RefuseAnEndpointNotOnAPushService(t *testing.T) {
 // the detached send runs against the user's stored subscriptions (none here,
 // so no relay is ever contacted) without blocking or panicking.
 func TestApprovalStagerFirePushNotification(t *testing.T) {
+	t.Parallel()
+
 	// nil push → guard short-circuits.
 	bare := &approvalStager{userEmail: "u@x.com", conversationID: "c1"}
 	bare.firePushNotification("send_email") // must not panic
@@ -302,6 +318,8 @@ func TestApprovalStagerFirePushNotification(t *testing.T) {
 // the viewer-write guard answers 403 — which the browser treats as a final
 // "no" and drops the new subscription, rather than retrying on every page.
 func TestPushRenew_ViewerIsRefused(t *testing.T) {
+	t.Parallel()
+
 	s := memberFixture(t, "viewer@x.com")
 	setRole(t, s, "viewer@x.com", "viewer", "")
 	s.push = webpush.New(webpush.Config{
@@ -324,6 +342,8 @@ func TestPushRenew_ViewerIsRefused(t *testing.T) {
 // TestPushSubscribeValidation rejects malformed bodies with 400 and wrong
 // methods with 405.
 func TestPushSubscribeValidation(t *testing.T) {
+	t.Parallel()
+
 	_, h := pushFixture(t)
 
 	// Missing keys.

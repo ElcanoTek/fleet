@@ -12,6 +12,8 @@ import (
 // version changes nothing, and a rename of a team nothing here is in is
 // recorded as done.
 func TestApplyExternalTeamRenameKeepsSharesOncePerVersion(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	c := f.sharedChat(t, "bob@x.com", f.project.ID, "Quant secret")
 	const issuer = "https://auth.example.com"
@@ -73,6 +75,8 @@ func TestApplyExternalTeamRenameKeepsSharesOncePerVersion(t *testing.T) {
 // equal one, and two deliveries of one version racing each other apply it
 // once: the per-issuer lock serializes the version check.
 func TestApplyExternalTeamRenameOlderAndConcurrent(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	const issuer = "https://auth.example.com"
 	if applied, _, err := f.s.ApplyExternalTeamRename(f.ctx, ExternalTeamRename{Issuer: issuer, Version: 50, EventID: "e50", From: "quant", To: "research"}, 1000); err != nil || !applied {
@@ -120,6 +124,8 @@ func TestApplyExternalTeamRenameOlderAndConcurrent(t *testing.T) {
 // work. It is ignored (roles still apply). A team written at or after the
 // rename, or by a provider that sends no rename version, applies as before.
 func TestExternalAccessIgnoresATeamWrittenBeforeAnAppliedRename(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	const issuer = "https://auth.example.com"
 	if _, _, err := f.s.ApplyExternalTeamRename(f.ctx, ExternalTeamRename{Issuer: issuer, Version: 100, EventID: "r", From: "quant", To: "research"}, 1000); err != nil {

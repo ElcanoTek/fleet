@@ -1,24 +1,33 @@
 #!/usr/bin/env bash
 # scripts/update.sh — in-place update for an existing fleet install.
 #
-# Pulls the fleet checkout AND the client-config bundle checkout, rebuilds the
-# sandbox image when the bundle's Containerfile or resolved image tag changed,
-# the tag is missing from the service user's image store, OR the installed
-# image is older than FLEET_SANDBOX_MAX_AGE_DAYS (default 7; 0 disables) — the
-# freshness backstop that keeps an unchanged bundle from serving a weeks-old
-# image full of unpatched base/package CVEs (skipped entirely when the bundle
-# resolves sandbox.image to a prebuilt ref: registry freshness is the
-# publisher's pipeline's job, not this box's). When the tag cannot be resolved
-# at all, the presence and freshness gates both go blind and the step says so
-# loudly instead of reporting the image up to date. It then rebuilds the
-# fleet binary with the Vite web bundle embedded in it (ADR-0091: the binary
-# serves the browser tier itself), retires the old Next.js fleet-web unit when
-# one is still installed, then restarts the fleet systemd unit. The sandbox gate runs BEFORE anything is installed on purpose:
-# its fail-closed abort (missing image, failed build) must leave the box
-# coherent — old binaries on disk, old service running — rather than a
-# half-updated box where new code is installed but the update claims nothing
-# changed. Services self-migrate on restart, so this script NEVER runs
-# application migrations.
+# DEFAULT: SIGNED RELEASE ARTIFACTS (docs/RELEASE-ARTIFACTS.md, ADR-0100). No Go,
+# no Node and no web build on the box. In order:
+#
+#   1. fast-forward the fleet checkout (scripts, units, the generic bundle) to
+#      the release tag being installed — the newest PUBLISHED release, or --tag;
+#   2. pull the client-config bundle checkout;
+#   3. download this box's binary and verify it BEFORE anything uses it
+#      (`fleet release fetch`: signature by fleet's release workflow, checksums,
+#      release tag, architecture, no host executor, no downgrade);
+#   4. sandbox image: a bundle that ships no Containerfile, or the generic one,
+#      gets the release's signed image (`fleet release sandbox`, then a podman
+#      pull BY DIGEST and a retag to the bundle's sandbox.tag); a bundle with its
+#      own Containerfile is built on the box, layered FROM that verified image
+#      when it declares `ARG FLEET_SANDBOX_BASE`; a bundle naming sandbox.image
+#      uses that image and nothing is pulled or built here;
+#   5. swap the binary in atomically (`fleet release install`: the previous one is
+#      kept as fleet.prev), restart — the service runs its own migrations on
+#      start; this script runs none — wait for /readyz, and roll back to
+#      fleet.prev automatically when the new binary does not become ready.
+#
+# The sandbox step runs BEFORE the install on purpose: its fail-closed abort
+# (missing image, failed build) must leave the box coherent — old binary, old
+# service — rather than half-updated.
+#
+# --from-source keeps the old path (make build on the box: Go + Node) for
+# DEVELOPMENT boxes only. It is isolated below and marked
+# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
 #
 # Invoked by `fleet update`, but also runnable directly on the host.
 #
@@ -46,7 +55,21 @@
 #                          the pin bootstrap persisted under the state dir). Set
 #                          FLEET_CLIENT_CONFIG_VERIFY=1 to verify-tag/-commit the
 #                          ref (fail-closed) when a signing key is configured.
-#   --no-pull              skip git fetch/ff; just rebuild the current checkout(s)
+#   --tag <vYYYY.MM.DD.N>  install this release instead of the newest published
+#                          one (env FLEET_UPDATE_TAG). Older than the running
+#                          release needs --allow-downgrade.
+#   --allow-downgrade      permit --tag to name an older release — a deliberate
+#                          roll back (env FLEET_UPDATE_ALLOW_DOWNGRADE=1). For
+#                          "undo the last update", `fleet release rollback` is
+#                          faster: it swaps fleet.prev back without a download.
+#   --artifact             the default; accepted so scripts can say it
+#   --from-source          DEVELOPMENT BOXES ONLY: build fleet on the box (make
+#                          build: Go + Node on PATH) from the checkout's branch
+#                          tip instead of installing a signed release (env
+#                          FLEET_UPDATE_FROM_SOURCE=1). LEGACY-BUILD-FROM-SOURCE:
+#                          remove after boxes run artifacts.
+#   --no-pull              skip git fetch/ff; reinstall the release the checkout
+#                          is at (from source: rebuild the current checkout)
 #   --sandbox-max-age <d>  rebuild the sandbox image when the installed one is
 #                          <d> or more days old, even if nothing else changed
 #                          (env FLEET_SANDBOX_MAX_AGE_DAYS, default 7; 0 disables).
@@ -69,10 +92,6 @@
 #                          fleet-maintenance timer pair, and don't hint about
 #                          it (env FLEET_UPDATE_OFFER_TIMERS=0) — for boxes
 #                          that deliberately run without them
-#   --no-node-repair       don't hand a node shortfall to `doctor.sh --node`;
-#                          fail with the repair command instead (env
-#                          FLEET_UPDATE_NODE_REPAIR=0) — for boxes whose node
-#                          is managed outside dnf (nvm, nodesource, an image)
 #   --wait                 wait up to --wait-timeout seconds for running
 #                          scheduled tasks, chat turns, or approval executions
 #                          to finish before starting the update (env
@@ -91,27 +110,32 @@
 #   --force                skip the active-work blocker and update/restart
 #                          immediately even when a task or turn is running
 #                          (env FLEET_UPDATE_FORCE=1)
-#   --dry-run              print the plan; build/restart nothing. Always exits 0
-#                          — it reports whether the plan is BLOCKED (e.g. the
-#                          node floor is unmet) in the plan itself, the same
-#                          contract bootstrap/doctor/fleet-upgrade follow. Use
+#   --dry-run              print the plan; download/build/restart nothing.
+#                          Always exits 0 — it reports whether the plan is
+#                          BLOCKED (e.g. work in flight) in the plan itself, the
+#                          same contract bootstrap/doctor follow. Use
 #                          `fleet update --check` (a Go verb — this script has
-#                          no --check) when you want that answer as an exit code.
+#                          no --check) when you want an answer as an exit code.
 #   -h | --help            this help
 #
-# Re-run safe (idempotent): when nothing changed it exits early; the web/binary
-# builds are deterministic from the checkout; the sandbox rebuild is gated on the
-# Containerfile hash + resolved image tag (and the tag's presence in the service
-# user's store) so the ~2-3min image build is skipped when unchanged — except
-# the max-age freshness backstop above, which deliberately re-fires once the
-# installed image ages past the threshold.
+# Re-run safe (idempotent): re-installing the release that is already live is a
+# verified no-op swap and restart; the published sandbox image is pulled only
+# when its digest changed or the service user's store lacks it; an on-box
+# sandbox build is gated on the Containerfile hash + resolved image tag + base
+# digest (and the tag's presence in the store) — except the max-age freshness
+# backstop above, which deliberately re-fires once an on-box image ages past
+# the threshold.
 
 set -euo pipefail
 
 # ── locate this script + its repo root (default SRC_DIR) ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=lib/node-version.sh
-. "$SCRIPT_DIR/lib/node-version.sh"
+# Signed-release download + verification for a box whose installed fleet
+# predates `fleet release` (ADR-0100).
+# shellcheck source=lib/release.sh
+. "$SCRIPT_DIR/lib/release.sh"
+# shellcheck source=lib/sandbox-bundle.sh
+. "$SCRIPT_DIR/lib/sandbox-bundle.sh"
 # The fleet-managed Caddyfile (marker, renderer, drift helpers) — the same
 # implementation bootstrap.sh writes from and doctor.sh repairs against.
 # shellcheck source=lib/caddyfile.sh
@@ -195,15 +219,13 @@ ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
 # timer doesn't nag on every update.
 OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
 
-# Hand a node shortfall to the repair path (scripts/doctor.sh --node) instead of
-# dying. ON by default, and that is a deliberate asymmetry with --adopt-units:
-# adopting a unit OVERWRITES an operator's hand-edit, so it needs consent, while
-# this only adds a parallel-installable interpreter package and stamps
-# FLEET_NODE_BIN — the interpreter step 4 builds the web bundle with. Refusing
-# to install the interpreter the build is about to need would be incoherent. Boxes whose
-# node comes from nvm/nodesource/an image opt out with --no-node-repair.
-NODE_REPAIR="${FLEET_UPDATE_NODE_REPAIR:-1}"
-# Sandbox image freshness backstop: rebuild the on-box sandbox image when the
+# Which release to install (empty = the newest published one), whether an older
+# one is allowed, and the development-only from-source path.
+RELEASE_TAG="${FLEET_UPDATE_TAG:-}"
+ALLOW_DOWNGRADE="${FLEET_UPDATE_ALLOW_DOWNGRADE:-0}"
+FROM_SOURCE="${FLEET_UPDATE_FROM_SOURCE:-0}"
+# Sandbox image freshness backstop (on-box builds only — the published image is
+# rebuilt by every release): rebuild the on-box sandbox image when the
 # one in the service user's store is this many days old or older, even when the
 # Containerfile and tag are unchanged. Without it a box whose bundle goes quiet
 # serves the same image for months — stale base layers, unpatched package CVEs
@@ -243,12 +265,20 @@ while [[ $# -gt 0 ]]; do
     --dry-run)        DRY_RUN=1 ;;
     --adopt-units)    ADOPT_UNITS=1 ;;
     --no-timers)      OFFER_TIMERS=0 ;;
-    --no-node-repair) NODE_REPAIR=0 ;;
+    --tag)            shift; [[ $# -gt 0 ]] || { echo "error: --tag needs a release tag" >&2; exit 1; }; RELEASE_TAG="$1" ;;
+    --tag=*)          RELEASE_TAG="${1#*=}" ;;
+    --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
+    --artifact)       FROM_SOURCE=0 ;;
+    --from-source)    FROM_SOURCE=1 ;;
     -h|--help)        awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
   shift
 done
+
+# --no-pull on the command line skips the fleet fetch too (SKIP_SRC_FETCH was
+# derived above from the env var alone, so the flag used to pull anyway).
+[[ "$NO_PULL" == "1" ]] && SKIP_SRC_FETCH=1
 
 # Fall back to the bootstrap-persisted pin (state file) when none was passed
 # explicitly. SRC_DIR is final here, so the state dir resolves the same way it
@@ -280,49 +310,11 @@ info() { printf '%s» %s%s\n' "$c_dim" "$*" "$c_reset"; }
 die()  { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_reset" >&2; exit 1; }
 run()  { if [[ "$DRY_RUN" == "1" ]]; then info "[dry-run] $*"; else "$@"; fi; }
 
-# Set by the node gate below; declared here so the later FLEET_NODE_BIN stamp
-# and build-PATH prefix are safe under `set -u` on a checkout with no web/.
-node_bin_resolved=""
-node_major_want=""
-npm_cli_resolved=""
 DRY_RUN_BLOCKED=0
-
-# node_probe — resolve the interpreter THIS checkout's web tier needs, and set
-# node_major_want + node_bin_resolved from what was actually found on the box.
-#
-# Read-only and side-effect free, so the plan printer (--dry-run) and the real
-# run share one implementation: the whole point of scripts/lib/node-version.sh
-# is that "which node?" is answered in exactly one place, and a dry run that
-# answered it differently from the run it previews would be worse than not
-# answering at all.
-#
-# npm is probed too, and separately, because on Fedora it is a separate package
-# (nodejs<major>-npm) whose shebang names its interpreter ABSOLUTELY — so
-# "a node 24 is installed" does not imply "npm will build on node 24", and the
-# gate's promise is about the build. See fleet_resolve_npm_cli.
-#
-# An unresolvable npm is a BLOCKER only for a versioned interpreter. That is the
-# parallel-stream layout, where the bare `npm` provably belongs to a different
-# interpreter and the missing package has a name. On a single-node layout
-# (Debian/nodesource/nvm) the same miss means npm ships in a shape this probe
-# cannot read — and there the `node` pin in the build PATH is enough, because
-# npm's shebang on those distros really is the relative `env node`. Refusing
-# that box would be inventing a blocker out of an unread file.
-#
-# Returns: 0 resolved · 1 nothing on this box qualifies · 2 web/.nvmrc unreadable
-#          · 3 a versioned node resolved but its npm did not.
-node_probe() {
-  node_bin_resolved=""
-  npm_cli_resolved=""
-  node_major_want="$(fleet_node_major_want "$SRC_DIR" || true)"
-  [[ -n "$node_major_want" ]] || return 2
-  node_bin_resolved="$(fleet_resolve_node_bin "$node_major_want")" || { node_bin_resolved=""; return 1; }
-  npm_cli_resolved="$(fleet_resolve_npm_cli "$node_bin_resolved")" || npm_cli_resolved=""
-  if [[ -z "$npm_cli_resolved" && "${node_bin_resolved##*/}" =~ ^node-[0-9]+$ ]]; then
-    return 3
-  fi
-  return 0
-}
+if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]]; then
+  die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
+fi
+[[ "$FROM_SOURCE" != "1" || -z "$RELEASE_TAG" ]] || die "--tag selects a signed release; it cannot be combined with --from-source"
 
 # Fall back to the deployment env file for lifecycle wait knobs when neither
 # command-line flags nor exported environment variables supplied them.
@@ -349,8 +341,9 @@ else
   WAIT_SECONDS=600
 fi
 
-# require_go_toolchain — fail the build step with an actionable message rather
-# than an opaque one.
+# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+# require_go_toolchain — fail the --from-source build with an actionable message
+# rather than an opaque one.
 #
 # The Makefile exports GOTOOLCHAIN=auto, so the operator does NOT need go.mod's
 # exact pinned patch release installed: Go fetches it. What Go cannot do is
@@ -374,6 +367,23 @@ require_go_toolchain() {
     pinned="$(awk '/^go /{print $2; exit}' "$SRC_DIR/go.mod" 2>/dev/null || true)"
     die "installed Go is ${goversion}, which predates GOTOOLCHAIN (added in 1.21) and so cannot fetch the pinned toolchain${pinned:+ (go.mod pins $pinned)} — upgrade Go and re-run; live binary left in place"
   fi
+}
+# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+# legacy_build_from_source — `make build` on the box for --from-source
+# (development boxes). The toolchain is whatever is on PATH: this script no
+# longer installs or repairs Go or Node (a release box needs neither). `make
+# build` ends with `fleet version --web`, and the result is re-checked here.
+legacy_build_from_source() {
+  require_go_toolchain
+  command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
+    || die "--from-source builds the web bundle: put node (>= $(tr -d '[:space:]v' < "$SRC_DIR/web/.nvmrc" 2>/dev/null || echo '?'), per web/.nvmrc) and npm on PATH — or drop --from-source and install the signed release"
+  ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
+  [[ -x "$SRC_DIR/fleet" ]] || die "make build did not emit ${SRC_DIR}/fleet"
+  local web_bundle
+  web_bundle="$("$SRC_DIR/fleet" version --web 2>/dev/null)" \
+    || die "the built binary carries no web bundle — live binary left in place"
+  ok "built from source on $(node -v) — ${web_bundle}; $("$SRC_DIR/fleet" version 2>/dev/null || true)"
+  NEW_FLEET="$SRC_DIR/fleet"
 }
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
 # file or disturbing operator-managed entries. Encoded by lib/envfile.sh so
@@ -410,6 +420,16 @@ unit_functional_body() { grep -vE '^[[:space:]]*(#|$)' "$1" 2>/dev/null || true;
 # the scripts/test-db-setup.sh workflow. Either shape is a valid checkout for
 # the `git -C` operations below.
 [[ -e "$SRC_DIR/.git" ]] || die "no fleet source checkout at $SRC_DIR (run scripts/bootstrap.sh first)"
+
+# One update at a time: two concurrent runs would race on the checkout, the
+# staging dir and the sandbox image. fd 9 is reopened (not inherited) by the
+# self-update re-exec below, which releases and retakes the same lock.
+if [[ "$DRY_RUN" != "1" ]] && command -v flock >/dev/null 2>&1; then
+  _lock_dir="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
+  mkdir -p "$_lock_dir"
+  exec 9>"$_lock_dir/update.lock"
+  flock -n 9 || die "another fleet update is running on this box (${_lock_dir}/update.lock) — wait for it to finish"
+fi
 
 if [[ "$REEXEC" == "1" ]]; then
   step "fleet update (src=${SRC_DIR}, client=${CLIENT_DIR}, service=${SERVICE_NAME}, post-self-update re-exec, dry-run=${DRY_RUN})"
@@ -469,14 +489,51 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   # old → new range (see the re-exec block below).
   before_sha="${FLEET_UPDATE_BASE_SHA:-$before_sha}"
   target_branch="$(git rev-parse --abbrev-ref HEAD)"
+  # No fetch: reinstall the release the checkout is at (or --tag, which the
+  # self-update re-exec always carries).
+  if [[ "$FROM_SOURCE" != "1" && -z "$RELEASE_TAG" ]]; then
+    RELEASE_TAG="$("$SRC_DIR/scripts/version.sh" current 2>/dev/null || true)"
+    [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == v* ]] || RELEASE_TAG="v${RELEASE_TAG}"
+    if [[ ! "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]]; then
+      RELEASE_TAG=""
+      if [[ "$DRY_RUN" == "1" ]]; then
+        # A shallow or tagless checkout (CI's, a fresh --depth clone): the plan
+        # still prints, and says what the real run would stop on.
+        warn "[dry-run] BLOCKER: no release tag is reachable from ${SRC_DIR}'s HEAD, so --no-pull has no release to reinstall — the real run stops here (name one: --tag vYYYY.MM.DD.N)"
+        DRY_RUN_BLOCKED=1
+      else
+        die "no release tag is reachable from ${SRC_DIR}'s HEAD, so --no-pull has no release to reinstall — name one: fleet update --no-pull --tag vYYYY.MM.DD.N"
+      fi
+    fi
+  fi
+  # --no-pull with an explicit --tag must name the release the checkout is
+  # AT: installing another one would run its binary on this checkout's units,
+  # scripts and generic bundle. (The re-exec carries the tag it just aligned to.)
+  if [[ "$REEXEC" != "1" && "$FROM_SOURCE" != "1" && -n "$RELEASE_TAG" ]]; then
+    _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+    if [[ "$_tag_sha" != "$after_sha" ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        warn "[dry-run] BLOCKER: --no-pull reinstalls the release the checkout is at, and ${SRC_DIR} is not at ${RELEASE_TAG} — the real run stops here (drop --no-pull to move the checkout to it)"
+        DRY_RUN_BLOCKED=1
+      else
+        die "--no-pull reinstalls the release the checkout is at, and ${SRC_DIR} is not at ${RELEASE_TAG} — drop --no-pull so the checkout moves to ${RELEASE_TAG} with its binary"
+      fi
+    fi
+  fi
   if [[ "$REEXEC" == "1" ]]; then
     ok "post-self-update re-exec — fleet checkout already at ${after_sha:0:12}; continuing (client bundle still pulls)"
-  else
+  elif [[ "$FROM_SOURCE" == "1" ]]; then
     ok "rebuild-only mode — skipping fetch, building ${after_sha:0:12}"
+  else
+    ok "no-pull mode — skipping fetch, reinstalling release ${RELEASE_TAG:-<none reachable>}"
   fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would: git fetch --tags origin && fast-forward the current branch"
+    if [[ "$FROM_SOURCE" == "1" ]]; then
+      info "[dry-run] would: git fetch --tags origin && fast-forward the current branch (--from-source)"
+    else
+      info "[dry-run] would: git fetch --tags origin, resolve ${RELEASE_TAG:-the newest published release} and fast-forward the checkout to that tag"
+    fi
     after_sha="$before_sha"
     target_branch="$(git rev-parse --abbrev-ref HEAD)"
   else
@@ -493,16 +550,66 @@ else
     after_sha="$(git rev-parse "origin/$target_branch" 2>/dev/null)" \
       || die "origin/$target_branch not found — did the remote branch get renamed or deleted?"
 
+    # Artifact mode: the checkout moves to the RELEASE being installed, not to
+    # the branch tip — its scripts, units and generic bundle then match the
+    # binary exactly. Only a published release has artifacts, and GitHub's
+    # "latest" is published only after its assets are uploaded.
+    if [[ "$FROM_SOURCE" != "1" ]]; then
+      if [[ -z "$RELEASE_TAG" ]]; then
+        RELEASE_TAG="$(fleet_release_latest_tag)" \
+          || die "could not ask GitHub which release is newest (offline? rate-limited?) — retry, or name one: fleet update --tag vYYYY.MM.DD.N"
+      fi
+      # The API answer can be newer than the fetch above (a release published
+      # in between): fetch once more before calling the tag missing.
+      _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+        || { git fetch --quiet --tags origin; _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)"; } \
+        || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} even after fetching tags — is origin ElcanoTek/fleet?"
+      git merge-base --is-ancestor "$_tag_sha" "origin/$target_branch" \
+        || die "release ${RELEASE_TAG} is not on origin/${target_branch} — refusing to move the checkout off its branch"
+      after_sha="$_tag_sha"
+      ok "release to install: ${RELEASE_TAG} (${after_sha:0:12})"
+      # The checkout must BE the release: its units, scripts and generic
+      # bundle ship with the binary. A checkout PAST the tag — a downgrade
+      # (--tag older --allow-downgrade), or a box that tracked the branch tip
+      # before artifacts — is moved BACK to it, which a fast-forward cannot
+      # do. Only commits that are on origin/<branch> may be left behind
+      # (they come back on the next update); local-only commits refuse.
+      _realign=0
+      if [[ "$before_sha" != "$after_sha" ]] && git merge-base --is-ancestor "$after_sha" "$before_sha"; then
+        git merge-base --is-ancestor "$before_sha" "origin/$target_branch" \
+          || die "${SRC_DIR} has commits that are not on origin/${target_branch}; moving it back to ${RELEASE_TAG} would strand them — push or reset them first"
+        _realign=1
+      fi
+      # Nothing from the tag runs (not even a re-exec of its update.sh) until
+      # its SIGNED manifest is checked: SHA256SUMS signed by the release
+      # identity, release.json matching it, naming this tag AND the commit the
+      # tag resolves to here. A tag moved or forged in the local clone fails
+      # here, before the checkout moves. Verified with this (current,
+      # already-trusted) checkout's pinned cosign.
+      if [[ "$before_sha" != "$after_sha" ]]; then
+        fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$after_sha" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" \
+          || die "release ${RELEASE_TAG} could not be verified (above) — the checkout was NOT moved and nothing was installed"
+        ok "the signed release.json names ${RELEASE_TAG} = ${after_sha:0:12}"
+      fi
+    fi
+
     if [[ "$before_sha" == "$after_sha" ]]; then
       ok "already on ${after_sha:0:12} — fleet checkout up to date"
     else
       say
-      printf '%s  incoming commits:%s\n' "$c_dim" "$c_reset"
-      git --no-pager log --oneline --no-decorate "${before_sha}..${after_sha}" | sed 's/^/    /'
+      if [[ "${_realign:-0}" == "1" ]]; then
+        printf '%s  moving the checkout BACK to %s; these commits leave it (they stay on origin):%s\n' "$c_dim" "$RELEASE_TAG" "$c_reset"
+        git --no-pager log --oneline --no-decorate "${after_sha}..${before_sha}" | sed 's/^/    /'
+        _range="${after_sha}..${before_sha}"
+      else
+        printf '%s  incoming commits:%s\n' "$c_dim" "$c_reset"
+        git --no-pager log --oneline --no-decorate "${before_sha}..${after_sha}" | sed 's/^/    /'
+        _range="${before_sha}..${after_sha}"
+      fi
       say
 
       if [[ "$ASSUME_YES" != "1" ]]; then
-        count="$(git rev-list --count "${before_sha}..${after_sha}")"
+        count="$(git rev-list --count "$_range")"
         printf '%s?%s Apply %s%d%s commits — %s..%s? %s(y/N)%s ' \
           "$c_cyan" "$c_reset" "$c_bold" "$count" "$c_reset" \
           "${before_sha:0:12}" "${after_sha:0:12}" "$c_dim" "$c_reset"
@@ -518,8 +625,15 @@ else
       # --ff-only refuses on divergence so unpushed commits surface loudly.
       git checkout --quiet "$target_branch" \
         || die "cannot switch to $target_branch — uncommitted changes in $SRC_DIR"
-      git merge --ff-only --quiet "$after_sha" \
-        || die "cannot fast-forward $target_branch to ${after_sha:0:12} — $SRC_DIR has unpushed commits or diverged; push/reset first"
+      if [[ "${_realign:-0}" == "1" ]]; then
+        git diff --quiet HEAD -- \
+          || die "cannot move $target_branch back to ${RELEASE_TAG} — uncommitted changes in $SRC_DIR"
+        git checkout --quiet -B "$target_branch" "$after_sha" \
+          || die "cannot move $target_branch back to ${RELEASE_TAG} (${after_sha:0:12})"
+      else
+        git merge --ff-only --quiet "$after_sha" \
+          || die "cannot fast-forward $target_branch to ${after_sha:0:12} — $SRC_DIR has unpushed commits or diverged; push/reset first"
+      fi
 
       # The shell running this script read the PRE-update file (bash holds the
       # old inode across the checkout above), so a fix to update.sh itself would
@@ -556,7 +670,9 @@ else
           FLEET_SANDBOX_MAX_AGE_DAYS="$SANDBOX_MAX_AGE_DAYS" \
           FLEET_UPDATE_ADOPT_UNITS="$ADOPT_UNITS" \
           FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
-          FLEET_UPDATE_NODE_REPAIR="$NODE_REPAIR" \
+          FLEET_UPDATE_TAG="$RELEASE_TAG" \
+          FLEET_UPDATE_ALLOW_DOWNGRADE="$ALLOW_DOWNGRADE" \
+          FLEET_UPDATE_FROM_SOURCE="$FROM_SOURCE" \
           FLEET_UPDATE_WAIT="$WAIT_FOR_IDLE" \
           FLEET_UPDATE_WAIT_SECONDS="$WAIT_SECONDS" \
           FLEET_UPDATE_FORCE="$FORCE_UPDATE" \
@@ -864,7 +980,9 @@ fi
 # a tag that exists nowhere and every sandboxed tool call fails at runtime
 # (fleet does not verify the image at boot). The tag is resolved by
 # build-sandbox-image.sh --print-tag — the same manifest read the build uses.
-sandbox_cf="$CLIENT_DIR/sandbox/Containerfile"
+# The manifest's sandbox.containerfile when set, as build-sandbox-image.sh
+# resolves it (scripts/lib/sandbox-bundle.sh).
+sandbox_cf="$(fleet_sandbox_containerfile "$CLIENT_DIR")"
 hash_file() { [[ -f "$1" ]] && sha256sum "$1" | awk '{print $1}' || printf 'absent'; }
 STATE_DIR="${FLEET_STATE_DIR:-$SRC_DIR/.fleet-state}"
 STAMP_FILE="$STATE_DIR/sandbox-containerfile.sha256"
@@ -989,154 +1107,139 @@ sandbox_image_age_days() {
   printf '%s' $(( (now - created) / 86400 ))
 }
 
-# ── the node gate ───────────────────────────────────────────────────────────
-# Placed HERE — after both pulls, before the first EXPENSIVE and destructive
-# step — for two reasons that pull in opposite directions:
-#
-#   * It cannot run any earlier. The major is declared in the CHECKOUT's
-#     web/.nvmrc, so a pre-pull gate reads the OLD floor. On a box provisioned
-#     before .nvmrc existed that is not a rounding error: the old floor was a
-#     hardcoded 20, node 22 satisfies it, and every pre-pull check says the box
-#     is fine. Post-pull is the earliest point at which "which node does this
-#     release need?" is even a well-posed question.
-#   * It must not run any later. It used to sit inside step 4, i.e. AFTER
-#     step 3 had potentially spent 2-3 minutes rebuilding the sandbox image and
-#     then pruned the superseded layers — and it still printed "nothing has been
-#     built or installed yet". This script already states the standard it was
-#     violating: a gate that can abort must run before the first side effect,
-#     or it is not a gate.
-#
-# The checkout fast-forward in step 1 is unavoidably already done by now, so the
-# refusal messages below say that rather than claiming an untouched box.
-if [[ -f "$SRC_DIR/web/package.json" ]]; then
-  step "Node gate (the web tier's interpreter)"
-  _np_rc=0; node_probe || _np_rc=$?
-  # What a refusal below can honestly claim about this box. Step 1 fast-forwards
-  # the checkout — unless --no-pull, in which case nothing has been touched at
-  # all. Saying "the checkout was fast-forwarded" on a --no-pull run would be
-  # the same species of untrue status line this gate exists to stop printing.
-  if [[ "$NO_PULL" == "1" ]]; then
-    _state="nothing has been pulled, built, installed or restarted"
+# ── release artifacts: download + verify BEFORE anything uses them ──────────
+# Runs after both pulls (the checkout now names the release) and before the
+# sandbox step and the install, so a refusal here leaves the box untouched: old
+# binary, old service, old image. The binary is verified by the INSTALLED fleet
+# (`fleet release fetch`) — the code doing the trusting is code already
+# trusted — and every later step re-verifies the staged files rather than
+# taking that on its word.
+resolve_install_dir() {
+  [[ -n "$INSTALL_DIR" ]] && return 0
+  # `systemctl show -p ExecStart --value` prints an exec-command struct
+  # ("{ path=/opt/fleet/fleet ; argv[]=... }"), NOT a bare path — extract the
+  # path= field. `|| true`: a box without systemd as PID 1 falls through to
+  # the /opt/fleet default instead of aborting under set -e + pipefail.
+  local exec_start
+  exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
+    | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1 || true)"
+  if [[ "$exec_start" == /* && -x "$(dirname "$exec_start")" ]]; then
+    INSTALL_DIR="$(dirname "$exec_start")"
   else
-    _state="the fleet + client-bundle checkouts were fast-forwarded; nothing was built, installed or restarted"
+    INSTALL_DIR="/opt/fleet"
   fi
-
+}
+NEW_FLEET=""     # the verified binary this update installs
+RELEASE_DIR=""   # its staging dir (SHA256SUMS, signatures, release.json, binary)
+if [[ "$FROM_SOURCE" != "1" ]]; then
+  resolve_install_dir
+  step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
+  # Staging lives under the root-owned release cache, never under the
+  # checkout (which another user may own): it must be private — see
+  # internal/release CheckPrivateDir — or the verified files could be swapped.
+  RELEASE_ROOT="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
+  RELEASE_DIR="${RELEASE_ROOT}/${RELEASE_TAG:-latest}"
+  RELEASE_COMMIT="$(git -C "$SRC_DIR" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+  _fetch_flags=()
+  [[ "$ALLOW_DOWNGRADE" == "1" ]] && _fetch_flags+=(--allow-downgrade)
   if [[ "$DRY_RUN" == "1" ]]; then
-    # Do NOT merely claim "would resolve node" — resolve it. `--dry-run` is the
-    # one command an operator runs to ask "will this work on my box?", and the
-    # node gate is what aborts the run. The previous plan printed
-    # "would resolve node >= web/.nvmrc" without ever calling the resolver, so
-    # on a box the real run refuses to touch it printed a clean checklist, a
-    # green banner and exit 0 — the same "reported a thing that did not happen"
-    # fault the rest of this change set exists to kill. node_probe is pure and
-    # root-free, so the plan can afford to answer the question for real.
-    if (( _np_rc == 0 )); then
-      ok "[dry-run] node gate PASSES: ${node_bin_resolved} ($("$node_bin_resolved" -v)) >= ${node_major_want} (web/.nvmrc) — resolved on this box, not assumed"
-      if [[ -n "$npm_cli_resolved" ]]; then
-        ok "[dry-run] npm gate PASSES: the build would run ${npm_cli_resolved} on ${node_bin_resolved} — resolved on this box, not assumed"
-      else
-        info "[dry-run] npm gate: no npm-cli.js resolvable for ${node_bin_resolved} (a single-node layout), so the build would use \`npm\` from PATH ($(command -v npm 2>/dev/null || echo none)) under a pinned \`node\`"
-      fi
-    elif (( _np_rc == 2 )); then
-      warn "[dry-run] BLOCKER: cannot read the node major from ${SRC_DIR}/web/.nvmrc — the real run stops here"
-      DRY_RUN_BLOCKED=1
-    elif (( _np_rc == 3 )); then
-      # A blocker in its own right: bare `npm` on this box belongs to the
-      # DEFAULT stream and its shebang pins it there, so the build would run on
-      # the old major however the node question was answered.
-      warn "[dry-run] BLOCKER: node ${node_bin_resolved} qualifies but no npm belongs to it — install nodejs${node_major_want}-npm"
-      DRY_RUN_BLOCKED=1
-      info "[dry-run] for a scriptable answer use: fleet update --check   (exits non-zero on this)"
-    else
-      warn "[dry-run] BLOCKER: no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)"
-      if [[ "$NODE_REPAIR" != "1" ]]; then
-        info "[dry-run] --no-node-repair is set, so the real run stops here — fix it with: sudo fleet doctor --node"
-      elif [[ $EUID -ne 0 ]]; then
-        info "[dry-run] the real run would repair it via scripts/doctor.sh --node, but that needs root and this is uid ${EUID}"
-      else
-        info "[dry-run] the real run would repair it first: scripts/doctor.sh --node, then re-resolve and refuse if it is still short"
-      fi
-      info "[dry-run] for a scriptable answer use: fleet update --check   (exits non-zero on this)"
-      DRY_RUN_BLOCKED=1
-    fi
+    info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
+    info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
   else
-    (( _np_rc != 2 )) \
-      || die "cannot read the node major from ${SRC_DIR}/web/.nvmrc — expected something like '24' (${_state})"
-
-    if (( _np_rc != 0 )); then
-      # The box is a major behind (or has the interpreter and not its npm).
-      # Dying here was the old behavior, and it made
-      # the documented order load-bearing: `fleet update` stopped, and the
-      # operator had to already know the fix lived in a different verb — a verb
-      # that, run FIRST on a box provisioned before web/.nvmrc existed, is a
-      # no-op, because it too reads the floor from the un-pulled checkout.
-      #
-      # update.sh is an updater, not a provisioner, so it does NOT grow its own
-      # `dnf install`: it hands the shortfall to the ONE place that owns the
-      # node install (scripts/doctor.sh --node) and then re-resolves. Scoped to
-      # --node deliberately — a full doctor run would adopt drifted units, a
-      # write this script only ever performs behind explicit consent
-      # (--adopt-units), and laundering that through the node repair would be a
-      # consent bypass.
-      if (( _np_rc == 3 )); then
-        # Same repair, different missing package: doctor --node installs
-        # nodejs<major> AND nodejs<major>-npm, which is exactly what is short
-        # here. Saying "no node" in this case would send the operator looking
-        # for a problem they do not have.
-        warn "node ${node_bin_resolved} ($("$node_bin_resolved" -v)) qualifies, but no npm belongs to it — the bare \`npm\` on this box is the default stream's and its shebang pins it there."
-      else
-        warn "no node >= ${node_major_want} (web/.nvmrc) — have $(node -v 2>/dev/null || echo none)."
-      fi
-      _doctor="$SCRIPT_DIR/doctor.sh"
-      if [[ "$NODE_REPAIR" != "1" ]]; then
-        warn "  --no-node-repair is set, so this run will not install it."
-        warn "  fix it:  sudo fleet doctor --node    (then re-run this update)"
-        die "refusing to build the web tier on an unsupported node — ${_state}"
-      elif [[ ! -r "$_doctor" ]]; then
-        warn "  the repair path ${_doctor} is missing from this checkout."
-        warn "  fix it:  sudo dnf install nodejs${node_major_want} nodejs${node_major_want}-npm"  # both: node and its npm are separate packages
-        die "refusing to build the web tier on an unsupported node — ${_state}"
-      elif [[ $EUID -ne 0 ]]; then
-        warn "  repairing it needs root, and this update is running as uid ${EUID}."
-        warn "  fix it:  sudo fleet doctor --node    (then re-run this update)"
-        die "refusing to build the web tier on an unsupported node — ${_state}"
-      fi
-
-      info "repairing the node toolchain first: scripts/doctor.sh --node (${_state})"
-      SRC_DIR="$SRC_DIR" bash "$_doctor" --node || true
-      hash -r   # a just-installed /usr/bin/node-NN must be visible to this shell
-
-      # Re-RESOLVE. doctor's exit code is not the claim being made here — the
-      # claim is "this box can now build the web tier", and only re-running the
-      # resolver against the box proves that. Same rule as the resolved
-      # ExecStart and resolved TimeoutStopFailureMode assertions.
-      node_probe \
-        || die "still no node >= ${node_major_want} with a matching npm after scripts/doctor.sh --node — inspect 'dnf list nodejs*' / 'dnf repolist'; ${_state}"
-      ok "node toolchain repaired in place — no re-run needed"
+    # Only the release being installed is staged: earlier releases' staging
+    # dirs (~100 MB each) are dropped first — the previous binary lives on as
+    # fleet.prev in the install dir, which is all a rollback needs.
+    [[ -n "$RELEASE_COMMIT" ]] || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} — cannot tie the release to a commit"
+    if [[ -d "$RELEASE_ROOT" ]]; then
+      find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
     fi
-    ok "web bundle will build on ${node_bin_resolved} ($("$node_bin_resolved" -v))"
-    # Named separately from the interpreter because it is a separate claim, and
-    # the one that was silently false: the gate resolved node 24, the build ran
-    # npm 22 (absolute shebang), and npm rejected the engine it was handed.
-    if [[ -n "$npm_cli_resolved" ]]; then
-      ok "web tier will build with ${npm_cli_resolved} — pinned to that interpreter, not to PATH"
+    rm -rf "$RELEASE_DIR"
+    install -d -m 0700 "$RELEASE_ROOT" "$RELEASE_DIR"
+    if fleet_release_capable "$INSTALL_DIR/fleet"; then
+      NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
+        || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
     else
-      info "no npm-cli.js resolvable for ${node_bin_resolved} — the build will use \`npm\` from PATH under a pinned \`node\`; the read-back below reports which interpreter it actually used"
+      # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+      # The installed fleet predates `fleet release` — the first artifact
+      # update on a box that used to build from source. Verify with the shell
+      # verifier (the same pinned cosign and signer identity), then let the
+      # verified binary check its own build info the way `fleet release
+      # fetch` would.
+      warn "${INSTALL_DIR}/fleet predates \`fleet release\`; verifying this first artifact with scripts/lib/release.sh (same pinned cosign and signer identity)"
+      # The downgrade guard `fleet release fetch` applies, applied here too.
+      _installed_version="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}' || true)"
+      if [[ "$ALLOW_DOWNGRADE" != "1" ]] && fleet_release_older "$RELEASE_TAG" "$_installed_version"; then
+        die "${RELEASE_TAG} is older than the installed ${_installed_version} — refusing a downgrade (pass --allow-downgrade to roll back on purpose)"
+      fi
+      NEW_FLEET="$(fleet_release_fetch "$SRC_DIR" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$RELEASE_COMMIT")" \
+        || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
+      "$NEW_FLEET" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
+        || die "the verified binary reports the host executor compiled in — refusing it"
+      "$NEW_FLEET" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
     fi
+    ok "verified ${RELEASE_TAG}: $("$NEW_FLEET" version 2>/dev/null || echo "$NEW_FLEET")"
   fi
 fi
 
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────
-step "3/5  Rebuilding the sandbox image (when the Containerfile/tag changed or the image went stale)"
+step "3/5  Sandbox image (the release's signed image, or an on-box build for a custom Containerfile)"
+# The release publishes the GENERIC bundle's sandbox image, signed. A bundle
+# that ships no Containerfile, or ships the generic one unchanged, runs that
+# image: verified by digest, pulled by digest, tagged as the bundle's
+# sandbox.tag so the service resolves it exactly as before. A bundle with its
+# own Containerfile is still built here — layered on the verified image when it
+# declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md).
+sandbox_published=0
+if [[ "$FROM_SOURCE" != "1" ]] && fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
+  sandbox_published=1
+fi
+sandbox_base=""   # the verified release image a custom Containerfile layers on
+SANDBOX_DIGEST_FILE="$STATE_DIR/sandbox-image.digest"
+SANDBOX_BASE_FILE="$STATE_DIR/sandbox-base.ref"
 if [[ -n "$sandbox_image_ref" ]]; then
   # image wins over tag (internal/clientconfig): the service pulls/uses the
   # prebuilt ref and never reads an on-box build, so gating on sandbox.tag
   # here would burn one pointless multi-GB build the first update after a
   # client switches to registry images. Same skip bootstrap.sh applies.
   info "manifest resolves sandbox.image=${sandbox_image_ref} — using a prebuilt/registry image; skipping the on-box build."
+elif [[ "$sandbox_published" == "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would verify the release's signed sandbox image (fleet release sandbox: its digest from the verified release.json, its cosign signature), pull it BY DIGEST into ${service_user:-the invoking user}'s store and tag it ${ref_now:-<sandbox.tag>}"
+  elif ! command -v podman >/dev/null 2>&1; then
+    warn "podman not found — cannot pull the sandbox image; install podman and re-run: sudo fleet update --no-pull"
+  elif [[ -z "$ref_now" ]]; then
+    die "the bundle's sandbox.tag could not be resolved${ref_err:+ (${ref_err})} — nothing was installed and ${SERVICE_NAME} was not restarted"
+  else
+    pub_ref="$("$NEW_FLEET" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
+      || die "the release's sandbox image did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
+    pub_prev=""
+    [[ -f "$SANDBOX_DIGEST_FILE" ]] && pub_prev="$(tr -d '[:space:]' < "$SANDBOX_DIGEST_FILE")"
+    if [[ "$pub_ref" == "$pub_prev" && "$ref_prev" == "$ref_now" && "$(sandbox_image_state "$ref_now")" == "present" ]]; then
+      ok "sandbox image up to date (${ref_now} = ${pub_ref##*@})"
+    elif sandbox_podman pull "$pub_ref" && sandbox_podman tag "$pub_ref" "$ref_now"; then
+      mkdir -p "$STATE_DIR"
+      printf '%s\n' "$pub_ref" > "$SANDBOX_DIGEST_FILE"
+      printf '%s\n' "$ref_now" > "$REF_FILE"
+      # Not the Containerfile hash: the tag now holds the RELEASE image, so a
+      # bundle that later turns custom (its own requirements, say, under an
+      # unchanged Containerfile) must not read as "already built".
+      printf 'release-image\n' > "$STAMP_FILE"
+      ok "sandbox image ${ref_now} = ${pub_ref} (verified, pulled by digest)"
+      sandbox_podman image prune -f >/dev/null 2>&1 || true
+    elif [[ "$(sandbox_image_state "$ref_now")" == "present" ]]; then
+      warn "pulling ${pub_ref} failed — the restarted service keeps the existing ${ref_now}; re-run: sudo fleet update --no-pull"
+    else
+      die "could not pull ${pub_ref} and ${ref_now} is not in the service user's store — refusing to install an update whose every sandboxed tool call would fail"
+    fi
+  fi
+elif [[ "$cf_now" == "absent" ]] && fleet_sandbox_containerfile_named "$CLIENT_DIR"; then
+  die "the bundle's manifest names sandbox.containerfile ${sandbox_cf}, which does not exist — fix the bundle (the generic release image is never used in place of a bundle's own Containerfile)"
 elif [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then
+  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
+    info "[dry-run] the bundle's Containerfile declares FLEET_SANDBOX_BASE — the build would layer on the release's verified sandbox image (fleet release sandbox), and a new base digest triggers a rebuild"
+  fi
   info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
   info "[dry-run] would run: FLEET_CLIENT_CONFIG_DIR=${CLIENT_DIR} scripts/build-sandbox-image.sh (--no-cache when age-triggered)"
   info "[dry-run] would record the new Containerfile hash + tag under ${STATE_DIR}"
@@ -1155,8 +1258,19 @@ else
   # step: nothing here learned whether the service's image exists, or how old
   # it is.
   sandbox_unverified=""
-  if [[ "$NO_PULL" == "1" ]]; then
+  # A custom Containerfile that layers on the release image: verify that image
+  # and pass its digest reference to the build. A new release (new base
+  # digest) is a reason to rebuild on its own.
+  base_prev=""
+  [[ -f "$SANDBOX_BASE_FILE" ]] && base_prev="$(tr -d '[:space:]' < "$SANDBOX_BASE_FILE")"
+  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
+    sandbox_base="$("$NEW_FLEET" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
+      || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify — nothing was installed and ${SERVICE_NAME} was not restarted"
+  fi
+  if [[ "$NO_PULL" == "1" && "$FROM_SOURCE" == "1" ]]; then
     build_reason="rebuild-only mode"
+  elif [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
+    build_reason="the release's sandbox base moved to ${sandbox_base##*@} — rebuilding the bundle's layers on it"
   elif [[ "$cf_prev" == "absent" ]]; then
     build_reason="no stored Containerfile hash yet — establishing the baseline"
   elif [[ "$cf_now" != "$cf_prev" ]]; then
@@ -1216,10 +1330,11 @@ else
     fi
   else
     info "${build_reason} — building the sandbox image."
-    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" \
+    if FLEET_CLIENT_CONFIG_DIR="$CLIENT_DIR" FLEET_SERVICE_NAME="$SERVICE_NAME" FLEET_SANDBOX_BASE="$sandbox_base" \
        FLEET_SANDBOX_BUILD_NO_CACHE="$sandbox_build_no_cache" "$SCRIPT_DIR/build-sandbox-image.sh"; then
       mkdir -p "$STATE_DIR"
       printf '%s\n' "$cf_now" > "$STAMP_FILE"
+      printf '%s\n' "$sandbox_base" > "$SANDBOX_BASE_FILE"
       [[ -n "$ref_now" ]] && printf '%s\n' "$ref_now" > "$REF_FILE"
       ok "sandbox image rebuilt (${ref_now:-see build output}); recorded hash ${cf_now:0:12}"
       # Each rebuild strands the previous image's layers as dangling cruft
@@ -1252,7 +1367,7 @@ else
 fi
 
 # ── 4. build the fleet binary (the web app is compiled into it) ────────────
-step "4/5  Building the fleet binary (web bundle embedded)"
+step "4/5  Preparing the host for the new binary"
 # Reconcile the backend's OAuth callback origin from the public, non-secret web
 # build stamp an older bootstrap persisted in the retired web tier's env file.
 # FLEET_PUBLIC_BASE_URL is also the browser tier's canonical origin now
@@ -1276,8 +1391,11 @@ if [[ -n "$web_origin" ]]; then
   fi
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
-  info "[dry-run] would run: (cd ${SRC_DIR} && make build) on the node+npm the gate resolved above → ${SRC_DIR}/fleet with the web bundle embedded (checked: fleet version --web)"
-  info "[dry-run] would install fleet → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  if [[ "$FROM_SOURCE" == "1" ]]; then
+    info "[dry-run] --from-source: would run (cd ${SRC_DIR} && make build) with the go, node and npm on PATH → ${SRC_DIR}/fleet with the web bundle embedded (checked: fleet version --web), then install it → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
+  else
+    info "[dry-run] would install fleet ${RELEASE_TAG:-<release>} → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}/fleet in step 5 (atomic swap; the running binary kept as fleet.prev)"
+  fi
   info "[dry-run] would remove a leftover fleet-admin shim from the install dir and /usr/local/bin, if present"
   info "[dry-run] would refresh /etc/profile.d/fleet-motd.sh (login banner) if it differs from deploy/fleet-motd.sh"
   if [[ -f "$web_env_file" ]]; then
@@ -1287,79 +1405,10 @@ if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${mcp_reqs} if its hash (${mcp_reqs_now:0:12}) changed from ${MCP_REQS_STAMP}"
   fi
 else
-  require_go_toolchain
-
-  # `make build` builds the web bundle (npm ci + vite build) and embeds it in
-  # the binary (ADR-0091), so it runs with `node`, `npm` and `npx` pinned to
-  # the interpreter the gate resolved. The bare-`npm` build used whatever its
-  # own shebang named — on Fedora the DEFAULT stream, absolutely pathed — so the
-  # bundle was built on the old major while this script reported the new one.
-  # Resolved once so the shim directory it may create is removed rather than
-  # leaked on every update, including on the failure path. See
-  # scripts/lib/node-version.sh.
-  _build_path="$(fleet_node_build_path "$node_bin_resolved")"
-  # Ask npm which interpreter it is actually running under, rather than
-  # inferring it from the PATH we just built: the pin is a claim about a
-  # subprocess's shebang resolution, and only npm's own answer settles it.
-  _build_node="$(fleet_npm_node_version "$_build_path" "$SRC_DIR/web" || true)"
-  _build_major="$(fleet_node_version_major "${_build_node:-}" || true)"
-  if [[ -z "$_build_node" ]]; then
-    warn "could not read the node version npm runs under (\`npm version --json\` gave nothing) — building anyway, but the interpreter is UNVERIFIED"
-    _build_node="unverified"
-  elif [[ -n "$_build_major" ]] && (( _build_major < node_major_want )); then
-    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-    warn "npm would build the web bundle on ${_build_node}, below the ${node_major_want} declared in web/.nvmrc."
-    warn "  fix it:  sudo dnf install nodejs${node_major_want}-npm    (then re-run this update)"
-    die "refusing to build the web bundle with an npm pinned to an unsupported node — live binary left in place"
+  if [[ "$FROM_SOURCE" == "1" ]]; then
+    legacy_build_from_source
   fi
-  if ! ( cd "$SRC_DIR" && export PATH="$_build_path" && make build ); then
-    fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-    die "make build failed — live binary left in place"
-  fi
-  fleet_node_build_path_cleanup "$_build_path" "$node_bin_resolved"
-  [[ -x "$SRC_DIR/fleet" ]] \
-    || die "make build did not emit ${SRC_DIR}/fleet"
-  # make build already ran this check; repeat it on the artifact about to be
-  # installed, so a box can never be left serving the "built without its web
-  # bundle" page.
-  web_bundle="$("$SRC_DIR/fleet" version --web 2>/dev/null)" \
-    || die "the built binary carries no web bundle (${web_bundle:-fleet version --web failed}) — live binary left in place"
-  ok "web bundle built on ${_build_node} and embedded — ${web_bundle}"
-  # Say what got built, in the words `fleet version` and the login banner use,
-  # so an operator does not have to log in again to learn the stamp. A stamp
-  # with no release in it gets one line of context: release.yml tags a push to
-  # main only AFTER its CI run goes green, minutes after the push, so an update
-  # taken right after a promotion is stamped `dev+g<sha>` for a commit that is
-  # about to be a release. Nothing here is wrong; a later update re-stamps it,
-  # and `fleet doctor` reports the mismatch until then.
-  built_identity="$("$SRC_DIR/fleet" version 2>/dev/null || true)"
-  ok "fleet binary built${built_identity:+ — ${built_identity}}"
-  case "$built_identity" in
-    "fleet dev"|"fleet dev "*|"fleet dev+"*)
-      info "no release tag is reachable from this commit — either CI has not tagged this push to main yet (it tags after the gate goes green; re-run 'fleet update' later to re-stamp), or this branch has not merged a release since one was cut" ;;
-  esac
-
-  # Install the freshly built binaries to the unit's ExecStart location so the
-  # restart below actually runs the NEW code. Without this the build is a no-op
-  # against the live deployment.
-  if [[ -z "$INSTALL_DIR" ]]; then
-    # `systemctl show -p ExecStart --value` prints an exec-command struct
-    # ("{ path=/opt/fleet/fleet ; argv[]=... }"), NOT a bare path — extract the
-    # path= field. The old `awk '{print $1}'` grabbed the literal "{", made
-    # dirname yield "." (== $SRC_DIR after the cd above), and the install was
-    # silently skipped as "in place": the restart re-ran the OLD binary.
-    # `|| true` for the same reason as fleet-upgrade.sh: under `set -e` +
-    # pipefail a `systemctl show` that cannot reach systemd (any container
-    # carrying the binary without systemd as PID 1) would abort the update
-    # rather than fall through to the /opt/fleet default below.
-    exec_start="$(systemctl show -p ExecStart --value "${SERVICE_NAME}.service" 2>/dev/null \
-      | sed -n 's/.*path=\([^ ;]*\).*/\1/p' | head -n1 || true)"
-    if [[ "$exec_start" == /* && -x "$(dirname "$exec_start")" ]]; then
-      INSTALL_DIR="$(dirname "$exec_start")"
-    else
-      INSTALL_DIR="/opt/fleet"
-    fi
-  fi
+  resolve_install_dir
   # If a scheduled task or chat turn started while the build was running,
   # wait up to WAIT_SECONDS for it to finish before overwriting the live
   # binary or restarting the service.
@@ -1411,13 +1460,18 @@ else
   if command -v python3 >/dev/null 2>&1 && ! python3 -c "import playwright" >/dev/null 2>&1; then
     python3 -m pip install --break-system-packages playwright >/dev/null 2>&1 || warn "pip install playwright failed — install python3 playwright for built-in browser automation."
   fi
-  # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
-  if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
-    info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
-  elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null; then
-    ok "installed fleet → ${INSTALL_DIR}"
+  if [[ "$FROM_SOURCE" == "1" ]]; then
+    # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+    # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
+    if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
+      info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
+    elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null; then
+      ok "installed fleet → ${INSTALL_DIR}"
+    else
+      die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
+    fi
   else
-    die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
+    info "the verified ${RELEASE_TAG} binary is swapped in at step 5, inside the drain fence, with a readiness gate and automatic rollback"
   fi
 
   # Evict the retired `fleet-admin` shim (ADR-0060). Deleting it from the repo
@@ -1678,7 +1732,7 @@ if command -v systemctl >/dev/null 2>&1 && [[ "$OFFER_TIMERS" != "0" ]]; then
   # The freshly installed binary; on an in-place dev box INSTALL_DIR == SRC_DIR
   # so this still resolves. PATH fallback covers the dry-run path (INSTALL_DIR
   # may be unresolved there) — dry-run never executes it anyway.
-  fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
+  fleet_bin="${NEW_FLEET:-${INSTALL_DIR:-/opt/fleet}/fleet}"
   [[ -x "$fleet_bin" ]] || fleet_bin="fleet"
   for _pair in \
     "backup|daily database dumps at 02:00|skip if you back up at the volume/hypervisor layer" \
@@ -1712,7 +1766,7 @@ if command -v systemctl >/dev/null 2>&1 && [[ "$OFFER_TIMERS" != "0" ]]; then
 fi
 
 # ── 5. restart the service (services self-migrate on start) ────────────────
-step "5/5  Restarting the ${SERVICE_NAME} service"
+step "5/5  Restarting the ${SERVICE_NAME} service onto the new binary"
 info "application migrations run inside each service on start — update.sh runs none."
 # Reload systemd once if we adopted any unit above, so the restarts below run the
 # freshly-installed unit rather than the cached old definition.
@@ -1725,13 +1779,43 @@ if [[ "$NEED_DAEMON_RELOAD" == "1" ]] && command -v systemctl >/dev/null 2>&1; t
     warn "systemctl daemon-reload failed (need root?) — run it before the restart, or the old unit stays cached"
   fi
 fi
-if ! command -v systemctl >/dev/null 2>&1; then
-  warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
+INSTALL_STATE=none   # none | swapped (not restarted) | restarted
+# artifact_swap_only WHY — install the verified binary with an atomic swap but
+# no restart (no systemd here, or no unit): the supervisor that runs fleet is
+# the operator's, so is the restart. Never reported as a finished update.
+artifact_swap_only() {
+  if "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+      --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" --no-restart; then
+    INSTALL_STATE=swapped
+    warn "$1 — ${RELEASE_TAG} is installed at ${INSTALL_DIR}/fleet but NOT running: restart fleet with your supervisor now."
+    warn "  if it does not come up: sudo fleet release rollback --install-dir ${INSTALL_DIR} --no-restart, then restart it again"
+  else
+    die "could not install ${RELEASE_TAG} into ${INSTALL_DIR} (above) — the previous binary is unchanged"
+  fi
+}
+if [[ "$DRY_RUN" != "1" && "$FROM_SOURCE" != "1" ]] && { ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; }; then
+  if command -v systemctl >/dev/null 2>&1; then
+    artifact_swap_only "${SERVICE_NAME}.service is not installed"
+  else
+    artifact_swap_only "no systemd on this box"
+  fi
+elif ! command -v systemctl >/dev/null 2>&1; then
+  if [[ "$DRY_RUN" == "1" && "$FROM_SOURCE" != "1" ]]; then
+    info "[dry-run] no systemd: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor"
+  else
+    warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
+  fi
 elif [[ "$DRY_RUN" == "1" ]]; then
   if [[ -f /etc/systemd/system/fleet-web.service ]] || systemctl cat fleet-web.service >/dev/null 2>&1; then
     info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web — fleet serves the web UI on 127.0.0.1:3000 itself"
   fi
-  info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
+  if [[ "$FROM_SOURCE" == "1" ]]; then
+    info "[dry-run] would run: systemctl restart ${SERVICE_NAME}"
+  elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    info "[dry-run] ${SERVICE_NAME}.service is not installed: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor; the run would not report it as running"
+  else
+    info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), systemctl restart ${SERVICE_NAME} (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_TLS_MODE "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
+  fi
 elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
   warn "${SERVICE_NAME}.service is not installed — start fleet manually or run scripts/bootstrap.sh --enable-service."
 else
@@ -1749,14 +1833,34 @@ else
     fi
   fi
   fleet_stop_web_tier || true
-  if systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME"; then
-    fleet_clear_drain "$backend_env_file"
-    ok "${SERVICE_NAME} is active"
+  _install_rc=0
+  if [[ "$FROM_SOURCE" == "1" ]]; then
+    # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+    # The from-source binary was installed in step 4; restart onto it. No
+    # readiness gate and no rollback here — that is the artifact path's.
+    systemctl restart "$SERVICE_NAME" \
+      && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME" \
+      || _install_rc=1
+  else
+    # Swap + restart + readiness gate + automatic rollback, in one verb of the
+    # VERIFIED new binary, which re-verifies the staged files before it trusts
+    # them (exit 4 = rolled back to the previous binary).
+    "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+      --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" \
+      --server-addr "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" \
+      --health-timeout "${FLEET_HEALTH_TIMEOUT:-90}s" || _install_rc=$?
+  fi
+  fleet_clear_drain "$backend_env_file"
+  if [[ "$_install_rc" == "0" ]]; then
+    INSTALL_STATE=restarted
+    ok "${SERVICE_NAME} is active${RELEASE_TAG:+ and ready on ${RELEASE_TAG}}"
     fleet_remove_web_tier "$SRC_DIR" || true
   else
-    fleet_clear_drain "$backend_env_file"
     if [[ "$FLEET_WEB_TIER_STOPPED" == "1" ]]; then
-      warn "the old web tier (fleet-web) was stopped but NOT removed; after rolling fleet back to the previous binary, restore it with: sudo systemctl enable --now fleet-web"
+      warn "the old web tier (fleet-web) was stopped but NOT removed; with fleet back on the previous binary, restore it with: sudo systemctl enable --now fleet-web"
+    fi
+    if [[ "$_install_rc" == "4" ]]; then
+      die "${RELEASE_TAG} did not become ready, so ${SERVICE_NAME} was rolled back to the previous binary (now live again; the failed one is ${INSTALL_DIR}/fleet.failed) — journalctl -u ${SERVICE_NAME} -n 100"
     fi
     die "${SERVICE_NAME} did not come back up — journalctl -u ${SERVICE_NAME} -n 50"
   fi
@@ -1806,7 +1910,13 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
-if [[ "$before_sha" == "$after_sha" ]]; then
+if [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" == "swapped" ]]; then
+  printf '%s ! fleet %s installed (signed release, verified) — NOT restarted: restart it with your supervisor%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
+elif [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" != "restarted" ]]; then
+  die "${RELEASE_TAG} was verified but not installed — see the warnings above"
+elif [[ "$FROM_SOURCE" != "1" ]]; then
+  printf '%s ✓ fleet %s installed (signed release, verified) and ready%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
+elif [[ "$before_sha" == "$after_sha" ]]; then
   printf '%s ✓ fleet rebuilt at %s%s\n' "$c_bold" "${after_sha:0:12}" "$c_reset"
 else
   printf '%s ✓ fleet updated %s → %s%s\n' "$c_bold" "${before_sha:0:12}" "${after_sha:0:12}" "$c_reset"
@@ -1820,6 +1930,8 @@ say
 report_bundle_state
 say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
-if [[ "$before_sha" != "$after_sha" ]]; then
-  say "  Roll back: ${c_dim}cd $SRC_DIR && git checkout $before_sha && scripts/update.sh --no-pull${c_reset}"
+if [[ "$FROM_SOURCE" != "1" ]]; then
+  say "  Roll back: ${c_dim}sudo fleet release rollback${c_reset}   (swaps ${INSTALL_DIR}/fleet.prev back in, restarts, waits for /readyz)"
+elif [[ "$before_sha" != "$after_sha" ]]; then
+  say "  Roll back: ${c_dim}cd $SRC_DIR && git checkout $before_sha && scripts/update.sh --from-source --no-pull${c_reset}"
 fi

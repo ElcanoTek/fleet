@@ -135,6 +135,8 @@ func runEnvShellWith(t *testing.T, env []string, script string) (string, error) 
 // Now the restore ends the run: non-zero exit, the old tier running, its
 // files intact, nothing after it executed.
 func TestBootstrapRestartFailureKeepsTheOldWebTier(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, true, true)
 	out, err := b.runBootstrapCutover(t)
 	if err == nil {
@@ -156,6 +158,8 @@ func TestBootstrapRestartFailureKeepsTheOldWebTier(t *testing.T) {
 
 // A restart that succeeds is what retires the old tier — after fleet is active.
 func TestBootstrapRestartSuccessRetiresTheOldWebTier(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, true, false)
 	out, err := b.runBootstrapCutover(t)
 	if err != nil {
@@ -179,6 +183,8 @@ func TestBootstrapRestartSuccessRetiresTheOldWebTier(t *testing.T) {
 // A tier that was installed but not running is left installed (and not
 // started) when fleet fails; the run still fails.
 func TestCutoverFailureLeavesAStoppedTierAlone(t *testing.T) {
+	t.Parallel()
+
 	b := newCutoverBox(t, false, true)
 	out, err := b.runBootstrapCutover(t)
 	if err == nil || !strings.Contains(out, "was left installed") {
@@ -192,9 +198,11 @@ func TestCutoverFailureLeavesAStoppedTierAlone(t *testing.T) {
 // Every path that retires the old tier removes it only after fleet is back
 // up; nothing stops-and-removes in one go any more. bootstrap goes through
 // cutover_web_tier_or_die at both sites; update.sh and doctor.sh remove only
-// in their post-restart success branch; fleet-upgrade.sh after its readiness
-// gate (TestFleetUpgrade* run it).
+// in their post-restart success branch (update.sh's restart is `fleet release
+// install`, which gates on /readyz and rolls back itself).
 func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	read := func(name string) string {
 		b, err := os.ReadFile(filepath.Join(root, "scripts", name))
@@ -207,7 +215,7 @@ func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
 	if strings.Contains(lib, "fleet_retire_web_tier()") {
 		t.Error("web-tier.sh still defines a stop-and-remove helper")
 	}
-	for _, name := range []string{"bootstrap.sh", "update.sh", "doctor.sh", "fleet-upgrade.sh"} {
+	for _, name := range []string{"bootstrap.sh", "update.sh", "doctor.sh"} {
 		if strings.Contains(read(name), "fleet_retire_web_tier") {
 			t.Errorf("%s still calls fleet_retire_web_tier", name)
 		}
@@ -225,7 +233,7 @@ func TestWebTierIsRemovedOnlyAfterFleetIsUp(t *testing.T) {
 	}
 
 	for name, restart := range map[string]string{
-		"update.sh": `systemctl restart "$SERVICE_NAME" && FLEET_WEB_TIER_READY_WAIT`,
+		"update.sh": `"$NEW_FLEET" release install --tag "$RELEASE_TAG"`,
 		"doctor.sh": `systemctl restart "${SERVICE_NAME}.service" 2>/dev/null \` + "\n" + `       && { [[ "$web_tier_cutover" == "0" ]] || fleet_web_tier_wait_active`,
 	} {
 		body := read(name)

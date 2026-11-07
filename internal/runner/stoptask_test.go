@@ -18,6 +18,8 @@ import (
 // dead-letter, or clobber the cancelled status — and the SSE stream's terminal
 // frame reports "stopped" with the who.
 func TestStopTaskInterruptsAndAttributes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 	taskID := tasks[0].ID
@@ -92,6 +94,8 @@ func TestStopTaskInterruptsAndAttributes(t *testing.T) {
 // force-cancelled run that returns (session, nil) — agentcore's cancelled
 // shape — must record as interrupted error, not success.
 func TestShutdownCancelNotMislabeledSuccess(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 

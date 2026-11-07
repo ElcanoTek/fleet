@@ -76,6 +76,8 @@ func answeringRunner(answer string) (TaskRunner, func() bool) {
 // reply to the original sender carrying the run's final answer, threaded to the
 // original Message-ID.
 func TestMaybeReplyToEmailEvent_Replies(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -117,6 +119,8 @@ func TestMaybeReplyToEmailEvent_Replies(t *testing.T) {
 // TestMaybeReplyToEmailEvent_NonEmailRunNoReply: a plain pending run (not spawned
 // from an email trigger) never triggers a reply.
 func TestMaybeReplyToEmailEvent_NonEmailRunNoReply(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := &models.Task{ID: uuid.New(), Prompt: "plain", Status: models.TaskStatusPending, Priority: 1, CreatedAt: time.Now().UTC()}
 	if _, err := store.AddTask(task); err != nil {

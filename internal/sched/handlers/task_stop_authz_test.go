@@ -20,6 +20,8 @@ import (
 // (a user or an API key) may always stop its own task, and admin and
 // view_all_logs principals keep fleet-wide reach.
 func TestTaskStopFollowsTaskScope(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)

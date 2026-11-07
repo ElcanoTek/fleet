@@ -54,6 +54,8 @@ func TestCleanupDispatch(t *testing.T) {
 
 // diskLine is a convenience report: present with df, one line, labeled.
 func TestDiskLine(t *testing.T) {
+	t.Parallel()
+
 	line := diskLine("test")
 	if line == "" {
 		t.Skip("df unavailable in this environment")

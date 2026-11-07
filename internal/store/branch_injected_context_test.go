@@ -60,6 +60,8 @@ func markConversationPreSplit(t *testing.T, s *Store, convID string) {
 // listing — on the owner's own branch as well as a teammate's. One rule: no
 // copy of a message carries a path into a conversation that does not own it.
 func TestBranchDropsTheParentsInjectedContext(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	parent := f.sharedChat(t, "alice@x.com", f.project.ID, "Weekly Channel Spend and CPM")
 
@@ -114,6 +116,8 @@ func TestBranchDropsTheParentsInjectedContext(t *testing.T) {
 // unselected is not enough for them. The marker strip is the second layer, and
 // it keeps the user's own words.
 func TestBranchStripsLegacyInlineInjectedContext(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@example.com"
@@ -170,6 +174,8 @@ func TestBranchStripsLegacyInlineInjectedContext(t *testing.T) {
 // written since migration 056 always has a value, so it can never be mistaken
 // for one whose blocks might still be inside its text.
 func TestBranchKeepsMarkerLikeTextWrittenByTheUser(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const owner = "alice@example.com"
@@ -217,6 +223,8 @@ func TestBranchKeepsMarkerLikeTextWrittenByTheUser(t *testing.T) {
 // NOTHING — not a row with empty text, which renders as an empty bubble in the
 // branched transcript.
 func TestBranchEmitsNoEmptyEntriesForFilteredContent(t *testing.T) {
+	t.Parallel()
+
 	f := newTeamFixture(t)
 	parent := f.sharedChat(t, "alice@x.com", f.project.ID, "Charts")
 
@@ -270,6 +278,8 @@ func TestBranchEmitsNoEmptyEntriesForFilteredContent(t *testing.T) {
 // The strip is a suffix cut, never an interior rewrite, and it does not fire
 // on text a user merely typed that resembles a header.
 func TestStripLegacyInjectedTextIsConservative(t *testing.T) {
+	t.Parallel()
+
 	entry := func(text string) *agent.HistoryEntry {
 		raw, err := json.Marshal(agent.TextContent{Text: text})
 		if err != nil {

@@ -43,6 +43,8 @@ func (f *fakeNotifier) drain() []notify.Event {
 // + session: prompt truncated to the display name, cost from the session, and an
 // absolute log URL built from the configured public base.
 func TestBuildEvent(t *testing.T) {
+	t.Parallel()
+
 	id := uuid.New()
 	longPrompt := strings.Repeat("x", 200)
 	task := &models.Task{ID: id, Prompt: longPrompt}
@@ -76,6 +78,8 @@ func TestBuildEvent(t *testing.T) {
 // TestBuildEvent_NilSessionNoBase covers the nil-session (early failure) and
 // no-public-base cases: cost defaults to 0.0000 and the log URL is empty.
 func TestBuildEvent_NilSessionNoBase(t *testing.T) {
+	t.Parallel()
+
 	p := &Pool{}
 	ev := p.buildEvent(&models.Task{ID: uuid.New(), Prompt: "short"}, notify.StatusFailure, nil, time.Second)
 	if ev.CostUSD != "0.0000" {
@@ -92,6 +96,8 @@ func TestBuildEvent_NilSessionNoBase(t *testing.T) {
 // TestNotifyTerminal_Fires checks the wired notifier receives an event, and that
 // a nil notifier (default OFF) is a safe no-op.
 func TestNotifyTerminal_Fires(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeNotifier{}
 	p := &Pool{notifier: fake, publicURLBase: "https://x.example"}
 	task := &models.Task{ID: uuid.New(), Prompt: "p"}
@@ -123,6 +129,8 @@ func TestNotifyTerminal_Fires(t *testing.T) {
 // answer"; the ask-pause's carries no Kind. Both go through a real pool run
 // whose runner calls the real tools.
 func TestProgressEvents_NotifyToolIsAProgressNote(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 0)
 	fake := &fakeNotifier{}
@@ -168,6 +176,8 @@ func TestProgressEvents_NotifyToolIsAProgressNote(t *testing.T) {
 // the per-user push channel has nothing to route to while the event still
 // fires for the deployment-wide channels (#292).
 func TestNotifyTerminal_AudienceEmptyWithoutOwner(t *testing.T) {
+	t.Parallel()
+
 	fake := &fakeNotifier{}
 	p := &Pool{notifier: fake}
 	task := &models.Task{ID: uuid.New(), Prompt: "p"} // CreatedBy nil
@@ -195,6 +205,8 @@ func TestNotifyTerminal_AudienceEmptyWithoutOwner(t *testing.T) {
 // multi-byte rune in half, sending invalid UTF-8 into email subjects and the
 // webhook JSON template (the same class truncate.Clamp fixed in #595).
 func TestNotifyTaskNameRuneSafe(t *testing.T) {
+	t.Parallel()
+
 	// 1 ASCII byte + 3-byte runes: byte 60 lands mid-rune (59 % 3 != 0).
 	name := notifyTaskName("a" + strings.Repeat("中", 40))
 	if !utf8.ValidString(name) {
@@ -209,6 +221,8 @@ func TestNotifyTaskNameRuneSafe(t *testing.T) {
 // multi-line prompt must become one line: a CR/LF in the label is a header
 // injection in the subject and a broken payload for a naive receiver.
 func TestNotifyTaskNameStripsLineBreaks(t *testing.T) {
+	t.Parallel()
+
 	name := notifyTaskName("first line\r\nBcc: victim@example.com\n\tthird")
 	if strings.ContainsAny(name, "\r\n\t") {
 		t.Fatalf("notifyTaskName kept a line break / tab: %q", name)

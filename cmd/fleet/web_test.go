@@ -33,6 +33,8 @@ func TestWebAddr(t *testing.T) {
 }
 
 func TestPrintWebBundleReportsTheEmbeddedBundle(t *testing.T) {
+	t.Parallel()
+
 	var out bytes.Buffer
 	code := printWebBundle(&out)
 	if id := webui.EmbeddedBuildID(); id == "" {
@@ -142,6 +144,8 @@ func TestWebServerTakesThePasswordSwitchFromConfig(t *testing.T) {
 // bearers it minted would keep working, and /v1/users would still create Ops
 // identities, on a Fleet whose other planes leave both to Auth.
 func TestServeHandsTheSchedulerThePasswordSwitch(t *testing.T) {
+	t.Parallel()
+
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "main.go", nil, 0)
 	if err != nil {
@@ -197,6 +201,8 @@ func countConfigWiring(t *testing.T, f *ast.File, field string) (literals, wired
 // writes. (The page bootstrap this drives needs a web bundle, which a Go-only
 // build lacks; internal/webui renders it against a test bundle.)
 func TestWebServerTakesAccountManagementFromConfig(t *testing.T) {
+	t.Parallel()
+
 	for _, managed := range []bool{false, true} {
 		if got := gatewayConfig(&config.Config{AccountsManagedByAuth: managed}).AccountsManagedByAuth; got != managed {
 			t.Errorf("AccountsManagedByAuth=%v reached the gateway as %v", managed, got)

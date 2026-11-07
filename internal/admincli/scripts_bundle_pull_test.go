@@ -50,6 +50,8 @@ func seedBundleRepo(t *testing.T, branch string) string {
 // bundle — so an update that advanced fleet while the bundle stood still looked
 // like complete success and showed up only as stale copy in the UI.
 func TestUpdateReportsBundleIdentity(t *testing.T) {
+	t.Parallel()
+
 	dir := seedBundleRepo(t, "leftover-feature-branch")
 	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull",
 		"--client-config", dir)
@@ -66,6 +68,8 @@ func TestUpdateReportsBundleIdentity(t *testing.T) {
 // service's own configuration wins; when the operator named one explicitly,
 // theirs does — but never silently.
 func TestUpdateReconcilesBundleAgainstServiceEnv(t *testing.T) {
+	t.Parallel()
+
 	svcBundle := seedBundleRepo(t, "main")
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("FLEET_CLIENT_CONFIG_DIR="+svcBundle+"\n"), 0o600); err != nil {
@@ -112,6 +116,8 @@ func TestUpdateReconcilesBundleAgainstServiceEnv(t *testing.T) {
 // reconcile exists to prevent, on the one run an operator gets after pulling
 // the fix. FLEET_CLIENT_CONFIG_EXPLICIT carries the original answer across.
 func TestUpdateReexecPreservesBundleExplicitness(t *testing.T) {
+	t.Parallel()
+
 	root := repoRootFromTest(t)
 	body, err := os.ReadFile(filepath.Join(root, "scripts", "update.sh"))
 	if err != nil {

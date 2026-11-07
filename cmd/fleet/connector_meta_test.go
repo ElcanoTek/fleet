@@ -9,6 +9,8 @@ import (
 // The parent maps the child's public connector metadata into the Manager's
 // snapshot; nil (an older child) must stay nil so the reload keeps the boot one.
 func TestConnectorMetaFromDescriptors(t *testing.T) {
+	t.Parallel()
+
 	if connectorMetaFromDescriptors(nil) != nil {
 		t.Fatal("nil descriptors must stay nil so a reload keeps the previous snapshot")
 	}

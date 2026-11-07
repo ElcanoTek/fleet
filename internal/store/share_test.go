@@ -36,6 +36,8 @@ func seedSharedConv(t *testing.T, s *Store, owner string) *Conversation {
 // token (with messages, sans id/user_email), and the owner's Get/List carry the
 // token so the UI can show a badge + copy-link (#226).
 func TestShareToken_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := seedSharedConv(t, s, "alice@example.com")
@@ -104,6 +106,8 @@ func TestShareToken_RoundTrip(t *testing.T) {
 // token, and an unknown token resolves to (nil, nil) — indistinguishable so a
 // probe can't tell which (#226).
 func TestShareToken_ExpiredRevokedUnknown(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := seedSharedConv(t, s, "alice@example.com")
@@ -149,6 +153,8 @@ func TestShareToken_ExpiredRevokedUnknown(t *testing.T) {
 // deleting its (unpinned, old) conversation. A backdated unshared conversation
 // is still swept (control), proving the exemption is the share token (#226).
 func TestSweepExpired_PreservesSharedConversation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	backdate := time.Now().Add(-30 * 24 * time.Hour).Unix()

@@ -54,6 +54,8 @@ func dummyServerPath(t *testing.T) string {
 // lists its tools, and exits 0; a broken command is captured as that server's
 // failure (exit 1) without aborting the sweep. Red/green: the verb is new.
 func TestMCPTestVerb_ProbesStdioServers(t *testing.T) {
+	t.Parallel()
+
 	dummy := dummyServerPath(t)
 	bundle := mcpTestBundle(t, `mcp_servers:
   - name: dummy
@@ -139,6 +141,8 @@ func TestMCPTestVerb_SelectionAndGating(t *testing.T) {
 // deepFailed, the sweep); a server without an auth-status tool is skipped
 // with an explanation rather than failed. Red/green: the flag is new.
 func TestMCPTestVerb_DeepAuthStatus(t *testing.T) {
+	t.Parallel()
+
 	fixture := filepath.Join(mustGetwd(t), "testdata", "authstatus_server.py")
 	if _, err := os.Stat(fixture); err != nil {
 		t.Fatalf("fixture missing: %v", err)
@@ -199,6 +203,8 @@ func TestMCPTestVerb_DeepAuthStatus(t *testing.T) {
 // via deepFailed, the sweep). A probe-less server keeps the skipped
 // placeholder, whose message now names both conventions. Red/green: probe: is new.
 func TestMCPTestVerb_DeepDeclaredProbe(t *testing.T) {
+	t.Parallel()
+
 	dummy := dummyServerPath(t)
 	bundle := mcpTestBundle(t, `mcp_servers:
   - name: probe_ok
@@ -271,6 +277,8 @@ func mustGetwd(t *testing.T) string {
 }
 
 func TestMCPTestVerb_FlagParsing(t *testing.T) {
+	t.Parallel()
+
 	if _, err := parseMCPTestFlags(nil); err == nil {
 		t.Error("no names and no --all must be a usage error")
 	}

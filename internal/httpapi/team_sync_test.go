@@ -39,6 +39,8 @@ func accountTeam(t *testing.T, st *store.Store, email string) string {
 // The provider's settings may carry a third key, team: applied when present,
 // the team left alone when absent, and any other extra key still refused.
 func TestExternalAccessAppliesProviderTeam(t *testing.T) {
+	t.Parallel()
+
 	s, st := teamSyncFixture(t)
 	h := s.Routes()
 	withTeam := externalGrant("acct-t", 1, map[string]string{"chat_role": "member", "ops_role": "none", "team": "growth"})
@@ -71,6 +73,8 @@ func TestExternalAccessAppliesProviderTeam(t *testing.T) {
 // Every admin write enforces the shared team rule, so Fleet never stores a
 // label its identity provider would refuse to mirror.
 func TestAdminTeamWritesEnforceTheTeamRule(t *testing.T) {
+	t.Parallel()
+
 	s, st := teamSyncFixture(t)
 	h := s.Routes()
 	astral := strings.Repeat("\U0001F600", 17) // 68 bytes, 34 UTF-16 units: under a browser maxlength of 64

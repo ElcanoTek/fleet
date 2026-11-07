@@ -7,6 +7,8 @@ import (
 )
 
 func TestTurnLifecycle(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -106,6 +108,8 @@ func TestTurnLifecycle(t *testing.T) {
 }
 
 func TestInsertAndLoadTurnEvents(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -187,6 +191,8 @@ func TestInsertAndLoadTurnEvents(t *testing.T) {
 }
 
 func TestSweepTurnEvents(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

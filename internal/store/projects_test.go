@@ -8,6 +8,8 @@ import (
 // #509 projects: CRUD, team-membership visibility, owner-only mutation,
 // delete-detach semantics, and the project-vs-personal memory scope split.
 func TestProjectLifecycleAndMembership(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

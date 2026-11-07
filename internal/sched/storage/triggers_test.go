@@ -11,6 +11,8 @@ import (
 )
 
 func TestTriggerCRUDAndSpawn(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -137,6 +139,8 @@ func seedTemplateTask(t *testing.T, store *Storage, mcp models.MCPSelection, cre
 }
 
 func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	task := seedTemplateTask(t, store, nil, nil)
 	ctx := context.Background()
@@ -172,6 +176,8 @@ func TestCreateTrigger_KindPolicyRoundTrip(t *testing.T) {
 }
 
 func TestRecordTriggerEvent_Dedup(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	task := seedTemplateTask(t, store, nil, nil)
 	ctx := context.Background()
@@ -197,6 +203,8 @@ func TestRecordTriggerEvent_Dedup(t *testing.T) {
 }
 
 func TestTriggerEvent_RunLinkage(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	task := seedTemplateTask(t, store, nil, nil)
 	ctx := context.Background()
@@ -222,6 +230,8 @@ func TestTriggerEvent_RunLinkage(t *testing.T) {
 }
 
 func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	mcp := models.MCPSelection{{Server: "github"}}
 	cred := models.CredentialAllowlist{{Server: "github"}}
@@ -258,6 +268,8 @@ func TestSpawnEmailRun_ConnectorGating(t *testing.T) {
 }
 
 func TestSpawnWebhookRun_PreservesConnectorBehavior(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	mcp := models.MCPSelection{{Server: "github"}}
 	cred := models.CredentialAllowlist{{Server: "github"}}
@@ -287,6 +299,8 @@ func TestSpawnWebhookRun_PreservesConnectorBehavior(t *testing.T) {
 // minted the run pending — firing a trigger executed the gated work with the
 // admin-authored condition silently discarded.
 func TestSpawnTriggerRun_CarriesRunIfGate(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	template := seedTemplateTask(t, store, nil, nil)
 	gate := &models.RunIf{Command: "test -f /tmp/ready", ExitCodeIs: 0, TimeoutSeconds: 30}

@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func setupTestHandler(t *testing.T) (*chi.Mux, func()) {
@@ -39,16 +40,10 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 	}
 
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		os.RemoveAll(tmpDir)
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
 		t.Fatalf("Failed to initialize storage: %v", err)
 	}
-
-	// Acquire global test lock to prevent interference from other parallel packages
-	acquireTestLock(t, store)
 
 	keyMgr, err := apikeys.NewManager(
 		filepath.Join(tmpDir, "api_keys.json"),
@@ -58,19 +53,6 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 		store.Close()
 		os.RemoveAll(tmpDir)
 		t.Fatalf("Failed to initialize API key manager: %v", err)
-	}
-
-	// Clean up PostgreSQL tables because tests share the same DB
-	ctx := context.Background()
-	queries := []string{
-		"DELETE FROM logs",
-		"DELETE FROM tasks",
-		"DELETE FROM users",
-	}
-	for _, q := range queries {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("Failed to clean up table: %v", err)
-		}
 	}
 
 	h := New(Config{
@@ -122,6 +104,8 @@ func setupTestHandlerWithStore(t *testing.T) (*chi.Mux, *storage.Storage, func()
 }
 
 func TestTaskTimezoneValidationAndScheduling(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -177,6 +161,8 @@ func TestTaskTimezoneValidationAndScheduling(t *testing.T) {
 // refusal happens before the key is minted — a request that names a cap must
 // not leave an uncapped key behind for the caller to never notice.
 func TestCreateKeyRejectsRetiredSpendingCaps(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -218,15 +204,9 @@ func TestCreateKeyRejectsRetiredSpendingCaps(t *testing.T) {
 	}
 }
 
-func isDatabaseUnavailable(err error) bool {
-	errMsg := err.Error()
-	return strings.Contains(errMsg, "sched DB DSN is empty") || // DATABASE_URL unset
-		strings.Contains(errMsg, "failed to connect to database") ||
-		strings.Contains(errMsg, "connection refused") ||
-		strings.Contains(errMsg, "no such host")
-}
-
 func TestHealthCheck(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -252,6 +232,8 @@ func TestHealthCheck(t *testing.T) {
 }
 
 func TestTaskManagement(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -328,6 +310,8 @@ func TestTaskManagement(t *testing.T) {
 }
 
 func TestAPIKeyManagement(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -416,6 +400,8 @@ func TestAPIKeyManagement(t *testing.T) {
 // an old client keeps working — it simply gets a key whose authority is its
 // permission set, which is all the patterns ever conferred.
 func TestRoleKeyCreatesTask(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -456,6 +442,8 @@ func TestRoleKeyCreatesTask(t *testing.T) {
 }
 
 func TestHistoryCleanup(t *testing.T) {
+	t.Parallel()
+
 	r, cleanup := setupTestHandler(t)
 	defer cleanup()
 
@@ -511,6 +499,8 @@ func seedScheduledTask(t *testing.T, store *storage.Storage, model string) *mode
 }
 
 func TestBulkSetTaskModel(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 

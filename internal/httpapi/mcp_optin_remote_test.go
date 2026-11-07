@@ -78,6 +78,8 @@ func remoteMCPFixture(t *testing.T) (*Server, *store.Store, *store.RemoteMCPServ
 // against the bundle-only catalog silently dropped remote names, so a
 // connected server could never participate in a chat turn (#443/#449).
 func TestConversationMCPServersPOSTAcceptsRemoteServer(t *testing.T) {
+	t.Parallel()
+
 	srv, st, _, user := remoteMCPFixture(t)
 	ctx := context.Background()
 
@@ -120,6 +122,8 @@ func TestConversationMCPServersPOSTAcceptsRemoteServer(t *testing.T) {
 // unless it was shared with them (#443 follow-up): the whitelist is scoped to
 // the requesting user's own rows plus rows shared with them.
 func TestConversationMCPServersPOSTScopedToCaller(t *testing.T) {
+	t.Parallel()
+
 	srv, st, row, owner := remoteMCPFixture(t)
 	ctx := context.Background()
 	const other = "other@x.com"
@@ -166,6 +170,8 @@ func TestConversationMCPServersPOSTScopedToCaller(t *testing.T) {
 // remote servers as toggleable entries (mirroring the startup catalog merge),
 // with the enabled flag reflecting the canonically-lowercased opt-in list.
 func TestConversationMCPServersGETListsRemoteServer(t *testing.T) {
+	t.Parallel()
+
 	srv, st, row, user := remoteMCPFixture(t)
 	ctx := context.Background()
 
@@ -217,6 +223,8 @@ func TestConversationMCPServersGETListsRemoteServer(t *testing.T) {
 // user's connected OAuth/API-key servers (Jira, Microsoft 365, GitHub, etc.)
 // enabled on their first scheduled run.
 func TestCreateConversationSeedsConnectedRemoteMCPServer(t *testing.T) {
+	t.Parallel()
+
 	srv, st, row, user := remoteMCPFixture(t)
 	srv.agent = &catalogEngine{
 		catalog: []agent.OptionalServerInfo{

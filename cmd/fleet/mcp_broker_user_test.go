@@ -94,6 +94,8 @@ func callWhoamiOn(t *testing.T, b *brokerBackend, spec mcpbroker.ScopeSpec, serv
 // of ADR-0087: an interactive scope's user is substituted into the bundle
 // server's env, and a scope without one leaves those variables UNSET.
 func TestBrokerBackend_ScopeSubstitutesSignedInUser(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForUserTest(t)
 	selection := []mcpbroker.ScopeChoice{{Server: "deals"}}
 
@@ -142,6 +144,8 @@ func TestBrokerBackend_NamedSeatScopeSubstitutesSignedInUser(t *testing.T) {
 // TestBrokerBackend_TaskScopeNeverSeesAUser: the scheduled path takes no user
 // at all, so its token-bearing keys are dropped even on the dedicated scope.
 func TestBrokerBackend_TaskScopeNeverSeesAUser(t *testing.T) {
+	t.Parallel()
+
 	b := newBrokerBackendForUserTest(t)
 	got := callWhoami(t, b, mcpbroker.ScopeSpec{
 		Selection: []mcpbroker.ScopeChoice{{Server: "deals"}},
@@ -155,6 +159,8 @@ func TestBrokerBackend_TaskScopeNeverSeesAUser(t *testing.T) {
 // TestBrokerScopeUser: the parent never puts a user on a task scope's wire
 // form, and sends nothing when it has nothing valid to send.
 func TestBrokerScopeUser(t *testing.T) {
+	t.Parallel()
+
 	user := agentcore.NewMCPUserIdentity("elyse@example.com")
 	if got := brokerScopeUser("task-1", user); got != nil {
 		t.Fatalf("task scope user = %+v, want nil", got)

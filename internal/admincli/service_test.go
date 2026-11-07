@@ -7,6 +7,8 @@ import (
 )
 
 func TestLogsArgs(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name   string
 		unit   string
@@ -47,6 +49,8 @@ func TestServiceVerbsRequireSystemctl(t *testing.T) {
 // matching the cmdStatus convention (flag.ContinueOnError → return 1). Covers all
 // three verbs without execing anything.
 func TestServiceVerbsRejectBadFlags(t *testing.T) {
+	t.Parallel()
+
 	for _, fn := range []struct {
 		name string
 		run  func([]string) int

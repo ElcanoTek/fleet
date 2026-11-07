@@ -15,6 +15,8 @@ import (
 // caller's own chats in the scope in the order given, the GET reads it back
 // by scope, and a bad scope, bad JSON or an unsupported method is refused.
 func TestConversationOrder(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	ctx := context.Background()
 	const me = "rail@x.com"

@@ -396,6 +396,8 @@ func (c *claimLosingStore) ClaimApproval(context.Context, string, string, string
 // The registry shares one signal between references and forgets it with the
 // last one.
 func TestApprovalStopRegistry_RefCounts(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{}
 	a := s.armApprovalStop("x")
 	if b := s.armApprovalStop("x"); a != b {

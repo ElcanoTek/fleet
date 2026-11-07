@@ -28,6 +28,8 @@ func seedConv(t *testing.T, s *Store, title string, labels []string) string {
 // TestListFiltered_Labels covers the #258 filter semantics: single-label match,
 // AND across multiple labels, and the unfiltered baseline.
 func TestListFiltered_Labels(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	const u = labelTestUser
@@ -59,6 +61,8 @@ func TestListFiltered_Labels(t *testing.T) {
 // so the values that would break a naive literal parser are the interesting
 // ones: separators, quotes, backslashes, braces, and the bare word NULL.
 func TestLabels_ArrayRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 
@@ -96,6 +100,8 @@ func TestLabels_ArrayRoundTrip(t *testing.T) {
 // distinguish from a populated array: a conversation created without labels and
 // one explicitly patched to none.
 func TestLabels_EmptyAndUnset(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 

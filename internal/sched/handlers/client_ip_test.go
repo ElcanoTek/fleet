@@ -17,6 +17,8 @@ import (
 // loopback (Caddy) is the only trusted hop, and client-supplied
 // X-Forwarded-For entries must not win.
 func TestGetClientIP(t *testing.T) {
+	t.Parallel()
+
 	clientIPMiddleware := httpmw.ClientIPFromXFF("127.0.0.1/32", "::1/128")
 
 	resolve := func(remoteAddr string, xff ...string) string {
@@ -89,6 +91,8 @@ func TestGetClientIP(t *testing.T) {
 // RemoteAddr fallback) names the same address as TrustedProxies.ClientIP, the
 // resolver the chat server's IP filter uses, with and without trusted proxies.
 func TestGetClientIPMatchesSharedResolver(t *testing.T) {
+	t.Parallel()
+
 	for _, trusted := range [][]net.IP{nil, {net.ParseIP("127.0.0.1"), net.ParseIP("::1")}} {
 		trust := httpmw.NewTrustedProxies(trusted)
 		for _, tc := range []struct{ remoteAddr, xff string }{

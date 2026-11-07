@@ -115,6 +115,8 @@ func claimResume(t *testing.T, s *Store, convID string) ApprovalResumeResult {
 // owned by the conversation's user; a second claim finds nothing left to
 // claim, so a card can never start two resumes.
 func TestClaimApprovalResume_ClaimsSettledCardsIntoOneInput(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := resumeConv(t, s)
@@ -166,6 +168,8 @@ func TestClaimApprovalResume_ClaimsSettledCardsIntoOneInput(t *testing.T) {
 
 // Concurrent claims (two settlements racing) still produce exactly one row.
 func TestClaimApprovalResume_ConcurrentClaimsEnqueueOnce(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
@@ -195,6 +199,8 @@ func TestClaimApprovalResume_ConcurrentClaimsEnqueueOnce(t *testing.T) {
 // caller knows is a failed outcome write — but that card itself is not
 // claimed, because its outcome is not in the conversation.
 func TestClaimApprovalResume_WaitsForOutstandingCards(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := resumeConv(t, s)
@@ -240,6 +246,8 @@ func TestClaimApprovalResume_WaitsForOutstandingCards(t *testing.T) {
 // outstanding; ignoring it lets other cards resume but leaves it armed for
 // boot recovery.
 func TestClaimApprovalResume_SentinelCardStaysArmed(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := resumeConv(t, s)
@@ -262,6 +270,8 @@ func TestClaimApprovalResume_SentinelCardStaysArmed(t *testing.T) {
 // Over the hourly cap, or with the queue full, the cards are marked skipped
 // and the conversation gets a note instead of a turn.
 func TestClaimApprovalResume_CapAndQueueFullSkipWithANote(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	for name, tc := range map[string]struct {
@@ -311,6 +321,8 @@ func TestClaimApprovalResume_CapAndQueueFullSkipWithANote(t *testing.T) {
 // A deleted conversation is never resumed: its settled armed cards are
 // dropped, no row is inserted.
 func TestClaimApprovalResume_DeletedConversation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	conv := resumeConv(t, s)
 	a := stageResume(t, s, conv.ID, "mcp_deals_update_deal", true)
@@ -329,6 +341,8 @@ func TestClaimApprovalResume_DeletedConversation(t *testing.T) {
 
 // Cards that did not opt in, and a superseded armed card, never resume.
 func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := resumeConv(t, s)
@@ -367,6 +381,8 @@ func TestClaimApprovalResume_UnarmedAndSupersededNeverResume(t *testing.T) {
 // A patrol conversation (chat_schedules) whose armed approval cards all timed
 // out marks them skipped without enqueuing an unattended cold-cache resume turn.
 func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	conv := resumeConv(t, s)
@@ -397,6 +413,8 @@ func TestClaimApprovalResume_PatrolTimeoutSkipsResume(t *testing.T) {
 // a queued resume row) is dropped with one note per conversation; a pending
 // armed card stays armed; nothing is re-run and a second boot notes nothing.
 func TestDropApprovalResumesAtBoot(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t)
 	ctx := context.Background()
 	convA := resumeConv(t, s)

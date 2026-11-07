@@ -7,6 +7,8 @@ import (
 )
 
 func TestSessionApprovalRegistry_Match(t *testing.T) {
+	t.Parallel()
+
 	r := NewSessionApprovalRegistry()
 
 	// approve-all for one tool in one conversation.
@@ -41,6 +43,8 @@ func TestSessionApprovalRegistry_Match(t *testing.T) {
 }
 
 func TestMaybeRegisterSessionPolicy(t *testing.T) {
+	t.Parallel()
+
 	s := New(&config.Config{}, &fakeEngine{}, nil)
 
 	// session approve → policy present, mode approve.
@@ -81,6 +85,8 @@ func TestMaybeRegisterSessionPolicy(t *testing.T) {
 // pre-decisions (and only its own), so the process-lifetime registry stops
 // growing with every "approve all" click on chats that no longer exist.
 func TestSessionApprovalRegistry_Forget(t *testing.T) {
+	t.Parallel()
+
 	r := NewSessionApprovalRegistry()
 	r.Register("conv-a", "send_email", SessionApprovalPolicy{Mode: "approve"})
 	r.Register("conv-a", "run_python", SessionApprovalPolicy{Mode: "deny"})

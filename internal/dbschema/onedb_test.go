@@ -1,12 +1,7 @@
 package dbschema_test
 
 import (
-	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
-	"net/url"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -19,45 +14,14 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
-// scratchDatabase creates a fresh, empty database on the test server (found
-// through FLEET_TEST_DATABASE_URL or DATABASE_URL) and returns its DSN; it is
-// dropped when the test ends. The test is skipped when no test server is
-// configured or the test role cannot create databases.
+// scratchDatabase returns the DSN of a fresh, empty database of the test's
+// own (internal/testdb), dropped when the test ends.
 func scratchDatabase(t *testing.T) string {
 	t.Helper()
-	base := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if base == "" {
-		base = os.Getenv("DATABASE_URL")
-	}
-	if base == "" {
-		t.Skip("no FLEET_TEST_DATABASE_URL / DATABASE_URL test server")
-	}
-	admin, err := sql.Open("pgx", base)
-	if err != nil {
-		t.Fatalf("open %s: %v", "test server", err)
-	}
-	t.Cleanup(func() { _ = admin.Close() })
-	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	name := "fleet_onedb_" + hex.EncodeToString(b)
-	if _, err := admin.Exec(`CREATE DATABASE ` + name); err != nil {
-		t.Skipf("test role cannot CREATE DATABASE: %v", err)
-	}
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+name+` WITH (FORCE)`); err != nil {
-			t.Logf("drop %s: %v", name, err)
-		}
-	})
-	u, err := url.Parse(base)
-	if err != nil {
-		t.Fatalf("parse test DSN: %v", err)
-	}
-	u.Path = "/" + name
-	return u.String()
+	return testdb.Empty(t)
 }
 
 // TestBothStoresInOneDatabase is the #2049 regression: both stores, with
@@ -66,6 +30,8 @@ func scratchDatabase(t *testing.T) string {
 // see only its own tables (both have a `users` and a `schema_migrations`
 // table of incompatible shapes), and reopen with no migration to run.
 func TestBothStoresInOneDatabase(t *testing.T) {
+	t.Parallel()
+
 	dsn := scratchDatabase(t)
 	ctx := t.Context()
 	d, err := config.ResolveDSNs(func(k string) string {
@@ -168,6 +134,8 @@ func TestBothStoresInOneDatabase(t *testing.T) {
 // legacy store's database must refuse rather than create empty schemas that
 // shadow the real data.
 func TestEnsureRefusesALegacyDatabase(t *testing.T) {
+	t.Parallel()
+
 	dsn := scratchDatabase(t)
 	legacy, err := store.Open(dsn, store.DefaultPoolConfig()) // a legacy chat database: tables in public
 	if err != nil {

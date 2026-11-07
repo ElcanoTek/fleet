@@ -66,6 +66,8 @@ func ownerOf(t *testing.T, store *Storage, id uuid.UUID) uuid.UUID {
 // copied from it — is not touched: the chain is followed through
 // previous_occurrence_id, not lineage.
 func TestSetTaskOwnerFollowsTheChain(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	oldOwner, newOwner := uuid.New(), uuid.New()
@@ -99,6 +101,8 @@ func TestSetTaskOwnerFollowsTheChain(t *testing.T) {
 // dead-letters) — so the last row takes the new owner even though it is
 // finished. Without that, a replay would resume the chain under the old owner.
 func TestSetTaskOwnerReachesAFinishedLastOccurrence(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	oldOwner, newOwner := uuid.New(), uuid.New()
@@ -123,6 +127,8 @@ func TestSetTaskOwnerReachesAFinishedLastOccurrence(t *testing.T) {
 // the new owner) — including a later occurrence whose selection differs from
 // the task's — and one refusal writes nothing.
 func TestSetTaskOwnerCheckSeesEveryRow(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 	oldOwner, newOwner := uuid.New(), uuid.New()
@@ -164,6 +170,8 @@ func TestSetTaskOwnerCheckSeesEveryRow(t *testing.T) {
 // from the completing occurrence, so the occurrence spawned after a
 // reassignment belongs to the new owner.
 func TestSetTaskOwnerReachesTheNextSpawn(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

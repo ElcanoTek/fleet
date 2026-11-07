@@ -165,6 +165,8 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 }
 
 func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -213,6 +215,8 @@ func TestQueue_SecondSubmitQueuesThenDrainsAsSeparateTurn(t *testing.T) {
 // postChat, so the next-turn migration has to live on the shared path
 // (reconcileLockdownModelCtx) for the accepted 202 row to run at all.
 func TestQueue_DrainedLockdownTurnMigratesDelistedModel(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	s.cfg.SandboxImage = "ghcr.io/x/y:1"
 	s.cfg.LockdownAllowedModels = []string{"a/b", "c/d"}
@@ -306,6 +310,8 @@ func (w *sweepHoldStore) CancelQueuedInputs(ctx context.Context, userEmail, conv
 }
 
 func TestQueue_StopCoversQueuedWork(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -361,6 +367,8 @@ func TestQueue_StopCoversQueuedWork(t *testing.T) {
 // maybeDrainQueue must not claim, and when the sweep ends the deferred drain
 // must run so a row accepted after the Stop still launches.
 func TestQueue_StopSweepInterlockDefersDrain(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -476,6 +484,8 @@ func expectGateCancelled(t *testing.T, s *Server, eng *gatedEngine, convID, clie
 // sweep is still in flight, and the row must stay cancelled after the sweep
 // ends and re-kicks the drain.
 func TestQueue_StopSweepGatesClaimedRowAtRegistration(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -536,6 +546,8 @@ func (w *stalledQueueListStore) ListQueuedInputs(ctx context.Context, _, _ strin
 // for as long as it stalls, and repeats of the race exhaust the per-user cap
 // (429s) while no turn is running.
 func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -597,6 +609,8 @@ func TestQueue_SweptLaunchReleasesSlotBeforeQueueRefresh(t *testing.T) {
 // whole sweep took: by the time it registers the interlock is released, so
 // only the Stop generation it carries can tell it the row is now pre-Stop.
 func TestQueue_StopSweepGenerationGatesSlowDrain(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -635,6 +649,8 @@ func (w *flakyTerminalStore) MarkClaimedInputTerminal(ctx context.Context, id, c
 // TestQueue_TerminalizeQueueRowRetries: a claimed row whose cancel write
 // fails must not stay 'running' until restart — the write is retried.
 func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -671,6 +687,8 @@ func TestQueue_TerminalizeQueueRowRetries(t *testing.T) {
 // so it must leave the re-claimed row alone rather than flip a live row back
 // to 'queued' and run the input twice.
 func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -719,6 +737,8 @@ func TestQueue_TerminalizeRetryRespectsLaterClaim(t *testing.T) {
 // drains the row: the production path) or is still in flight when a drain
 // claims and launches it.
 func TestQueue_StopSparesRowAcceptedAfterStop(t *testing.T) {
+	t.Parallel()
+
 	for _, tc := range []struct {
 		name     string
 		endSweep bool
@@ -807,6 +827,8 @@ func (w *postStopEnqueueStore) CancelQueuedInputs(ctx context.Context, userEmail
 }
 
 func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -868,6 +890,8 @@ func TestQueue_StopSparesFollowUpSubmittedAfterStop(t *testing.T) {
 // the drain — the caller's own kick has long since fired against a row that
 // was still 'running', and no turn remains to kick on completion.
 func TestQueue_TerminalizeRetryRequeueRekicks(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -903,6 +927,8 @@ func TestQueue_TerminalizeRetryRequeueRekicks(t *testing.T) {
 }
 
 func TestQueue_IdempotentSubmission(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -935,6 +961,8 @@ func TestQueue_IdempotentSubmission(t *testing.T) {
 // nothing else queued was told "position 2" although it was next. A replay
 // reports the place the input holds now; a running input has none.
 func TestQueue_AckReportsPlaceInLine(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -1005,6 +1033,8 @@ func TestQueue_AckReportsPlaceInLine(t *testing.T) {
 // the same key while the turn runs, or after it ends, is answered with the
 // original input instead of starting a second turn.
 func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "dora@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -1053,6 +1083,8 @@ func TestDirectTurn_InputIDIsIdempotent(t *testing.T) {
 // already accepted instead of creating a second conversation and running the
 // prompt again there.
 func TestFirstSubmission_ResendFindsTheOriginal(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "erin@x.com"
 	eng := &gatedEngine{started: make(chan struct{}, 4), release: make(chan struct{}, 4)}
@@ -1096,6 +1128,8 @@ func TestFirstSubmission_ResendFindsTheOriginal(t *testing.T) {
 }
 
 func TestQueue_SteerInjectsMidTurnExactlyOnce(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "bob@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -1170,6 +1204,8 @@ func (f *failFirstEngine) RunTurn(ctx context.Context, in TurnInput, sink agent.
 }
 
 func TestQueue_DrainedTurnPreCommitFailureRequeuesNotCompletes(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)
@@ -1233,6 +1269,8 @@ func TestQueue_DrainedTurnPreCommitFailureRequeuesNotCompletes(t *testing.T) {
 }
 
 func TestQueue_DrainWorksAtConcurrencyCapOne(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	// The regression: with cap=1 the completion tail drained BEFORE the
@@ -1273,6 +1311,8 @@ func bufferEvents(b *turnBuffer) []bufferedEvent {
 // the drained turn shows a chip strip that still advertises send-now/remove
 // for the row this very turn is running.
 func TestQueue_DrainedTurnStreamCarriesQueueSnapshot(t *testing.T) {
+	t.Parallel()
+
 	s := serverFixture(t)
 	const user = "alice@x.com"
 	conv, err := s.store.CreateConversation(t.Context(), user, "q", "victoria", "openrouter/auto", false)

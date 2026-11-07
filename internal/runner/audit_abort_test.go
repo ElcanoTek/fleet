@@ -23,6 +23,8 @@ import (
 // right and said so; the system discarded that and reported green, which is how
 // a client dashboard froze for days with every run "succeeding".
 func TestAuditAbortIsNotSuccess(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	task := &models.Task{
 		ID:         uuid.New(),
@@ -85,6 +87,8 @@ func TestAuditAbortIsNotSuccess(t *testing.T) {
 // An abort is the machinery working, not an application failure — paging on it
 // would train everyone to ignore the page.
 func TestAuditAbortIsNotSentryReportable(t *testing.T) {
+	t.Parallel()
+
 	err := fmt.Errorf("%w: nothing to publish", agentcore.ErrAuditAborted)
 	if reportableRunFailure(err, false, false) {
 		t.Error("a deliberate self-audit abort must not be reported as an application failure")
@@ -99,6 +103,8 @@ func TestAuditAbortIsNotSentryReportable(t *testing.T) {
 // that the page was unchanged and why — the one field that would have told an
 // operator a dashboard had stopped refreshing while every run showed green.
 func TestSuccessMessageKeepsTheAgentsOwnSummary(t *testing.T) {
+	t.Parallel()
+
 	const fallback = "Task completed successfully"
 	summary := "Source unchanged since 2026-08-13.\n\nPublished nothing; reported source_not_updated."
 	session := &models.LogSession{Messages: []models.LogMessage{

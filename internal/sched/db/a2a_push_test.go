@@ -57,6 +57,8 @@ func seedPushTask(t *testing.T, db *Database, status models.TaskStatus) uuid.UUI
 }
 
 func TestA2APushConfigSealedRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)
@@ -134,6 +136,8 @@ func TestA2APushConfigSealedRoundTrip(t *testing.T) {
 }
 
 func TestA2APushStoreFailsClosedWithoutCipher(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)
@@ -155,6 +159,8 @@ func TestA2APushStoreFailsClosedWithoutCipher(t *testing.T) {
 }
 
 func TestA2APushWorkScanAndMark(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)
@@ -203,6 +209,8 @@ func TestA2APushWorkScanAndMark(t *testing.T) {
 // whole scan — the good row is still returned, and the bad row is marked so
 // it stops occupying the batch until the task's next status change.
 func TestA2APushWorkSkipsUnreadableRow(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)
@@ -257,6 +265,8 @@ func TestA2APushWorkSkipsUnreadableRow(t *testing.T) {
 // row applies only to the sealed bytes the scan saw, so a re-registration that
 // lands between the scan and the mark keeps the recovered config due.
 func TestA2APushUnreadableMarkSparesReRegistration(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)
@@ -293,6 +303,8 @@ func TestA2APushUnreadableMarkSparesReRegistration(t *testing.T) {
 // MaxA2APushConfigsPerTask configs; updating an existing id at the cap is
 // still allowed, and another task is unaffected.
 func TestA2APushConfigPerTaskCap(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	cleanA2APush(t, db)

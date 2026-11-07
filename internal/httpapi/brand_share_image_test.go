@@ -41,6 +41,8 @@ func getShareImage(t *testing.T, s *Server, method string) *httptest.ResponseRec
 
 // The bundle's card must actually be served — this is the whole point of #893.
 func TestBrandShareImage_ServesBundleCard(t *testing.T) {
+	t.Parallel()
+
 	png := []byte("\x89PNG\r\n\x1a\nfake-card-bytes")
 	s := shareImageFixture(t, "acme-share.png", png)
 
@@ -71,6 +73,8 @@ func TestBrandShareImage_ServesBundleCard(t *testing.T) {
 // No bundle, or a bundle declaring no share image, must 404 so the web falls back
 // to fleet's own neutral card rather than serving a broken og:image.
 func TestBrandShareImage_404WithoutADeclaredImage(t *testing.T) {
+	t.Parallel()
+
 	for name, s := range map[string]*Server{
 		"no bundle":      {},
 		"no share_image": {clientConfig: &clientconfig.Bundle{Dir: t.TempDir()}},
@@ -85,6 +89,8 @@ func TestBrandShareImage_404WithoutADeclaredImage(t *testing.T) {
 
 // A file that vanished under a running process must fail soft, not 500.
 func TestBrandShareImage_404WhenFileVanished(t *testing.T) {
+	t.Parallel()
+
 	s := shareImageFixture(t, "card.png", []byte("x"))
 	if err := os.Remove(s.clientConfig.BrandShareImagePath); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -98,6 +104,8 @@ func TestBrandShareImage_404WhenFileVanished(t *testing.T) {
 // enforced. An oversized card degrades to fleet's own rather than making every
 // unfurl scraper wait on megabytes.
 func TestBrandShareImage_EnforcesItsOwnLargerCap(t *testing.T) {
+	t.Parallel()
+
 	if brandShareImageMaxBytes <= brandLogoMaxBytes {
 		t.Fatalf("share-image cap %d must exceed the logo cap %d", brandShareImageMaxBytes, brandLogoMaxBytes)
 	}
@@ -116,6 +124,8 @@ func TestBrandShareImage_EnforcesItsOwnLargerCap(t *testing.T) {
 }
 
 func TestBrandShareImage_HeadAndMethodGating(t *testing.T) {
+	t.Parallel()
+
 	s := shareImageFixture(t, "card.png", []byte("\x89PNGdata"))
 	if w := getShareImage(t, s, http.MethodHead); w.Code != http.StatusOK {
 		t.Errorf("HEAD: status = %d, want 200", w.Code)
@@ -130,6 +140,8 @@ func TestBrandShareImage_HeadAndMethodGating(t *testing.T) {
 // Token-gated but identity-less: an unfurl scraper has no session, and the
 // browser must still not reach chat-server directly.
 func TestBrandShareImage_TokenGatedIdentityLess(t *testing.T) {
+	t.Parallel()
+
 	s := shareImageFixture(t, "card.png", []byte("\x89PNGdata"))
 	h := s.tokenOnlyMiddleware(http.HandlerFunc(s.brandShareImage))
 
@@ -152,6 +164,8 @@ func TestBrandShareImage_TokenGatedIdentityLess(t *testing.T) {
 // /brand/meta advertises the URL only when a file backed the field, mirroring
 // logo_url, so the web never emits an og:image pointing at a 404.
 func TestBrandMeta_AdvertisesShareImageOnlyWhenBacked(t *testing.T) {
+	t.Parallel()
+
 	backed := shareImageFixture(t, "card.png", []byte("\x89PNGdata"))
 	_, got := getBrandMeta(t, backed)
 	if got.ShareImageURL != brandShareImageWebPath {

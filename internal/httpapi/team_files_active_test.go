@@ -3,6 +3,8 @@ package httpapi
 import "testing"
 
 func TestIsActiveContentTypeCoversEveryXMLType(t *testing.T) {
+	t.Parallel()
+
 	for ct, want := range map[string]bool{
 		"text/html; charset=utf-8": true,
 		"image/svg+xml":            true,

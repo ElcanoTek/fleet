@@ -433,7 +433,7 @@ Awk and Perl tokens such as `$NF` and `$_` are excluded explicitly.
 
 The scan found 21 unregistered inputs, all now registered:
 - the e2e harness's `ORCH_PORT`, `WEB_PORT` and `E2E_*`, and `CANARY_MODEL`;
-- `HTTPAPI_TEST_DATABASE_URL`;
+- `HTTPAPI_TEST_DATABASE_URL` (since retired with the per-store test DSNs, #2049 M2);
 - bootstrap's `SCHED_DB_NAME`, `SCHED_DB_USER` and `SCHED_DB_PASSWORD`;
 - doctor's `SRC_DIR`;
 - `IMAGE_NAME`, `FLAG_DIR`, `MIGRATION_LINT_BASE` and `FREEZE_VERSION`.

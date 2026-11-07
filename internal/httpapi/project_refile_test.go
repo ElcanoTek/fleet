@@ -25,6 +25,8 @@ func postProject(t *testing.T, srv *Server, user, convID, body string) *httptest
 // re-file endpoint, project_id was set-once at creation, so the sidebar's
 // drag-a-chat-into-a-project flow had nothing to call.
 func TestConversationProjectRefileAndUnfile(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
@@ -66,6 +68,8 @@ func TestConversationProjectRefileAndUnfile(t *testing.T) {
 // 403), mirroring projectForMember so project ids don't leak membership
 // state. The conversation stays unfiled.
 func TestConversationProjectRefileNonMember(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
@@ -97,6 +101,8 @@ func TestConversationProjectRefileNonMember(t *testing.T) {
 // member of the target project: the store's owner-scoped UPDATE is the
 // enforcement, and the victim's conversation stays untouched.
 func TestConversationProjectRefileForeignConversation(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()

@@ -12,6 +12,8 @@ import (
 // TestTurnBuffer_SlidingWindowEviction verifies the byte cap evicts the oldest
 // events while keeping IDs monotonic and the newest event present (#295).
 func TestTurnBuffer_SlidingWindowEviction(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("c", "t")
 	buf.maxBytes = 200 // small cap to force eviction
 
@@ -41,6 +43,8 @@ func TestTurnBuffer_SlidingWindowEviction(t *testing.T) {
 // sliding window dropped events it hadn't seen receives a synthetic `reconnect`
 // frame before the replay.
 func TestTurnBuffer_ReconnectFrameOnGap(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("c", "t")
 	buf.maxBytes = 200
 	for i := 1; i <= 10; i++ {
@@ -64,6 +68,8 @@ func TestTurnBuffer_ReconnectFrameOnGap(t *testing.T) {
 // TestTurnBuffer_NoReconnectFrameWhenContiguous verifies a clean reconnect (no
 // evicted events) does NOT inject a reconnect frame.
 func TestTurnBuffer_NoReconnectFrameWhenContiguous(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("c", "t") // maxBytes 0 = unlimited, no eviction
 	for i := 1; i <= 5; i++ {
 		buf.Emit("delta", map[string]any{"i": i})
@@ -108,6 +114,8 @@ func TestTurnBuffer_Heartbeat(t *testing.T) {
 // end with an explicit evicted `reconnect` frame, not the same clean EOF a
 // finished turn produces (which the client renders as turn-complete).
 func TestTurnBuffer_EvictedSubscriberGetsEvictedFrame(t *testing.T) {
+	t.Parallel()
+
 	buf := newTurnBuffer("c", "t")
 
 	rw := newRecorder()
@@ -152,6 +160,8 @@ func TestTurnBuffer_EvictedSubscriberGetsEvictedFrame(t *testing.T) {
 // "12abc" as 12 and resumed a client from an id it never sent; anything
 // malformed now falls back to 0 — a full replay, which is always safe.
 func TestParseLastEventID(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		header, query string
 		want          uint64

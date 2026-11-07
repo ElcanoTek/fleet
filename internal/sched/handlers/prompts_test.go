@@ -31,6 +31,8 @@ promptTemplate: |-
 // entry's JSON has neither form key (the web keys "is this a form?" off
 // `fields`).
 func TestPromptLibraryItemFromGitCarriesForm(t *testing.T) {
+	t.Parallel()
+
 	floor := 1.0
 	gp := clientconfig.Prompt{
 		ID: "git:campaign.yaml", Name: "Campaign page", Content: formPromptYAML,
@@ -88,6 +90,8 @@ func TestPromptLibraryItemFromGitCarriesForm(t *testing.T) {
 // prompt_template, while a plain prompt and an INVALID form are both served as
 // plain entries with their raw content — a broken form never hides the prompt.
 func TestPromptLibraryCollectionServesGitForms(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	dir := t.TempDir()
 	for name, body := range map[string]string{
@@ -146,6 +150,8 @@ func TestPromptLibraryCollectionServesGitForms(t *testing.T) {
 }
 
 func TestPromptLibraryHeaderTrustAuthorizesChatMembers(t *testing.T) {
+	t.Parallel()
+
 	h, _ := setupTest(t)
 	h.config.SharedToken = "shared-secret"
 	h.SetChatMemberRoleProvider(func(_ context.Context, email string) (string, error) {

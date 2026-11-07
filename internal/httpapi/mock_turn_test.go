@@ -12,22 +12,19 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // mockServer wires a minimal Server with MockMode=true and a real Postgres
 // store. No Manager is needed because /chat short-circuits before RunTurn.
-// Skips when FLEET_TEST_DATABASE_URL is unset (testdb.ChatDSN).
+// Skips when FLEET_TEST_DATABASE_URL is unset (internal/testdb).
 func mockServer(t *testing.T) *Server {
 	t.Helper()
-	dsn := testdb.ChatDSN(t)
-	st, err := store.Open(dsn, store.DefaultPoolConfig())
+	// A database of the test's own (fleetdb), so nothing is shared with any
+	// other test and nothing needs wiping.
+	st, err := store.Open(fleetdb.New(t).ChatDSN(), fleetdb.ChatPool())
 	if err != nil {
 		t.Fatalf("open store: %v", err)
-	}
-	if err := st.TruncateAllForTest(context.Background()); err != nil {
-		_ = st.Close()
-		t.Fatalf("truncate: %v", err)
 	}
 	srv := &Server{
 		cfg: &config.Config{
@@ -51,6 +48,8 @@ func mockServer(t *testing.T) *Server {
 // reasoning.{start,delta,end}, tool.call, tool.result, text.delta+,
 // turn.completed.
 func TestMockTurn_SSEStream(t *testing.T) {
+	t.Parallel()
+
 	s := mockServer(t)
 
 	body, _ := json.Marshal(map[string]any{
@@ -115,6 +114,8 @@ func TestMockTurn_SSEStream(t *testing.T) {
 // history table should contain the canned events so pin/reload/resume works
 // end-to-end in Playwright without involving OpenRouter.
 func TestMockTurn_PersistsHistory(t *testing.T) {
+	t.Parallel()
+
 	s := mockServer(t)
 
 	body, _ := json.Marshal(map[string]any{"message": "first", "persona": "generic"})
@@ -150,6 +151,8 @@ func TestMockTurn_PersistsHistory(t *testing.T) {
 // TestMockTurn_ReplyReflectsUserMessage — Playwright asserts on a specific
 // substring, so guarantee the canned reply echoes the user input.
 func TestMockTurn_ReplyReflectsUserMessage(t *testing.T) {
+	t.Parallel()
+
 	if got := buildMockReply("foo bar"); got != "Mock reply to: foo bar" {
 		t.Errorf("reply: got %q", got)
 	}
@@ -162,6 +165,8 @@ func TestMockTurn_ReplyReflectsUserMessage(t *testing.T) {
 // the agent Manager. This lets test harnesses construct Server without
 // dialing OpenRouter.
 func TestMockTurn_AgentFieldUnused(t *testing.T) {
+	t.Parallel()
+
 	s := mockServer(t)
 	if s.agent != nil {
 		t.Fatalf("expected nil Manager in mock test fixture (saw %T)", s.agent)

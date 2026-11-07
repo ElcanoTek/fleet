@@ -22,6 +22,8 @@ func sampleModelInfos() []agentcore.ModelInfo {
 }
 
 func TestBuildModelsResponse_NoAllowlistReturnsAll(t *testing.T) {
+	t.Parallel()
+
 	at := time.Date(2026, 6, 27, 3, 0, 0, 0, time.UTC)
 	resp := buildModelsResponse(sampleModelInfos(), nil, at)
 	if len(resp.Models) != 3 {
@@ -38,6 +40,8 @@ func TestBuildModelsResponse_NoAllowlistReturnsAll(t *testing.T) {
 }
 
 func TestBuildModelsResponse_AllowlistFilters(t *testing.T) {
+	t.Parallel()
+
 	resp := buildModelsResponse(sampleModelInfos(), []string{"anthropic/*", "google/gemini-*"}, time.Time{})
 	got := map[string]bool{}
 	for _, m := range resp.Models {
@@ -58,6 +62,8 @@ func TestBuildModelsResponse_AllowlistFilters(t *testing.T) {
 }
 
 func TestBuildModelsResponse_EmptyCatalogEncodesEmptyArray(t *testing.T) {
+	t.Parallel()
+
 	resp := buildModelsResponse(nil, nil, time.Time{})
 	b, err := json.Marshal(resp)
 	if err != nil {
@@ -71,6 +77,8 @@ func TestBuildModelsResponse_EmptyCatalogEncodesEmptyArray(t *testing.T) {
 }
 
 func TestHandleModels_RejectsNonGET(t *testing.T) {
+	t.Parallel()
+
 	s := &Server{cfg: &config.Config{}}
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/models", nil)
 	rec := httptest.NewRecorder()

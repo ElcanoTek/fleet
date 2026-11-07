@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +12,14 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
-
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/testdb"
+	_ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
 )
 
 func TestParsePGConn(t *testing.T) {
+	t.Parallel()
+
 	c, err := parsePGConn("postgres://alice:s3cr3t@db.example:6543/fleet_chat?sslmode=require")
 	if err != nil {
 		t.Fatalf("parsePGConn: %v", err)
@@ -81,6 +82,8 @@ func TestParsePGConn(t *testing.T) {
 }
 
 func TestPGConnEnvHidesPasswordFromArgv(t *testing.T) {
+	t.Parallel()
+
 	c, err := parsePGConn("postgres://alice:s3cr3t@h/db")
 	if err != nil {
 		t.Fatal(err)
@@ -98,6 +101,8 @@ func TestPGConnEnvHidesPasswordFromArgv(t *testing.T) {
 }
 
 func TestSelectDBs(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string][]string{
 		"chat":  {"chat"},
 		"sched": {"sched"},
@@ -124,44 +129,24 @@ func TestSelectDBs(t *testing.T) {
 }
 
 func TestBackupFileName(t *testing.T) {
+	t.Parallel()
+
 	ts := time.Date(2026, 6, 23, 14, 5, 6, 0, time.UTC)
 	if got := backupFileName("chat", ts); got != "fleet-chat-20260623T140506Z.dump" {
 		t.Fatalf("backupFileName = %q", got)
 	}
 }
 
-// withDBName returns dsn with its database path swapped to db (preserving creds,
-// host, and query like sslmode). Used to reach the maintenance DB and the scratch
-// DBs the round-trip test provisions.
-func withDBName(t *testing.T, dsn, db string) string {
-	t.Helper()
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
-	}
-	u.Path = "/" + db
-	// The suite's DATABASE_URL names a store schema (TestMain); a scratch
-	// database starts without one, so the helper gives the database's
-	// default search_path and each test names the schema it uses.
-	q := u.Query()
-	q.Del("options")
-	u.RawQuery = q.Encode()
-	return u.String()
-}
-
 // TestBackupRestoreRoundTrip is the load-bearing test the issue's Note demands: a
 // backup is only complete if its restore is verified. It provisions two scratch
-// databases (so it never touches fleet_chat_test/fleet_sched_test), seeds a
+// databases of its own (internal/testdb), seeds a
 // sentinel row in the source, runs the real pg_dump wrapper, restores into the
 // fresh destination with the real pg_restore wrapper, and asserts the row arrives.
 //
-// Skips cleanly when DATABASE_URL is unset or pg_dump/pg_restore are absent, so a
+// Skips cleanly when FLEET_TEST_DATABASE_URL is unset or pg_dump/pg_restore are absent, so a
 // machine without the postgres client tools still passes `make test`.
 func TestBackupRestoreRoundTrip(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set, skipping pg_dump/pg_restore round-trip")
-	}
+	t.Parallel()
 	if _, err := exec.LookPath("pg_dump"); err != nil {
 		t.Skip("pg_dump not found, skipping round-trip")
 	}
@@ -170,20 +155,9 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	const srcDB = "fleet_backup_src_test"
-	const dstDB = "fleet_backup_dst_test"
-	adminDSN := withDBName(t, base, "postgres")
-	// A store's DSN names its schema (fleet backup dumps that schema only).
-	srcDSN := config.WithSchema(withDBName(t, base, srcDB), config.SchedSchema)
-	dstDSN := config.WithSchema(withDBName(t, base, dstDB), config.SchedSchema)
-
-	admin, err := sql.Open("pgx", adminDSN)
+	admin, err := sql.Open("pgx", testdb.MaintenanceDSN(t))
 	if err != nil {
 		t.Fatalf("open admin DB: %v", err)
-	}
-	if err := admin.PingContext(ctx); err != nil {
-		admin.Close()
-		t.Skipf("admin DB unreachable, skipping: %v", err)
 	}
 	defer admin.Close()
 
@@ -195,24 +169,10 @@ func TestBackupRestoreRoundTrip(t *testing.T) {
 		t.Skipf("pg_dump major %d != server major %d; skipping round-trip (install a matching postgresql-client)", cm, sm)
 	}
 
-	// Fresh scratch DBs. DROP first in case a prior run left them behind.
-	for _, db := range []string{srcDB, dstDB} {
-		if _, err := admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db); err != nil {
-			t.Fatalf("drop %s: %v", db, err)
-		}
-		if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil {
-			if isPermissionError(err) {
-				t.Skipf("cannot CREATE DATABASE (insufficient privilege), skipping: %v", err)
-			}
-			t.Fatalf("create %s: %v", db, err)
-		}
-	}
-	defer func() {
-		for _, db := range []string{srcDB, dstDB} {
-			admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db)
-		}
-	}()
-
+	// Two fresh scratch databases of this test's own.
+	// A store's DSN names its schema (fleet backup dumps that schema only).
+	srcDSN := config.WithSchema(testdb.Empty(t), config.SchedSchema)
+	dstDSN := config.WithSchema(testdb.Empty(t), config.SchedSchema)
 	// Seed a sentinel row in the source DB, then close the connection so the dump
 	// (and later the destination restore) has no contention.
 	const sentinel = "round-trip-ok"
@@ -272,10 +232,6 @@ func firstBytes(b []byte, n int) []byte {
 		return b
 	}
 	return b[:n]
-}
-
-func isPermissionError(err error) bool {
-	return err != nil && bytes.Contains([]byte(err.Error()), []byte("permission denied"))
 }
 
 // pgMajorVersions returns (pg_dump major, server major, ok). ok is false if

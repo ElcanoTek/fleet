@@ -13,6 +13,8 @@ import (
 // untouched, and name/type validation rejects junk before it reaches SQL.
 
 func TestLLMProviderCRUDAndKeySealing(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 
@@ -105,6 +107,8 @@ func TestLLMProviderCRUDAndKeySealing(t *testing.T) {
 }
 
 func TestLLMProviderValidation(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 
@@ -159,6 +163,8 @@ func TestLLMProviderValidation(t *testing.T) {
 // update, the UI-facing list and the resolver-building read, and a value the
 // INTEGER column cannot hold is refused as a validation error.
 func TestLLMProviderContextWindow(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 
@@ -230,6 +236,8 @@ func TestLLMProviderContextWindow(t *testing.T) {
 // on another type, and a bedrock base_url with a path are refused as
 // validation errors, disabled or not.
 func TestLLMProviderRegion(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStoreWithCipher(t)
 	ctx := context.Background()
 
@@ -283,6 +291,8 @@ func TestLLMProviderRegion(t *testing.T) {
 // A keyed create without a cipher configured must fail closed, never store
 // plaintext.
 func TestLLMProviderKeyRequiresCipher(t *testing.T) {
+	t.Parallel()
+
 	s := newTestStore(t) // no cipher
 	key := "sk-secret"
 	if _, err := s.CreateLLMProvider(context.Background(), LLMProviderInput{

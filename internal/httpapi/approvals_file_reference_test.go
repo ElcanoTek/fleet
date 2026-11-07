@@ -292,6 +292,8 @@ func TestRunStagedToolKeepsAttachmentCopiesWhileArgumentsRetained(t *testing.T) 
 // A call with no reference never takes a sandbox: the fake engine has no
 // pool, so a take would fail the call.
 func TestRunStagedToolWithoutReferenceTakesNoSandbox(t *testing.T) {
+	t.Parallel()
+
 	broker := &fakeMCPBroker{text: `{"ok":true}`}
 	s := &Server{agent: &approvalEngine{fakeEngine: &fakeEngine{}, broker: broker, catalog: lensApprovalCatalog}}
 	_, err := s.runStagedTool(context.Background(), &store.Approval{

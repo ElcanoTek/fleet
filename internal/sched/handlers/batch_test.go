@@ -31,6 +31,8 @@ func postBatch(t *testing.T, r http.Handler, body string) (*httptest.ResponseRec
 }
 
 func TestCreateTaskBatch_AllValidAtomic(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -61,6 +63,8 @@ func TestCreateTaskBatch_AllValidAtomic(t *testing.T) {
 }
 
 func TestCreateTaskBatch_PartialFailNonAtomic(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -96,6 +100,8 @@ func TestCreateTaskBatch_PartialFailNonAtomic(t *testing.T) {
 }
 
 func TestCreateTaskBatch_AtomicAbortsOnValidationFailure(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -125,6 +131,8 @@ func TestCreateTaskBatch_AtomicAbortsOnValidationFailure(t *testing.T) {
 }
 
 func TestCreateTaskBatch_OversizedRejected(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -141,6 +149,8 @@ func TestCreateTaskBatch_OversizedRejected(t *testing.T) {
 }
 
 func TestCreateTaskBatch_EmptyRejected(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -151,6 +161,8 @@ func TestCreateTaskBatch_EmptyRejected(t *testing.T) {
 }
 
 func TestCreateTaskBatch_Unauthorized(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -168,6 +180,8 @@ func TestCreateTaskBatch_Unauthorized(t *testing.T) {
 // charges N-1 via ConsumeN), so a single batch larger than the key's cap is
 // rejected with 429 — the batch endpoint cannot be a rate-limit bypass.
 func TestCreateTaskBatch_RateLimitAccounting(t *testing.T) {
+	t.Parallel()
+
 	r, _, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 
@@ -252,6 +266,8 @@ func TestCreateTaskBatch_RateLimitAccounting(t *testing.T) {
 // registry growing past the point where 100 rows no longer fit 65535 bind
 // parameters fails here, not in production.
 func TestMaxBatchSizeFitsOneInsert(t *testing.T) {
+	t.Parallel()
+
 	if limit := db.MaxTaskBatchRows(); MaxBatchSize > limit {
 		t.Fatalf("MaxBatchSize = %d exceeds db.MaxTaskBatchRows() = %d: a full batch no longer fits one INSERT", MaxBatchSize, limit)
 	}

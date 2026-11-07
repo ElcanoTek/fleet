@@ -28,6 +28,8 @@ func htmlFixture(t *testing.T) (*store.Conversation, []agent.HistoryEntry) {
 // document a person wants to read or forward: the conversation, with the
 // agent's working trail left out.
 func TestRenderConversationHTML_ReadableDefault(t *testing.T) {
+	t.Parallel()
+
 	conv, history := htmlFixture(t)
 	at := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
 
@@ -57,6 +59,8 @@ func TestRenderConversationHTML_ReadableDefault(t *testing.T) {
 
 // TestRenderConversationHTML_FullScope adds the working trail back, collapsed.
 func TestRenderConversationHTML_FullScope(t *testing.T) {
+	t.Parallel()
+
 	conv, history := htmlFixture(t)
 	page := renderConversationHTML(conv, history, time.Unix(0, 0).UTC(), scopeFull)
 
@@ -78,6 +82,8 @@ func TestRenderConversationHTML_FullScope(t *testing.T) {
 // Markdown renderer runs without goldmark's unsafe option, and every field
 // outside it goes through html.EscapeString.
 func TestRenderConversationHTML_EscapesUntrustedText(t *testing.T) {
+	t.Parallel()
+
 	conv := &store.Conversation{
 		ID:      "x",
 		Title:   `<img src=x onerror=alert(1)>`,
@@ -114,6 +120,8 @@ func TestRenderConversationHTML_EscapesUntrustedText(t *testing.T) {
 // undecodable entry is skipped, an empty title still names the document, and a
 // blank message doesn't emit an empty card.
 func TestRenderConversationHTML_Degrades(t *testing.T) {
+	t.Parallel()
+
 	conv := &store.Conversation{ID: "x"}
 	history := []agent.HistoryEntry{
 		{Role: "assistant", Type: "text", Content: json.RawMessage(`not valid json`)},
@@ -132,6 +140,8 @@ func TestRenderConversationHTML_Degrades(t *testing.T) {
 // TestParseExportScope pins the query contract: the readable transcript is the
 // default, and an unrecognized value is never an error.
 func TestParseExportScope(t *testing.T) {
+	t.Parallel()
+
 	for value, want := range map[string]exportScope{
 		"":             scopeConversation,
 		"conversation": scopeConversation,

@@ -3,7 +3,6 @@ package admincli
 import (
 	"context"
 	"database/sql"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
@@ -11,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestBackupRestoreWithExtraSchemas (#2055 review): the database may hold
@@ -19,17 +19,14 @@ import (
 // restores the store's schema and nothing else, and a dump of the removed
 // two-database layout (its store in public) is refused (#2049 phase 2).
 func TestBackupRestoreWithExtraSchemas(t *testing.T) {
-	base := os.Getenv("DATABASE_URL")
-	if base == "" {
-		t.Skip("DATABASE_URL not set")
-	}
+	t.Parallel()
 	for _, b := range []string{"pg_dump", "pg_restore"} {
 		if _, err := exec.LookPath(b); err != nil {
 			t.Skipf("%s not found", b)
 		}
 	}
 	ctx := context.Background()
-	admin, err := sql.Open("pgx", withDBName(t, base, "postgres"))
+	admin, err := sql.Open("pgx", testdb.MaintenanceDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -37,23 +34,9 @@ func TestBackupRestoreWithExtraSchemas(t *testing.T) {
 	if cm, sm, ok := pgMajorVersions(ctx, admin); ok && cm != sm {
 		t.Skipf("pg_dump major %d != server major %d", cm, sm)
 	}
-	const srcDB, dstDB = "fleet_backup_extra_src_test", "fleet_backup_extra_dst_test"
-	for _, db := range []string{srcDB, dstDB} {
-		_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
-		if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+db); err != nil {
-			if isPermissionError(err) {
-				t.Skipf("cannot CREATE DATABASE: %v", err)
-			}
-			t.Fatal(err)
-		}
-	}
-	defer func() {
-		for _, db := range []string{srcDB, dstDB} {
-			_, _ = admin.ExecContext(ctx, "DROP DATABASE IF EXISTS "+db+" WITH (FORCE)")
-		}
-	}()
-	srcDSN := config.WithSchema(withDBName(t, base, srcDB), config.ChatSchema)
-	dstDSN := config.WithSchema(withDBName(t, base, dstDB), config.ChatSchema)
+	srcRaw, dstRaw := testdb.Empty(t), testdb.Empty(t)
+	srcDSN := config.WithSchema(srcRaw, config.ChatSchema)
+	dstDSN := config.WithSchema(dstRaw, config.ChatSchema)
 	src, err := sql.Open("pgx", srcDSN)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +90,7 @@ func TestBackupRestoreWithExtraSchemas(t *testing.T) {
 
 	// A dump of the removed two-database layout (the store in public) is
 	// refused before anything is dropped.
-	legacySrc, err := sql.Open("pgx", withDBName(t, base, srcDB))
+	legacySrc, err := sql.Open("pgx", srcRaw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +99,7 @@ func TestBackupRestoreWithExtraSchemas(t *testing.T) {
 	}
 	_ = legacySrc.Close()
 	legacyDump := filepath.Join(t.TempDir(), "legacy.dump")
-	if err := runPgDump(ctx, config.WithSchema(withDBName(t, base, srcDB), config.PublicSchema), legacyDump); err != nil {
+	if err := runPgDump(ctx, config.WithSchema(srcRaw, config.PublicSchema), legacyDump); err != nil {
 		t.Fatalf("dump public: %v", err)
 	}
 	if err := runPgRestore(ctx, dstDSN, legacyDump); err == nil || !strings.Contains(err.Error(), "removed two-database layout") {

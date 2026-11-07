@@ -18,6 +18,8 @@ import (
 // dropped it anyway. Moving the header here means one owner of the filename and
 // a name a human recognizes.
 func TestProjectExport_SetsContentDispositionFilename(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
@@ -72,6 +74,8 @@ func TestProjectExport_SetsContentDispositionFilename(t *testing.T) {
 // attacker-adjacent only in that a user names their own project, but a
 // degenerate name should not yield `attachment; filename=".json"`.
 func TestProjectExport_FilenameSurvivesAnUnslugifiableName(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
@@ -107,6 +111,8 @@ func TestProjectExport_FilenameSurvivesAnUnslugifiableName(t *testing.T) {
 // would learn how many chats each colleague keeps here and collect a valid id
 // set, neither of which any other project surface gives them.
 func TestProjectExport_IsOwnerOnly(t *testing.T) {
+	t.Parallel()
+
 	srv := serverFixture(t)
 	st := srv.store.(*store.Store)
 	ctx := context.Background()
