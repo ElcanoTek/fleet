@@ -28,6 +28,7 @@ import {
   type TeamChatEntry,
 } from "./ProjectChatSections";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Project home (#509 follow-up): the page a project's rail row opens — title,
 // this member's chats in the project, the TEAM's shared chats beside them, a
@@ -427,7 +428,7 @@ export function ProjectHome({
       } catch (err) {
         notify({
           message: `Couldn’t share “${title || "Untitled"}” with ${team}. ${
-            err instanceof Error ? err.message : ""
+            errorMessage(err, "")
           }`.trim(),
         });
         return false;
@@ -468,7 +469,7 @@ export function ProjectHome({
     } catch (err) {
       notify({
         message: `Couldn’t stop sharing “${title}”. ${
-          err instanceof Error ? err.message : ""
+          errorMessage(err, "")
         }`.trim(),
       });
     }
@@ -493,7 +494,7 @@ export function ProjectHome({
       } catch (err) {
         notify({
           message: `Couldn’t share the new chat with ${team}. ${
-            err instanceof Error ? err.message : ""
+            errorMessage(err, "")
           }`.trim(),
         });
       }
@@ -981,7 +982,7 @@ export function TeamLearningsPanel({
       setDraft("");
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t save that learning.");
+      setError(errorMessage(err, "Couldn’t save that learning."));
     } finally {
       setBusy(false);
     }
@@ -1007,7 +1008,7 @@ export function TeamLearningsPanel({
       await load();
       return true;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t update that learning.");
+      setError(errorMessage(err, "Couldn’t update that learning."));
       return false;
     }
   };
@@ -1023,7 +1024,7 @@ export function TeamLearningsPanel({
       if (!res.ok) throw new Error(await responseErrorText(res, "Couldn’t delete that learning"));
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t delete that learning.");
+      setError(errorMessage(err, "Couldn’t delete that learning."));
     }
   };
 

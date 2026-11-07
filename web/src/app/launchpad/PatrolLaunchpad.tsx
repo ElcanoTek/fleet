@@ -40,6 +40,7 @@ import {
 } from "./launchpadModel";
 import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -232,7 +233,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       // may be stale (a tool connected or removed in the other tab), so launch
       // must not replace the server's connector seed with it.
       setCatalogLoaded(false);
-      setLoadError(e instanceof Error ? e.message : "Could not load your connectors.");
+      setLoadError(errorMessage(e, "Could not load your connectors."));
     }
   }, []);
 
@@ -548,7 +549,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     } catch (e) {
       setLaunch({
         phase,
-        error: e instanceof Error ? e.message : "Launch failed.",
+        error: errorMessage(e, "Launch failed."),
         conversationId: created.current.conversationId || undefined,
       });
     }
@@ -1367,7 +1368,7 @@ function RulesStep({
       }
       onMemoriesChanged();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not save that.");
+      setError(errorMessage(e, "Could not save that."));
     } finally {
       setBusy(false);
     }
@@ -1764,7 +1765,7 @@ function LaunchStep({
       onDrafted({ title: d.title?.trim() || title, prompt: d.prompt.trim(), summary: d.summary?.trim() ?? "" });
     } catch (e) {
       setDraftError(
-        `${e instanceof Error ? e.message : "The assistant could not draft this patrol"}. Your template draft is still here — it works as-is.`,
+        `${errorMessage(e, "The assistant could not draft this patrol")}. Your template draft is still here — it works as-is.`,
       );
     } finally {
       setDrafting(false);

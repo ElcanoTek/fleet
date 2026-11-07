@@ -12,6 +12,7 @@ import { useToast } from "@/app/shared/ui/Toast";
 import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { downloadFile } from "./downloadFile";
 import { plural } from "./plural";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
 // rows (CSV), run the agent over pending rows, review PROPOSED write-backs
@@ -68,7 +69,7 @@ export function DatasetsPanel() {
       const res = await orchestratorApi.datasets();
       setDatasets(res.datasets ?? []);
     } catch (err) {
-      showToast(`Failed to load datasets: ${(err as Error).message}`, "error");
+      showToast(`Failed to load datasets: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setListLoaded(true);
     }
@@ -104,7 +105,7 @@ export function DatasetsPanel() {
       if (page > rowsPagesRef.current) setRowsPage(rowsPagesRef.current);
     } catch (err) {
       if (runId !== rowsRunRef.current) return;
-      showToast(`Failed to load rows: ${(err as Error).message}`, "error");
+      showToast(`Failed to load rows: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       if (runId === rowsRunRef.current) setRowsLoading(false);
     }
@@ -168,7 +169,7 @@ export function DatasetsPanel() {
       await reloadList();
       await reloadRows();
     } catch (err) {
-      showToast(`${label} failed: ${(err as Error).message}`, "error");
+      showToast(`${label} failed: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setBusy(false);
     }
@@ -192,7 +193,7 @@ export function DatasetsPanel() {
       `/api/orchestrator/datasets/${encodeURIComponent(selected.id)}/export`,
       `${selected.name || "dataset"}.csv`,
     ).catch((err: unknown) =>
-      showToast(`Export failed: ${err instanceof Error ? err.message : "download failed"}`, "error"),
+      showToast(`Export failed: ${errorMessage(err, "download failed")}`, "error"),
     );
   };
 
@@ -499,7 +500,7 @@ function DatasetCreateModal({
       });
       onCreated(d);
     } catch (err) {
-      showToast(`Create failed: ${(err as Error).message}`, "error");
+      showToast(`Create failed: ${errorMessage(err, "unknown error")}`, "error");
     } finally {
       setSaving(false);
     }

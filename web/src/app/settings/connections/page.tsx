@@ -61,6 +61,7 @@ import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { responseErrorText } from "@/app/lib/responseError";
 import { copyText } from "@/app/shared/lib/clipboard";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -243,7 +244,7 @@ function granteeLabel(g: string): string {
 }
 
 function errMessage(err: unknown): string {
-  return err instanceof Error ? err.message : "Something went wrong.";
+  return errorMessage(err, "Something went wrong.");
 }
 
 // seatLabel renders a seat's account label; the unlabeled seat is "primary".

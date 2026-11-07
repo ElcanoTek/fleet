@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { validateFile } from "@/app/shared/lib/validation";
 import { DEFAULT_UPLOAD_MAX_BYTES } from "@/app/lib/uploadLimits";
 import { formatFileSize, truncateFilename } from "@/app/shared/lib/format";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // FileUpload — compact multi-file attach row for the task form. Owns local
 // file-entry state; the parent calls uploadAll() (passed an uploader) at submit
@@ -168,7 +169,7 @@ export function FileUpload({
             entry.filename = result.filename;
           } catch (err) {
             entry.status = "error";
-            entry.error = (err as Error).message;
+            entry.error = errorMessage(err, "Upload failed.");
             updateRef.current([...entriesRef.current]);
             throw err;
           }

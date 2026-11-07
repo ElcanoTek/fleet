@@ -10,6 +10,7 @@ import {
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { downloadFile } from "./downloadFile";
 import { plural } from "./plural";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // UsagePanel — the Operations Center Usage tab (#601 part 1): cost/token
 // roll-ups over the persisted metering (task iterations + chat turns), grouped
@@ -166,7 +167,7 @@ export function UsagePanel() {
               // Fetch-then-save (downloadFile) instead of navigating: a 401/500
               // used to replace the dashboard with the server's error body.
               void downloadFile(`/api/orchestrator/admin/usage?${qs.toString()}`, `usage-${groupBy}-${from}.csv`).catch(
-                (err: unknown) => setDownloadError(err instanceof Error ? err.message : "download failed"),
+                (err: unknown) => setDownloadError(errorMessage(err, "download failed")),
               );
             }}
           >
@@ -271,7 +272,7 @@ function BudgetsSection() {
       setHardTokens("");
       await reload();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to save budget");
+      setFormError(errorMessage(err, "Failed to save budget"));
     } finally {
       setSaving(false);
     }
@@ -285,7 +286,7 @@ function BudgetsSection() {
       await orchestratorApi.deleteBudget(id);
       await reload();
     } catch (err) {
-      setFormError(err instanceof Error ? err.message : "Failed to delete budget");
+      setFormError(errorMessage(err, "Failed to delete budget"));
     } finally {
       setDeleting(null);
     }

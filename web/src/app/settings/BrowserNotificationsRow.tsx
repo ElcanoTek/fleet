@@ -23,6 +23,7 @@ import {
 } from "@/app/shared/pushKey";
 import { SetRow, SetSwitch } from "./ui/atoms";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type PushState =
   | "loading" // probing support + current subscription
@@ -155,7 +156,7 @@ export function BrowserNotificationsRow() {
         if (stale) return;
         setViewer(isViewer);
         setState("disabled");
-        setError(e instanceof Error ? e.message : "Something went wrong.");
+        setError(errorMessage(e, "Something went wrong."));
       });
     return () => {
       stale = true;
@@ -231,7 +232,7 @@ export function BrowserNotificationsRow() {
       }
       setState("enabled");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      setError(errorMessage(e, "Something went wrong."));
     } finally {
       setBusy(false);
     }
@@ -257,7 +258,7 @@ export function BrowserNotificationsRow() {
       }
       setState("disabled");
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Something went wrong.");
+      setError(errorMessage(e, "Something went wrong."));
     } finally {
       setBusy(false);
     }

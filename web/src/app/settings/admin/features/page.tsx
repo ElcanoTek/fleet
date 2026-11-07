@@ -40,6 +40,7 @@ import {
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type ResolvedSetting = {
   key: string;
@@ -356,7 +357,7 @@ function FeaturesAdmin() {
     } catch (err) {
       setRowErrors((prev) => ({
         ...prev,
-        [key]: err instanceof Error ? err.message : "Failed to save.",
+        [key]: errorMessage(err, "Failed to save."),
       }));
     } finally {
       setSaving((prev) => {
@@ -901,7 +902,7 @@ function GuardrailActions() {
         mode: "",
         profile: "",
         flagged: false,
-        detail: err instanceof Error ? err.message : "Probe failed.",
+        detail: errorMessage(err, "Probe failed."),
         latency_ms: 0,
       });
     }

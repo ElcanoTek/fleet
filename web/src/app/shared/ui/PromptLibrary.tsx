@@ -9,6 +9,7 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { isFormPrompt, PromptLibraryForm } from "./PromptLibraryForm";
 import { useDialogA11y } from "./useDialogA11y";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Not on the shared DialogShell (the B-2 pass), deliberately: this is the
 // full-bleed "sheet" shape, not a centred panel — it portals to <body>, fills
@@ -82,7 +83,7 @@ export function PromptLibrary({
       );
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not load prompt library",
+        errorMessage(err, "Could not load prompt library"),
       );
     } finally {
       setLoading(false);
@@ -145,7 +146,7 @@ export function PromptLibrary({
       setEditing(false);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save prompt");
+      setError(errorMessage(err, "Could not save prompt"));
     } finally {
       setSaving(false);
     }
@@ -158,7 +159,7 @@ export function PromptLibrary({
       await orchestratorApi.deletePrompt(selected.id);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete prompt");
+      setError(errorMessage(err, "Could not delete prompt"));
     }
   };
 

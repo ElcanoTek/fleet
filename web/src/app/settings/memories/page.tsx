@@ -17,6 +17,7 @@ import {
   SetSection,
 } from "../ui/panels";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type UserMemory = {
   id: string;
@@ -81,7 +82,7 @@ export default function MemoriesPage() {
       const data = (await res.json()) as { memories?: UserMemory[] };
       setMemories(data.memories ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load memories.");
+      setError(errorMessage(err, "Unable to load memories."));
       setMemories((cur) => cur ?? []);
     }
   }, []);
@@ -143,7 +144,7 @@ export default function MemoriesPage() {
       setNotice(wasEditing ? "Memory updated." : "Memory added.");
       await loadMemories();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save memory.");
+      setError(errorMessage(err, "Unable to save memory."));
     } finally {
       setBusy(false);
     }
@@ -164,7 +165,7 @@ export default function MemoriesPage() {
       if (!res.ok) throw new Error(await responseErrorText(res, "Unable to update memory"));
       await loadMemories();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to update memory.");
+      setError(errorMessage(err, "Unable to update memory."));
     }
   };
 
@@ -183,7 +184,7 @@ export default function MemoriesPage() {
       }
       setNotice("Memory deleted.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to delete memory.");
+      setError(errorMessage(err, "Unable to delete memory."));
     }
   };
 
@@ -208,9 +209,7 @@ export default function MemoriesPage() {
       await loadMemories();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Unable to move memory to team learnings.",
+        errorMessage(err, "Unable to move memory to team learnings."),
       );
     }
   };

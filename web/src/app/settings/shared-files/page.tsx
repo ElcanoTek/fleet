@@ -36,6 +36,7 @@ import {
 } from "../ui/panels";
 import { useIsAdmin } from "../useIsAdmin";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type SharedFile = {
   id: string;
@@ -143,7 +144,7 @@ export default function SharedFilesPage() {
       if (!res.ok) throw new Error(await responseErrorText(res, "Delete failed"));
       await refresh();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Delete failed.");
+      setActionError(errorMessage(err, "Delete failed."));
     } finally {
       setBusy(false);
     }
@@ -179,7 +180,7 @@ export default function SharedFilesPage() {
       setEditing(null);
       await refresh();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : "Save failed.");
+      setEditError(errorMessage(err, "Save failed."));
     } finally {
       setBusy(false);
     }
@@ -487,7 +488,7 @@ function UploadPanel({
       if (inputRef.current) inputRef.current.value = "";
       onUploaded();
     } catch (err) {
-      setUploadError(err instanceof Error ? err.message : "Upload failed.");
+      setUploadError(errorMessage(err, "Upload failed."));
     } finally {
       setBusy(false);
     }

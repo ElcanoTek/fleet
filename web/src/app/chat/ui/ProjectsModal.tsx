@@ -5,6 +5,7 @@ import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Projects / Spaces modal (#509): create/edit shared team workspaces — the
 // binding object for standing instructions, curated connectors, default
@@ -110,7 +111,7 @@ export function ProjectsModal({
       const data = (await res.json()) as { projects?: Project[] };
       setProjects(data.projects ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to load projects.");
+      setError(errorMessage(err, "Unable to load projects."));
     }
   }, []);
 
@@ -208,7 +209,7 @@ export function ProjectsModal({
       setSelectedId(p.id);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save project.");
+      setError(errorMessage(err, "Unable to save project."));
     } finally {
       setBusy(false);
     }
@@ -221,7 +222,7 @@ export function ProjectsModal({
       setSelectedId(null);
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to delete project.");
+      setError(errorMessage(err, "Unable to delete project."));
     }
   };
 
@@ -238,7 +239,7 @@ export function ProjectsModal({
       setMemoryDraft("");
       await loadMemories(selectedId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to add memory.");
+      setError(errorMessage(err, "Unable to add memory."));
     }
   };
 
@@ -249,7 +250,7 @@ export function ProjectsModal({
       if (!res.ok) throw new Error(await responseErrorText(res, "Unable to remove memory"));
       await loadMemories(selectedId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to remove memory.");
+      setError(errorMessage(err, "Unable to remove memory."));
     }
   };
 

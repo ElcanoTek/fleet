@@ -165,6 +165,7 @@ import type { UserPersonaOption } from "./userPersonas";
 import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 import { copyText } from "@/app/shared/lib/clipboard";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -2221,9 +2222,7 @@ export function ChatExperience({
       await loadMemories();
     } catch (err) {
       setMemoryError(
-        err instanceof Error
-          ? err.message
-          : "Unable to move that memory to team learnings.",
+        errorMessage(err, "Unable to move that memory to team learnings."),
       );
     }
   };
@@ -3236,7 +3235,7 @@ export function ChatExperience({
       // returns.
       await loadConversation(activeConversationId);
     } catch (err) {
-      setSummarizeError(err instanceof Error ? err.message : "Summarizing failed.");
+      setSummarizeError(errorMessage(err, "Summarizing failed."));
     } finally {
       setIsSummarizing(false);
       setSummarizeStream("");

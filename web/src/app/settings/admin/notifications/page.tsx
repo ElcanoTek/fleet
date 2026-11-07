@@ -34,6 +34,7 @@ import {
 import { useIsAdmin } from "../../useIsAdmin";
 import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type NotifySettings = {
   notify_on: string;
@@ -236,7 +237,7 @@ function NotificationsAdmin() {
       flashTimer.current = setTimeout(() => setSavedFlash(false), 1400);
       await reload();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to save.");
+      setSaveError(errorMessage(err, "Failed to save."));
     } finally {
       setBusy(false);
     }
@@ -256,7 +257,7 @@ function NotificationsAdmin() {
       setEdits(null);
       await reload();
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : "Failed to revert.");
+      setSaveError(errorMessage(err, "Failed to revert."));
     } finally {
       setBusy(false);
     }
@@ -280,7 +281,7 @@ function NotificationsAdmin() {
         ...prev,
         [channel]: {
           ok: false,
-          detail: err instanceof Error ? err.message : "Test failed.",
+          detail: errorMessage(err, "Test failed."),
           latency_ms: 0,
         },
       }));

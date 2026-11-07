@@ -21,6 +21,7 @@ import {
 } from "../ui/panels";
 import { ClampText } from "../ui/atoms";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Skills library (Settings → Skills, fleet-unified settings pass). Two panels
 // on the design's .skill-row anatomy: "Your skills" — the personal skill
@@ -127,7 +128,7 @@ export default function SkillsPage() {
         if (!stale) setSkills([...(data.skills ?? []), ...(data.shared_skills ?? [])]);
       })
       .catch((e: unknown) => {
-        if (!stale) setError(e instanceof Error ? e.message : "Failed to load skills.");
+        if (!stale) setError(errorMessage(e, "Failed to load skills."));
       });
     fetch("/api/user-skills", { cache: "no-store" })
       .then(async (res) => {
@@ -144,7 +145,7 @@ export default function SkillsPage() {
         // An empty list under an error line: the rows are unknown, not absent,
         // and the panel must leave "Loading…" so Retry has somewhere to live.
         setMine([]);
-        setMineError(e instanceof Error ? e.message : "Failed to load your skills.");
+        setMineError(errorMessage(e, "Failed to load your skills."));
       });
     return () => {
       stale = true;
@@ -176,7 +177,7 @@ export default function SkillsPage() {
       })
       .catch((e: unknown) => {
         setMine((prev) => prev ?? []);
-        setMineError(e instanceof Error ? e.message : "Failed to load your skills.");
+        setMineError(errorMessage(e, "Failed to load your skills."));
       });
 
   const saveDraft = () => {
@@ -202,7 +203,7 @@ export default function SkillsPage() {
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Save failed."))
+      .catch((e: unknown) => setError(errorMessage(e, "Save failed.")))
       .finally(() => setBusy(false));
   };
 
@@ -226,7 +227,7 @@ export default function SkillsPage() {
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Share update failed."))
+      .catch((e: unknown) => setError(errorMessage(e, "Share update failed.")))
       .finally(() => setBusy(false));
   };
 
@@ -249,7 +250,7 @@ export default function SkillsPage() {
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Update failed."))
+      .catch((e: unknown) => setError(errorMessage(e, "Update failed.")))
       .finally(() => setBusy(false));
   };
 
@@ -282,7 +283,7 @@ export default function SkillsPage() {
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Approve failed."))
+      .catch((e: unknown) => setError(errorMessage(e, "Approve failed.")))
       .finally(() => setBusy(false));
   };
 
@@ -299,7 +300,7 @@ export default function SkillsPage() {
         await reloadMine();
         await reloadWorkspacePack();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Delete failed."))
+      .catch((e: unknown) => setError(errorMessage(e, "Delete failed.")))
       .finally(() => setBusy(false));
   };
 
@@ -326,7 +327,7 @@ export default function SkillsPage() {
         if (!res.ok) throw new Error(await responseErrorText(res, "Failed to add skill"));
         await reloadMine();
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to add skill."))
+      .catch((e: unknown) => setError(errorMessage(e, "Failed to add skill.")))
       .finally(() => setBusy(false));
   };
 
@@ -361,7 +362,7 @@ export default function SkillsPage() {
           editorRef.current?.scrollIntoView?.({ behavior: "smooth", block: "nearest" });
         }, 0);
       })
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Failed to load skill."))
+      .catch((e: unknown) => setError(errorMessage(e, "Failed to load skill.")))
       .finally(() => setBusy(false));
   };
 
@@ -382,7 +383,7 @@ export default function SkillsPage() {
       .catch((e: unknown) => {
         // A superseded request's failure is about a skill no longer open.
         if (seq !== viewSeq.current) return;
-        setViewError({ name, message: e instanceof Error ? e.message : "Failed to load skill." });
+        setViewError({ name, message: errorMessage(e, "Failed to load skill.") });
       });
   };
 

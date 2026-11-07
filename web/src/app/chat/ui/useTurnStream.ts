@@ -90,6 +90,7 @@ import { foldNarration, settleDone, settleDoneMessages, settleNarration } from "
 import type { ConversationSummary, MCPServerInfo } from "./chat-experience";
 import type { PerConvComposerState } from "./usePerConvComposerState";
 import type { TurnStreamState } from "./useTurnStreamState";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // Does the conversation still owe the user a turn? `queued` rows are waiting
 // for a drain kick; `running` rows were claimed by one (their turn may not
@@ -4452,7 +4453,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
       } catch (err) {
         setAttachmentErrorForKey(
           composerKey,
-          err instanceof Error ? err.message : "Upload failed.",
+          errorMessage(err, "Upload failed."),
         );
         return false;
       }
@@ -4820,9 +4821,7 @@ export function useTurnStream(deps: TurnStreamDeps): UseTurnStream {
                 // genuinely gone (not inflight, no buffer, nothing completed
                 // in the DB).
                 const rawMsg =
-                  error instanceof Error
-                    ? error.message
-                    : "Something went wrong.";
+                  errorMessage(error, "Something went wrong.");
                 const msg =
                   rawMsg === "__stream_closed_before_turn_end__"
                     ? "The connection dropped before the response finished."

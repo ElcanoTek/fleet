@@ -44,6 +44,7 @@ import { ApprovalCardDetails, ApprovalReadableBody } from "./ApprovalReadableCar
 import { conversationApiPath } from "@/app/lib/conversationApiUrl";
 import { earliestExpiry } from "./approvalGroups";
 import { ConnectorNamesContext } from "./approvalToolLabel";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type GroupResult = {
   approval_id: string;
@@ -245,7 +246,7 @@ export function ApprovalGroupCard({
       }
     } catch (err) {
       setSubmitError(
-        `Couldn't reach the server (${err instanceof Error ? err.message : "request failed"}).`,
+        `Couldn't reach the server (${errorMessage(err, "request failed")}).`,
       );
     } finally {
       setSubmitting(null);

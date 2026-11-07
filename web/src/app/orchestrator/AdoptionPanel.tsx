@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { orchestratorApi, type AdoptionReport, type AdoptionUser } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { downloadFile } from "./downloadFile";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // AdoptionPanel — the Operations Center's executive Adoption view: who is
 // actually using the agents, how often, and is that growing. Driven by
@@ -139,7 +140,7 @@ export function AdoptionPanel() {
               // Fetch-then-save (downloadFile) instead of navigating: a 401/500
               // used to replace the dashboard with the server's error body.
               void downloadFile(`/api/orchestrator/admin/usage/adoption?${qs.toString()}`, `adoption-${from}.csv`).catch(
-                (err: unknown) => setDownloadError(err instanceof Error ? err.message : "download failed"),
+                (err: unknown) => setDownloadError(errorMessage(err, "download failed")),
               );
             }}
           >

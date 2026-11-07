@@ -28,6 +28,7 @@ import { useIsAdmin } from "../useIsAdmin";
 import { AdminGateFallback } from "../AdminGateFallback";
 import { Icon } from "@/app/shared/ui/Icon";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type HealthSummary = {
   fleet_version: string;
@@ -148,7 +149,7 @@ export default function AdminOverviewPage() {
       })
       .catch((e: unknown) => {
         if (isStale()) return;
-        setHealthErr(e instanceof Error ? e.message : "failed to load health");
+        setHealthErr(errorMessage(e, "failed to load health"));
       });
 
   const applyStats = (isStale: () => boolean) =>
@@ -161,7 +162,7 @@ export default function AdminOverviewPage() {
       })
       .catch((err: unknown) => {
         if (isStale()) return;
-        setStatsErr(err instanceof Error ? err.message : "Failed to load.");
+        setStatsErr(errorMessage(err, "Failed to load."));
       });
 
   useEffect(() => {

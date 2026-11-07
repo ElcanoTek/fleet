@@ -38,6 +38,7 @@ import { FileUpload, type FileUploadHandle, type FileEntry } from "@/app/shared/
 import { CostForecastPanel } from "./CostForecastPanel";
 import { PromptLibrary } from "@/app/shared/ui/PromptLibrary";
 import { readPref, writePref } from "@/app/shared/lib/storage";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // TaskCreateModal — the create-task form, matching the elevated New Task design
 // (states: default · filled · advanced · validation · submitting · scrolled ·
@@ -1286,7 +1287,7 @@ export function TaskCreateModal({
       // cannot exceed 250000 bytes", "persona X is not in the loaded
       // client bundle", …) is actionable, and hiding it behind a generic
       // "try again" sent operators bug-hunting for what was a clear 400.
-      const detail = (err as Error).message;
+      const detail = errorMessage(err, "");
       setEstimateNote(detail ? `Estimate failed: ${detail}` : "Estimate failed — try again.");
       setForecast(null);
       console.warn("estimate failed:", detail);
@@ -1395,7 +1396,7 @@ export function TaskCreateModal({
       resetForm();
       onClose();
     } catch (err) {
-      const msg = (err as Error).message;
+      const msg = errorMessage(err, "unknown error");
       // The one server-side validation surface the form can't pre-check fully.
       if (/run_if/i.test(msg)) {
         setFieldError("run_if", msg);

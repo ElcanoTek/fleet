@@ -36,6 +36,7 @@ import {
 } from "./Checklist";
 import { ToolStepCard, TranscriptTimeline } from "./LogTimeline";
 import { formatDuration, unwrapDeferredCall } from "./logTimeline";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // The transcript itself — tool steps, events, the prompt, filters — renders in
 // LogTimeline.tsx; this file owns the modal around it. The ReactMarkdown
@@ -679,7 +680,7 @@ function LiveTaskView({
           if (ac.signal.aborted) return;
           failures += 1;
           setStreamError(
-            `${err instanceof Error ? err.message : "stream failed"}; reconnecting…`,
+            `${errorMessage(err, "stream failed")}; reconnecting…`,
           );
           await new Promise((resolve) =>
             window.setTimeout(
@@ -706,7 +707,7 @@ function LiveTaskView({
       await orchestratorApi.cancelTask(task.id);
       // The terminal "stopped" frame arrives on the stream; nothing else to do.
     } catch (err) {
-      setStreamError(err instanceof Error ? err.message : "stop failed");
+      setStreamError(errorMessage(err, "stop failed"));
       setStopping(false);
     }
   };
@@ -941,7 +942,7 @@ function LogViewerBody({
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `${actionLabel} failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `${actionLabel} failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -982,7 +983,7 @@ function LogViewerBody({
       onResubmitted?.();
     } catch (err) {
       showToast(
-        `Fire event failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Fire event failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
     } finally {
@@ -1012,7 +1013,7 @@ function LogViewerBody({
       window.location.href = `/chat?c=${encodeURIComponent(conversation_id)}`;
     } catch (err) {
       showToast(
-        `Discuss failed: ${err instanceof Error ? err.message : "unknown error"}`,
+        `Discuss failed: ${errorMessage(err, "unknown error")}`,
         "error",
       );
       setDiscussing(false);
@@ -1446,7 +1447,7 @@ function SelfImprovePanel({
       );
       if (open) await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -1458,7 +1459,7 @@ function SelfImprovePanel({
       await orchestratorApi.activateLearnedInstruction(task.id, version);
       await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }
@@ -1470,7 +1471,7 @@ function SelfImprovePanel({
       await orchestratorApi.deactivateLearnedInstruction(task.id);
       await reload();
     } catch (err) {
-      setNote(`Failed: ${(err as Error).message}`);
+      setNote(`Failed: ${errorMessage(err, "unknown error")}`);
     } finally {
       setBusy(false);
     }

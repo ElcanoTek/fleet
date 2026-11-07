@@ -9,6 +9,7 @@ import { ConnBadge } from "../../ui/atoms";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
 import { formatBytes, formatUptime } from "../lib";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 type ServerStats = {
   available: boolean;
@@ -99,7 +100,7 @@ export default function AdminServerPage() {
         setError(null);
       })
       .catch((err: unknown) => {
-        if (!isStale()) setError(err instanceof Error ? err.message : "server stats unavailable");
+        if (!isStale()) setError(errorMessage(err, "server stats unavailable"));
       });
 
   useEffect(() => {

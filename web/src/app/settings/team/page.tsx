@@ -33,6 +33,7 @@ import { ConnPanel, ConnPanelHead, ConnPanelSub, SetSection } from "../ui/panels
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 export type Me = {
   email: string;
@@ -77,7 +78,7 @@ export default function TeamSettingsPage() {
       setMe((await res.json()) as Me);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to read your team.");
+      setError(errorMessage(err, "Unable to read your team."));
     } finally {
       setLoading(false);
     }
@@ -135,7 +136,7 @@ export default function TeamSettingsPage() {
       // counts instead of degrading to "we couldn't work out the numbers".
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to save your team.");
+      setError(errorMessage(err, "Unable to save your team."));
     } finally {
       setBusy(false);
     }

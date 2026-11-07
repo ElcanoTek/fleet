@@ -35,6 +35,7 @@ import { Icon } from "@/app/shared/ui/Icon";
 import { CopyButton } from "@/app/chat/ui/ChatChips";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { responseErrorText } from "@/app/lib/responseError";
+import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 export type AdminUser = {
   email: string;
@@ -536,7 +537,7 @@ export default function AdminUsersPage() {
       })
       .catch((err: unknown) => {
         if (stale) return;
-        setError(err instanceof Error ? err.message : "Failed to load.");
+        setError(errorMessage(err, "Failed to load."));
       })
       .finally(() => {
         if (stale) return;
@@ -671,7 +672,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: err instanceof Error ? err.message : "Save failed.",
+        [u.email]: errorMessage(err, "Save failed."),
       }));
     }
   };
@@ -734,7 +735,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setDeleteError({
         email: u.email,
-        message: err instanceof Error ? err.message : "Delete failed.",
+        message: errorMessage(err, "Delete failed."),
       });
     } finally {
       setDeleting(null);
@@ -763,7 +764,7 @@ export default function AdminUsersPage() {
     } catch (err) {
       setRowStatus((s) => ({
         ...s,
-        [u.email]: err instanceof Error ? err.message : "Reset failed.",
+        [u.email]: errorMessage(err, "Reset failed."),
       }));
     }
   };
@@ -816,7 +817,7 @@ export default function AdminUsersPage() {
       setAddStatus(null);
       setAddOpen(false);
     } catch (err) {
-      setAddStatus(err instanceof Error ? err.message : "Create failed.");
+      setAddStatus(errorMessage(err, "Create failed."));
     }
   };
 
@@ -850,7 +851,7 @@ export default function AdminUsersPage() {
       const rows = await fetchUsers();
       if (rows !== null) setUsers(rows);
     } catch (err) {
-      setRenameStatus(err instanceof Error ? err.message : "Rename failed.");
+      setRenameStatus(errorMessage(err, "Rename failed."));
     }
   };
 
