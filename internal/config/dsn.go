@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/creds"
@@ -115,10 +116,10 @@ func dbPartsDSN(get func(string) string, defaultUser, defaultName string) (strin
 		u.User = url.UserPassword(user, pass)
 	}
 	q := url.Values{}
-	if strings.HasPrefix(host, "/") {
-		// A Unix-socket directory has no place in a URL authority; the
-		// drivers take it (and the port, which names the socket file) as
-		// query parameters on an empty host.
+	if path.IsAbs(host) {
+		// An absolute path is a Unix-socket directory, which has no place in
+		// a URL authority; the drivers take it (and the port, which names the
+		// socket file) as query parameters on an empty host.
 		q.Set("host", host)
 		q.Set("port", port)
 	} else {
