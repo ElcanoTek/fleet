@@ -76,7 +76,7 @@ func healthyFake() *fakePG {
 	f := &fakePG{clientMajor: 16}
 	f.rules = append(f.rules,
 		fakeRule{frag: "current_setting('server_version_num')", rows: [][]string{{"160004", "5432"}}},
-		fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}, {"sched", "sched"}}},
+		fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}}},
 		fakeRule{frag: "FROM pg_roles", rows: [][]string{{"1"}}},
 		fakeRule{frag: "pg_stat_activity", rows: nil},
 		fakeRule{frag: "bool_or(dirty)", rows: [][]string{{"f"}}},
@@ -86,7 +86,11 @@ func healthyFake() *fakePG {
 	)
 	f.rules = append(f.rules, inv("chat")...)
 	f.rules = append(f.rules, inv("sched")...)
-	f.rules = append(f.rules, inv("fleet")...) // the copy, for verification
+	f.rules = append(f.rules, inv("fleet")...) // the target, for verification
+	// The scratch copies of the (closed) sources: what the target is
+	// verified against.
+	f.rules = append(f.rules, inv("fleet_consolidate_chat")...)
+	f.rules = append(f.rules, inv("fleet_consolidate_sched")...)
 	f.rules = append(f.rules,
 		fakeRule{frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"t", "0"}}},
 	)
@@ -179,7 +183,7 @@ func TestConsolidatePreflightRefusals(t *testing.T) {
 		{"client tools missing", func(f *fakePG, _ *consolidateDeps) { f.checkErr = errors.New("not found on PATH: pg_restore") }, nil, "pg_restore"},
 		{"old pg_dump", func(f *fakePG, _ *consolidateDeps) { f.clientMajor = 15 }, nil, "pg_dump 15 is older than the server (16)"},
 		{"source missing", func(f *fakePG, _ *consolidateDeps) {
-			f.prepend(fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}}})
+			f.prepend(fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}}})
 		}, nil, `database "sched" not found`},
 		{"source not a fleet store", func(f *fakePG, _ *consolidateDeps) {
 			f.prepend(fakeRule{db: "chat", frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"f", "0"}}})
@@ -192,16 +196,16 @@ func TestConsolidatePreflightRefusals(t *testing.T) {
 		}, nil, "DIRTY"},
 		{"target half filled", func(f *fakePG, _ *consolidateDeps) {
 			f.prepend(
-				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}, {"sched", "sched"}, {"fleet", "sched"}}},
+				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}, {"fleet", "sched", "t"}}},
 				fakeRule{db: "fleet", frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"12", "f", "0"}}},
 			)
 		}, nil, "--force-clean"},
 		{"target owned by someone else", func(f *fakePG, _ *consolidateDeps) {
-			f.prepend(fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}, {"sched", "sched"}, {"fleet", "postgres"}}})
+			f.prepend(fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}, {"fleet", "postgres", "t"}}})
 		}, nil, `owned by "postgres"`},
 		{"target holds a legacy store", func(f *fakePG, _ *consolidateDeps) {
 			f.prepend(
-				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat"}, {"sched", "sched"}, {"fleet", "sched"}}},
+				fakeRule{frag: "FROM pg_database WHERE datname IN", rows: [][]string{{"chat", "chat", "t"}, {"sched", "sched", "t"}, {"fleet", "sched", "t"}}},
 				fakeRule{db: "fleet", frag: "to_regclass('public.schema_migrations') IS NOT NULL,\n", rows: [][]string{{"0", "t", "40"}}},
 			)
 		}, nil, "has tables in public"},

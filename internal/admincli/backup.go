@@ -103,7 +103,6 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	}
 	// -Fc custom format, --no-owner/--no-acl so a restore into a differently-owned
 	// target DB (the common DR case) does not fail on role/grant mismatches.
-	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath}
 	// A store's dump is its schema and nothing else: the DSN's schema in the
 	// one-database layout, public in the legacy one (a legacy database may
 	// hold other schemas of its own, which are not fleet's to back up).
@@ -111,7 +110,7 @@ func runPgDump(ctx context.Context, dsn, outPath string) error {
 	if schema == "" {
 		schema = config.PublicSchema // LEGACY-DB-LAYOUT: remove after consolidation
 	}
-	args = append(args, "-n", schema)
+	args := []string{"-Fc", "--no-owner", "--no-acl", "-f", outPath, "-n", schema}
 	//nolint:gosec // G204: fixed "pg_dump" binary; outPath is an operator-supplied path passed as a separate argv (no shell interpolation); connection params (incl. password) ride in the env, never argv.
 	cmd := exec.CommandContext(ctx, "pg_dump", args...)
 	cmd.Env = c.env()

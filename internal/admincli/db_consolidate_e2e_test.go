@@ -124,6 +124,16 @@ func seedLegacyPair(t *testing.T, chatDSN, schedDSN string) string {
 // scratch copy is left behind.
 func checkSourcesIntact(t *testing.T, admin *sql.DB, chatDSN, target string) {
 	t.Helper()
+	// A successful move leaves the sources closed to connections; re-open
+	// the chat source as the printed rollback would, to look inside.
+	db := strings.TrimPrefix(strings.SplitN(strings.SplitN(chatDSN, "?", 2)[0], "/", 4)[3], "/")
+	var allow bool
+	if err := admin.QueryRow(`SELECT datallowconn FROM pg_database WHERE datname = $1`, db).Scan(&allow); err != nil || allow {
+		t.Errorf("source %s datallowconn = %v (%v), want closed after the move", db, allow, err)
+	}
+	if _, err := admin.Exec(`ALTER DATABASE ` + db + ` ALLOW_CONNECTIONS true`); err != nil {
+		t.Fatal(err)
+	}
 	src, err := sql.Open("pgx", chatDSN)
 	if err != nil {
 		t.Fatal(err)

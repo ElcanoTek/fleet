@@ -14,17 +14,21 @@ package admincli
 //
 //   - Dry run by default: the full plan, the preflight verdicts and the exact
 //     per-table row counts it will copy. Nothing changes without --apply.
-//   - The source databases are never modified. Each is copied with CREATE
+//   - The source databases' data is never modified. Both are first CLOSED to
+//     new connections (ALTER DATABASE … ALLOW_CONNECTIONS false — a database
+//     setting) and their remaining non-superuser sessions ended, so nothing
+//     can write to a source after its copy is taken; they are re-opened on
+//     any failure or interrupt and left closed on success (the rollback
+//     prints the command that re-opens them). Each is copied with CREATE
 //     DATABASE … TEMPLATE into a scratch database, whose public schema is
 //     renamed to the store's schema, dumped (pg_dump -Fc -n) and restored
 //     into the target in one transaction (pg_restore --single-transaction
 //     --no-owner --no-privileges --role=<owner>). The scratch copy is dropped.
 //   - Verification before anything points at the target: exact per-table
-//     row counts, sequence values and schema_migrations rows (source vs
-//     target, and the sources recounted after the copy to prove nothing
-//     wrote to them meanwhile), object ownership, then both stores opened
-//     through the real store code in schema mode (their migrations must
-//     already be applied) with a trivial read.
+//     row counts, sequence values and schema_migrations rows (target vs each
+//     scratch copy — the closed source's final state), object ownership,
+//     then both stores opened through the real store code in schema mode
+//     (their migrations must already be applied) with a trivial read.
 //   - The env file is rewritten only after verification passed, in one
 //     atomic write, after a timestamped backup. Interrupt it anywhere before
 //     that and the box is exactly as it was (plus, at worst, a partly filled
@@ -266,7 +270,8 @@ type consolidatePlan struct {
 	targetNonEmpty bool
 	leftoverTmp    []string
 	sourceSize     uint64
-	inv            map[string]inventory // keyed by label
+	inv            map[string]inventory // keyed by label: the preview (preflight) counts
+	copied         map[string]inventory // keyed by label: each scratch copy, the sources' final state
 	passwords      []string             // for redaction only
 	// The local Postgres instance both sources are on: its socket directory
 	// ("" = the client's default, which loopback TCP DSNs map to) and port.
@@ -345,7 +350,8 @@ func runConsolidate(ctx context.Context, o consolidateOptions, d consolidateDeps
 	}
 	if err := applyConsolidation(ctx, o, d, plan); err != nil {
 		fmt.Fprintf(out, "\nFAILED: %s\n", plan.redact(err.Error()))
-		fmt.Fprintln(out, "The env file was NOT changed and the source databases were not touched: the box still runs on")
+		fmt.Fprintln(out, "The env file was NOT changed, the source databases' data was not touched and they were re-opened")
+		fmt.Fprintln(out, "to connections (see above if re-opening failed): the box still runs on")
 		fmt.Fprintln(out, "the legacy layout. Start fleet again as it was, fix the cause, and re-run (a partly filled")
 		fmt.Fprintf(out, "target is refused until you pass --force-clean, which drops only its chat and sched schemas).\n")
 		return 5
@@ -637,21 +643,31 @@ func (f *preflighter) tools() bool {
 func (f *preflighter) databases() bool {
 	p := f.p
 	names := []string{p.chat.database, p.sched.database, p.target, p.tmpDB(p.chat), p.tmpDB(p.sched)}
-	rows, err := f.q("postgres", `SELECT datname, pg_get_userbyid(datdba) FROM pg_database WHERE datname IN (`+sqlList(names)+`)`)
+	rows, err := f.q("postgres", `SELECT datname, pg_get_userbyid(datdba), datallowconn FROM pg_database WHERE datname IN (`+sqlList(names)+`)`)
 	if err != nil {
 		f.add(false, "list databases", err.Error())
 		return false
 	}
 	f.exists = map[string]string{}
+	closed := map[string]bool{}
 	for _, r := range rows {
-		if len(r) == 2 {
+		if len(r) == 3 {
 			f.exists[r[0]] = r[1]
+			closed[r[0]] = r[2] != "t"
 		}
 	}
 	f.srcOK = true
 	for _, s := range []pgSource{p.chat, p.sched} {
-		if _, ok := f.exists[s.database]; !ok {
+		switch _, ok := f.exists[s.database]; {
+		case !ok:
 			f.add(false, s.label+" source exists", fmt.Sprintf("database %q not found", s.database))
+			f.srcOK = false
+		case closed[s.database]:
+			// An apply closes the sources for the move and re-opens them on
+			// failure; one still closed while the env file names it was left
+			// so by an interrupted run that could not re-open it (killed).
+			f.add(false, s.label+" source accepts connections", fmt.Sprintf("database %q does not accept connections — left closed by an interrupted consolidation? Re-open it with: %s -c %s",
+				s.database, p.superuserCmd("psql"), shellQuote(reopenSQL(s.database))))
 			f.srcOK = false
 		}
 	}
@@ -897,7 +913,7 @@ func diffInventory(label string, want, got inventory) []string {
 
 func printSources(out io.Writer, p *consolidatePlan) {
 	fmt.Fprintf(out, "Env file:  %s\n", p.envFile)
-	fmt.Fprintln(out, "Sources (never modified; left in place afterwards):")
+	fmt.Fprintln(out, "Sources (their data is never modified; during the move they are CLOSED to new connections — a database\n  setting, ALLOW_CONNECTIONS false — re-opened if the move fails, and left closed once it succeeds):")
 	for _, s := range []pgSource{p.chat, p.sched} {
 		fmt.Fprintf(out, "  %-5s database %q, role %q, from %s  %s\n", s.label, s.database, s.role, s.from, redactDSN(s.dsn))
 	}
@@ -929,6 +945,8 @@ func printSteps(out io.Writer, o consolidateOptions, p *consolidatePlan) {
 	fmt.Fprintf(out, "\nSteps (--apply; superuser work as %s):\n", p.superuserCmd("psql/pg_dump/pg_restore"))
 	n := 0
 	step := func(f string, a ...any) { n++; fmt.Fprintf(out, "  %2d. %s\n", n, fmt.Sprintf(f, a...)) }
+	step("ALTER DATABASE %s / %s ALLOW_CONNECTIONS false (re-opened on any failure or interrupt; left closed on success); end non-superuser sessions on them",
+		p.chat.database, p.sched.database)
 	if len(p.leftoverTmp) > 0 {
 		step("DROP DATABASE %s (scratch copies left by an interrupted run)", strings.Join(p.leftoverTmp, ", "))
 	}
@@ -941,13 +959,14 @@ func printSteps(out io.Writer, o consolidateOptions, p *consolidatePlan) {
 	}
 	for _, s := range []pgSource{p.chat, p.sched} {
 		tmp := p.tmpDB(s)
-		step("CREATE DATABASE %s TEMPLATE %s  (a scratch copy; %s itself is never modified)", tmp, s.database, s.database)
+		step("CREATE DATABASE %s TEMPLATE %s  (a scratch copy of the closed source, whose data is never modified)", tmp, s.database)
 		step("in %s: ALTER SCHEMA public RENAME TO %s", tmp, s.schema)
+		step("in %s: inventory (exact row counts, sequences, schema_migrations) — what the target is verified against", tmp)
 		conn := strings.Join(p.connArgs(), " ")
 		step("pg_dump %s -Fc -n %s %s | pg_restore %s --single-transaction --no-owner --no-privileges --role=%s -d %s", conn, s.schema, tmp, conn, p.owner, p.target)
 		step("DROP DATABASE %s", tmp)
 	}
-	step("verify: per-table row counts, sequence values, schema_migrations (target vs source); sources unchanged; every object owned by %s", p.owner)
+	step("verify: per-table row counts, sequence values, schema_migrations (target vs each copy); every object owned by %s", p.owner)
 	step("verify: open both stores through fleet's own code against %s (no migration may be pending) and read from each", p.target)
 	step("back up %s to %s.pre-consolidate-<timestamp>", p.envFile, filepath.Base(p.envFile))
 	step("set DATABASE_URL to %s; comment out %s", p.target, strings.Join(retiredKeys(p), ", "))
@@ -982,6 +1001,41 @@ func applyConsolidation(ctx context.Context, o consolidateOptions, d consolidate
 	run := func(db, sql string) error { return d.pg.Exec(ctx, db, sql) }
 
 	fmt.Fprintln(out)
+
+	// Close both sources to new connections for the whole move, so nothing
+	// can write to them after their copy is taken — such a write would be
+	// lost, and row counts cannot tell. This is a setting on the source
+	// databases, not a change to their data. On any failure or interrupt
+	// they are re-opened (deferred, on a context of its own); on success they
+	// stay closed: the box now runs on the target, and going back is a
+	// deliberate step (printed below with the command that re-opens them).
+	success := false
+	var closed []string
+	defer func() {
+		if success {
+			return
+		}
+		cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
+		defer cancel()
+		for _, db := range closed {
+			if rerr := d.pg.Exec(cctx, "postgres", reopenSQL(db)); rerr != nil {
+				err = errors.Join(err, fmt.Errorf("re-open %s (run %s -c %s): %w", db, p.superuserCmd("psql"), shellQuote(reopenSQL(db)), rerr))
+				continue
+			}
+			logf("re-opened %s to connections", db)
+		}
+	}()
+	for _, s := range []pgSource{p.chat, p.sched} {
+		logf("closing %s to new connections for the move", s.database)
+		if err := run("postgres", `ALTER DATABASE `+quoteIdent(s.database)+` ALLOW_CONNECTIONS false`); err != nil {
+			return fmt.Errorf("close %s to connections: %w", s.database, err)
+		}
+		closed = append(closed, s.database)
+	}
+	if err := clearSourceConnections(ctx, d, p); err != nil {
+		return err
+	}
+
 	for _, tmp := range p.leftoverTmp {
 		logf("dropping leftover scratch database %s", tmp)
 		if err := run("postgres", `DROP DATABASE IF EXISTS `+quoteIdent(tmp)); err != nil {
@@ -1034,10 +1088,13 @@ func applyConsolidation(ctx context.Context, o consolidateOptions, d consolidate
 	if err != nil {
 		return err
 	}
+	success = true // the sources stay closed: the box runs on the target now
 	stamp := d.now().UTC().Format("2006-01-02")
 	fmt.Fprintf(out, `
 Done. %s now sets DATABASE_URL to database %q (schemas chat and sched).
   backup of the previous env file: %s
+  The old databases %q and %q are left CLOSED to connections (their data untouched), so
+  nothing can keep writing to them by mistake.
 
 Next:
   systemctl start %s fleet-backup.timer fleet-maintenance.timer   (whichever you stopped)
@@ -1046,17 +1103,20 @@ Next:
 
 Rollback (any time before you drop the old databases):
   systemctl stop %s
+  %s -c %s -c %s
   cp -p %s %s
   systemctl start %s
-  The old databases %q and %q were never modified, so this returns the box exactly to
-  its state before the move. Anything written after the switch exists only in %q and
-  is NOT carried back.
+  The old databases' data was never modified, so this returns the box exactly to its
+  state before the move. Anything written after the switch exists only in %q and is NOT
+  carried back.
 
 Once satisfied, drop the old databases (irreversible):
   %s -c %s -c %s
-`, p.envFile, p.target, backup,
-		serviceName(""), serviceName(""), shellQuote(backup), shellQuote(p.envFile), serviceName(""),
-		p.chat.database, p.sched.database, p.target,
+`, p.envFile, p.target, backup, p.chat.database, p.sched.database,
+		serviceName(""), serviceName(""),
+		p.superuserCmd("psql"), shellQuote(reopenSQL(p.chat.database)), shellQuote(reopenSQL(p.sched.database)),
+		shellQuote(backup), shellQuote(p.envFile), serviceName(""),
+		p.target,
 		p.superuserCmd("psql"), shellQuote("DROP DATABASE "+quoteIdent(p.chat.database)), shellQuote("DROP DATABASE "+quoteIdent(p.sched.database)))
 	if p.chat.role != "" && p.chat.role != p.owner {
 		fmt.Fprintf(out, "  and the chat role, if nothing else uses it: %s -c %s\n", p.superuserCmd("psql"), shellQuote("DROP ROLE "+quoteIdent(p.chat.role)))
@@ -1065,8 +1125,57 @@ Once satisfied, drop the old databases (irreversible):
 	return nil
 }
 
+// reopenSQL re-opens a source database the move closed.
+func reopenSQL(db string) string {
+	return `ALTER DATABASE ` + quoteIdent(db) + ` ALLOW_CONNECTIONS true`
+}
+
+// clearSourceConnections ends the sessions still open on the (now closed)
+// sources: client backends of non-superusers are terminated — anything that
+// slipped in between the preflight and the close — and the sources must then
+// be free of client backends within connWait. A superuser session is not
+// terminated (it may be an operator's); it makes the move refuse instead.
+func clearSourceConnections(ctx context.Context, d consolidateDeps, p *consolidatePlan) error {
+	dbs := sqlList([]string{p.chat.database, p.sched.database})
+	if _, err := d.pg.Query(ctx, "postgres", `SELECT pg_terminate_backend(a.pid) FROM pg_stat_activity a
+		JOIN pg_roles r ON r.oid = a.usesysid
+		WHERE a.datname IN (`+dbs+`) AND a.backend_type = 'client backend'
+		  AND a.pid <> pg_backend_pid() AND NOT r.rolsuper`); err != nil {
+		return fmt.Errorf("end sessions on the sources: %w", err)
+	}
+	query := `SELECT datname, usename, count(*) FROM pg_stat_activity
+		WHERE datname IN (` + dbs + `) AND backend_type = 'client backend' AND pid <> pg_backend_pid()
+		GROUP BY 1, 2 ORDER BY 1`
+	deadline := time.Now().Add(d.connWait)
+	for {
+		rows, err := d.pg.Query(ctx, "postgres", query)
+		if err != nil {
+			return fmt.Errorf("check sessions on the sources: %w", err)
+		}
+		if len(rows) == 0 {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			var who []string
+			for _, r := range rows {
+				if len(r) == 3 {
+					who = append(who, fmt.Sprintf("%s: %s session(s) as %s", r[0], r[2], r[1]))
+				}
+			}
+			return fmt.Errorf("sessions are still open on the sources (superuser sessions are not ended for you): %s", strings.Join(who, "; "))
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
+}
+
 // copyStore moves one source into its schema of the target through a
-// scratch copy, which it always drops again.
+// scratch copy, which it always drops again. The source is closed to
+// connections by then, so the copy is the source's final state; its
+// inventory, taken from the copy, is what the target is verified against.
 func copyStore(ctx context.Context, d consolidateDeps, p *consolidatePlan, s pgSource, logf func(string, ...any)) (err error) {
 	tmp := p.tmpDB(s)
 	logf("%s: copying database %s to scratch database %s", s.label, s.database, tmp)
@@ -1084,6 +1193,14 @@ func copyStore(ctx context.Context, d consolidateDeps, p *consolidatePlan, s pgS
 	if err := d.pg.Exec(ctx, tmp, `ALTER SCHEMA public RENAME TO `+quoteIdent(s.schema)+`; COMMENT ON SCHEMA `+quoteIdent(s.schema)+` IS NULL;`); err != nil {
 		return fmt.Errorf("rename schema in %s: %w", tmp, err)
 	}
+	inv, err := takeInventory(ctx, d.pg, tmp, s.schema)
+	if err != nil {
+		return fmt.Errorf("inventory of %s: %w", tmp, err)
+	}
+	if p.copied == nil {
+		p.copied = map[string]inventory{}
+	}
+	p.copied[s.label] = inv
 	logf("%s: restoring schema %s into %s as role %s", s.label, s.schema, p.target, p.owner)
 	if err := d.pg.DumpRestore(ctx, tmp, s.schema, p.target, p.owner); err != nil {
 		return fmt.Errorf("copy schema %s into %s: %w", s.schema, p.target, err)
@@ -1091,23 +1208,25 @@ func copyStore(ctx context.Context, d consolidateDeps, p *consolidatePlan, s pgS
 	return nil
 }
 
-// verifyCopy compares the target with the inventory taken before the copy
-// and recounts the sources, which must not have changed.
+// verifyCopy compares the target with the inventory of each scratch copy —
+// the source's final state, since the sources were closed to connections
+// before they were copied — and checks ownership. A difference from the
+// preview's inventory (rows written between the dry run's counts and the
+// close) is reported, not refused: the copy carries them.
 func verifyCopy(ctx context.Context, d consolidateDeps, p *consolidatePlan) error {
 	var diffs []string
 	for _, s := range []pgSource{p.chat, p.sched} {
-		want := p.inv[s.label]
+		want, ok := p.copied[s.label]
+		if !ok {
+			return fmt.Errorf("no inventory of the %s copy", s.label)
+		}
 		got, err := takeInventory(ctx, d.pg, p.target, s.schema)
 		if err != nil {
 			return err
 		}
 		diffs = append(diffs, diffInventory(s.schema, want, got)...)
-		again, err := takeInventory(ctx, d.pg, s.database, config.PublicSchema)
-		if err != nil {
-			return err
-		}
-		if dd := diffInventory("source "+s.database, want, again); len(dd) > 0 {
-			diffs = append(diffs, "the "+s.label+" source changed during the copy (something is still writing to it): "+strings.Join(dd, "; "))
+		if dd := diffInventory("since the preview, "+s.label, p.inv[s.label], want); len(dd) > 0 {
+			fmt.Fprintf(d.out, "    note: the %s source changed between the preview and the close (the copy has the final state): %s\n", s.label, strings.Join(dd, "; "))
 		}
 	}
 	rows, err := d.pg.Query(ctx, p.target, `SELECT kind || ' ' || name FROM (
@@ -1134,10 +1253,10 @@ func verifyCopy(ctx context.Context, d consolidateDeps, p *consolidatePlan) erro
 	}
 	for _, s := range []pgSource{p.chat, p.sched} {
 		var total int64
-		for _, t := range p.inv[s.label].tables {
+		for _, t := range p.copied[s.label].tables {
 			total += t.rows
 		}
-		fmt.Fprintf(d.out, "    %s: %d tables, %d rows, %d sequences, schema_migrations — identical\n", s.schema, len(p.inv[s.label].tables), total, len(p.inv[s.label].sequences))
+		fmt.Fprintf(d.out, "    %s: %d tables, %d rows, %d sequences, schema_migrations — identical\n", s.schema, len(p.copied[s.label].tables), total, len(p.copied[s.label].sequences))
 	}
 	return nil
 }

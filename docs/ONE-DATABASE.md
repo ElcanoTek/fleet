@@ -153,10 +153,18 @@ Flags: `--target-db <name>` (default `fleet`), `--env-file <path>` (default:
 the server env file), `--force-clean` (see re-runs).
 
 **What it does.** The target database is created owned by the **sched DSN's
-role** and reached with that role's password — no new secret. For each store:
+role** and reached with that role's password — no new secret. First both
+sources are **closed to new connections** (`ALTER DATABASE <source>
+ALLOW_CONNECTIONS false`, a database setting — their data is never
+modified) and any remaining non-superuser session on them is ended, so
+nothing can write to a source after its copy is taken; a superuser session
+still open makes the move refuse. On any failure or interrupt (SIGINT/SIGTERM
+included) they are re-opened; on success they are left closed, since the box
+now runs on the target (a SIGKILL can leave them closed: a re-run then refuses
+and prints the command that re-opens them). For each store:
 `CREATE DATABASE <target>_consolidate_<store> TEMPLATE <source>` (a scratch
-copy; the source is never modified), `ALTER SCHEMA public RENAME TO <store>`
-in the copy, `pg_dump -Fc -n <store> | pg_restore --single-transaction
+copy of the closed source), `ALTER SCHEMA public RENAME TO <store>` in the
+copy, an inventory of the copy, `pg_dump -Fc -n <store> | pg_restore --single-transaction
 --no-owner --no-privileges --role=<owner> -d <target>`, then the scratch copy
 is dropped — always, also on a failure or an interrupt. Superuser work runs as
 `runuser -u postgres -- psql/pg_dump/pg_restore` (peer authentication, no
@@ -185,9 +193,9 @@ refuses a box whose env file already
 configures one database ("Nothing to do").
 
 **Verification — before the env file is touched:** exact per-table row
-counts, sequence values and `schema_migrations` rows, target versus the
-inventory taken before the copy; the sources recounted to prove nothing wrote
-to them meanwhile; every schema, relation, type and function in `chat`/`sched`
+counts, sequence values and `schema_migrations` rows, target versus each
+scratch copy (the closed source's final state; differences from the dry run's
+preview are reported as notes); every schema, relation, type and function in `chat`/`sched`
 owned by the target role; `public` of the target empty; then both stores
 opened through fleet's own code against the target in schema mode — no
 migration may be pending — and read from.
@@ -208,10 +216,11 @@ all. A re-run drops leftover scratch databases. A target that already has
 and only while the env file still names the legacy sources (anything else
 stops at "Nothing to do"). The tool never drops a source.
 
-**Rollback** (printed with the exact paths): stop fleet, copy the env-file
-backup back, start fleet. The old databases were never modified, so this
-returns the box to its state before the move; anything written after the
-switch exists only in the target and is not carried back.
+**Rollback** (printed with the exact paths and commands): stop fleet,
+re-open the old databases (`ALTER DATABASE … ALLOW_CONNECTIONS true`), copy
+the env-file backup back, start fleet. The old databases' data was never
+modified, so this returns the box to its state before the move; anything
+written after the switch exists only in the target and is not carried back.
 
 **Afterwards**, once satisfied: drop the old databases
 (`runuser -u postgres -- psql -p 5432 -c 'DROP DATABASE "chat"' -c 'DROP DATABASE "sched"'`;

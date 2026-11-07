@@ -36,11 +36,13 @@ func TestConsolidatePrintedCommandsReachTheInstance(t *testing.T) {
 		}
 	}
 	want := [][]string{
+		// Rollback: re-open the sources the move left closed.
+		{"runuser", "-u", "postgres", "--", "psql", "-h", "/run/pg dir", "-p", "5444", "-c", `ALTER DATABASE "chat" ALLOW_CONNECTIONS true`, "-c", `ALTER DATABASE "sched" ALLOW_CONNECTIONS true`},
 		{"runuser", "-u", "postgres", "--", "psql", "-h", "/run/pg dir", "-p", "5444", "-c", `DROP DATABASE "chat"`, "-c", `DROP DATABASE "sched"`},
 		{"runuser", "-u", "postgres", "--", "psql", "-h", "/run/pg dir", "-p", "5444", "-c", `DROP ROLE "chat"`},
 	}
 	if len(lines) != len(want) {
-		t.Fatalf("want the database drop and the role drop commands, got %q\n%s", lines, out.String())
+		t.Fatalf("want the re-open, database drop and role drop commands, got %q\n%s", lines, out.String())
 	}
 	for i, ln := range lines {
 		// Let bash split it, exactly as a pasted command would be.
