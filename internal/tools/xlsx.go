@@ -133,6 +133,9 @@ const MaxXLSXDecompressedBytes = 512 << 20
 // per-entry bookkeeping the byte budget does not see.
 const MaxXLSXParts = 10000
 
+// zipCentralDirSig opens every zip central-directory file header ("PK\x01\x02").
+var zipCentralDirSig = []byte{'P', 'K', 0x01, 0x02}
+
 // ErrXLSXTooLarge reports a workbook whose parts decompress past the budget.
 var ErrXLSXTooLarge = errors.New("workbook decompresses past the decompressed-size cap")
 
@@ -166,6 +169,16 @@ func parseXLSXPackage(raw []byte) (*xlsxPackage, error) {
 // parseXLSXPackageWithin is parseXLSXPackage with an explicit decompressed
 // budget, so tests can prove the bound without allocating 512 MiB.
 func parseXLSXPackageWithin(raw []byte, limit int64) (*xlsxPackage, error) {
+	// zip.NewReader allocates a *zip.File for every central-directory header
+	// before returning, and it keeps reading headers until one fails to parse
+	// (the end record's entry count is only checked modulo 65536), so neither
+	// that count nor len(r.File) bounds the work. Every header it accepts starts
+	// with the central-directory signature, so the number of signatures in the
+	// raw bytes is an upper bound on the entries it would build: refuse past the
+	// cap before parsing anything.
+	if n := bytes.Count(raw, zipCentralDirSig); n > MaxXLSXParts {
+		return nil, fmt.Errorf("workbook has %d or more parts, more than the %d-part cap", MaxXLSXParts+1, MaxXLSXParts)
+	}
 	r, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
 		return nil, err

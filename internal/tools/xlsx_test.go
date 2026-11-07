@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"io"
 	"os"
@@ -175,6 +176,36 @@ func TestParseXLSXPackage_DecompressedBudget(t *testing.T) {
 	}
 	if _, err := parseXLSXPackageWithin(two.Bytes(), 2<<20); err != nil {
 		t.Fatalf("within-budget parse: %v", err)
+	}
+}
+
+// TestParseXLSXPackage_PartCapBeforeDirectoryParse proves the cap is applied
+// to the raw bytes, before zip.NewReader builds the directory: an end record
+// that understates the entry count does not change the outcome (with the old
+// len(r.File) check this archive was fully parsed, then failed as ErrFormat).
+func TestParseXLSXPackage_PartCapBeforeDirectoryParse(t *testing.T) {
+	t.Parallel()
+
+	var src bytes.Buffer
+	zw := zip.NewWriter(&src)
+	for i := 0; i <= MaxXLSXParts; i++ {
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: "p" + strconv.Itoa(i), Method: zip.Store}); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	raw := src.Bytes()
+	// Rewrite the end-of-central-directory entry counts to 1.
+	eocd := bytes.LastIndex(raw, []byte{'P', 'K', 0x05, 0x06})
+	if eocd < 0 {
+		t.Fatal("no end record")
+	}
+	binary.LittleEndian.PutUint16(raw[eocd+8:], 1)
+	binary.LittleEndian.PutUint16(raw[eocd+10:], 1)
+	if _, err := parseXLSXPackage(raw); err == nil || !strings.Contains(err.Error(), "part cap") {
+		t.Fatalf("err = %v, want the part-count cap", err)
 	}
 }
 
