@@ -9,7 +9,12 @@ package main
 // permission each operation declares is the one the code enforces.
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,12 +22,14 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/goccy/go-yaml"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/sched"
@@ -35,9 +42,17 @@ import (
 
 // Non-permission values of x-fleet-permission (see the spec's info.description).
 const (
-	permNone          = "none"          // takes no API key; security: []
+	permNone          = "none"          // reads no credential; security: []
 	permAuthenticated = "authenticated" // any valid key; checked per JSON-RPC method (A2A)
+	permWebhook       = "webhook"       // slug-scoped webhook key OR trigger HMAC
+	permHMAC          = "hmac"          // trigger HMAC only
 )
+
+// triggerSecurity is the exact security list each trigger value must declare.
+var triggerSecurity = map[string][]string{
+	permWebhook: {"triggerSignature", "webhookKey", "webhookKeyBearer"},
+	permHMAC:    {"triggerSignature"},
+}
 
 // specOp is one operation as the auth-contract tests see it.
 type specOp struct {
@@ -105,10 +120,11 @@ func TestOpenAPIPermissionDeclared(t *testing.T) {
 		case p == "":
 			t.Errorf("%s: missing x-fleet-permission", op)
 			continue
-		case p == permNone, p == permAuthenticated:
+		case p == permNone, p == permAuthenticated, p == permWebhook, p == permHMAC:
 		case models.Permission(p).Valid():
 		default:
-			t.Errorf("%s: x-fleet-permission %q is neither a models.Permission nor %q/%q", op, p, permNone, permAuthenticated)
+			t.Errorf("%s: x-fleet-permission %q is neither a models.Permission nor one of %q/%q/%q/%q",
+				op, p, permNone, permAuthenticated, permWebhook, permHMAC)
 			continue
 		}
 		if !op.hasSecurity {
@@ -117,6 +133,21 @@ func TestOpenAPIPermissionDeclared(t *testing.T) {
 		public := op.hasSecurity && len(op.security) == 0
 		if public != (p == permNone) {
 			t.Errorf("%s: x-fleet-permission %q but security %v — %q and security: [] go together", op, p, op.security, permNone)
+		}
+		// The trigger schemes appear exactly on the trigger values, and those
+		// values carry exactly their schemes.
+		sec := slices.Sorted(slices.Values(op.security))
+		usesTriggerScheme := slices.ContainsFunc(sec, func(s string) bool {
+			return s == "triggerSignature" || s == "webhookKey" || s == "webhookKeyBearer"
+		})
+		if want, ok := triggerSecurity[p]; ok {
+			if !slices.Equal(sec, want) {
+				t.Errorf("%s: x-fleet-permission %q needs security exactly %v, got %v", op, p, want, sec)
+			}
+			continue
+		}
+		if usesTriggerScheme {
+			t.Errorf("%s: security %v names a trigger scheme but x-fleet-permission is %q", op, sec, p)
 		}
 		if p != permNone && p != string(models.PermissionAdmin) && !slices.Contains(op.security, "scopedApiKey") {
 			t.Errorf("%s: x-fleet-permission %q but security does not list scopedApiKey — only admin-gated operations omit it", op, p)
@@ -279,25 +310,8 @@ type probeKey struct {
 // the acting key (so own-rows rules never mask the permission gate), in a
 // terminal status so the stream route replays instead of following.
 func TestOpenAPIPermissionEnforcement(t *testing.T) {
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
-	store := storage.New()
-	store.SetDatabase(database)
-
-	tmp := t.TempDir()
-	keyMgr, err := apikeys.NewManager(filepath.Join(tmp, "api_keys.json"), filepath.Join(tmp, "audit.jsonl"))
-	if err != nil {
-		t.Fatalf("key manager: %v", err)
-	}
-	const adminKey = "openapi-permissions-admin-key"
-	h := handlers.New(handlers.Config{
-		AdminAPIKey:      adminKey,
-		DefaultTaskModel: "test/model",
-		Version:          "0.0.0-test",
-		DataDir:          tmp,
-	}, store, keyMgr)
-	notes := handlers.NewNotesHandlers(sched.NewStore(database), h)
-	noop := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
-	router := apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil))
+	env := newProbeEnv(t)
+	store, keyMgr, router, adminKey := env.store, env.keyMgr, env.router, env.adminKey
 
 	typed := map[apikeys.KeyType]probeKey{}
 	for _, kt := range []apikeys.KeyType{apikeys.KeyTypeAdmin, apikeys.KeyTypeTask, apikeys.KeyTypeReadonly, apikeys.KeyTypeWebhook} {
@@ -352,8 +366,11 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 
 	probed := map[string]bool{}
 	for _, op := range specOps(t) {
-		if op.permission == "" || op.permission == permNone || op.permission == permAuthenticated {
-			continue
+		switch op.permission {
+		case "", permNone, permAuthenticated:
+			continue // not a permission; none/trigger values have their own tests
+		case permWebhook, permHMAC:
+			continue // TestOpenAPITriggerAuthEnforcement
 		}
 		if _, skip := probeExcluded[op.String()]; skip {
 			continue
@@ -416,6 +433,271 @@ func TestOpenAPIPermissionEnforcement(t *testing.T) {
 		if !probed[op] {
 			t.Errorf("%s is read by the manifest contract but was not probed", op)
 		}
+	}
+}
+
+// probeEnv is the real orchestrator stack the behavioural probes drive: the
+// router a deployment serves (apiversion.Router over buildOrchestratorMux),
+// real Handlers on the sched test DB, and a real key manager.
+type probeEnv struct {
+	store    *storage.Storage
+	keyMgr   *apikeys.Manager
+	router   http.Handler
+	adminKey string
+}
+
+func newProbeEnv(t *testing.T) probeEnv {
+	t.Helper()
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	store := storage.New()
+	store.SetDatabase(database)
+
+	tmp := t.TempDir()
+	keyMgr, err := apikeys.NewManager(filepath.Join(tmp, "api_keys.json"), filepath.Join(tmp, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("key manager: %v", err)
+	}
+	const adminKey = "openapi-permissions-admin-key"
+	h := handlers.New(handlers.Config{
+		AdminAPIKey:      adminKey,
+		DefaultTaskModel: "test/model",
+		Version:          "0.0.0-test",
+		DataDir:          tmp,
+	}, store, keyMgr)
+	notes := handlers.NewNotesHandlers(sched.NewStore(database), h)
+	noop := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
+	return probeEnv{
+		store:    store,
+		keyMgr:   keyMgr,
+		router:   apiversion.Router(buildOrchestratorMux(h, notes, noop, noop, nil)),
+		adminKey: adminKey,
+	}
+}
+
+// specSchemeHeader returns the header an apiKey-in-header security scheme names.
+func specSchemeHeader(t *testing.T, scheme string) string {
+	t.Helper()
+	comps, _ := loadRawOpenAPI(t)["components"].(map[string]any)
+	schemes, _ := comps["securitySchemes"].(map[string]any)
+	def, _ := schemes[scheme].(map[string]any)
+	in, _ := def["in"].(string)
+	name, _ := def["name"].(string)
+	if in != "header" || name == "" {
+		t.Fatalf("securitySchemes.%s: in=%q name=%q, want a header scheme", scheme, in, name)
+	}
+	return name
+}
+
+// TestOpenAPINoneOperationsTakeNoCredential proves `none` means what the spec
+// says: every such operation answers a request carrying no credential (no API
+// key, no bearer, no cookie, no signature) without a 401 or 403. A mutating
+// request carries a same-origin Origin header, as a browser sends it: that is
+// the CSRF check every cookie-capable POST passes, not a credential.
+//
+// POST /auth/login is the one `none` operation that authenticates anything: it
+// checks the username/password in its BODY and issues a token. It is probed
+// with a real user's credentials (admitted) and a wrong password (401), so
+// "none" there means "no credential is presented to it", nothing more.
+func TestOpenAPINoneOperationsTakeNoCredential(t *testing.T) {
+	env := newProbeEnv(t)
+	prefix := specServerPrefix(t)
+
+	const username, password = "openapi-probe-user", "openapi-probe-password"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	if _, err := env.store.AddUser(&models.User{ID: uuid.New(), Username: username, PasswordHash: string(hash),
+		Role: "client", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatalf("add user: %v", err)
+	}
+
+	send := func(op specOp, body string) int {
+		req := httptest.NewRequest(op.method, prefix+fillPath(op.path, uuid.NewString()), strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if op.method != http.MethodGet && op.method != http.MethodHead {
+			req.Header.Set("Origin", "http://"+req.Host)
+		}
+		w := httptest.NewRecorder()
+		env.router.ServeHTTP(w, req)
+		return w.Code
+	}
+
+	n := 0
+	for _, op := range specOps(t) {
+		if op.permission != permNone {
+			continue
+		}
+		n++
+		body := ""
+		if op.method == http.MethodPost || op.method == http.MethodPut {
+			body = "{}"
+		}
+		if op.String() == "POST /auth/login" {
+			good, _ := json.Marshal(models.UserLogin{Username: username, Password: password})
+			bad, _ := json.Marshal(models.UserLogin{Username: username, Password: "wrong-password"})
+			if code := send(op, string(good)); code != http.StatusOK {
+				t.Errorf("%s with the right username/password in the body: %d, want 200", op, code)
+			}
+			if code := send(op, string(bad)); code != http.StatusUnauthorized {
+				t.Errorf("%s with a wrong password: %d, want 401", op, code)
+			}
+			continue
+		}
+		if code := send(op, body); code == http.StatusUnauthorized || code == http.StatusForbidden {
+			t.Errorf("%s declares x-fleet-permission none but answered %d with no credential", op, code)
+		}
+	}
+	if n == 0 {
+		t.Fatal("no x-fleet-permission: none operations found")
+	}
+}
+
+// TestOpenAPITriggerAuthEnforcement proves the two trigger values against the
+// real stack, with a real trigger row per operation:
+//
+//   - webhook (POST /triggers/{slug}): a fleet_webhook_ key scoped to the slug
+//     is admitted under the webhookKey header and as a bearer
+//     (webhookKeyBearer); a webhook key scoped to another slug is 403; a valid
+//     triggerSignature with no key is admitted; no credential, a bad
+//     signature, and every other key type (bootstrap admin included) are 401.
+//   - hmac (POST /triggers/email/{slug}): a valid triggerSignature is admitted;
+//     no credential, a bad signature, and a slug-scoped webhook key (with no
+//     signature) are 401.
+//
+// Header names come from the spec's securitySchemes.
+func TestOpenAPITriggerAuthEnforcement(t *testing.T) {
+	env := newProbeEnv(t)
+	prefix := specServerPrefix(t)
+	keyHeader := specSchemeHeader(t, "webhookKey")
+	sigHeader := specSchemeHeader(t, "triggerSignature")
+
+	const secret = "openapi-probe-trigger-secret-0123456789abcdef"
+	sign := func(body []byte) string {
+		mac := hmac.New(sha256.New, []byte(secret))
+		mac.Write(body)
+		return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+	}
+	newTrigger := func(kind models.TriggerKind) string {
+		t.Helper()
+		template := &models.Task{ID: uuid.New(), Prompt: "openapi trigger probe template", Status: models.TaskStatusScheduled,
+			Priority: models.PriorityNormal, TriggerType: models.TriggerTypeWebhook, CreatedAt: time.Now().UTC()}
+		if _, err := env.store.AddTask(template); err != nil {
+			t.Fatalf("add template task: %v", err)
+		}
+		slug := "openapi-probe-" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
+		trig := &models.TaskTrigger{ID: uuid.New(), TaskID: template.ID, Slug: slug, Secret: secret, Kind: kind}
+		if kind == models.TriggerKindEmail {
+			trig.EmailPolicy = &models.EmailTriggerPolicy{ApprovedSenders: []string{"corp.example"}}
+		}
+		if err := env.store.CreateTrigger(context.Background(), trig); err != nil {
+			t.Fatalf("create trigger: %v", err)
+		}
+		return slug
+	}
+	webhookKey := func(slugs ...string) string {
+		t.Helper()
+		_, raw, err := env.keyMgr.CreateTypedKey("probe-webhook-"+uuid.NewString(), apikeys.KeyTypeWebhook, slugs, 0, nil, "")
+		if err != nil {
+			t.Fatalf("create webhook key: %v", err)
+		}
+		return raw
+	}
+	otherTyped := func(kt apikeys.KeyType) string {
+		t.Helper()
+		_, raw, err := env.keyMgr.CreateTypedKey("probe-"+string(kt)+"-"+uuid.NewString(), kt, nil, 0, nil, "")
+		if err != nil {
+			t.Fatalf("create %s key: %v", kt, err)
+		}
+		return raw
+	}
+
+	type attempt struct {
+		name    string
+		headers map[string]string
+		sign    bool   // send a valid signature
+		badSig  bool   // send a wrong signature
+		want    string // "admit", or an exact status code as text
+	}
+	run := func(t *testing.T, path string, body []byte, a attempt) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, prefix+path, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range a.headers {
+			req.Header.Set(k, v)
+		}
+		if a.sign {
+			req.Header.Set(sigHeader, sign(body))
+		}
+		if a.badSig {
+			req.Header.Set(sigHeader, "sha256="+strings.Repeat("0", 64))
+		}
+		w := httptest.NewRecorder()
+		env.router.ServeHTTP(w, req)
+		switch a.want {
+		case "admit":
+			if w.Code == http.StatusUnauthorized || w.Code == http.StatusForbidden {
+				t.Errorf("%s: %d, want admitted (%s)", a.name, w.Code, strings.TrimSpace(w.Body.String()))
+			}
+		default:
+			if got := strconv.Itoa(w.Code); got != a.want {
+				t.Errorf("%s: %s, want %s", a.name, got, a.want)
+			}
+		}
+	}
+
+	probed := map[string]int{}
+	for _, op := range specOps(t) {
+		if op.permission != permWebhook && op.permission != permHMAC {
+			continue
+		}
+		probed[op.permission]++
+		t.Run(op.String(), func(t *testing.T) {
+			if op.method != http.MethodPost || !strings.Contains(op.path, "{slug}") {
+				t.Fatalf("%s: the trigger probe only knows POST .../{slug} operations", op)
+			}
+			kind := models.TriggerKindWebhook
+			body := []byte(`{"action":"probe"}`)
+			if op.permission == permHMAC {
+				kind = models.TriggerKindEmail
+				body, _ = json.Marshal(handlers.InboundEmail{MessageID: "<" + uuid.NewString() + "@corp.example>",
+					From: "alerts@corp.example", To: "probe@inbound.fleet", Subject: "probe", Text: "probe", DKIM: "pass", SPF: "pass"})
+			}
+			slug := newTrigger(kind)
+			path := strings.ReplaceAll(op.path, "{slug}", slug)
+			scoped := webhookKey(slug)
+			bearer := map[string]string{"Authorization": "Bearer " + scoped}
+			if keyHeader == "Authorization" {
+				t.Fatal("webhookKey must name a header distinct from the bearer form")
+			}
+
+			attempts := []attempt{
+				{name: "no credential", want: "401"},
+				{name: "bad signature", badSig: true, want: "401"},
+				{name: "valid signature", sign: true, want: "admit"},
+				{name: "bootstrap admin key", headers: map[string]string{keyHeader: env.adminKey}, want: "401"},
+				{name: "typed admin key", headers: map[string]string{keyHeader: otherTyped(apikeys.KeyTypeAdmin)}, want: "401"},
+				{name: "typed task key", headers: map[string]string{keyHeader: otherTyped(apikeys.KeyTypeTask)}, want: "401"},
+			}
+			if op.permission == permWebhook {
+				attempts = append(attempts,
+					attempt{name: "webhook key scoped to the slug", headers: map[string]string{keyHeader: scoped}, want: "admit"},
+					attempt{name: "webhook key scoped to the slug, as bearer", headers: bearer, want: "admit"},
+					attempt{name: "webhook key for another slug", headers: map[string]string{keyHeader: webhookKey("some-other-slug")}, want: "403"},
+				)
+			} else {
+				attempts = append(attempts,
+					attempt{name: "webhook key scoped to the slug (no signature)", headers: map[string]string{keyHeader: scoped}, want: "401"},
+					attempt{name: "webhook key scoped to the slug, as bearer (no signature)", headers: bearer, want: "401"},
+				)
+			}
+			for _, a := range attempts {
+				run(t, path, body, a)
+			}
+		})
+	}
+	if probed[permWebhook] == 0 || probed[permHMAC] == 0 {
+		t.Errorf("expected at least one webhook and one hmac operation, probed %v", probed)
 	}
 }
 

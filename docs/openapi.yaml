@@ -37,12 +37,20 @@ info:
       the version prefix (`/v1`).
     - **`x-fleet-permission`** (on EVERY operation): ONE value — the
       `models.Permission` an `X-API-Key` principal must hold to be admitted to
-      the operation at all. `admin` implies every other permission. Two
-      non-permission values exist: `none` (the operation takes no API key;
-      always paired with `security: []` — public, or authenticated by a
-      per-trigger HMAC / the login body instead) and `authenticated` (any valid
-      API key is admitted at the HTTP layer and the permission is checked per
-      JSON-RPC method inside the dispatcher: the A2A endpoint only). It is
+      the operation at all. `admin` implies every other permission. The
+      non-permission values: `none` (the operation reads no credential at all;
+      always paired with `security: []`. `POST /auth/login` is `none` too: it
+      checks the username/password in its body and issues a token, it does
+      not accept one); `authenticated` (any valid API key is admitted at the
+      HTTP layer and the permission is checked per JSON-RPC method inside the
+      dispatcher: the A2A endpoint only); `webhook` (`POST /triggers/{slug}`:
+      EITHER a typed `webhook` key whose allowed trigger slugs include the
+      path slug, as X-API-Key or Authorization: Bearer — a webhook key for
+      another slug is 403 — OR a valid per-trigger HMAC signature; no other
+      key type, admin included, is honoured; security schemes `webhookKey`,
+      `webhookKeyBearer`, `triggerSignature`); `hmac`
+      (`POST /triggers/email/{slug}`: the per-trigger HMAC signature only,
+      `triggerSignature`; no API key of any type). It is
       deliberately a single value, not an any-of list: no operation is
       admitted by one of several permissions.
       What it does NOT capture, so read it as "necessary, and sufficient up to
@@ -65,7 +73,9 @@ info:
       permission set (`models.RolePermissions`) through the same handler checks.
       The value is proven against enforcement by
       `TestOpenAPIPermissionEnforcement` (cmd/fleet), which drives real
-      requests through the real router with keys that hold, and lack, it.
+      requests through the real router with keys that hold, and lack, it;
+      `none` by `TestOpenAPINoneOperationsTakeNoCredential` and `webhook` /
+      `hmac` by `TestOpenAPITriggerAuthEnforcement`.
     - **`x-fleet-key-types`** (top level): each typed key class
       (`fleet_<type>_…`) with the permission set it carries and the HTTP methods
       it may use on the scoped-key route group; pinned to `internal/sched/apikeys`
@@ -90,7 +100,8 @@ x-fleet-api-version: "1"
 # Typed API-key classes (internal/sched/apikeys): the permission set each type
 # carries (KeyType.Permissions) and the HTTP methods it may use on the
 # scoped-key route group (TypeAllowsMethod). `any` = every method. Webhook keys
-# reach no API-key route; they exist for the HMAC trigger endpoints.
+# reach no scoped-key route: they authenticate POST /triggers/{slug} only, for
+# their own slugs (x-fleet-permission: webhook).
 x-fleet-key-types:
   admin: { permissions: [admin], methods: any }
   task: { permissions: [create_task, view_tasks, view_logs], methods: any }
@@ -128,6 +139,30 @@ components:
       in: cookie
       name: elcano_auth
       description: The Elcano unified-auth Ed25519-signed identity cookie (scoped-user tier).
+    webhookKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: >-
+        A typed webhook key (fleet_webhook_…, #190), accepted ONLY on
+        POST /triggers/{slug} and only for a slug in the key's allowed trigger
+        slugs (x-fleet-permission: webhook).
+    webhookKeyBearer:
+      type: http
+      scheme: bearer
+      description: >-
+        The same fleet_webhook_ key sent as Authorization: Bearer (checked after
+        X-API-Key). Not a user token.
+    triggerSignature:
+      type: apiKey
+      in: header
+      name: X-Hub-Signature-256
+      description: >-
+        "sha256=" + hex HMAC-SHA256 of the raw request body under the trigger's
+        own secret (GitHub-compatible). X-Fleet-Signature-256 is read when
+        X-Hub-Signature-256 is absent. OpenAPI cannot express a body signature;
+        this scheme names the header, and the value is a signature, not a
+        static key.
 
   schemas:
     PromptLibraryWrite:
@@ -3212,14 +3247,18 @@ paths:
         Spawns a one-shot run cloned from the trigger's template task, with the
         rendered prompt_template as the prompt. Authenticated SOLELY by the
         per-trigger HMAC-SHA256 secret over the raw body (GitHub-compatible
-        X-Hub-Signature-256, or X-Fleet-Signature-256) — NOT the admin API key.
-        Unknown slug and bad signature both return 401 (indistinguishable, with
-        equalized HMAC work) to prevent slug enumeration. A leaked secret lets a
-        caller inject the spawned run's prompt under the template's seat
-        (network/MCP/files); the sandbox remains the execution boundary. Rotate
-        with `fleet sched trigger rotate`.
-      security: []
-      x-fleet-permission: none
+        X-Hub-Signature-256, or X-Fleet-Signature-256), OR by a typed
+        fleet_webhook_ API key whose allowed trigger slugs include this slug
+        (#190), sent as X-API-Key or Authorization: Bearer — never the admin
+        API key or any other key type. A valid webhook key that does not list
+        this slug is a definitive 403. Unknown slug and bad signature both
+        return 401 (indistinguishable, with equalized HMAC work) to prevent slug
+        enumeration. A leaked secret or key lets a caller inject the spawned
+        run's prompt under the template's seat (network/MCP/files); the sandbox
+        remains the execution boundary. Rotate the secret with
+        `fleet sched trigger rotate`.
+      security: [{ webhookKey: [] }, { webhookKeyBearer: [] }, { triggerSignature: [] }]
+      x-fleet-permission: webhook
       requestBody:
         content:
           application/json:
@@ -3235,6 +3274,7 @@ paths:
                   run_id: { type: string, format: uuid }
         "400": { $ref: "#/components/responses/Error" }
         "401": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
 
   /triggers/email/{slug}:
     parameters:
@@ -3248,7 +3288,8 @@ paths:
         An email provider's inbound-parse webhook posts a normalized email
         payload to spawn a governed run cloned from the trigger's template task.
         Authenticated by the per-trigger HMAC-SHA256 secret over the raw body
-        (X-Hub-Signature-256 or X-Fleet-Signature-256) — NOT the admin API key.
+        (X-Hub-Signature-256 or X-Fleet-Signature-256) ONLY — no API key of
+        any type, webhook keys included, is accepted here.
         An unknown slug, a webhook-kind slug, or a bad signature all return an
         identical timing-equalized 401 (no slug/kind enumeration). After auth the
         email-kind policy is enforced (approved senders → 403; required DKIM/SPF →
@@ -3258,8 +3299,8 @@ paths:
         when the template task set allow_event_triggers=true; otherwise it runs
         with native tools only. The run is recorded against the inbound event, and
         on success a reply is sent to the sender when SMTP is configured.
-      security: []
-      x-fleet-permission: none
+      security: [{ triggerSignature: [] }]
+      x-fleet-permission: hmac
       requestBody:
         description: >-
           A normalized inbound email: { message_id, from, to, subject, text,

@@ -26,7 +26,9 @@ it instead of grepping Go source.
 | The `{method, path}` set under `paths` equals the routes the real router registers | `TestOpenAPIRouteParity` |
 | Every scheme named in an operation's `security` is defined | `TestOpenAPISecuritySchemesDefined` |
 | `components.schemas.*` properties exist on the backing Go model, `required` ones are not `omitempty`, scalar types agree | `TestOpenAPISchemaDrift` (only spec ⊆ Go: a Go field missing from the spec is a warning, not a failure) |
-| Every operation has `x-fleet-permission`, its value comes from the allowed set, `none` appears exactly when `security: []` | `TestOpenAPIPermissionDeclared` |
+| Every operation has `x-fleet-permission`, its value comes from the allowed set, `none` appears exactly when `security: []`, and `webhook`/`hmac` appear exactly with their trigger security schemes | `TestOpenAPIPermissionDeclared` |
+| Every `none` operation answers a request with no credential without 401/403 (`POST /auth/login` is checked with right and wrong body credentials instead) | `TestOpenAPINoneOperationsTakeNoCredential` |
+| `webhook` (`POST /triggers/{slug}`): a webhook key scoped to the slug is admitted as `X-API-Key` and as a bearer, a webhook key for another slug gets 403, a valid HMAC signature alone is admitted; no credential, a bad signature, and any other key type get 401. `hmac` (`POST /triggers/email/{slug}`): only a valid signature is admitted; a webhook key gets 401 | `TestOpenAPITriggerAuthEnforcement` (real trigger rows) |
 | **Each declared `x-fleet-permission` is the permission the code enforces** | `TestOpenAPIPermissionEnforcement` (needs the sched DB, `DATABASE_URL`, as CI sets it) |
 | `x-fleet-api-version` equals `apiversion.Version`. A request under `servers[0].url` reaches the inner route and carries `X-Fleet-API-Version`. `GET <servers[0].url>/api-info` answers 200 with no credentials | `TestOpenAPIAPIVersion` |
 | `x-fleet-key-types` equals `apikeys.KeyType.Permissions()` and `apikeys.TypeAllowsMethod` | `TestOpenAPIKeyTypes` |
@@ -58,8 +60,17 @@ probe also fails if any operation manifest reads is ever left out.
 - **`x-fleet-api-version`** (top level, string): the HTTP API major version.
 - **`x-fleet-permission`** (on every operation, one string): the
   `models.Permission` value an `X-API-Key` principal must hold to use the
-  operation (`admin` implies every permission). Two other values exist:
-  - `none`: the operation takes no API key (`security: []`).
+  operation (`admin` implies every permission). Four other values exist:
+  - `none`: the operation reads no credential (`security: []`).
+    `POST /auth/login` is `none` too: it checks a username and password in its
+    body and issues a token.
+  - `webhook`: `POST /triggers/{slug}` accepts EITHER a typed
+    `fleet_webhook_` key whose allowed slugs include the path slug (as
+    `X-API-Key` or `Authorization: Bearer`; schemes `webhookKey` and
+    `webhookKeyBearer`) OR a per-trigger HMAC-SHA256 body signature (scheme
+    `triggerSignature`, header `X-Hub-Signature-256`). No other key type is
+    honoured there.
+  - `hmac`: `POST /triggers/email/{slug}` accepts the HMAC signature only.
   - `authenticated`: any valid key passes the HTTP layer. Only the A2A
     endpoint uses it.
 
