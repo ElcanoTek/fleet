@@ -304,6 +304,9 @@ func run() error {
 		return fmt.Errorf("load config: %w", err)
 	}
 	cfg.PinWorkspaceRoot()
+	// config.Load also exported the outbound attachment staging dir
+	// (agentcore.AdmitOutboundAttachmentDir); the MCP broker started below
+	// inherits it.
 
 	// OpenTelemetry distributed tracing (#186): OPT-IN via FLEET_OTEL_ENDPOINT.
 	// With the endpoint unset (the default) this is a complete no-op — no

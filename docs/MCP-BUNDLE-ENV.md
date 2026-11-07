@@ -100,6 +100,26 @@ colon-suffixed form fails the load. Admitting the root means the connector can
 read anything under the shared scheduled workspace; that is the same view the
 sandbox already has (fleet#1543 tracks per-task isolation of that root).
 
+**The outbound attachment directory rides along.** Before an email is sent,
+fleet copies its attachments out of the workspace into
+`<EMAIL_ATTACHMENT_DIR>/outbound/` (absolute; outside the workspace root, so
+no sandbox sees it) and rewrites the arguments to name the copies
+([ATTACHMENT-SCOPING.md](ATTACHMENT-SCOPING.md#outgoing-email-attachments)).
+An allowlist that admits only the root would refuse every one of them, so on
+every spawn path `SpawnEnv` appends that directory to an env key when **both**
+hold: the key's name ends in `ALLOWED_DIRS`, and its value lists
+`${FLEET_WORKSPACE_ROOT}` as a whole path-list element. The example above
+therefore reaches the server as
+`<operator dirs>:<workspace-root>:<EMAIL_ATTACHMENT_DIR>/outbound`. A key that
+does not admit the root, or a single-directory key such as
+`CUTLASS_REPORT_DIR: "${FLEET_WORKSPACE_ROOT}"`, is left alone, and nothing
+wider than the outbound directory (uploads, downloads) is ever added. Loading
+the configuration exports the directory as `FLEET_MCP_OUTBOUND_ATTACHMENT_DIR`,
+so every entrypoint that spawns MCP servers has it: `fleet serve` (and the MCP
+broker it starts, which inherits it), `fleet task run` and `fleet mcp test`.
+Loading overwrites any value the environment held, so it is not
+an operator knob.
+
 **Honest scope.** On the *shared* spawn paths (the boot roster the broker child
 keeps for tool discovery, hot reload, `fleet mcp test`, and load-on-demand onto
 a shared client) MCP subprocesses are host-side and process-lifetime, so the

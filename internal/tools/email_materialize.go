@@ -168,9 +168,14 @@ func MaterializeAttachmentPaths(convID, rawInput string) (string, error) {
 	return string(out), nil
 }
 
-// forEachAttachmentPath calls fn with every non-empty string `path` (trimmed)
-// in the `attachments` and `inline_attachments` arrays of args, writes the value
-// fn returns back in its place, and reports whether any value changed.
+// forEachAttachmentPath calls fn with every non-empty attachment path
+// (trimmed) in the `attachments` and `inline_attachments` arrays of args,
+// writes the value fn returns back in its place, and reports whether any value
+// changed. An item is either an object carrying a string `path`
+// ({"path": "chart.png", ...}) or a bare path string ("report.xlsx"), and each
+// keeps its shape: an object gets its `path` replaced, a string is replaced by
+// the new string. Bare strings used to be skipped, which let them reach the
+// connector unchecked, un-snapshotted and still relative.
 func forEachAttachmentPath(args map[string]any, fn func(path string) (string, error)) (bool, error) {
 	changed := false
 	for _, key := range []string{"attachments", "inline_attachments"} {
@@ -179,15 +184,20 @@ func forEachAttachmentPath(args map[string]any, fn func(path string) (string, er
 			continue
 		}
 		for i, item := range raw {
-			obj, ok := item.(map[string]any)
-			if !ok {
+			var current string
+			switch v := item.(type) {
+			case string:
+				current = v
+			case map[string]any:
+				p, ok := v["path"].(string)
+				if !ok {
+					continue
+				}
+				current = p
+			default:
 				continue
 			}
-			file, ok := obj["path"].(string)
-			if !ok {
-				continue
-			}
-			file = strings.TrimSpace(file)
+			file := strings.TrimSpace(current)
 			if file == "" {
 				continue
 			}
@@ -195,11 +205,15 @@ func forEachAttachmentPath(args map[string]any, fn func(path string) (string, er
 			if err != nil {
 				return false, err
 			}
-			if next != obj["path"] {
-				obj["path"] = next
-				raw[i] = obj
-				changed = true
+			if next == current {
+				continue
 			}
+			if obj, ok := item.(map[string]any); ok {
+				obj["path"] = next
+			} else {
+				raw[i] = next
+			}
+			changed = true
 		}
 		args[key] = raw
 	}
@@ -382,11 +396,23 @@ func (b attachmentBases) resolve(path string) (base, rel string, err error) {
 // copies an email is sent with: <emailAttachmentDir>/outbound, a host-side
 // directory no sandbox mounts. "" when emailAttachmentDir is unset (the
 // snapshot then uses the OS temp directory).
+//
+// The result is always absolute (resolved against the process cwd). The
+// copies' paths are written into the tool arguments and read by the email
+// connector, an MCP subprocess running in its own cwd (a per-run
+// mcp-runs/task-<id> directory), so a relative staging path, which the
+// default "./data/attachments" used to produce, never resolved there and the
+// send failed with "attachment file not found".
 func OutboundAttachmentStagingDir(emailAttachmentDir string) string {
-	if strings.TrimSpace(emailAttachmentDir) == "" {
+	dir := strings.TrimSpace(emailAttachmentDir)
+	if dir == "" {
 		return ""
 	}
-	return filepath.Join(emailAttachmentDir, "outbound")
+	dir = filepath.Join(dir, "outbound")
+	if abs, err := filepath.Abs(dir); err == nil {
+		return abs
+	}
+	return dir
 }
 
 // MaxEmailAttachmentBytes bounds the attachments one email may carry in total,
@@ -439,6 +465,11 @@ func hasAttachmentLists(args map[string]any) bool {
 func snapshotAttachments(bases attachmentBases, args map[string]any, stagingParent string) (cleanup func(), err error) {
 	if stagingParent == "" {
 		stagingParent = os.TempDir()
+	}
+	// The copies' paths are handed to a connector running in another cwd, so
+	// they must be absolute whatever the caller passed.
+	if abs, err := filepath.Abs(stagingParent); err == nil {
+		stagingParent = abs
 	}
 	if err := os.MkdirAll(stagingParent, 0o700); err != nil {
 		return nil, fmt.Errorf("prepare attachment staging: %w", err)
