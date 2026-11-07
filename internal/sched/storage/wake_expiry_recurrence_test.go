@@ -56,6 +56,8 @@ func parkStrandedWake(t *testing.T, store *Storage, recurrence string) *models.T
 // silently end a daily schedule — the same failure #1116 fixed for the other
 // parked state.
 func TestExpireStrandedWakeTasks_PreservesRecurrenceChain(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 
@@ -100,6 +102,8 @@ func TestExpireStrandedWakeTasks_PreservesRecurrenceChain(t *testing.T) {
 }
 
 func TestExpireStrandedWakeTasks_NonRecurringSpawnsNothing(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 

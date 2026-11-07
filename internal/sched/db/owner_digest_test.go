@@ -18,6 +18,8 @@ import (
 // was cancelled, unscheduled one-offs, runs outside the window, ownerless
 // rows, webhook templates, occurrences not yet overdue — stays out.
 func TestOwnerDigestCandidates(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

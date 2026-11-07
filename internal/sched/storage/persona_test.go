@@ -13,6 +13,8 @@ import (
 // TestTaskPersonaRoundTrip pins the nullable persona column (#221): empty
 // round-trips empty, a set persona round-trips intact, and an edit replaces it.
 func TestTaskPersonaRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

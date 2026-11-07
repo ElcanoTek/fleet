@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -25,6 +24,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // setupTaskAuthz wires the task read routes behind the real
@@ -35,17 +35,10 @@ func setupTaskAuthz(t *testing.T) (*storage.Storage, *apikeys.Manager, *chi.Mux)
 	tmpDir := t.TempDir()
 
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if isDatabaseUnavailable(err) {
-			t.Skipf("Skipping tests: database unavailable: %v", err)
-		}
+	if err := store.Initialize(fleetdb.New(t).SchedDSN(), fleetdb.SchedPool()); err != nil {
 		t.Fatalf("init storage: %v", err)
 	}
 	t.Cleanup(func() { store.Close() })
-	acquireTestLock(t, store)
-	if err := cleanDB(store); err != nil {
-		t.Fatalf("clean db: %v", err)
-	}
 
 	keyMgr, err := apikeys.NewManager(filepath.Join(tmpDir, "keys.json"), filepath.Join(tmpDir, "audit.jsonl"))
 	if err != nil {
@@ -159,6 +152,8 @@ func listTaskIDs(t *testing.T, r *chi.Mux, header, value string) map[string]bool
 // only its own rows on list, get, and the get-shaped sub-reads, while the
 // creating key still reads its own.
 func TestTaskReadIsCreatorScoped(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r := setupTaskAuthz(t)
 
 	ownerKey, ownerRaw, err := keyMgr.CreateTypedKey("owner", apikeys.KeyTypeTask, nil, 0, nil, "")
@@ -227,6 +222,8 @@ func TestTaskReadIsCreatorScoped(t *testing.T) {
 // view_all_logs auditor grant (an auditor who may read every transcript must be
 // able to find the tasks those transcripts belong to).
 func TestTaskReadFleetWideGrants(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r := setupTaskAuthz(t)
 
 	task := addOwnedTask(t, store, nil, nil) // created out-of-band; owned by nobody
@@ -270,6 +267,8 @@ func TestTaskReadFleetWideGrants(t *testing.T) {
 // non-admin user sees its own tasks only — matching the transcript model (#980)
 // — while an admin-role user sees the fleet.
 func TestTaskReadUserScoping(t *testing.T) {
+	t.Parallel()
+
 	store, _, r := setupTaskAuthz(t)
 
 	alice := addLogUser(t, store, "alice", "client", "alice-token")
@@ -301,6 +300,8 @@ func TestTaskReadUserScoping(t *testing.T) {
 // a non-admin principal receives only its own tags and counts, preventing information
 // leaks about other principals' tags or activity levels. An admin principal sees all.
 func TestTagCatalogueAuthz(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, r := setupTaskAuthz(t)
 
 	alice := addLogUser(t, store, "alice", "client", "alice-token")
@@ -379,6 +380,8 @@ func TestTagCatalogueAuthz(t *testing.T) {
 // the addresses its own tasks deliver to, an admin sees every visible task's,
 // and a line in a delivery block that is not a bare address is never offered.
 func TestRecipientHistoryAuthz(t *testing.T) {
+	t.Parallel()
+
 	store, _, r := setupTaskAuthz(t)
 
 	alice := addLogUser(t, store, "alice", "client", "alice-token")

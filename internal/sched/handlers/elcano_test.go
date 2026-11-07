@@ -13,6 +13,8 @@ import (
 )
 
 func TestElcanoLogout(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{ElcanoCookieName: "elcano_auth", ElcanoCookieDomain: "elcanotek.com"}}
 	req := httptest.NewRequest(http.MethodPost, "/auth/logout", nil)
 	rr := httptest.NewRecorder()
@@ -37,6 +39,8 @@ func TestElcanoLogout(t *testing.T) {
 // the token authenticates before and is refused (401) after. A logout with
 // some other bearer leaves the session alone.
 func TestLogoutEndsBearerSession(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0",

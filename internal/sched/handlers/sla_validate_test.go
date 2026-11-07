@@ -12,6 +12,8 @@ import (
 // statically-broken SLA config (#274) instead of persisting one that fires
 // spurious alerts at runtime.
 func TestValidateTaskCreate_SLA(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 	expected := 30

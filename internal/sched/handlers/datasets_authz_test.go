@@ -106,6 +106,8 @@ func datasetRequest(method, path, apiKey, contentType string, body string) *http
 // model. Reads need view_tasks, mutations need create_task, like the task
 // surface.
 func TestDatasetsRequirePermissions(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr := setupDatasetAuthz(t)
 	readonly, readonlyKey, err := keyMgr.CreateTypedKey("viewer", apikeys.KeyTypeReadonly, nil, 0, nil, "")
 	if err != nil {
@@ -178,6 +180,8 @@ func TestDatasetsRequirePermissions(t *testing.T) {
 // error and the handler's MaxBytesReader was dead code. The exemption is
 // narrow — POST /datasets (create) stays under the global cap.
 func TestDatasetImportBodyCapIsTheHandlers(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr := setupDatasetAuthz(t)
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	ds := seedOwnedDataset(t, store, nil, &clientKeyID)
@@ -245,6 +249,8 @@ func listDatasetIDs(t *testing.T, r http.Handler, req *http.Request) map[string]
 // other, like an unknown id), lists only those, and admin and view_all_logs
 // principals reach every dataset, including one with no recorded creator.
 func TestDatasetsAreCreatorScoped(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr, h := setupDatasetAuthzHandlers(t)
 	h.SetDatasetRunner(stubDatasetRunner{})
 
@@ -368,6 +374,8 @@ func TestDatasetsAreCreatorScoped(t *testing.T) {
 // TestDatasetCreateRecordsCreator pins that POST /datasets records the
 // creating principal, so the creator can reach the dataset afterwards.
 func TestDatasetCreateRecordsCreator(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr := setupDatasetAuthz(t)
 	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")
 	alice := addLogUser(t, store, "alice-"+uuid.NewString()[:8], "client", "alice-token")
@@ -409,6 +417,8 @@ func TestDatasetCreateRecordsCreator(t *testing.T) {
 // re-run, row import) go through the same per-principal budget gate as task
 // creation: an exhausted window answers 402 with Retry-After.
 func TestDatasetRunHonorsBudget(t *testing.T) {
+	t.Parallel()
+
 	r, store, keyMgr, h := setupDatasetAuthzHandlers(t)
 	h.SetDatasetRunner(stubDatasetRunner{})
 	keyID, key := mustCreateRoleKeyWithID(t, keyMgr, "client")

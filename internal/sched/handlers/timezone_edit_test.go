@@ -21,6 +21,8 @@ import (
 // stale time). The edit path gets this from validateTaskCreate deriving
 // scheduled_for from the cron in the request's zone; this pins it.
 func TestUpdateTask_TimezoneChangeMovesNextRun(t *testing.T) {
+	t.Parallel()
+
 	store, h, cleanup := setupFullHandler(t)
 	defer cleanup()
 	r := chi.NewRouter()

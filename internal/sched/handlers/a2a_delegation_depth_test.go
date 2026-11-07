@@ -66,6 +66,8 @@ func createdTaskID(t *testing.T, env *rpcEnvelope) uuid.UUID {
 }
 
 func TestA2AInboundDelegationDepth(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux, h := setupA2AHandlers(t, false)
 	h.a2a.MaxDelegationDepth = 2
 	rawKey, keyID := mintTaskKey(t, keyMgr, "delegator")
@@ -126,6 +128,8 @@ func TestA2AInboundDelegationDepth(t *testing.T) {
 }
 
 func TestA2ADelegationDepthDefaultsWhenUnconfigured(t *testing.T) {
+	t.Parallel()
+
 	// A zero ceiling (a test-built config) falls back to the package default
 	// instead of refusing every create.
 	if d, err := a2aDelegationDepth("", 0); err != nil || d != 1 {

@@ -5,7 +5,9 @@
 //
 // It imports both stores, so their own internal tests (package store,
 // package db under internal/sched/db) cannot use it; they clone single-store
-// templates through internal/testdb directly. Everything else uses this.
+// templates through internal/testdb directly. Everything else uses this —
+// internal/sched/storage too: fleetdb deliberately does not import it, so its
+// tests can (wrap SchedDB with storage.SetDatabase).
 //
 // Every helper skips the test only when FLEET_TEST_DATABASE_URL is unset and
 // fails it on any other error (internal/testdb). Each call to New is a new
@@ -20,7 +22,6 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
-	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/testdb"
 )
@@ -106,18 +107,6 @@ func (d DB) SchedDB(t testing.TB) *scheddb.Database {
 	return db
 }
 
-// Storage opens the scheduler's storage layer on d, closed when the test
-// ends.
-func (d DB) Storage(t testing.TB) *storage.Storage {
-	t.Helper()
-	s := storage.New()
-	if err := s.Initialize(d.SchedDSN(), SchedPool()); err != nil {
-		t.Fatalf("fleetdb: open sched storage: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	return s
-}
-
 // Chat is New(t).Chat(t): a chat store on a database of its own.
 func Chat(t testing.TB) *store.Store {
 	t.Helper()
@@ -130,11 +119,6 @@ func SchedDB(t testing.TB) *scheddb.Database {
 	return New(t).SchedDB(t)
 }
 
-// Storage is New(t).Storage(t).
-func Storage(t testing.TB) *storage.Storage {
-	t.Helper()
-	return New(t).Storage(t)
-}
 
 // DeleteRows runs `DELETE FROM <table>` for each table, in order, failing the
 // test on any error — for a test that wipes mid-run (an export → wipe →

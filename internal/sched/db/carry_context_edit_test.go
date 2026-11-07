@@ -13,6 +13,8 @@ import (
 // toggle was acknowledged with 200 (the handler returns the mutated in-memory
 // task) and then silently reverted on the next read.
 func TestUpdateTaskTxPersistsCarryContext(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

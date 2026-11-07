@@ -19,6 +19,8 @@ import (
 // route was admin-API-key-only and the proxy never sent X-API-Key, so it was a
 // guaranteed "Invalid API key" for every dashboard user.
 func TestSLAReportAdminGate(t *testing.T) {
+	t.Parallel()
+
 	h, store := setupTest(t)
 
 	addUser := func(username, role, token string) {

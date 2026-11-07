@@ -23,6 +23,8 @@ import (
 // signature, a key scoped to a different slug is 403, and the HMAC path is
 // untouched (no key → unchanged behavior).
 func TestHandleWebhookTrigger_WebhookKey(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 

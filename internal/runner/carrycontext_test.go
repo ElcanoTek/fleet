@@ -81,6 +81,8 @@ func runPoolOnce(t *testing.T, store *storage.Storage, runner TaskRunner, seen f
 // TestCarryContext_InjectsPriorRunHandoff: a recurring carry_context task's run
 // sees the prior run's final assistant message injected as prior-run context.
 func TestCarryContext_InjectsPriorRunHandoff(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedCarryTask(t, store, "0 9 * * *", true, "Sales were up 12% week over week.")
 
@@ -96,6 +98,8 @@ func TestCarryContext_InjectsPriorRunHandoff(t *testing.T) {
 // TestCarryContext_DisabledNoInjection: carry_context off → no prior context,
 // even with a prior log present.
 func TestCarryContext_DisabledNoInjection(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedCarryTask(t, store, "0 9 * * *", false, "Prior output that must NOT be carried.")
 
@@ -110,6 +114,8 @@ func TestCarryContext_DisabledNoInjection(t *testing.T) {
 // TestCarryContext_OneShotNoInjection: carry_context on but the task is one-shot
 // (no recurrence) → no prior context (carry is a recurring-only feature).
 func TestCarryContext_OneShotNoInjection(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedCarryTask(t, store, "", true, "Prior output for a one-shot task.")
 
@@ -124,6 +130,8 @@ func TestCarryContext_OneShotNoInjection(t *testing.T) {
 // TestCarryContext_ClampsLongHandoff: an over-long prior answer is truncated to
 // the bounded window so context-carry stays cheap.
 func TestCarryContext_ClampsLongHandoff(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	long := strings.Repeat("x", carryContextMaxChars+500)
 	seedCarryTask(t, store, "0 9 * * *", true, long)
@@ -143,6 +151,8 @@ func TestCarryContext_ClampsLongHandoff(t *testing.T) {
 // TestCarryContext_FirstRunNoPriorLog: carry_context on, recurring, but no prior
 // run yet → no context (nothing to carry), and the run still proceeds.
 func TestCarryContext_FirstRunNoPriorLog(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedCarryTask(t, store, "0 9 * * *", true, "")
 
@@ -160,6 +170,8 @@ func TestCarryContext_FirstRunNoPriorLog(t *testing.T) {
 // the occurrence that just completed — before that pointer existed every real
 // recurrence started cold and the feature only fired on a retry of one row.
 func TestCarryContext_FollowsRecurrenceLineage(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 
 	// Occurrence #1: terminal, with its transcript persisted under ITS id.

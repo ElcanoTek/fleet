@@ -11,6 +11,8 @@ import (
 // to maxTaskDescriptionChars runes is accepted; one rune over is rejected; empty
 // is fine. Counting is rune-based, so multibyte text is not penalized by bytes.
 func TestValidateTaskCreate_Description(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 	prompt := "do the thing for the team"
 
@@ -40,6 +42,8 @@ func TestValidateTaskCreate_Description(t *testing.T) {
 // parity for 90-deal Manifest batches). The literal is deliberate: raising or
 // lowering the cap must be a conscious edit here too. The cap counts BYTES.
 func TestValidateTaskCreate_PromptMaxBytes(t *testing.T) {
+	t.Parallel()
+
 	h := newValidateTestHandlers()
 
 	if err := h.validateTaskCreate(&models.TaskCreate{Prompt: strings.Repeat("a", 250000)}); err != nil {

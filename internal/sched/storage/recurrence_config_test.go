@@ -22,6 +22,8 @@ import (
 // This drives the real scheduleNextRecurrence path (DB persist + reload), so it
 // also proves the fields survive the AddTask → scanTask round-trip.
 func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	owner := uuid.New()

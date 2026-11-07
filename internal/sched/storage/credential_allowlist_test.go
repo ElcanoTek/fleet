@@ -15,6 +15,8 @@ import (
 // (#184) through the nullable JSONB column: nil ("inherit global") and empty
 // ("deny all") must NOT collapse into each other across a write/read cycle.
 func TestCredentialAllowlistRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -69,6 +71,8 @@ func TestCredentialAllowlistRoundTrip(t *testing.T) {
 // TestUpdateTaskCredentialAllowlist exercises the set → read-back → clear cycle
 // and the editable-state guard.
 func TestUpdateTaskCredentialAllowlist(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

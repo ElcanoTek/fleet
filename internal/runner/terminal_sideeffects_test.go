@@ -18,6 +18,8 @@ import (
 // the run must fire NO success notification and NO email reply — the DB says
 // cancelled, and the external world must agree.
 func TestNoSuccessSideEffectsWhenTerminalWriteFails(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	ctx := context.Background()
 
@@ -105,6 +107,8 @@ func TestNoSuccessSideEffectsWhenTerminalWriteFails(t *testing.T) {
 // write are rejected (lease lost — the row is cancelled), no failure
 // notification fires.
 func TestNoFailureSideEffectsWhenNoTerminalStateLands(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedTask(t, store, 0, 0) // MaxRetries 0 → a retryable class exhausts immediately
 
@@ -150,6 +154,8 @@ func TestNoFailureSideEffectsWhenNoTerminalStateLands(t *testing.T) {
 // the #580 gating: a normally-completing run still fires its success
 // notification — the gate suppresses only runs whose terminal write failed.
 func TestSuccessSideEffectsFireWhenTerminalWriteLands(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -177,6 +183,8 @@ func TestSuccessSideEffectsFireWhenTerminalWriteLands(t *testing.T) {
 // entry — otherwise the live run loses stillOwns fencing (its real terminal
 // write is skipped), lease renewal, and StopTask reachability.
 func TestStaleGoroutineCleanupPreservesFreshClaim(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -265,6 +273,8 @@ func TestStaleGoroutineCleanupPreservesFreshClaim(t *testing.T) {
 // answer still in pending_answer, so the retried claim injects it again. The
 // Q&A columns are cleared only once the run reaches a terminal outcome.
 func TestResumedAnswerSurvivesRetry(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	ctx := context.Background()
 

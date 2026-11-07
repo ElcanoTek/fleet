@@ -8,6 +8,8 @@ import (
 )
 
 func TestSenderApproved(t *testing.T) {
+	t.Parallel()
+
 	approved := []string{"alerts@corp.com", "ops.io"}
 	cases := []struct {
 		from string
@@ -34,6 +36,8 @@ func TestSenderApproved(t *testing.T) {
 }
 
 func TestCheckEmailPolicy(t *testing.T) {
+	t.Parallel()
+
 	base := InboundEmail{From: "alerts@corp.com", DKIM: "pass", SPF: "pass"}
 	policy := &models.EmailTriggerPolicy{ApprovedSenders: []string{"corp.com"}, RequireDKIM: true}
 
@@ -66,6 +70,8 @@ func TestCheckEmailPolicy(t *testing.T) {
 }
 
 func TestAttachmentsExceedLimits(t *testing.T) {
+	t.Parallel()
+
 	// nil policy / zero MaxAttachments disallows attachments entirely.
 	if bad, _ := attachmentsExceedLimits(nil, []InboundAttachment{{Filename: "x", Size: 1}}); !bad {
 		t.Error("nil policy should reject any attachment")
@@ -86,6 +92,8 @@ func TestAttachmentsExceedLimits(t *testing.T) {
 }
 
 func TestEmailAddress(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"alerts@corp.com":        "alerts@corp.com",
 		"Ops <ops@corp.com>":     "ops@corp.com",
@@ -100,6 +108,8 @@ func TestEmailAddress(t *testing.T) {
 }
 
 func TestEmailIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
 	withID := InboundEmail{MessageID: "  <abc@mail>  ", From: "a@b.com", Subject: "s", Text: "t"}
 	if got := emailIdempotencyKey(withID); got != "<abc@mail>" {
 		t.Errorf("message-id key = %q, want <abc@mail>", got)
@@ -120,6 +130,8 @@ func TestEmailIdempotencyKey(t *testing.T) {
 }
 
 func TestRenderEmailPrompt(t *testing.T) {
+	t.Parallel()
+
 	email := InboundEmail{From: "a@b.com", Subject: "Deploy?", Text: "Please deploy v2."}
 
 	// Empty template → a useful default prompt carrying the email content.

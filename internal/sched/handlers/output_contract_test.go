@@ -15,6 +15,8 @@ import (
 )
 
 func TestGetTaskOutputTerminalContract(t *testing.T) {
+	t.Parallel()
+
 	router, store, cleanup := setupTestHandlerWithStore(t)
 	defer cleanup()
 	schema := json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`)

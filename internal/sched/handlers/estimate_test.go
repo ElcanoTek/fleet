@@ -17,6 +17,8 @@ func intptr(i int) *int { return &i }
 // tool-count seams end to end (minus HTTP), asserting the forecast math lines up
 // with the resolved inputs.
 func TestForecastTaskKnownModel(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{
 		config: Config{
 			DefaultTaskModel:     "anthropic/claude-haiku-4-5",
@@ -63,6 +65,8 @@ func TestForecastTaskKnownModel(t *testing.T) {
 // defaults for model and iteration cap, and that an explicit mcp_selection
 // drives the tool count instead of the enabled-by-default set.
 func TestForecastTaskExplicitOverrides(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{
 		config: Config{DefaultTaskModel: "anthropic/claude-haiku-4-5", DefaultMaxIterations: 7},
 		mcpCatalog: func() []MCPServerCatalogEntry {
@@ -97,6 +101,8 @@ func TestForecastTaskExplicitOverrides(t *testing.T) {
 // TestForecastTaskUnknownModel confirms an unknown model resolves to a forecast
 // with no pricing, so the handler returns 202.
 func TestForecastTaskUnknownModel(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{DefaultTaskModel: "vendor/unknown-model"}}
 	fc := h.forecastTask(&models.TaskCreate{Prompt: "hello"})
 	if fc.PricingKnown {
@@ -110,6 +116,8 @@ func TestForecastTaskUnknownModel(t *testing.T) {
 // TestEstimateTaskToolCountNoProvider confirms the tool count is 0 (not a panic)
 // when no MCP catalog provider is wired.
 func TestEstimateTaskToolCountNoProvider(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{}
 	if n := h.estimateTaskToolCount(&models.TaskCreate{}); n != 0 {
 		t.Fatalf("tool count = %d, want 0 with no provider", n)
@@ -117,6 +125,8 @@ func TestEstimateTaskToolCountNoProvider(t *testing.T) {
 }
 
 func TestForecastTaskExplicitOpenRouterRoute(t *testing.T) {
+	t.Parallel()
+
 	resolver, err := agentcore.NewModelResolverWithProviders([]agentcore.ProviderConfig{
 		{Name: "native", Type: agentcore.ProviderTypeOpenAI, APIKey: "test-native"},
 		{Name: "router", Type: agentcore.ProviderTypeOpenRouter, APIKey: "test-router"},

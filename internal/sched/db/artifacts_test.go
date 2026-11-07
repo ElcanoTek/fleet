@@ -16,6 +16,8 @@ import (
 // NOT write artifacts (clobber-safe, like effective_priority); and UpdateTaskTx
 // (the runner's atomic status-update seam) writes it and reads back unchanged.
 func TestArtifacts_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

@@ -6,15 +6,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 func newNotesStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(testdb.SchedDB(t, "agent_note_proposals", "agent_notes"))
+	return NewStore(fleetdb.SchedDB(t))
 }
 
 func TestNoteCRUD(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 
@@ -77,6 +79,8 @@ func TestNoteCRUD(t *testing.T) {
 }
 
 func TestNoteSlugValidation(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 	for _, bad := range []string{"", "Has Space", "UPPER", "with/slash", strings.Repeat("a", 129)} {
@@ -92,6 +96,8 @@ func TestNoteSlugValidation(t *testing.T) {
 }
 
 func TestNoteBodyValidation(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 	huge := strings.Repeat("x", (1<<20)+1)
@@ -101,6 +107,8 @@ func TestNoteBodyValidation(t *testing.T) {
 }
 
 func TestProposalLifecycle_PublishCreateNew(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 
@@ -141,6 +149,8 @@ func TestProposalLifecycle_PublishCreateNew(t *testing.T) {
 }
 
 func TestProposalLifecycle_PublishUpdateExisting(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 
@@ -172,6 +182,8 @@ func TestProposalLifecycle_PublishUpdateExisting(t *testing.T) {
 }
 
 func TestProposalLifecycle_Reject(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 
@@ -200,6 +212,8 @@ func TestProposalLifecycle_Reject(t *testing.T) {
 // shape (Slug/Title/Body) via ListPublishedNotes — exercised here at the data
 // layer; the actual seam wiring happens in the process (P6).
 func TestListPublishedNotesOrdering(t *testing.T) {
+	t.Parallel()
+
 	s := newNotesStore(t)
 	ctx := context.Background()
 

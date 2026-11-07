@@ -60,6 +60,8 @@ func seedUnclaimedDeadLettered(t *testing.T, store *Storage, task *models.Task) 
 // tick in the task's timezone, task memory carried, and the dead-lettered
 // row's spawn credit settled so the reconciliation sweep can never duplicate.
 func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -160,6 +162,8 @@ func TestDeadLetteredOccurrenceSpawnsSuccessor(t *testing.T) {
 // spawn credit (park) so the reconciliation sweep never re-evaluates it, and
 // replay remains the way the chain continues.
 func TestDeadLetterBreakerParksChainAfterTwoConsecutive(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -228,6 +232,8 @@ func TestDeadLetterBreakerParksChainAfterTwoConsecutive(t *testing.T) {
 // re-drive the spawn — predecessor healthy (success), so no breaker — landing
 // exactly one successor and settling the credit.
 func TestReconcileRecurrencesSpawnsUnclaimedDeadLetteredOccurrence(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -314,6 +320,8 @@ func TestReconcileRecurrencesSpawnsUnclaimedDeadLetteredOccurrence(t *testing.T)
 // is parked, not spawned, and its credit is settled so the sweep does not
 // re-evaluate it every tick.
 func TestReconcileRecurrencesAppliesDeadLetterBreaker(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -384,6 +392,8 @@ func TestReconcileRecurrencesAppliesDeadLetterBreaker(t *testing.T) {
 // so replaying the dead-lettered occurrence must NOT re-arm its spawn credit —
 // the replayed run's own success would otherwise fork a second parallel chain.
 func TestReplayDeadLetteredWithSuccessorKeepsSpawnSettled(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -457,6 +467,8 @@ func TestReplayDeadLetteredWithSuccessorKeepsSpawnSettled(t *testing.T) {
 // parked the chain (recurrence_parked_at set). Replay re-arms the spawn
 // credit and the replayed run's success then spawns exactly one successor.
 func TestReplayDeadLetteredWithoutSuccessorReArmsAndContinues(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -578,6 +590,8 @@ func deadLetterRecurringOccurrence(t *testing.T, store *Storage, id uuid.UUID) {
 // is not parked. Replay keeps the credit unclaimed so the replayed run
 // can spawn.
 func TestReplayDeadLetteredUnclaimedRearms(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -604,6 +618,8 @@ func TestReplayDeadLetteredUnclaimedRearms(t *testing.T) {
 // replay commits before the breaker settle, the guarded UPDATE must not flip
 // the re-armed flag back to TRUE.
 func TestSettleDeadLetteredRecurrenceSpawnDoesNotClobberReplay(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()
@@ -645,6 +661,8 @@ func TestSettleDeadLetteredRecurrenceSpawnDoesNotClobberReplay(t *testing.T) {
 // dead_lettered snapshot; if replay commits first, the status-gated claim
 // must not consume the re-armed credit or mint a successor from the stale row.
 func TestScheduleNextRecurrenceIgnoresStaleRowAfterReplay(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	store.SetTimezone("UTC")
 	ctx := context.Background()

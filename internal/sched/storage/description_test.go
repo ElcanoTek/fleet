@@ -15,6 +15,8 @@ import (
 // round-trips as empty, a populated value round-trips intact, and an edit can
 // both set and clear it.
 func TestTaskDescriptionRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 
@@ -57,6 +59,8 @@ func TestTaskDescriptionRoundTrip(t *testing.T) {
 // TestTaskDescriptionFilter pins the has_description filter: only tasks with a
 // non-empty description match.
 func TestTaskDescriptionFilter(t *testing.T) {
+	t.Parallel()
+
 	store, database := newTestStore(t)
 	ctx := context.Background()
 

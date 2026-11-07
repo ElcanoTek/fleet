@@ -39,6 +39,8 @@ func (r *sseRecorder) Body() string {
 // TestTaskStreamBuffer_AttachReplaysFromZero: a sealed buffer attached at
 // lastEventID=0 replays every event in order with monotonic ids.
 func TestTaskStreamBuffer_AttachReplaysFromZero(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Emit("a", map[string]any{"n": 1})
 	buf.Emit("b", map[string]any{"n": 2})
@@ -60,6 +62,8 @@ func TestTaskStreamBuffer_AttachReplaysFromZero(t *testing.T) {
 // TestTaskStreamBuffer_AttachReplaysFromLastEventID: a reconnect with
 // Last-Event-ID only replays events strictly newer than that id.
 func TestTaskStreamBuffer_AttachReplaysFromLastEventID(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	for i := 0; i < 4; i++ {
 		buf.Emit("e", map[string]any{"i": i})
@@ -82,6 +86,8 @@ func TestTaskStreamBuffer_AttachReplaysFromLastEventID(t *testing.T) {
 // TestTaskStreamBuffer_SlidingWindowEviction: past the byte cap the oldest events
 // are evicted while ids stay monotonic and the newest event survives.
 func TestTaskStreamBuffer_SlidingWindowEviction(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.maxBytes = 200 // small cap to force eviction
 
@@ -111,6 +117,8 @@ func TestTaskStreamBuffer_SlidingWindowEviction(t *testing.T) {
 // receives events emitted after attach, and returns cleanly (nil) when Finish
 // seals the buffer.
 func TestTaskStreamBuffer_LiveThenFinish(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	rw := newSSERecorder()
 
@@ -139,6 +147,8 @@ func TestTaskStreamBuffer_LiveThenFinish(t *testing.T) {
 // TestTaskStreamBuffer_AttachAfterFinish: attaching to an already-sealed buffer
 // replays the full history and returns immediately (no live channel, no hang).
 func TestTaskStreamBuffer_AttachAfterFinish(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Emit("status", map[string]any{"status": "running"})
 	buf.Emit("status", map[string]any{"status": "succeeded"})
@@ -163,6 +173,8 @@ func TestTaskStreamBuffer_AttachAfterFinish(t *testing.T) {
 // TestTaskStreamBuffer_EmitAfterFinishIsNoop: Finish makes Emit a no-op, so a
 // late event never appears and ids do not advance.
 func TestTaskStreamBuffer_EmitAfterFinishIsNoop(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Emit("a", map[string]any{})
 	buf.Finish()
@@ -180,6 +192,8 @@ func TestTaskStreamBuffer_EmitAfterFinishIsNoop(t *testing.T) {
 // TestTaskStreamBuffer_FinishReportsSealOnce: Finish returns true only on the call
 // that actually seals, so the registry arms the cleanup timer exactly once.
 func TestTaskStreamBuffer_FinishReportsSealOnce(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	if !buf.Finish() {
 		t.Fatal("first Finish should report it sealed the buffer")
@@ -193,6 +207,8 @@ func TestTaskStreamBuffer_FinishReportsSealOnce(t *testing.T) {
 // internal event names onto the stable SSE types the UI tails, and ignores loop
 // internals (reasoning/enforcement).
 func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Observe("text.delta", map[string]any{"text": "partial answer"})
 	buf.Observe("text.replace", map[string]any{"text": "final answer"})
@@ -229,6 +245,8 @@ func TestTaskStreamBuffer_ObserveMapsRunEvents(t *testing.T) {
 // entry — and the event name matches agent.SubagentProgressEvent, which this
 // package pins as a literal.
 func TestTaskStreamBuffer_SubagentProgress(t *testing.T) {
+	t.Parallel()
+
 	if subagentProgressEvent != "subagent.progress" {
 		t.Fatalf("subagentProgressEvent = %q; it must mirror agent.SubagentProgressEvent", subagentProgressEvent)
 	}
@@ -267,6 +285,8 @@ func TestTaskStreamBuffer_SubagentProgress(t *testing.T) {
 // seals it (a subsequent Attach returns immediately) but keeps it retained for the
 // replay window so a late joiner still finds it.
 func TestTaskStreamRegistry_Lifecycle(t *testing.T) {
+	t.Parallel()
+
 	reg := newTaskStreamRegistry()
 	id := uuid.New()
 
@@ -310,6 +330,8 @@ func TestTaskStreamRegistry_Lifecycle(t *testing.T) {
 // TestTaskStreamBuffer_AttachClientDisconnect: a cancelled request context unwinds
 // a live Attach with the context error, evicting the subscriber.
 func TestTaskStreamBuffer_AttachClientDisconnect(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	rw := newSSERecorder()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -354,6 +376,8 @@ func waitForSubscribers(t *testing.T, buf *taskStreamBuffer, n int) {
 }
 
 func TestTaskStreamBuffer_ForwardsCompactionCheckpointFrames(t *testing.T) {
+	t.Parallel()
+
 	buf := newTaskStreamBuffer()
 	buf.Observe("fleet.context_checkpoint", map[string]any{"used_tokens": 137023, "resend_budget_tokens": 80000, "trigger": "resend_budget", "checkpoint": 3})
 	buf.Observe("fleet.context_compacted", map[string]any{"removed_turns": 52, "trigger": "resend_budget"})

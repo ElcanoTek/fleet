@@ -18,6 +18,8 @@ import (
 // instant (so a client can measure its own clock's skew against it rather than
 // rendering "now" from a browser clock that may simply be wrong).
 func TestGetDashboardConfigCarriesServerClock(t *testing.T) {
+	t.Parallel()
+
 	store := storage.New()
 	store.SetTimezone("America/New_York")
 	h := &Handlers{
@@ -74,6 +76,8 @@ func TestGetDashboardConfigCarriesServerClock(t *testing.T) {
 // has a location — storage.New defaults it to UTC — so the endpoint must not
 // panic or emit a zero time.
 func TestGetDashboardConfigDefaultsToUTC(t *testing.T) {
+	t.Parallel()
+
 	h := &Handlers{config: Config{Version: "test"}, storage: storage.New()}
 
 	rr := httptest.NewRecorder()

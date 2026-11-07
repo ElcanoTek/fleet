@@ -14,6 +14,8 @@ import (
 // terminal runs beyond keepPerTask are pruned, while the most-recent keepPerTask
 // per bucket, non-terminal tasks, and within-retention runs are all preserved.
 func TestCleanupOldRuns(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	ctx := context.Background()
 

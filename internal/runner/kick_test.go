@@ -16,6 +16,8 @@ import (
 // come from the kick — the negative window in the middle proves the poll
 // isn't doing the work.
 func TestKickWakesClaimLoopAheadOfPoll(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 
 	var ran int32

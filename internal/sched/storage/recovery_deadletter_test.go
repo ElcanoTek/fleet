@@ -50,6 +50,8 @@ func seedExpiredLease(t *testing.T, store *Storage, status models.TaskStatus, at
 // DeadLetterTaskWithContext writes, so the DLQ listing and replay treat it
 // like any other quarantined task.
 func TestRecoverExpiredLeasesDeadLettersPastRetryBudget(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 
 	// attempt_count >= max_retries (0 >= 0, a "never retry" task) → quarantine.
@@ -119,6 +121,8 @@ func TestRecoverExpiredLeasesDeadLettersPastRetryBudget(t *testing.T) {
 // the DLQ — never cycle forever. Parity with the in-process gate: max_retries=R
 // allows at most R+1 total executions.
 func TestRecoverExpiredLeasesBoundsACrashLoop(t *testing.T) {
+	t.Parallel()
+
 	store, _ := newTestStore(t)
 	task := seedExpiredLease(t, store, models.TaskStatusRunning, 0, 1)
 

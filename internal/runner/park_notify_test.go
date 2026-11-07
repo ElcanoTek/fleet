@@ -18,6 +18,8 @@ import (
 // line that is the validator's message, naming the identifier. A dead-letter
 // that spawned its successor carries no such line.
 func TestDeadLetterNotificationSaysTheScheduleStopped(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	malformed := &models.Task{
 		ID: uuid.New(), Status: models.TaskStatusPending, Priority: 1, Recurrence: "@daily", Timezone: "UTC", CreatedAt: time.Now().UTC(),

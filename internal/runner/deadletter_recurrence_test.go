@@ -59,6 +59,8 @@ func recurrenceSpawnedFlag(t *testing.T, store *storage.Storage, id uuid.UUID) b
 // immediately. Quiescence is therefore: the original dead-lettered, exactly
 // one scheduled successor, no third row.
 func TestNonRetryableFailureOfRecurringTaskSpawnsSuccessor(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	orig := seedRecurringTask(t, store)
 

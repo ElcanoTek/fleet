@@ -52,6 +52,8 @@ func setupFullHandler(t *testing.T) (*storage.Storage, *Handlers, func()) {
 }
 
 func TestExportImport_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -238,6 +240,8 @@ func assertSLADefinitionRoundTripped(t *testing.T, got *models.Task) {
 }
 
 func TestExportImport_ConflictSemantics(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -336,6 +340,8 @@ func TestExportImport_ConflictSemantics(t *testing.T) {
 // sibling LoopConfig/WorktreeConfig — applying new limits and clearing them when
 // the replacing record omits them.
 func TestImportReplace_RoundTripsSandboxLimits(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -380,6 +386,8 @@ func TestImportReplace_RoundTripsSandboxLimits(t *testing.T) {
 }
 
 func TestExportImport_PermissionGates(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 	_ = store
@@ -408,6 +416,8 @@ func TestExportImport_PermissionGates(t *testing.T) {
 // TestExportImport_ReplaceRequiresAdmin asserts the handler's in-handler admin
 // gate for conflict=replace without going through the middleware.
 func TestExportImport_ReplaceRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
 	_, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key"}, store, nil)
@@ -484,6 +494,8 @@ func wipeAllTasks(t *testing.T, store *storage.Storage) {
 // in an export envelope. The same principal importing an UNGATED record still
 // succeeds, so the gate is on run_if, not on importing.
 func TestImport_RunIfRequiresAdmin(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -559,6 +571,8 @@ func TestImport_RunIfRequiresAdmin(t *testing.T) {
 // but never onto a task already pending dispatch (the gate could not be
 // evaluated for that run; see models.RunIf's enforcement contract).
 func TestImportReplace_RoundTripsRunIf(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -641,6 +655,8 @@ func importReplaceOne(t *testing.T, r http.Handler, rec models.TaskExportRecord)
 // unlocked read → full-row upsert rewound status to `scheduled` and nulled the
 // lease, re-dispatching a live run.
 func TestImportReplace_RefusesClaimedTask(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -677,6 +693,8 @@ func TestImportReplace_RefusesClaimedTask(t *testing.T) {
 // `scheduled` with a NULL scheduled_for, which GetScheduledTasks (scheduled_for
 // IS NOT NULL) can never promote.
 func TestImportReplace_ReschedulesScheduleLessRecord(t *testing.T) {
+	t.Parallel()
+
 	r, store, cleanup := setupExportImportHandler(t)
 	defer cleanup()
 
@@ -703,6 +721,8 @@ func TestImportReplace_ReschedulesScheduleLessRecord(t *testing.T) {
 // REQUIREMENTS line (#1601), so a dry run reports it and a multi-record import
 // writes nothing before reaching it.
 func TestValidateExportRecordRefusesMalformedRequirements(t *testing.T) {
+	t.Parallel()
+
 	rec := models.TaskExportRecord{Prompt: "Refresh the page.\n\nEXECUTION REQUIREMENTS (JSON):\n" +
 		`{"mcp_servers":["files + file_helpers","pages"]}`}
 	if err := validateExportRecord(rec); err == nil || !strings.Contains(err.Error(), "files + file_helpers") {

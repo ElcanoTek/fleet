@@ -114,6 +114,8 @@ func (refusingBudgetGate) Statuses(context.Context) ([]models.BudgetStatus, erro
 // create_task principal could mint a task whose gate — a shell command that
 // runs ON THE HOST as the fleet user — was of its own authoring.
 func TestRerunCloneRunIfPrivilegeBoundary(t *testing.T) {
+	t.Parallel()
+
 	env := setupGovernedCreate(t)
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, env.keyMgr, "client")
 	gate := &models.RunIf{Command: "true", TimeoutSeconds: 30, OnError: models.RunIfOnErrorRun}
@@ -190,6 +192,8 @@ func TestRerunCloneRunIfPrivilegeBoundary(t *testing.T) {
 // priority override, and the per-principal budget gate refuses an exhausted
 // window with the create path's 402.
 func TestRerunCloneRunsTheCreateGates(t *testing.T) {
+	t.Parallel()
+
 	env := setupGovernedCreate(t)
 	clientKeyID, clientKey := mustCreateRoleKeyWithID(t, env.keyMgr, "client")
 	source := env.addGatedSource(t, clientKeyID, nil)

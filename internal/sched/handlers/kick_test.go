@@ -20,6 +20,8 @@ import (
 )
 
 func TestTaskKickerFiresOnClaimableWrites(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, mux, h := setupA2AHandlers(t, false)
 	rawKey, keyID := mintTaskKey(t, keyMgr, "kicker")
 
@@ -64,6 +66,8 @@ func TestTaskKickerFiresOnClaimableWrites(t *testing.T) {
 }
 
 func TestTaskKickerSkipsNonClaimableCreates(t *testing.T) {
+	t.Parallel()
+
 	_, _, _, h := setupA2AHandlers(t, false)
 
 	var kicks int32

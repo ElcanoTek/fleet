@@ -16,6 +16,8 @@ import (
 // independently, a quoted run stays one phrase, blanks never become a term,
 // and an over-long paste is capped rather than multiplying the scan.
 func TestTaskSearchTerms(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		in   string
 		want []string
@@ -42,6 +44,8 @@ func TestTaskSearchTerms(t *testing.T) {
 // creator shown in the Created By column. The literal-% case is the opposite
 // failure — a wildcard that matched far more than was typed.
 func TestTaskSearchFindsJobsTheWayPeopleRememberThem(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

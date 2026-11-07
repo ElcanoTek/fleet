@@ -14,6 +14,8 @@ import (
 // through INSERT and the upsert-based UpdateTask, distinguishing nil (inherit),
 // 0 (off), and a positive budget. Mirrors TestSandboxLimits_RoundTrip.
 func TestThinkingBudget_RoundTrip(t *testing.T) {
+	t.Parallel()
+
 	db := setupTestDB(t)
 	defer db.Close()
 	ctx := context.Background()

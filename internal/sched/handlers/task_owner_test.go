@@ -163,6 +163,8 @@ const otherDashboardOverrides = `{"overrides":{"prompt":"refresh the Brookfield 
 // every run dead-lettered. A principal with no user now gives the copy the
 // source's owner, and the copy's selection is checked against that owner.
 func TestRerunCloneByKeyKeepsTheSourceOwner(t *testing.T) {
+	t.Parallel()
+
 	env := setupOwnershipEnv(t)
 	adminScopedKeyID, adminScopedKey := mustCreateRoleKeyWithID(t, env.keyMgr, "admin")
 	sourceKeyID := "source-key"
@@ -227,6 +229,8 @@ func TestRerunCloneByKeyKeepsTheSourceOwner(t *testing.T) {
 // owner-only connection to someone who lacks it is refused up front instead
 // of dead-lettering.
 func TestRerunCloneByUserBelongsToTheCaller(t *testing.T) {
+	t.Parallel()
+
 	env := setupOwnershipEnv(t)
 	pinned := env.addRecurringSource(t, &env.owner.ID, nil, models.MCPSelection{{Server: "browserbase"}})
 	plain := env.addRecurringSource(t, &env.owner.ID, nil, models.MCPSelection{{Server: "bundle"}})
@@ -259,6 +263,8 @@ func TestRerunCloneByUserBelongsToTheCaller(t *testing.T) {
 // per-job workspace "Resubmit with changes" relies on); new_lineage makes it a
 // job of its own.
 func TestRerunCloneNewLineage(t *testing.T) {
+	t.Parallel()
+
 	env := setupOwnershipEnv(t)
 	source := env.addRecurringSource(t, &env.owner.ID, nil, models.MCPSelection{{Server: "browserbase"}})
 
@@ -290,6 +296,8 @@ func TestRerunCloneNewLineage(t *testing.T) {
 // selection its run would refuse, checked for the owner the task will have,
 // and accepts the owner's own hosted connection.
 func TestCreatePathsCheckTheMCPSelection(t *testing.T) {
+	t.Parallel()
+
 	env := setupOwnershipEnv(t)
 	create := func(auth func(*http.Request), server string) *httptest.ResponseRecorder {
 		body, _ := json.Marshal(models.TaskCreate{Prompt: "a task prompt that is long enough", MCPSelection: models.MCPSelection{{Server: server}}})
@@ -363,6 +371,8 @@ func TestCreatePathsCheckTheMCPSelection(t *testing.T) {
 // an unknown user or task, the selection checked for the NEW owner, and the
 // chain's unfinished next occurrence reassigned with the task.
 func TestSetTaskOwnerEndpoint(t *testing.T) {
+	t.Parallel()
+
 	env := setupOwnershipEnv(t)
 	clientKey := mustCreateRoleKey(t, env.keyMgr, "client")
 	// An ownerless copy left by the incident, plus its already-spawned next

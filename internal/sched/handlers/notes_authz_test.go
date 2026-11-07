@@ -20,6 +20,8 @@ import (
 // The routes sit in the authenticate-only AdminOrUserAuthMiddleware group (as
 // in cmd/fleet), so the gate is the handler's.
 func TestNoteProposalReadsRequireAdmin(t *testing.T) {
+	t.Parallel()
+
 	store, keyMgr, _, cleanup := setupAuthzHandler(t)
 	defer cleanup()
 	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)

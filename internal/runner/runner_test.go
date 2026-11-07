@@ -12,7 +12,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
-	"github.com/ElcanoTek/fleet/internal/testdb"
+	"github.com/ElcanoTek/fleet/internal/testdb/fleetdb"
 )
 
 // listAllTasks returns every task row through the production listing query
@@ -36,7 +36,7 @@ func allLogs(s *storage.Storage) (map[uuid.UUID]*models.LogSession, error) {
 // the shared advisory lock so it never races the storage/db package tests.
 func newTestStore(t *testing.T) *storage.Storage {
 	t.Helper()
-	database := testdb.SchedDB(t, "logs", "tasks", "users")
+	database := fleetdb.SchedDB(t)
 	store := storage.New()
 	store.SetDatabase(database)
 	return store
@@ -58,6 +58,8 @@ func seedPending(t *testing.T, store *storage.Storage, n int) []*models.Task {
 // TestPoolClaimsAndCompletes verifies the pool claims a pending task, runs it
 // through the TaskRunner, and writes a terminal success status + log.
 func TestPoolClaimsAndCompletes(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
@@ -95,6 +97,8 @@ func TestPoolClaimsAndCompletes(t *testing.T) {
 // cap=N and N+1 pending tasks, at most N tasks run concurrently and the extra
 // stays pending until a slot frees.
 func TestPoolCapSaturation(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	const capacity = 2
 	seedPending(t, store, capacity+1)
@@ -150,6 +154,8 @@ func TestPoolCapSaturation(t *testing.T) {
 // claimed+leased, the "worker" dies (we drop the lease to the past), recovery
 // re-queues it, and a fresh claim succeeds.
 func TestRestartMidTaskRecovery(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	tasks := seedPending(t, store, 1)
 	taskID := tasks[0].ID
@@ -211,6 +217,8 @@ func TestRestartMidTaskRecovery(t *testing.T) {
 // mcp_selection through to the TaskRunner unchanged — this is what drives the
 // scheduled driver to bind the right server + account per task.
 func TestPerTaskMCPSelectionReachesRunner(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 
 	sel := models.MCPSelection{{Server: "xandr", Account: "client_a"}, {Server: "magnite"}}
@@ -245,6 +253,8 @@ func TestPerTaskMCPSelectionReachesRunner(t *testing.T) {
 // TestGracefulDrain asserts Shutdown (ctx cancel) waits for the in-flight task
 // to finish and its terminal status/log to land via the background context.
 func TestGracefulDrain(t *testing.T) {
+	t.Parallel()
+
 	store := newTestStore(t)
 	seedPending(t, store, 1)
 
