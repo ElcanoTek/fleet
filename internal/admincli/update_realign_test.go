@@ -18,8 +18,9 @@ import (
 // the clone and the environment for a real (non-dry-run) update.sh run that
 // gets as far as the checkout step and then stops at the release download
 // (nothing is served there) — which is all these tests look at.
-func realignFixture(t *testing.T, tag string) (clone string, env []string, sha func(string) string) {
+func realignFixture(t *testing.T) (clone string, env []string, sha func(string) string) {
 	t.Helper()
+	const tag = fixtureTag
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -71,7 +72,7 @@ func realignFixture(t *testing.T, tag string) (clone string, env []string, sha f
 // downgrade, or a box that tracked the branch tip) must not keep its newer
 // units and scripts next to an older binary: update moves it back to the tag.
 func TestUpdateMovesACheckoutBackToTheRelease(t *testing.T) {
-	clone, env, sha := realignFixture(t, "v2026.11.01.1")
+	clone, env, sha := realignFixture(t)
 	tagSHA := sha("v2026.11.01.1^{commit}")
 	if sha("HEAD") == tagSHA {
 		t.Fatal("fixture: the clone should start past the tag")
@@ -95,7 +96,7 @@ func TestUpdateMovesACheckoutBackToTheRelease(t *testing.T) {
 // TestUpdateRefusesToStrandLocalCommits — moving back is only safe for commits
 // origin still has; a local-only commit refuses rather than disappearing.
 func TestUpdateRefusesToStrandLocalCommits(t *testing.T) {
-	clone, env, sha := realignFixture(t, "v2026.11.01.1")
+	clone, env, sha := realignFixture(t)
 	_ = os.WriteFile(filepath.Join(clone, "local"), []byte("x\n"), 0o644)
 	for _, args := range [][]string{{"add", "."}, {"commit", "-q", "-m", "local only"}} {
 		cmd := exec.Command("git", args...)
@@ -118,9 +119,12 @@ func TestUpdateRefusesToStrandLocalCommits(t *testing.T) {
 // checkout's release; naming another one would mix that release's binary with
 // this checkout's content.
 func TestUpdateNoPullRefusesAnotherReleasesTag(t *testing.T) {
-	_, env, _ := realignFixture(t, "v2026.11.01.1")
+	_, env, _ := realignFixture(t)
 	out, err := runScript(t, env, "update.sh", "--no-pull", "--tag", "v2026.11.01.1")
 	if err == nil || !strings.Contains(out, "is not at v2026.11.01.1") {
 		t.Fatalf("want a refusal, got err=%v\n%s", err, out)
 	}
 }
+
+// fixtureTag is the release realignFixture publishes.
+const fixtureTag = "v2026.11.01.1"

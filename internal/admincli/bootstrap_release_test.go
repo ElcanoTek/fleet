@@ -70,7 +70,7 @@ func TestBootstrapInstallsTheNewestPublishedRelease(t *testing.T) {
 	defer dead.Close()
 	cmd := exec.Command("bash", filepath.Join(clone, "scripts", "bootstrap.sh"), "--postgres=external")
 	cmd.Dir = clone
-	cmd.Env = append(gitEnv, "TERM=dumb", "FLEET_RELEASE_LATEST_URL="+api.URL, "FLEET_RELEASE_BASE_URL="+dead.URL,
+	cmd.Env = append(append([]string{}, gitEnv...), "TERM=dumb", "FLEET_RELEASE_LATEST_URL="+api.URL, "FLEET_RELEASE_BASE_URL="+dead.URL,
 		"FLEET_COSIGN_URL="+dead.URL, "FLEET_RELEASE_CACHE_DIR="+t.TempDir(), "FLEET_STATE_DIR="+t.TempDir(),
 		"FLEET_ENV_FILE="+filepath.Join(t.TempDir(), "fleet.env"))
 	out, err := cmd.CombinedOutput()

@@ -21,15 +21,15 @@ import (
 // FOO pin) and an upstream serving release v1.1.0 of o/foo.
 func pinsFixture(t *testing.T, published time.Time, tamper bool) (root string, run func() (string, error)) {
 	t.Helper()
-	real := repoRoot(t)
+	src := repoRoot(t)
 	root = t.TempDir()
 	for _, rel := range []string{"scripts/update-pins.sh", "scripts/lib/release.sh", "internal/release/cosign.lock"} {
-		b, err := os.ReadFile(filepath.Join(real, rel))
+		b, err := os.ReadFile(filepath.Join(src, rel))
 		if err != nil {
 			t.Fatal(err)
 		}
 		_ = os.MkdirAll(filepath.Dir(filepath.Join(root, rel)), 0o755)
-		if err := os.WriteFile(filepath.Join(root, rel), b, 0o755); err != nil { //nolint:gosec // fixture scripts must be executable
+		if err := os.WriteFile(filepath.Join(root, rel), b, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}

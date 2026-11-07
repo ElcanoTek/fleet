@@ -18,7 +18,7 @@ func TestUpdateRunsOneAtATime(t *testing.T) {
 	if _, err := exec.LookPath("flock"); err != nil {
 		t.Skip("flock not available")
 	}
-	_, env, sha := realignFixture(t, "v2026.11.01.1")
+	_, env, sha := realignFixture(t)
 	state := t.TempDir()
 	f, err := os.OpenFile(filepath.Join(state, "update.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

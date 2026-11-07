@@ -17,7 +17,7 @@ import (
 func TestUpdateWithoutAUnitSwapsButNeverClaimsARestart(t *testing.T) {
 	stub := t.TempDir()
 	// A systemctl that knows no units (as on a box whose fleet is not one).
-	if err := os.WriteFile(filepath.Join(stub, "systemctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil { //nolint:gosec // an executable stub
+	if err := os.WriteFile(filepath.Join(stub, "systemctl"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	env := []string{"PATH=" + stub + string(os.PathListSeparator) + os.Getenv("PATH")}

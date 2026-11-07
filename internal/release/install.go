@@ -302,8 +302,8 @@ var checkFreeSpace = func(dir, src string) error {
 	if err := syscall.Statfs(dir, &st); err != nil {
 		return fmt.Errorf("free space on %s: %w", dir, err)
 	}
-	free := uint64(st.Bavail) * uint64(st.Bsize) //nolint:gosec // G115: block counts and sizes are non-negative.
-	need := uint64(fi.Size()) + freeSpaceMargin  //nolint:gosec // G115: a file size is non-negative.
+	free := st.Bavail * uint64(st.Bsize)
+	need := uint64(fi.Size()) + freeSpaceMargin
 	if free < need {
 		return fmt.Errorf("%s has %d MiB free; staging the binary needs %d MiB — nothing was changed", dir, free>>20, need>>20)
 	}
