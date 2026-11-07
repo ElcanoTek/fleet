@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
@@ -59,9 +60,6 @@ func TestSchedRateLimitMiddleware_PerIdentityLimit(t *testing.T) {
 	if body["error"] != "rate_limit_exceeded" {
 		t.Errorf("body error = %v, want rate_limit_exceeded", body["error"])
 	}
-	if counts := h.RateLimitExceededCounts(); counts["minute"] != 1 {
-		t.Errorf("exceeded[minute] = %d, want 1", counts["minute"])
-	}
 }
 
 // TestSchedRateLimitMiddleware_AdminBypass verifies the admin key is never
@@ -102,8 +100,13 @@ func TestSchedRateLimitMiddleware_GlobalCap(t *testing.T) {
 	if w2.Code != http.StatusTooManyRequests {
 		t.Fatalf("2nd request (different IP) should hit global cap: got %d", w2.Code)
 	}
-	if counts := h.RateLimitExceededCounts(); counts["global"] != 1 {
-		t.Errorf("exceeded[global] = %d, want 1", counts["global"])
+	// The 429 names the window that refused it: the global cap (1), not the
+	// per-identity default (1000).
+	if got := w2.Header().Get("X-RateLimit-Limit"); got != "1" {
+		t.Errorf("X-RateLimit-Limit = %q, want the global cap 1", got)
+	}
+	if w2.Header().Get("Retry-After") == "" {
+		t.Error("missing Retry-After header")
 	}
 }
 
@@ -136,5 +139,31 @@ func TestSchedRateLimitMiddleware_PerKeyOverride(t *testing.T) {
 	}
 	if c := do(); c != http.StatusTooManyRequests {
 		t.Fatalf("2nd request should hit the key's override cap (1/min): got %d", c)
+	}
+}
+
+// TestLogin_RateLimitedPerIP pins the login throttle on the shared limiter:
+// 20 attempts per minute per client IP, the 21st refused with 429, and another
+// IP unaffected. The bodies are malformed so the allowed attempts stop at the
+// 400 before any storage lookup — the throttle runs first either way.
+func TestLogin_RateLimitedPerIP(t *testing.T) {
+	h := New(Config{DefaultTaskModel: "test/model"}, nil, nil)
+	login := func(remote string) int {
+		req := httptest.NewRequest("POST", "/login", strings.NewReader("not json"))
+		req.RemoteAddr = remote
+		w := httptest.NewRecorder()
+		h.Login(w, req)
+		return w.Code
+	}
+	for i := 1; i <= loginRateLimitPerMinute; i++ {
+		if code := login("203.0.113.20:1000"); code != http.StatusBadRequest {
+			t.Fatalf("login %d: got %d, want 400 (allowed through to body parsing)", i, code)
+		}
+	}
+	if code := login("203.0.113.20:1001"); code != http.StatusTooManyRequests {
+		t.Fatalf("login %d from the same IP: got %d, want 429", loginRateLimitPerMinute+1, code)
+	}
+	if code := login("203.0.113.21:1000"); code != http.StatusBadRequest {
+		t.Fatalf("another IP: got %d, want 400 (not throttled)", code)
 	}
 }

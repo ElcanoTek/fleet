@@ -53,7 +53,9 @@ func cleanDB(s *storage.Storage) error {
 	ctx := context.Background()
 	// Use raw DB access to clean tables
 	db := s.DB()
-	tables := []string{"logs", "tasks", "users"}
+	// prompt_library too, as storage_test.go does: otherwise a second run of
+	// this package on the same database trips over a leftover row (409).
+	tables := []string{"prompt_library", "logs", "tasks", "users"}
 	for _, table := range tables {
 		if _, err := db.Conn().ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return err

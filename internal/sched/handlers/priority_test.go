@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/ElcanoTek/fleet/internal/sched/apikeys"
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 )
@@ -174,8 +175,8 @@ func TestCreateTaskBatch_KeyPriorityCeiling(t *testing.T) {
 	if w := post(body); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("atomic over-cap batch: got %d, want 422 (%s)", w.Code, w.Body.String())
 	}
-	if tasks, _ := store.GetAllTasks(); len(tasks) != 0 {
-		t.Errorf("atomic batch must create nothing on cap violation, found %d tasks", len(tasks))
+	if _, total, _ := store.GetTasksFiltered(db.TaskFilter{}, 1, 0); total != 0 {
+		t.Errorf("atomic batch must create nothing on cap violation, found %d tasks", total)
 	}
 
 	// A batch entirely within the ceiling (priority 50) succeeds.

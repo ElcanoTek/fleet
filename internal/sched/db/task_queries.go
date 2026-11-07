@@ -14,16 +14,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// GetAllTasks gets all tasks.
-func (db *Database) GetAllTasks(ctx context.Context) ([]*models.Task, error) {
-	rows, err := db.conn.QueryContext(ctx, "SELECT "+taskColumns+" FROM tasks")
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	return db.rowsToTasks(rows)
-}
-
 // GetScheduledTasks gets scheduled tasks that are due to run up to a limit,
 // strictly after the (afterScheduledFor, afterID) keyset cursor in the total
 // order (scheduled_for ASC, id ASC). Pass the zero time.Time / uuid.Nil to
@@ -262,23 +252,6 @@ func (db *Database) GetDashboardStats(ctx context.Context) (*models.DashboardSta
 		return nil, fmt.Errorf("failed to get task stats: %w", err)
 	}
 	return stats, nil
-}
-
-// GetAllTasksPaginated gets tasks with pagination.
-func (db *Database) GetAllTasksPaginated(ctx context.Context, limit, offset int) ([]*models.Task, int, error) {
-	var total int
-	err := db.conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM tasks").Scan(&total)
-	if err != nil {
-		return nil, 0, err
-	}
-	rows, err := db.conn.QueryContext(ctx,
-		"SELECT "+taskColumns+" FROM tasks ORDER BY created_at DESC LIMIT $1 OFFSET $2", limit, offset)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-	tasks, err := db.rowsToTasks(rows)
-	return tasks, total, err
 }
 
 // TaskFilter contains optional filter parameters for task queries.

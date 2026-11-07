@@ -26,7 +26,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	clientIP := getClientIP(r)
-	if !h.loginRateLimiter.Allow(clientIP) {
+	if ok, _ := h.loginRL.Allow(clientIP); !ok {
 		writeError(w, http.StatusTooManyRequests, "Too many login attempts. Try again later.")
 		return
 	}

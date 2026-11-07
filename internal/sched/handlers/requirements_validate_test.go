@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
@@ -70,8 +71,8 @@ func TestTaskWritesRejectMalformedExecutionRequirements(t *testing.T) {
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), `invalid server or tool identifier \"fast_io + fastio_helpers\"`) {
 			t.Fatalf("create: %d %s", w.Code, w.Body.String())
 		}
-		if tasks, err := store.GetAllTasks(); err != nil || len(tasks) != 0 {
-			t.Fatalf("a refused create wrote %d task(s) (err %v)", len(tasks), err)
+		if _, total, err := store.GetTasksFiltered(db.TaskFilter{}, 1, 0); err != nil || total != 0 {
+			t.Fatalf("a refused create wrote %d task(s) (err %v)", total, err)
 		}
 	})
 

@@ -80,9 +80,9 @@ func TestRecurringTaskCarriesFullConfigForward(t *testing.T) {
 	}
 
 	// Find the next occurrence (the row that is not the original).
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var next *models.Task
 	for _, tk := range all {
@@ -169,7 +169,7 @@ func assertMissingStructuredOutputDoesNotRecur(t *testing.T, store *Storage, tas
 	}); err == nil {
 		t.Fatal("structured recurrence succeeded without output_json")
 	}
-	tasks, err := store.GetAllTasks()
+	tasks, err := listAllTasks(store)
 	if err != nil {
 		t.Fatal(err)
 	}

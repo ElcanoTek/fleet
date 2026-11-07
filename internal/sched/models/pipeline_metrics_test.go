@@ -40,9 +40,9 @@ func TestComputePipelineMetrics(t *testing.T) {
 	}
 }
 
-// TestAggregatePipelineMetrics pins the rollup: histogram banding, the ≥5
-// long-pipeline share, and most-recent-first ordering of the runs slice.
-func TestAggregatePipelineMetrics(t *testing.T) {
+// TestPipelineMetricsAccumulator pins the rollup: histogram banding and the ≥5
+// long-pipeline share. Ordering of recent runs is RecentRuns' job (below).
+func TestPipelineMetricsAccumulator(t *testing.T) {
 	runs := []RunPipelineMetrics{
 		{TaskID: "a", ToolTurns: 0, CreatedAt: 1},
 		{TaskID: "b", ToolTurns: 1, DistinctTools: 1, CreatedAt: 2},
@@ -50,7 +50,11 @@ func TestAggregatePipelineMetrics(t *testing.T) {
 		{TaskID: "d", ToolTurns: 7, DistinctTools: 4, CreatedAt: 4},
 		{TaskID: "e", ToolTurns: 12, DistinctTools: 6, CreatedAt: 5},
 	}
-	agg := AggregatePipelineMetrics(runs)
+	acc := NewPipelineMetricsAccumulator()
+	for _, r := range runs {
+		acc.Add(r)
+	}
+	agg := acc.Result()
 	if agg.Runs != 5 {
 		t.Fatalf("runs = %d", agg.Runs)
 	}
@@ -63,37 +67,13 @@ func TestAggregatePipelineMetrics(t *testing.T) {
 	if agg.PctRunsAtLeast5ToolTurns != 40 {
 		t.Errorf("pct ≥5 = %v, want 40", agg.PctRunsAtLeast5ToolTurns)
 	}
-	if runs[0].TaskID != "e" || runs[4].TaskID != "a" {
-		t.Errorf("runs not sorted most-recent-first: %v", runs)
+	if agg.AvgToolTurns != 23.0/5 || agg.AvgDistinctTools != 13.0/5 {
+		t.Errorf("averages = %v / %v", agg.AvgToolTurns, agg.AvgDistinctTools)
 	}
 
-	empty := AggregatePipelineMetrics(nil)
+	empty := NewPipelineMetricsAccumulator().Result()
 	if empty.Runs != 0 || empty.ToolTurnHistogram["0"] != 0 {
 		t.Errorf("empty aggregate: %+v", empty)
-	}
-}
-
-func TestPipelineMetricsAccumulator_MatchesAggregate(t *testing.T) {
-	runs := []RunPipelineMetrics{
-		{TaskID: "a", ToolTurns: 0, CreatedAt: 1},
-		{TaskID: "b", ToolTurns: 1, DistinctTools: 1, CreatedAt: 2},
-		{TaskID: "c", ToolTurns: 3, DistinctTools: 2, CreatedAt: 3},
-		{TaskID: "d", ToolTurns: 7, DistinctTools: 4, CreatedAt: 4},
-		{TaskID: "e", ToolTurns: 12, DistinctTools: 6, CreatedAt: 5},
-	}
-	acc := NewPipelineMetricsAccumulator()
-	for _, r := range runs {
-		acc.Add(r)
-	}
-	got := acc.Result()
-	want := AggregatePipelineMetrics(append([]RunPipelineMetrics(nil), runs...))
-	if got.Runs != want.Runs || got.PctRunsAtLeast5ToolTurns != want.PctRunsAtLeast5ToolTurns {
-		t.Fatalf("acc=%+v want=%+v", got, want)
-	}
-	for k, v := range want.ToolTurnHistogram {
-		if got.ToolTurnHistogram[k] != v {
-			t.Errorf("histogram[%s] = %d, want %d", k, got.ToolTurnHistogram[k], v)
-		}
 	}
 }
 

@@ -6,37 +6,8 @@ import (
 	"log"
 	"net/http"
 	"strconv"
-	"sync"
 	"time"
 )
-
-// rateLimitCounter is a tiny concurrency-safe tally of 429s by window. Held
-// behind a pointer on Handlers so a Handlers value remains copyable (govet
-// copylocks).
-type rateLimitCounter struct {
-	mu     sync.Mutex
-	counts map[string]int64
-}
-
-func newRateLimitCounter() *rateLimitCounter {
-	return &rateLimitCounter{counts: map[string]int64{}}
-}
-
-func (c *rateLimitCounter) inc(window string) {
-	c.mu.Lock()
-	c.counts[window]++
-	c.mu.Unlock()
-}
-
-func (c *rateLimitCounter) snapshot() map[string]int64 {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	out := make(map[string]int64, len(c.counts))
-	for k, v := range c.counts {
-		out[k] = v
-	}
-	return out
-}
 
 // SchedRateLimitMiddleware throttles the high-cost orchestrator endpoints
 // (POST /tasks, POST /upload) with the shared sliding-window limiter
@@ -97,7 +68,7 @@ func (h *Handlers) SchedRateLimitMiddleware(next http.Handler) http.Handler {
 }
 
 // writeRateLimited emits a 429 with the full rate-limit header set and the
-// standardized JSON body, and records the hit by window.
+// standardized JSON body, and logs the hit with its window.
 func (h *Handlers) writeRateLimited(w http.ResponseWriter, retry time.Duration, limit int, window string) {
 	retrySeconds := int(retry.Seconds())
 	if retrySeconds < 1 {
@@ -107,23 +78,10 @@ func (h *Handlers) writeRateLimited(w http.ResponseWriter, retry time.Duration, 
 	w.Header().Set("X-RateLimit-Remaining", "0")
 	w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(retry).Unix(), 10))
 	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
-	if h.taskRLCounter != nil {
-		h.taskRLCounter.inc(window)
-	}
 	//nolint:gosec // G706: window is a fixed internal label ("global"|"minute"|"day") set by this package, never request input; retrySeconds is an int.
 	log.Printf("orchestrator rate limit exceeded (window=%s, retry_after=%ds)", window, retrySeconds)
 	writeJSON(w, http.StatusTooManyRequests, map[string]any{
 		"error":               "rate_limit_exceeded",
 		"retry_after_seconds": retrySeconds,
 	})
-}
-
-// RateLimitExceededCounts returns a snapshot of the 429 tallies by window. A
-// Prometheus surface is deferred to the dedicated metrics issue (#176); until
-// then these counts can be surfaced via dashboard stats.
-func (h *Handlers) RateLimitExceededCounts() map[string]int64 {
-	if h.taskRLCounter == nil {
-		return map[string]int64{}
-	}
-	return h.taskRLCounter.snapshot()
 }

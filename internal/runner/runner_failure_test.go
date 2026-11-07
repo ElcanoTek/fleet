@@ -145,7 +145,7 @@ func TestToolFailureMarksTaskFailed(t *testing.T) {
 		t.Errorf("expected 0 running tasks after failure, got %d", len(running))
 	}
 	// A failure log session was persisted (synthetic when the runner gave none).
-	logs, _ := store.GetAllLogs()
+	logs, _ := allLogs(store)
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 failure log persisted, got %d", len(logs))
 	}
@@ -198,7 +198,7 @@ func TestInterruptedTaskPersistsTerminalOnShutdown(t *testing.T) {
 	if len(running) != 0 {
 		t.Errorf("expected 0 running tasks after interrupted drain, got %d", len(running))
 	}
-	logs, _ := store.GetAllLogs()
+	logs, _ := allLogs(store)
 	if len(logs) != 1 {
 		t.Fatalf("expected 1 log persisted on shutdown, got %d", len(logs))
 	}

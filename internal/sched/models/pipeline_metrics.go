@@ -94,21 +94,9 @@ func toolTurnBucket(turns int) string {
 	}
 }
 
-// AggregatePipelineMetrics rolls per-run metrics up fleet-wide and sorts runs
-// most-recent-first (callers typically truncate for display).
-func AggregatePipelineMetrics(runs []RunPipelineMetrics) PipelineMetricsAggregate {
-	acc := NewPipelineMetricsAccumulator()
-	for _, r := range runs {
-		acc.Add(r)
-	}
-	sort.Slice(runs, func(i, j int) bool { return runs[i].CreatedAt > runs[j].CreatedAt })
-	return acc.Result()
-}
-
 // PipelineMetricsAccumulator incrementally rolls up fleet-wide metrics so
 // callers can stream sessions without retaining every RunPipelineMetrics
-// (#1122). Result() is equivalent to AggregatePipelineMetrics over the
-// same sequence (minus the in-place sort of the input slice).
+// (#1122).
 type PipelineMetricsAccumulator struct {
 	n, turns, distinct, prompt, completion, wall, longRuns int
 	hist                                                   map[string]int

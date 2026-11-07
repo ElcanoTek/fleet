@@ -77,9 +77,9 @@ func TestExpireStrandedWakeTasks_PreservesRecurrenceChain(t *testing.T) {
 		t.Errorf("expired occurrence status = %s, want error", gotOrig.Status)
 	}
 
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	var next *models.Task
 	for _, tk := range all {
@@ -108,9 +108,9 @@ func TestExpireStrandedWakeTasks_NonRecurringSpawnsNothing(t *testing.T) {
 	if n, err := store.ExpireStrandedWakeTasks(context.Background(), 24*time.Hour); err != nil || n != 1 {
 		t.Fatalf("ExpireStrandedWakeTasks: n=%d err=%v", n, err)
 	}
-	all, err := store.GetAllTasks()
+	all, err := listAllTasks(store)
 	if err != nil {
-		t.Fatalf("GetAllTasks: %v", err)
+		t.Fatalf("listAllTasks: %v", err)
 	}
 	if len(all) != 1 || all[0].ID != orig.ID {
 		t.Fatalf("expected only the original one-shot task, got %d tasks", len(all))
