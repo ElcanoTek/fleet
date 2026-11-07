@@ -325,7 +325,7 @@ jobs:
         working-directory: web
         run: |
           set -euo pipefail
-          npm ci
+          npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
           npm run build
 
       # Static (CGO_ENABLED=0), trimmed paths, version stamped from the tag the
@@ -491,7 +491,7 @@ jobs:
           set -euo pipefail
           cd "${RUNNER_TEMP}"
           tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          curl -fsSL --retry 3 -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
           echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" grype
@@ -520,7 +520,7 @@ jobs:
           lock=internal/release/cosign.lock
           ver="$(awk '$1=="version"{print $2}' "${lock}")"
           want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
-          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
           echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
           chmod 0755 "${RUNNER_TEMP}/cosign"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
@@ -896,7 +896,7 @@ jobs:
           lock=internal/release/cosign.lock
           ver="$(awk '$1=="version"{print $2}' "${lock}")"
           want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
-          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
           echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
           chmod 0755 "${RUNNER_TEMP}/cosign"
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"

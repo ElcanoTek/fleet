@@ -58,8 +58,12 @@ jobs:
           # entry shaped exactly vMAJOR.MINOR.PATCH — the same shape
           # a release (not a prerelease) has — and skip anything with a
           # prerelease suffix.
-          latest="$(curl -fsSL --retry 3 https://nodejs.org/dist/index.json \
-            | jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].version // empty')"
+          # To a file, not a pipe: a retried transfer restarts the file, but a
+          # pipe would hand jq the failed attempt's partial body too.
+          index="${RUNNER_TEMP}/node-index.json"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 \
+            -o "${index}" https://nodejs.org/dist/index.json
+          latest="$(jq -r '[.[] | select(.version | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))][0].version // empty' "${index}")"
           if [ -z "${latest}" ]; then
             echo "no release-shaped version in nodejs.org/dist/index.json; refusing to guess." >&2
             exit 1
