@@ -92,7 +92,7 @@ type Config struct {
 	// FLEET_SCHED_RATE_LIMIT_PER_MINUTE / _PER_DAY / _GLOBAL_PER_MINUTE.
 	SchedRateLimitPerMinute       int // default 60
 	SchedRateLimitPerDay          int // default 500
-	SchedGlobalRateLimitPerMinute int // default 200; process-wide across all keys
+	SchedGlobalRateLimitPerMinute int // default 200; process-wide, applied separately to authenticated and unauthenticated callers
 
 	// SharedToken is the chat-server shared secret (CHAT_SERVER_TOKEN), reused as
 	// the orchestrator's channel authenticator. The web tier — the SOLE
@@ -148,7 +148,8 @@ type Handlers struct {
 	// Sliding-window limiters for the high-cost task endpoints (POST /tasks,
 	// POST /upload), shared implementation with the chat server
 	// (internal/ratelimit). taskKeyRL is per-API-key (or per-IP for cookie/bearer
-	// callers); taskGlobalRL is a single process-wide window. See
+	// callers); taskGlobalRL holds the process-wide windows (one for
+	// authenticated callers, one for everyone else). See
 	// ratelimit_middleware.go.
 	taskKeyRL    *ratelimit.Limiter
 	taskGlobalRL *ratelimit.Limiter

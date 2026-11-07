@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -165,5 +166,57 @@ func TestLogin_RateLimitedPerIP(t *testing.T) {
 	}
 	if code := login("203.0.113.21:1000"); code != http.StatusBadRequest {
 		t.Fatalf("another IP: got %d, want 400 (not throttled)", code)
+	}
+}
+
+// TestSchedRateLimitMiddleware_GlobalChargedAfterPerIdentity: requests the
+// per-identity window refuses are not counted in the process-wide window, and
+// unauthenticated requests draw on their own process-wide bucket, so a caller
+// with a valid key from another address is still admitted.
+func TestSchedRateLimitMiddleware_GlobalChargedAfterPerIdentity(t *testing.T) {
+	dir := t.TempDir()
+	mgr, err := apikeys.NewManager(filepath.Join(dir, "keys.json"), filepath.Join(dir, "audit.jsonl"))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	_, rawKey, err := mgr.CreateKey("ci", nil, nil, 0, nil, "")
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	// The production defaults: 60/min per identity, 200/min process-wide.
+	h := New(Config{DefaultTaskModel: "test/model", SchedRateLimitPerMinute: 60, SchedGlobalRateLimitPerMinute: 200}, nil, mgr)
+	mw := h.SchedRateLimitMiddleware(okHandler())
+
+	for i := 0; i < 201; i++ {
+		req := httptest.NewRequest("POST", "/triggers/x", nil)
+		req.RemoteAddr = "203.0.113.30:1"
+		mw.ServeHTTP(httptest.NewRecorder(), req)
+	}
+	req := httptest.NewRequest("POST", "/tasks", nil)
+	req.Header.Set("X-API-Key", rawKey)
+	req.RemoteAddr = "198.51.100.4:1"
+	w := httptest.NewRecorder()
+	mw.ServeHTTP(w, req)
+	if w.Code == http.StatusTooManyRequests {
+		t.Fatalf("keyed request from another address got 429 after unauthenticated traffic")
+	}
+
+	// Many unauthenticated addresses together are still bounded by their own
+	// process-wide bucket.
+	refused := 0
+	for i := 0; i < 250; i++ {
+		req := httptest.NewRequest("POST", "/triggers/x", nil)
+		req.RemoteAddr = "192.0.2." + strconv.Itoa(i%250) + ":1"
+		w := httptest.NewRecorder()
+		mw.ServeHTTP(w, req)
+		if w.Code == http.StatusTooManyRequests {
+			refused++
+			if got := w.Header().Get("X-RateLimit-Limit"); got != "200" {
+				t.Fatalf("X-RateLimit-Limit = %q, want the process-wide cap 200", got)
+			}
+		}
+	}
+	if refused == 0 {
+		t.Fatal("unauthenticated traffic across addresses should still meet a process-wide cap")
 	}
 }
