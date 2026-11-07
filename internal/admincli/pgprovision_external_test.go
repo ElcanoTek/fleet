@@ -3,6 +3,7 @@ package admincli
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/url"
 	"os"
 	"os/exec"
@@ -47,19 +48,34 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	roleDSN := u.String()
 
 	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "pgprovision.sh")
-	can := func() bool {
-		return exec.Command("bash", "-c", `. "$1"; fleet_db_can_create_schemas "$2"`, "_", lib, roleDSN).Run() == nil
+	readiness := func() int {
+		err := exec.Command("bash", "-c", `. "$1"; fleet_db_store_readiness "$2"`, "_", lib, roleDSN).Run()
+		if err == nil {
+			return 0
+		}
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitCode()
+		}
+		t.Fatal(err)
+		return -1
 	}
-	if can() {
-		t.Fatal("a role without CREATE on the database passed the schema check")
+	can := func() bool { return readiness() == 0 }
+	if got := readiness(); got != 1 {
+		t.Fatalf("a role without CREATE on the database: readiness %d, want 1", got)
 	}
 	// bootstrap's own gate (the function every unprovisioned-DSN path calls,
 	// --adopt-existing-db included) refuses it with an actionable message.
 	gate := bootstrapFunc(t, "require_schema_privilege")
-	out, err := exec.Command("bash", "-c", `die() { echo "$*"; exit 1; }; . "$1"; eval "$2"; require_schema_privilege "$3" "the adopted DATABASE_URL"`, "_", lib, gate, roleDSN).CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "the adopted DATABASE_URL's role cannot create the chat and sched schemas") || strings.Contains(string(out), pw) {
-		t.Fatalf("bootstrap's privilege gate = %v: %s", err, out)
+	runGate := func(what string) (string, error) {
+		out, err := exec.Command("bash", "-c", `die() { echo "$*"; exit 1; }; . "$1"; eval "$2"; require_schema_privilege "$3" "$4"`, "_", lib, gate, roleDSN, what).CombinedOutput()
+		return string(out), err
 	}
+	out0, err := runGate("the adopted DATABASE_URL")
+	if err == nil || !strings.Contains(out0, "the adopted DATABASE_URL's role cannot run fleet's stores there") || strings.Contains(out0, pw) {
+		t.Fatalf("bootstrap's privilege gate = %v: %s", err, out0)
+	}
+	var out []byte
 
 	// The superuser SQL bootstrap runs, built from the DSN itself.
 	out, err = exec.Command("bash", "-c", `. "$1"; rd="$(fleet_dsn_role_db "$2")"; fleet_external_db_sql "${rd%% *}" "${rd#* }"`, "_", lib, roleDSN).Output()
@@ -77,24 +93,48 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	if !can() {
 		t.Fatal("the role still cannot create the schemas after the grant")
 	}
-	if out, err := exec.Command("bash", "-c", `die() { echo "$*"; exit 1; }; . "$1"; eval "$2"; require_schema_privilege "$3" x`, "_", lib, gate, roleDSN).CombinedOutput(); err != nil {
+	if out, err := runGate("x"); err != nil {
 		t.Fatalf("bootstrap's privilege gate refused a granted role: %v: %s", err, out)
+	}
+
+	tdb, err := sql.Open("pgx", withDBName(t, base, db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tdb.Close()
+	// #2055 review: CREATE on the database is not enough for a store schema
+	// that already exists without privileges for the role.
+	if _, err := tdb.ExecContext(ctx, "CREATE SCHEMA chat"); err != nil { // owned by the test superuser
+		t.Fatal(err)
+	}
+	if got := readiness(); got != 1 {
+		t.Fatalf("an existing chat schema the role cannot use: readiness %d, want 1", got)
+	}
+	if _, err := tdb.ExecContext(ctx, "DROP SCHEMA chat"); err != nil {
+		t.Fatal(err)
 	}
 
 	// Pre-created schemas with CREATE + USAGE are the other accepted shape.
 	if _, err := admin.ExecContext(ctx, "REVOKE CREATE ON DATABASE "+db+" FROM "+role); err != nil {
 		t.Fatal(err)
 	}
-	tdb, err := sql.Open("pgx", withDBName(t, base, db))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tdb.Close()
 	if _, err := tdb.ExecContext(ctx, "CREATE SCHEMA chat AUTHORIZATION "+role+"; CREATE SCHEMA sched AUTHORIZATION "+role); err != nil {
 		t.Fatal(err)
 	}
 	if !can() {
 		t.Fatal("pre-created schemas owned by the role were not accepted")
+	}
+
+	// #2055 review: a database whose public holds a fleet store is refused,
+	// pointing at consolidation, whatever the privileges.
+	if _, err := tdb.ExecContext(ctx, "CREATE TABLE public.schema_migrations (version int)"); err != nil {
+		t.Fatal(err)
+	}
+	if got := readiness(); got != 2 {
+		t.Fatalf("a legacy store in public: readiness %d, want 2", got)
+	}
+	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "fleet db consolidate") {
+		t.Fatalf("the gate did not refuse a legacy store in public: %v: %s", err, out)
 	}
 
 	for dsn, ok := range map[string]bool{

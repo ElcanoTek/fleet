@@ -56,16 +56,30 @@ GRANT CONNECT, CREATE ON DATABASE "${2}" TO "${1}";
 SQL
 }
 
-# fleet_db_can_create_schemas DSN — true when DSN's role can run fleet's
-# stores in that database: CREATE on the database (each store creates its
-# schema on first start), or both schemas chat and sched already there with
-# CREATE + USAGE for it. False on any error.
-fleet_db_can_create_schemas() {
+# fleet_db_store_readiness DSN — can fleet's stores run in the database DSN
+# names, as DSN's role? Returns
+#   0  yes: for each of the schemas chat and sched, the role has CREATE and
+#      USAGE on it when it exists, or CREATE on the database when it does
+#      not (each store creates its schema on first start);
+#   1  no: a privilege is missing;
+#   2  no: the database's public schema holds a fleet store
+#      (public.schema_migrations) — a legacy two-database install's
+#      database, which the stores refuse to run next to;
+#   3  the check could not run (psql failed).
+fleet_db_store_readiness() {
   local out
-  out="$(psql -X -v ON_ERROR_STOP=1 -tAq "$1" -c "SELECT has_database_privilege(current_database(), 'CREATE')
-    OR (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')
-          AND has_schema_privilege(nspname::text, 'CREATE') AND has_schema_privilege(nspname::text, 'USAGE')) = 2" 2>/dev/null)" || return 1
-  [[ "$out" == "t" ]]
+  out="$(psql -X -v ON_ERROR_STOP=1 -tAq -F '|' "$1" -c "SELECT
+      to_regclass('public.schema_migrations') IS NOT NULL,
+      bool_and(CASE WHEN n.oid IS NULL THEN has_database_privilege(current_database(), 'CREATE')
+                    ELSE has_schema_privilege(n.oid, 'CREATE') AND has_schema_privilege(n.oid, 'USAGE') END)
+    FROM (VALUES ('chat'), ('sched')) AS s(name)
+    LEFT JOIN pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
+  case "$out" in
+    t\|*) return 2 ;;
+    f\|t) return 0 ;;
+    f\|f) return 1 ;;
+    *) return 3 ;;
+  esac
 }
 
 # fleet_redact_db_passwords < TEXT — TEXT with every occurrence of the

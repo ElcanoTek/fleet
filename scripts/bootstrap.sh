@@ -476,11 +476,17 @@ gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24;
 # fleet's stores there: each store creates its schema (chat, sched) on first
 # start, so a role that passes SELECT 1 but lacks CREATE on the database would
 # be reported ready and then fail at boot (lib/pgprovision.sh
-# fleet_db_can_create_schemas). Every path that accepts a DSN it did not
+# fleet_db_store_readiness), or next to a legacy store in public. Every path that accepts a DSN it did not
 # provision itself — external mode, --adopt-existing-db — calls it.
 require_schema_privilege() {
-  fleet_db_can_create_schemas "$1" \
-    || die "${2}'s role cannot create the chat and sched schemas: grant it CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>), or pre-create both schemas with CREATE + USAGE for it${3:+, $3}"
+  local rc=0
+  fleet_db_store_readiness "$1" || rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    2) die "${2} names a database whose public schema already holds a fleet store (a legacy two-database install's database) — fleet will not run its stores next to it. Point DATABASE_URL at a new database, or move the legacy install with: fleet db consolidate (docs/ONE-DATABASE.md)" ;;
+    1) die "${2}'s role cannot run fleet's stores there: it needs CREATE on the database for a schema (chat, sched) that does not exist yet (GRANT CREATE ON DATABASE <db> TO <role>), and CREATE + USAGE on each that does (GRANT CREATE, USAGE ON SCHEMA <schema> TO <role>)${3:+, $3}" ;;
+    *) die "${2}: could not check the role's privileges (psql failed)" ;;
+  esac
 }
 
 # ── Caddyfile ownership marker ──
