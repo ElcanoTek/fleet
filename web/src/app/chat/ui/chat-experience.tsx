@@ -72,9 +72,7 @@ import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
 import { PENDING_CONV_KEY } from "./workspaceHref";
-import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
-import { Segmented } from "@/app/shared/ui/Segmented";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { Icon } from "./Icon";
 import { QueuedInputs } from "./QueuedInputs";
@@ -84,8 +82,7 @@ import {
   type CreatePatrolInput,
 } from "./PatrolBanner";
 import { ProjectsModal, type Project } from "./ProjectsModal";
-import { ProjectHome, TeamLearningsPanel } from "./ProjectHome";
-import { MemoryGraphView } from "./MemoryGraphView";
+import { ProjectHome } from "./ProjectHome";
 import {
   ConversationTotalsChip,
   type PendingAttachment,
@@ -137,7 +134,6 @@ import {
   afterDeleteAllUnpinned,
   countDeletedByDeleteAllUnpinned,
 } from "./deleteAllUnpinnedScope";
-import { memoryModalSubtitle } from "./memoryModalCopy";
 import { Composer } from "./Composer";
 import { mergeComposerSkills, type SkillInfo } from "./skillSlash";
 import { ChatTranscript } from "./ChatTranscript";
@@ -162,13 +158,14 @@ import {
   writeDashboardView,
 } from "./dashboard/prefs";
 import type { UserPersonaOption } from "./userPersonas";
-import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
 import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 import { fetchMe } from "@/app/shared/lib/account";
+import { useChatMemories } from "./useChatMemories";
+import { MemoryManagerDialog, MemoryPromoteDialog } from "./MemoryManagerDialog";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -380,31 +377,6 @@ export type MCPServerInfo = {
 
 // NEW_MODEL_WINDOW_DAYS + isNewlyReleased moved into ./Composer alongside
 // their only caller (the model-picker rows) during the #169 decomposition.
-
-type UserMemory = {
-  id: string;
-  content: string;
-  source: "manual" | "chat" | string;
-  kind?: string;
-  origin?: string;
-  conversation_id?: string;
-  pinned?: boolean;
-  valid_from?: number;
-  valid_to?: number;
-  learned_at?: number;
-  retired_at?: number;
-  retired_by?: string;
-  created_at: number;
-  updated_at: number;
-};
-
-const MEMORY_KINDS = [
-  "fact",
-  "preference",
-  "identity",
-  "constraint",
-  "context",
-] as const;
 
 // ── streaming helpers ────────────────────────────────────────────────────
 // minimumThinkingMs / streamIdleTimeoutMs moved into ./useTurnStream alongside
@@ -1172,19 +1144,8 @@ export function ChatExperience({
   const [schedulesByConv, setSchedulesByConv] = useState<
     Map<string, ChatSchedule[]>
   >(() => new Map());
-  const [memories, setMemories] = useState<UserMemory[]>([]);
-  const [memoryManagerOpen, setMemoryManagerOpen] = useState(false);
-  // Memory-manager tab (#523): the flat record list (default) or the derived
-  // knowledge-graph view.
-  // "team" is the project's Team learnings, shown only while the open chat is
-  // in a project (Item D4) — members manage them without leaving the chat.
-  const [memoryView, setMemoryView] = useState<"list" | "graph" | "team">(
-    "list",
-  );
-  // Promotion of a personal memory into a project's team learnings (Item D5).
-  // Non-null = the picker is open for this memory id (only when more than one
-  // team-shared project is a candidate; with exactly one we just move it).
-  const [promoteMemoryId, setPromoteMemoryId] = useState<string | null>(null);
+  // The memory manager's state and actions (useChatMemories, #2008).
+  const memories = useChatMemories();
   // Projects modal state: null = closed; {} = open on the list; create opens
   // straight into the new-project form (the rail's +); selectId opens with
   // that project selected (the rail kebab's "Edit project…").
@@ -1243,12 +1204,6 @@ export function ChatExperience({
     ReadonlyMap<string, BranchOrigin>
   >(() => new Map());
 
-  const [memoryDraft, setMemoryDraft] = useState("");
-  const [memoryKindDraft, setMemoryKindDraft] = useState<string>("fact");
-  const [editingMemoryId, setEditingMemoryId] = useState<string | null>(null);
-  const [memoryError, setMemoryError] = useState<string | null>(null);
-  const [isLoadingMemories, setIsLoadingMemories] = useState(false);
-  const [isSavingMemory, setIsSavingMemory] = useState(false);
   const [sidebarQuery, setSidebarQuery] = useState("");
   // Rail organization filters (#258/#279): a set of
   // labels (AND). Driving the sectioned-vs-filtered view in the rail.
@@ -2141,138 +2096,6 @@ export function ChatExperience({
       }
     } catch {
       setMcpServers(prev);
-    }
-  };
-
-  const loadMemories = async () => {
-    if (isLoadingMemories) return;
-    setIsLoadingMemories(true);
-    setMemoryError(null);
-    try {
-      const response = await fetch("/api/memories", { cache: "no-store" });
-      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to load memories"));
-      const data = (await response.json()) as { memories?: UserMemory[] };
-      setMemories(data.memories ?? []);
-    } catch (err) {
-      setMemoryError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Unable to load memories.",
-      );
-    } finally {
-      setIsLoadingMemories(false);
-    }
-  };
-
-  const openMemoryManager = () => {
-    setMemoryManagerOpen(true);
-    setMemoryView("list");
-    setMemoryDraft("");
-    setMemoryKindDraft("fact");
-    setEditingMemoryId(null);
-    void loadMemories();
-  };
-
-  const saveMemory = async () => {
-    const content = memoryDraft.trim();
-    if (!content || isSavingMemory) return;
-    setIsSavingMemory(true);
-    setMemoryError(null);
-    try {
-      const url = editingMemoryId
-        ? `/api/memories/${encodeURIComponent(editingMemoryId)}`
-        : "/api/memories";
-      const response = await fetch(url, {
-        method: editingMemoryId ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, kind: memoryKindDraft }),
-      });
-      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to save memory"));
-      setMemoryDraft("");
-      setMemoryKindDraft("fact");
-      setEditingMemoryId(null);
-      await loadMemories();
-    } catch (err) {
-      setMemoryError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Unable to save memory.",
-      );
-    } finally {
-      setIsSavingMemory(false);
-    }
-  };
-
-  // promoteMemoryToProject MOVES one personal memory into a project's team
-  // learnings (Item D5) — the migration path for team facts people saved to
-  // personal memory before a destination choice existed. A move, not a copy:
-  // two rows saying the same thing would be injected twice in every project
-  // chat. The server enforces both halves (the row must be the caller's own
-  // personal memory; the caller must be a member of the project).
-  const promoteMemoryToProject = async (id: string, projectID: string) => {
-    setMemoryError(null);
-    try {
-      const response = await fetch(
-        `/api/projects/${encodeURIComponent(projectID)}/memories`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ from_memory_id: id }),
-        },
-      );
-      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to move that memory to team learnings"));
-      setPromoteMemoryId(null);
-      await loadMemories();
-    } catch (err) {
-      setMemoryError(
-        errorMessage(err, "Unable to move that memory to team learnings."),
-      );
-    }
-  };
-
-  const deleteMemory = async (id: string) => {
-    setMemoryError(null);
-    try {
-      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to delete memory"));
-      setMemories((prev) => prev.filter((m) => m.id !== id));
-      if (editingMemoryId === id) {
-        setEditingMemoryId(null);
-        setMemoryDraft("");
-      }
-    } catch (err) {
-      setMemoryError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Unable to delete memory.",
-      );
-    }
-  };
-
-  // Partial update for the #515 controls (pin/unpin, retire/restore). The
-  // server treats absent fields as untouched, so each action sends only its
-  // own flag.
-  const patchMemory = async (
-    id: string,
-    patch: { pinned?: boolean; retired?: boolean },
-  ) => {
-    setMemoryError(null);
-    try {
-      const response = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!response.ok) throw new Error(await responseErrorText(response, "Unable to update memory"));
-      await loadMemories();
-    } catch (err) {
-      setMemoryError(
-        err instanceof Error && err.message
-          ? err.message
-          : "Unable to update memory.",
-      );
     }
   };
 
@@ -3868,7 +3691,9 @@ export function ChatExperience({
   // because the modal's subtitle has to describe the same tab the strip
   // highlights (finding #18).
   const activeMemoryView =
-    memoryView === "team" && !activeProjectForMemory ? "list" : memoryView;
+    memories.memoryView === "team" && !activeProjectForMemory
+      ? "list"
+      : memories.memoryView;
 
   // The audience a team-shared chat is shared WITH, for the header chip. The
   // stamp lives on the conversation server-side (conversations.team_shared_with,
@@ -5505,7 +5330,7 @@ export function ChatExperience({
     startThinkingCrossfade,
     refreshConversations,
     loadConversation,
-    loadMemories,
+    loadMemories: memories.loadMemories,
     loadRankedModels,
     loadCatalogModels,
     nextPendingKey,
@@ -6809,328 +6634,29 @@ export function ChatExperience({
           </div>
         ) : null}
 
-        {promoteMemoryId ? (
-          <DialogShell
-            label="Move to team learnings"
-            scrimLabel="Cancel moving the memory"
-            onDismiss={() => setPromoteMemoryId(null)}
-            layer="stacked"
-            className="max-w-[24rem] p-5"
-          >
-            <h2 className="mb-1 text-[0.95rem] font-semibold text-[var(--color-text-primary)]">
-              Move to team learnings
-            </h2>
-            <p className="mb-3 text-[0.8rem] leading-[1.5] text-[var(--color-text-secondary)]">
-              Pick the project this belongs to. It leaves your personal memory
-              and every member of that project sees it.
-            </p>
-            <div className="grid gap-1">
-              {teamSharedProjects.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  className="rounded-md border border-[var(--color-border)] px-3 py-2 text-left text-[0.85rem] text-[var(--color-text-primary)] transition hover:border-[var(--color-accent)]"
-                  onClick={() =>
-                    void promoteMemoryToProject(promoteMemoryId, p.id)
-                  }
-                >
-                  {p.name}
-                  <span className="ml-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                    {p.team_id}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.78rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)]"
-                onClick={() => setPromoteMemoryId(null)}
-              >
-                Cancel
-              </button>
-            </div>
-          </DialogShell>
+        {memories.promoteMemoryId ? (
+          <MemoryPromoteDialog
+            id={memories.promoteMemoryId}
+            teamSharedProjects={teamSharedProjects}
+            promoteMemoryToProject={memories.promoteMemoryToProject}
+            onCancel={() => memories.setPromoteMemoryId(null)}
+          />
         ) : null}
 
-        {memoryManagerOpen ? (
-          <DialogShell
-            label="Memories"
-            scrimLabel="Close memories"
-            onDismiss={() => setMemoryManagerOpen(false)}
-            className="flex max-h-[88vh] max-w-[34rem] flex-col gap-4 overflow-hidden p-5"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h2 className="text-[1rem] font-semibold text-[var(--color-text-primary)]">
-                  Memories
-                </h2>
-                {/* The subtitle describes the VISIBLE tab. It used to
-                    describe personal memories on all three, so on Team
-                    learnings neither half of it was true — those are scoped
-                    to the project and its team, and injected only into that
-                    project's chats (finding #18). */}
-                <p className="mt-1 text-[0.8125rem] leading-[1.5] text-[var(--color-text-secondary)]">
-                  {memoryModalSubtitle(activeMemoryView, {
-                    userEmail,
-                    projectName: activeProjectForMemory?.name,
-                  })}
-                </p>
-              </div>
-              <CloseButton
-                label="Close memories"
-                onClick={() => setMemoryManagerOpen(false)}
-              />
-            </div>
-
-            {/* Knowledge-graph tab (#523): a compact derived view over the
-                same records; the record list stays the default. The third
-                tab appears only inside a project — it is that project's
-                team learnings, the same list (and the same permissions) as
-                the project home's panel, reachable without leaving the
-                conversation (Item D4). */}
-            <div className="flex items-center">
-              {/* Falls back to what is actually showing; see
-                  activeMemoryView. */}
-              <Segmented
-                label="Memory view"
-                value={activeMemoryView}
-                options={[
-                  { value: "list", label: "My memory" },
-                  { value: "graph", label: "Graph" },
-                  ...(activeProjectForMemory
-                    ? [{ value: "team" as const, label: "Team learnings" }]
-                    : []),
-                ]}
-                onChange={setMemoryView}
-              />
-            </div>
-
-            {memoryView === "team" && activeProjectForMemory ? (
-              <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                <TeamLearningsPanel
-                  projectId={activeProjectForMemory.id}
-                  projectOwner={
-                    projects.find((p) => p.id === activeProjectForMemory.id)
-                      ?.owner_email ?? ""
-                  }
-                  userEmail={userEmail}
-                  teamShared={activeProjectForMemory.teamShared}
-                />
-              </div>
-            ) : memoryView === "graph" ? (
-              <MemoryGraphView />
-            ) : (
-              <>
-                <div className="grid gap-2">
-                  <textarea
-                    className="min-h-24 w-full resize-y rounded-[0.9rem] border border-[var(--color-border-strong)] bg-transparent px-3 py-2 text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-muted)] focus:border-[var(--color-accent)]"
-                    placeholder="Remember that deal names may contain intentional typos."
-                    value={memoryDraft}
-                    onChange={(event) => setMemoryDraft(event.target.value)}
-                  />
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <label
-                        className="text-[0.72rem] text-[var(--color-text-muted)]"
-                        htmlFor="memory-kind"
-                      >
-                        Kind
-                      </label>
-                      <select
-                        id="memory-kind"
-                        className="rounded-md border border-[var(--color-border-strong)] bg-transparent px-2 py-1 text-[0.75rem] text-[var(--color-text-primary)] outline-none focus:border-[var(--color-accent)]"
-                        value={memoryKindDraft}
-                        onChange={(event) =>
-                          setMemoryKindDraft(event.target.value)
-                        }
-                      >
-                        {MEMORY_KINDS.map((k) => (
-                          <option key={k} value={k}>
-                            {k}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {editingMemoryId ? (
-                        <button
-                          type="button"
-                          className="rounded-[var(--radius-md)] border border-[var(--color-border-strong)] px-3 py-1.5 text-[0.75rem] text-[var(--color-text-secondary)] transition hover:bg-[var(--color-overlay-soft)] hover:text-[var(--color-text-primary)]"
-                          onClick={() => {
-                            setEditingMemoryId(null);
-                            setMemoryDraft("");
-                          }}
-                        >
-                          Cancel edit
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        className="rounded-[var(--radius-md)] bg-[var(--color-text-primary)] px-3 py-1.5 text-[0.75rem] font-medium text-[var(--color-surface-1)] transition hover:opacity-80 disabled:opacity-40"
-                        disabled={!memoryDraft.trim() || isSavingMemory}
-                        onClick={() => void saveMemory()}
-                      >
-                        {isSavingMemory
-                          ? "Saving..."
-                          : editingMemoryId
-                            ? "Save changes"
-                            : "Add memory"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                {memoryError ? (
-                  <div className="rounded-[0.75rem] border border-[var(--color-danger,#dc2626)] bg-[color-mix(in_srgb,var(--color-danger,#dc2626)_10%,transparent)] px-3 py-2 text-[0.75rem] text-[var(--color-danger,#dc2626)]">
-                    {memoryError}
-                  </div>
-                ) : null}
-
-                <div className="min-h-0 flex-1 overflow-y-auto pr-1">
-                  {isLoadingMemories ? (
-                    <p className="py-4 text-[0.8125rem] text-[var(--color-text-muted)]">
-                      Loading memories...
-                    </p>
-                  ) : memories.length === 0 ? (
-                    <p className="rounded-[0.9rem] border border-dashed border-[var(--color-border)] px-3 py-4 text-[0.8125rem] leading-[1.5] text-[var(--color-text-muted)]">
-                      No memories yet. Add one manually or tell chat “remember
-                      this: ...”.
-                    </p>
-                  ) : (
-                    <div className="grid gap-2">
-                      {memories.map((memory) => {
-                        const retired = memory.retired_at != null;
-                        const sourceLabel =
-                          memory.source === "chat"
-                            ? memory.origin === "auto"
-                              ? "Auto-extracted from chat"
-                              : "Saved from chat"
-                            : memory.source === "proposed"
-                              ? "Proposed"
-                              : "Manual";
-                        const learned = memory.learned_at
-                          ? new Date(
-                              memory.learned_at * 1000,
-                            ).toLocaleDateString()
-                          : null;
-                        return (
-                          <div
-                            key={memory.id}
-                            className={`rounded-[0.9rem] border border-[var(--color-border)] bg-[var(--color-overlay-soft)] p-3 ${retired ? "opacity-60" : ""}`}
-                          >
-                            <p className="whitespace-pre-wrap text-[0.875rem] leading-[1.5] text-[var(--color-text-primary)]">
-                              {memory.pinned ? (
-                                <span title="Pinned">📌 </span>
-                              ) : null}
-                              {memory.content}
-                            </p>
-                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[0.7rem] text-[var(--color-text-muted)]">
-                              <span>
-                                {memory.kind && memory.kind !== "fact" ? (
-                                  <StatusChip tone="neutral" className="mr-1.5">
-                                    {memory.kind}
-                                  </StatusChip>
-                                ) : null}
-                                {sourceLabel}
-                                {learned ? ` · learned ${learned}` : ""}
-                                {retired ? " · retired" : ""}
-                              </span>
-                              <div className="flex items-center gap-3">
-                                {retired ? (
-                                  <button
-                                    type="button"
-                                    className="hover:text-[var(--color-text-primary)]"
-                                    onClick={() =>
-                                      void patchMemory(memory.id, {
-                                        retired: false,
-                                      })
-                                    }
-                                  >
-                                    Restore
-                                  </button>
-                                ) : (
-                                  <>
-                                    <button
-                                      type="button"
-                                      className="hover:text-[var(--color-text-primary)]"
-                                      onClick={() =>
-                                        void patchMemory(memory.id, {
-                                          pinned: !memory.pinned,
-                                        })
-                                      }
-                                    >
-                                      {memory.pinned ? "Unpin" : "Pin"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="hover:text-[var(--color-text-primary)]"
-                                      onClick={() => {
-                                        setEditingMemoryId(memory.id);
-                                        setMemoryDraft(memory.content);
-                                        setMemoryKindDraft(
-                                          memory.kind ?? "fact",
-                                        );
-                                      }}
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="hover:text-[var(--color-text-primary)]"
-                                      title="Keep for audit, stop injecting into chats"
-                                      onClick={() =>
-                                        void patchMemory(memory.id, {
-                                          retired: true,
-                                        })
-                                      }
-                                    >
-                                      Retire
-                                    </button>
-                                    {/* Promote a personal memory the whole
-                                        team should have (Item D5). Only for
-                                        real, saved memories — a proposal has
-                                        not been accepted yet — and only when
-                                        there is a team-shared project to
-                                        promote it into. */}
-                                    {memory.source !== "proposed" &&
-                                    teamSharedProjects.length > 0 ? (
-                                      <button
-                                        type="button"
-                                        className="hover:text-[var(--color-text-primary)]"
-                                        title="Move this memory into a project's team learnings"
-                                        onClick={() => {
-                                          if (teamSharedProjects.length === 1)
-                                            void promoteMemoryToProject(
-                                              memory.id,
-                                              teamSharedProjects[0].id,
-                                            );
-                                          else setPromoteMemoryId(memory.id);
-                                        }}
-                                      >
-                                        Move to team learnings
-                                      </button>
-                                    ) : null}
-                                  </>
-                                )}
-                                <button
-                                  type="button"
-                                  className="hover:text-[var(--color-danger)]"
-                                  onClick={() => void deleteMemory(memory.id)}
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </>
-            )}
-          </DialogShell>
+        {memories.memoryManagerOpen ? (
+          <MemoryManagerDialog
+            mem={memories}
+            activeMemoryView={activeMemoryView}
+            activeProjectForMemory={activeProjectForMemory}
+            activeProjectOwner={
+              activeProjectForMemory
+                ? (projects.find((p) => p.id === activeProjectForMemory.id)
+                    ?.owner_email ?? "")
+                : ""
+            }
+            teamSharedProjects={teamSharedProjects}
+            userEmail={userEmail}
+          />
         ) : null}
 
         {confirmSummarize ? (
@@ -7736,7 +7262,7 @@ export function ChatExperience({
               regenerateLastAssistant={regenerateLastAssistant}
               branchFromMessage={branchFromMessage}
               savePromptFromMessage={savePromptFromMessage}
-              loadMemories={loadMemories}
+              loadMemories={memories.loadMemories}
               memoryProject={activeProjectForMemory}
               setSelectedModel={selectModelExplicitly}
               modelCatalog={modelCatalog}
@@ -7930,7 +7456,7 @@ export function ChatExperience({
                 }
                 shareTeam={activeChatTeamAudience}
                 shareBusy={creatingShareForCurrentView}
-                onOpenMemories={openMemoryManager}
+                onOpenMemories={memories.openMemoryManager}
                 showDetails={showStats}
                 onToggleShowDetails={toggleShowStats}
               />

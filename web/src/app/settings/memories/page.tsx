@@ -16,41 +16,25 @@ import {
   ConnRows,
   SetSection,
 } from "../ui/panels";
-import { responseErrorText } from "@/app/lib/responseError";
+import {
+  deleteMemory,
+  listMemories,
+  MEMORY_KINDS,
+  MemoriesApiError,
+  patchMemory,
+  promoteMemory,
+  saveMemory,
+  type UserMemory,
+} from "@/app/shared/lib/memoriesApi";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { fetchMe } from "@/app/shared/lib/account";
 import { redirectToLogin } from "@/app/settings/lib/getGated";
-
-type UserMemory = {
-  id: string;
-  content: string;
-  source: "manual" | "chat" | string;
-  kind?: string;
-  origin?: string;
-  conversation_id?: string;
-  pinned?: boolean;
-  valid_from?: number;
-  valid_to?: number;
-  learned_at?: number;
-  retired_at?: number;
-  retired_by?: string;
-  created_at: number;
-  updated_at: number;
-};
 
 type ProjectSummary = {
   id: string;
   name: string;
   team_id?: string;
 };
-
-const MEMORY_KINDS = [
-  "fact",
-  "preference",
-  "identity",
-  "constraint",
-  "context",
-] as const;
 
 const ROW =
   "grid gap-[0.45rem] border-b border-[var(--color-border-subtle)] px-[0.1rem] py-3 last:border-b-0";
@@ -75,15 +59,12 @@ export default function MemoriesPage() {
 
   const loadMemories = useCallback(async () => {
     try {
-      const res = await fetch("/api/memories", { cache: "no-store" });
-      if (res.status === 401) {
+      setMemories(await listMemories("Unable to load memories"));
+    } catch (err) {
+      if (err instanceof MemoriesApiError && err.status === 401) {
         redirectToLogin();
         return;
       }
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to load memories"));
-      const data = (await res.json()) as { memories?: UserMemory[] };
-      setMemories(data.memories ?? []);
-    } catch (err) {
       setError(errorMessage(err, "Unable to load memories."));
       setMemories((cur) => cur ?? []);
     }
@@ -122,15 +103,7 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      const url = editingId
-        ? `/api/memories/${encodeURIComponent(editingId)}`
-        : "/api/memories";
-      const res = await fetch(url, {
-        method: editingId ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, kind: kindDraft }),
-      });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to save memory"));
+      await saveMemory({ id: editingId, content, kind: kindDraft }, "Unable to save memory");
       const wasEditing = editingId !== null;
       setDraft("");
       setKindDraft("fact");
@@ -151,12 +124,7 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to update memory"));
+      await patchMemory(id, patch, "Unable to update memory");
       await loadMemories();
     } catch (err) {
       setError(errorMessage(err, "Unable to update memory."));
@@ -167,10 +135,7 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(`/api/memories/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) throw new Error(await responseErrorText(res, "Unable to delete memory"));
+      await deleteMemory(id, "Unable to delete memory");
       setMemories((cur) => (cur ? cur.filter((m) => m.id !== id) : cur));
       if (editingId === id) {
         setEditingId(null);
@@ -186,18 +151,7 @@ export default function MemoriesPage() {
     setError(null);
     setNotice(null);
     try {
-      const res = await fetch(
-        `/api/projects/${encodeURIComponent(projectId)}/memories`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ from_memory_id: id }),
-        },
-      );
-      if (!res.ok)
-        throw new Error(
-          await responseErrorText(res, "Unable to move memory to team learnings"),
-        );
+      await promoteMemory(id, projectId, "Unable to move memory to team learnings");
       setPromoteId(null);
       setNotice("Moved to project team learnings.");
       await loadMemories();
