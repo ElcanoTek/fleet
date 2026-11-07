@@ -124,8 +124,10 @@ On the right of every row sit four actions:
 | **Delete** | Removes the task **and its run history** permanently. Prefer Stop when you simply want something to cease running; delete only what should leave the record — you never have to delete a task to reuse its title, since titles are labels and need not be unique. |
 
 A **Viewer** (read-only) sees no row actions at all: viewers can open and read
-every task and its history, but cannot create, run, edit, stop or delete
-tasks, so the board also hides **New task** for them.
+the tasks visible to them (as for any non-admin, the tasks they created unless
+their role grants viewing all logs) and those tasks' history, but cannot
+create, run, edit, stop or delete tasks, so the board also hides **New task**
+for them.
 
 Two kinds of row show fewer than four. While a run is **live** it can only be
 stopped: run-now, edit and delete are withheld until it finishes, so a second
