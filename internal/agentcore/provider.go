@@ -6,11 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openrouter"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Provider setup + upstream pinning (merged from chat + cutlass fantasy.go).
@@ -52,7 +52,7 @@ const openRouterBaseURLOverrideEnv = "OPENROUTER_BASE_URL"
 // fleet-namespaced), then the canonical FLEET_/legacy CHAT_/CUTLASS_ family so
 // it still composes with the prefixed env config when desired.
 func openRouterBaseURLOverride() string {
-	if v := strings.TrimSpace(os.Getenv(openRouterBaseURLOverrideEnv)); v != "" {
+	if v := strings.TrimSpace(envreg.Get(openRouterBaseURLOverrideEnv)); v != "" {
 		return v
 	}
 	return fleetEnv.lookup(openRouterBaseURLOverrideEnv)

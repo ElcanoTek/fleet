@@ -43,12 +43,12 @@ import (
 	"log"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/store"
 )
@@ -136,19 +136,19 @@ func (c Config) Enabled() bool {
 // configuring the keys is the single opt-in step.
 func Load() Config {
 	return Config{
-		VAPIDPublicKey:    strings.TrimSpace(os.Getenv("FLEET_VAPID_PUBLIC_KEY")),
-		VAPIDPrivateKey:   os.Getenv("FLEET_VAPID_PRIVATE_KEY"),
-		Contact:           strings.TrimSpace(os.Getenv("FLEET_VAPID_CONTACT")),
+		VAPIDPublicKey:    strings.TrimSpace(envreg.Get("FLEET_VAPID_PUBLIC_KEY")),
+		VAPIDPrivateKey:   envreg.Get("FLEET_VAPID_PRIVATE_KEY"),
+		Contact:           strings.TrimSpace(envreg.Get("FLEET_VAPID_CONTACT")),
 		OnTaskComplete:    envBoolDefaultTrue("FLEET_PUSH_ON_TASK_COMPLETE"),
 		OnApprovalRequest: envBoolDefaultTrue("FLEET_PUSH_ON_APPROVAL_REQUEST"),
-		PublicURLBase:     strings.TrimRight(strings.TrimSpace(os.Getenv("FLEET_PUBLIC_URL")), "/"),
+		PublicURLBase:     strings.TrimRight(strings.TrimSpace(envreg.Get("FLEET_PUBLIC_URL")), "/"),
 	}
 }
 
 // envBoolDefaultTrue parses a boolean env var that defaults to TRUE when
 // unset or unparseable — the trigger flags are opt-out, not opt-in.
 func envBoolDefaultTrue(key string) bool {
-	v := strings.TrimSpace(os.Getenv(key))
+	v := strings.TrimSpace(envreg.Get(key))
 	if v == "" {
 		return true
 	}

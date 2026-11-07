@@ -33,6 +33,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
@@ -200,9 +201,9 @@ func checkSchedDB(ctx context.Context, ping func(context.Context) error) Check {
 // unless mock mode is on. Presence only — the value is never echoed.
 func checkModelKey() Check {
 	c := Check{Name: "model API key"}
-	mock := truthy(os.Getenv("FLEET_MOCK_MODE")) || truthy(os.Getenv("CHAT_MOCK_MODE"))
+	mock := truthy(envreg.Get("FLEET_MOCK_MODE")) || truthy(envreg.Get("CHAT_MOCK_MODE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 	switch {
-	case strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY")) != "":
+	case strings.TrimSpace(envreg.Get("OPENROUTER_API_KEY")) != "":
 		c.Status, c.Detail = StatusOK, "OPENROUTER_API_KEY set"
 	case mock:
 		c.Status, c.Detail = StatusWarn, "OPENROUTER_API_KEY unset but mock mode is on"
@@ -569,7 +570,7 @@ func serviceName(v string) string {
 	if v = strings.TrimSpace(v); v != "" {
 		return v
 	}
-	if v = strings.TrimSpace(os.Getenv("FLEET_SERVICE_NAME")); v != "" {
+	if v = strings.TrimSpace(envreg.Get("FLEET_SERVICE_NAME")); v != "" {
 		return v
 	}
 	return "fleet"
@@ -579,10 +580,10 @@ func resolveImageRef(ref string) string {
 	if ref = strings.TrimSpace(ref); ref != "" {
 		return ref
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_IMAGE")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_IMAGE")); v != "" {
 		return v
 	}
-	return strings.TrimSpace(os.Getenv("CHAT_SANDBOX_IMAGE"))
+	return strings.TrimSpace(envreg.Get("CHAT_SANDBOX_IMAGE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 }
 
 func dataDir(v string) string {

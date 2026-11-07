@@ -22,6 +22,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
@@ -875,7 +876,7 @@ func buildKubernetesSandboxPool(cfg *config.Config, poolCfg sandbox.PoolConfig, 
 			"FLEET_SANDBOX_RUNTIME=%q is a podman OCI-runtime knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
 				"select hypervisor isolation with FLEET_SANDBOX_K8S_RUNTIME_CLASS (a cluster RuntimeClass, e.g. kata) instead (fail-closed)", sandboxRuntime)
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SANDBOX_SECCOMP_PROFILE")); v != "" {
 		return nil, fmt.Errorf(
 			"FLEET_SANDBOX_SECCOMP_PROFILE=%q is a podman knob and has no effect under FLEET_SANDBOX_BACKEND=kubernetes; "+
 				"install the profile on the sandbox nodes and set FLEET_SANDBOX_K8S_SECCOMP_PROFILE (a kubelet-relative Localhost profile) instead (fail-closed)", v)
@@ -2476,3 +2477,8 @@ func emailAttachmentSnapshotter(conversationID, emailAttachmentDir string) func(
 		return tools.SnapshotEmailAttachments(conversationID, args, staging)
 	}
 }
+
+// WarmPoolSize is the warm-pool depth the sandbox pool is built with for cfg
+// (resolveWarmSize). Exported so the configuration registry's inherited
+// default for FLEET_SANDBOX_WARM_SIZE is checked against it.
+func WarmPoolSize(cfg *config.Config) int { return resolveWarmSize(cfg) }

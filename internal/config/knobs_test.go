@@ -300,7 +300,7 @@ func TestGetenvDefaultHelpersStripQuotes(t *testing.T) {
 		t.Errorf(`getenvDefault with FLEET_TLS_MODE='auto' (quoted) = %q, want %q`, got, "auto")
 	}
 	// Unset resolves to the default, returned verbatim (no quote stripping).
-	if got := getenvFleetDefault("DEFINITELY_UNSET_KNOB", `"keep"`); got != `"keep"` {
+	if got := getenvFleetDefault("GUARDRAIL_PROFILE", `"keep"`); got != `"keep"` {
 		t.Errorf("unset default = %q, want it returned verbatim", got)
 	}
 }

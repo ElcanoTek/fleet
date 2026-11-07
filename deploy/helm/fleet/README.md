@@ -73,6 +73,9 @@ install notes warn that it is not digest-pinned. For an image with your
 client bundle baked in, build it `FROM` the published one. Verify the images
 before you deploy them; the deployment guide shows the `cosign verify` line.
 
+Every `config.env` key is described in `values.schema.json` (generated from
+the configuration registry — see docs/CONFIGURATION.md).
+
 ## Honest scope
 
 - **NetworkPolicy enforcement is the CNI's job.** The chart ships the deny-all

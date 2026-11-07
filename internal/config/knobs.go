@@ -50,12 +50,14 @@ package config
 //     preflights the syntax and reports it as an ADVISORY. Every lenient row
 //     must carry the rationale in why (a registry test enforces that).
 //
-// Adding a knob: add a registry entry here. For a loader knob, give Load a
-// loadParser call too — the pairing cannot drift silently, since a loader call
-// without a registry entry (or with a mismatched kind) records a load error,
-// and knobs_coverage_test.go cross-checks both directions from source. For an
-// out-of-loader knob, knobs_sweep_test.go walks the whole repo for ad-hoc
-// os.Getenv+parse reads and fails until the key has a row here.
+// Adding a knob: give its entry in the configuration registry
+// (internal/config/envreg/table.go) a Knob spec — the rows below are derived
+// from it (#2053). For a loader knob, give Load a loadParser call too — the
+// pairing cannot drift silently, since a loader call without a knob row (or
+// with a mismatched kind) records a load error, and knobs_coverage_test.go
+// cross-checks both directions from source. For an out-of-loader knob,
+// knobs_sweep_test.go walks the whole repo for ad-hoc env read+parse pairs
+// (os.Getenv or envreg.Get) and fails until the key has a Knob spec.
 
 import (
 	"fmt"
@@ -64,6 +66,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -149,309 +152,56 @@ type envKnob struct {
 	why     string
 }
 
-// bound builds a *float64 for the registry literals below.
-func bound(v float64) *float64 { return &v }
+// envKnobs is the knob table: every numeric/bool/duration knob the binary
+// parses. Since #2053 it is DERIVED from the configuration registry
+// (internal/config/envreg/table.go) — each entry carrying a Knob spec becomes
+// one row, in registry order — so a knob's kind, bounds, consumer and alias
+// behaviour are declared once, next to its default and description.
+// TestKnobsMatchPreRegistrySnapshot pins the derived rows to the table this
+// replaced, field for field.
+var envKnobs = func() []envKnob {
+	var out []envKnob
+	for _, e := range envreg.All() {
+		if e.Knob == nil {
+			continue
+		}
+		k := envKnob{
+			key:     e.Name,
+			fleet:   e.Chain, // LEGACY-ENV-ALIAS: remove after migrate-env
+			kind:    knobKindOf(e.Type),
+			min:     e.Knob.Min,
+			max:     e.Knob.Max,
+			readBy:  e.Knob.ReadBy,
+			lenient: e.Knob.Lenient,
+			why:     e.Knob.Why,
+		}
+		if e.Knob.ReadBy != "" {
+			k.scope = scopeExternal
+		}
+		out = append(out, k)
+	}
+	return out
+}()
 
-// envKnobs is the registry: every numeric/bool/duration knob Load consumes.
-// Grouping and order mirror Load's struct literal for reviewability.
-var envKnobs = []envKnob{
-	// ── data (interactive) ──
-	{key: "CONVERSATION_TTL_DAYS", kind: kindInt},
-	{key: "CONVERSATION_UNPINNED_CAP", kind: kindInt},
-	{key: "FLEET_INPUT_QUEUE_RETENTION_DAYS", fleet: true, kind: kindInt, min: bound(0)},
-	{key: "FLEET_TURN_EVENT_RETENTION_DAYS", fleet: true, kind: kindInt},
-	{key: "FLEET_UPLOAD_MAX_BYTES", fleet: true, kind: kindInt64},
-	{key: "FLEET_SHARED_FILES_MAX_TOTAL_MB", fleet: true, kind: kindInt, min: bound(0)},
-	{key: "FLEET_AUTO_ARCHIVE_AFTER_DAYS", fleet: true, kind: kindInt},
-	{key: "FLEET_SEARCH_ENABLED", kind: kindBool},
-	{key: "FLEET_CONVERSATION_SOFT_DELETE", kind: kindBool},
-
-	// ── DB connection pools (#276) ──
-	{key: "FLEET_CHAT_DB_MAX_CONNS", fleet: true, kind: kindInt},
-	{key: "FLEET_CHAT_DB_MIN_CONNS", fleet: true, kind: kindInt},
-	{key: "FLEET_CHAT_DB_MAX_CONN_IDLE_TIME", fleet: true, kind: kindDuration},
-	{key: "FLEET_CHAT_DB_MAX_CONN_LIFETIME", fleet: true, kind: kindDuration},
-	{key: "FLEET_CHAT_DB_CONNECT_TIMEOUT", fleet: true, kind: kindDuration},
-	{key: "FLEET_SCHED_DB_MAX_CONNS", fleet: true, kind: kindInt},
-	{key: "FLEET_SCHED_DB_MIN_CONNS", fleet: true, kind: kindInt},
-	{key: "FLEET_SCHED_DB_MAX_CONN_IDLE_TIME", fleet: true, kind: kindDuration},
-	{key: "FLEET_SCHED_DB_MAX_CONN_LIFETIME", fleet: true, kind: kindDuration},
-	{key: "FLEET_SCHED_DB_CONNECT_TIMEOUT", fleet: true, kind: kindDuration},
-	// min 1: a zero tick would spin the due-task scan; "as fast as possible"
-	// is 1s, and the production default (30s) lives at the getenv site.
-	{key: "FLEET_SCHED_TICK_SECONDS", fleet: true, kind: kindInt, min: bound(1)},
-	// Deployment default for a task's max_retries when the create request
-	// omits it (#1538); same 0–10 bounds as the per-task field.
-	{key: "FLEET_TASK_DEFAULT_MAX_RETRIES", fleet: true, kind: kindInt, min: bound(0), max: bound(10)},
-	// Kill switch for per-job scheduled workspaces (#1543): on, every
-	// non-worktree scheduled run works in the shared root as before.
-	{key: "FLEET_SCHEDULED_SHARED_WORKSPACE", fleet: true, kind: kindBool},
-
-	// ── LLM (shared) ── bounds on the four hot-reloadable ceilings match
-	// reload.go, so boot and reload agree (#1119).
-	{key: "FLEET_MAX_ITERATIONS", fleet: true, kind: kindInt, min: bound(1), max: bound(10000)},
-	{key: "FLEET_MAX_COST_USD", fleet: true, kind: kindFloat, min: bound(0)},
-	{key: "FLEET_MAX_TOTAL_TOKENS", fleet: true, kind: kindInt, min: bound(0)},
-	{key: "FLEET_DEFAULT_THINKING_BUDGET_TOKENS", fleet: true, kind: kindInt},
-	{key: "FLEET_SHUTDOWN_GRACE_SECONDS", fleet: true, kind: kindInt},
-	{key: "FLEET_TURN_TIMEOUT_SECONDS", fleet: true, kind: kindInt},
-	{key: "FLEET_TEMPERATURE", fleet: true, kind: kindFloat, min: bound(0)},
-	{key: "LLM_MAX_TOKENS", kind: kindInt},
-	{key: "FLEET_ERROR_ANALYSIS_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_SELF_IMPROVE_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_AUTO_TITLE", fleet: true, kind: kindBool},
-	{key: "FLEET_ESCALATION_SIGNALS_ENABLED", fleet: true, kind: kindBool},
-	// Percent, the same 50–99 the admin setting allows: below 50 a coin flip
-	// would count as frustration and stage cards on most messages.
-	{key: "FLEET_ESCALATION_CLASSIFIER_THRESHOLD", fleet: true, kind: kindInt, min: bound(50), max: bound(99)},
-	{key: "FLEET_MEMORY_AUTOINDEX_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_MEMORY_GRAPH_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_APPROVAL_TIMEOUT_SECONDS", fleet: true, kind: kindInt},
-	{key: "FLEET_AUTO_APPROVE_IN_TEST", fleet: true, kind: kindBool},
-	// min 1: `fleet serve` hands this straight to admission.New, which floors
-	// a 0 to total=1 with no interactive reserve — a box-wide concurrency cap
-	// of ONE, not "use a default". (Only the standalone runner pool treats
-	// n<1 as "fall back to 8".) A set 0 is a misconfiguration; refuse it.
-	{key: "FLEET_MAX_CONCURRENT_AGENTS", fleet: true, kind: kindInt, min: bound(1)},
-
-	// ── phone a friend / sub-agents (#175, #264, #1043) ──
-	{key: "FLEET_PHONE_A_FRIEND_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_SUBAGENTS_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_SUBAGENTS_MAX_DEPTH", fleet: true, kind: kindInt},
-	{key: "FLEET_SUBAGENTS_MAX_CHILDREN", fleet: true, kind: kindInt},
-	// Out-of-range numeric fractions are CLAMPED by normalizeBudgetFraction
-	// (documented: a misconfiguration must never mean "unbounded"), so no
-	// bounds here — only a non-numeric value errors.
-	{key: "FLEET_SUBAGENTS_BUDGET_FRACTION", fleet: true, kind: kindFloat},
-
-	// ── task memory (#198, #285) ──
-	{key: "FLEET_TASK_MEMORY_MAX_KEYS", fleet: true, kind: kindInt},
-	{key: "FLEET_TASK_MEMORY_MAX_VALUE_BYTES", fleet: true, kind: kindInt},
-
-	// ── run-history retention (#252) + task pacing (#230, #510) ──
-	{key: "FLEET_RUN_LOG_RETENTION_DAYS", fleet: true, kind: kindInt},
-	{key: "FLEET_KEEP_RUNS_PER_TASK", fleet: true, kind: kindInt},
-	{key: "FLEET_CLEANUP_HOUR", fleet: true, kind: kindInt},
-	{key: "FLEET_TASK_STARVATION_WINDOW_MINUTES", fleet: true, kind: kindInt},
-	{key: "FLEET_PAUSED_TASK_EXPIRY_MINUTES", fleet: true, kind: kindInt},
-
-	// ── host reclamation + disk backpressure ──
-	// The prune age is floored at zero (which disables the sweep) rather than
-	// allowed negative, and the free-space floor is a percentage, so it is
-	// bounded to [0, 100] — a typo like 500 would otherwise shed all scheduled
-	// work forever.
-	{key: "FLEET_WORKTREE_PRUNE_AGE", fleet: true, kind: kindDuration, min: bound(0)},
-	{key: "FLEET_DISK_MIN_FREE_PERCENT", fleet: true, kind: kindInt, min: bound(0), max: bound(100)},
-
-	// ── process log file sink (#298) + log archival (#272) ──
-	{key: "FLEET_LOG_MAX_SIZE_MB", fleet: true, kind: kindInt},
-	{key: "FLEET_LOG_MAX_AGE_DAYS", fleet: true, kind: kindInt},
-	{key: "FLEET_LOG_MAX_BACKUPS", fleet: true, kind: kindInt},
-	{key: "FLEET_LOG_COMPRESS", fleet: true, kind: kindBool},
-	{key: "FLEET_LOG_ARCHIVE_AFTER_DAYS", fleet: true, kind: kindInt},
-
-	// ── remote MCP OAuth (#443) ──
-	{key: "FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP", fleet: true, kind: kindBool},
-
-	// ── rate limit (interactive) ──
-	{key: "CHAT_RATE_PER_MIN", kind: kindInt},
-	{key: "CHAT_RATE_PER_DAY", kind: kindInt},
-	{key: "FLEET_CHAT_RATE_LIMIT_ENABLED", kind: kindBool},
-	{key: "FLEET_CHAT_RATE_LIMIT_CONCURRENT", kind: kindInt},
-
-	// ── sandbox ──
-	{key: "FLEET_PII_REDACTION_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_CONTEXT_HANDLES_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_TEAM_CHATS_SHARED_BY_DEFAULT", fleet: true, kind: kindBool},
-	// Waives the boot requirement for the open-egress NetworkPolicy, so it is
-	// a security posture rather than a preference: registered like any other
-	// bool so a typo ("ture") is refused at the seam instead of silently
-	// reading as false and — here — as the SAFE value, which would hide the
-	// operator's intent behind an error they never see.
-	{key: "FLEET_SANDBOX_K8S_OPEN_EGRESS_ACKNOWLEDGED", kind: kindBool},
-	{key: "FLEET_A2A_ENABLED", fleet: true, kind: kindBool},
-	{key: "FLEET_A2A_PUSH_ALLOW_PRIVATE", fleet: true, kind: kindBool},
-	// min 1: a zero would mean "answer with the SUBMITTED row immediately",
-	// which is what returnImmediately is for — a set 0 is a misconfiguration.
-	{key: "FLEET_A2A_UNARY_WAIT_SECONDS", fleet: true, kind: kindInt, min: bound(1)}, // gitleaks:allow — a knob NAME, not a credential (generic-api-key entropy false positive)
-	{key: "FLEET_SANDBOX_PIDS", kind: kindInt},
-	// min 1: a set 0 would mean "no time at all for a sandbox start", which is
-	// a misconfiguration — unset is the way to keep the backend default (#1358).
-	{key: "FLEET_SANDBOX_START_TIMEOUT_SECONDS", kind: kindInt, min: bound(1)},
-	{key: "FLEET_SANDBOX_DISK_GB", kind: kindInt},
-	{key: "FLEET_SANDBOX_MEMORY_MAX_MB", fleet: true, kind: kindInt},
-	{key: "FLEET_SANDBOX_CPUS_MAX", fleet: true, kind: kindFloat},
-	{key: "FLEET_SANDBOX_PIDS_MAX", fleet: true, kind: kindInt},
-	// min 0: 0 is a real value (no warm pool, #1264) and unset means "derive",
-	// so every explicit negative — the -1 sentinel spelled out included — is a
-	// misconfiguration to refuse at the seam, not something for the pool to
-	// absorb (#1299).
-	{key: "FLEET_SANDBOX_WARM_SIZE", fleet: true, kind: kindInt, min: bound(0)},
-	{key: "FLEET_SANDBOX_WARM_TTL", fleet: true, kind: kindInt},
-
-	// ── python REPL (#213) ──
-	{key: "FLEET_PYTHON_CELL_TIMEOUT", fleet: true, kind: kindInt},
-	{key: "FLEET_PYTHON_REPL_IDLE_TTL", fleet: true, kind: kindInt},
-	{key: "FLEET_PYTHON_REPL_MAX", fleet: true, kind: kindInt},
-
-	// ── lockdown / test harness ── FLEET_LOCKDOWN_ONLY is the security knob
-	// whose silent fail-open motivated #1119: an unrecognized token used to
-	// leave lockdown OFF; now it refuses to boot.
-	{key: "FLEET_LOCKDOWN_ONLY", fleet: true, kind: kindBool},
-	{key: "FLEET_MOCK_MODE", fleet: true, kind: kindBool},
-
-	// ── central Auth sign-in ── the break-glass that turns Fleet passwords
-	// back on while Auth SSO is configured (Config.PasswordLoginDisabled), and
-	// the mark for an OIDC provider that is not central Auth
-	// (CentralAuthConfigured).
-	{key: "FLEET_OIDC_ALLOW_PASSWORD", kind: kindBool},
-	{key: "FLEET_OIDC_GENERIC", kind: kindBool},
-
-	// ─────────────────────────────────────────────────────────────────────
-	// scopeExternal (#1273): parsed at the point of use, NOT by Load. Load
-	// still validates every row below (externalKnobProblems), so a malformed
-	// value refuses boot exactly like a loader knob; the consumers keep their
-	// local default as defense-in-depth for the cases the boot gate cannot
-	// cover (a value that appears only in a child process's env, a `fleet`
-	// verb that never calls Load — those verbs resolve through the exported
-	// EnvKnob* helpers instead).
-	//
-	// The bounds on each row are exactly the acceptance its consumer already
-	// applies, so no value that is HONORED today starts being refused — what
-	// changes is that a value which was silently DISCARDED now refuses boot.
-	// ─────────────────────────────────────────────────────────────────────
-
-	// ── orchestrator create/upload rate limits (cmd/fleet, read at serve
-	// start into handlers.Config; 0 disables a window, so negatives — which
-	// used to be honored and mean something undefined — are refused).
-	{key: "FLEET_SCHED_RATE_LIMIT_PER_MINUTE", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "cmd/fleet (handlers.Config)"},
-	{key: "FLEET_SCHED_RATE_LIMIT_PER_DAY", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "cmd/fleet (handlers.Config)"},
-	{key: "FLEET_SCHED_RATE_LIMIT_GLOBAL_PER_MINUTE", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "cmd/fleet (handlers.Config)"},
-
-	// ── outbound A2A delegation (#1368) ── read at the point of use because
-	// the broker child registers the peer tools without ever running Load,
-	// and the inbound depth guard shares the same ceiling. min 1: a zero
-	// depth ceiling would refuse every inbound A2A create, which is what
-	// leaving FLEET_A2A_ENABLED unset is for.
-	{key: "FLEET_A2A_MAX_DELEGATION_DEPTH", fleet: true, kind: kindInt, min: bound(1), // gitleaks:allow — a knob NAME, not a credential (generic-api-key entropy false positive)
-		scope: scopeExternal, readBy: "internal/agent (RegisterA2APeers) + cmd/fleet (buildA2AConfig)"},
-	{key: "FLEET_A2A_CLIENT_ALLOW_PRIVATE", fleet: true, kind: kindBool,
-		scope: scopeExternal, readBy: "internal/agent (RegisterA2APeers)"},
-
-	// ── backup retention (`fleet backup`, a verb that never calls Load —
-	// internal/admincli resolves it through EnvKnobInt below).
-	{key: "FLEET_BACKUP_RETENTION_DAYS", kind: kindInt, min: bound(1),
-		scope: scopeExternal, readBy: "internal/admincli (backup prune)"},
-
-	// ── sandbox runtime sizing ── the Kata guest-memory overhead only ever
-	// ADDS memory, but a typo silently sizing every VM off the default is the
-	// #1119 bug class; the consumer requires a POSITIVE integer.
-	{key: "FLEET_SANDBOX_KATA_OVERHEAD_MB", kind: kindInt, min: bound(1),
-		scope: scopeExternal, readBy: "internal/sandbox (kataOverheadMB)"},
-
-	// ── agent runtime (internal/agentcore) ── the fleet:true rows here resolve
-	// through agentcore's fleetEnv reader, which honors the CHAT_/CUTLASS_ aliases;
-	// the two fleet:false rows are read with a plain os.Getenv on the canonical
-	// name, so the registry must not accept an alias spelling nothing reads.
-	{key: "FLEET_TOOL_DISCLOSURE_THRESHOLD", kind: kindInt, min: bound(1),
-		scope: scopeExternal, readBy: "internal/agentcore (deferred tool disclosure)"},
-	{key: "FLEET_MODEL_CACHE_TTL_MINUTES", fleet: true, kind: kindInt, min: bound(1),
-		scope: scopeExternal, readBy: "internal/agentcore (OpenRouter catalog TTL)"},
-	{key: "FLEET_RETRY_MAX_ATTEMPTS", fleet: true, kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/agentcore (provider retry budget)"},
-	// Clamped by the consumer to [MinMaxToolOutputBytes, HardMaxToolOutputBytes]
-	// and to (0,1] respectively — a documented clamp, like the subagent budget
-	// fraction above — so only a non-numeric value is refused.
-	{key: "FLEET_MAX_TOOL_OUTPUT_BYTES", kind: kindInt,
-		scope: scopeExternal, readBy: "internal/agentcore (model-output boundary)"},
-	{key: "FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD", fleet: true, kind: kindFloat,
-		scope: scopeExternal, readBy: "internal/agentcore (context pressure)"},
-	// Cost-aware compaction for scheduled runs (#1534): the per-call resent
-	// prompt budget in tokens; 0 disables. Read lazily per check in agentcore.
-	{key: "FLEET_CONTEXT_RESEND_BUDGET_TOKENS", fleet: true, kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/agentcore (cost-aware context compaction)"},
-	// Scheduled compaction elides stale tool results before buying a summary
-	// (#1742); on unless set false. Read with strconv.ParseBool, so it takes
-	// that narrower token set, like the kill-switches further down.
-	{key: "FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY", fleet: true, kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/agentcore (scheduled compaction elision)"},
-	{key: "FLEET_CONTEXT_COMPACTION_THRESHOLD", fleet: true, kind: kindFloat,
-		scope: scopeExternal, readBy: "internal/agentcore (context compaction)"},
-	// Clamped by the consumer to (0,1] like the two context thresholds above;
-	// 1 disables in practice (the hard ceiling fires first at 100%).
-	{key: "FLEET_BUDGET_WINDDOWN_FRACTION", fleet: true, kind: kindFloat,
-		scope: scopeExternal, readBy: "internal/agentcore (budget wind-down notice)"},
-	// First-chunk watchdog (#1537): base deadline (default 75 s since #1585 —
-	// a reasoning model's hidden thinking can pass 30 s before its first
-	// visible token, and a route that does not stream reasoning shows the
-	// watchdog nothing meanwhile; floor 5 s applied by the consumer) and cap
-	// (default 180 s, never below the base) for the prompt-scaled wait on a
-	// provider's first streamed event.
-	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
-		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
-	{key: "FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS", fleet: true, kind: kindFloat, min: bound(0),
-		scope: scopeExternal, readBy: "internal/agentcore (provider first-chunk watchdog)"},
-	// These agentcore kill-switches are read with strconv.ParseBool, so they
-	// take its narrower token set (see kindStrconvBool).
-	{key: "FLEET_DISABLE_PROMPT_CACHE", fleet: true, kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/agentcore (prompt-cache breakpoints)"},
-	{key: "FLEET_DISABLE_OPENROUTER_MODELS", fleet: true, kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/agentcore (live model catalog)"},
-	{key: "FLEET_SCHEDULED_AUTO_COMPACT", fleet: true, kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/agentcore (scheduled auto-compaction)"},
-
-	// ── scheduled-run wall clock (internal/runner) ── "0" disables the
-	// ceiling; a negative would mean "unbounded", which the consumer refuses.
-	{key: "FLEET_TASK_WALL_TIMEOUT", kind: kindDuration, min: bound(0),
-		scope: scopeExternal, readBy: "internal/runner (per-task wall clock)"},
-
-	// ── task notifications (internal/notify) ──
-	{key: "FLEET_NOTIFY_TIMEOUT", kind: kindDuration, min: bound(0),
-		scope: scopeExternal, readBy: "internal/notify"},
-	{key: "FLEET_NOTIFY_RETRIES", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/notify"},
-
-	// ── chat HTTP surface (internal/httpapi) ── package-level vars, resolved
-	// at package init, i.e. before Load; the boot gate below is what makes a
-	// typo fatal rather than a log line nobody reads.
-	{key: "FLEET_SSE_BUFFER_DURATION", kind: kindDuration, min: bound(0),
-		scope: scopeExternal, readBy: "internal/httpapi (SSE replay retention)"},
-	{key: "FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/httpapi (SSE replay cap)"},
-	{key: "FLEET_SSE_HEARTBEAT_INTERVAL", kind: kindDuration, min: bound(0),
-		scope: scopeExternal, readBy: "internal/httpapi (SSE keepalive)"},
-	{key: "FLEET_MAINTENANCE_MIN_INTERVAL", kind: kindDuration, min: bound(0),
-		scope: scopeExternal, readBy: "internal/httpapi (maintenance pacing)"},
-	{key: "FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/httpapi (webhook trigger limit)"},
-
-	// ── task workspace downloads (internal/sched/handlers) ──
-	{key: "FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES", kind: kindInt64, min: bound(1),
-		scope: scopeExternal, readBy: "internal/sched/handlers (workspace download cap)"},
-
-	// ── Web Push triggers (internal/webpush) ── opt-OUT flags, read with
-	// strconv.ParseBool: an unparseable value used to leave the trigger ON,
-	// so `FLEET_PUSH_ON_TASK_COMPLETE=off` silently kept notifying.
-	{key: "FLEET_PUSH_ON_TASK_COMPLETE", kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/webpush"},
-	{key: "FLEET_PUSH_ON_APPROVAL_REQUEST", kind: kindStrconvBool,
-		scope: scopeExternal, readBy: "internal/webpush"},
-
-	// ── operator lifecycle CLI (internal/admincli) ──
-	{key: "FLEET_UPDATE_WAIT_SECONDS", kind: kindInt, min: bound(0),
-		scope: scopeExternal, readBy: "internal/admincli (restart/stop --wait-timeout default)"},
-
-	// ── documented-lenient (#1273) ── the ONE knob whose leniency is
-	// deliberate. Registered so validate-config preflights the syntax as an
-	// advisory; boot does not refuse.
-	{key: "FLEET_OTEL_SAMPLE_RATIO", kind: kindFloat,
-		scope: scopeExternal, readBy: "internal/otelsetup (head sampler)",
-		lenient: true,
-		why:     "tracing dial with a documented total order over bad input: unset/unparseable/NaN/±Inf/≥1 all mean AlwaysSample and ≤0 means never. Refusing to boot the whole service over an observability knob is worse than sampling everything, so validate-config reports a malformed ratio as an advisory instead"},
+// knobKindOf maps a registry type onto the parser's kind. envreg refuses a
+// Knob on any other type at init, so the default is unreachable.
+func knobKindOf(t envreg.Type) knobKind {
+	switch t {
+	case envreg.TypeInt:
+		return kindInt
+	case envreg.TypeInt64:
+		return kindInt64
+	case envreg.TypeFloat:
+		return kindFloat
+	case envreg.TypeBool:
+		return kindBool
+	case envreg.TypeDuration:
+		return kindDuration
+	case envreg.TypeStrictBool:
+		return kindStrconvBool
+	default:
+		panic("config: registry knob of non-knob type " + string(t))
+	}
 }
 
 // envKnobByKey indexes the registry by canonical name for the loader and the
@@ -771,13 +521,13 @@ func EnvKnobBool(key string, def bool) (bool, error) {
 func externalKnob(key string, kind knobKind) (*envKnob, error) {
 	k := envKnobByKey[key]
 	if k == nil {
-		return nil, fmt.Errorf("%s: BUG — read at its point of use but not in the envKnobs registry; add a scopeExternal entry in knobs.go so boot and `fleet validate-config` validate it (#1273)", key)
+		return nil, fmt.Errorf("%s: BUG — read at its point of use but not in the envKnobs registry; add a scopeExternal entry in internal/config/envreg/table.go (its Knob spec) so boot and `fleet validate-config` validate it (#1273)", key)
 	}
 	if k.scope != scopeExternal {
 		return nil, fmt.Errorf("%s: BUG — envKnobs registry has it as a loader knob; read it off the *Config instead", key)
 	}
 	if k.kind != kind {
-		return nil, fmt.Errorf("%s: BUG — envKnobs registry kind mismatch (registry %s, caller reads %s); fix the entry in knobs.go", key, k.kind.label(), kind.label())
+		return nil, fmt.Errorf("%s: BUG — envKnobs registry kind mismatch (registry %s, caller reads %s); fix the entry in internal/config/envreg/table.go (its Knob spec)", key, k.kind.label(), kind.label())
 	}
 	return k, nil
 }
@@ -803,17 +553,17 @@ func (p *loadParser) knob(key string, kind knobKind) *envKnob {
 	k := envKnobByKey[key]
 	if k == nil {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — read by the loader but not in the envKnobs registry; add an entry in knobs.go so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key))
+			"%s: BUG — read by the loader but not in the envKnobs registry; add an entry in internal/config/envreg/table.go (its Knob spec) so boot, hot-reload, and `fleet validate-config` all validate it (#1119)", key))
 		return nil
 	}
 	if k.kind != kind {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — envKnobs registry kind mismatch (registry %s, loader reads %s); fix the entry in knobs.go", key, k.kind.label(), kind.label()))
+			"%s: BUG — envKnobs registry kind mismatch (registry %s, loader reads %s); fix the entry in internal/config/envreg/table.go (its Knob spec)", key, k.kind.label(), kind.label()))
 		return nil
 	}
 	if k.scope != scopeLoader {
 		p.problems = append(p.problems, fmt.Sprintf(
-			"%s: BUG — envKnobs registry marks it scopeExternal but the loader consumes it; drop the scope/readBy fields from its entry in knobs.go (#1273)", key))
+			"%s: BUG — envKnobs registry marks it scopeExternal but the loader consumes it; drop the scope/readBy fields from its entry in internal/config/envreg/table.go (its Knob spec) (#1273)", key))
 		return nil
 	}
 	return k

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,6 +14,7 @@ import (
 
 	"charm.land/fantasy"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -81,7 +81,7 @@ func normalizeToolOutputLimit(n int) int {
 func envMaxToolOutputBytes() int {
 	maxToolOutputBytesOnce.Do(func() {
 		maxToolOutputBytesOnce.v = defaultMaxToolOutputBytes
-		if s := os.Getenv("FLEET_MAX_TOOL_OUTPUT_BYTES"); s != "" {
+		if s := envreg.Get("FLEET_MAX_TOOL_OUTPUT_BYTES"); s != "" {
 			if n, err := strconv.Atoi(s); err == nil {
 				maxToolOutputBytesOnce.v = n
 			}

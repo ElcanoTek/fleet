@@ -23,6 +23,7 @@
 //	fleet admin add|list|rm                           (one-step full admin across both user planes)
 //	fleet account-events export                       (every chat account's membership as JSON Lines, for an identity provider's import)
 //	fleet config set-openrouter-key|set-auth-pubkey|set-browserbase-key|set-env|unset-env   (guided credential/env-file writes)
+//	fleet config explain [KEY...] [--all] [--json] | migrate-env [--write]   (the configuration registry, #2053)
 //	fleet env [show|edit]                             (print the env files secrets-masked / open one in an editor)
 //	fleet chat user add|update|role|del|list
 //	fleet sched user add|update|set-role|rename|del|list
@@ -46,7 +47,8 @@
 // The operator lifecycle is bootstrap → update → status/doctor: bootstrap
 // provisions a box, update rolls a new version in place, status reports health
 // (quick, read-only, in-process), and doctor diagnoses AND repairs box-level
-// drift (wraps scripts/doctor.sh; needs root except --check/--dry-run).
+// drift (wraps scripts/doctor.sh; needs root except --check/--dry-run), and warns
+// about deprecated CHAT_/CUTLASS_ env spellings (ADR-0099).
 // bootstrap + update are thin wrappers over scripts/bootstrap.sh +
 // scripts/update.sh. restart/stop/logs are day-2 conveniences over the host
 // systemd unit (systemctl/journalctl).
@@ -237,6 +239,13 @@ Users, credentials, notes:
   fleet config set-env <KEY> [--value -]              (upsert ANY key into the server env file as exactly one line:
                                                        duplicates removed, 0600 + owner kept; value from stdin/hidden prompt, never argv)
   fleet config unset-env <KEY>                        (remove every line for KEY)
+  fleet config explain [KEY ...] [--all] [--json] [--no-unit]
+                                                      (each setting's CONFIGURED value and its source, from what it can see: the
+                                                       systemd unit's environment, your shell, the env file, aliases, defaults
+                                                       incl. inherited ones — not the server's in-memory config; secrets redacted.
+                                                       No KEY: every set/noted setting; --all: every one — docs/CONFIGURATION.md)
+  fleet config migrate-env [--write]                  (rewrite deprecated CHAT_/CUTLASS_ keys in the env file to their FLEET_ names;
+                                                       dry run by default, --write backs the file up first; never prints values)
   fleet env [show]                                    (print the server env file with secret values masked)
   fleet env edit [--editor CMD]                       (open the server env file in $EDITOR, or pick
                                                        nano/vim/helix interactively; offered via dnf install if missing.

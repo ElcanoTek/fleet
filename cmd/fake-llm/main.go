@@ -16,9 +16,9 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 )
 
@@ -195,7 +195,7 @@ func registerLiveScenarios(s *fakellm.Server) {
 }
 
 func envOr(k, def string) string {
-	if v := os.Getenv(k); v != "" {
+	if v := envreg.Get(k); v != "" {
 		return v
 	}
 	return def

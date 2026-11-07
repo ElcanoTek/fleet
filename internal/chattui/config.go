@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 )
 
@@ -123,7 +124,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 	if cfg.Token == "" {
 		// Env-var NAMES (not secret values): canonical first, legacy alias second.
-		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN")))
+		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN"))) // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
@@ -144,12 +145,12 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// the deployment this client is talking to.
 	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil { // LEGACY-ENV-ALIAS: remove after migrate-env
 			// serverFile is recorded only when the file actually fills a
 			// missing value: a file that merely matched on a key we already
 			// had says nothing about which deployment we are talking to.
 			if cfg.Token == "" {
-				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" {
+				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 					cfg.Token, serverFile = tok, path
 				}
 			}
@@ -254,7 +255,7 @@ func discoverEnvValues(evf envValuesReader, candidates []string, keys ...string)
 }
 
 // osEnv / osReadFile / osReadEnvValues are the production accessors.
-func osEnv(k string) string               { return os.Getenv(k) }
+func osEnv(k string) string               { return envreg.Get(k) }
 func osReadFile(p string) ([]byte, error) { return os.ReadFile(p) } //nolint:gosec // G304: p is operator-supplied --token-file (a deliberate local path), not request/LLM input.
 
 func osReadEnvValues(path string, keys ...string) (map[string]string, error) {

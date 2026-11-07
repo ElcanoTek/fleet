@@ -497,14 +497,7 @@ type bashResult struct {
 // Log dir resolution: $FLEET_AUDIT_DIR (or legacy $CHAT_AUDIT_DIR), else
 // $FLEET_DATA_DIR/audit (or legacy $CHAT_DATA_DIR/audit), else ./data/audit.
 func auditBashInvocation(command, workingDir string, exitCode int, elapsedMs int64, blockedReason string) error {
-	dir := fleetEnv("AUDIT_DIR")
-	if dir == "" {
-		dataDir := fleetEnv("DATA_DIR")
-		if dataDir == "" {
-			dataDir = "./data"
-		}
-		dir = filepath.Join(dataDir, "audit")
-	}
+	dir := AuditDir()
 	if err := os.MkdirAll(dir, 0o750); err != nil { // audit dir built from operator-set env or default
 		auditWarnOnce("mkdir audit dir failed: " + err.Error())
 		return fmt.Errorf("create audit dir: %w", err)
@@ -715,4 +708,20 @@ func resolveBashWorkingDir(ctx context.Context, requested string) (string, error
 		return "", fmt.Errorf("error getting current directory: %w", err)
 	}
 	return wd, nil
+}
+
+// AuditDir resolves the bash audit log directory: $FLEET_AUDIT_DIR (or the
+// legacy $CHAT_AUDIT_DIR), else <$FLEET_DATA_DIR>/audit (or the legacy
+// $CHAT_DATA_DIR), else ./data/audit. Exported so the configuration
+// registry's inherited default for FLEET_AUDIT_DIR is checked against it.
+func AuditDir() string {
+	dir := fleetEnv("AUDIT_DIR")
+	if dir == "" {
+		dataDir := fleetEnv("DATA_DIR")
+		if dataDir == "" {
+			dataDir = "./data"
+		}
+		dir = filepath.Join(dataDir, "audit")
+	}
+	return dir
 }

@@ -56,6 +56,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // HTTPToolServerName is the synthetic MCP-server name inline http_tools are
@@ -95,7 +96,7 @@ const DefaultDir = "config/default"
 // Dir resolves the configured bundle directory: FLEET_CLIENT_CONFIG_DIR, else
 // the generic default.
 func Dir() string {
-	if v := strings.TrimSpace(os.Getenv(EnvDir)); v != "" {
+	if v := strings.TrimSpace(envreg.Get(EnvDir)); v != "" {
 		return v
 	}
 	return DefaultDir
@@ -915,7 +916,7 @@ func (s *ServerDef) enabled() bool {
 // allSet reports whether every named process-env var has a non-empty value.
 func allSet(vars []string) bool {
 	for _, v := range vars {
-		if strings.TrimSpace(os.Getenv(v)) == "" {
+		if strings.TrimSpace(envreg.Unregistered(v)) == "" {
 			return false
 		}
 	}

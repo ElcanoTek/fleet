@@ -22,6 +22,8 @@ package creds
 import (
 	"os"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // accountSeparatorFolder maps the separators an operator might type in an
@@ -75,7 +77,7 @@ func ApplyClientSuffix(env map[string]string, account string) (map[string]string
 	suffix := "_" + strings.ToUpper(CanonicalAccount(account))
 	overrides := 0
 	for k, v := range env {
-		if override := os.Getenv(k + suffix); override != "" {
+		if override := envreg.Unregistered(k + suffix); override != "" {
 			out[k] = StripEnvQuotes(override)
 			overrides++
 			continue

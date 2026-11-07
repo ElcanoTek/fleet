@@ -3,9 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // SmartSearchParams are the typed parameters for the web_search tool.
@@ -21,7 +21,7 @@ func NewSmartSearchTool() fantasy.AgentTool {
 	duckduckgo := NewWebSearchTool()
 	tavily := NewTavilySearchTool()
 
-	hasTavily := os.Getenv("TAVILY_API_KEY") != ""
+	hasTavily := envreg.Get("TAVILY_API_KEY") != ""
 	description := "Search the web using DuckDuckGo. Returns search results with titles, URLs, and snippets."
 	if hasTavily {
 		description = "Search the web intelligently. Tries DuckDuckGo first (free), automatically falls back to Tavily API (AI-optimized) if blocked."
@@ -29,7 +29,7 @@ func NewSmartSearchTool() fantasy.AgentTool {
 
 	return fantasy.NewAgentTool("web_search", description,
 		func(ctx context.Context, params SmartSearchParams, _ fantasy.ToolCall) (fantasy.ToolResponse, error) {
-			hasTavilyNow := os.Getenv("TAVILY_API_KEY") != ""
+			hasTavilyNow := envreg.Get("TAVILY_API_KEY") != ""
 
 			// Build args map for internal delegation
 			args := map[string]interface{}{"query": params.Query}

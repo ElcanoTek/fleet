@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
 
@@ -117,7 +118,7 @@ type BrowserbaseKeyFunc func(ctx context.Context) (string, error)
 // this turn: either the caller supplied a reachable connector key, or the
 // operator set a box-wide BROWSERBASE_API_KEY.
 func BrowserbaseLiveViewAvailable(connectorReachable bool) bool {
-	return connectorReachable || strings.TrimSpace(os.Getenv("BROWSERBASE_API_KEY")) != ""
+	return connectorReachable || strings.TrimSpace(envreg.Get("BROWSERBASE_API_KEY")) != ""
 }
 
 // NewBrowserbaseLiveViewTool returns the tool, or nil when this deployment has no
@@ -164,7 +165,7 @@ func resolveBrowserbaseKey(ctx context.Context, keyFn BrowserbaseKeyFunc) (key s
 		// Deliberately not logged — the value is a credential and the caller
 		// reports the outcome.
 	}
-	return strings.TrimSpace(os.Getenv("BROWSERBASE_API_KEY")), false
+	return strings.TrimSpace(envreg.Get("BROWSERBASE_API_KEY")), false
 }
 
 // browserbaseHTTPClient is the shared client for both vendor calls. Redirects

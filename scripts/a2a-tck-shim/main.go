@@ -42,9 +42,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 func main() {
@@ -52,7 +53,7 @@ func main() {
 	target := flag.String("target", "http://127.0.0.1:18000", "fleet orchestrator base URL")
 	flag.Parse()
 
-	key := os.Getenv("TCK_API_KEY")
+	key := envreg.Get("TCK_API_KEY")
 	if key == "" {
 		log.Fatal("TCK_API_KEY is required (a fleet_task_… key; mint one with the admin key via POST /v1/keys)")
 	}

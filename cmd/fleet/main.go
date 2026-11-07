@@ -47,6 +47,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/apiversion"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/datasets"
 	"github.com/ElcanoTek/fleet/internal/diskguard"
 	"github.com/ElcanoTek/fleet/internal/guardrail"
@@ -303,7 +304,7 @@ func run() error {
 	// .env copy must be reported as Skipped, never silently rotated mid-run.
 	config.RegisterNonReloadableSecretEnvVars(bundle.WebhookSecretEnvNames()...)
 
-	cfg, err := config.Load(os.Getenv("FLEET_ENV_FILE"))
+	cfg, err := config.Load(envreg.Get("FLEET_ENV_FILE"))
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
@@ -764,7 +765,7 @@ func run() error {
 		return err
 	}
 	hcfg := handlers.Config{
-		AdminAPIKey:                   os.Getenv("ADMIN_API_KEY"),
+		AdminAPIKey:                   envreg.Get("ADMIN_API_KEY"),
 		Version:                       version.String(),
 		DataDir:                       cfg.DataDir,
 		Timezone:                      timezone(),
@@ -973,7 +974,7 @@ func run() error {
 		// pool's idle claim poll — one dial for "how fast the engine notices
 		// due work". Default 30s each.
 		PollInterval:  time.Duration(cfg.SchedTickSeconds) * time.Second,
-		PublicURLBase: os.Getenv("FLEET_PUBLIC_URL"),
+		PublicURLBase: envreg.Get("FLEET_PUBLIC_URL"),
 		// Post-failure error-recovery diagnosis (#317): the interactive Manager
 		// doubles as the runner's ErrorAnalyzer (it has the host-side resolver +
 		// cheap-model seam, exactly like SuggestTitle). Gated on
@@ -1090,7 +1091,7 @@ func run() error {
 	// Config hot-reload on SIGUSR2 (#286): re-read the reloadable settings without
 	// a restart. Extracted to a helper so run() stays within the cyclomatic budget.
 	defer onSignal(ctx, syscall.SIGUSR2, "cmd.config-reload", func() {
-		logConfigReload(cfg.Reload(os.Getenv("FLEET_ENV_FILE")))
+		logConfigReload(cfg.Reload(envreg.Get("FLEET_ENV_FILE")))
 	})()
 
 	// MCP hot-reload on SIGHUP (#218): re-read the bundle's MCP catalog and apply
@@ -1140,7 +1141,6 @@ func run() error {
 				if n, err := chatSrv.SweepExpiredApprovals(sweepCtx); err != nil {
 					log.Printf("approval expiry sweep: %v", err)
 				} else if n > 0 {
-					//nolint:gosec // G706: only an integer count is formatted (%d) — no request-derived string is logged, so no CR/LF log-line forgery is possible.
 					log.Printf("approval expiry sweep: auto-denied %d timed-out approval(s)", n)
 				}
 				cancel()
@@ -1162,7 +1162,6 @@ func run() error {
 	// Listeners are bound; tell a systemd-aware supervisor we are ready (no-op
 	// when NOTIFY_SOCKET is unset, i.e. non-systemd / dev / tests).
 	grace := shutdownGrace(cfg)
-	//nolint:gosec // G706: grace is a time.Duration (digits+unit) derived from operator config, not request input — it cannot forge a log line.
 	log.Printf("fleet: shutdown grace = %s (FLEET_SHUTDOWN_GRACE_SECONDS)", grace)
 	sdNotify("READY=1")
 
@@ -1261,7 +1260,6 @@ func wireA2A(cfg *config.Config, bundle *clientconfig.Bundle, h *handlers.Handle
 		return nil, fmt.Errorf("a2a: %w", err)
 	}
 	h.SetA2A(a2aCfg)
-	//nolint:gosec // G706: A2APersona/A2AModel are operator-set env config, not request input — they can't forge a log line.
 	log.Printf("a2a: enabled (card at /.well-known/agent-card.json, JSON-RPC at /v1/a2a, persona=%q model=%q, push=%v)",
 		cfg.A2APersona, cfg.A2AModel, pushEnabled)
 	if !pushEnabled {
@@ -1371,7 +1369,7 @@ func setupDatasetRunner(schedStorage *storage.Storage, mgr *agent.Manager, h *ha
 }
 
 func timezone() string {
-	if v := strings.TrimSpace(os.Getenv("FLEET_TIMEZONE")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_TIMEZONE")); v != "" {
 		return v
 	}
 	return "UTC"
@@ -1382,7 +1380,7 @@ func timezone() string {
 // operator can set an org default for task scheduling without moving the system
 // clock. Empty defaults to "UTC", matching prior behaviour.
 func defaultTaskTimezone() string {
-	if v := strings.TrimSpace(os.Getenv("FLEET_DEFAULT_TIMEZONE")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_DEFAULT_TIMEZONE")); v != "" {
 		return v
 	}
 	return "UTC"
@@ -1423,7 +1421,7 @@ func seedBootstrapAdmins(schedStorage *storage.Storage, managedByAuth bool) erro
 // — returning the de-duplicated, lowercased, non-empty entries. Empty/unset =
 // no bootstrap.
 func bootstrapAdmins() []string {
-	raw := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS"))
+	raw := strings.TrimSpace(envreg.Get("FLEET_ORCHESTRATOR_BOOTSTRAP_ADMINS"))
 	if raw == "" {
 		return nil
 	}
@@ -1551,7 +1549,7 @@ func toAgentcoreProviders(bundle *clientconfig.Bundle) []agentcore.ProviderConfi
 	for _, p := range bundle.Providers {
 		key := ""
 		if env := strings.TrimSpace(p.APIKeyEnv); env != "" {
-			key = os.Getenv(env)
+			key = envreg.Unregistered(env)
 			if strings.TrimSpace(key) == "" {
 				// A keyed type then fails resolver construction; a type whose
 				// key is optional (ollama, openaicompat) would otherwise run
@@ -1736,7 +1734,7 @@ func confineFileToolsToWorkspace(workspaceRoot string) {
 // explicitly via FLEET_ORCHESTRATOR_ADDR; the Caddyfile renderer follows the
 // env-file value (scripts/lib/caddyfile.sh) when they do.
 func orchestratorAddr() string {
-	if v := strings.TrimSpace(os.Getenv("FLEET_ORCHESTRATOR_ADDR")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_ORCHESTRATOR_ADDR")); v != "" {
 		return v
 	}
 	return "127.0.0.1:8000"
@@ -1777,15 +1775,12 @@ func resolveSandboxInto(cfg *config.Config, bundle *clientconfig.Bundle) error {
 		return err
 	}
 	if envImage == "" && strings.TrimSpace(cfg.SandboxImage) != "" {
-		//nolint:gosec // G706: image ref is operator config (the bundle manifest's sandbox.image/tag) — not request input.
 		log.Printf("sandbox: image resolved from bundle = %s", cfg.SandboxImage)
 	}
 	if cfg.SandboxRuntime != envRuntime && cfg.SandboxRuntime != "" {
-		//nolint:gosec // G706: runtime name is operator config (FLEET_SANDBOX_RUNTIME / bundle manifest), quoted with %q — not request input.
 		log.Printf("sandbox: runtime resolved to %q (podman OCI runtime name)", cfg.SandboxRuntime)
 	}
 	if cfg.SandboxBackend == sandbox.BackendKubernetes {
-		//nolint:gosec // G706: backend + namespace are operator config (FLEET_SANDBOX_* / bundle manifest), quoted with %q — not request input.
 		log.Printf("sandbox: backend resolved to %q (control plane and runners split — pods in namespace %q)",
 			cfg.SandboxBackend, defaultString(cfg.SandboxK8sNamespace, "fleet-sandboxes"))
 	}
@@ -1857,15 +1852,12 @@ func logDiskGuard(guard *diskguard.Guard, cfg *config.Config) {
 		return
 	}
 	st := guard.Sample()
-	//nolint:gosec // G706: an operator-configured path and integers — no request input.
 	log.Printf("disk backpressure: ON (floor %d%% free on %s; scheduled work pauses below it, chat is never gated)",
 		cfg.DiskMinFreePercent, cfg.DataDir)
 	switch {
 	case !st.Available:
-		//nolint:gosec // G706: the statfs error text and an operator-configured path.
 		log.Printf("⚠ disk backpressure: cannot measure %s (%s) — failing OPEN, scheduled work will not be held back", cfg.DataDir, st.Err)
 	case st.Shedding:
-		//nolint:gosec // G706: numbers and an operator-configured path.
 		log.Printf("⚠ disk backpressure: only %.1f%% free on %s at boot — scheduled tasks are held back until space is reclaimed", st.FreePercent, cfg.DataDir)
 	}
 }
@@ -1921,7 +1913,6 @@ func configurePIIRedaction(cfg *config.Config) {
 	}
 	if st.mode != string(piiredact.ModeOff) {
 		// The mode is a validated constant, never raw env input.
-		//nolint:gosec // G706: mode is a validated constant (observe/redact/block), never raw input.
 		log.Printf("PII redaction: enabled (mode=%s, engine=pattern)", st.mode)
 	}
 }
@@ -2035,7 +2026,6 @@ func pruneStaleWorktrees(ctx context.Context, cfg *config.Config) {
 		return
 	}
 	if n := res.Count(); n > 0 {
-		//nolint:gosec // G706: an integer count and a Go duration — no request input.
 		log.Printf("maintenance: reclaimed %d stale worktree dir(s) older than %s", n, cfg.WorktreePruneAge)
 	}
 }
@@ -2063,7 +2053,6 @@ func runMaintenancePass(ctx context.Context, cfg *config.Config, h *handlers.Han
 		// shared with the orchestrator upload path, so sweep it directly.
 		log.Printf("maintenance: attachments: %v", err)
 	} else if n > 0 {
-		//nolint:gosec // G706: only an integer count is formatted (%d).
 		log.Printf("maintenance: removed %d expired attachment file(s)", n)
 	}
 

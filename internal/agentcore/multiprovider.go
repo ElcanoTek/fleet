@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"slices"
 	"strings"
@@ -20,6 +19,7 @@ import (
 	"charm.land/fantasy/providers/openai"
 	"charm.land/fantasy/providers/openaicompat"
 	"charm.land/fantasy/providers/vercel"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/charmbracelet/openai-go/option"
 )
 
@@ -263,7 +263,7 @@ func hostOpenAIHeaderRemovals() []option.RequestOption {
 		option.WithHeaderDel("OpenAI-Organization"),
 		option.WithHeaderDel("OpenAI-Project"),
 	}
-	for _, line := range strings.Split(os.Getenv("OPENAI_CUSTOM_HEADERS"), "\n") {
+	for _, line := range strings.Split(envreg.Get("OPENAI_CUSTOM_HEADERS"), "\n") {
 		if name, _, ok := strings.Cut(line, ":"); ok {
 			if name = strings.TrimSpace(name); name != "" && !sdkOwnedHeaders[strings.ToLower(name)] {
 				opts = append(opts, option.WithHeaderDel(name))

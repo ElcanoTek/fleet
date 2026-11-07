@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 
@@ -286,7 +287,7 @@ func clientBundleCheck() bool {
 // of the directory holding scripts/update.sh (found via findScript). Empty when
 // neither resolves (e.g. a packaged install with no checkout).
 func repoRoot() string {
-	if root := strings.TrimSpace(os.Getenv("FLEET_ROOT")); root != "" {
+	if root := strings.TrimSpace(envreg.Get("FLEET_ROOT")); root != "" {
 		return root
 	}
 	if script := findScript("update.sh"); script != "" {
