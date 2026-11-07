@@ -2592,54 +2592,85 @@ type Approval struct {
 	// docs/RESUME-AFTER-APPROVAL.md): "" (the tool did not opt in, or the row
 	// predates the column), ApprovalResumeArmed, ApprovalResumeClaimed,
 	// ApprovalResumeSkipped, ApprovalResumeSuperseded or ApprovalResumeDropped.
-	// Read by GetApproval and ListExpiredApprovals; other listings leave it
-	// empty.
 	ResumeState string
 	// GroupID is the approval group the card joined at staging (migration
 	// 075, docs/GROUPED-APPROVALS.md): the staging turn's id, for a tool the
 	// bundle lists in critical_tool_group_approval. Empty for every other row.
-	// Read by GetApproval, ListPendingApprovals and ListResolvedApprovals.
 	GroupID string
 	// ProgressJSON is the latest progress an approved, still-executing call
 	// reported (migration 076, docs/APPROVAL-PROGRESS.md): canonical JSON
-	// written by SetApprovalProgress. Empty when none. Read by GetApproval,
-	// ListResolvedApprovals and ListExecutingApprovals.
+	// written by SetApprovalProgress. Empty when none.
 	ProgressJSON string
 	// ResultCardJSON is the outcome card the call's own result carried
 	// (migration 077, docs/APPROVAL-RESULT-CARDS.md): canonical JSON written
-	// once by SetApprovalResultCard. Empty when none. Read by GetApproval and
-	// ListResolvedApprovals.
+	// once by SetApprovalResultCard. Empty when none.
 	ResultCardJSON string
 	// NarrowedJSON records a card the person approved narrowed (migration
 	// 079, docs/APPROVAL-NARROWING.md): canonical JSON {"arg", "staged",
 	// "approved"} written by ClaimApprovalNarrowed in the claim itself.
 	// ArgsJSON stays the staged call; execution replaces only Arg with
-	// Approved. Empty for every card approved whole. Read by GetApproval and
-	// ListResolvedApprovals.
+	// Approved. Empty for every card approved whole.
 	NarrowedJSON string
 	// StopRequestedAt is when the person pressed Stop on the running call
 	// (migration 080, docs/APPROVAL-STOP.md), unix seconds, written once by
 	// MarkApprovalStopRequested while the call executes. 0 when no stop was
-	// asked for. Read by GetApproval, ListResolvedApprovals and
-	// ListExecutingApprovals.
+	// asked for.
 	StopRequestedAt int64
 	// NarrowableArg is the argument a person may narrow on this card, frozen
 	// at staging by SetApprovalNarrowableArg (migration 079,
 	// docs/APPROVAL-NARROWING.md). Empty = the card approves its call whole.
-	// Read by GetApproval and ListPendingApprovals.
 	NarrowableArg string
 }
+
+// approvalCols is the one column list the full approval readers select
+// (GetApproval, ListPendingApprovals, ListResolvedApprovals,
+// ListExpiredApprovals, LatestApprovalByTool), in scanApproval's order, so
+// every reader fills every Approval field the same way. ListExecutingApprovals
+// stays narrow on purpose: it is polled for settlement and must not download
+// completed cards or argument bodies.
+const approvalCols = `id, conversation_id, user_email, tool_name, args_json, status,
+	COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
+	COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
+	COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
+	is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
+	COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, '')`
+
+// scanApproval scans one row selected with approvalCols.
+func scanApproval(row rowScanner) (Approval, error) {
+	var a Approval
+	err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
+		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
+		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
+		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg)
+	return a, err
+}
+
+// scanApprovals collects every row of a query selected with approvalCols.
+func scanApprovals(rows *sql.Rows) ([]Approval, error) {
+	defer rows.Close()
+	var out []Approval
+	for rows.Next() {
+		a, err := scanApproval(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// approvalClaimable is the claim predicate on an approval row: still pending
+// and not past its expires_at deadline. A still-pending approval past its
+// deadline is default-deny (#225 / #1109) whether or not the expiry sweep has
+// run yet; NULL/0 expires_at never expires. $1 is always the caller's "now".
+const approvalClaimable = `status = 'pending' AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $1)`
 
 // ListPendingApprovals returns every pending approval for a conversation,
 // oldest first. Used on page reload to re-render approval cards that were
 // staged but never resolved in the previous browser session.
 func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID string) ([]Approval, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
-		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(narrowable_arg, '')
+		`SELECT `+approvalCols+`
 		 FROM approvals
 		 WHERE conversation_id = $1 AND ($2 = '' OR LOWER(user_email) = LOWER($2)) AND status = 'pending'
 		 ORDER BY created_at ASC`,
@@ -2648,18 +2679,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context, userEmail, convID stri
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Approval
-	for rows.Next() {
-		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.NarrowableArg); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
+	return scanApprovals(rows)
 }
 
 // MaxResolvedApprovalsPerConversation caps how many resolved approvals the
@@ -2677,12 +2697,7 @@ const MaxResolvedApprovalsPerConversation = 100
 // the first time the user leaves and comes back (#1153's record contract).
 func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID string) ([]Approval, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
-		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0)
+		`SELECT `+approvalCols+`
 		 FROM approvals
 		 WHERE conversation_id = $1 AND user_email = $2 AND status <> 'pending'
 		 ORDER BY created_at DESC
@@ -2692,19 +2707,8 @@ func (s *Store) ListResolvedApprovals(ctx context.Context, userEmail, convID str
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Approval
-	for rows.Next() {
-		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-			&a.NarrowedJSON, &a.StopRequestedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	if err := rows.Err(); err != nil {
+	out, err := scanApprovals(rows)
+	if err != nil {
 		return nil, err
 	}
 	// Oldest first for display, matching ListPendingApprovals.
@@ -2838,9 +2842,17 @@ func (s *Store) CreateApproval(ctx context.Context, convID, userEmail, toolName,
 // already resolved (or superseded) in between is dropped, never written onto
 // a settled decision.
 func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, cardJSON string) (bool, error) {
+	return s.setPendingApprovalColumn(ctx, "card_json", userEmail, approvalID, cardJSON)
+}
+
+// setPendingApprovalColumn writes one staging-time column on a still-pending
+// approval the user owns, and reports whether a row was updated. column is
+// one of the constant names its three callers pass, never request input.
+func (s *Store) setPendingApprovalColumn(ctx context.Context, column, userEmail, approvalID, value string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET card_json = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
-		cardJSON, approvalID, userEmail)
+		//nolint:gosec // G202: column is a constant from SetApprovalCard/SetApprovalNarrowableArg/SetApprovalGroup; every value is a bound placeholder.
+		`UPDATE approvals SET `+column+` = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
+		value, approvalID, userEmail)
 	if err != nil {
 		return false, err
 	}
@@ -2852,14 +2864,7 @@ func (s *Store) SetApprovalCard(ctx context.Context, userEmail, approvalID, card
 // narrow on a still-pending approval the user owns (migration 079). It
 // reports whether a row was updated.
 func (s *Store) SetApprovalNarrowableArg(ctx context.Context, userEmail, approvalID, arg string) (bool, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET narrowable_arg = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
-		arg, approvalID, userEmail)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return s.setPendingApprovalColumn(ctx, "narrowable_arg", userEmail, approvalID, arg)
 }
 
 // SetApprovalGroup records the approval group a still-pending approval the
@@ -2867,14 +2872,7 @@ func (s *Store) SetApprovalNarrowableArg(ctx context.Context, userEmail, approva
 // a row was updated: a row resolved or superseded in between keeps no group,
 // so it can never be pulled into a later group decision.
 func (s *Store) SetApprovalGroup(ctx context.Context, userEmail, approvalID, groupID string) (bool, error) {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET group_id = $1 WHERE id = $2 AND user_email = $3 AND status = 'pending'`,
-		groupID, approvalID, userEmail)
-	if err != nil {
-		return false, err
-	}
-	n, err := res.RowsAffected()
-	return n == 1, err
+	return s.setPendingApprovalColumn(ctx, "group_id", userEmail, approvalID, groupID)
 }
 
 // SetApprovalProgress records the latest progress of an approved call that is
@@ -2931,21 +2929,11 @@ type ApprovalSeat struct {
 
 // GetApproval looks up a pending approval, scoped by user_email.
 func (s *Store) GetApproval(ctx context.Context, userEmail, approvalID string) (*Approval, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
-		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), resume_state, COALESCE(group_id, ''), COALESCE(progress_json, ''),
-		        COALESCE(result_card_json, ''), COALESCE(narrowed_json, ''), COALESCE(stop_requested_at, 0), COALESCE(narrowable_arg, '')
-		 FROM approvals WHERE id = $1 AND user_email = $2`,
+	a, err := scanApproval(s.db.QueryRowContext(ctx,
+		`SELECT `+approvalCols+` FROM approvals WHERE id = $1 AND user_email = $2`,
 		approvalID, userEmail,
-	)
-	var a Approval
-	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState, &a.GroupID, &a.ProgressJSON, &a.ResultCardJSON,
-		&a.NarrowedJSON, &a.StopRequestedAt, &a.NarrowableArg); err != nil {
+	))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
@@ -2967,11 +2955,7 @@ const MaxExpiredApprovalsPerSweep = 500
 // Rows with NULL/0 expires_at never expire and are excluded.
 func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
-		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, ''), resume_state
+		`SELECT `+approvalCols+`
 		 FROM approvals
 		 WHERE status = 'pending' AND expires_at IS NOT NULL AND expires_at > 0 AND expires_at < $1
 		 ORDER BY expires_at ASC
@@ -2981,18 +2965,7 @@ func (s *Store) ListExpiredApprovals(ctx context.Context, now int64) ([]Approval
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Approval
-	for rows.Next() {
-		var a Approval
-		if err := rows.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-			&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-			&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON, &a.ResumeState); err != nil {
-			return nil, err
-		}
-		out = append(out, a)
-	}
-	return out, rows.Err()
+	return scanApprovals(rows)
 }
 
 // Approval lifecycle statuses.
@@ -3012,26 +2985,15 @@ func (s *Store) ResolveApproval(ctx context.Context, userEmail, approvalID, newS
 	if !validApprovalResolution(newStatus) {
 		return fmt.Errorf("invalid approval status %q", newStatus)
 	}
-	now := time.Now().Unix()
-	var (
-		res sql.Result
-		err error
-	)
 	// An approved ResolveApproval IS the outcome (notify-mode records), so
-	// is_err=false is part of the write. Rejections leave is_err NULL.
-	if newStatus == approvalStatusApproved {
-		res, err = s.db.ExecContext(ctx,
-			`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3, is_err = FALSE
-			 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
-			newStatus, resultText, now, approvalID, userEmail,
-		)
-	} else {
-		res, err = s.db.ExecContext(ctx,
-			`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
-			 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
-			newStatus, resultText, now, approvalID, userEmail,
-		)
-	}
+	// is_err=false is part of the write. Rejections leave is_err as it was
+	// (NULL on a pending row).
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3,
+		        is_err = CASE WHEN $1 = 'approved' THEN FALSE ELSE is_err END
+		 WHERE id = $4 AND user_email = $5 AND status = 'pending'`,
+		newStatus, resultText, time.Now().Unix(), approvalID, userEmail,
+	)
 	if err != nil {
 		return err
 	}
@@ -3062,9 +3024,8 @@ func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, a
 	now := time.Now().Unix()
 	var convID string
 	err = tx.QueryRowContext(ctx,
-		`SELECT conversation_id FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
-		approvalID, userEmail, now,
+		`SELECT conversation_id FROM approvals WHERE id = $2 AND user_email = $3 AND `+approvalClaimable,
+		now, approvalID, userEmail,
 	).Scan(&convID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
@@ -3078,22 +3039,14 @@ func (s *Store) claimApprovalForAuthorizedUser(ctx context.Context, userEmail, a
 		}
 		return false, err
 	}
-	var res sql.Result
-	if narrowedJSON != "" {
-		res, err = tx.ExecContext(ctx,
-			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, narrowed_json = $3
-			 WHERE id = $4 AND user_email = $5 AND status = 'pending'
-			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
-			resultText, now, narrowedJSON, approvalID, userEmail, now,
-		)
-	} else {
-		res, err = tx.ExecContext(ctx,
-			`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2
-			 WHERE id = $3 AND user_email = $4 AND status = 'pending'
-			   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
-			resultText, now, approvalID, userEmail, now,
-		)
-	}
+	// An empty narrowedJSON (a card approved whole) leaves narrowed_json as
+	// it was — NULL on a pending row.
+	res, err := tx.ExecContext(ctx,
+		`UPDATE approvals SET status = 'approved', result_text = $2, resolved_at = $1,
+		        narrowed_json = COALESCE(NULLIF($3, ''), narrowed_json)
+		 WHERE id = $4 AND user_email = $5 AND `+approvalClaimable,
+		now, resultText, narrowedJSON, approvalID, userEmail,
+	)
 	if err != nil {
 		return false, err
 	}
@@ -3113,12 +3066,10 @@ func (s *Store) ClaimApproval(ctx context.Context, userEmail, approvalID, newSta
 	if newStatus == approvalStatusApproved {
 		return s.claimApprovalForAuthorizedUser(ctx, userEmail, approvalID, resultText, "")
 	}
-	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE approvals SET status = $1, result_text = $2, resolved_at = $3
-		 WHERE id = $4 AND user_email = $5 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $6)`,
-		newStatus, resultText, now, approvalID, userEmail, now,
+		`UPDATE approvals SET status = $2, result_text = $3, resolved_at = $1
+		 WHERE id = $4 AND user_email = $5 AND `+approvalClaimable,
+		time.Now().Unix(), newStatus, resultText, approvalID, userEmail,
 	)
 	if err != nil {
 		return false, err
@@ -3180,9 +3131,8 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 	now := time.Now().Unix()
 	var pending int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM approvals WHERE id = $1 AND user_email = $2 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $3)`,
-		approvalID, userEmail, now,
+		`SELECT 1 FROM approvals WHERE id = $2 AND user_email = $3 AND `+approvalClaimable,
+		now, approvalID, userEmail,
 	).Scan(&pending); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, nil
@@ -3194,10 +3144,9 @@ func (s *Store) ClaimApprovalAndSetModel(ctx context.Context, userEmail, approva
 		return false, err
 	}
 	res, err := tx.ExecContext(ctx,
-		`UPDATE approvals SET status = 'approved', result_text = $1, resolved_at = $2, is_err = FALSE
-		 WHERE id = $3 AND user_email = $4 AND status = 'pending'
-		   AND (expires_at IS NULL OR expires_at = 0 OR expires_at > $5)`,
-		resultText, now, approvalID, userEmail, now,
+		`UPDATE approvals SET status = 'approved', result_text = $2, resolved_at = $1, is_err = FALSE
+		 WHERE id = $3 AND user_email = $4 AND `+approvalClaimable,
+		now, resultText, approvalID, userEmail,
 	)
 	if err != nil {
 		return false, err
@@ -3289,22 +3238,15 @@ func (s *Store) SetApprovalResult(ctx context.Context, userEmail, approvalID, re
 // disposition: an approved row stops re-suggestions for the rest of
 // the conversation; a rejected row triggers a user-turn cooldown.
 func (s *Store) LatestApprovalByTool(ctx context.Context, convID, toolName string) (*Approval, error) {
-	row := s.db.QueryRowContext(ctx,
-		`SELECT id, conversation_id, user_email, tool_name, args_json, status,
-		        COALESCE(result_text, ''), created_at, COALESCE(resolved_at, 0),
-		        COALESCE(tool_call_id, ''), COALESCE(expires_at, 0),
-		        COALESCE(mcp_server, ''), COALESCE(mcp_account, ''),
-		        is_err, COALESCE(card_json, '')
+	a, err := scanApproval(s.db.QueryRowContext(ctx,
+		`SELECT `+approvalCols+`
 		 FROM approvals
 		 WHERE conversation_id = $1 AND tool_name = $2
 		 ORDER BY created_at DESC
 		 LIMIT 1`,
 		convID, toolName,
-	)
-	var a Approval
-	if err := row.Scan(&a.ID, &a.ConversationID, &a.UserEmail, &a.ToolName,
-		&a.ArgsJSON, &a.Status, &a.ResultText, &a.CreatedAt, &a.ResolvedAt, &a.ToolCallID, &a.ExpiresAt,
-		&a.MCPServer, &a.MCPAccount, &a.IsErr, &a.CardJSON); err != nil {
+	))
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
