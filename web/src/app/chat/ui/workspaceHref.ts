@@ -382,8 +382,11 @@ export function isPrivateWorkspacePath(path: string): boolean {
 export type SharedFileLinks = {
   /** The owner's shared outputs, by workspace-relative path (`out/report.xlsx`). */
   shared: ReadonlySet<string>;
-  /** Builds the reader's download URL for a shared path (teamFileUrl). */
-  fileUrl: (path: string) => string;
+  /**
+   * Builds the reader's download URL for a shared path
+   * (conversationTeamFileUrl); null when the URL gate refuses the path.
+   */
+  fileUrl: (path: string) => string | null;
 };
 
 /**
@@ -434,12 +437,8 @@ export function decideReadOnlyFile(
     return { kind: "upload", name: ref.name, path: ref.path };
   }
   if (ref.path && policy.links.shared.has(ref.path)) {
-    return {
-      kind: "shared",
-      name: ref.name,
-      path: ref.path,
-      url: policy.links.fileUrl(ref.path),
-    };
+    const url = policy.links.fileUrl(ref.path);
+    if (url) return { kind: "shared", name: ref.name, path: ref.path, url };
   }
   return { kind: "locked", ...ref };
 }

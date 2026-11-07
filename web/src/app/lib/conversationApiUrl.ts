@@ -73,6 +73,23 @@ export function conversationWorkspaceUrl(
   const base = conversationApiUrl(conversationId, "/workspace/");
   if (base === null) return null;
   if (filePath === "") return base;
+  return appendFilePath(base, filePath);
+}
+
+// conversationTeamFileUrl returns `/api/conversations/<id>/team-files/<path>`,
+// a teammate's download of a shared output, under the same rules as
+// conversationWorkspaceUrl. A team file always names a file, so an empty
+// `filePath` is refused too.
+export function conversationTeamFileUrl(
+  conversationId: string,
+  filePath: string,
+): string | null {
+  const base = conversationApiUrl(conversationId, "/team-files/");
+  if (base === null) return null;
+  return appendFilePath(base, filePath);
+}
+
+function appendFilePath(base: string, filePath: string): string | null {
   const segments = filePath.split("/");
   if (segments.some((s) => s === "" || s === "." || s === "..")) return null;
   return base + segments.map((segment) => encodeURIComponent(segment)).join("/");

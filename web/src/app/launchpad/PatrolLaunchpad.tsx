@@ -42,6 +42,7 @@ import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, removePref, writePref } from "@/app/shared/lib/storage";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { fetchMe } from "@/app/shared/lib/account";
+import { conversationApiPath, conversationApiUrl } from "@/app/lib/conversationApiUrl";
 
 export const LAUNCHPAD_PROGRESS_ITEM = "fleet.launchpad.v1";
 
@@ -496,13 +497,15 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         );
       }
       setCreated({ ...created.current, conversationId });
-      const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
+      const toolsUrl = conversationApiUrl(conversationId, "/mcp-servers");
+      const schedulesUrl = conversationApiUrl(conversationId, "/schedules");
+      if (!toolsUrl || !schedulesUrl) throw new Error("The server returned an invalid chat id.");
 
       setPhase("tools");
       // Only replace the chat's connector set when the catalog is known: an
       // unknown selection keeps the defaults the server seeded at creation.
       if (toolsCatalog) {
-        const toolsRes = await fetch(`${base}/mcp-servers`, {
+        const toolsRes = await fetch(toolsUrl, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ enabled_optional: optionalSelection(toolsCatalog, toolsSelection), accounts: {} }),
@@ -511,7 +514,7 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       }
 
       setPhase("schedule");
-      const schedRes = await fetch(`${base}/schedules`, {
+      const schedRes = await fetch(schedulesUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -531,8 +534,11 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
       // The patrol is armed from here on; a refused first run (a full queue,
       // say) is reported, not treated as a failed launch.
       let firstRun: LaunchState["firstRun"] = "skipped";
-      if (scheduleId) {
-        const runRes = await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}/run-now`, {
+      const runNowUrl = scheduleId
+        ? conversationApiPath(conversationId, "schedules", scheduleId, "run-now")
+        : null;
+      if (runNowUrl) {
+        const runRes = await fetch(runNowUrl, {
           method: "POST",
         }).catch(() => null);
         firstRun = runRes === null ? "unknown" : runRes.ok ? "running" : "refused";
@@ -571,13 +577,16 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
     const { conversationId, scheduleId } = created.current;
     const settled = (res: Response | null) => res !== null && (res.ok || res.status === 404);
     if (conversationId) {
-      const base = `/api/conversations/${encodeURIComponent(conversationId)}`;
+      // An id the URL gate refuses is never sent; it counts as not settled.
       if (scheduleId) {
-        const res = await fetch(`${base}/schedules/${encodeURIComponent(scheduleId)}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "cancel" }),
-        }).catch(() => null);
+        const scheduleUrl = conversationApiPath(conversationId, "schedules", scheduleId);
+        const res = scheduleUrl
+          ? await fetch(scheduleUrl, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ action: "cancel" }),
+            }).catch(() => null)
+          : null;
         if (!settled(res)) {
           setLaunch((cur) => ({
             ...(cur ?? { phase: "schedule" }),
@@ -588,7 +597,8 @@ export function PatrolLaunchpad({ onClose }: { onClose: () => void }) {
         }
         setCreated({ conversationId, scheduleId: "" });
       }
-      const res = await fetch(base, { method: "DELETE" }).catch(() => null);
+      const chatUrl = conversationApiUrl(conversationId);
+      const res = chatUrl ? await fetch(chatUrl, { method: "DELETE" }).catch(() => null) : null;
       if (!settled(res)) {
         setLaunch((cur) => ({
           ...(cur ?? { phase: "conversation" }),

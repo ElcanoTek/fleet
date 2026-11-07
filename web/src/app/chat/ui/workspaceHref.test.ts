@@ -612,6 +612,18 @@ describe("decideReadOnlyFile — the read-only views' render-time file policy", 
     expect(decideReadOnlyFile("out/user-skills/x.md", team).kind).toBe("locked");
   });
 
+  it("locks a shared path whose URL the gate refuses", () => {
+    const refusing = {
+      mode: "shared" as const,
+      links: { shared: new Set(["data.csv"]), fileUrl: () => null },
+    };
+    expect(decideReadOnlyFile("data.csv", refusing)).toEqual({
+      kind: "locked",
+      name: "data.csv",
+      path: "data.csv",
+    });
+  });
+
   it("never mints a URL for a path outside the shared set, traversal included", () => {
     for (const raw of ["secret/data.csv", `/api/conversations/${CONV}/workspace/%2e%2e/data.csv`]) {
       expect(decideReadOnlyFile(raw, team).kind).toBe("locked");

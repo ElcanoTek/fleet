@@ -28,6 +28,7 @@ import {
 } from "./personaTemplates";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { conversationApiPath, conversationApiUrl } from "@/app/lib/conversationApiUrl";
 
 // Personas (Settings → Personas, docs/USER-PERSONAS.md). A persona is how the
 // assistant thinks, writes and patrols in chats you start with it. Three
@@ -224,8 +225,9 @@ export default function PersonasPage() {
       });
       if (!convRes.ok) throw new Error(await responseErrorText(convRes, "Could not create the patrol chat"));
       const conv = (await convRes.json()) as { id: string };
-      const base = `/api/conversations/${encodeURIComponent(conv.id)}/schedules`;
-      const schedRes = await fetch(base, {
+      const schedulesUrl = conversationApiUrl(conv.id, "/schedules");
+      if (!schedulesUrl) throw new Error("The server returned an invalid chat id.");
+      const schedRes = await fetch(schedulesUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -238,12 +240,13 @@ export default function PersonasPage() {
       });
       if (!schedRes.ok) throw new Error(await responseErrorText(schedRes, "Could not start the patrol"));
       const sched = (await schedRes.json()) as { schedule?: { id: string } };
-      if (sched.schedule?.id) {
+      const runNowUrl = sched.schedule?.id
+        ? conversationApiPath(conv.id, "schedules", sched.schedule.id, "run-now")
+        : null;
+      if (runNowUrl) {
         // The first check runs now so the chat shows the persona at work;
         // a refusal here (e.g. a full queue) still leaves the patrol armed.
-        await fetch(`${base}/${encodeURIComponent(sched.schedule.id)}/run-now`, { method: "POST" }).catch(
-          () => undefined,
-        );
+        await fetch(runNowUrl, { method: "POST" }).catch(() => undefined);
       }
       navigate(`/chat?c=${encodeURIComponent(conv.id)}`);
     });

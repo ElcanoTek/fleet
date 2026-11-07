@@ -3,12 +3,14 @@ import { Icon } from "./Icon";
 import { TeamGlyph } from "./ShareGlyphs";
 import { formatBytes } from "./formatters";
 import {
+  conversationTeamFileUrl,
+  conversationWorkspaceUrl,
+} from "@/app/lib/conversationApiUrl";
+import {
   fetchProjectSources,
   filesLabel,
   formatDay,
-  ownerFileUrl,
   setOutputShared,
-  teamFileUrl,
   type SourcesFile,
   type SourcesGroup,
 } from "./teamSharing";
@@ -298,9 +300,12 @@ export function ProjectSources({
   // Blob: the browser streams the file straight to disk, so a large output
   // never has to fit in this tab's memory first. The trade-off is where a
   // failure shows — a file removed or unshared since this list loaded is
-  // reported by the browser's own downloads UI, not by an in-app message.
+  // reported by the browser's own downloads UI, not by an in-app message. A
+  // path the URL gate refuses gets no href at all.
   const downloadHref = (g: SourcesGroup, f: SourcesFile) =>
-    g.mine ? ownerFileUrl(g.conversation_id, f.path) : teamFileUrl(g.conversation_id, f.path);
+    (g.mine
+      ? conversationWorkspaceUrl(g.conversation_id, f.path)
+      : conversationTeamFileUrl(g.conversation_id, f.path)) ?? undefined;
 
   const total =
     ordered.theirs.reduce((n, g) => n + g.files.length, 0) +

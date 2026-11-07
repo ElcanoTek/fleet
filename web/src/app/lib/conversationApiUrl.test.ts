@@ -3,6 +3,7 @@ import {
   conversationApiPath,
   conversationApiUrl,
   conversationApprovalApiUrl,
+  conversationTeamFileUrl,
   conversationWorkspaceUrl,
   isApiId,
   isConversationId,
@@ -163,5 +164,27 @@ describe("conversationWorkspaceUrl", () => {
   it.each(hostileIds)("returns null when the conversation id is %j", (id) => {
     expect(conversationWorkspaceUrl(id)).toBeNull();
     expect(conversationWorkspaceUrl(id, "report.pptx")).toBeNull();
+  });
+});
+
+describe("conversationTeamFileUrl", () => {
+  it("builds the team-files route, encoding each segment on its own", () => {
+    expect(conversationTeamFileUrl(uuid, "out/chart 1.png")).toBe(
+      `/api/conversations/${uuid}/team-files/out/chart%201.png`,
+    );
+    expect(conversationTeamFileUrl(uuid, "%2e%2e/x")).toBe(
+      `/api/conversations/${uuid}/team-files/%252e%252e/x`,
+    );
+  });
+
+  it.each(["", "../x", "a/../b", "./x", "a//b", "/abs", "x/", "..", "."])(
+    "refuses the team file path %j",
+    (path) => {
+      expect(conversationTeamFileUrl(uuid, path)).toBeNull();
+    },
+  );
+
+  it.each(hostileIds)("returns null when the conversation id is %j", (id) => {
+    expect(conversationTeamFileUrl(id, "report.pptx")).toBeNull();
   });
 });
