@@ -241,6 +241,54 @@ func TestRunStagedToolHoldsWindowsWhileArgumentsRetained(t *testing.T) {
 	}
 }
 
+// An approved email's attachment copies stay on disk while the dispatch
+// retains the arguments, and are removed once the retention ends, not when
+// runStagedTool returns.
+func TestRunStagedToolKeepsAttachmentCopiesWhileArgumentsRetained(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", root)
+	t.Setenv("CHAT_WORKSPACE_ROOT", root)
+	st := newFakeChatStore()
+	conv, err := st.CreateConversation(context.Background(), "u@x.com", "t", "p", "", false)
+	if err != nil {
+		t.Fatalf("CreateConversation: %v", err)
+	}
+	dir := filepath.Join(root, conv.ID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "report.csv"), []byte("a,b\n1,2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	broker := &retainingBroker{}
+	catalog := []mcp.ServerTool{{ServerName: "sendgrid", Tool: mcp.Tool{Name: "send_email"}}}
+	srv := New(&config.Config{EmailAttachmentDir: t.TempDir()}, &approvalEngine{fakeEngine: &fakeEngine{}, broker: broker, catalog: catalog}, st)
+	approval := &store.Approval{
+		UserEmail:      "u@x.com",
+		ConversationID: conv.ID,
+		ToolName:       "mcp_sendgrid_send_email",
+		ArgsJSON:       `{"to_email":"a@b.com","subject":"s","content":"c","attachments":[{"path":"report.csv"}]}`,
+	}
+	if _, err := srv.runStagedTool(context.Background(), approval); err != nil {
+		t.Fatalf("runStagedTool: %v", err)
+	}
+	attachments, _ := broker.args["attachments"].([]any)
+	if len(attachments) != 1 {
+		t.Fatalf("attachments sent = %#v", broker.args["attachments"])
+	}
+	copyPath, _ := attachments[0].(map[string]any)["path"].(string)
+	if copyPath == "" || strings.HasPrefix(copyPath, root) {
+		t.Fatalf("attachment path %q should name a private copy outside the workspace", copyPath)
+	}
+	if b, err := os.ReadFile(copyPath); err != nil || string(b) != "a,b\n1,2\n" {
+		t.Fatalf("copy removed while the dispatch still retains its arguments: %q, %v", b, err)
+	}
+	broker.end()
+	if _, err := os.Stat(copyPath); !os.IsNotExist(err) {
+		t.Fatalf("copy not removed after the retention ended: stat err = %v", err)
+	}
+}
+
 // A call with no reference never takes a sandbox: the fake engine has no
 // pool, so a take would fail the call.
 func TestRunStagedToolWithoutReferenceTakesNoSandbox(t *testing.T) {
