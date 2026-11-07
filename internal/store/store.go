@@ -227,6 +227,12 @@ type ThinkingConfig struct {
 // "gone" from "the server broke" — which a raw 500 never let it do.
 var ErrConversationNotFound = errors.New("conversation not found")
 
+// ErrSummaryStale is returned by ReplaceSummary when a message was committed
+// to the conversation after the history the summary covers was read: saving
+// the summary would hide that message from the model (#2044). The caller
+// discards the summary and asks the user to summarize again.
+var ErrSummaryStale = errors.New("the conversation changed while it was being summarized; summarize again")
+
 // ErrForeignConversation is returned by DeleteByIDs / BulkPatch when one or
 // more of the supplied IDs do not belong to the caller (or do not exist). The
 // HTTP layer surfaces it as 403 and the whole operation is a no-op.
@@ -2025,6 +2031,13 @@ func (s *Store) AppendHistory(ctx context.Context, convID string, entries []agen
 func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, entries []agent.HistoryEntry) ([]int64, error) {
 	now := time.Now().Unix()
 
+	// Bump updated_at FIRST: it takes the conversation row lock before any
+	// message id is allocated, which is what lets ReplaceSummary's
+	// newer-message check be atomic (#2044) — see lockConversationForAppend.
+	if err := lockConversationForAppend(ctx, tx, convID, now); err != nil {
+		return nil, err
+	}
+
 	var b strings.Builder
 	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, injected_context) VALUES `)
 	args := make([]any, 0, len(entries)*6)
@@ -2073,12 +2086,21 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 			return nil, err
 		}
 	}
-
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID); err != nil {
-		return nil, err
-	}
 	return ids, nil
+}
+
+// lockConversationForAppend bumps the conversation's updated_at at the START
+// of a history-append transaction. The UPDATE's row lock is held to commit,
+// so every writer of a conversation's messages serializes on that row before
+// it allocates message ids. ReplaceSummary relies on it (#2044): it locks the
+// same row, so a concurrent turn's rows are either committed (and seen by its
+// newer-message check) or allocated after the summary's id. Without it, a
+// writer could draw ids below the summary's and commit after it, landing
+// before the summary marker where replayHistory discards them.
+func lockConversationForAppend(ctx context.Context, tx *sql.Tx, convID string, now int64) error {
+	_, err := tx.ExecContext(ctx,
+		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID)
+	return err
 }
 
 // ReplaceSummary deletes any prior `summary` messages on the conversation
@@ -2089,7 +2111,20 @@ func (s *Store) appendHistoryTx(ctx context.Context, tx *sql.Tx, convID string, 
 //
 // Scoped by user_email: a foreign-owned conversation returns an error
 // instead of mutating someone else's chat.
-func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error {
+//
+// coveredThroughID is the highest messages.id in the history the summary was
+// generated from. The summary row gets a fresh (larger) id, and replayHistory
+// discards everything before the latest summary — so a message committed
+// while the 30-60 s summary call was running would sit *before* the summary
+// and silently drop out of the model's context (#2044). ReplaceSummary
+// therefore refuses with ErrSummaryStale when any non-summary message newer
+// than coveredThroughID exists. The check and the insert are atomic with
+// respect to every history writer: the conversation row is locked FOR UPDATE
+// first, and the append paths (appendHistoryTx, appendHistoryProvenanceTx)
+// take that row's lock before they allocate message ids, so a writer is
+// either fully committed and visible to the check, or it waits and its rows
+// land after the summary.
+func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry, coveredThroughID int64) error {
 	if entry.Type != "summary" {
 		return fmt.Errorf("ReplaceSummary: entry type must be \"summary\", got %q", entry.Type)
 	}
@@ -2106,6 +2141,30 @@ func (s *Store) ReplaceSummary(ctx context.Context, userEmail, convID string, en
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// FOR UPDATE (not NO KEY UPDATE) also conflicts with the KEY SHARE lock a
+	// concurrent message INSERT's foreign-key check holds, so even a writer
+	// that has not reached its own conversation-row lock is waited out.
+	var locked string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM conversations WHERE id = $1 FOR UPDATE`, convID,
+	).Scan(&locked); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConversationNotFound
+		}
+		return fmt.Errorf("lock conversation: %w", err)
+	}
+	var newer bool
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM messages
+		                 WHERE conversation_id = $1 AND id > $2 AND type <> 'summary')`,
+		convID, coveredThroughID,
+	).Scan(&newer); err != nil {
+		return fmt.Errorf("check for newer messages: %w", err)
+	}
+	if newer {
+		return ErrSummaryStale
+	}
 
 	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM messages WHERE conversation_id = $1 AND type = 'summary'`,

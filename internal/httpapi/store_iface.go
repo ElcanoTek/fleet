@@ -123,7 +123,7 @@ type chatStore interface {
 	LookupInput(ctx context.Context, convID, clientID string) (*store.InputQueueRow, error)
 	LookupInputForUser(ctx context.Context, userEmail, clientID string) (*store.InputQueueRow, error)
 	SettleTurnInputs(ctx context.Context, turnID, drainedID string) (requeued, cancelled int, err error)
-	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry) error
+	ReplaceSummary(ctx context.Context, userEmail, convID string, entry agent.HistoryEntry, coveredThroughID int64) error
 	TruncateAfter(ctx context.Context, userEmail, convID string, afterMessageID int64) error
 	MaxMessageIDForRole(ctx context.Context, convID, role string) (int64, error)
 	SecondMaxMessageIDForRole(ctx context.Context, convID, role string) (int64, error)

@@ -1329,6 +1329,10 @@ full, a banner says so and the assistant starts to slow down and cost more per
 turn. **Summarize earlier messages**, in **More options** or on the banner, replaces the earlier
 turns with a short summary so the conversation fits comfortably again; the
 transcript keeps its history, only the assistant's working view is shortened.
+If a reply lands in the conversation while the summary is being written (from
+another tab, say), the summary is not saved and the chat says *"The
+conversation changed while it was being summarized, so the summary was not
+saved. Summarize again."* Summarize again to include the new reply.
 You do not have to watch for it: by default, once a request reaches about 90% of
 the model's limit, the platform summarizes the oldest part of that working view
 by itself — between turns, or in the middle of a long turn that keeps pulling in

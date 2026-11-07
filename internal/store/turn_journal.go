@@ -163,6 +163,10 @@ func (s *Store) CommitTurnHistory(ctx context.Context, convID, turnID string, en
 // stay NULL — they never collide with this index.
 func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convID, turnID string, startSeq int64, entries []agent.HistoryEntry) ([]int64, error) {
 	now := time.Now().Unix()
+	// Row lock before id allocation; see lockConversationForAppend (#2044).
+	if err := lockConversationForAppend(ctx, tx, convID, now); err != nil {
+		return nil, err
+	}
 
 	var b strings.Builder
 	b.WriteString(`INSERT INTO messages (conversation_id, role, type, content, created_at, turn_id, turn_seq, injected_context) VALUES `)
@@ -207,10 +211,6 @@ func (s *Store) appendHistoryProvenanceTx(ctx context.Context, tx *sql.Tx, convI
 		if err := insertSearchContent(ctx, tx, convID, now, entries, ids); err != nil {
 			return nil, err
 		}
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE conversations SET updated_at = $1 WHERE id = $2`, now, convID); err != nil {
-		return nil, err
 	}
 	return ids, nil
 }
