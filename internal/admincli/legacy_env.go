@@ -86,7 +86,7 @@ func printMigrationPlan(w io.Writer, m *config.EnvMigration) {
 // read-only and never prints a value; `fleet doctor` calls it first.
 func warnDeprecatedEnvAliases(w io.Writer) {
 	path := serverEnvFile("")
-	findings, err := config.DeprecatedAliasFindings(path, envFileExportedBySystemd(path))
+	findings, err := config.DeprecatedAliasFindings(path, loadUnitEnv())
 	if err != nil {
 		fmt.Fprintf(w, "fleet doctor: could not check %s for deprecated env aliases: %v\n", path, err)
 		return

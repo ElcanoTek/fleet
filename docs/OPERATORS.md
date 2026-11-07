@@ -102,11 +102,19 @@ and whether fleet's own env-file loader admits it. That page is generated from
 the configuration registry ([CONFIG-REGISTRY.md](CONFIG-REGISTRY.md)), so it
 cannot fall behind the code; this section covers how the file is used.
 
-On a box, `fleet config explain [KEY…]` shows each setting's effective value
-and where it came from (the process environment, the env file, a deprecated
-alias spelling, or the default); secrets are always redacted. With no KEY it
-lists every setting that is set, and `--all` lists every one, with its
-default.
+On a box, `fleet config explain [KEY…]` reports each setting's *configured*
+value and its source. It draws from the sources it can see:
+- the systemd unit's own environment, which outranks your shell
+  (`--no-unit` leaves it out);
+- your shell's environment;
+- the env file;
+- alias spellings;
+- defaults, including one inherited from another setting.
+
+It is not the running server's in-memory configuration: admin overrides made
+in the app and values not yet reloaded are not shown. Secrets are always
+redacted. With no KEY it lists every setting that is set or carries a note,
+and `--all` lists every one, with its default.
 
 **The legacy `CHAT_`/`CUTLASS_` spellings are deprecated**
 ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)). They still

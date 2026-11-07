@@ -25,7 +25,7 @@
 # config.Load; pointing systemd at the same file keeps process-env and
 # config-loaded values in sync. Every variable is documented in
 # docs/CONFIGURATION.md (generated from internal/config/envreg/table.go);
-# `fleet config explain` shows the effective values. Minimum keys it should
+# `fleet config explain` shows the configured values. Minimum keys it should
 # contain:
 #
 #   OPENROUTER_API_KEY=...

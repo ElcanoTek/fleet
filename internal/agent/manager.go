@@ -2477,3 +2477,8 @@ func emailAttachmentSnapshotter(conversationID, emailAttachmentDir string) func(
 		return tools.SnapshotEmailAttachments(conversationID, args, staging)
 	}
 }
+
+// WarmPoolSize is the warm-pool depth the sandbox pool is built with for cfg
+// (resolveWarmSize). Exported so the configuration registry's inherited
+// default for FLEET_SANDBOX_WARM_SIZE is checked against it.
+func WarmPoolSize(cfg *config.Config) int { return resolveWarmSize(cfg) }

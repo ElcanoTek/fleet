@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -52,11 +53,12 @@ func (f AliasFinding) String() string {
 }
 
 // DeprecatedAliasFindings lists every deprecated alias spelling set
-// (non-empty) in the process environment or in envFile, sorted. exported says
-// the box's systemd unit loads envFile with EnvironmentFile=
-// (EnvFileExportedBySystemd), which makes every line of it effective. A
+// (non-empty) in the shell's process environment, the systemd unit's own
+// environment (unit, nil when not on systemd) or envFile, sorted. When the
+// unit loads envFile with EnvironmentFile=, every line of it is effective. A
 // missing env file is not an error; an unreadable one is.
-func DeprecatedAliasFindings(envFile string, exported bool) ([]AliasFinding, error) {
+func DeprecatedAliasFindings(envFile string, unit *UnitEnv) ([]AliasFinding, error) {
+	exported := unit != nil && EnvFileIn(envFile, unit.Files)
 	file := map[string]string{}
 	if envFile != "" {
 		vals, err := creds.ReadEnvValues(envFile)
@@ -70,6 +72,12 @@ func DeprecatedAliasFindings(envFile string, exported bool) ([]AliasFinding, err
 		for _, a := range e.DeprecatedAliases() {
 			if v, ok := os.LookupEnv(a.Name); ok && strings.TrimSpace(v) != "" {
 				out = append(out, AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceProcessEnv, ReadBy: a.ReadBy})
+			}
+			// The unit's own Environment= / other EnvironmentFile= lines (a
+			// line from envFile itself is reported as the env-file finding).
+			if unit != nil && strings.TrimSpace(unit.Env[a.Name]) != "" &&
+				filepath.Clean(strings.TrimPrefix(unit.Origin[a.Name], "EnvironmentFile=")) != filepath.Clean(envFile) {
+				out = append(out, AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceUnit + " (" + unit.Origin[a.Name] + ")", ReadBy: a.ReadBy})
 			}
 			if v, ok := file[a.Name]; ok && strings.TrimSpace(v) != "" {
 				f := AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceEnvFile, ReadBy: a.ReadBy}

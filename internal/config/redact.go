@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -57,7 +58,13 @@ func redactQuery(rest string) string {
 	parts := strings.Split(query, "&")
 	for i, p := range parts {
 		name, _, hasValue := strings.Cut(p, "=")
-		if hasValue && credentialParam(name) {
+		// Match the DECODED name (`%74oken` is `token`), keep the original
+		// spelling in the output. An undecodable name is matched as written.
+		decoded, err := url.QueryUnescape(name)
+		if err != nil {
+			decoded = name
+		}
+		if hasValue && credentialParam(decoded) {
 			parts[i] = name + "=REDACTED"
 		}
 	}

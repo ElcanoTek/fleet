@@ -3,84 +3,127 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
-// `fleet config explain` (#2053): for each registered setting, the effective
-// value, where it came from, and whether that spelling is deprecated. It
-// resolves through the same two functions config.Load does (resolve.go:
-// envLayers.get for the env-file merge, resolveSpellings for the spelling
-// chain), without loading anything; TestExplainMatchesLoad pins the two
-// against each other.
+// `fleet config explain` (#2053). The contract: for each registered setting,
+// explain reports its CONFIGURED value and that value's source, drawn from
+// the sources explain can see —
+//
+//   - the systemd unit's own environment, on a systemd box (Environment=,
+//     EnvironmentFile=, minus UnsetEnvironment=): what the service starts with;
+//   - the process environment of the shell running explain;
+//   - the env file, as fleet's own loader reads it;
+//   - the setting's alias spellings;
+//   - its default, including one inherited from another setting.
+//
+// It is not the running server's in-memory configuration: admin overrides
+// made in the app, values a running process has not reloaded, and anything
+// computed at run time are outside it. It resolves through the same code as
+// config.Load (resolve.go) and changes nothing; TestExplainMatchesLoad and
+// TestInheritedDefaultsMatchTheReaders pin it against the real readers.
 
 // Redacted replaces every secret's value in an Explanation.
 const Redacted = "<redacted>"
 
-// Explanation describes one setting's effective value.
+// ExplainOptions selects what explain reports and from which sources.
+type ExplainOptions struct {
+	// EnvFile is the deployment env file ("" for none).
+	EnvFile string
+	// Keys are canonical names or alias spellings; empty means "every
+	// setting that is set or carries a note" (or every setting, with All).
+	Keys []string
+	All  bool
+	// Unit is the systemd unit's environment (UnitEnvFromSystemctl /
+	// UnitEnvFromFiles); nil when not on a systemd box or with --no-unit.
+	Unit *UnitEnv
+}
+
+// ExplainSources says which sources the report drew from.
+type ExplainSources struct {
+	// ProcessEnv is always the environment of the shell running explain.
+	ProcessEnv string `json:"process_env"`
+	// EnvFile is the env file path read.
+	EnvFile string `json:"env_file"`
+	// EnvFileReadByLoader: fleet's own loader reads EnvFile (without a unit:
+	// assumed, as `fleet serve` with FLEET_ENV_FILE does; with a unit: only
+	// when the unit's FLEET_ENV_FILE names it). When false, the file's lines
+	// reach the service only through the unit's EnvironmentFile=, if at all.
+	EnvFileReadByLoader bool `json:"env_file_read_by_fleet_loader"`
+	// SystemdUnit is the unit whose environment was merged in (nil: none).
+	SystemdUnit *UnitEnv `json:"systemd_unit,omitempty"`
+}
+
+// ExplainReport is explain's result.
+type ExplainReport struct {
+	Sources  ExplainSources `json:"sources"`
+	Settings []Explanation  `json:"settings"`
+}
+
+// Explanation describes one setting's configured value.
 type Explanation struct {
 	// Key is the canonical name.
 	Key string `json:"key"`
-	// Value is the effective value (Redacted for a secret that is set; the
-	// documented default when unset).
-	Value string `json:"value"`
-	// Set reports whether any spelling supplied a non-empty value.
+	// Value is the configured value (Redacted for a secret; a DSN without
+	// its credentials). Unset, it is the default: inherited from another
+	// setting (InheritedFrom), or the registry's documented Default.
+	Value string `json:"configured_value"`
+	// Set reports whether a spelling of this setting supplied the value.
 	Set bool `json:"set"`
-	// Source is SourceProcessEnv, SourceEnvFile or SourceDefault.
+	// Source is SourceUnit, SourceProcessEnv, SourceEnvFile or SourceDefault.
 	Source string `json:"source"`
+	// SourceDetail qualifies a unit source: "Environment=" or
+	// "EnvironmentFile=<path>".
+	SourceDetail string `json:"source_detail,omitempty"`
 	// Spelling is the variable name that supplied the value (the canonical
-	// name or an alias); empty for the default.
+	// name or an alias); empty for a default.
 	Spelling string `json:"spelling,omitempty"`
 	// Deprecated reports that Spelling is a deprecated legacy alias.
 	Deprecated bool `json:"deprecated"`
+	// InheritedFrom is the chain of settings an inherited default came
+	// through, nearest first (FLEET_MEMORY_GRAPH_MODEL ← FLEET_MEMORY_MODEL ←
+	// FLEET_METADATA_MODEL ← FLEET_TITLE_MODEL).
+	InheritedFrom []string `json:"inherited_from,omitempty"`
+	// InheritedSource says where the inherited value was set ("" when it is
+	// the root setting's own default).
+	InheritedSource string `json:"inherited_source,omitempty"`
 	// Secret marks a redacted setting.
 	Secret bool `json:"secret"`
-	// Notes carries anything else an operator should know: a value in the env
-	// file that does not count, another spelling that is also set, an alias
-	// only some readers honour.
+	// Notes carries anything else an operator should know.
 	Notes []string `json:"notes,omitempty"`
 }
 
-// explainLayers builds the merge explain shares with applyEnvFile. exported
-// (the box's systemd unit loads the file with EnvironmentFile=) admits every
-// name, since systemd exports every line into the server's environment.
-func explainLayers(file map[string]string, exported bool) envLayers {
-	admit := isAllowedEnvVar
-	if exported {
-		admit = func(string) bool { return true }
-	}
-	return envLayers{process: os.LookupEnv, file: file, admit: admit}
-}
-
-// Explain resolves the named settings (canonical names or alias spellings)
-// against the process environment and envFile. With no keys it returns every
-// setting that is set or carries a note (an alias the server ignores, a file
-// value that does not count); with all, every registered setting. An unknown
-// key is an error naming it. A missing env file is not an error.
-//
-// exported says the box's systemd unit loads envFile with EnvironmentFile=
-// (SystemdExportsEnvFile), so every line of it reaches the server even when
-// fleet's own env-file loader would not admit the name.
-func Explain(envFile string, keys []string, all, exported bool) ([]Explanation, error) {
-	file := map[string]string{}
-	if envFile != "" {
-		vals, err := readEnvFileValues(envFile)
+// Explain resolves the requested settings from the sources in opts. An
+// unknown key is an error naming it. A missing env file is not an error.
+func Explain(opts ExplainOptions) (*ExplainReport, error) {
+	rep := &ExplainReport{Sources: ExplainSources{
+		ProcessEnv:  "the shell running fleet config explain",
+		EnvFile:     opts.EnvFile,
+		SystemdUnit: opts.Unit,
+	}}
+	var file map[string]string
+	if opts.EnvFile != "" {
+		vals, err := readEnvFileValues(opts.EnvFile)
 		if err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("read env file %s: %w", envFile, err)
+			return nil, fmt.Errorf("read env file %s: %w", opts.EnvFile, err)
 		}
-		if vals != nil {
-			file = vals
-		}
+		file = vals
 	}
-	layers := explainLayers(file, exported)
+	rep.Sources.EnvFileReadByLoader = opts.EnvFile != "" && loaderReadsEnvFile(opts.Unit, opts.EnvFile)
+	if !rep.Sources.EnvFileReadByLoader {
+		file = nil
+	}
+	layers := envLayers{unit: opts.Unit, process: os.LookupEnv, file: file, admit: isAllowedEnvVar}
 
 	var entries []envreg.Entry
-	if len(keys) > 0 {
+	if len(opts.Keys) > 0 {
 		var unknown []string
 		seen := map[string]bool{}
-		for _, k := range keys {
+		for _, k := range opts.Keys {
 			e, ok := envreg.Find(strings.TrimSpace(k))
 			if !ok {
 				unknown = append(unknown, k)
@@ -98,74 +141,92 @@ func Explain(envFile string, keys []string, all, exported bool) ([]Explanation, 
 		entries = envreg.All()
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	}
-
-	out := make([]Explanation, 0, len(entries))
 	for i := range entries {
-		x := explainEntry(&entries[i], layers, exported)
-		if len(keys) == 0 && !all && !x.Set && len(x.Notes) == 0 {
+		x := explainEntry(&entries[i], layers)
+		if len(opts.Keys) == 0 && !opts.All && !x.Set && len(x.Notes) == 0 {
 			continue
 		}
-		out = append(out, x)
+		rep.Settings = append(rep.Settings, x)
 	}
-	return out, nil
+	return rep, nil
 }
 
-// serverSpellings are the spellings the server resolves for e, in order: all
-// of them except reader-specific aliases (Alias.ReadBy), which only one other
-// reader honours.
-func serverSpellings(e *envreg.Entry) []string {
-	out := make([]string, 0, 1+len(e.Aliases))
-	out = append(out, e.Name)
-	for _, a := range e.Aliases {
-		if a.ReadBy == "" {
-			out = append(out, a.Name)
-		}
+// loaderReadsEnvFile reports whether fleet's own env-file loader reads
+// envFile: always without a unit model; with one, only when the service's
+// FLEET_ENV_FILE names it (the standard unit unsets FLEET_ENV_FILE and
+// exports the file with EnvironmentFile= instead).
+func loaderReadsEnvFile(unit *UnitEnv, envFile string) bool {
+	if unit == nil {
+		return true
 	}
-	return out
+	v, ok := unit.Env["FLEET_ENV_FILE"]
+	return ok && filepath.Clean(strings.TrimSpace(v)) == filepath.Clean(envFile)
 }
 
-func explainEntry(e *envreg.Entry, layers envLayers, exported bool) Explanation {
-	x := Explanation{Key: e.Name, Secret: e.Secret, Source: SourceDefault, Value: e.Default}
-
-	// The value: the shared spelling chain over the shared merge.
-	sources := map[string]string{}
-	get := func(name string) (string, bool) {
-		v, src, present, _ := layers.get(name)
-		sources[name] = src
-		return v, present
+// describeLayer renders a layer source for a note or InheritedSource.
+func describeLayer(spelling string, lv layerValue) string {
+	s := lv.source
+	if lv.detail != "" {
+		s += " (" + lv.detail + ")"
 	}
-	if v, spelling, ok := resolveSpellings(serverSpellings(e), get); ok {
-		x.Set, x.Value, x.Source, x.Spelling = true, v, sources[spelling], spelling
-		if a, _, isAlias := envreg.AliasOf(spelling); isAlias {
+	if spelling != "" {
+		s += " as " + spelling
+	}
+	return s
+}
+
+func explainEntry(e *envreg.Entry, layers envLayers) Explanation {
+	x := Explanation{Key: e.Name, Secret: e.Secret}
+	sv := resolveSetting(*e, layers.get)
+	x.Value = sv.value
+	switch {
+	case sv.set:
+		x.Set, x.Source, x.SourceDetail, x.Spelling = true, sv.layer.source, sv.layer.detail, sv.spelling
+		if a, _, isAlias := envreg.AliasOf(sv.spelling); isAlias {
 			x.Deprecated = a.Deprecated
 		}
-		if x.Source == SourceEnvFile && exported && !isAllowedEnvVar(spelling) {
-			x.Notes = append(x.Notes, fmt.Sprintf("%s reaches the server only through the systemd unit's EnvironmentFile=; fleet's own env-file loader does not admit this spelling", spelling))
+		if sv.layer.shellDiffers {
+			x.Notes = append(x.Notes, fmt.Sprintf("your shell sets %s to a different value, but the service uses the systemd unit's", sv.spelling))
 		}
+	default:
+		x.Source = SourceDefault
+		x.InheritedFrom = sv.inheritedFrom
+		if sv.rootSpelling != "" {
+			x.InheritedSource = describeLayer(sv.rootSpelling, sv.rootLayer)
+		}
+	}
+	if !sv.prose {
 		x.Value = displayValue(e, x.Value)
 	}
 
-	// The notes: every other spelling that is set, and why it does not count.
+	// Notes: every other spelling that is set, and why it does not count.
 	for _, a := range e.Aliases {
 		if a.ReadBy == "" {
 			continue
 		}
 		if where := setSomewhere(layers, a.Name); where != "" {
-			x.Notes = append(x.Notes, fmt.Sprintf("set as %s (%s), which only %s reads; the server ignores it", a.Name, where, a.ReadBy))
+			x.Notes = append(x.Notes, fmt.Sprintf("set as %s (%s), which only %s reads; the code resolving this setting ignores it", a.Name, where, a.ReadBy))
 		}
 	}
 	for _, name := range serverSpellings(e) {
+		lv := layers.get(name)
 		if name == x.Spelling {
+			if lv.miss == fileMasked {
+				x.Notes = append(x.Notes, fmt.Sprintf("%s is also in the env file, but the %s value wins", name, lv.source))
+			}
 			continue
 		}
-		v, src, present, why := layers.get(name)
 		switch {
-		case why == fileMasked:
-			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, but the process env also sets it (to %s), which wins", name, emptyOr(v)))
-		case why == fileNotAdmitted:
-			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, which fleet's own loader does not admit — ignored unless the systemd unit exports the file (set it in the process environment)", name))
-		case present && v != "" && x.Set:
-			x.Notes = append(x.Notes, fmt.Sprintf("%s is also set (%s) but %s takes precedence", name, src, x.Spelling))
+		case lv.unsetByUnit:
+			if where := setSomewhere(envLayers{process: layers.process, file: layers.file}, name); where != "" {
+				x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the %s, but the systemd unit removes it (UnsetEnvironment=)", name, where))
+			}
+		case lv.miss == fileMasked:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, but the %s also sets it (to %s), which wins", name, lv.source, emptyOr(lv.value)))
+		case lv.miss == fileNotAdmitted:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is set in the env file, which fleet's own loader does not admit — ignored (set it in the process environment or the unit)", name))
+		case lv.present && lv.value != "" && x.Set:
+			x.Notes = append(x.Notes, fmt.Sprintf("%s is also set (%s) but %s takes precedence", name, describeLayer("", lv), x.Spelling))
 		}
 	}
 	return x
@@ -179,8 +240,14 @@ func emptyOr(v string) string {
 	return "a value"
 }
 
-// setSomewhere names where name is set (non-empty), admitted or not.
+// setSomewhere names where name is set (non-empty) in any source, admitted
+// or not.
 func setSomewhere(l envLayers, name string) string {
+	if l.unit != nil {
+		if v := l.unit.Env[name]; v != "" {
+			return SourceUnit
+		}
+	}
 	if v, ok := l.process(name); ok && v != "" {
 		return SourceProcessEnv
 	}

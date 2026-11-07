@@ -162,8 +162,24 @@ type Entry struct {
 	Name string
 	// Type is the value type.
 	Type Type
-	// Default is the documented default ("" = unset/empty).
+	// Default is the documented default ("" = unset/empty). Prose in
+	// parentheses means the default is not a value an operator could write
+	// (decided at run time); such text must not name another setting — use
+	// DefaultFrom for that (TestDerivedDefaultsAreStructured).
 	Default string
+	// DefaultFrom names the setting (canonical) this one INHERITS its default
+	// from when no spelling of it is set: FLEET_METADATA_MODEL falls back to
+	// FLEET_TITLE_MODEL's effective value. The parent is resolved the same
+	// way (its own spellings, then its own inheritance, then its Default).
+	DefaultFrom string
+	// DefaultDerive turns the inherited value into this setting's default
+	// (nil: the inherited value as is). ok=false falls back to Default.
+	DefaultDerive func(inherited string) (string, bool)
+	// DefaultFromCanonical: the reader inherits only the parent's CANONICAL
+	// spelling read verbatim from the environment — not its aliases, its own
+	// inheritance or its Default (the browser gateway reads FLEET_SERVER_TOKEN
+	// with a plain lookup).
+	DefaultFromCanonical bool
 	// Description says what the setting does, in one or two sentences.
 	Description string
 	// Group is the docs section (one of the Group* constants).
@@ -271,6 +287,20 @@ func build(in []Entry) *registry {
 			r.byAlias[a.Name] = i
 		}
 		r.entries[i] = e
+	}
+	for _, e := range r.entries {
+		seenFrom := map[string]bool{e.Name: true}
+		for p := e.DefaultFrom; p != ""; {
+			j, ok := r.byName[p]
+			if !ok {
+				panic("envreg: " + e.Name + " DefaultFrom names unregistered " + p)
+			}
+			if seenFrom[p] {
+				panic("envreg: DefaultFrom cycle through " + e.Name)
+			}
+			seenFrom[p] = true
+			p = r.entries[j].DefaultFrom
+		}
 	}
 	return r
 }

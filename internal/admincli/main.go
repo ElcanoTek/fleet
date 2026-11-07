@@ -233,9 +233,11 @@ Users, credentials, notes:
   fleet config set-env <KEY> [--value -]              (upsert ANY key into the server env file as exactly one line:
                                                        duplicates removed, 0600 + owner kept; value from stdin/hidden prompt, never argv)
   fleet config unset-env <KEY>                        (remove every line for KEY)
-  fleet config explain [KEY ...] [--all] [--json]     (each setting's effective value, its source — process env, env file, a
-                                                       deprecated alias, the default — and deprecation; secrets always redacted.
-                                                       No KEY: every set setting; --all: every registered one — docs/CONFIGURATION.md)
+  fleet config explain [KEY ...] [--all] [--json] [--no-unit]
+                                                      (each setting's CONFIGURED value and its source, from what it can see: the
+                                                       systemd unit's environment, your shell, the env file, aliases, defaults
+                                                       incl. inherited ones — not the server's in-memory config; secrets redacted.
+                                                       No KEY: every set/noted setting; --all: every one — docs/CONFIGURATION.md)
   fleet config migrate-env [--write]                  (rewrite deprecated CHAT_/CUTLASS_ keys in the env file to their FLEET_ names;
                                                        dry run by default, --write backs the file up first; never prints values)
   fleet env [show]                                    (print the server env file with secret values masked)

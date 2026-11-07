@@ -30,7 +30,7 @@ func TestExplainSourcesAndPrecedence(t *testing.T) {
 	}, "\n")+"\n")
 	t.Setenv("FLEET_MAX_ITERATIONS", "40")
 
-	got, err := Explain(path, []string{"FLEET_MAX_COST_USD", "FLEET_TEMPERATURE", "OPENROUTER_API_KEY", "CHAT_MAX_ITERATIONS"}, false, false)
+	got, err := explainRun(path, []string{"FLEET_MAX_COST_USD", "FLEET_TEMPERATURE", "OPENROUTER_API_KEY", "CHAT_MAX_ITERATIONS"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,11 +67,11 @@ func TestExplainListsSetKeysByDefaultAndEverythingWithAll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_GUARDRAIL_PROFILE=strict\n")
 	unsetForTest(t, "FLEET_GUARDRAIL_PROFILE", "CHAT_GUARDRAIL_PROFILE", "CUTLASS_GUARDRAIL_PROFILE")
-	set, err := Explain(path, nil, false, false)
+	set, err := explainRun(path, nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := Explain(path, nil, true, false)
+	all, err := explainRun(path, nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestExplainListsSetKeysByDefaultAndEverythingWithAll(t *testing.T) {
 	if len(all) <= len(set) {
 		t.Errorf("--all listed %d keys, the default %d", len(all), len(set))
 	}
-	if _, err := Explain(path, []string{"FLEET_NOT_A_SETTING"}, false, false); err == nil {
+	if _, err := explainRun(path, []string{"FLEET_NOT_A_SETTING"}, false, nil); err == nil {
 		t.Error("an unknown key must be an error")
 	}
 }
@@ -99,7 +99,7 @@ func TestExplainNeverReturnsASecretValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_SMTP_PASSWORD=placeholder-password\nAPP_SESSION_SECRET=placeholder-session\n")
 	unsetForTest(t, "FLEET_SMTP_PASSWORD", "APP_SESSION_SECRET")
-	all, err := Explain(path, nil, true, false)
+	all, err := explainRun(path, nil, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +248,11 @@ func TestDeprecatedAliasFindings(t *testing.T) {
 	writeEnv(t, path, "CHAT_SERVER_TOKEN=placeholder-token\nCUTLASS_MAX_ITERATIONS=3\nCHAT_TLS_MODE=auto\n")
 	findings := func(exported bool) string {
 		t.Helper()
-		got, err := DeprecatedAliasFindings(path, exported)
+		var unit *UnitEnv
+		if exported {
+			unit = unitExporting(t, path)
+		}
+		got, err := DeprecatedAliasFindings(path, unit)
 		if err != nil {
 			t.Fatal(err)
 		}

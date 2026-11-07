@@ -26,8 +26,12 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
   are deprecated ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)): `fleet doctor` warns about each one it
   finds and `fleet config migrate-env --write` rewrites the env file to the canonical names. Some `CHAT_`/`CUTLASS_` names
   are canonical (not aliases) and are listed as settings of their own.
-- **Inspect a box** with `fleet config explain [KEY…]` (the effective value of each key, where it came from, and whether
-  it is deprecated) — see [OPERATORS.md](OPERATORS.md).
+- **Inherited defaults.** A default shown as *inherited from `X`* is setting `X`'s value, resolved the same way
+  (`FLEET_METADATA_MODEL` follows `FLEET_TITLE_MODEL` unless set).
+- **Inspect a box** with `fleet config explain [KEY…]`. It reports each setting's *configured* value and its source,
+  from the sources it can see: the systemd unit's own environment (on a systemd box), your shell, the env file, the
+  aliases and the defaults (inherited ones included). It is not the running server's in-memory configuration —
+  see [CONFIG-REGISTRY.md](CONFIG-REGISTRY.md).
 
 ## Sections
 
@@ -58,7 +62,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_WEB_ADDR` | string | `127.0.0.1:3000` | server | Listen address of the browser tier (the embedded web UI and every browser /api route, ADR-0091). `off`, `none`, `disabled` or `0` runs API-only with no browser tier. Helm: set by the chart (fixed: 0.0.0.0:3000). |
 | `FLEET_ORCHESTRATOR_ADDR` | string | `127.0.0.1:8000` | server | Listen address of the orchestrator (scheduler HTTP API, /v1, triggers). Loopback by default; multi-host topologies opt in explicitly. Helm: set by the chart (fixed: 0.0.0.0:8000). |
 | `FLEET_SERVER_TOKEN` | string | — | server | Shared bearer token between the browser gateway and the chat/orchestrator APIs. Not reloadable. **Secret.** Deprecated aliases: `CHAT_SERVER_TOKEN`, `CUTLASS_SERVER_TOKEN` (process env only). |
-| `ORCHESTRATOR_SERVER_TOKEN` | string | (FLEET_SERVER_TOKEN) | server | Bearer token the browser gateway presents to the orchestrator; defaults to FLEET_SERVER_TOKEN. **Secret.** |
+| `ORCHESTRATOR_SERVER_TOKEN` | string | inherited from `FLEET_SERVER_TOKEN` | server | Bearer token the browser gateway presents to the orchestrator; defaults to FLEET_SERVER_TOKEN. **Secret.** |
 | `ADMIN_API_KEY` | string | — | server | Admin API key for the orchestrator's admin endpoints (and `fleet mcp reload`). Not reloadable. **Secret.** |
 | `FLEET_PUBLIC_BASE_URL` | url | — | server | Public origin of this deployment (https://fleet.example.com). Used for OAuth redirect URIs, links and the browser tier's origin checks; a trailing slash is trimmed. Deprecated aliases: `CHAT_PUBLIC_BASE_URL` (process env only), `CUTLASS_PUBLIC_BASE_URL` (process env only). |
 | `FLEET_PUBLIC_URL` | url | — | server | Public URL used to build deep links in task notifications and Web Push messages. |
@@ -77,8 +81,8 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_SSE_BUFFER_DURATION` | duration | `60m` | server | How long a finished turn's SSE events stay in memory for reattach. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_BUFFER_MAX_BYTES_PER_TURN` | int | `5242880` | server | Cap on the in-memory SSE replay buffer per turn, in bytes. *Validated at boot* (≥ 0). |
 | `FLEET_SSE_HEARTBEAT_INTERVAL` | duration | `15s` | server | Idle keepalive cadence on an attached SSE stream; 0 disables. *Validated at boot* (≥ 0). |
-| `FLEET_UPDATE_DRAIN_FILE` | path | (<FLEET_ENV_FILE>.update.drain) | server | Path of the update drain sentinel; a relative path resolves under /etc/fleet. While it exists the server reports not-ready and starts no new work. |
-| `FLEET_DRAIN_FILE` | path | — | server | Older name of FLEET_UPDATE_DRAIN_FILE, read when that is unset. |
+| `FLEET_UPDATE_DRAIN_FILE` | path | inherited from `FLEET_DRAIN_FILE` | server | Path of the update drain sentinel; a relative path resolves under /etc/fleet. While it exists the server reports not-ready and starts no new work. |
+| `FLEET_DRAIN_FILE` | path | inherited from `FLEET_ENV_FILE` (derived); else `/etc/fleet/fleet.env.update.drain` | server | Older name of FLEET_UPDATE_DRAIN_FILE, read when that is unset. |
 | `FLEET_MAINTENANCE_MIN_INTERVAL` | duration | `5m` | server | Minimum spacing between two maintenance passes started over HTTP. *Validated at boot* (≥ 0). |
 | `FLEET_ENV_FILE` | path | (/etc/fleet/fleet.env on a provisioned box, else .env.local for CLI verbs) | server | The deployment env file. `fleet serve` loads it when set (the systemd unit passes the file through EnvironmentFile= instead); operator CLI verbs resolve it with --env-file first. A value inside the file itself could never take effect. *Process env only* (fleet's env-file loader does not admit it; export it). |
 
@@ -98,7 +102,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_OIDC_SCOPES` | string | `openid email` | server | Space-separated OIDC scopes requested at sign-in. |
 | `FLEET_OIDC_ALLOWED_DOMAINS` | csv | — | server | Comma-separated email domains allowed to sign in through OIDC; empty allows any. |
 | `FLEET_OIDC_BUTTON_LABEL` | string | — | server | Label of the SSO button on the sign-in page. |
-| `FLEET_OIDC_REDIRECT_URI` | url | (derived from the public origin) | server | OIDC redirect URI, when it must differ from the one derived from the public origin. |
+| `FLEET_OIDC_REDIRECT_URI` | url | inherited from `FLEET_PUBLIC_BASE_URL` (derived); else (the request's own origin — local development only) | server | OIDC redirect URI, when it must differ from the one derived from the public origin. |
 | `FLEET_OIDC_AUTO_START` | bool | `false` | server | An anonymous /login first tries SSO silently (prompt=none). |
 | `FLEET_OIDC_ALLOW_PASSWORD` | bool | `false` | server | Break-glass: keep Fleet passwords working while central Auth SSO is configured. *Validated at boot*. |
 | `FLEET_OIDC_GENERIC` | bool | `false` | server | Marks the OIDC provider as a generic identity provider (Okta, Entra, …) rather than central Auth, so Fleet keeps its own passwords and account management. *Validated at boot*. |
@@ -171,13 +175,13 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's everyday model tier (admin setting default_model). Deprecated aliases: `CHAT_DEFAULT_MODEL` (process env only), `CUTLASS_DEFAULT_MODEL` (process env only). |
 | `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the advanced model tier (admin setting advanced_model). Deprecated aliases: `CHAT_ADVANCED_MODEL` (process env only), `CUTLASS_ADVANCED_MODEL` (process env only). |
 | `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). Deprecated aliases: `CHAT_PINNED_MODELS` (process env only), `CUTLASS_PINNED_MODELS` (process env only). |
-| `FLEET_TITLE_MODEL` | string | (the everyday tier) | server | Model that titles conversations. Deprecated aliases: `CHAT_TITLE_MODEL`, `CUTLASS_TITLE_MODEL` (process env only). |
-| `FLEET_METADATA_MODEL` | string | (FLEET_TITLE_MODEL) | server | Model for auxiliary metadata jobs. Deprecated aliases: `CHAT_METADATA_MODEL`, `CUTLASS_METADATA_MODEL` (process env only). |
-| `FLEET_ERROR_ANALYSIS_MODEL` | string | (FLEET_METADATA_MODEL) | server | Model that analyses failed runs. Deprecated aliases: `CHAT_ERROR_ANALYSIS_MODEL` (process env only), `CUTLASS_ERROR_ANALYSIS_MODEL` (process env only). |
-| `FLEET_MEMORY_MODEL` | string | (FLEET_METADATA_MODEL) | server | Model for memory indexing. Deprecated aliases: `CHAT_MEMORY_MODEL` (process env only), `CUTLASS_MEMORY_MODEL` (process env only). |
-| `FLEET_MEMORY_GRAPH_MODEL` | string | (FLEET_MEMORY_MODEL) | server | Model for the memory graph. Deprecated aliases: `CHAT_MEMORY_GRAPH_MODEL` (process env only), `CUTLASS_MEMORY_GRAPH_MODEL` (process env only). |
-| `FLEET_RECURRING_TASK_MODEL` | string | (FLEET_METADATA_MODEL) | server | Model that drafts recurring tasks. Deprecated aliases: `CHAT_RECURRING_TASK_MODEL` (process env only), `CUTLASS_RECURRING_TASK_MODEL` (process env only). |
-| `FLEET_LIBRARY_PROMPT_MODEL` | string | (FLEET_METADATA_MODEL) | server | Model that drafts prompt-library entries. Deprecated aliases: `CHAT_LIBRARY_PROMPT_MODEL` (process env only), `CUTLASS_LIBRARY_PROMPT_MODEL` (process env only). |
+| `FLEET_TITLE_MODEL` | string | `anthropic/claude-opus-5.5` | server | Model that titles conversations. Deprecated aliases: `CHAT_TITLE_MODEL`, `CUTLASS_TITLE_MODEL` (process env only). |
+| `FLEET_METADATA_MODEL` | string | inherited from `FLEET_TITLE_MODEL` | server | Model for auxiliary metadata jobs. Deprecated aliases: `CHAT_METADATA_MODEL`, `CUTLASS_METADATA_MODEL` (process env only). |
+| `FLEET_ERROR_ANALYSIS_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that analyses failed runs. Deprecated aliases: `CHAT_ERROR_ANALYSIS_MODEL` (process env only), `CUTLASS_ERROR_ANALYSIS_MODEL` (process env only). |
+| `FLEET_MEMORY_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model for memory indexing. Deprecated aliases: `CHAT_MEMORY_MODEL` (process env only), `CUTLASS_MEMORY_MODEL` (process env only). |
+| `FLEET_MEMORY_GRAPH_MODEL` | string | inherited from `FLEET_MEMORY_MODEL` | server | Model for the memory graph. Deprecated aliases: `CHAT_MEMORY_GRAPH_MODEL` (process env only), `CUTLASS_MEMORY_GRAPH_MODEL` (process env only). |
+| `FLEET_RECURRING_TASK_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts recurring tasks. Deprecated aliases: `CHAT_RECURRING_TASK_MODEL` (process env only), `CUTLASS_RECURRING_TASK_MODEL` (process env only). |
+| `FLEET_LIBRARY_PROMPT_MODEL` | string | inherited from `FLEET_METADATA_MODEL` | server | Model that drafts prompt-library entries. Deprecated aliases: `CHAT_LIBRARY_PROMPT_MODEL` (process env only), `CUTLASS_LIBRARY_PROMPT_MODEL` (process env only). |
 | `FLEET_ESCALATION_CLASSIFIER_MODE` | enum: off, observe, suggest | `suggest` | server | Chat escalation classifier mode (docs/CHAT-ESCALATION.md). A mistyped value refuses to boot. Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_MODE` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_MODE` (process env only). |
 | `FLEET_ESCALATION_CLASSIFIER_MODEL` | string | `~typesafe/jev-latest` | server | Model the escalation classifier calls. Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_MODEL` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_MODEL` (process env only). |
 | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | int | `80` | server | Classifier confidence, in percent, above which a card is staged. *Validated at boot* (50–99). Deprecated aliases: `CHAT_ESCALATION_CLASSIFIER_THRESHOLD` (process env only), `CUTLASS_ESCALATION_CLASSIFIER_THRESHOLD` (process env only). |
@@ -227,7 +231,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_TOOL_DISCLOSURE_THRESHOLD` | int | (the provider's tool ceiling) | server | Tool count above which tools are disclosed on demand rather than all up front. *Validated at boot* (≥ 1). |
 | `FLEET_MAX_TOOL_OUTPUT_BYTES` | int | `65536` | server | Cap on one tool result handed to the model, in bytes (clamped to the built-in bounds). *Validated at boot*. |
 | `FLEET_ALLOWED_DIRS` | string | — | server | Extra colon-separated directories the host-side file tools may touch, beyond the workspace. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_ALLOWED_DIRS` (process env only). |
-| `FLEET_AUDIT_DIR` | path | (<FLEET_DATA_DIR>/audit) | server | Directory of the bash tool's audit log. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_AUDIT_DIR` (process env only). |
+| `FLEET_AUDIT_DIR` | path | inherited from `FLEET_DATA_DIR` (derived) | server | Directory of the bash tool's audit log. *Process env only* (fleet's env-file loader does not admit it; export it). Deprecated aliases: `CHAT_AUDIT_DIR` (process env only). |
 | `FLEET_LOCKDOWN_ONLY` | bool | `false` | server | Only lockdown (no-egress) conversations; needs a sandbox image. A mistyped value refuses to boot. *Validated at boot*. Deprecated aliases: `CHAT_LOCKDOWN_ONLY`, `CUTLASS_LOCKDOWN_ONLY` (process env only). |
 | `FLEET_LOCKDOWN_ALLOWED_MODELS` | csv | (the two model tiers) | server | Comma-separated model slugs (or `*` globs) a lockdown conversation may run on; the first literal entry is the lockdown default. Unset, the list is the workspace's current default and advanced models, so lockdown follows a tier change live. A lockdown conversation whose model is no longer listed moves to the lockdown default on its next turn; a list of globs only has no literal to move to, so give it a literal first entry. Deprecated aliases: `CHAT_LOCKDOWN_ALLOWED_MODELS`, `CUTLASS_LOCKDOWN_ALLOWED_MODELS` (process env only). |
 | `FLEET_PII_REDACTION_ENABLED` | bool | `false` | server | PII redaction with the built-in pattern engine. *Validated at boot*. Deprecated aliases: `CHAT_PII_REDACTION_ENABLED` (process env only), `CUTLASS_PII_REDACTION_ENABLED` (process env only). |
@@ -286,7 +290,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_SANDBOX_MEMORY_MAX_MB` | int | `8192` | sandbox | Ceiling a task may raise its sandbox memory to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_MEMORY_MAX_MB` (process env only), `CUTLASS_SANDBOX_MEMORY_MAX_MB` (process env only). |
 | `FLEET_SANDBOX_CPUS_MAX` | float | `16` | sandbox | Ceiling a task may raise its sandbox CPUs to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_CPUS_MAX` (process env only), `CUTLASS_SANDBOX_CPUS_MAX` (process env only). |
 | `FLEET_SANDBOX_PIDS_MAX` | int | `1024` | sandbox | Ceiling a task may raise its sandbox process limit to. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_PIDS_MAX` (process env only), `CUTLASS_SANDBOX_PIDS_MAX` (process env only). |
-| `FLEET_SANDBOX_WARM_SIZE` | int | (derived from FLEET_MAX_CONCURRENT_AGENTS, 2..8) | sandbox | Warm-pool depth; 0 disables the warm pool. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_SANDBOX_WARM_SIZE` (process env only), `CUTLASS_SANDBOX_WARM_SIZE` (process env only). Helm: set by the chart from `sandbox.warmSize`. |
+| `FLEET_SANDBOX_WARM_SIZE` | int | inherited from `FLEET_MAX_CONCURRENT_AGENTS` (derived) | sandbox | Warm-pool depth; 0 disables the warm pool. *Validated at boot* (≥ 0). Deprecated aliases: `CHAT_SANDBOX_WARM_SIZE` (process env only), `CUTLASS_SANDBOX_WARM_SIZE` (process env only). Helm: set by the chart from `sandbox.warmSize`. |
 | `FLEET_SANDBOX_WARM_TTL` | int | `300` | sandbox | Seconds an unused warm sandbox lives. *Validated at boot*. Deprecated aliases: `CHAT_SANDBOX_WARM_TTL` (process env only), `CUTLASS_SANDBOX_WARM_TTL` (process env only). |
 | `FLEET_SANDBOX_KATA_OVERHEAD_MB` | int | `512` | sandbox | Guest-memory overhead added for Kata sandboxes, in MiB. *Validated at boot* (≥ 1). |
 | `FLEET_SANDBOX_STATS_INTERVAL_SECONDS` | int | `10` | sandbox | Poll cadence of sandbox resource stats (floor 5 s). |
@@ -476,11 +480,32 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `CHAT_DB_USER` | string | `chat` | scripts | bootstrap.sh: chat database role to provision. A canonical name, not a legacy alias. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DB_PASSWORD` | string | (generated) | scripts | bootstrap.sh: chat database password. A canonical name, not a legacy alias. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_URL` | url | — | scripts | bootstrap.sh: chat URL printed in its summary. A canonical name, not a legacy alias. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `SCHED_DB_NAME` | string | `sched` | scripts | bootstrap.sh: scheduler database name to provision (same as --sched-db-name). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `SCHED_DB_USER` | string | `sched` | scripts | bootstrap.sh: scheduler database role to provision (same as --sched-db-user). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `SCHED_DB_PASSWORD` | string | (generated) | scripts | bootstrap.sh: scheduler database password; otherwise the one already in the env file's DSN, else generated. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `SRC_DIR` | path | (the checkout doctor.sh runs from) | scripts | doctor.sh: the source checkout it checks. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `IMAGE_NAME` | string | (the bundle manifest's sandbox.tag) | scripts | build-sandbox-image.sh: image name to build and tag, for a client's own registry. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLAG_DIR` | path | `../flag` | scripts | flag-sync.sh: the ElcanoTek/flag checkout vendored files are synced from. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `MIGRATION_LINT_BASE` | string | — | scripts | check-migrations.sh: git ref whose diff selects the migrations to lint (CI sets it). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FREEZE_VERSION` | string | `v0.2.2` | scripts | generate-tui-screenshot.sh: version of the freeze tool used to render the screenshot. *Process env only* (fleet's env-file loader does not admit it; export it). |
 
 ## Tests and harnesses
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
+| `HTTPAPI_TEST_DATABASE_URL` | dsn | — | test | Postgres DSN of the httpapi test suite; go-test.sh runs those packages in their own serial group when it is set. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `ORCH_PORT` | int | `18000` | test | e2e-boot-server.sh: orchestrator port of the e2e server. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `WEB_PORT` | int | `3100` | test | e2e-boot-server.sh: browser-tier port of the e2e server. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_DATABASE_DSN` | dsn | — | test | e2e-boot-server.sh: base Postgres DSN with CREATEDB rights; unset uses a local instance. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_TEST_PASSWORD` | string | `e2e-test-password` | test | e2e-boot-server.sh: password of the e2e test user. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_SCHED_USERNAME` | string | `e2e` | test | e2e-boot-server.sh: orchestrator user of the e2e run. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_ENV_FILE` | path | `web/.e2e-live.env` | test | e2e-boot-server.sh: where the resolved env for the Playwright suite is written. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_WORKSPACE_BASE` | path | (/tmp/fleet-e2e-<uid>) | test | e2e-boot-server.sh: parent directory of the run's unique workspace. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_LOG_DIR` | path | `.e2e-run/logs` | test | e2e-boot-server.sh: log directory of the e2e servers. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_SKIP_WEB` | bool | `0` | test | e2e-boot-server.sh: boot only the backend (no web bundle build; FLEET_WEB_ADDR=off). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_REUSE_DB` | bool | `0` | test | e2e-boot-server.sh: keep the chat and scheduler test databases instead of recreating them. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `E2E_CANARY` | bool | `0` | test | e2e-boot-server.sh: canary mode — the real OpenRouter upstream and the operator's key instead of the fake LLM. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `CANARY_MODEL` | string | — | test | e2e-boot-server.sh canary mode: model to run; empty leaves the choice to Fleet's defaults. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_TEST_DATABASE_URL` | dsn | — | test | Postgres DSN of the chat test suites (internal/testdb). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_PORT` | int | `18080` | test | e2e-boot-server.sh: port of the e2e chat server. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DSN` | dsn | — | test | e2e-boot-server.sh: chat DSN of the e2e server. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |

@@ -44,8 +44,12 @@ func Markdown() []byte {
 	w("  are deprecated ([ADR-0099](adr/0099-deprecate-the-chat-cutlass-env-aliases.md)): `fleet doctor` warns about each one it\n")
 	w("  finds and `fleet config migrate-env --write` rewrites the env file to the canonical names. Some `CHAT_`/`CUTLASS_` names\n")
 	w("  are canonical (not aliases) and are listed as settings of their own.\n")
-	w("- **Inspect a box** with `fleet config explain [KEY…]` (the effective value of each key, where it came from, and whether\n")
-	w("  it is deprecated) — see [OPERATORS.md](OPERATORS.md).\n\n")
+	w("- **Inherited defaults.** A default shown as *inherited from `X`* is setting `X`'s value, resolved the same way\n")
+	w("  (`FLEET_METADATA_MODEL` follows `FLEET_TITLE_MODEL` unless set).\n")
+	w("- **Inspect a box** with `fleet config explain [KEY…]`. It reports each setting's *configured* value and its source,\n")
+	w("  from the sources it can see: the systemd unit's own environment (on a systemd box), your shell, the env file, the\n")
+	w("  aliases and the defaults (inherited ones included). It is not the running server's in-memory configuration —\n")
+	w("  see [CONFIG-REGISTRY.md](CONFIG-REGISTRY.md).\n\n")
 
 	w("## Sections\n\n")
 	for _, g := range Groups {
@@ -121,13 +125,25 @@ func typeLabel(e *Entry) string {
 }
 
 func defaultLabel(e *Entry) string {
-	if e.Default == "" {
-		return "—"
+	own := "—"
+	switch {
+	case e.Default == "":
+	case strings.HasPrefix(e.Default, "("):
+		own = e.Default
+	default:
+		own = "`" + e.Default + "`"
 	}
-	if strings.HasPrefix(e.Default, "(") {
-		return e.Default
+	if e.DefaultFrom == "" {
+		return own
 	}
-	return "`" + e.Default + "`"
+	s := "inherited from `" + e.DefaultFrom + "`"
+	if e.DefaultDerive != nil {
+		s += " (derived)"
+	}
+	if e.Default != "" {
+		s += "; else " + own
+	}
+	return s
 }
 
 // describe is the description plus the facts the registry records.
@@ -260,7 +276,10 @@ func HelmEnvSchema() HelmSchema {
 		if e.Helm != "" {
 			d += " The chart sets it from " + strings.Trim(e.Helm, "()") + "; set that value instead."
 		}
-		if e.Default != "" {
+		switch {
+		case e.DefaultFrom != "":
+			d += " Default: inherited from " + e.DefaultFrom + "."
+		case e.Default != "":
 			d += " Default: " + strings.Trim(e.Default, "()") + "."
 		}
 		s.Properties[e.Name] = HelmProperty{Type: helmValueTypes, Description: d}

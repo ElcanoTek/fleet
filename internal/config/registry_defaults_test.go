@@ -237,7 +237,9 @@ func TestRegistryDefaultsMatchCodeFallbacks(t *testing.T) {
 				key = "FLEET_" + strings.TrimLeft(key, "_")
 			}
 			e, ok := envreg.Find(key)
-			if !ok || strings.HasPrefix(e.Default, "(") {
+			// An inherited default (DefaultFrom) is checked against the readers by
+			// TestInheritedDefaultsMatchTheReaders; Load may hold a sentinel there.
+			if !ok || strings.HasPrefix(e.Default, "(") || e.DefaultFrom != "" {
 				return true
 			}
 			var code constant.Value

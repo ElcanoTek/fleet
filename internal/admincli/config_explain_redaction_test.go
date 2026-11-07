@@ -46,10 +46,10 @@ func withUnitDir(t *testing.T, envFile string, exported bool) {
 			t.Fatal(err)
 		}
 	}
-	orig, origCtl := systemdUnitDirs, systemctlEnvironmentFiles
+	orig, origCtl := systemdUnitDirs, systemctlShow
 	systemdUnitDirs = []string{dir}
-	systemctlEnvironmentFiles = func(string) ([]string, bool) { return nil, false } // no systemctl: parse the fixture
-	t.Cleanup(func() { systemdUnitDirs, systemctlEnvironmentFiles = orig, origCtl })
+	systemctlShow = func(string) (string, bool) { return "", false } // no systemctl: parse the fixture
+	t.Cleanup(func() { systemdUnitDirs, systemctlShow = orig, origCtl })
 	t.Setenv("FLEET_SERVICE_NAME", "fleet")
 }
 
@@ -82,7 +82,10 @@ func TestConfigExplainNeverPrintsACredentialTextOrJSON(t *testing.T) {
 		}
 	}
 	var doc struct {
-		Settings []struct{ Key, Value string }
+		Settings []struct {
+			Key   string `json:"key"`
+			Value string `json:"configured_value"`
+		} `json:"settings"`
 	}
 	if err := json.Unmarshal([]byte(js), &doc); err != nil {
 		t.Fatalf("not JSON: %v", err)
@@ -109,17 +112,26 @@ func TestConfigExplainAndDoctorFollowSystemdExport(t *testing.T) {
 		withUnitDir(t, path, exported)
 		out := captureStdout(t, func() { configExplain([]string{"FLEET_MAX_ITERATIONS", "--json", "--env-file", path}) })
 		var doc struct {
-			Exported bool `json:"env_file_exported_by_systemd"`
+			Sources struct {
+				Unit *struct {
+					Files []string `json:"environment_files"`
+				} `json:"systemd_unit"`
+			} `json:"sources"`
 			Settings []struct {
-				Value string
-				Set   bool
-			}
+				Value  string `json:"configured_value"`
+				Set    bool   `json:"set"`
+				Source string `json:"source"`
+			} `json:"settings"`
 		}
 		if err := json.Unmarshal([]byte(out), &doc); err != nil {
 			t.Fatalf("not JSON: %v\n%s", err, out)
 		}
-		if doc.Exported != exported || doc.Settings[0].Set != exported {
-			t.Errorf("exported=%v: explain reported exported=%v set=%v", exported, doc.Exported, doc.Settings[0].Set)
+		gotExported := doc.Sources.Unit != nil && len(doc.Sources.Unit.Files) == 1 && doc.Sources.Unit.Files[0] == path
+		if gotExported != exported || doc.Settings[0].Set != exported {
+			t.Errorf("exported=%v: explain reported unit=%+v setting=%+v", exported, doc.Sources.Unit, doc.Settings[0])
+		}
+		if exported && (doc.Settings[0].Value != "70" || doc.Settings[0].Source != "systemd unit") {
+			t.Errorf("exported: setting %+v, want 70 from the systemd unit", doc.Settings[0])
 		}
 		var buf bytes.Buffer
 		warnDeprecatedEnvAliases(&buf)

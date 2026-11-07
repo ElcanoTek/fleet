@@ -1153,8 +1153,8 @@ func applyEnvFile(envFile string) (map[string]string, error) {
 			admit:   isAllowedEnvVar,
 		}
 		for k := range file {
-			if v, src, _, _ := layers.get(k); src == SourceEnvFile {
-				_ = os.Setenv(k, v)
+			if lv := layers.get(k); lv.source == SourceEnvFile {
+				_ = os.Setenv(k, lv.value)
 			}
 		}
 	}

@@ -104,7 +104,7 @@ func checkExplainAgainstLoad(t *testing.T, tc explainVsLoadCase, spellings []str
 		path := filepath.Join(t.TempDir(), "fleet.env")
 		writeEnv(t, path, strings.Join(file, "\n")+"\n")
 
-		xs, err := Explain(path, []string{tc.key}, false, false)
+		xs, err := explainRun(path, []string{tc.key}, false, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func TestExplainEmptyProcessValueMasksTheFile(t *testing.T) {
 	t.Setenv("FLEET_SERVER_ADDR", "")
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_SERVER_ADDR=10.0.0.1:9\n")
-	xs, err := Explain(path, []string{"FLEET_SERVER_ADDR"}, false, false)
+	xs, err := explainRun(path, []string{"FLEET_SERVER_ADDR"}, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestExplainEmptyProcessValueMasksTheFile(t *testing.T) {
 func TestExplainListsNoteOnlyEntries(t *testing.T) {
 	unsetForTest(t, "FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE")
 	t.Setenv("CHAT_TLS_MODE", "auto")
-	xs, err := Explain("", nil, false, false)
+	xs, err := explainRun("", nil, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

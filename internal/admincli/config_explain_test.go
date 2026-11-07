@@ -18,6 +18,7 @@ func clearEnvNames(t *testing.T, names ...string) {
 }
 
 func TestConfigExplainRedactsAndNamesTheSource(t *testing.T) {
+	stubSystemd(t, t.TempDir(), "", false) // hermetic: no systemd unit on the test box
 	clearEnvNames(t, "FLEET_SMTP_PASSWORD", "FLEET_MAX_COST_USD", "CHAT_MAX_COST_USD", "CUTLASS_MAX_COST_USD")
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(path, []byte("FLEET_SMTP_PASSWORD=placeholder-smtp\nCHAT_MAX_COST_USD=9\n"), 0o600); err != nil {
@@ -33,9 +34,12 @@ func TestConfigExplainRedactsAndNamesTheSource(t *testing.T) {
 	}
 	var doc struct {
 		Settings []struct {
-			Key, Value, Source, Spelling string
-			Deprecated                   bool
-		}
+			Key        string `json:"key"`
+			Value      string `json:"configured_value"`
+			Source     string `json:"source"`
+			Spelling   string `json:"spelling"`
+			Deprecated bool   `json:"deprecated"`
+		} `json:"settings"`
 	}
 	if err := json.Unmarshal([]byte(out), &doc); err != nil {
 		t.Fatalf("not JSON: %v\n%s", err, out)
@@ -96,6 +100,7 @@ func TestConfigMigrateEnvDryRunThenWrite(t *testing.T) {
 }
 
 func TestDoctorWarnsAboutDeprecatedAliases(t *testing.T) {
+	stubSystemd(t, t.TempDir(), "", false) // hermetic: no systemd unit on the test box
 	clearEnvNames(t, "CHAT_MAX_ITERATIONS", "CUTLASS_TEMPERATURE")
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(path, []byte("CHAT_MAX_ITERATIONS=5\n"), 0o600); err != nil {

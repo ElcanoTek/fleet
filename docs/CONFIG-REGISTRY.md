@@ -23,8 +23,9 @@ proper. Each `Entry` carries:
 | Field | Meaning |
 | --- | --- |
 | `Name` | canonical spelling |
-| `Type` | `string`, `int`, `int64`, `float`, `bool`, `strict-bool`, `duration`, `url`, `csv`, `path`, `enum`, `base64` |
-| `Default` | the documented default (prose in parentheses when it is derived) |
+| `Type` | `string`, `int`, `int64`, `float`, `bool`, `strict-bool`, `duration`, `url`, `dsn`, `csv`, `path`, `enum`, `base64` |
+| `Default` | the documented default; prose in parentheses only for a run-time decision, and such prose never names another setting (`TestDerivedDefaultsAreStructured`) |
+| `DefaultFrom`, `DefaultDerive`, `DefaultFromCanonical` | an **inherited** default: when unset, the setting takes `DefaultFrom`'s resolved value (optionally transformed by `DefaultDerive`, which mirrors the reader; `DefaultFromCanonical` when the reader reads only the parent's canonical spelling) |
 | `Description`, `Group` | the docs text and section |
 | `Scope` | `server`, `cli`, `sandbox`, `broker`, `scripts`, `test` |
 | `Secret` | redacted by `explain`, never printed by `migrate-env`, routed to `existingSecret` by the Helm docs |
@@ -35,9 +36,9 @@ proper. Each `Entry` carries:
 | `Knob` | makes it a boot-validated typed knob: `Min`/`Max`, `ReadBy` (a consumer outside `config.Load`), `Lenient`/`Why` |
 | `Helm` | the chart value that sets it (the explicit values↔settings mapping) |
 
-The table holds 371 settings. 276 are admitted from the env file under their
+The table holds 392 settings. 276 are admitted from the env file under their
 canonical name (the old allowlist's 300 keys are those plus 22 legacy alias
-spellings and the bare `PERSONA` / `PERSONA_DEFAULT`). The other 95 are read only
+spellings and the bare `PERSONA` / `PERSONA_DEFAULT`). The other 116 are read only
 from the process environment and were in no table before: CLI, Kubernetes,
 platform and harness variables, and the operator-facing inputs of the shell
 scripts. 149 settings resolve through the legacy-prefix chain, which with 9
@@ -123,36 +124,103 @@ mapping both ways: every `- name:` the chart's Deployment sets is a registered
 canonical name with a `Helm` mapping, and every entry with a mapping is set by
 the template.
 
-### `fleet config explain [KEY…] [--all] [--json] [--env-file F]`
+### `fleet config explain [KEY…] [--all] [--json] [--no-unit] [--env-file F]`
 
-`explain` resolves through the **same code** as `config.Load`, in
-[`internal/config/resolve.go`](../internal/config/resolve.go). Resolution
-has two steps:
+**The contract.** `explain` reports each setting's **configured value** and
+its **source**. It draws only from the sources it can see, highest first:
 
-1. **Merge, per variable name** (`envLayers.get`). A name present in the
-   process environment wins, *even when its value is empty*. Otherwise the env
-   file's value counts, provided the name is admitted. `applyEnvFile` writes
-   exactly this merge into the process environment at boot.
+1. **The systemd unit's own environment**, on a systemd box: `Environment=`,
+   then each `EnvironmentFile=` (a later file wins), minus
+   `UnsetEnvironment=`. This is what the service process starts with, so it
+   outranks the shell running `explain`. `--no-unit` leaves it out. The CLI
+   reads it with `systemctl show -p LoadState -p Environment -p
+   EnvironmentFiles -p UnsetEnvironment <unit>`. Without systemctl it parses
+   the unit files (see below). An `EnvironmentFile=` the CLI cannot read is
+   listed so the operator can re-run as root.
+2. **The shell's process environment.**
+3. **The env file**, as fleet's own loader reads it. With a unit, this
+   applies only when the unit's `FLEET_ENV_FILE` names that file. The
+   standard unit unsets `FLEET_ENV_FILE` and exports the file through
+   `EnvironmentFile=`, so its lines arrive as source 1.
+4. **The setting's alias spellings.**
+5. **Its default**, including one **inherited** from another setting
+   (`DefaultFrom`).
+
+It is **not** the running server's in-memory configuration. Admin overrides
+made in the app, values a running process has not reloaded, and run-time
+decisions are outside it. The usage text, this page, CONFIGURATION.md and the
+JSON field names say exactly that. The JSON fields are:
+- `sources` (`process_env`, `env_file`, `env_file_read_by_fleet_loader`,
+  `systemd_unit`);
+- per setting: `configured_value`, `source`, `source_detail`, `spelling`,
+  `inherited_from`, `inherited_source`, `deprecated`, `secret`, `notes`.
+
+**One resolution.** `explain` resolves through the **same code** as
+`config.Load`, in [`internal/config/resolve.go`](../internal/config/resolve.go):
+
+1. **Merge, per variable name** (`envLayers.get`):
+   - the unit's value, if it sets the name (an `UnsetEnvironment=` name is
+     absent);
+   - else a name present in the process environment, even when its value is
+     empty;
+   - else the env file's value, if the name is admitted.
+
+   `applyEnvFile` writes the last two steps into the process environment at
+   boot. Inside the service, the unit's environment *is* the process
+   environment.
 2. **Pick, across a setting's spellings** (`resolveSpellings`). The first
-   spelling with a non-empty value wins, so an empty value falls through to
-   the next spelling. `lookupFleet`, `getenvDefault` and the knob parser read
-   the merged environment this way. A reader-specific alias is not among the
-   server's spellings.
+   spelling with a non-empty value wins. A reader-specific alias is not among
+   the spellings.
+3. **Default** (`resolveSetting`). An unset setting with `DefaultFrom`
+   resolves its parent through this same function, recursively, then applies
+   `DefaultDerive`. Otherwise it takes its `Default`.
 
-`explain` prints:
-- the effective value;
-- its source (`process env`, `env file`, or `default`);
-- the spelling that supplied it;
-- `DEPRECATED` when that spelling is a legacy alias.
-
-It also adds notes for a file value masked by a process variable (even an
-empty one), a file value the loader does not admit, a lower-precedence
-spelling that is also set, and a reader-specific alias.
+`explain` prints the configured value; its source, with the unit's
+`Environment=` or `EnvironmentFile=<path>` as detail; the spelling; and
+`DEPRECATED` for a legacy alias. An inherited default prints as, for example,
+`vendor/my-model` with source `default (inherited from FLEET_MEMORY_MODEL ←
+FLEET_METADATA_MODEL ← FLEET_TITLE_MODEL, set in env file as
+FLEET_TITLE_MODEL)`. Notes cover:
+- a shell value the unit overrides ("your shell sets X to a different value,
+  but the service uses the systemd unit's");
+- a name the unit removes;
+- a file value masked by a higher source (even an empty one);
+- a file value the loader does not admit;
+- a lower-precedence spelling that is also set;
+- a reader-specific alias.
 
 Secrets print as `<redacted>`. With no KEY, `explain` lists every setting
 that is set **or carries a note**, so an entry whose only spelling set is
 `CHAT_TLS_MODE` still appears. `--all` lists every setting with its default.
 An unknown KEY is an error.
+
+**Inherited defaults.** These entries use `DefaultFrom`, found by grepping
+`config.go` and the readers for derived defaults:
+- the model chain: `FLEET_METADATA_MODEL` ← `FLEET_TITLE_MODEL`, then the
+  error-analysis, memory, recurring-task and library-prompt models ←
+  metadata, and the memory graph ← memory;
+- `ORCHESTRATOR_SERVER_TOKEN` ← `FLEET_SERVER_TOKEN`, canonical spelling only,
+  as the gateway reads it;
+- the drain sentinel: `FLEET_UPDATE_DRAIN_FILE` ← `FLEET_DRAIN_FILE` ←
+  `<FLEET_ENV_FILE>.update.drain`;
+- `FLEET_AUDIT_DIR` ← `<FLEET_DATA_DIR>/audit`;
+- `FLEET_OIDC_REDIRECT_URI` ← the public origin's `/api/auth/oidc/callback`;
+- `FLEET_SANDBOX_WARM_SIZE` ← `FLEET_MAX_CONCURRENT_AGENTS` clamped to 2..8.
+
+`FLEET_TITLE_MODEL`'s default is now the literal everyday-tier slug, pinned to
+`agentcore.DefaultCoreModel` by `TestTitleModelDefaultIsTheCoreModel`.
+
+`TestInheritedDefaultsMatchTheReaders` covers every entry with `DefaultFrom`;
+a new one fails until it is added. For each, it compares `explain` against
+the code that actually uses the value, with nothing set, with each ancestor
+set, and with the setting itself set:
+- for Config fields: `config.Load`;
+- for the rest: `webui.ConfigFromEnv`, `httpapi.UpdateDrainFile`,
+  `tools.AuditDir`, `agent.WarmPoolSize`.
+
+`TestDerivedDefaultsAreStructured` fails when a `Default` text names a
+setting. It also fails when a description says "defaults to / falls back to /
+inherits / derived from `<SETTING>`" without the matching `DefaultFrom`.
 
 `TestExplainMatchesLoad` pins the two against each other. For six settings,
 it applies every combination of {absent, process env, process env
@@ -187,21 +255,26 @@ actually produced.
 fleet unit loads the env file with `EnvironmentFile=`, every line counts as
 the server's environment, not only the names fleet's own loader admits;
 without such a unit an unadmitted line is reported as ignored. A
-reader-specific alias is never reported as a setting's effective value, only
+reader-specific alias is never reported as a setting's configured value, only
 as a note.
 
-Whether the unit exports the file is asked of systemd itself (`systemctl show
--p EnvironmentFiles --value fleet.service`, which already merges drop-ins).
-Only when `systemctl` is missing or fails (a container, no systemd) does the
-CLI parse the unit files, the way systemd resolves them
-(`config.UnitEnvironmentFiles`):
+The unit's environment comes from systemd itself (`systemctl show -p
+LoadState -p Environment -p EnvironmentFiles -p UnsetEnvironment
+fleet.service`, which already merges drop-ins; `LoadState=not-found` means
+no unit). Only when `systemctl` is missing or fails (a container, no systemd)
+does the CLI parse the unit files, the way systemd resolves them
+(`config.UnitEnvFromFiles`):
 - the base unit is the first one found in the search order `/etc/systemd/system`,
   `/run/systemd/system`, `/usr/local/lib/systemd/system`,
   `/usr/lib/systemd/system`, `/lib/systemd/system`;
 - drop-ins come from every directory, a higher-priority directory masking a
   drop-in of the same name, and apply in file-name order;
-- an empty `EnvironmentFile=` resets the list;
+- an empty `Environment=`, `EnvironmentFile=` or `UnsetEnvironment=` resets
+  that list;
 - only `[Service]` counts.
+
+`Environment=` values are split the way systemd splits them (quotes and
+backslash escapes). Tests drive all of this with fake `systemctl` output.
 
 The unit name is `$FLEET_SERVICE_NAME` or `fleet`.
 
@@ -211,6 +284,8 @@ The unit name is `$FLEET_SERVICE_NAME` or `fleet`.
 (`Type: dsn`), which keeps its host and database with the userinfo stripped.
 Every other value that contains `://` has its userinfo and its credential-like
 query parameters (token, key, secret, password, signature, auth, …) removed.
+A parameter name is matched **decoded**, so `%74oken` is `token`, but it is
+printed as written.
 `config.RedactDSN` does this, and `fleet status`, `fleet diagnose` and `fleet
 backup` share it. `TestCredentialValuesAreSecret` requires every entry whose
 name says it is a credential, and every DSN, to be `Secret`, except a short
@@ -308,6 +383,14 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm
   schema points them at `config.existingSecret`. Nothing refuses them in
   `config.env`.
+- **`explain`'s JSON changed shape** (the command is new in this PR, so
+  nothing consumes it yet). The top level is `sources` + `settings`, and each
+  setting's value is `configured_value`, not `value`. The fields name what
+  `explain` actually reports.
+- **Two readers gained an exported accessor** so the inheritance cross-check
+  can call the real code. `tools.AuditDir` is the bash audit-log directory
+  logic, extracted unchanged from `auditBashInvocation`. `agent.WarmPoolSize`
+  wraps `resolveWarmSize`.
 - **Boot applies the env file through the shared merge.** `applyEnvFile` now
   reads the whole file, then applies each admitted name that the process env
   does not already hold, instead of applying every line and then restoring
@@ -315,6 +398,35 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   difference is the error path: if the file fails to parse partway through
   (for example, a line over the scanner limit), nothing from it is applied,
   and Load fails either way.
+
+### Shell scripts are scanned too
+
+`TestShellScriptReadsAreRegistered` extends the "no unregistered reads" rule
+to every shell script under `scripts/` and `deploy/`: `*.sh` files and files
+with a sh or bash shebang. A name counts as read from the environment in
+either of these cases:
+- **Nothing assigns it**: not the script, and not a sourced `scripts/lib`
+  file. For a lib file itself, no script that sources it assigns it either.
+- **It is read with a default expansion before the script assigns it**:
+  `${X:-d}`, `${X:=d}` or `${X:?}` on or before the script's first
+  assignment of `X`. This is the input idiom `X="${X:-d}"`, including
+  `X="${X_ARG:-${X:-d}}"`.
+
+Perl `$ENV{X}` in embedded programs counts unless the script passes `X`
+itself. Every such name must be registered or appear in one of two commented
+lists:
+- `shellInternal`: names set by bash, the OS, sudo, CI or the tools fleet
+  drives;
+- `scriptLocals`: one entry, `update.sh`'s `env_get` default.
+
+Awk and Perl tokens such as `$NF` and `$_` are excluded explicitly.
+
+The scan found 21 unregistered inputs, all now registered:
+- the e2e harness's `ORCH_PORT`, `WEB_PORT` and `E2E_*`, and `CANARY_MODEL`;
+- `HTTPAPI_TEST_DATABASE_URL`;
+- bootstrap's `SCHED_DB_NAME`, `SCHED_DB_USER` and `SCHED_DB_PASSWORD`;
+- doctor's `SRC_DIR`;
+- `IMAGE_NAME`, `FLAG_DIR`, `MIGRATION_LINT_BASE` and `FREEZE_VERSION`.
 
 ### Registry defaults are checked against the code
 
