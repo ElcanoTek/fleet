@@ -104,28 +104,38 @@ env and config-loaded values stay in sync. `bootstrap` writes/refreshes the
 machine-managed keys in place (preserving your hand-edited lines and comments):
 
 ```
-FLEET_CHAT_DATABASE_URL=postgres://chat:…@127.0.0.1:5432/chat?sslmode=disable
-FLEET_SCHED_DATABASE_URL=postgres://sched:…@127.0.0.1:5432/sched?sslmode=disable
+DATABASE_URL=postgres://fleet:…@127.0.0.1:5432/fleet?sslmode=disable
 FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client      # the client bundle checkout
 FLEET_ENV_FILE=/etc/fleet/fleet.env            # so config.Load reads this same file
 ```
 
-**Database DSN precedence.** `fleet serve`, `fleet validate-config`, the admin
-doctor and every operator CLI verb resolve the two DSNs the same way
-(`config.ResolveDSNs`):
+**One database.** fleet keeps both of its stores in the ONE database
+`DATABASE_URL` names: the chat store in schema `chat`, the scheduler in schema
+`sched` ([ADR-0098](adr/0098-one-database-two-schemas.md),
+[ONE-DATABASE.md](ONE-DATABASE.md)). Each store's connections get its schema as
+their only `search_path`, and each store creates its schema on first start.
+`fleet serve`, `fleet validate-config`, the doctor and every operator CLI verb
+resolve the DSN the same way (`config.ResolveDSNs`): `DATABASE_URL`, else the
+`DB_*` parts (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`,
+`DB_SSLMODE`; with `DB_NAME` set, user `fleet` and `localhost:5432`,
+`sslmode=disable` by default). A CLI verb's `--*-database-url` flag wins, and a
+flag naming the one database is given the store's schema. A verb refuses to
+fall through to the bare localhost defaults when nothing is set.
 
-- chat: `FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`, else the `DB_*` parts
-- sched: `FLEET_SCHED_DATABASE_URL`, else `SCHED_DATABASE_URL`, else
-  `DATABASE_URL`, else the `DB_*` parts
-
-The `DB_*` parts (`DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`,
-`DB_SSLMODE`) default to `localhost:5432`, `sslmode=disable`, and user/database
-`chat`/`chat` for chat and `fleet`/`sched` for sched. A CLI verb's
-`--*-database-url` flag wins over all of these, and a verb refuses to fall
-through to the bare localhost defaults when nothing is set. The two stores
-must live in **different** databases: boot and `validate-config` refuse a
-configuration where both resolve to the same host, port and database — which
-is what a shared `DATABASE_URL`, or `DB_*` parts with one `DB_NAME`, produce.
+**Legacy two-database installs (deprecated).** Every install bootstrapped
+before #2049 has two databases and the per-store keys
+`FLEET_CHAT_DATABASE_URL` / `FLEET_SCHED_DATABASE_URL` (or `SCHED_DATABASE_URL`).
+That layout keeps working unchanged — an upgrade never moves data — and the
+server, `fleet status` and `fleet doctor` say so and point at
+`fleet db consolidate`, which moves it into one database
+([ONE-DATABASE.md](ONE-DATABASE.md#moving-a-legacy-install-fleet-db-consolidate)).
+In that layout the old precedence still applies (chat:
+`FLEET_CHAT_DATABASE_URL`, else `DATABASE_URL`, else the `DB_*` parts; sched:
+`FLEET_SCHED_DATABASE_URL`, else `SCHED_DATABASE_URL`, else `DATABASE_URL`,
+else the `DB_*` parts), and with no `DB_NAME` the bare `DB_*` defaults are
+still `chat`/`chat` and `fleet`/`sched`. When the per-store keys name the same
+database, fleet uses its two schemas. What is refused is two DSNs that would
+put both stores in the same schema.
 
 `fleet config set-env KEY` upserts one variable as exactly one line (value from
 stdin or a hidden prompt; duplicates removed; `0600` and owner kept) — prefer

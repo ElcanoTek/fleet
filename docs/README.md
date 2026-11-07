@@ -77,6 +77,7 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   `X-API-Key` as the one public auth path, `/v1/tasks/estimate` as the free
   connection test): [`docs/API-CLIENTS.md`](API-CLIENTS.md) +
   [ADR-0053](adr/0053-public-api-through-the-tls-front.md)
+- **One database** (both stores in one Postgres database, one schema each; moving a legacy two-database install with `fleet db consolidate`): [`docs/ONE-DATABASE.md`](ONE-DATABASE.md) + [ADR-0098](adr/0098-one-database-two-schemas.md)
 - **Database migrations** (the two runners, safe-DDL patterns, the migration DDL
   linter, `fleet migrate status`, rollback scope): [`docs/MIGRATIONS.md`](MIGRATIONS.md)
 - **The browser tier** (the fleet binary serves the Vite SPA and every
@@ -309,6 +310,7 @@ above fails otherwise.
 - [`MULTIPLAYER-CHAT.md`](MULTIPLAYER-CHAT.md) — Multiplayer chat mode: collaborative team conversations with per-turn sender identity and optional default-on sharing
 - [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md) — The node toolchain handoff (`fleet update` ⇄ `fleet doctor --node`)
 - [`NOTIFICATIONS.md`](NOTIFICATIONS.md) — Task notifications (email + webhook) & admin management, including the `blocked` status
+- [`ONE-DATABASE.md`](ONE-DATABASE.md) — One persistence plane: both stores in one database (schemas `chat` and `sched`), `fleet db consolidate` for legacy two-database installs, and removing the legacy layout (#2049, ADR-0098)
 - [`OPEN-REMOTE-MCP.md`](OPEN-REMOTE-MCP.md) — Open-access remote MCP connections
 - [`OPERATORS.md`](OPERATORS.md) — Operating fleet
 - [`OPS-CENTER-LOG-TIMELINE.md`](OPS-CENTER-LOG-TIMELINE.md) — Operations Center log timeline — one readable step per tool call

@@ -334,16 +334,18 @@ func TestOpenMCPBrokerRemoteStore(t *testing.T) {
 	if st, resolver, err := openMCPBrokerRemoteStore(&config.Config{}); err != nil || st != nil || resolver != nil {
 		t.Fatalf("disabled store = (%v, %v, %v), want nils", st, resolver, err)
 	}
-	t.Run("refuses shared chat and sched database before open", func(t *testing.T) {
+	t.Run("refuses chat and sched sharing one schema before open", func(t *testing.T) {
+		// Two DSNs to one database with no schema each would put both stores
+		// in public; the resolved one-database layout gives each its schema.
 		const sameDSN = "postgres://db.example.com/shared"
-		t.Setenv("FLEET_CHAT_DATABASE_URL", sameDSN)
-		t.Setenv("FLEET_SCHED_DATABASE_URL", sameDSN)
 		st, resolver, err := openMCPBrokerRemoteStore(&config.Config{
+			DatabaseURL:           sameDSN,
+			SchedDatabaseURL:      sameDSN,
 			PublicBaseURL:         "https://fleet.example.com",
 			MCPOAuthEncryptionKey: []byte("0123456789abcdef0123456789abcdef"),
 		})
-		if err == nil || st != nil || resolver != nil {
-			t.Fatalf("shared database check = (%v, %v, %v), want refusal", st, resolver, err)
+		if err == nil || st != nil || resolver != nil || !strings.Contains(err.Error(), "its own schema") {
+			t.Fatalf("shared schema check = (%v, %v, %v), want the distinct-stores refusal", st, resolver, err)
 		}
 	})
 

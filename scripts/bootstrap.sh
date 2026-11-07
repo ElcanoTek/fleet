@@ -2,11 +2,18 @@
 # scripts/bootstrap.sh — fleet DB + credential-store bootstrap for fleet.
 #
 # Merges chat's + moc's bootstrap into ONE script with a --postgres=local|external
-# branch (default local). It provisions the ONE cluster, TWO databases (chat +
-# sched) layout the unified `fleet` process expects, and ensures the 0600
-# credential env file exists. It NEVER runs application migrations — each service
-# self-migrates on first start (chat's advisory-lock runner; sched's
-# golang-migrate-compatible runner).
+# branch (default local). It provisions ONE role and ONE database (default
+# fleet/fleet; the chat and sched stores live in its schemas chat and sched,
+# ADR-0098), writes DATABASE_URL, and ensures the 0600 credential env file
+# exists. It NEVER runs application migrations — each store self-migrates on
+# first start (chat's advisory-lock runner; sched's golang-migrate-compatible
+# runner), creating its schema.
+#
+# LEGACY-DB-LAYOUT: an install whose env file already carries the per-store
+# FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL (or a run given the
+# --chat-db-* / --sched-db-* / --adopt-existing-chat|sched-db flags) keeps the
+# legacy two-database layout and is converged as before; `fleet db consolidate`
+# moves it into one database (docs/ONE-DATABASE.md).
 #
 # It is IDEMPOTENT end to end: re-runs converge on the same state (roles/dbs are
 # created only when missing via \gexec; the env file is refreshed in place; the
@@ -17,9 +24,9 @@
 # and is not recorded in this script's env file from a previous run — is treated
 # as someone else's (e.g. a legacy chat/moc install) and the script stops with
 # instructions. The operator must choose explicitly: fresh names
-# (--chat-db-name/--chat-db-user/...) or adoption (--adopt-existing-chat-db /
-# --adopt-existing-sched-db, which NEVER creates or alters the role — no
-# password rotation — and requires the operator to supply a working DSN).
+# (--db-name/--db-user) or adoption (--adopt-existing-db, which NEVER creates
+# or alters the role — no password rotation — and requires the operator to
+# supply a working DSN).
 #
 # Usage:
 #   scripts/bootstrap.sh                             # INTERACTIVE on a terminal: prompts for the
@@ -41,15 +48,15 @@
 #
 # End-to-end flow (every run): ensure 0600 env file → ensure the client bundle is
 # in place (--client-config) → build the sandbox image from the bundle → provision
-# both chat+sched roles/databases (local) or validate DSNs (external) → write the
-# resolved DSNs + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
+# the role + database (local) or validate the DSN (external) → write DATABASE_URL
+# + FLEET_CLIENT_CONFIG_DIR into the env file → optionally enable +
 # start the systemd unit → install + enable the daily database-backup and
 # host-maintenance timers (--no-backup-timer / --no-maintenance-timer opt out).
 #
-# Branch A (local):  install + init a local cluster, create the two owner roles
-#                    and two databases idempotently via psql \gexec, sslmode=disable.
-# Branch B (external): skip install; validate the provided DSNs with SELECT 1 and
-#                    assume the roles/dbs are pre-provisioned (opt-in superuser
+# Branch A (local):  install + init a local cluster, create the owner role and
+#                    the database idempotently via psql \gexec, sslmode=disable.
+# Branch B (external): skip install; validate DATABASE_URL with SELECT 1 and
+#                    assume the role/db is pre-provisioned (opt-in superuser
 #                    create via FLEET_DB_SUPERUSER_URL), sslmode=require.
 #
 # Flags:
@@ -85,6 +92,15 @@
 #                              both accept the `auth pubkey` output line
 #                              verbatim). Validated as a 32-byte Ed25519 key.
 #                              Interactive --enable-web runs are prompted.
+#   --db-name <name>           the database (default fleet). Use a fresh name
+#                              when something else already owns the default.
+#   --db-user <name>           its owner role (default fleet).
+#   --adopt-existing-db        local mode: do NOT create/alter the role or
+#                              database (no password rotation, ever). Use the
+#                              DSN the operator supplies in DATABASE_URL (env or
+#                              already in the env file) verbatim; it is
+#                              validated with SELECT 1.
+#   LEGACY-DB-LAYOUT (two databases; deprecated — use the flags above):
 #   --chat-db-name <name>      chat database name (default chat; same as env
 #                              CHAT_DB_NAME — the flag wins). Use a fresh name
 #                              (e.g. fleet_chat) when a legacy app already owns
@@ -151,6 +167,9 @@
 #                           --client-config is a git URL (default /opt/fleet/client,
 #                           or ./.fleet-client when /opt is not writable).
 #   FLEET_SERVICE_NAME      systemd unit to enable/start (default fleet)
+#   DATABASE_URL            the DSN (external mode; also the adopted DSN under
+#                           --adopt-existing-db)
+#   LEGACY-DB-LAYOUT (deprecated two-database inputs):
 #   CHAT_DB_NAME            chat database name (default chat)
 #   CHAT_DB_USER            chat owner role  (default chat)
 #   CHAT_DB_PASSWORD        chat role password (local: generated if unset)
@@ -230,6 +249,11 @@ ENABLE_BACKUP_TIMER=1
 # exactly the box that fills its disk with stale sandbox image layers.
 ENABLE_MAINTENANCE_TIMER=1
 FORCE_CADDY=0
+DB_NAME_ARG=""
+DB_USER_ARG=""
+ADOPT_DB=0
+# LEGACY-DB-LAYOUT: remove after consolidation — the per-store knobs below.
+LEGACY_DB_FLAGS=0
 CHAT_DB_NAME_ARG=""
 CHAT_DB_USER_ARG=""
 SCHED_DB_NAME_ARG=""
@@ -250,16 +274,22 @@ while [[ $# -gt 0 ]]; do
     --admin=*)           ADMIN_EMAILS_ARG="${1#*=}" ;;
     --auth-pubkey)       shift; [[ $# -gt 0 ]] || { echo "error: --auth-pubkey needs a value or @file" >&2; exit 1; }; AUTH_PUBKEY_ARG="$1" ;;
     --auth-pubkey=*)     AUTH_PUBKEY_ARG="${1#*=}" ;;
-    --chat-db-name)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-name needs a name" >&2; exit 1; }; CHAT_DB_NAME_ARG="$1" ;;
-    --chat-db-name=*)    CHAT_DB_NAME_ARG="${1#*=}" ;;
-    --chat-db-user)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-user needs a name" >&2; exit 1; }; CHAT_DB_USER_ARG="$1" ;;
-    --chat-db-user=*)    CHAT_DB_USER_ARG="${1#*=}" ;;
-    --sched-db-name)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-name needs a name" >&2; exit 1; }; SCHED_DB_NAME_ARG="$1" ;;
-    --sched-db-name=*)   SCHED_DB_NAME_ARG="${1#*=}" ;;
-    --sched-db-user)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-user needs a name" >&2; exit 1; }; SCHED_DB_USER_ARG="$1" ;;
-    --sched-db-user=*)   SCHED_DB_USER_ARG="${1#*=}" ;;
-    --adopt-existing-chat-db)  ADOPT_CHAT_DB=1 ;;
-    --adopt-existing-sched-db) ADOPT_SCHED_DB=1 ;;
+    --db-name)           shift; [[ $# -gt 0 ]] || { echo "error: --db-name needs a name" >&2; exit 1; }; DB_NAME_ARG="$1" ;;
+    --db-name=*)         DB_NAME_ARG="${1#*=}" ;;
+    --db-user)           shift; [[ $# -gt 0 ]] || { echo "error: --db-user needs a name" >&2; exit 1; }; DB_USER_ARG="$1" ;;
+    --db-user=*)         DB_USER_ARG="${1#*=}" ;;
+    --adopt-existing-db) ADOPT_DB=1 ;;
+    # LEGACY-DB-LAYOUT: remove after consolidation — the per-store flags.
+    --chat-db-name)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-name needs a name" >&2; exit 1; }; CHAT_DB_NAME_ARG="$1"; LEGACY_DB_FLAGS=1 ;;
+    --chat-db-name=*)    CHAT_DB_NAME_ARG="${1#*=}"; LEGACY_DB_FLAGS=1 ;;
+    --chat-db-user)      shift; [[ $# -gt 0 ]] || { echo "error: --chat-db-user needs a name" >&2; exit 1; }; CHAT_DB_USER_ARG="$1"; LEGACY_DB_FLAGS=1 ;;
+    --chat-db-user=*)    CHAT_DB_USER_ARG="${1#*=}"; LEGACY_DB_FLAGS=1 ;;
+    --sched-db-name)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-name needs a name" >&2; exit 1; }; SCHED_DB_NAME_ARG="$1"; LEGACY_DB_FLAGS=1 ;;
+    --sched-db-name=*)   SCHED_DB_NAME_ARG="${1#*=}"; LEGACY_DB_FLAGS=1 ;;
+    --sched-db-user)     shift; [[ $# -gt 0 ]] || { echo "error: --sched-db-user needs a name" >&2; exit 1; }; SCHED_DB_USER_ARG="$1"; LEGACY_DB_FLAGS=1 ;;
+    --sched-db-user=*)   SCHED_DB_USER_ARG="${1#*=}"; LEGACY_DB_FLAGS=1 ;;
+    --adopt-existing-chat-db)  ADOPT_CHAT_DB=1; LEGACY_DB_FLAGS=1 ;;
+    --adopt-existing-sched-db) ADOPT_SCHED_DB=1; LEGACY_DB_FLAGS=1 ;;
     --no-backup-timer)   ENABLE_BACKUP_TIMER=0 ;;
     --no-maintenance-timer) ENABLE_MAINTENANCE_TIMER=0 ;;
     --force-caddy)       FORCE_CADDY=1 ;;
@@ -371,6 +401,43 @@ if [[ "$ENABLE_SERVICE" == "1" && "$ENABLE_BACKUP_TIMER" == "1" ]]; then
   [[ "$BACKUP_RETENTION_DAYS" =~ ^[1-9][0-9]*$ ]] \
     || die "FLEET_BACKUP_RETENTION_DAYS must be a positive integer (got '${BACKUP_RETENTION_DAYS}')"
 fi
+# The database layout this run provisions: ONE database (the default, ADR-0098),
+# or — LEGACY-DB-LAYOUT — the two-database layout of an install whose env file
+# already records the per-store DSNs, or of a run given the per-store flags or
+# CHAT_DB_*/SCHED_DB_* inputs. A legacy box is converged as it is: bootstrap
+# never moves data between databases (`fleet db consolidate` does).
+DB_LAYOUT="one"
+if [[ "$LEGACY_DB_FLAGS" == "1" ]] \
+  || grep -qE '^[[:space:]]*(export[[:space:]]+)?(FLEET_CHAT_DATABASE_URL|FLEET_SCHED_DATABASE_URL|SCHED_DATABASE_URL)=.' "$ENV_FILE" 2>/dev/null \
+  || [[ -n "${CHAT_DB_NAME:-}${CHAT_DB_USER:-}${SCHED_DB_NAME:-}${SCHED_DB_USER:-}" ]] \
+  || [[ "$POSTGRES_MODE" == "external" && -n "${FLEET_CHAT_DATABASE_URL:-}${FLEET_SCHED_DATABASE_URL:-}" ]]; then
+  DB_LAYOUT="legacy" # LEGACY-DB-LAYOUT: remove after consolidation
+fi
+if [[ "$DB_LAYOUT" == "one" && ( "$ADOPT_CHAT_DB" == "1" || "$ADOPT_SCHED_DB" == "1" ) ]]; then
+  die "--adopt-existing-chat-db/--adopt-existing-sched-db belong to the legacy two-database layout; use --adopt-existing-db"
+fi
+if [[ "$DB_LAYOUT" == "legacy" && ( -n "$DB_NAME_ARG" || -n "$DB_USER_ARG" || "$ADOPT_DB" == "1" ) ]]; then
+  die "this install uses the legacy two-database layout (per-store DSNs in ${ENV_FILE}, or per-store flags given); --db-name/--db-user/--adopt-existing-db apply to one database — move this box with \`fleet db consolidate\` first (docs/ONE-DATABASE.md)"
+fi
+FLEET_DB_NAME="${DB_NAME_ARG:-fleet}"
+FLEET_DB_USER="${DB_USER_ARG:-fleet}"
+# Lower-case only: the names go unquoted into the provisioning SQL, where
+# Postgres folds them to lower case — "Fleet" would create role/db "fleet"
+# while the DSN written below says "Fleet", which then fails to connect.
+for _ident in "$FLEET_DB_NAME" "$FLEET_DB_USER"; do
+  [[ "$_ident" =~ ^[a-z_][a-z0-9_]*$ ]] \
+    || die "database/role name '${_ident}' must be a lower-case plain identifier ([a-z_][a-z0-9_]*)"
+done
+if [[ "$POSTGRES_MODE" == "external" && "$ADOPT_DB" == "1" ]]; then
+  die "--adopt-existing-db applies to --postgres=local; external mode always uses your DSN and never touches roles"
+fi
+ADOPTED_DB_URL=""
+if [[ "$ADOPT_DB" == "1" ]]; then
+  ADOPTED_DB_URL="${DATABASE_URL:-$(grep '^DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  [[ -n "$ADOPTED_DB_URL" ]] \
+    || die "--adopt-existing-db needs the existing database's working DSN: set DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
+fi
+# LEGACY-DB-LAYOUT: remove after consolidation — the per-store names below.
 # DB names/roles: flag > env > default. The values are interpolated into the
 # provisioning SQL below, so restrict them to plain identifiers.
 CHAT_DB_NAME="${CHAT_DB_NAME_ARG:-${CHAT_DB_NAME:-chat}}"
@@ -1215,7 +1282,7 @@ env_file_records() {
   [[ "$url" =~ $re ]]
 }
 
-# guard_preexisting LABEL ROLE DB ENVKEY ADOPTFLAG NAMEFLAG — refuse to
+# guard_preexisting LABEL ROLE DB ENVKEY ADOPTFLAG NAMEFLAG [USERFLAG] — refuse to
 # provision over a role/database that already exists on the local cluster but
 # is NOT recorded in the env file by a previous run of this script. Without
 # this, defaults colliding with a legacy install (role/db "chat") would
@@ -1224,7 +1291,7 @@ env_file_records() {
 # on the legacy database. The operator must choose: adopt it explicitly, or
 # pick fresh names.
 guard_preexisting() {
-  local label="$1" role="$2" db="$3" envkey="$4" adoptflag="$5" nameflag="$6"
+  local label="$1" role="$2" db="$3" envkey="$4" adoptflag="$5" nameflag="$6" userflag="${7:-}"
   if env_file_records "$envkey" "$role" "$db"; then
     info "${label}: ${envkey} in ${ENV_FILE} already records ${role}@…/${db} (provisioned by a previous run) — converging as usual."
     return 0
@@ -1255,7 +1322,7 @@ guard_preexisting() {
     "  legacy chat/moc install. Proceeding would rotate that role's password (locking out whatever" \
     "  still uses it, including a later legacy export) and run fleet's migrations on that database." \
     "  Choose explicitly, then re-run:" \
-    "    fresh names:  ${nameflag} fleet_${label} (and the matching --${label}-db-user; any unused names)" \
+    "    fresh names:  ${nameflag} fleet_${label} (and the matching ${userflag:-"--${label}-db-user"}; any unused names)" \
     "    adopt it:     ${adoptflag} with ${envkey}=<working DSN> (never creates/alters the role)" \
     "  Migrating legacy data? Use fresh names + export/import — see docs/CUTOVER.md.")"
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -1268,6 +1335,9 @@ guard_preexisting() {
 
 if [[ "$POSTGRES_MODE" == "local" ]]; then
   SSLMODE="disable"
+  FLEET_DB_PASSWORD="$(env_dsn_password DATABASE_URL)"
+  FLEET_DB_PASSWORD="${FLEET_DB_PASSWORD:-$(gen_pass)}"
+  # LEGACY-DB-LAYOUT: remove after consolidation — the per-store passwords.
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(env_dsn_password FLEET_CHAT_DATABASE_URL)}"
   CHAT_DB_PASSWORD="${CHAT_DB_PASSWORD:-$(gen_pass)}"
   SCHED_DB_PASSWORD="${SCHED_DB_PASSWORD:-$(env_dsn_password FLEET_SCHED_DATABASE_URL)}"
@@ -1315,6 +1385,46 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     fi
   fi
 
+  if [[ "$DB_LAYOUT" == "one" ]]; then
+  step "Creating the role + database idempotently (${FLEET_DB_USER}/${FLEET_DB_NAME}; the stores use its schemas chat and sched)"
+  # Refuse to touch a pre-existing role/db this script did not provision; an
+  # adopted database skips both the guard and provisioning entirely. The
+  # CREATE-if-missing + ALTER converge only a role this script provisioned
+  # (its DSN is in the env file, whose password is reused), never another's.
+  if [[ "$ADOPT_DB" == "1" ]]; then
+    info "--adopt-existing-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
+    DB_URL="$ADOPTED_DB_URL"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would validate the adopted DSN with: psql '<dsn>' -c 'SELECT 1'"
+    else
+      psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null \
+        || die "adopted DSN failed SELECT 1 — supply the existing role's working DSN in DATABASE_URL (this script never rotates its password)"
+      ok "database adopted (existing role/database, SELECT 1 ok; password untouched)"
+    fi
+  else
+    guard_preexisting db "$FLEET_DB_USER" "$FLEET_DB_NAME" DATABASE_URL --adopt-existing-db --db-name --db-user
+    # A single quote would end the password's SQL literal early (see below).
+    if [[ "$FLEET_DB_PASSWORD" == *"'"* ]]; then
+      if [[ "$DRY_RUN" == "1" ]]; then
+        warn "the database password contains a single quote, which the provisioning SQL cannot carry; a real run would REFUSE here."
+      else
+        die "the database password (in the env file's DATABASE_URL) contains a single quote, which the provisioning SQL cannot carry; set a password without one."
+      fi
+    fi
+    PSQL_SQL="$(fleet_role_db_sql "$FLEET_DB_USER" "$FLEET_DB_PASSWORD" "$FLEET_DB_NAME")"
+    PSQL_PLAN="$(fleet_role_db_sql "$FLEET_DB_USER" "$FLEET_DB_PW_PLACEHOLDER" "$FLEET_DB_NAME")"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would run as postgres:"
+      printf '%s\n' "$PSQL_PLAN" | sed 's/^/    /'
+    else
+      printf '%s\n' "$PSQL_SQL" | fleet_psql_provision_one "$FLEET_DB_PASSWORD" \
+        || die "role/database provisioning failed"
+    fi
+    DB_URL="postgres://${FLEET_DB_USER}:${FLEET_DB_PASSWORD}@127.0.0.1:5432/${FLEET_DB_NAME}?sslmode=${SSLMODE}"
+    ok "database: ${FLEET_DB_NAME} (owner ${FLEET_DB_USER}), sslmode=${SSLMODE}"
+  fi
+  else # LEGACY-DB-LAYOUT: remove after consolidation — this whole branch.
+  warn "legacy two-database layout (per-store DSNs): converging it as it is; \`fleet db consolidate\` moves it into one database (docs/ONE-DATABASE.md)"
   step "Creating roles + databases idempotently (chat + sched)"
   # Refuse to touch a pre-existing role/db this script did not provision (a
   # legacy chat/moc install owning the default names is exactly the trap).
@@ -1399,8 +1509,45 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     SCHED_URL="postgres://${SCHED_DB_USER}:${SCHED_DB_PASSWORD}@127.0.0.1:5432/${SCHED_DB_NAME}?sslmode=${SSLMODE}"
     ok "sched DB: ${SCHED_DB_NAME} (owner ${SCHED_DB_USER}), sslmode=${SSLMODE}"
   fi
+  fi # LEGACY-DB-LAYOUT: end of the legacy branch
 
-else
+elif [[ "$DB_LAYOUT" == "one" ]]; then
+  SSLMODE="require"
+  step "Branch B (external): validate the pre-provisioned DATABASE_URL (SELECT 1 + schema privilege)"
+  # The process env first, then the env file — a re-run converges on the DSN
+  # a previous run recorded, like every other persisted setting.
+  DB_URL="${DATABASE_URL:-$(env_get DATABASE_URL)}"
+  [[ -n "$DB_URL" ]] || die "external mode needs DATABASE_URL (in the environment, or already in ${ENV_FILE})"
+  if [[ -n "${FLEET_DB_SUPERUSER_URL:-}" ]]; then
+    step "Opt-in: creating the database and granting the role CREATE on it via FLEET_DB_SUPERUSER_URL"
+    # The role and database come from DATABASE_URL itself, so the database
+    # created is the one fleet will use; the grant lets the role create the
+    # chat and sched schemas in a database the superuser owns.
+    _role_db="$(fleet_dsn_role_db "$DB_URL")" \
+      || die "FLEET_DB_SUPERUSER_URL needs a DATABASE_URL of the form postgres://<role>:…@host/<database> with a lower-case role and database name"
+    SU_SQL="$(fleet_external_db_sql "${_role_db%% *}" "${_role_db#* }")"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      info "[dry-run] would run as FLEET_DB_SUPERUSER_URL:"
+      printf '%s\n' "$SU_SQL" | sed 's/^/    /'
+    else
+      printf '%s\n' "$SU_SQL" | psql -v ON_ERROR_STOP=1 "$FLEET_DB_SUPERUSER_URL" >/dev/null \
+        || die "superuser provisioning failed"
+    fi
+    unset _role_db
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    info "[dry-run] would run: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat and sched schemas"
+  else
+    psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null || die "DATABASE_URL failed SELECT 1"
+    # fleet's stores create their schemas (chat, sched) on first start; a role
+    # without CREATE on the database would pass SELECT 1 here and then fail
+    # at boot. Refuse now instead.
+    fleet_db_can_create_schemas "$DB_URL" \
+      || die "DATABASE_URL's role cannot create the chat and sched schemas: grant it CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>), pre-create both schemas with CREATE + USAGE for it, or set FLEET_DB_SUPERUSER_URL so bootstrap grants it"
+    ok "DATABASE_URL answered SELECT 1 and may create the chat and sched schemas (sslmode=${SSLMODE} expected in the DSN)"
+  fi
+
+else # LEGACY-DB-LAYOUT: remove after consolidation — this whole branch.
   SSLMODE="require"
   step "Branch B (external): validate pre-provisioned DSNs (SELECT 1)"
   CHAT_URL="${FLEET_CHAT_DATABASE_URL:-}"
@@ -1444,13 +1591,19 @@ fi
 # CHAT_DB_PASSWORD/SCHED_DB_PASSWORD), and the cluster role is ALTERed to match —
 # the env file and the cluster never disagree after a run.
 step "Writing connection settings into ${ENV_FILE} (0600)"
-upsert_env FLEET_CHAT_DATABASE_URL "$CHAT_URL"
-upsert_env FLEET_SCHED_DATABASE_URL "$SCHED_URL"
+if [[ "$DB_LAYOUT" == "one" ]]; then
+  upsert_env DATABASE_URL "$DB_URL"
+  DB_KEYS_WRITTEN="DATABASE_URL"
+else # LEGACY-DB-LAYOUT: remove after consolidation
+  upsert_env FLEET_CHAT_DATABASE_URL "$CHAT_URL"
+  upsert_env FLEET_SCHED_DATABASE_URL "$SCHED_URL"
+  DB_KEYS_WRITTEN="FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL"
+fi
 upsert_env FLEET_CLIENT_CONFIG_DIR "$CLIENT_CONFIG_DIR"
 # Point config.Load at the same file so process-env and config-loaded values match.
 upsert_env FLEET_ENV_FILE "$ENV_FILE"
 if [[ "$DRY_RUN" != "1" ]]; then
-  ok "wrote FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
+  ok "wrote ${DB_KEYS_WRITTEN} / FLEET_CLIENT_CONFIG_DIR / FLEET_ENV_FILE"
   # OPENROUTER_API_KEY: prompt for it interactively (hidden) when absent, so the
   # documented one-command deploy ends with a runnable service instead of a
   # "remember to add the key" homework item. Skippable (blank), non-TTY runs
@@ -1713,8 +1866,11 @@ if [[ "$ENABLE_SERVICE" == "1" ]]; then
           # The binary prompts for the password (hidden, double-entry) on the
           # same TTY; DSNs are handed over explicitly so this works before the
           # operator's shell has any fleet env.
-          if FLEET_CHAT_DATABASE_URL="$CHAT_URL" FLEET_SCHED_DATABASE_URL="$SCHED_URL" \
-             "$_fleet_bin" admin add "$_email"; then
+          _db_env=(DATABASE_URL="${DB_URL:-}")
+          if [[ "$DB_LAYOUT" != "one" ]]; then # LEGACY-DB-LAYOUT: remove after consolidation
+            _db_env=(FLEET_CHAT_DATABASE_URL="$CHAT_URL" FLEET_SCHED_DATABASE_URL="$SCHED_URL")
+          fi
+          if env "${_db_env[@]}" "$_fleet_bin" admin add "$_email"; then
             ok "admin ${_email} registered (web login + Background tasks)"
           else
             warn "could not register ${_email} — retry with: fleet admin add ${_email}"

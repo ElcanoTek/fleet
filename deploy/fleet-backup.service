@@ -14,7 +14,7 @@
 #   install -d -m 0700 -o root -g root /var/backups/fleet
 #   systemctl daemon-reload && systemctl enable --now fleet-backup.timer
 #
-# What it covers and what it does NOT: the dumps are the chat + sched databases
+# What it covers and what it does NOT: the dumps are the chat + sched stores
 # only. They protect against LOGICAL loss (a bad migration, an accidental
 # delete) — they are not offsite backup (same host, same disk) and they do not
 # capture the attachment/upload files under the data dir. See
@@ -25,7 +25,7 @@
 # contain every conversation, task and user row — are readable by root alone.
 
 [Unit]
-Description=fleet database backup (pg_dump of the chat + sched databases)
+Description=fleet database backup (pg_dump of the chat + sched stores)
 Documentation=https://github.com/ElcanoTek/fleet/blob/main/docs/BACKUP_RESTORE.md
 # Ordering only, no Wants=: a backup must not be what pulls the cluster up, and
 # an external-Postgres box has no local unit to order against (a missing unit in

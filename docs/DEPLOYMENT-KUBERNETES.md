@@ -196,10 +196,13 @@ podman backend guarantees (#796).
    Azure Files). A ReadWriteOnce class only works when every pod shares one
    node (kind). Verify:
    `kubectl -n fleet get pvc fleet-workspace -o jsonpath='{.spec.accessModes}'`.
-2. **Database: managed Postgres.** Put `FLEET_CHAT_DATABASE_URL` and
-   `FLEET_SCHED_DATABASE_URL` in your `config.existingSecret` and leave
+2. **Database: managed Postgres.** Put `DATABASE_URL` (one database; fleet
+   creates its schemas `chat` and `sched` in it — the role needs CREATE on
+   the database) in your `config.existingSecret` and leave
    `postgres.enabled=false`. The chart's Postgres is an evaluation
-   convenience: one replica, one PVC, no backups.
+   convenience: one replica, one PVC, one database `fleet`, no backups. A
+   release installed before #2049 keeps its two in-cluster databases (and the
+   per-store env) on upgrade; see [ONE-DATABASE.md](ONE-DATABASE.md).
 3. **NetworkPolicy enforcement is your CNI's job.** fleet verifies the
    deny-all policy *object* exists; only a CNI that implements NetworkPolicy
    (Calico, Cilium, the EKS VPC CNI's network-policy agent, GKE Dataplane V2,

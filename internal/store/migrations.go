@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/dbschema"
 )
 
 // Migrations live as `NNN_name.sql` files under migrations/. They run in
@@ -193,6 +195,13 @@ func applyMigrations(ctx context.Context, db *sql.DB) (err error) {
 	// making lock ownership explicit, this is required when MaxOpenConns is one:
 	// routing these calls back through db would wait forever for the connection
 	// already held above.
+	//
+	// In the one-database layout the connection's search_path names the chat
+	// schema, which must exist before anything can be created in it
+	// (internal/dbschema); in the legacy layout this is a no-op.
+	if err := dbschema.Ensure(ctx, conn); err != nil {
+		return err
+	}
 	if err := ensureSchemaMigrationsTable(ctx, conn); err != nil {
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}

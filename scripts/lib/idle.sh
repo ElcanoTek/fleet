@@ -302,53 +302,258 @@ fleet_uri_encode_userinfo() {
   printf '%s' "$out"
 }
 
-# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — resolves PRIMARY_KEY from the
-# process environment first and then ENV_FILE, checking SCHED_DATABASE_URL for
-# the scheduler store, before falling back to DATABASE_URL and finally the
-# DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE parts. Mirrors the
-# Go resolver, config.ResolveDSNs (internal/config/dsn.go) — keep in step.
-fleet_resolve_dsn() {
-  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" val=""
-  val="$(fleet_env_or_file "$key" "$env_file")"
-  if [[ -z "$val" && "$key" == "FLEET_SCHED_DATABASE_URL" ]]; then
-    val="$(fleet_env_or_file SCHED_DATABASE_URL "$env_file")"
+# fleet_db_parts_dsn DEF_USER DEF_NAME ENV_FILE — the URL-form DSN built from
+# the DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME/DB_SSLMODE parts, with
+# DEF_USER / DEF_NAME for an unset DB_USER / DB_NAME. Mirrors the Go
+# resolver's dbPartsDSN (internal/config/dsn.go).
+fleet_db_parts_dsn() {
+  local def_user="$1" def_name="$2" env_file="$3" host port user pass name ssl auth
+  host="$(fleet_env_or_file DB_HOST "$env_file")"
+  port="$(fleet_env_or_file DB_PORT "$env_file")"
+  user="$(fleet_env_or_file DB_USER "$env_file")"
+  pass="$(fleet_env_or_file DB_PASSWORD "$env_file")"
+  name="$(fleet_env_or_file DB_NAME "$env_file")"
+  ssl="$(fleet_env_or_file DB_SSLMODE "$env_file")"
+  [[ -n "$host" ]] || host="localhost"
+  [[ -n "$port" ]] || port="5432"
+  [[ -n "$user" ]] || user="$def_user"
+  [[ -n "$name" ]] || name="$def_name"
+  [[ -n "$ssl" ]] || ssl="disable"
+  auth="$(fleet_uri_encode_userinfo "$user")"
+  if [[ -n "$pass" ]]; then
+    auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
   fi
-  if [[ -z "$val" ]]; then
-    val="$(fleet_env_or_file DATABASE_URL "$env_file")"
+  if [[ "$host" == /* ]]; then
+    # A Unix-socket directory has no place in a URL authority: libpq (and
+    # the Go resolver) take it, with the port naming the socket file, as
+    # query parameters on an empty host.
+    printf '%s' "postgres://${auth}@/${name}?host=$(fleet_uri_encode_userinfo "$host")&port=${port}&sslmode=${ssl}"
+  else
+    # An IPv6 literal is bracketed in the authority ("[2001:db8::1]:5432").
+    [[ "$host" == *:* && "$host" != \[* ]] && host="[${host}]"
+    printf '%s' "postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
   fi
-  if [[ -z "$val" ]]; then
-    local host port user pass name ssl def_user="chat" def_name="chat" auth
-    if [[ "$key" == "FLEET_SCHED_DATABASE_URL" ]]; then
-      def_user="fleet"
-      def_name="sched"
-    fi
-    host="$(fleet_env_or_file DB_HOST "$env_file")"
-    port="$(fleet_env_or_file DB_PORT "$env_file")"
-    user="$(fleet_env_or_file DB_USER "$env_file")"
-    pass="$(fleet_env_or_file DB_PASSWORD "$env_file")"
-    name="$(fleet_env_or_file DB_NAME "$env_file")"
-    ssl="$(fleet_env_or_file DB_SSLMODE "$env_file")"
-    [[ -n "$host" ]] || host="localhost"
-    [[ -n "$port" ]] || port="5432"
-    [[ -n "$user" ]] || user="$def_user"
-    [[ -n "$name" ]] || name="$def_name"
-    [[ -n "$ssl" ]] || ssl="disable"
-    auth="$(fleet_uri_encode_userinfo "$user")"
-    if [[ -n "$pass" ]]; then
-      auth="${auth}:$(fleet_uri_encode_userinfo "$pass")"
-    fi
-    if [[ "$host" == /* ]]; then
-      # A Unix-socket directory has no place in a URL authority: libpq (and
-      # the Go resolver) take it, with the port naming the socket file, as
-      # query parameters on an empty host.
-      val="postgres://${auth}@/${name}?host=$(fleet_uri_encode_userinfo "$host")&port=${port}&sslmode=${ssl}"
+}
+
+# fleet_kv_last_options DSN — parse a libpq key=value DSN (whitespace-separated
+# key = value pairs, a value bare or single-quoted with \' and \\ escapes)
+# and set REPLY_KV_START / REPLY_KV_END to the byte span of its LAST options
+# pair (-1 when it has none) and REPLY_KV_VALUE to that pair's decoded value.
+# Returns 1 when DSN is not a well-formed key=value string. Mirrors
+# parseKeywordDSN (internal/config/dsn.go).
+fleet_kv_last_options() {
+  local LC_ALL=C s="$1" n i=0 start key val c closed any=0
+  n=${#s}
+  REPLY_KV_START=-1 REPLY_KV_END=-1 REPLY_KV_VALUE=""
+  while :; do
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    (( i < n )) || break
+    start=$i
+    while (( i < n )) && [[ "${s:i:1}" != [=$' \t'] ]]; do i=$((i + 1)); done
+    key="${s:start:i-start}"
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    [[ -n "$key" ]] && (( i < n )) && [[ "${s:i:1}" == "=" ]] || return 1
+    i=$((i + 1))
+    while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
+    val=""
+    if (( i < n )) && [[ "${s:i:1}" == "'" ]]; then
+      i=$((i + 1))
+      closed=0
+      while (( i < n )); do
+        c="${s:i:1}"
+        if [[ "$c" == '\' ]] && (( i + 1 < n )); then
+          val+="${s:i+1:1}"
+          i=$((i + 2))
+          continue
+        fi
+        if [[ "$c" == "'" ]]; then
+          i=$((i + 1))
+          closed=1
+          break
+        fi
+        val+="$c"
+        i=$((i + 1))
+      done
+      (( closed )) || return 1
     else
-      # An IPv6 literal is bracketed in the authority ("[2001:db8::1]:5432").
-      [[ "$host" == *:* && "$host" != \[* ]] && host="[${host}]"
-      val="postgres://${auth}@${host}:${port}/${name}?sslmode=${ssl}"
+      while (( i < n )) && [[ "${s:i:1}" != [$' \t\n\r'] ]]; do
+        if [[ "${s:i:1}" == '\' ]] && (( i + 1 < n )); then i=$((i + 1)); fi
+        val+="${s:i:1}"
+        i=$((i + 1))
+      done
+    fi
+    any=1
+    if [[ "$key" == "options" ]]; then
+      REPLY_KV_START=$start REPLY_KV_END=$i REPLY_KV_VALUE="$val"
+    fi
+  done
+  (( any ))
+}
+
+# fleet_kv_quote VALUE — one key=value value, single-quoted (\ and ' escaped)
+# only when it is empty or holds whitespace, a quote or a backslash. Mirrors
+# quoteKeywordValue.
+fleet_kv_quote() {
+  local v="$1"
+  if [[ -z "$v" || "$v" == *[$' \t\n\r']* || "$v" == *"'"* || "$v" == *'\'* ]]; then
+    v="${v//\\/\\\\}"
+    v="${v//\'/\\\'}"
+    printf "'%s'" "$v"
+  else
+    printf '%s' "$v"
+  fi
+}
+
+# fleet_dsn_with_schema DSN SCHEMA — DSN with SCHEMA as its connections' only
+# search_path: an `options=-csearch_path%3D<schema>` query parameter appended
+# to a URL DSN (to an existing options value, after a +), every other byte
+# kept as written. A key=value DSN gets `-csearch_path=<schema>` added to its
+# LAST options pair in place (any earlier schema switch dropped), or an
+# options pair appended. Mirrors config.WithSchema byte for byte.
+fleet_dsn_with_schema() {
+  local LC_ALL=C dsn="$1" schema="$2" base query frag="" out="" p found=0
+  local opt="-csearch_path%3D${schema}"
+  if [[ "$dsn" != postgres://* && "$dsn" != postgresql://* ]]; then
+    if ! fleet_kv_last_options "$dsn"; then
+      printf '%s' "$dsn" # not a DSN this can rewrite safely
+      return 0
+    fi
+    local prev="" w new
+    local -a words=()
+    if (( REPLY_KV_START >= 0 )); then
+      read -r -d '' -a words <<< "$REPLY_KV_VALUE" || true
+      for w in "${words[@]}"; do
+        [[ "$w" == -csearch_path=* ]] || prev="${prev:+$prev }$w"
+      done
+    fi
+    new="${prev:+$prev }-csearch_path=${schema}"
+    if (( REPLY_KV_START >= 0 )); then
+      printf '%s' "${dsn:0:REPLY_KV_START}options=$(fleet_kv_quote "$new")${dsn:REPLY_KV_END}"
+    else
+      printf '%s' "$dsn options=$(fleet_kv_quote "$new")"
+    fi
+    return 0
+  fi
+  if [[ "$dsn" == *"#"* ]]; then frag="#${dsn#*#}"; dsn="${dsn%%#*}"; fi
+  base="${dsn%%\?*}"
+  query=""
+  [[ "$dsn" == *"?"* ]] && query="${dsn#*\?}"
+  if [[ -n "$query" ]]; then
+    local IFS='&'
+    for p in $query; do
+      if [[ "${p%%=*}" == "options" ]]; then
+        (( found )) && continue
+        found=1
+        if [[ -n "${p#options=}" && "$p" == *=* ]]; then p="${p}+${opt}"; else p="options=${opt}"; fi
+      fi
+      out="${out:+${out}&}${p}"
+    done
+  fi
+  (( found )) || out="${out:+${out}&}options=${opt}"
+  printf '%s' "${base}?${out}${frag}"
+}
+
+# fleet_dsn_identity DSN — host:port/dbname of a postgres URL DSN (a socket
+# host given as ?host=…&port=… counts as the host), or "" for anything else.
+# Mirrors config.DSNIdentity.
+fleet_dsn_identity() {
+  local dsn="$1" rest auth path query host="" qhost="" qport="" p
+  case "$dsn" in
+    postgres://*) rest="${dsn#postgres://}" ;;
+    postgresql://*) rest="${dsn#postgresql://}" ;;
+    *) return 0 ;;
+  esac
+  rest="${rest%%#*}"
+  query=""
+  [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
+  rest="${rest%%\?*}"
+  auth="${rest%%/*}"
+  path=""
+  [[ "$rest" == */* ]] && path="/${rest#*/}"
+  host="${auth##*@}"
+  if [[ -z "$host" && -n "$query" ]]; then
+    local IFS='&'
+    for p in $query; do
+      case "$p" in
+        host=*) [[ -n "$qhost" ]] || qhost="${p#host=}" ;;
+        port=*) [[ -n "$qport" ]] || qport="${p#port=}" ;;
+      esac
+    done
+    if [[ -n "$qhost" ]]; then
+      qhost="${qhost//+/ }"
+      printf -v qhost '%b' "${qhost//%/\\x}"
+      [[ "$qhost" == *:* ]] && qhost="[${qhost}]"
+      host="${qhost}:${qport}"
     fi
   fi
-  printf '%s' "$val"
+  [[ -n "$host" ]] && printf '%s' "${host}${path}"
+  return 0
+}
+
+# fleet_same_database A B — true when two DSNs name the same database: URL
+# DSNs by host:port/dbname, anything else only when identical. Mirrors the Go
+# resolver's sameDatabase.
+fleet_same_database() {
+  local a="$1" b="$2" ia
+  [[ -n "$a" && -n "$b" ]] || return 1
+  ia="$(fleet_dsn_identity "$a")"
+  [[ -n "$ia" && "$ia" == "$(fleet_dsn_identity "$b")" ]] && return 0
+  [[ "$a" == "$b" ]]
+}
+
+# LEGACY-DB-LAYOUT: remove after consolidation — fleet_resolve_dsn_legacy.
+# fleet_resolve_dsn_legacy ENV_FILE — the legacy two-database resolution
+# (config.resolveLegacyDSNs in internal/config/dsn_legacy.go): applies only
+# when a store-specific key is set, or neither DATABASE_URL nor DB_NAME is;
+# then sets REPLY_CHAT / REPLY_SCHED by the old per-store precedence and
+# per-store DB_* defaults and returns 0. Returns 1 when it does not apply.
+fleet_resolve_dsn_legacy() {
+  local env_file="$1"
+  REPLY_CHAT="" REPLY_SCHED=""
+  local fc fs ls
+  fc="$(fleet_env_or_file FLEET_CHAT_DATABASE_URL "$env_file")"
+  fs="$(fleet_env_or_file FLEET_SCHED_DATABASE_URL "$env_file")"
+  ls="$(fleet_env_or_file SCHED_DATABASE_URL "$env_file")"
+  if [[ -z "$fc$fs$ls" && ( -n "$(fleet_env_or_file DATABASE_URL "$env_file")" || -n "$(fleet_env_or_file DB_NAME "$env_file")" ) ]]; then
+    return 1
+  fi
+  REPLY_CHAT="$fc"
+  [[ -n "$REPLY_CHAT" ]] || REPLY_CHAT="$(fleet_env_or_file DATABASE_URL "$env_file")"
+  [[ -n "$REPLY_CHAT" ]] || REPLY_CHAT="$(fleet_db_parts_dsn chat chat "$env_file")"
+  REPLY_SCHED="$fs"
+  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$ls"
+  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$(fleet_env_or_file DATABASE_URL "$env_file")"
+  [[ -n "$REPLY_SCHED" ]] || REPLY_SCHED="$(fleet_db_parts_dsn fleet sched "$env_file")"
+  return 0
+}
+
+# fleet_resolve_dsn PRIMARY_KEY ENV_FILE — the DSN the store PRIMARY_KEY names
+# (FLEET_CHAT_DATABASE_URL for chat, FLEET_SCHED_DATABASE_URL for sched)
+# connects with, read from the process environment first and then ENV_FILE.
+# The configuration is one DSN — DATABASE_URL, else the DB_* parts (default
+# user and database fleet) — with the store's schema (chat / sched) added.
+# A legacy two-database configuration resolves as it always did. Mirrors the
+# Go resolver, config.ResolveDSNs (internal/config/dsn.go) — keep in step;
+# TestIdleLib* pins the two against each other.
+fleet_resolve_dsn() {
+  local key="$1" env_file="${2:-/etc/fleet/fleet.env}" chat sched schema="chat"
+  [[ "$key" == "FLEET_SCHED_DATABASE_URL" ]] && schema="sched"
+  if fleet_resolve_dsn_legacy "$env_file"; then # LEGACY-DB-LAYOUT: remove after consolidation
+    chat="$REPLY_CHAT" sched="$REPLY_SCHED"
+    if ! fleet_same_database "$chat" "$sched"; then
+      if [[ "$schema" == "sched" ]]; then printf '%s' "$sched"; else printf '%s' "$chat"; fi
+      return 0
+    fi
+  else
+    chat="$(fleet_env_or_file DATABASE_URL "$env_file")"
+    [[ -n "$chat" ]] || chat="$(fleet_db_parts_dsn fleet fleet "$env_file")"
+    sched="$chat"
+  fi
+  if [[ "$schema" == "sched" ]]; then
+    fleet_dsn_with_schema "$sched" sched
+  else
+    fleet_dsn_with_schema "$chat" chat
+  fi
 }
 
 FLEET_DRAIN_OWNER_TOKEN="${FLEET_DRAIN_OWNER_TOKEN:-pid-$$-${RANDOM:-0}}"

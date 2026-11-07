@@ -27,8 +27,7 @@
 #
 #   OPENROUTER_API_KEY=...
 #   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client    # the checked-out client bundle
-#   FLEET_CHAT_DATABASE_URL=postgres://chat:...@127.0.0.1:5432/chat?sslmode=disable
-#   FLEET_SCHED_DATABASE_URL=postgres://sched:...@127.0.0.1:5432/sched?sslmode=disable
+#   DATABASE_URL=postgres://fleet:...@127.0.0.1:5432/fleet?sslmode=disable   # one database: schemas chat + sched
 #   FLEET_ENV_FILE=/etc/fleet/fleet.env          # so config.Load reads the same file
 #   # plus the client bundle's MCP connector credentials (the env vars its
 #   # manifest references, e.g. EXAMPLE_API_KEY=..., EXAMPLE_USERNAME=...).

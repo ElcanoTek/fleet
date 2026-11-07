@@ -5,7 +5,7 @@ package main
 // after `systemctl start fleet` — a missing MCP executable, an unset credential
 // gate, a wrong DATABASE_URL, podman absent. It reuses the SAME loaders the
 // server boots through (clientconfig.Load, config.Load + cfg.Validate, the
-// config.ResolveDSNs/EnsureDistinctDatabases logic) rather than reinventing them,
+// config.ResolveDSNs/EnsureDistinctStores logic) rather than reinventing them,
 // so a green run here means the real boot path will get past these gates.
 //
 // It is a read-only diagnostic: it never starts the servers, never runs
@@ -1295,10 +1295,11 @@ func interactiveHiddenServerPinned(bundle *clientconfig.Bundle, members []string
 
 // checkDatabase validates the chat + sched DSNs and (unless --skip-network-checks)
 // runs a SELECT 1 against each within a 5s budget. It reuses the SAME DSN
-// resolution and the EnsureDistinctDatabases invariant the server boots through,
+// resolution and the EnsureDistinctStores invariant the server boots through,
 // but does NOT run migrations — it is a read-only probe. The DB is BLOCKING (the
 // issue lists it so); --skip-network-checks keeps it blocking but skips only the
-// live probe, still validating the DSNs + the distinct-databases invariant.
+// live probe, still validating the DSNs + the distinct-stores invariant. The
+// detail names the layout (one database, or the legacy two).
 func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts validateOptions) checkResult {
 	res := checkResult{Name: "database", Blocking: true}
 	if cfgErr != nil || cfg == nil {
@@ -1317,14 +1318,18 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		res.Detail = "sched DSN is empty (set FLEET_SCHED_DATABASE_URL or DATABASE_URL)"
 		return res
 	}
-	if err := config.EnsureDistinctDatabases(chat, sched); err != nil {
+	if err := config.EnsureDistinctStores(chat, sched); err != nil {
 		res.Status = statusFail
 		res.Detail = err.Error()
 		return res
 	}
+	layout := "one database, schemas chat + sched"
+	if config.LayoutOf(chat, sched) == config.LayoutLegacy { // LEGACY-DB-LAYOUT: remove after consolidation
+		layout = "legacy two-database layout; `fleet db consolidate` moves it into one"
+	}
 	if opts.skipNetworkChecks {
 		res.Status = statusOK
-		res.Detail = "DSNs valid + distinct (live probe skipped)"
+		res.Detail = "DSNs valid, " + layout + " (live probe skipped)"
 		return res
 	}
 	// Both DSNs always resolve (config.ResolveDSNs falls back to the DB_*
@@ -1342,7 +1347,7 @@ func checkDatabase(ctx context.Context, cfg *config.Config, cfgErr error, opts v
 		return res
 	}
 	res.Status = statusOK
-	res.Detail = "chat + sched DB reachable (SELECT 1)"
+	res.Detail = "chat + sched DB reachable (SELECT 1); " + layout
 	return res
 }
 
