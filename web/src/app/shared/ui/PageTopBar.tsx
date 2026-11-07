@@ -5,6 +5,7 @@ import {
 } from "@/app/lib/useClientConfig";
 import { DialogShell } from "./DialogShell";
 import { Icon } from "./Icon";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // PageTopBar — the shared top header for Chat and the Operations Center (#169).
 // One bordered bar so the two views read identically: a mobile sidebar toggle +
@@ -62,17 +63,11 @@ export function PageTopBar({ title, onMenu, actions, support }: PageTopBarProps)
 
   const handleCopyEmail = async () => {
     if (!activeSupport?.email) return;
-    if (typeof navigator === "undefined" || typeof navigator.clipboard?.writeText !== "function") {
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(activeSupport.email.trim());
-      setCopied(true);
-      if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-      copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard write failed; email remains selectable in the card.
-    }
+    // A failed write leaves the email selectable in the card.
+    if (!(await copyText(activeSupport.email.trim()))) return;
+    setCopied(true);
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+    copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (

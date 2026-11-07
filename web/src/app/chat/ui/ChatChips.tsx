@@ -28,6 +28,7 @@ import {
 import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // PendingAttachment describes a file the user has picked to send with the
 // next turn. We carry the live File object for display (chip name/size
@@ -95,12 +96,7 @@ export function CopyButton({
   }, []);
 
   const onClick = async () => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setState("ok");
-    } catch {
-      setState("err");
-    }
+    setState((await copyText(text)) ? "ok" : "err");
     resetRef.current = window.setTimeout(() => setState("idle"), 1500);
   };
 

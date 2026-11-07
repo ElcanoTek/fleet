@@ -60,6 +60,7 @@ import { ToastProvider, useToast } from "@/app/shared/ui/Toast";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { responseErrorText } from "@/app/lib/responseError";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // Per-user remote (hosted) MCP connections (#443). Users add a hosted MCP server
 // by URL, then log in to it via the OAuth handshake (the backend handles
@@ -900,9 +901,7 @@ function DirectoryCard({
                     <button
                       type="button"
                       className={btnClass({ reveal: true })}
-                      onClick={() =>
-                        navigator.clipboard?.writeText(redirectUri)
-                      }
+                      onClick={() => void copyText(redirectUri)}
                     >
                       Copy
                     </button>

@@ -164,6 +164,7 @@ import {
 import type { UserPersonaOption } from "./userPersonas";
 import { responseErrorText } from "@/app/lib/responseError";
 import { readPref, writePref } from "@/app/shared/lib/storage";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -4677,14 +4678,9 @@ export function ChatExperience({
     // convenience; the explicit Copy button is the honest path when the
     // clipboard write is blocked.
     setShareLinkCopied(false);
-    try {
-      await navigator.clipboard.writeText(buildShareUrl(token));
-      return true;
-    } catch {
-      // Clipboard may be blocked (no user gesture / insecure context); the link
-      // is still reachable via the Copy-link action once the badge appears.
-      return false;
-    }
+    // Clipboard may be blocked (no user gesture / insecure context); the link
+    // is still reachable via the Copy-link action once the badge appears.
+    return copyText(buildShareUrl(token));
   };
 
   // unshareConversation revokes the public link (#226).
@@ -5243,7 +5239,7 @@ export function ChatExperience({
     const msg = messages.find((m) => m.id === lastAssistantMessageId);
     const text = msg?.content?.trim();
     if (!text) return;
-    void navigator.clipboard?.writeText(text);
+    void copyText(text);
   }, [lastAssistantMessageId, messages]);
 
   // Multi-select keyboard support (#279): Escape exits select mode (clearing
@@ -7228,10 +7224,7 @@ export function ChatExperience({
             buildShareUrl={buildShareUrl}
             onCreateLink={(c) => void shareConversation(c)}
             onCopyLink={(url) => {
-              void navigator.clipboard
-                ?.writeText(url)
-                .then(() => setShareLinkCopied(true))
-                .catch(() => setShareLinkCopied(false));
+              void copyText(url).then(setShareLinkCopied);
             }}
             onStopLink={(c) => void unshareConversation(c)}
             onShareWithTeam={(c, checklist) =>

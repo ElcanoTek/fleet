@@ -52,6 +52,7 @@ import {
 import { useEffect, useId, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
+import { copyText } from "@/app/shared/lib/clipboard";
 
 // ── shared button looks (live Fleet tokens only) ─────────────────────────
 const FOCUS =
@@ -487,13 +488,7 @@ export function ShareDialog({
       toast.notify({
         message: `Couldn’t copy the link. Copy it from here: ${url}`,
       });
-    const clip =
-      typeof navigator !== "undefined" ? navigator.clipboard : undefined;
-    if (!clip) {
-      failed();
-      return;
-    }
-    void clip.writeText(url).then(done, failed);
+    void copyText(url).then((ok) => (ok ? done() : failed()));
   };
 
   // The A4/A6 file line and its Choose… checklist: the same control in both
