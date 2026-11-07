@@ -139,7 +139,11 @@ What it does, in order (`scripts/update.sh`):
    rollback runs per install dir at a time (a lock), and the staging copy is
    refused up front when the filesystem lacks room for it. The readiness URL
    is where the deployment listens: `FLEET_SERVER_ADDR` from the environment or
-   the env file, over https when `FLEET_TLS_MODE` is `manual` or `auto`.
+   the env file, over https when `FLEET_TLS_MODE` is `manual` or `auto` — verified
+   in full: the probe dials loopback with `ServerName` = `FLEET_TLS_DOMAIN`
+   (or `--probe-server-name`), against the system roots plus, in manual mode,
+   `FLEET_TLS_CERT_FILE`; with no domain known it refuses rather than skip the
+   check.
 
 **No systemd, or no fleet unit (a custom supervisor).** Update still installs
 the verified binary — the same atomic swap, `fleet.prev` kept — but cannot

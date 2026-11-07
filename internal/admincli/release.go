@@ -5,6 +5,7 @@ package admincli
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -272,6 +273,7 @@ type installFlags struct {
 	installDir, service, healthURL, serverAddr string
 	healthTimeout                              time.Duration
 	noRollback, noRestart                      bool
+	probeServerName                            string
 }
 
 func (i *installFlags) register(fs *flag.FlagSet) {
@@ -281,6 +283,7 @@ func (i *installFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&i.serverAddr, "server-addr", "", "the chat listener (default: FLEET_SERVER_ADDR from the environment or the server env file)")
 	fs.DurationVar(&i.healthTimeout, "health-timeout", 90*time.Second, "how long to wait for readiness")
 	fs.BoolVar(&i.noRestart, "no-restart", false, "swap the binary only: no restart, no readiness gate (a fleet not run by systemd)")
+	fs.StringVar(&i.probeServerName, "probe-server-name", "", "the domain the chat listener's TLS certificate names (default: FLEET_TLS_DOMAIN)")
 }
 
 // healthURL is the readiness URL to gate on: --health-url, else the address
@@ -300,18 +303,43 @@ func (i *installFlags) resolvedHealthURL() string {
 	return release.HealthURL(addr, envOrFile("FLEET_TLS_MODE"))
 }
 
-func (i *installFlags) options(w io.Writer) release.InstallOptions {
-	return release.InstallOptions{
-		InstallDir: i.installDir, Service: i.service, HealthURL: i.resolvedHealthURL(),
-		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback, NoRestart: i.noRestart,
-		Restarter: installRestarter, Prober: installProber, Log: w,
+// probeTLS is how the readiness probe verifies a TLS chat listener: the
+// deployment's own domain (--probe-server-name, else FLEET_TLS_DOMAIN) and,
+// in manual mode, its certificate file — verification is never skipped.
+func (i *installFlags) probeTLS(url string) (*tls.Config, error) {
+	name := i.probeServerName
+	if name == "" {
+		name = envOrFile("FLEET_TLS_DOMAIN")
 	}
+	cfg, err := release.ProbeTLSConfig(url, envOrFile("FLEET_TLS_MODE"), name, envOrFile("FLEET_TLS_CERT_FILE"))
+	if errors.Is(err, release.ErrProbeServerName) {
+		return nil, fmt.Errorf("%w — set FLEET_TLS_DOMAIN in the env file, or pass --probe-server-name <domain> (or --health-url https://<domain>/readyz)", err)
+	}
+	return cfg, err
+}
+
+func (i *installFlags) options(w io.Writer) (release.InstallOptions, error) {
+	url := i.resolvedHealthURL()
+	o := release.InstallOptions{
+		InstallDir: i.installDir, Service: i.service, HealthURL: url,
+		HealthTimeout: i.healthTimeout, NoRollback: i.noRollback, NoRestart: i.noRestart,
+		Restarter: installRestarter, Log: w,
+	}
+	if i.noRestart {
+		return o, nil // nothing is probed
+	}
+	cfg, err := i.probeTLS(url)
+	if err != nil {
+		return o, err
+	}
+	o.Prober = newInstallProber(cfg)
+	return o, nil
 }
 
 // Seams for tests.
 var (
 	installRestarter release.Restarter = release.Systemctl{}
-	installProber    release.Prober    = release.HTTPProber{}
+	newInstallProber                   = func(cfg *tls.Config) release.Prober { return release.HTTPProber{TLS: cfg} }
 )
 
 func releaseInstall(ctx context.Context, argv []string) int {
@@ -333,7 +361,10 @@ func releaseInstall(ctx context.Context, argv []string) int {
 	if err != nil {
 		return errf(5, "%s: %v", f.dir, err)
 	}
-	o := inf.options(os.Stderr)
+	o, err := inf.options(os.Stderr)
+	if err != nil {
+		return errf(5, "install %s: %v", tag, err)
+	}
 	o.Binary = got.Binary
 	res, err := release.Install(ctx, o)
 	if err != nil {
@@ -366,7 +397,10 @@ func releaseRollback(ctx context.Context, argv []string) int {
 	if fs.NArg() > 0 {
 		return errf(2, "unexpected argument %q", fs.Arg(0))
 	}
-	o := inf.options(os.Stderr)
+	o, err := inf.options(os.Stderr)
+	if err != nil {
+		return errf(5, "rollback: %v", err)
+	}
 	if err := release.Rollback(ctx, o); err != nil {
 		if errors.Is(err, release.ErrBusy) {
 			return errf(6, "rollback: %v", err)

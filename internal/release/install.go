@@ -6,6 +6,7 @@ package release
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -403,7 +404,10 @@ func (Systemctl) Restart(ctx context.Context, service string) error {
 
 // HTTPProber polls a readiness URL until it answers 200.
 type HTTPProber struct {
-	Client   *http.Client
+	Client *http.Client
+	// TLS verifies an https readiness URL (see ProbeTLSConfig). Nil uses the
+	// default verification: the system roots and the URL's own host name.
+	TLS      *tls.Config
 	Interval time.Duration
 }
 
@@ -412,11 +416,8 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 	client := p.Client
 	if client == nil {
 		client = &http.Client{Timeout: 5 * time.Second}
-		if loopbackHTTPS(url) {
-			// The box probing its OWN listener over loopback: the certificate
-			// names the public domain (manual/ACME), never 127.0.0.1, and the
-			// probe asks only "did it start" — nothing secret crosses it.
-			client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS12}} //nolint:gosec // G402: loopback self-probe only (loopbackHTTPS).
+		if p.TLS != nil {
+			client.Transport = &http.Transport{TLSClientConfig: p.TLS.Clone()}
 		}
 	}
 	interval := p.Interval
@@ -489,4 +490,47 @@ func loopbackHTTPS(raw string) bool {
 	}
 	ip := net.ParseIP(h)
 	return ip != nil && ip.IsLoopback()
+}
+
+// ErrProbeServerName is returned when an https readiness probe to a loopback
+// address has no domain to verify the certificate against.
+var ErrProbeServerName = errors.New("the readiness probe dials the chat listener on loopback over TLS, and its certificate names a domain this command does not know")
+
+// ProbeTLSConfig is how a readiness probe verifies the deployment's own TLS
+// listener — fully, never with verification switched off.
+//
+// The probe dials the listener on a loopback address, but the certificate
+// names the public domain (FLEET_TLS_DOMAIN: the ACME domain in auto mode,
+// the certificate's name in manual mode). So ServerName is set to that domain
+// and the chain is verified against the system roots — which is all an ACME
+// certificate needs — plus, in manual mode, the configured certificate file
+// itself (FLEET_TLS_CERT_FILE), so a self-signed or internal-CA certificate
+// verifies too.
+//
+// It returns nil for a plain-http URL, and for an https URL to a non-loopback
+// host (that URL's own name is what the certificate is checked against). A
+// loopback https URL with no serverName is ErrProbeServerName: set
+// FLEET_TLS_DOMAIN, or name the domain explicitly.
+func ProbeTLSConfig(url, mode, serverName, certFile string) (*tls.Config, error) {
+	if !loopbackHTTPS(url) {
+		return nil, nil
+	}
+	serverName = strings.TrimSpace(serverName)
+	if serverName == "" {
+		return nil, ErrProbeServerName
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if strings.EqualFold(strings.TrimSpace(mode), "manual") && certFile != "" {
+		pemBytes, err := os.ReadFile(certFile) //nolint:gosec // G304: the operator's FLEET_TLS_CERT_FILE.
+		if err != nil {
+			return nil, fmt.Errorf("read FLEET_TLS_CERT_FILE %s: %w", certFile, err)
+		}
+		if !roots.AppendCertsFromPEM(pemBytes) {
+			return nil, fmt.Errorf("FLEET_TLS_CERT_FILE %s holds no PEM certificate", certFile)
+		}
+	}
+	return &tls.Config{ServerName: serverName, RootCAs: roots, MinVersion: tls.VersionTLS12}, nil
 }
