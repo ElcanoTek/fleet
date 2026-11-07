@@ -2,8 +2,11 @@ package tools
 
 import (
 	"errors"
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Path-safety guard for serving files OUT of a fixed workspace root over HTTP.
@@ -117,4 +120,33 @@ func SafeWorkspaceJoin(root, relPath string) (string, error) {
 		return "", ErrPathEscapesWorkspace
 	}
 	return resolvedAbs, nil
+}
+
+// ErrNotRegularFile is returned by OpenRegularInRoot for anything other than a
+// regular file (a directory, FIFO, socket or device).
+var ErrNotRegularFile = errors.New("not a regular file")
+
+// OpenRegularInRoot opens rel for reading through root and returns the file
+// with its descriptor's FileInfo, refusing anything that is not a regular file.
+//
+// Opening through os.Root keeps the open itself inside root even if the path
+// changes after an earlier SafeWorkspaceJoin check (a symlink pointing out of
+// root fails the open), and the type check runs on the opened descriptor, not
+// a second lookup of the name. The open is non-blocking so a FIFO cannot hold
+// the caller; reads of the returned regular file are unaffected.
+func OpenRegularInRoot(root *os.Root, rel string) (*os.File, fs.FileInfo, error) {
+	f, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, info, ErrNotRegularFile
+	}
+	return f, info, nil
 }

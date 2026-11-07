@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -328,5 +329,78 @@ func TestWorkspaceSizeCap(t *testing.T) {
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversize download: want 413 got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// serveWithin runs one request and fails the test if it does not answer in
+// time (a read that waits on a non-regular file would hang).
+func serveWithin(t *testing.T, r http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	t.Helper()
+	w := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		r.ServeHTTP(w, req)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("request did not complete")
+	}
+	return w
+}
+
+// TestWorkspaceDownload_NonRegularRefused: only regular files are served; the
+// type is checked on the opened descriptor.
+func TestWorkspaceDownload_NonRegularRefused(t *testing.T) {
+	h, store := setupTest(t)
+	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
+	if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	r := workspaceRouter(h)
+	req := httptest.NewRequest("GET", "/tasks/"+task.ID.String()+"/workspace/pipe", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	w := serveWithin(t, r, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("FIFO download: want 400 got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestWorkspaceZip_OnlyRegularFilesInsideTheWorkspace: the archive leaves out
+// links that leave the workspace and non-regular files.
+func TestWorkspaceZip_OnlyRegularFilesInsideTheWorkspace(t *testing.T) {
+	h, store := setupTest(t)
+	task, root := seedWorkspaceTask(t, store, models.TaskStatusSuccess)
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("OUTSIDE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	r := workspaceRouter(h)
+	req := httptest.NewRequest("GET", "/tasks/"+task.ID.String()+"/workspace?format=zip", nil)
+	req.Header.Set("X-API-Key", "admin-key")
+	w := serveWithin(t, r, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("zip: want 200 got %d: %s", w.Code, w.Body.String())
+	}
+	zr, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+	if err != nil {
+		t.Fatalf("open zip: %v", err)
+	}
+	got := map[string]bool{}
+	for _, f := range zr.File {
+		got[f.Name] = true
+	}
+	if !got["report.md"] || got["link"] || got["pipe"] {
+		t.Fatalf("zip entries = %v", got)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("OUTSIDE")) {
+		t.Fatal("zip carries content from outside the workspace")
 	}
 }

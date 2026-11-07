@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 )
 
 // Email argument materialization, used by the governed staging surface (the web
@@ -389,25 +388,11 @@ func copyFromRoot(base, rel, dst string, budget int64) (int64, error) {
 		return 0, err
 	}
 	defer root.Close()
-	// Check the type before opening so the open cannot block on a non-regular
-	// file, then re-check on the descriptor, which is what is read.
-	if info, err := root.Stat(rel); err != nil {
-		return 0, err
-	} else if !info.Mode().IsRegular() {
-		return 0, errors.New("not a regular file")
-	}
-	src, err := root.OpenFile(rel, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	src, info, err := OpenRegularInRoot(root, rel)
 	if err != nil {
 		return 0, err
 	}
 	defer src.Close()
-	info, err := src.Stat()
-	if err != nil {
-		return 0, err
-	}
-	if !info.Mode().IsRegular() {
-		return 0, errors.New("not a regular file")
-	}
 	if info.Size() > budget {
 		return 0, fmt.Errorf("attachments exceed the %d-byte limit for one email", MaxEmailAttachmentBytes)
 	}

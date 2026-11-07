@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestExpandContextHandles_File(t *testing.T) {
@@ -156,5 +158,40 @@ func TestAppendContextHandleBlocks(t *testing.T) {
 	got := appendContextHandleBlocks("base", []string{"BLOCK"}, []string{"a notice"})
 	if !strings.Contains(got, "base") || !strings.Contains(got, "BLOCK") || !strings.Contains(got, "a notice") {
 		t.Errorf("append dropped content: %q", got)
+	}
+}
+
+// @file reads only regular files inside the workspace: a link leaving it and
+// a FIFO are both refused, and neither holds the expansion.
+func TestExpandContextHandles_FileLinkAndFIFORefused(t *testing.T) {
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("OUTSIDE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe"), 0o600); err != nil {
+		t.Skipf("mkfifo: %v", err)
+	}
+	type result struct{ blocks, notices []string }
+	done := make(chan result, 1)
+	go func() {
+		b, n := expandContextHandles(context.Background(), `@file:"link.txt" @file:"pipe"`, dir)
+		done <- result{b, n}
+	}()
+	select {
+	case r := <-done:
+		if len(r.blocks) != 0 || len(r.notices) != 2 {
+			t.Fatalf("blocks=%v notices=%v", r.blocks, r.notices)
+		}
+		for _, b := range r.blocks {
+			if strings.Contains(b, "OUTSIDE") {
+				t.Fatal("content from outside the workspace was expanded")
+			}
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("expansion did not complete")
 	}
 }
