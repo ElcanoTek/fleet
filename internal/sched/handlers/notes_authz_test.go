@@ -5,8 +5,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -70,6 +72,48 @@ func TestNoteProposalReadsRequireAdmin(t *testing.T) {
 			if w.Code != tc.want {
 				t.Errorf("%s GET %s = %d, want %d: %s", tc.name, path, w.Code, tc.want, w.Body.String())
 			}
+		}
+	}
+}
+
+// TestNoteActorIgnoresASpoofedUserHeader: created_by comes from the
+// authenticated caller, never from a client-supplied X-User-Email. Before the
+// fix an admin-key or bearer caller could attribute a note to anyone.
+func TestNoteActorIgnoresASpoofedUserHeader(t *testing.T) {
+	t.Parallel()
+
+	store, keyMgr, _, cleanup := setupAuthzHandler(t)
+	defer cleanup()
+	h := New(Config{DefaultTaskModel: "test/model", AdminAPIKey: "test-admin-key", Version: "0.1.0"}, store, keyMgr)
+	nh := NewNotesHandlers(sched.NewStore(store.DB()), h)
+	r := chi.NewRouter()
+	r.Group(func(r chi.Router) {
+		r.Use(h.AdminOrUserAuthMiddleware)
+		r.Post("/notes", nh.CreateNote)
+	})
+	addLogUser(t, store, "admin-user", "admin", "admin-token")
+
+	for _, tc := range []struct {
+		name, header, value, slug, want string
+	}{
+		{"admin key", "X-API-Key", "test-admin-key", "spoof-admin-key", "admin"},
+		{"bearer user", "Authorization", "Bearer admin-token", "spoof-bearer", "admin-user"},
+	} {
+		body := strings.NewReader(`{"slug":"` + tc.slug + `","title":"T","body":"b"}`)
+		req := httptest.NewRequest(http.MethodPost, "/notes", body)
+		req.Header.Set(tc.header, tc.value)
+		req.Header.Set("X-User-Email", "victim@example.com")
+		rec := httptest.NewRecorder()
+		r.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK && rec.Code != http.StatusCreated {
+			t.Fatalf("%s: create note: %d %s", tc.name, rec.Code, rec.Body.String())
+		}
+		var note sched.Note
+		if err := json.Unmarshal(rec.Body.Bytes(), &note); err != nil {
+			t.Fatalf("%s: decode: %v", tc.name, err)
+		}
+		if note.CreatedBy != tc.want {
+			t.Errorf("%s: created_by = %q, want %q (the spoofed X-User-Email must be ignored)", tc.name, note.CreatedBy, tc.want)
 		}
 	}
 }
