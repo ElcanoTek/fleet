@@ -640,8 +640,6 @@ func TestCheckCredentialsSplitsDefaultsFromMissing(t *testing.T) {
 // TestCheckDatabaseSkipNetwork: with --skip-network-checks the DB check validates
 // the DSN + distinctness without a live probe and stays blocking.
 func TestCheckDatabaseSkipNetwork(t *testing.T) {
-	t.Parallel()
-
 	cfg := &config.Config{
 		DatabaseURL:      "postgres://u:p@localhost:5432/fleet_chat?sslmode=disable",
 		SchedDatabaseURL: "postgres://u:p@localhost:5432/fleet_sched?sslmode=disable",
@@ -656,8 +654,6 @@ func TestCheckDatabaseSkipNetwork(t *testing.T) {
 // blocking failure (the EnsureDistinctDatabases invariant), even with the probe
 // skipped.
 func TestCheckDatabaseSameDB(t *testing.T) {
-	t.Parallel()
-
 	same := "postgres://u:p@localhost:5432/fleet?sslmode=disable"
 	cfg := &config.Config{DatabaseURL: same, SchedDatabaseURL: same}
 	res := checkDatabase(t.Context(), cfg, nil, validateOptions{skipNetworkChecks: true})
@@ -2087,8 +2083,6 @@ agent_policy:
 // A reachable chat DB plus an unreachable sched DSN must fail on the sched
 // probe.
 func TestCheckDatabaseProbesSched(t *testing.T) {
-	t.Parallel()
-
 	chat := fleetdb.New(t).ChatDSN()
 	cfg := &config.Config{
 		DatabaseURL:      chat,

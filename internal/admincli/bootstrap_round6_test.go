@@ -13,6 +13,8 @@ import (
 // first "@", and "#" is not a fragment — or refuse the DSN rather than read
 // it differently.
 func TestShellDSNHelpersReadDSNsAsPgx(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}

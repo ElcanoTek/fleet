@@ -65,6 +65,8 @@ func TestBootstrapOneDatabaseNameFlags(t *testing.T) {
 // the role and database from the DATABASE_URL a previous run recorded —
 // never the defaults — and refuses flags or a DSN it cannot honour.
 func TestBootstrapRerunKeepsTheRecordedDatabase(t *testing.T) {
+	t.Parallel()
+
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	write := func(dsn string) {
 		t.Helper()

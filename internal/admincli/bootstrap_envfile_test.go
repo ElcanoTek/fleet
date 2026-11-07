@@ -13,6 +13,8 @@ import (
 // file as fleet does (fleet_env_value: last assignment, quotes stripped), so a
 // quoted DATABASE_URL is still recognised (adversarial review, #2055).
 func TestBootstrapEnvFileRecordsReadsLikeTheService(t *testing.T) {
+	t.Parallel()
+
 	if _, err := exec.LookPath("bash"); err != nil {
 		t.Skip("bash not available")
 	}
@@ -39,6 +41,8 @@ func TestBootstrapEnvFileRecordsReadsLikeTheService(t *testing.T) {
 // must find the binary where bootstrap puts it, or on PATH, rather than
 // assume one install directory (adversarial review, #2055).
 func TestDoctorFindsTheFleetBinaryForTheLayout(t *testing.T) {
+	t.Parallel()
+
 	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "doctor.sh"))
 	if err != nil {
 		t.Fatal(err)
