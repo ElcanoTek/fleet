@@ -433,7 +433,7 @@ if [[ "$POSTGRES_MODE" == "external" && "$ADOPT_DB" == "1" ]]; then
 fi
 ADOPTED_DB_URL=""
 if [[ "$ADOPT_DB" == "1" ]]; then
-  ADOPTED_DB_URL="${DATABASE_URL:-$(grep '^DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  ADOPTED_DB_URL="${DATABASE_URL:-$(env_get DATABASE_URL)}"
   [[ -n "$ADOPTED_DB_URL" ]] \
     || die "--adopt-existing-db needs the existing database's working DSN: set DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
 fi
@@ -471,6 +471,17 @@ if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
 fi
 
 gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24; }
+
+# require_schema_privilege DSN WHAT [HINT] — die unless DSN's role can run
+# fleet's stores there: each store creates its schema (chat, sched) on first
+# start, so a role that passes SELECT 1 but lacks CREATE on the database would
+# be reported ready and then fail at boot (lib/pgprovision.sh
+# fleet_db_can_create_schemas). Every path that accepts a DSN it did not
+# provision itself — external mode, --adopt-existing-db — calls it.
+require_schema_privilege() {
+  fleet_db_can_create_schemas "$1" \
+    || die "${2}'s role cannot create the chat and sched schemas: grant it CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>), or pre-create both schemas with CREATE + USAGE for it${3:+, $3}"
+}
 
 # ── Caddyfile ownership marker ──
 # The Caddyfile this script writes carries this marker as its first line. An
@@ -1395,11 +1406,12 @@ if [[ "$POSTGRES_MODE" == "local" ]]; then
     info "--adopt-existing-db — skipping role/database provisioning (no CREATE, no ALTER, no password change)."
     DB_URL="$ADOPTED_DB_URL"
     if [[ "$DRY_RUN" == "1" ]]; then
-      info "[dry-run] would validate the adopted DSN with: psql '<dsn>' -c 'SELECT 1'"
+      info "[dry-run] would validate the adopted DSN with: psql '<dsn>' -c 'SELECT 1', then check the role may create the chat and sched schemas"
     else
       psql -v ON_ERROR_STOP=1 "$DB_URL" -c "SELECT 1" >/dev/null \
         || die "adopted DSN failed SELECT 1 — supply the existing role's working DSN in DATABASE_URL (this script never rotates its password)"
-      ok "database adopted (existing role/database, SELECT 1 ok; password untouched)"
+      require_schema_privilege "$DB_URL" "the adopted DATABASE_URL"
+      ok "database adopted (existing role/database, SELECT 1 ok, may create the chat and sched schemas; password untouched)"
     fi
   else
     guard_preexisting db "$FLEET_DB_USER" "$FLEET_DB_NAME" DATABASE_URL --adopt-existing-db --db-name --db-user
@@ -1542,8 +1554,8 @@ elif [[ "$DB_LAYOUT" == "one" ]]; then
     # fleet's stores create their schemas (chat, sched) on first start; a role
     # without CREATE on the database would pass SELECT 1 here and then fail
     # at boot. Refuse now instead.
-    fleet_db_can_create_schemas "$DB_URL" \
-      || die "DATABASE_URL's role cannot create the chat and sched schemas: grant it CREATE on the database (GRANT CREATE ON DATABASE <db> TO <role>), pre-create both schemas with CREATE + USAGE for it, or set FLEET_DB_SUPERUSER_URL so bootstrap grants it"
+    require_schema_privilege "$DB_URL" "DATABASE_URL" \
+      "or set FLEET_DB_SUPERUSER_URL so bootstrap grants it"
     ok "DATABASE_URL answered SELECT 1 and may create the chat and sched schemas (sslmode=${SSLMODE} expected in the DSN)"
   fi
 

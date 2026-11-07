@@ -53,9 +53,16 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	if can() {
 		t.Fatal("a role without CREATE on the database passed the schema check")
 	}
+	// bootstrap's own gate (the function every unprovisioned-DSN path calls,
+	// --adopt-existing-db included) refuses it with an actionable message.
+	gate := bootstrapFunc(t, "require_schema_privilege")
+	out, err := exec.Command("bash", "-c", `die() { echo "$*"; exit 1; }; . "$1"; eval "$2"; require_schema_privilege "$3" "the adopted DATABASE_URL"`, "_", lib, gate, roleDSN).CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "the adopted DATABASE_URL's role cannot create the chat and sched schemas") || strings.Contains(string(out), pw) {
+		t.Fatalf("bootstrap's privilege gate = %v: %s", err, out)
+	}
 
 	// The superuser SQL bootstrap runs, built from the DSN itself.
-	out, err := exec.Command("bash", "-c", `. "$1"; rd="$(fleet_dsn_role_db "$2")"; fleet_external_db_sql "${rd%% *}" "${rd#* }"`, "_", lib, roleDSN).Output()
+	out, err = exec.Command("bash", "-c", `. "$1"; rd="$(fleet_dsn_role_db "$2")"; fleet_external_db_sql "${rd%% *}" "${rd#* }"`, "_", lib, roleDSN).Output()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +76,9 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	}
 	if !can() {
 		t.Fatal("the role still cannot create the schemas after the grant")
+	}
+	if out, err := exec.Command("bash", "-c", `die() { echo "$*"; exit 1; }; . "$1"; eval "$2"; require_schema_privilege "$3" x`, "_", lib, gate, roleDSN).CombinedOutput(); err != nil {
+		t.Fatalf("bootstrap's privilege gate refused a granted role: %v: %s", err, out)
 	}
 
 	// Pre-created schemas with CREATE + USAGE are the other accepted shape.
@@ -96,6 +106,50 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		err := exec.Command("bash", "-c", `. "$1"; fleet_dsn_role_db "$2"`, "_", lib, dsn).Run()
 		if (err == nil) != ok {
 			t.Errorf("fleet_dsn_role_db(%q) ok=%v, want %v", dsn, err == nil, ok)
+		}
+	}
+}
+
+// bootstrapFunc returns the source of one function defined in
+// scripts/bootstrap.sh (from its `name() {` line to the first line that is
+// just `}`), so a test can run the script's real code without running the
+// whole script.
+func bootstrapFunc(t *testing.T, name string) string {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(body)
+	start := strings.Index(src, "\n"+name+"() {")
+	if start < 0 {
+		t.Fatalf("bootstrap.sh defines no %s()", name)
+	}
+	end := strings.Index(src[start:], "\n}\n")
+	if end < 0 {
+		t.Fatalf("cannot find the end of %s()", name)
+	}
+	return src[start : start+end+3]
+}
+
+// TestBootstrapAdoptAndExternalCheckSchemaPrivilege (#2055 review): both
+// paths that accept a DSN bootstrap did not provision — --adopt-existing-db
+// and external mode — run the privilege gate after SELECT 1 and before
+// reporting success.
+func TestBootstrapAdoptAndExternalCheckSchemaPrivilege(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(repoRootFromTest(t), "scripts", "bootstrap.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(body)
+	for _, success := range []string{`ok "database adopted`, `ok "DATABASE_URL answered SELECT 1`} {
+		end := strings.Index(src, success)
+		if end < 0 {
+			t.Fatalf("bootstrap.sh lost %q", success)
+		}
+		start := strings.LastIndex(src[:end], `-c "SELECT 1"`)
+		if start < 0 || !strings.Contains(src[start:end], `require_schema_privilege "$DB_URL"`) {
+			t.Errorf("the path ending in %q reports success without require_schema_privilege after its SELECT 1", success)
 		}
 	}
 }
