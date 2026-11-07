@@ -3010,17 +3010,32 @@ export function ChatExperience({
   // change locally so the rail updates without a refetch. Undefined fields are
   // dropped by JSON.stringify, so the backend leaves them untouched (COALESCE);
   // labels is a full replace.
+  //
+  // Every caller fires this with `void`, so it never throws (#1998): a
+  // refused or failed PATCH is reported through the rail toast and leaves
+  // the rail as it was, instead of surfacing as an unhandled rejection that
+  // made pinning or labelling fail silently.
   const patchConversationIds = async (
     ids: string[],
     changes: { pinned?: boolean; labels?: string[] },
   ) => {
     if (ids.length === 0) return;
-    const response = await fetch("/api/conversations/bulk", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_ids: ids, changes }),
-    });
-    if (!response.ok) throw new Error("Unable to update conversations.");
+    const what = ids.length === 1 ? "the chat" : "the chats";
+    let response: Response;
+    try {
+      response = await fetch("/api/conversations/bulk", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_ids: ids, changes }),
+      });
+    } catch {
+      showRailError(`Couldn't update ${what} — network error.`);
+      return;
+    }
+    if (!response.ok) {
+      showRailError(`Couldn't update ${what} (HTTP ${response.status}).`);
+      return;
+    }
     const idSet = new Set(ids);
     setConversations((current) =>
       current.map((c) => {
