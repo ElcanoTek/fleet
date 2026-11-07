@@ -136,3 +136,15 @@ func endServeSpan(span trace.Span, resp response) {
 	}
 	span.End()
 }
+
+// endToolErrorSpan ends a client span whose call returned a tool-level error
+// (isError=true, no transport error) with the same marks endServeSpan gives
+// the child's span: fleet.tool.is_error, error.type=tool_error, and an error
+// status.
+func endToolErrorSpan(span trace.Span) {
+	if span.IsRecording() {
+		span.SetAttributes(attrBrokerToolEr.Bool(true), telemetry.AttrErrClass.String("tool_error"))
+		span.SetStatus(codes.Error, "tool_error")
+	}
+	span.End()
+}

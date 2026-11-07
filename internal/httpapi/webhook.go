@@ -275,6 +275,9 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// notify_user's list the next time they open Fleet.
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok := s.registerTurn(conv.ID, turnCancel)
+	// The turn carries the webhook request's ids and continues its trace,
+	// like a /chat turn (turnContext, #2052).
+	turnCtx = turnContext(turnCtx, r.Context(), conv.ID, turnID, user)
 	if !ok {
 		// Unreachable in practice — the conversation was created just above,
 		// so no turn can be running on it. Fail closed rather than panic.

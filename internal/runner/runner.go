@@ -207,6 +207,11 @@ type Pool struct {
 	store  *storage.Storage
 	runner TaskRunner
 
+	// runIDs holds each in-flight run's correlation (runCorrelation, by task
+	// id) from the start of executeTask to its return, so submitLog can name
+	// the run and its trace on a session the runner never produced (#2052).
+	runIDs sync.Map
+
 	// streams holds the live per-task SSE event buffers (#200). executeTask
 	// registers a buffer before a run and seals it after, tee'ing the run's event
 	// stream into it via agentcore.WithStreamObserver; the orchestrator's
@@ -776,6 +781,10 @@ func (p *Pool) executeTask(taskCtx context.Context, task *models.Task, token uui
 	))
 	var runSpanErr error
 	defer func() { telemetry.End(runSpan, runSpanErr) }()
+	// An early failure (worktree, sandbox or MCP-scope prep) returns no
+	// session; the synthetic one submitLog stores names this run and trace.
+	p.runIDs.Store(task.ID, runCorrelation{runID: token.String(), traceID: telemetry.TraceID(taskCtx)})
+	defer p.runIDs.Delete(task.ID)
 
 	// Sentry breadcrumb (#193): the task-start trail so a captured panic's
 	// event in the Sentry UI shows what the runner did immediately before the
@@ -1739,9 +1748,16 @@ func (p *Pool) recordArtifactsForLease(taskID, leaseOwner uuid.UUID, manifest js
 	}
 }
 
+// runCorrelation is one in-flight run's ids (Pool.runIDs): the claim's lease
+// token as run_id, and the task.run span's trace id ("" with tracing off).
+type runCorrelation struct {
+	runID, traceID string
+}
+
 // submitLog persists the run's session log. When the runner produced no
 // session (early failure), a synthetic one-message log is stored so the failure
-// is visible, mirroring gig's submitSyntheticErrorLog.
+// is visible, mirroring gig's submitSyntheticErrorLog. The synthetic log names
+// the run and its trace like a session the agent loop built (#2052).
 func (p *Pool) submitLog(task *models.Task, session *models.LogSession, failureReason string) {
 	if session == nil {
 		now := time.Now().Unix()
@@ -1753,6 +1769,10 @@ func (p *Pool) submitLog(task *models.Task, session *models.LogSession, failureR
 			Messages: []models.LogMessage{
 				{ID: task.ID.String() + "-0", Role: "user", Content: task.Prompt, CreatedAt: now},
 			},
+		}
+		if c, ok := p.runIDs.Load(task.ID); ok {
+			corr := c.(runCorrelation)
+			session.RunID, session.TraceID = corr.runID, corr.traceID
 		}
 		if failureReason != "" {
 			et := "error"

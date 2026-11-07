@@ -151,7 +151,19 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 			// sees the group empty, or Serve can return with the panic
 			// response still unwritten.
 			defer wg.Done()
-			defer recoverBackendPanic(location, req.ID, write)
+			// The request's server span, under the caller's propagated
+			// trace context, with its correlation ids on the context
+			// (telemetry.go, #2052). It ends AFTER the panic recovery
+			// below (LIFO), and the recovery hands it the incident
+			// response it wrote, so a backend panic is exported as a
+			// failed span, not a success.
+			spanCtx, span := startServeSpan(runCtx, req, location)
+			var resp response
+			defer func() { endServeSpan(span, resp) }()
+			defer recoverBackendPanic(location, req.ID, func(r response) {
+				resp = r
+				write(r)
+			})
 			defer func() {
 				if cancellable {
 					mu.Lock()
@@ -160,12 +172,6 @@ func (s *Server) Serve(ctx context.Context, conn io.ReadWriteCloser) error {
 				}
 				cancel()
 			}()
-			// The request's server span, under the caller's propagated
-			// trace context, with its correlation ids on the context
-			// (telemetry.go, #2052).
-			spanCtx, span := startServeSpan(runCtx, req, location)
-			var resp response
-			defer func() { endServeSpan(span, resp) }()
 			resp = fn(spanCtx)
 			write(resp)
 		}()

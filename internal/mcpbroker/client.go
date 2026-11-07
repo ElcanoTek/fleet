@@ -80,8 +80,12 @@ func (c *Client) callMCP(ctx context.Context, scope, server, tool string, args m
 	// span continues it (stampCorrelation in roundtrip).
 	ctx, span := startClientSpan(ctx, "mcpbroker.call", server, tool, scope)
 	defer func() {
-		if err == nil && isErr && span.IsRecording() {
-			span.SetAttributes(attrBrokerToolEr.Bool(true))
+		if err == nil && isErr {
+			// A tool-level error is no transport error, but the call still
+			// failed: mark the span the way the child's mcpbroker.call span
+			// and the agent's tool.call span are marked (endServeSpan).
+			endToolErrorSpan(span)
+			return
 		}
 		telemetry.End(span, err)
 	}()

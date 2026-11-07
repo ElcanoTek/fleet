@@ -30,6 +30,10 @@ import (
 
 // ── /chat (SSE) ────────────────────────────────────────────────────────────
 
+// errTurnPanicked is the chat.turn span's error for a turn whose goroutine
+// panicked (the recovery emits turn.error); only its class reaches the span.
+var errTurnPanicked = errors.New("chat turn panicked")
+
 type chatRequest struct {
 	ConversationID string `json:"conversation_id"` // if empty, a new one is created
 	Message        string `json:"message"`
@@ -674,13 +678,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	}
 	turnCtx, turnCancel := context.WithTimeout(context.Background(), s.turnTimeout())
 	buf, turnID, turnToken, ok, swept := s.registerTurnGated(conv.ID, turnCancel, steer, gate, strings.TrimSpace(req.SubmissionID))
-	// Correlation (#2052): the turn's context is detached from the request's
-	// lifetime, not from its identity. Every log line of the turn carries
-	// conv_id, turn_id, user_id and the request_id that started it, and the
-	// turn's spans continue the request's trace.
-	turnCtx = logging.WithTurn(turnCtx, conv.ID, turnID)
-	turnCtx = logging.WithAttrs(turnCtx, logging.Attrs(reqCtx)...)
-	turnCtx = telemetry.ContextWithRemoteParent(turnCtx, reqCtx)
+	turnCtx = turnContext(turnCtx, reqCtx, conv.ID, turnID, user)
 	if swept && queued == nil {
 		// A Stop scope=all began while this direct claim's turn was being
 		// prepared, or a Stop named its key: the claim belongs to the
@@ -1079,6 +1077,19 @@ func (s *Server) turnStore(buf *turnBuffer) chatStore {
 // optional title_updated event, and then finishes the buffer. Lives in
 // its own goroutine so the HTTP POST can disconnect without killing
 // generation.
+// turnContext gives a turn's detached context the identity of what started
+// it (#2052): the turn's context is detached from the request's lifetime, not
+// from its identity. Every log line of the turn carries conv_id, turn_id,
+// user_id and the ids the starting request carried (request_id), and the
+// turn's spans continue the request's trace. parent may be a request-less
+// context (a queue drain): the turn's own ids are still set.
+func turnContext(turnCtx, parent context.Context, convID, turnID, user string) context.Context {
+	turnCtx = logging.WithAttrs(turnCtx, logging.Attrs(parent)...)
+	turnCtx = logging.WithTurn(turnCtx, convID, turnID)
+	turnCtx = logging.WithUser(turnCtx, user)
+	return telemetry.ContextWithRemoteParent(turnCtx, parent)
+}
+
 func (s *Server) runTurnAsync(
 	turnCtx context.Context,
 	turnCancel context.CancelFunc,
@@ -1109,14 +1120,21 @@ func (s *Server) runTurnAsync(
 	// deriveToolCallEntries).
 	startedAtUnix := time.Now().Unix()
 	buf.inputKind = inputKind
+	// The shared turn boundary (#2052): whatever launched the turn (a /chat
+	// request, a queue drain, a webhook), its log lines carry conv_id,
+	// turn_id and user_id. Re-attaching replaces, never duplicates.
+	turnCtx = logging.WithTurn(turnCtx, conv.ID, buf.turnID)
+	turnCtx = logging.WithUser(turnCtx, user)
 	// The turn's root span (#2052): the agent loop, model, tool, sandbox,
 	// broker and DB spans of this turn are its descendants. Ended last (the
-	// first defer), so it covers the cleanup the deferred calls below do.
+	// first defer), so it covers the cleanup the deferred calls below do, and
+	// records the turn's failure (turnErr) — a user's Stop is not one.
 	turnCtx, turnSpan := telemetry.Start(turnCtx, "chat.turn", trace.WithAttributes(
 		telemetry.AttrConvID.String(conv.ID),
 		telemetry.AttrTurnID.String(buf.turnID),
 	))
-	defer turnSpan.End()
+	var turnErr error
+	defer func() { telemetry.End(turnSpan, turnErr) }()
 	// Order matters: finishTurn must seal the buffer and schedule
 	// retention AFTER title_updated has been emitted. turnCancel runs
 	// first to release any resources the agent still holds.
@@ -1129,6 +1147,7 @@ func (s *Server) runTurnAsync(
 	// runs FIRST on unwind: emit a terminal error, then turnCancel + finishTurn
 	// seal the buffer and the user sees an error instead of a stuck "Thinking…".
 	defer safe.Recover("httpapi.runTurnAsync", func(any) {
+		turnErr = errTurnPanicked
 		buf.Emit("turn.error", map[string]any{"message": "the turn ended unexpectedly due to an internal error"})
 	})
 
@@ -1136,6 +1155,7 @@ func (s *Server) runTurnAsync(
 	// Playwright + CI. Skips history replay + provider call entirely.
 	if s.cfg.MockMode {
 		if err := runMockTurn(turnCtx, s.turnStore(buf), conv, buf.turnID, userInput, buf); err != nil {
+			turnErr = err
 			logging.From(turnCtx).Error("runMockTurn error", "user", user, "conv_id", conv.ID, "err", err)
 		}
 		sweepCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1255,6 +1275,7 @@ func (s *Server) runTurnAsync(
 			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}
+		turnErr = err
 		logging.From(turnCtx).Error("RunTurn error", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 		if !errors.Is(err, ErrModelSelectionRequired) {
 			buf.Emit("turn.error", map[string]any{"message": err.Error(), "user_email": user})

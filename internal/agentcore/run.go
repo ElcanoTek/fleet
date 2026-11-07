@@ -405,6 +405,15 @@ func runAnswer(policy Policy, roundText string) string {
 	return roundText
 }
 
+// endRunSpan ends Run's agentcore.run span with the run's final error. It is
+// deferred before the panic backstop, so it reads err after the backstop set
+// it; span is nil when Run panicked before starting it.
+func endRunSpan(span *trace.Span, err *error) {
+	if *span != nil {
+		telemetry.End(*span, *err)
+	}
+}
+
 // Run drives a single agent run to completion. It is the shared body both modes
 // use; Mode + the seams are the only divergence axes.
 func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Result, err error) {
@@ -413,6 +422,11 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		taskID:         cfg.TaskID,
 		conversationID: cfg.ConversationID,
 	}
+	// The run span ends LAST (deferred first, so it unwinds after the panic
+	// backstop): a contained panic has set err to ErrRunBoundaryPanic by then,
+	// so the span records the failure instead of a nil-error success.
+	var runSpan trace.Span
+	defer endRunSpan(&runSpan, &err)
 	defer recoverSynchronousRunPanic(panicAttribution, &result, &err)
 
 	// Correlation (#2052): the run's ids ride the context, so every log line
@@ -422,14 +436,13 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 	ctx = logging.WithAttrs(ctx,
 		slog.String(logging.KeyTaskID, cfg.TaskID),
 		slog.String(logging.KeyConvID, cfg.ConversationID))
-	ctx, runSpan := telemetry.Start(ctx, "agentcore.run", trace.WithAttributes(
+	ctx, runSpan = telemetry.Start(ctx, "agentcore.run", trace.WithAttributes(
 		telemetry.AttrRunMode.String(mode.String()),
 		telemetry.AttrConvID.String(cfg.ConversationID),
 		telemetry.AttrTaskID.String(cfg.TaskID),
 		telemetry.AttrTurnID.String(logging.Value(ctx, logging.KeyTurnID)),
 		telemetry.AttrRunID.String(logging.Value(ctx, logging.KeyRunID)),
 	))
-	defer func() { telemetry.End(runSpan, err) }()
 
 	if deps.Model == nil {
 		return Result{}, fmt.Errorf("no language model configured")

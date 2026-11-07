@@ -83,10 +83,22 @@ func ErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
 }
 
-// TraceID returns the trace id of ctx's span as 32 hex characters, or "" when
-// ctx carries no valid span context (tracing disabled, or no span started).
+// TraceID returns the trace id of ctx's span as 32 hex characters when this
+// process records and exports that trace, else "". It is the id fleet
+// PUBLISHES (turn.started, the persisted run log), so a span context that is
+// merely valid is not enough: with tracing off, a caller's traceparent still
+// yields a valid, non-recording span context, and publishing it would name a
+// trace fleet never recorded (or one the caller made up). The id counts when
+// the span is sampled and either recording here, or a local (non-remote)
+// span context — the detached copy ContextWithRemoteParent makes of a span
+// this process recorded, which a chat turn carries after its request ends.
 func TraceID(ctx context.Context) string {
-	if sc := trace.SpanContextFromContext(ctx); sc.IsValid() {
+	span := trace.SpanFromContext(ctx)
+	sc := span.SpanContext()
+	if !sc.IsValid() || !sc.IsSampled() {
+		return ""
+	}
+	if span.IsRecording() || !sc.IsRemote() {
 		return sc.TraceID().String()
 	}
 	return ""
