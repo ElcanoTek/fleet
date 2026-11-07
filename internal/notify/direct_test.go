@@ -5,13 +5,15 @@ import (
 	"context"
 	"errors"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeSMTP is a minimal in-process SMTP server: enough of RFC 5321 for
-// net/smtp.SendMail without auth or STARTTLS. It records each delivered
+// deliver (net/smtp.Client) without auth or STARTTLS. It records each delivered
 // message's envelope and data.
 type fakeSMTP struct {
 	ln   net.Listener
@@ -169,5 +171,80 @@ func TestSendDirectEmail_NotConfigured(t *testing.T) {
 	}
 	if err := ok.SendDirectEmail(context.Background(), "o@example.com\r\nRCPT TO:<x@evil>", "s", "t", "h"); err == nil || errors.Is(err, ErrDirectEmailNotConfigured) {
 		t.Errorf("CR/LF recipient: err = %v, want a refusal", err)
+	}
+}
+
+// silentSMTP listens on loopback and accepts one connection that it holds
+// open without ever sending the 220 greeting.
+func silentSMTP(t *testing.T) Config {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err == nil {
+			accepted <- conn // hold it open, say nothing
+		}
+	}()
+	t.Cleanup(func() {
+		_ = ln.Close()
+		select {
+		case c := <-accepted:
+			_ = c.Close()
+		default:
+		}
+	})
+	host, port, _ := net.SplitHostPort(ln.Addr().String())
+	return Config{SMTPHost: host, SMTPPort: port, SMTPFrom: "fleet@example.com"}
+}
+
+// TestDeliver_SilentServerHonoursDeadline: a server that accepts the TCP
+// connection but never sends its 220 greeting used to strand smtp.SendMail on
+// a detached goroutine (#2017). deliver must return when the attempt's
+// deadline passes and leave no goroutine behind.
+func TestDeliver_SilentServerHonoursDeadline(t *testing.T) {
+	before := runtime.NumGoroutine()
+	cfg := silentSMTP(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	err := deliver(ctx, cfg, []string{"ops@example.com"}, []byte("Subject: x\r\n\r\nbody\r\n"))
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("deliver took %v against a silent server; want ~200ms", elapsed)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+
+	// deliver runs on the caller's goroutine; nothing it started may outlive
+	// it. Only the fake server's accept goroutine (already returned once it
+	// accepted) may have existed; allow the scheduler a moment to retire it.
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > before && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := runtime.NumGoroutine(); n > before {
+		t.Fatalf("goroutines: %d after deliver, %d before — deliver leaked one", n, before)
+	}
+}
+
+// TestDeliver_CancelUnblocks: a cancel (not just a deadline) ends a stalled
+// attempt promptly.
+func TestDeliver_CancelUnblocks(t *testing.T) {
+	cfg := silentSMTP(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	time.AfterFunc(100*time.Millisecond, cancel)
+	start := time.Now()
+	err := deliver(ctx, cfg, []string{"ops@example.com"}, []byte("x"))
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("deliver took %v after cancel", elapsed)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }
