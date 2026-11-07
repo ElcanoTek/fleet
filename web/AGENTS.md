@@ -34,7 +34,7 @@ in `web/` runs on the server.
 
 ```sh
 npm ci                              # lockfile-exact install
-npm run lint                        # oxlint --deny-warnings
+npm run lint                        # oxlint --deny-warnings --report-unused-disable-directives
 npm run typecheck                   # tsc --noEmit — the ONLY type check (vite build strips types)
 npm run test                        # vitest
 npm run build                       # vite build → ../internal/webui/bundle/dist

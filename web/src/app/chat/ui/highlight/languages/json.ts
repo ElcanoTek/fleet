@@ -5,8 +5,6 @@
 // Lea Verou (Prism) and Titus Wormer (refractor); see ../LICENSE.prism and
 // ../LICENSE.refractor. SPDX-License-Identifier: MIT
 
-/* eslint-disable no-useless-escape, no-control-regex -- the regexes are Prism's, kept byte for byte so the tokens stay upstream's. */
-
 import type { PrismLike } from "../prism";
 
 export function json(Prism: PrismLike): void {

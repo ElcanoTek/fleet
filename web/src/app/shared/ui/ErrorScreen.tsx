@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { claimChunkAutoReload, isChunkLoadError } from "@/app/shared/chunkReload";
 
 // ErrorScreen is what the app's error boundary (src/App.tsx) renders when a page
-// throws. Before it existed a crash showed Next's bare "Application error: a
+// throws. Before it existed a crash showed a bare "Application error: a
 // client-side exception has occurred" text with no control at all, which in a
 // browser tab cost a reload, and in an iPhone Home Screen web app (no address
 // bar, no reload button) cost force-quitting the app. So the one thing this
@@ -13,7 +13,7 @@ import { claimChunkAutoReload, isChunkLoadError } from "@/app/shared/chunkReload
 //
 // Navigation away is a hard one (location.assign) on purpose: the client router
 // is part of what may have just failed, and a fresh document is the recovery.
-export function ErrorScreen({ error }: { error: Error & { digest?: string } }) {
+export function ErrorScreen({ error }: { error: Error }) {
   useEffect(() => {
     console.error(error);
     if (isChunkLoadError(error) && claimChunkAutoReload()) {
@@ -42,11 +42,6 @@ export function ErrorScreen({ error }: { error: Error & { digest?: string } }) {
           This page hit an error. Reloading usually fixes it, and also picks up
           the latest version of the app if one has been released.
         </p>
-        {error.digest ? (
-          <p className="mt-2 font-[var(--font-code-ui)] text-[0.75rem] text-[var(--color-text-muted)]">
-            Reference: {error.digest}
-          </p>
-        ) : null}
         <button
           type="button"
           onClick={() => window.location.reload()}

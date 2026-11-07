@@ -7,7 +7,6 @@
 /** A grammar: token name -> pattern(s). Loosely typed, as Prism's grammars are. */
 // The values are RegExps, pattern objects or arrays of either; `rest` merges
 // another grammar in on first use.
-// oxlint-disable-next-line typescript/no-explicit-any -- grammar data is heterogeneous by design
 export type Grammar = Record<string, any>;
 
 /** The registry the grammar files write into. */

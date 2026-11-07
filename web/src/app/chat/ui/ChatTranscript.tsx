@@ -399,7 +399,7 @@ export function ChatTranscript({
   // the streamEndRef sentinel still sits at the very bottom. Rows are
   // dynamically measured (variable-height markdown/code) via measureElement;
   // unmeasured rows use a running average around this estimate.
-  // eslint-disable-next-line react-hooks/incompatible-library -- TanStack Virtual is intentionally isolated in this no-memo component.
+  // TanStack Virtual is intentionally isolated in this no-memo component.
   const virtualizer = useVirtualizer<HTMLElement, HTMLDivElement>({
     count: rows.length,
     getScrollElement: () => conversationRef.current,
