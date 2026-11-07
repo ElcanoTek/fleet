@@ -203,9 +203,14 @@ bytes (a newer base layer or RPM) under a tag boxes already verified. The
 publish job checks GHCR again right before it pushes. Recovering a partial
 publish is deliberate: delete it and re-run, or let the next green push
 release. Overlapping runs both publish: a tag a newer one overtook while it
-was building still gets its release (with `--latest=false`), so no signed
-image is left without a release naming it; Latest, `:latest` and retention
-follow the newest tag.
+was building still gets its release, so no signed image is left without a
+release naming it. Latest and `:latest` follow the newest successfully
+PUBLISHED release (non-draft, with `SHA256SUMS`;
+`scripts/release-newer-published.sh`), checked before and after the create —
+not the newest tag, so a newer tag whose build failed does not keep a complete
+release from being Latest. Retention counts published releases. Tagging itself
+retries with jittered backoff until an ordinal is free (40 attempts as a
+backstop), so any number of green pushes landing together all get tagged.
 
 ## Sandbox images and client bundles
 

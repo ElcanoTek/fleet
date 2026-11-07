@@ -84,12 +84,13 @@ jobs:
             echo
             echo "Run CI on this branch (Actions → CI → Run workflow) before merging: a branch pushed with GITHUB_TOKEN does not start it."
           } > "${body}"
-          if gh pr create --base main --head "${branch}" --title "deps(pins): verified pin updates ($(date -u +%Y-%m))" --body-file "${body}"; then
-            exit 0
+          if ! gh pr create --base main --head "${branch}" --title "deps(pins): verified pin updates ($(date -u +%Y-%m))" --body-file "${body}"; then
+            echo "::warning::GitHub Actions may not open PRs here; filing an issue that links the branch instead."
+            title="Pin updates are ready on branch ${branch}"
+            if [ -z "$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')" ]; then
+              gh issue create --title "${title}" --body-file "${body}"
+            fi
           fi
-          echo "::warning::GitHub Actions may not open PRs here; filing an issue that links the branch instead."
-          title="Pin updates are ready on branch ${branch}"
-          if [ -z "$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')" ]; then
-            gh issue create --title "${title}" --body-file "${body}"
-          fi
+          # A partial update still opens its PR, but the run stays red: a pin
+          # that failed verification must not hide behind the ones that moved.
           [ "${PINS_OUTCOME}" = "success" ] || { echo "::error::a pin failed verification (above); the others were updated."; exit 1; }

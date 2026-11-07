@@ -47,9 +47,9 @@ func TestEveryBuiltTagPublishes(t *testing.T) {
 	if strings.Contains(pub, "not publishing a release for it") {
 		t.Error("the publish job still skips a superseded tag")
 	}
-	for _, want := range []string{`latest_flag="--latest=false"`, `[ "${TAG}" = "${newest}" ] && latest_flag="--latest"`, `"${latest_flag}"`} {
+	for _, want := range []string{`latest_flag="--latest=false"`, `[ -z "${newer}" ] && latest_flag="--latest"`, `"${latest_flag}"`} {
 		if !strings.Contains(pub, want) {
-			t.Errorf("publish job missing %q — Latest must follow the newest tag, not gate publication", want)
+			t.Errorf("publish job missing %q — Latest must follow the newest published release, not gate publication", want)
 		}
 	}
 }

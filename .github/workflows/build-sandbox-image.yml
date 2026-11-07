@@ -186,8 +186,15 @@ jobs:
           repository: ElcanoTek/fleet
           ref: ${{ steps.pin.outputs.resolved }}
           path: .fleet-core
+          # Everything build-sandbox-image.sh sources or reads from the fleet
+          # checkout: its helper library, and the generic bundle's manifest
+          # and sandbox/ (built for a bundle that ships no Containerfile).
+          # scripts/check_sandbox_sparse_test.go keeps this list complete.
           sparse-checkout: |
             scripts/build-sandbox-image.sh
+            scripts/lib/sandbox-bundle.sh
+            config/default/manifest.yaml
+            config/default/sandbox/
           sparse-checkout-cone-mode: false
 
       - name: Ensure podman

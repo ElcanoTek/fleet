@@ -80,7 +80,7 @@ jobs:
   tag:
     name: Tag the release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     # Only a GREEN CI run on a real push to main. `workflow_dispatch` runs of
     # ci.yml (which exist to re-produce the required check on a PR
     # whose webhook was dropped) carry a PR head ref and must not release.
@@ -165,10 +165,20 @@ jobs:
           fi
 
           # Retry loop for the one race the concurrency group cannot rule out:
-          # a tag pushed between our `next` computation and our push (a manual
-          # push, or a queued run that started before our fetch). Recompute the
-          # ordinal against the refreshed tags rather than forcing ours.
-          for attempt in 1 2 3; do
+          # a tag pushed between our `next` computation and our push (another
+          # commit's run — the group is per SHA, so any number of green pushes
+          # allocate concurrently — or a manual push). Recompute the ordinal
+          # against the refreshed tags rather than forcing ours, and keep going:
+          # a rejected push means SOMEONE took that ordinal, so every round
+          # makes progress, and a certified commit must not end up untagged
+          # because K other runs happened to land at once. The bound is a
+          # backstop against a push that fails for another reason (auth, a
+          # protected ref), not a limit on contention; the jittered backoff
+          # spreads the contenders out so they stop colliding.
+          MAX_ATTEMPTS="${TAG_MAX_ATTEMPTS:-40}"
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
             tag="$(scripts/version.sh next)"
             echo "attempt ${attempt}: tagging ${HEAD_SHA} as ${tag}"
 
@@ -183,13 +193,26 @@ jobs:
               exit 0
             fi
 
-            echo "::warning::pushing ${tag} was rejected; refetching tags and recomputing the ordinal"
             git tag -d "${tag}"
-            git fetch --force --tags origin
+            if [ "${attempt}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "::error::could not push a release tag after ${attempt} attempts; re-run this workflow to tag ${HEAD_SHA}."
+              exit 1
+            fi
+            backoff=$(( (attempt < 10 ? attempt : 10) + RANDOM % 5 ))
+            echo "::warning::pushing ${tag} was rejected (attempt ${attempt}/${MAX_ATTEMPTS}); refetching tags and retrying in ${backoff}s"
+            sleep "${backoff}"
+            git fetch --force --tags origin || echo "::warning::refetching tags failed; retrying"
+            # A tag on this very commit appearing meanwhile (a re-run that
+            # raced this one) is the answer, not a reason to mint a second.
+            if existing="$(scripts/version.sh released-at "${HEAD_SHA}")" && [ -n "${existing}" ]; then
+              echo "::notice::${HEAD_SHA} was tagged ${existing} meanwhile."
+              {
+                echo "tag=${existing}"
+                echo "released=true"
+              } >>"${GITHUB_OUTPUT}"
+              exit 0
+            fi
           done
-
-          echo "::error::could not push a release tag after 3 attempts."
-          exit 1
         id: tag
 
       # RELEASES ARE IMMUTABLE. A re-run of this workflow for a tag that
@@ -720,13 +743,20 @@ jobs:
           notes="$(mktemp)"
           git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
 
-          # Latest only when this is the newest release tag ON THE REMOTE —
-          # fetched right here, because two per-SHA runs can tag
-          # concurrently and the one that won the push never refetched.
-          git fetch --quiet --tags origin
-          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
+          # Latest only when no NEWER release is successfully PUBLISHED (a
+          # non-draft release with SHA256SUMS: scripts/release-newer-published.sh).
+          # Not "no newer tag": a newer tag whose build failed, or that is
+          # still building, has nothing a box can install, and must not keep
+          # this complete release from being Latest. When the releases cannot
+          # be listed, Latest is left alone (the next release sets it) — a
+          # failure here must not strand pushed, signed images without their
+          # release.
           latest_flag="--latest=false"
-          [ "${TAG}" = "${newest}" ] && latest_flag="--latest"
+          if newer="$(scripts/release-newer-published.sh "${TAG}")"; then
+            [ -z "${newer}" ] && latest_flag="--latest"
+          else
+            echo "::warning::could not list the published releases; publishing ${TAG} without the Latest mark."
+          fi
 
           # With files, gh creates the release as a draft, uploads every
           # asset and only then publishes it — so /releases/latest, which is
@@ -740,24 +770,28 @@ jobs:
             --verify-tag \
             dist/*
 
-          # The newest-tag check above and this create are two steps, and a
-          # concurrent run for the next commit can tag AND publish .N+1
-          # between them; a `--latest` just passed would then have moved
-          # Latest back onto this older tag. Every tag is pushed before its
-          # release is created, so a fetch AFTER the create sees any release
-          # that beat this one, and clearing this one's mark is enough: the
-          # newer release asked for Latest itself.
-          git fetch --quiet --tags origin
-          newest="$(git tag --list | scripts/version.sh filter | tail -n 1)"
-          if [ "${TAG}" != "${newest}" ]; then
+          # The check above and this create are two steps, and a concurrent
+          # run for a newer commit can PUBLISH .N+1 between them; a `--latest`
+          # just passed would then have moved Latest back onto this older
+          # release. So ask again AFTER the create, by the same rule — a newer
+          # successfully published release — and clear this one's mark if one
+          # appeared: that newer release asked for Latest itself.
+          if ! newer="$(scripts/release-newer-published.sh "${TAG}")"; then
+            echo "::warning::could not list the published releases after publishing ${TAG}; leaving its Latest mark and the :latest images as they are."
+          elif [ -n "${newer}" ]; then
             if [ "${latest_flag}" = "--latest" ]; then
-              echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
+              echo "::notice::${TAG} was superseded by $(printf '%s' "${newer}" | tail -n 1) while publishing; clearing its Latest mark."
               gh release edit "${TAG}" --latest=false \
                 || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
             else
-              echo "::notice::${TAG} published, not Latest: ${newest} is newer."
+              echo "::notice::${TAG} published, not Latest: $(printf '%s' "${newer}" | tail -n 1) is newer and published."
             fi
           else
+            if [ "${latest_flag}" != "--latest" ]; then
+              # Created without the mark because the first listing failed.
+              gh release edit "${TAG}" --latest \
+                || echo "::warning::could not mark ${TAG} Latest; the next release sets it."
+            fi
             # :latest follows the newest release only, by digest (no
             # re-push: --preserve-digests copies the signed index as is).
             for name in fleet fleet-sandbox; do
