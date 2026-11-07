@@ -157,6 +157,16 @@ type Deps struct {
 	Executor Executor
 	// ReadWorkspaceFile binds MCP binary argument references to the active sandbox.
 	ReadWorkspaceFile tools.WorkspaceFileReadFunc
+	// PrepareEmailAttachments, when set, runs before every email-tool MCP
+	// dispatch (tools.IsEmailToolName) on that call's arguments: it checks the
+	// attachment paths and rewrites them to private copies, returning a cleanup
+	// that runs once the dispatch has let go of the arguments. An error refuses
+	// the call. The interactive driver binds it to the conversation's
+	// workspace (tools.SnapshotEmailAttachments), the same step an approved
+	// staged email takes, so a call that runs without a card (session
+	// pre-approval, auto-approve, a patrol email) is held to the same rule.
+	// nil = no rewrite.
+	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 
 	// Model + FallbackModel are the resolved fantasy language models.
 	Model         fantasy.LanguageModel
@@ -487,6 +497,7 @@ func Run(ctx context.Context, mode Mode, cfg RunConfig, deps Deps) (result Resul
 		hooks:             hooks,
 		journal:           deps.TurnJournal,
 		readWorkspaceFile: deps.ReadWorkspaceFile,
+		prepareEmail:      deps.PrepareEmailAttachments,
 	}
 	// A narrowed roster (#1603) makes Gate-2 exhaustive for this run.
 	toolCfg.exclusiveAllowlist = cfg.MCPRosterNarrowing != ""

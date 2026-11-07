@@ -359,6 +359,8 @@ func (a *approvalStager) isAutoApprove() bool {
 // owner (with no cc/bcc and inline content that requires no staging-time file
 // materialization), so a user who opted into auto-approve on their patrol can
 // receive their own patrol digest email without a manual approval card.
+// Any inline_attachments such a call carries are checked and copied when it is
+// dispatched (agentcore.Deps.PrepareEmailAttachments), as for an approved card.
 func (a *approvalStager) isSelfAddressedPatrolEmail(toolName, rawInput string) bool {
 	if !a.isPatrolOrPatrolResume() || strings.TrimSpace(a.userEmail) == "" {
 		return false

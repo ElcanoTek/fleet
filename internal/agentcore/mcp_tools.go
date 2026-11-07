@@ -258,6 +258,8 @@ type toolBuildConfig struct {
 	// includeConfirmAudit appends the scheduled-mode confirm_audit tool.
 	includeConfirmAudit bool
 	readWorkspaceFile   tools.WorkspaceFileReadFunc
+	// prepareEmail is Deps.PrepareEmailAttachments, carried onto every mcpTool.
+	prepareEmail func(args map[string]any) (func(), error)
 	// loaderTools are extra always-registered tools (scheduled mcp_list/load).
 	loaderTools []fantasy.AgentTool
 	// personaName/personaPolicy/observer carry Gate-4 (#294) into the tool build
@@ -446,6 +448,7 @@ func buildFantasyTools(
 			hooks:             cfg.hooks,
 			journal:           cfg.journal,
 			readWorkspaceFile: cfg.readWorkspaceFile,
+			prepareEmail:      cfg.prepareEmail,
 			hiddenSuffixes:    cfg.hiddenSuffixes,
 		}
 		// Gate 4 (persona tool allowlist, #294): applied HERE — to the logical
@@ -709,13 +712,16 @@ func governToolOutput(ctx context.Context, toolName, text string) (string, bool)
 // fast.io trim).
 type mcpTool struct {
 	readWorkspaceFile tools.WorkspaceFileReadFunc
-	serverName        string
-	tool              mcp.Tool
-	broker            MCPBroker
-	policy            Policy
-	providerOptions   fantasy.ProviderOptions
-	hooks             *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
-	journal           TurnJournal // #798; nil = no durable journal (scheduled/evals)
+	// prepareEmail is Deps.PrepareEmailAttachments (nil = none); call applies
+	// it to email-tool arguments before the dispatch.
+	prepareEmail    func(args map[string]any) (func(), error)
+	serverName      string
+	tool            mcp.Tool
+	broker          MCPBroker
+	policy          Policy
+	providerOptions fantasy.ProviderOptions
+	hooks           *hookEngine // #788; fires under the real mcp_<server>_<tool> name (also on the deferred route)
+	journal         TurnJournal // #798; nil = no durable journal (scheduled/evals)
 	// hiddenSuffixes is the run's RunConfig.HiddenToolSuffixes, the call
 	// gate Run checks first (interactive_hidden.go). nil = none.
 	hiddenSuffixes []string
@@ -794,6 +800,23 @@ func (m *mcpTool) Run(ctx context.Context, params fantasy.ToolCall) (fantasy.Too
 	}, params)
 }
 
+// prepareEmailArguments applies the run's PrepareEmailAttachments to an
+// email tool's arguments. The returned release is never nil.
+func (m *mcpTool) prepareEmailArguments(toolName string, args map[string]any) (func(), error) {
+	noop := func() {}
+	if m.prepareEmail == nil || args == nil || !tools.IsEmailToolName(toolName) {
+		return noop, nil
+	}
+	cleanup, err := m.prepareEmail(args)
+	if err != nil {
+		return noop, fmt.Errorf("email not sent: %w", err)
+	}
+	if cleanup == nil {
+		return noop, nil
+	}
+	return cleanup, nil
+}
+
 // call runs the brokered MCP call plus the MCP-specific output handling —
 // everything between the shared gates and the shared epilogue. Every failure
 // (transport error, isError=true, guardrail block) becomes an error RESPONSE
@@ -813,16 +836,28 @@ func (m *mcpTool) call(ctx context.Context, toolName string, params fantasy.Tool
 	timeout := toolCallTimeoutFor(m.serverName, params.Input)
 	callCtx, cancel := context.WithTimeout(mcp.WithCallTimeout(ctx, timeout), timeout+toolCallTimeout)
 	defer cancel()
-	resolved, err := m.resolveFileReferences(callCtx, args)
+	// Email attachment paths are checked and replaced with private copies
+	// before the dispatch, whether or not the call went through a card.
+	releaseAttachments, err := m.prepareEmailArguments(toolName, args)
 	if err != nil {
 		message, _ := governToolOutput(ctx, toolName, err.Error())
 		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
 	}
-	// The references' windows stay charged until the dispatch has let go of
-	// args: when CallMCP returns (on every path, panics included) AND, for an
-	// out-of-process call cancelled mid-flight, when the broker child has
-	// answered (mcp.RetainArguments). The hold runs resolved then.
-	callCtx, hold := mcp.WithArgumentHold(callCtx, resolved)
+	resolved, err := m.resolveFileReferences(callCtx, args)
+	if err != nil {
+		releaseAttachments()
+		message, _ := governToolOutput(ctx, toolName, err.Error())
+		return toolCallOutcome{resp: fantasy.NewTextErrorResponse(message), failed: true}
+	}
+	// The references' windows stay charged, and the attachment copies stay on
+	// disk, until the dispatch has let go of args: when CallMCP returns (on
+	// every path, panics included) AND, for an out-of-process call cancelled
+	// mid-flight, when the broker child has answered (mcp.RetainArguments).
+	// The hold runs both releases then.
+	callCtx, hold := mcp.WithArgumentHold(callCtx, func() {
+		resolved()
+		releaseAttachments()
+	})
 	defer hold.Done()
 	// Resolution may have queued for the workspace-file budget past the
 	// call's deadline (or its cancellation). Never dispatch then: an

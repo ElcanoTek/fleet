@@ -159,6 +159,40 @@ path — the strip cannot tell an injected block from a user who typed one, and 
 "---" rule followed by `**Shared file library**` is what someone documenting
 fleet writes. See ADR-0058; do not add `NOT NULL DEFAULT ''` to this column.
 
+## Outgoing email attachments
+
+An email tool's `attachments` and `inline_attachments` name files by path.
+Those paths are confined to the sending conversation in two steps
+(`internal/tools/email_materialize.go`):
+
+- **When a card is staged**, every path must lie in the conversation's own
+  workspace directory or the staged shared-file library (`shared/<name>`). A
+  file that already exists is resolved through its links and must still land
+  there and be a regular file. A file that does not exist yet is accepted
+  here and checked at send time.
+- **Right before the connector is called**, `SnapshotEmailAttachments`
+  resolves each path again, opens it through `os.Root`, requires a regular
+  file on the opened descriptor, and copies it (30 MiB in total per email)
+  into a private directory under `<EMAIL_ATTACHMENT_DIR>/outbound/`, which no
+  sandbox mounts. The connector is given the copies, which are removed once
+  the call has finished.
+
+The second step runs for every email dispatch in a chat turn, whether or not
+a card was shown: an approved card (httpapi `runStagedTool`), and a call that
+runs without one, through session pre-approval, conversation auto-approve or a
+self-addressed patrol email (`agentcore.Deps.PrepareEmailAttachments`, which
+the chat driver binds to the conversation). A sub-agent spawned from a chat
+turn carries the same step. A path outside the conversation's workspace and
+the shared library refuses the send.
+
+Scheduled task runs do not set that seam: their email arguments go to the
+connector as written, as before. Those runs have no conversation workspace to
+anchor to, and their sandbox mounts only the job's own directory (ADR-0097).
+
+The content is copied when the email is sent, so a file changed between
+staging a card and approving it is sent as it is at approval time. The card
+does not record a hash of the bytes.
+
 ## What this does not fix
 
 **Cross-conversation visibility of the workspace root.** The workspace root is

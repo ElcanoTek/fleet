@@ -103,6 +103,10 @@ type TurnConfig struct {
 	// this turn (and any sub-agent it spawns) neither offers nor calls. The
 	// Manager sets it from agentcore.InteractiveHiddenTools(); nil = none.
 	HiddenToolSuffixes []string
+	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments for
+	// this turn and any sub-agent it spawns. The Manager binds it to the
+	// conversation's workspace (tools.SnapshotEmailAttachments).
+	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 
 	MaxCostUSD     float64
 	MaxTotalTokens int
@@ -208,22 +212,25 @@ func RunInteractiveTurn(ctx context.Context, tc TurnConfig, obs agentcore.Observ
 	}
 
 	deps := agentcore.Deps{
-		Input:                messagesInput{system: tc.SystemPrompt, messages: tc.Messages, label: tc.Label},
-		Observer:             obs,
-		Policy:               policy,
-		Executor:             NewSandboxExecutor(tc.Sandbox),
-		ReadWorkspaceFile:    tools.WorkspaceFileReader(tc.Sandbox),
-		Model:                tc.Model,
-		FallbackModel:        tc.FallbackModel,
-		FallbackModels:       tc.FallbackModels,
-		MCPClient:            tc.MCPClient,
-		MCPBroker:            tc.MCPBroker,
-		MCPCatalog:           tc.MCPCatalog,
-		Finalize:             buildInteractiveFinalize(tc),
-		CompactionSummarizer: buildInteractiveCompactionSummarizer(tc),
-		HealthRegistry:       tc.HealthRegistry,
-		TurnJournal:          tc.TurnJournal,
-		SteerSource:          tc.SteerSource,
+		Input:             messagesInput{system: tc.SystemPrompt, messages: tc.Messages, label: tc.Label},
+		Observer:          obs,
+		Policy:            policy,
+		Executor:          NewSandboxExecutor(tc.Sandbox),
+		ReadWorkspaceFile: tools.WorkspaceFileReader(tc.Sandbox),
+		// Email attachments are checked and copied before every email
+		// dispatch, carded or not.
+		PrepareEmailAttachments: tc.PrepareEmailAttachments,
+		Model:                   tc.Model,
+		FallbackModel:           tc.FallbackModel,
+		FallbackModels:          tc.FallbackModels,
+		MCPClient:               tc.MCPClient,
+		MCPBroker:               tc.MCPBroker,
+		MCPCatalog:              tc.MCPCatalog,
+		Finalize:                buildInteractiveFinalize(tc),
+		CompactionSummarizer:    buildInteractiveCompactionSummarizer(tc),
+		HealthRegistry:          tc.HealthRegistry,
+		TurnJournal:             tc.TurnJournal,
+		SteerSource:             tc.SteerSource,
 	}
 
 	// Per-user remote-MCP overlay (#443): advertise the shared catalog merged
@@ -284,8 +291,10 @@ func newInteractiveSpawnHost(tc TurnConfig, policy *agentcore.InteractivePolicy,
 		PersonaPolicy:    tc.PersonaPolicy,
 		// Children inherit the turn's hidden tools (buildChild copies them).
 		HiddenToolSuffixes: tc.HiddenToolSuffixes,
-		Overlay:            tc.Overlay,
-		Subagent:           tc.Subagent,
+		// Children send email under the same attachment rule as the turn.
+		PrepareEmailAttachments: tc.PrepareEmailAttachments,
+		Overlay:                 tc.Overlay,
+		Subagent:                tc.Subagent,
 	})
 	host.runtimePolicy = policy
 	host.spawnObserver = obs

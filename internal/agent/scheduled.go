@@ -176,6 +176,9 @@ type Agent struct {
 	// tools. Threaded into RunConfig.HiddenToolSuffixes.
 	hiddenToolSuffixes []string
 
+	// prepareEmailAttachments is Options.PrepareEmailAttachments.
+	prepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
+
 	// auditProtocolRef names the bundle's self-audit protocol in the audit
 	// guidance ("protocols/self-audit.md"), or "" when the bundle ships none.
 	auditProtocolRef string
@@ -276,6 +279,11 @@ type Options struct {
 	// interactive spawn host sets it, so a sub-agent spawned from chat cannot
 	// reach what the chat turn could not; scheduled drivers leave it nil.
 	HiddenToolSuffixes []string
+	// PrepareEmailAttachments is agentcore.Deps.PrepareEmailAttachments. Only
+	// the interactive spawn host sets it (and every child copies it), so a
+	// sub-agent spawned from chat sends email attachments under the chat
+	// turn's rule; scheduled drivers leave it nil.
+	PrepareEmailAttachments func(args map[string]any) (cleanup func(), err error)
 	// AuditProtocolRef is the workspace-relative self-audit protocol path the
 	// audit guidance names, from AuditProtocolRef(protocolsDir); "" when the
 	// bundle ships none, so the model is never sent after a missing file.
@@ -391,44 +399,45 @@ func NewAgent(opts Options) *Agent {
 		maxIter = 500
 	}
 	a := &Agent{
-		config:               opts.Config,
-		model:                opts.Model,
-		fallbackModel:        opts.FallbackModel,
-		fallbackModels:       append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
-		mcpClient:            opts.MCPClient,
-		mcpBroker:            opts.MCPBroker,
-		mcpCatalog:           cloneMCPCatalog(opts.MCPCatalog),
-		mcpToolAllowlist:     opts.MCPToolAllowlist,
-		optionalServers:      opts.OptionalServers,
-		mcpRosterNarrowing:   opts.MCPRosterNarrowing,
-		overlay:              opts.Overlay,
-		nativeTools:          opts.NativeTools,
-		systemPrompt:         opts.SystemPrompt,
-		persona:              opts.Persona,
-		maxIterations:        maxIter,
-		costCeilingOverride:  opts.MaxCostUSD,
-		tokenCeilingOverride: opts.MaxTotalTokens,
-		logSession:           NewLogSession(),
-		sb:                   opts.Sandbox,
-		loadedServers:        make(map[string]bool),
-		logFile:              opts.LogFile,
-		notesProvider:        opts.NotesProvider,
-		noteProposer:         opts.NoteProposer,
-		skillProposer:        opts.SkillProposer,
-		taskMemory:           opts.TaskMemory,
-		learnedInstruction:   opts.LearnedInstruction,
-		taskID:               opts.TaskID,
-		taskMemoryConfig:     opts.TaskMemoryConfig,
-		credentialAllowlist:  opts.CredentialAllowlist,
-		thinkingBudget:       opts.ThinkingBudget,
-		personaPolicy:        opts.PersonaPolicy,
-		hiddenToolSuffixes:   append([]string(nil), opts.HiddenToolSuffixes...),
-		auditProtocolRef:     opts.AuditProtocolRef,
-		outputSchema:         append(json.RawMessage(nil), opts.OutputSchema...),
-		phoneAFriendEnabled:  opts.PhoneAFriendEnabled,
-		reviewerModel:        opts.ReviewerModel,
-		verifierModel:        opts.VerifierModel,
-		subagent:             newSubagentConfig(opts.Subagent),
+		config:                  opts.Config,
+		model:                   opts.Model,
+		fallbackModel:           opts.FallbackModel,
+		fallbackModels:          append([]fantasy.LanguageModel(nil), opts.FallbackModels...),
+		mcpClient:               opts.MCPClient,
+		mcpBroker:               opts.MCPBroker,
+		mcpCatalog:              cloneMCPCatalog(opts.MCPCatalog),
+		mcpToolAllowlist:        opts.MCPToolAllowlist,
+		optionalServers:         opts.OptionalServers,
+		mcpRosterNarrowing:      opts.MCPRosterNarrowing,
+		overlay:                 opts.Overlay,
+		nativeTools:             opts.NativeTools,
+		systemPrompt:            opts.SystemPrompt,
+		persona:                 opts.Persona,
+		maxIterations:           maxIter,
+		costCeilingOverride:     opts.MaxCostUSD,
+		tokenCeilingOverride:    opts.MaxTotalTokens,
+		logSession:              NewLogSession(),
+		sb:                      opts.Sandbox,
+		loadedServers:           make(map[string]bool),
+		logFile:                 opts.LogFile,
+		notesProvider:           opts.NotesProvider,
+		noteProposer:            opts.NoteProposer,
+		skillProposer:           opts.SkillProposer,
+		taskMemory:              opts.TaskMemory,
+		learnedInstruction:      opts.LearnedInstruction,
+		taskID:                  opts.TaskID,
+		taskMemoryConfig:        opts.TaskMemoryConfig,
+		credentialAllowlist:     opts.CredentialAllowlist,
+		thinkingBudget:          opts.ThinkingBudget,
+		personaPolicy:           opts.PersonaPolicy,
+		hiddenToolSuffixes:      append([]string(nil), opts.HiddenToolSuffixes...),
+		prepareEmailAttachments: opts.PrepareEmailAttachments,
+		auditProtocolRef:        opts.AuditProtocolRef,
+		outputSchema:            append(json.RawMessage(nil), opts.OutputSchema...),
+		phoneAFriendEnabled:     opts.PhoneAFriendEnabled,
+		reviewerModel:           opts.ReviewerModel,
+		verifierModel:           opts.VerifierModel,
+		subagent:                newSubagentConfig(opts.Subagent),
 	}
 	if len(opts.CompletionAnySucceeded) > 0 {
 		a.completionAnySucceeded = make(map[string]bool, len(opts.CompletionAnySucceeded))
@@ -1379,15 +1388,17 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 		Policy:            inner, // inner policy exposes orchestration() for confirm_audit + usage
 		Executor:          NewSandboxExecutor(a.sb),
 		ReadWorkspaceFile: tools.WorkspaceFileReader(a.sb),
-		Model:             a.model,
-		FallbackModel:     a.fallbackModel,
-		FallbackModels:    a.fallbackModels,
-		MCPClient:         a.mcpClient,
-		MCPBroker:         a.mcpBroker,
-		MCPCatalog:        a.mcpCatalog,
-		LogSession:        a.logSession,
-		MCPServersDirty:   a.mcpDirty,
-		ClearMCPDirty:     a.clearMCPDirty,
+		// nil for a scheduled task; a chat turn's sub-agent carries the turn's.
+		PrepareEmailAttachments: a.prepareEmailAttachments,
+		Model:                   a.model,
+		FallbackModel:           a.fallbackModel,
+		FallbackModels:          a.fallbackModels,
+		MCPClient:               a.mcpClient,
+		MCPBroker:               a.mcpBroker,
+		MCPCatalog:              a.mcpCatalog,
+		LogSession:              a.logSession,
+		MCPServersDirty:         a.mcpDirty,
+		ClearMCPDirty:           a.clearMCPDirty,
 		// A real summary for compaction (window pressure, the resend budget and
 		// its checkpoints, reactive recovery): without it the run kept a
 		// one-line placeholder in place of everything it had learned.

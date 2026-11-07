@@ -311,6 +311,17 @@ func (b attachmentBases) resolve(path string) (base, rel string, err error) {
 	return "", "", outsideErr(path)
 }
 
+// OutboundAttachmentStagingDir is where SnapshotEmailAttachments puts the
+// copies an email is sent with: <emailAttachmentDir>/outbound, a host-side
+// directory no sandbox mounts. "" when emailAttachmentDir is unset (the
+// snapshot then uses the OS temp directory).
+func OutboundAttachmentStagingDir(emailAttachmentDir string) string {
+	if strings.TrimSpace(emailAttachmentDir) == "" {
+		return ""
+	}
+	return filepath.Join(emailAttachmentDir, "outbound")
+}
+
 // MaxEmailAttachmentBytes bounds the attachments one email may carry in total,
 // matching the ~30 MiB message ceiling of the email providers fleet targets.
 const MaxEmailAttachmentBytes = 30 << 20

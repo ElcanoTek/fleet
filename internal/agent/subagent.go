@@ -1045,13 +1045,15 @@ func (a *Agent) buildChild(role string, model fantasy.LanguageModel, allowlist a
 		// interactive-hidden tools (agent_policy.interactive_hidden_tools),
 		// so delegating cannot reach a tool chat could not.
 		HiddenToolSuffixes: a.hiddenToolSuffixes,
-		NativeTools:        tools.ExcludeInteractiveOnly(a.nativeTools),
-		SystemPrompt:       childSystemPrompt,
-		Persona:            a.persona,
-		MaxIterations:      childIter,
-		Sandbox:            a.sb,
-		NotesProvider:      a.notesProvider,
-		NoteProposer:       a.noteProposer,
+		// Same for the email attachment rule.
+		PrepareEmailAttachments: a.prepareEmailAttachments,
+		NativeTools:             tools.ExcludeInteractiveOnly(a.nativeTools),
+		SystemPrompt:            childSystemPrompt,
+		Persona:                 a.persona,
+		MaxIterations:           childIter,
+		Sandbox:                 a.sb,
+		NotesProvider:           a.notesProvider,
+		NoteProposer:            a.noteProposer,
 		// Persistent task memory (#285) is inherited from the parent so a child of a
 		// Captain's Log task shares the same task-scoped memory; nil for a
 		// non-opted-in parent (unchanged default).

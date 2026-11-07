@@ -827,8 +827,8 @@ func appendToolResultToHistory(ctx context.Context, st chatStore, convID, toolNa
 // copied for the send: under the host-side attachment directory, which no
 // sandbox mounts. Empty (no config) means the process temp dir.
 func (s *Server) outboundAttachmentStagingDir() string {
-	if s.cfg == nil || strings.TrimSpace(s.cfg.EmailAttachmentDir) == "" {
+	if s.cfg == nil {
 		return ""
 	}
-	return filepath.Join(s.cfg.EmailAttachmentDir, "outbound")
+	return tools.OutboundAttachmentStagingDir(s.cfg.EmailAttachmentDir)
 }

@@ -1977,11 +1977,15 @@ func (m *Manager) RunTurn(ctx context.Context, in TurnInput, sink EventSink) (*T
 		// agent_policy.interactive_hidden_tools: tools a chat turn neither
 		// offers nor calls (scheduled runs keep them).
 		HiddenToolSuffixes: hiddenTools,
-		MaxCostUSD:         m.config.LiveMaxCostUSD(),
-		MaxTotalTokens:     m.config.LiveMaxTotalTokens(),
-		ApprovalStager:     in.ApprovalStager,
-		MemoryProposer:     in.MemoryProposer,
-		NoteProposer:       m.noteProposer,
+		// Every email dispatch in this turn, carded or not, sends checked
+		// private copies of its attachments from this conversation's
+		// workspace (the step an approved card takes in httpapi).
+		PrepareEmailAttachments: emailAttachmentSnapshotter(in.ConversationID, m.config.EmailAttachmentDir),
+		MaxCostUSD:              m.config.LiveMaxCostUSD(),
+		MaxTotalTokens:          m.config.LiveMaxTotalTokens(),
+		ApprovalStager:          in.ApprovalStager,
+		MemoryProposer:          in.MemoryProposer,
+		NoteProposer:            m.noteProposer,
 		// The finish nudge / BLOCKED texts name protocols/self-audit.md only when
 		// this bundle actually ships it.
 		AuditProtocolRef: AuditProtocolRef(m.protocolsDir),
@@ -2461,4 +2465,14 @@ func hostMemoryBytes() (uint64, error) {
 		return kb * 1024, nil
 	}
 	return 0, fmt.Errorf("MemTotal not found in /proc/meminfo")
+}
+
+// emailAttachmentSnapshotter binds tools.SnapshotEmailAttachments to one
+// conversation, staging the copies under the host-side outbound attachment
+// directory (tools.OutboundAttachmentStagingDir).
+func emailAttachmentSnapshotter(conversationID, emailAttachmentDir string) func(map[string]any) (func(), error) {
+	staging := tools.OutboundAttachmentStagingDir(emailAttachmentDir)
+	return func(args map[string]any) (func(), error) {
+		return tools.SnapshotEmailAttachments(conversationID, args, staging)
+	}
 }
