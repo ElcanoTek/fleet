@@ -53,6 +53,9 @@
     "jsx-a11y/no-redundant-roles": "error",
     "jsx-a11y/no-noninteractive-tabindex": "error",
     "react/immutability": "error",
+    // Markup reaches the DOM only as React elements (search previews are
+    // split into text + <mark> nodes, Markdown goes through react-markdown).
+    "react/no-danger": "error",
     "eslint/no-control-regex": "error"
   },
   "ignorePatterns": [
