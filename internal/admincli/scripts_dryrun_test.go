@@ -614,6 +614,46 @@ func TestUpdateFromSourceIsIsolatedLegacy(t *testing.T) {
 	}
 }
 
+// TestUpdateDryRunOnATaglessCheckout — CI checks the repo out shallow, with no
+// tags, so `--no-pull` has no release to reinstall there. The plan must still
+// print and exit 0 (the dry-run contract), naming that as the blocker rather
+// than dying.
+func TestUpdateDryRunOnATaglessCheckout(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := repoRootFromTest(t)
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	v, err := os.ReadFile(filepath.Join(root, "scripts", "version.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "scripts", "version.sh"), v, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@example.invalid", "-c", "user.name=t", "add", "."},
+		{"-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-q", "-m", "fixture"},
+	} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = src
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	out, err := runScript(t, []string{"SRC_DIR=" + src}, "update.sh", "--dry-run", "--no-pull")
+	if err != nil {
+		t.Fatalf("a dry run on a tagless checkout must exit 0: %v\n--- output ---\n%s", err, out)
+	}
+	if !strings.Contains(out, "BLOCKER: no release tag is reachable") || !strings.Contains(out, "a BLOCKER above would stop the real run") {
+		t.Errorf("the plan must name the missing release as its blocker\n--- output ---\n%s", out)
+	}
+}
+
 // TestUpdateRefusesABadTag — --tag selects which signed release is fetched and
 // is checked against the signed release.json; anything that is not exactly a
 // release tag is refused before the update starts.

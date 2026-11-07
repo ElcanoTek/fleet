@@ -482,15 +482,24 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   if [[ "$FROM_SOURCE" != "1" && -z "$RELEASE_TAG" ]]; then
     RELEASE_TAG="$("$SRC_DIR/scripts/version.sh" current 2>/dev/null || true)"
     [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == v* ]] || RELEASE_TAG="v${RELEASE_TAG}"
-    [[ "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]] \
-      || die "no release tag is reachable from ${SRC_DIR}'s HEAD, so --no-pull has no release to reinstall — name one: fleet update --no-pull --tag vYYYY.MM.DD.N"
+    if [[ ! "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]]; then
+      RELEASE_TAG=""
+      if [[ "$DRY_RUN" == "1" ]]; then
+        # A shallow or tagless checkout (CI's, a fresh --depth clone): the plan
+        # still prints, and says what the real run would stop on.
+        warn "[dry-run] BLOCKER: no release tag is reachable from ${SRC_DIR}'s HEAD, so --no-pull has no release to reinstall — the real run stops here (name one: --tag vYYYY.MM.DD.N)"
+        DRY_RUN_BLOCKED=1
+      else
+        die "no release tag is reachable from ${SRC_DIR}'s HEAD, so --no-pull has no release to reinstall — name one: fleet update --no-pull --tag vYYYY.MM.DD.N"
+      fi
+    fi
   fi
   if [[ "$REEXEC" == "1" ]]; then
     ok "post-self-update re-exec — fleet checkout already at ${after_sha:0:12}; continuing (client bundle still pulls)"
   elif [[ "$FROM_SOURCE" == "1" ]]; then
     ok "rebuild-only mode — skipping fetch, building ${after_sha:0:12}"
   else
-    ok "no-pull mode — skipping fetch, reinstalling release ${RELEASE_TAG}"
+    ok "no-pull mode — skipping fetch, reinstalling release ${RELEASE_TAG:-<none reachable>}"
   fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
