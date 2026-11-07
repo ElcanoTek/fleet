@@ -48,6 +48,27 @@ func TestResolveDSNsPrecedence(t *testing.T) {
 			chatFrom: DSNFromDBParts, schedFrom: DSNFromDBParts,
 		},
 		{
+			name:     "an IPv6 DB_HOST is bracketed in the authority",
+			env:      map[string]string{"DB_HOST": "2001:db8::1"},
+			chat:     "postgres://chat@[2001:db8::1]:5432/chat?sslmode=disable",
+			sched:    "postgres://fleet@[2001:db8::1]:5432/sched?sslmode=disable",
+			chatFrom: DSNFromDBParts, schedFrom: DSNFromDBParts,
+		},
+		{
+			name:     "a Unix-socket DB_HOST moves host and port into the query",
+			env:      map[string]string{"DB_HOST": "/var/run/postgresql"},
+			chat:     "postgres://chat@/chat?host=%2Fvar%2Frun%2Fpostgresql&port=5432&sslmode=disable",
+			sched:    "postgres://fleet@/sched?host=%2Fvar%2Frun%2Fpostgresql&port=5432&sslmode=disable",
+			chatFrom: DSNFromDBParts, schedFrom: DSNFromDBParts,
+		},
+		{
+			name:     "DB_PASSWORD keeps surrounding whitespace (an opaque secret)",
+			env:      map[string]string{"DB_HOST": " db ", "DB_PASSWORD": " pw "},
+			chat:     "postgres://chat:%20pw%20@db:5432/chat?sslmode=disable",
+			sched:    "postgres://fleet:%20pw%20@db:5432/sched?sslmode=disable",
+			chatFrom: DSNFromDBParts, schedFrom: DSNFromDBParts,
+		},
+		{
 			name:     "DB_USER/DB_NAME apply to both stores",
 			env:      map[string]string{"DB_USER": "app", "DB_NAME": "one"},
 			chat:     "postgres://app@localhost:5432/one?sslmode=disable",
@@ -85,7 +106,9 @@ func TestEnsureDistinctDatabases(t *testing.T) {
 		// is by host:port/db, so it must be refused.
 		{"shared DB_NAME via DB_* parts is refused", resolved(map[string]string{"DB_HOST": "db", "DB_NAME": "fleet"}), true},
 		{"same db, different user and query is refused", DSNs{Chat: "postgres://a@h:5432/x?sslmode=disable", Sched: "postgres://b:pw@h:5432/x?sslmode=require"}, true},
-		{"key=value DSNs are left to the drivers", DSNs{Chat: "host=h dbname=x", Sched: "host=h dbname=x"}, false},
+		{"identical key=value DSNs are refused", DSNs{Chat: "host=h dbname=x password=s3cret", Sched: "host=h dbname=x password=s3cret"}, true},
+		{"different key=value DSNs pass", DSNs{Chat: "host=h dbname=x", Sched: "host=h dbname=y"}, false},
+		{"one socket directory, one database name is refused", resolved(map[string]string{"DB_HOST": "/var/run/postgresql", "DB_NAME": "fleet"}), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,6 +118,9 @@ func TestEnsureDistinctDatabases(t *testing.T) {
 			}
 			if err != nil && !strings.Contains(err.Error(), "SEPARATE databases") {
 				t.Errorf("error %q does not explain the refusal", err)
+			}
+			if err != nil && strings.Contains(err.Error(), "s3cret") {
+				t.Errorf("error %q leaks the DSN's password", err)
 			}
 		})
 	}

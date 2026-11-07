@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strings"
@@ -59,10 +60,16 @@ func (d DSNs) SchedFromGeneric() bool {
 // are URL form with the password escaped.
 //
 // getenv supplies the values: ProcessEnv for the server, the admin CLI's
-// env-or-env-file lookup for its verbs. Values are whitespace-trimmed here;
-// quote stripping is getenv's job.
+// env-or-env-file lookup for its verbs. Values are whitespace-trimmed here,
+// except DB_PASSWORD, an opaque secret whose surrounding whitespace may be
+// part of it; quote stripping is getenv's job.
 func ResolveDSNs(getenv func(string) string) DSNs {
-	get := func(k string) string { return strings.TrimSpace(getenv(k)) }
+	get := func(k string) string {
+		if k == "DB_PASSWORD" {
+			return getenv(k)
+		}
+		return strings.TrimSpace(getenv(k))
+	}
 	var d DSNs
 	d.Chat, d.ChatFrom = firstDSN(get, "FLEET_CHAT_DATABASE_URL", "DATABASE_URL")
 	if d.Chat == "" {
@@ -103,11 +110,24 @@ func dbPartsDSN(get func(string) string, defaultUser, defaultName string) (strin
 	user = orDefault(user, defaultUser)
 	name = orDefault(name, defaultName)
 	ssl = orDefault(ssl, "disable")
-	auth := url.User(user).String()
+	u := &url.URL{Scheme: "postgres", User: url.User(user), Path: "/" + name}
 	if pass != "" {
-		auth = url.UserPassword(user, pass).String()
+		u.User = url.UserPassword(user, pass)
 	}
-	return fmt.Sprintf("postgres://%s@%s:%s/%s?sslmode=%s", auth, host, port, url.PathEscape(name), url.QueryEscape(ssl)), from
+	q := url.Values{}
+	if strings.HasPrefix(host, "/") {
+		// A Unix-socket directory has no place in a URL authority; the
+		// drivers take it (and the port, which names the socket file) as
+		// query parameters on an empty host.
+		q.Set("host", host)
+		q.Set("port", port)
+	} else {
+		// JoinHostPort brackets an IPv6 literal ("[2001:db8::1]:5432").
+		u.Host = net.JoinHostPort(host, port)
+	}
+	q.Set("sslmode", ssl)
+	u.RawQuery = q.Encode()
+	return u.String(), from
 }
 
 func orDefault(v, def string) string {
@@ -117,30 +137,47 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// DSNIdentity returns host:port/dbname for a postgres URL DSN, or "" when the
-// DSN is not a parseable URL (a key=value DSN is left to the drivers).
+// DSNIdentity returns host:port/dbname for a postgres URL DSN (a socket host
+// given as ?host=…&port=… counts as the host), or "" when the DSN is not a
+// parseable URL with a host; key=value DSNs are compared verbatim by
+// EnsureDistinctDatabases instead.
 func DSNIdentity(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
 	if dsn == "" {
 		return ""
 	}
 	u, err := url.Parse(dsn)
-	if err != nil || u.Host == "" {
+	if err != nil {
 		return ""
 	}
-	return u.Host + u.Path
+	host := u.Host
+	if host == "" {
+		if h := u.Query().Get("host"); h != "" {
+			host = net.JoinHostPort(h, u.Query().Get("port"))
+		}
+	}
+	if host == "" {
+		return ""
+	}
+	return host + u.Path
 }
 
 // EnsureDistinctDatabases fails when the chat and sched DSNs name the SAME
 // database. The two stores use structurally incompatible `users` schemas and
 // different migration runners, so sharing one database corrupts startup. Pass
 // the RESOLVED DSNs (ResolveDSNs) — comparing anything less misses the shared
-// DATABASE_URL and the shared-DB_NAME shapes. Best-effort on the URL form; a
-// key=value DSN is left to the drivers.
+// DATABASE_URL and the shared-DB_NAME shapes. URL DSNs compare by
+// host:port/dbname (so DSNs differing only in user or options still match);
+// any two identical DSNs — key=value form included — always match.
 func EnsureDistinctDatabases(chatDSN, schedDSN string) error {
-	c := DSNIdentity(chatDSN)
-	if c != "" && c == DSNIdentity(schedDSN) {
-		return fmt.Errorf("chat and sched must use SEPARATE databases (incompatible users schemas + migration runners) but both resolve to %q; set distinct FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL", c)
+	chatDSN, schedDSN = strings.TrimSpace(chatDSN), strings.TrimSpace(schedDSN)
+	// The message names host:port/db, never the DSN itself: a key=value DSN
+	// can carry the password.
+	same := "the same DSN"
+	if c := DSNIdentity(chatDSN); c != "" && c == DSNIdentity(schedDSN) {
+		same = fmt.Sprintf("%q", c)
+	} else if chatDSN == "" || chatDSN != schedDSN {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("chat and sched must use SEPARATE databases (incompatible users schemas + migration runners) but both resolve to %s; set distinct FLEET_CHAT_DATABASE_URL and FLEET_SCHED_DATABASE_URL", same)
 }
