@@ -14,6 +14,7 @@ release.yml runs three jobs after CI goes green on a push to `main`:
 | `tag` | `contents: write` | mints `vYYYY.MM.DD.N` on the certified SHA (unchanged) |
 | `build` (amd64 on `ubuntu-24.04`, arm64 on `ubuntu-24.04-arm`) | `contents: read` only | web bundle; static `fleet` binary; the host-executor, CGO, version and web-bundle assertions; `fleet-sandbox` and `fleet` images; SPDX SBOMs; the stamped Helm chart |
 | `publish` | contents, packages, id-token, attestations: write | scans the image archives with Grype (CI's pin and policy) before anything is pushed, pushes multi-arch images, signs everything, attaches SBOM attestations and SLSA provenance, writes `release.json` + `SHA256SUMS`, publishes the GitHub release |
+| `promote-latest` (one at a time: concurrency group `release-promote-latest`) | `contents: read`, `packages: write` | the only writer of the `:latest` image tags: recomputes the newest complete published release, verifies its `SHA256SUMS` signature and `release.json`, and points `fleet:latest` then `fleet-sandbox:latest` at the digests it records (a no-op when they already match) |
 
 The build job is the only one that runs the release's code, and it holds no
 write scope. The publish job runs no code from the release: it checks out the
@@ -204,11 +205,16 @@ publish job checks GHCR again right before it pushes. Recovering a partial
 publish is deliberate: delete it and re-run, or let the next green push
 release. Overlapping runs both publish: a tag a newer one overtook while it
 was building still gets its release, so no signed image is left without a
-release naming it. Latest and `:latest` follow the newest successfully
+release naming it. The Latest mark follows the newest successfully
 PUBLISHED release (non-draft, with `SHA256SUMS`;
 `scripts/release-newer-published.sh`), checked before and after the create —
 not the newest tag, so a newer tag whose build failed does not keep a complete
-release from being Latest. Retention counts published releases. Tagging itself
+release from being Latest. The `:latest` image tags follow the same rule but
+are moved only by the serialized `promote-latest` job
+(`scripts/release-promote-latest.sh`), which never promotes "its own" run's
+release: overlapping publish jobs cannot move `:latest` back to an older
+digest or leave `fleet:latest` and `fleet-sandbox:latest` on different
+releases. Retention counts published releases. Tagging itself
 retries with jittered backoff until an ordinal is free (40 attempts as a
 backstop), so any number of green pushes landing together all get tagged.
 

@@ -777,7 +777,7 @@ jobs:
           # successfully published release — and clear this one's mark if one
           # appeared: that newer release asked for Latest itself.
           if ! newer="$(scripts/release-newer-published.sh "${TAG}")"; then
-            echo "::warning::could not list the published releases after publishing ${TAG}; leaving its Latest mark and the :latest images as they are."
+            echo "::warning::could not list the published releases after publishing ${TAG}; leaving its Latest mark as it is."
           elif [ -n "${newer}" ]; then
             if [ "${latest_flag}" = "--latest" ]; then
               echo "::notice::${TAG} was superseded by $(printf '%s' "${newer}" | tail -n 1) while publishing; clearing its Latest mark."
@@ -792,13 +792,10 @@ jobs:
               gh release edit "${TAG}" --latest \
                 || echo "::warning::could not mark ${TAG} Latest; the next release sets it."
             fi
-            # :latest follows the newest release only, by digest (no
-            # re-push: --preserve-digests copies the signed index as is).
-            for name in fleet fleet-sandbox; do
-              skopeo copy --all --preserve-digests \
-                "docker://ghcr.io/elcanotek/${name}:${TAG}" "docker://ghcr.io/elcanotek/${name}:latest"
-            done
           fi
+          # The :latest image tags are NOT moved here: overlapping publish
+          # jobs would race them (an older digest last, or the two repos on
+          # different releases). The promote-latest job below owns them.
 
           # Keep the newest RETAIN release OBJECTS — the rollback window for
           # `fleet update --tag <older> --allow-downgrade` (ADR-0100). It was
@@ -855,3 +852,62 @@ jobs:
           if [ "${prune_failed}" -ne 0 ]; then
             echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than ${RETAIN} entries."
           fi
+
+  # ── promote-latest: the ONLY writer of the :latest image tags ───────────────
+  #
+  # Overlapping publish jobs (two green pushes close together) must not race
+  # :latest: the slower one could move it back to an older digest, or leave
+  # fleet:latest and fleet-sandbox:latest on different releases. So promotion
+  # is one serialized job, and it never promotes "this run's" release: it
+  # recomputes the newest COMPLETE published release from the GitHub API,
+  # verifies that release's SHA256SUMS signature and its release.json against
+  # it, and points both repositories' :latest at the digests release.json
+  # records — fleet first, then the sandbox — skipping any already there
+  # (scripts/release-promote-latest.sh). The concurrency group queues runs
+  # without cancelling the running one; a newer queued run replacing an older
+  # pending one is exactly right, because whichever runs last recomputes the
+  # newest release anyway.
+  promote-latest:
+    name: Point :latest at the newest published release
+    needs: [tag, publish]
+    if: ${{ needs.publish.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    concurrency:
+      group: release-promote-latest
+      cancel-in-progress: false
+    permissions:
+      contents: read  # read releases and their release.json / SHA256SUMS
+      packages: write # retag ghcr.io/elcanotek/{fleet,fleet-sandbox}:latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      FLEET_IMAGE: ghcr.io/elcanotek/fleet
+      SANDBOX_IMAGE: ghcr.io/elcanotek/fleet-sandbox
+      SIGNER_IDENTITY: https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main
+      OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      # Default branch only (trusted code, as in the tag and publish jobs).
+      - name: Check out the default branch (trusted code)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install the pinned cosign
+        run: |
+          set -euo pipefail
+          lock=internal/release/cosign.lock
+          ver="$(awk '$1=="version"{print $2}' "${lock}")"
+          want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
+          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | skopeo login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      - name: Point :latest at the newest complete published release
+        run: scripts/release-promote-latest.sh

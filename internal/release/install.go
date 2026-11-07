@@ -122,15 +122,22 @@ func (o *InstallOptions) logf(format string, a ...any) {
 //     still rolls back — and the box ends on a binary that answered ready, or
 //     the error says plainly that neither did.
 func Install(ctx context.Context, o InstallOptions) (InstallResult, error) {
-	live := filepath.Join(o.InstallDir, liveName)
-	prev := filepath.Join(o.InstallDir, prevName)
-	res := InstallResult{Live: live}
+	res := InstallResult{Live: filepath.Join(o.InstallDir, liveName)}
 	if err := os.MkdirAll(o.InstallDir, 0o755); err != nil { //nolint:gosec // G301: the install dir holds a world-executable binary.
 		return res, err
 	}
-	if err := checkInstallDir(o.InstallDir); err != nil {
+	// Everything below goes through the RESOLVED, validated path: a symlink
+	// on the way to the configured one could be retargeted after the check,
+	// and only the real directory's ancestors were checked.
+	dir, err := checkInstallDir(o.InstallDir)
+	if err != nil {
 		return res, err
 	}
+	o.InstallDir = dir
+	afterInstallDirCheck()
+	live := filepath.Join(o.InstallDir, liveName)
+	prev := filepath.Join(o.InstallDir, prevName)
+	res.Live = live
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
 		return res, err
@@ -229,14 +236,18 @@ func (o *InstallOptions) rollbackContext(ctx context.Context) (context.Context, 
 // under its own bounded context: interrupting the command after the swap must
 // not leave the service unrestarted on a binary nobody checked.
 func Rollback(ctx context.Context, o InstallOptions) error {
-	live := filepath.Join(o.InstallDir, liveName)
-	prev := filepath.Join(o.InstallDir, prevName)
-	if _, err := os.Stat(prev); err != nil {
-		return fmt.Errorf("no previous binary at %s to roll back to", prev)
+	if _, err := os.Stat(filepath.Join(o.InstallDir, prevName)); err != nil {
+		return fmt.Errorf("no previous binary at %s to roll back to", filepath.Join(o.InstallDir, prevName))
 	}
-	if err := checkInstallDir(o.InstallDir); err != nil {
+	// As in Install: only the resolved, validated path from here on.
+	dir, err := checkInstallDir(o.InstallDir)
+	if err != nil {
 		return err
 	}
+	o.InstallDir = dir
+	afterInstallDirCheck()
+	live := filepath.Join(o.InstallDir, liveName)
+	prev := filepath.Join(o.InstallDir, prevName)
 	unlock, err := lockDir(o.InstallDir)
 	if err != nil {
 		return err
@@ -614,38 +625,47 @@ func ProbeTLSConfig(url, mode, serverName, certFile string) (*tls.Config, error)
 	return &tls.Config{ServerName: serverName, RootCAs: roots, MinVersion: tls.VersionTLS12}, nil
 }
 
+// afterInstallDirCheck is a test seam: it runs right after the install dir is
+// validated, where a test retargets a symlink to prove nothing later follows it.
+var afterInstallDirCheck = func() {}
+
 // checkInstallDir requires the install dir — whose fleet and fleet.prev are
 // executed as the service — to be writable only by root or this user, and
 // reachable only through directories others cannot rename entries in (the
 // CheckPrivateDir rule for parents). Unlike a staging dir it may be readable
-// (0755): the service user runs the binary from it.
-func checkInstallDir(dir string) error {
+// (0755): the service user runs the binary from it. It returns the resolved
+// directory it checked, which is the only path the caller may use afterwards.
+func checkInstallDir(dir string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
-		return fmt.Errorf("install dir %s: %w", dir, err)
+		return "", fmt.Errorf("install dir %s: %w", dir, err)
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return "", err
 	}
 	fi, err := os.Lstat(resolved)
 	if err != nil {
-		return err
+		return "", err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !fi.IsDir() || !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) || fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("install dir %s must be a directory owned by root (or uid %d) that no one else can write to (is %v) — refusing it", resolved, os.Geteuid(), fi.Mode())
+		return "", fmt.Errorf("install dir %s must be a directory owned by root (or uid %d) that no one else can write to (is %v) — refusing it", resolved, os.Geteuid(), fi.Mode())
 	}
 	for p := filepath.Dir(resolved); ; p = filepath.Dir(p) {
 		fi, err := os.Lstat(p)
 		if err != nil {
-			return err
+			return "", err
 		}
 		st, ok := fi.Sys().(*syscall.Stat_t)
 		if !ok || (st.Uid != 0 && int(st.Uid) != os.Geteuid()) {
-			return fmt.Errorf("install dir %s sits under %s, owned by another user — refusing it", resolved, p)
+			return "", fmt.Errorf("install dir %s sits under %s, owned by another user — refusing it", resolved, p)
 		}
 		if fi.Mode().Perm()&0o022 != 0 && fi.Mode()&os.ModeSticky == 0 {
-			return fmt.Errorf("install dir %s sits under %s (mode %v), which others can write to — refusing it", resolved, p, fi.Mode())
+			return "", fmt.Errorf("install dir %s sits under %s (mode %v), which others can write to — refusing it", resolved, p, fi.Mode())
 		}
 		if p == "/" || p == filepath.Dir(p) {
-			return nil
+			return resolved, nil
 		}
 	}
 }

@@ -28,6 +28,56 @@ func TestInstallRefusesAnInstallDirOthersCanWrite(t *testing.T) {
 	}
 }
 
+// TestInstallUsesTheValidatedInstallDir — the install dir is checked through
+// its symlinks, and every later operation (lock, link, copy, rename) goes to
+// the directory that was checked: a link retargeted after the check cannot
+// redirect the install, or a rollback.
+func TestInstallUsesTheValidatedInstallDir(t *testing.T) {
+	dir, bin, svc, p := setup(t, "OLD")
+	elsewhere := t.TempDir()
+	link := filepath.Join(t.TempDir(), "opt-fleet")
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	afterInstallDirCheck = func() {
+		_ = os.Remove(link)
+		if err := os.Symlink(elsewhere, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer func() { afterInstallDirCheck = func() {} }()
+	o := opts(link, bin, svc, p)
+	o.NoRestart = true
+	if _, err := Install(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dir, "fleet")); got != "NEW" {
+		t.Errorf("validated dir holds %q, want NEW", got)
+	}
+	if got := read(t, filepath.Join(dir, "fleet.prev")); got != "OLD" {
+		t.Errorf("validated dir's fleet.prev = %q, want OLD", got)
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Errorf("the retargeted link's directory was written: %v", entries)
+	}
+
+	// Rollback follows the same rule.
+	_ = os.Remove(link)
+	if err := os.Symlink(dir, link); err != nil {
+		t.Fatal(err)
+	}
+	o.Binary = ""
+	if err := Rollback(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, filepath.Join(dir, "fleet")); got != "OLD" {
+		t.Errorf("after rollback the validated dir holds %q, want OLD", got)
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Errorf("a rollback wrote into the retargeted link's directory: %v", entries)
+	}
+}
+
 func TestCosignIsRunOnlyFromAPrivateVerifiedCopy(t *testing.T) {
 	cache := filepath.Join(t.TempDir(), "cache")
 	src := filepath.Join(t.TempDir(), "cosign")

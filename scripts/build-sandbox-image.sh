@@ -74,15 +74,12 @@ MANIFEST="$BUNDLE_DIR/manifest.yaml"
 # shellcheck source=lib/sandbox-bundle.sh
 . "$REPO_ROOT/scripts/lib/sandbox-bundle.sh"
 manifest_value() { fleet_sandbox_manifest_value "$@"; }
-CONTAINERFILE="$(fleet_sandbox_containerfile "$BUNDLE_DIR")"
 # A bundle that ships no Containerfile AND names none customizes nothing: its
 # sandbox IS the generic image (fleet_sandbox_uses_release_image agrees), so a
 # build on the box — --from-source, or no release image reachable — builds the
 # generic bundle's Containerfile under the bundle's own sandbox.tag. A bundle
 # that NAMES a missing Containerfile still fails below: that is a broken bundle.
-if [[ ! -f "$CONTAINERFILE" ]] && ! fleet_sandbox_containerfile_named "$BUNDLE_DIR"; then
-    CONTAINERFILE="$(fleet_sandbox_containerfile "$REPO_ROOT/config/default")"
-fi
+CONTAINERFILE="$(fleet_sandbox_build_containerfile "$BUNDLE_DIR" "$REPO_ROOT/config/default")"
 
 # Image name/tag: explicit IMAGE_NAME wins; else derive from the manifest's
 # sandbox.tag (name:tag). Positional $1 overrides the tag.

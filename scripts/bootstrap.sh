@@ -1335,7 +1335,11 @@ elif [[ "$sandbox_published" == "1" ]]; then
   fi
 else
   sandbox_base=""
-  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$SANDBOX_CONTAINERFILE"; then
+  # What an on-box build uses: the bundle's Containerfile, or — for a bundle
+  # that ships none and names none — the generic one, resolved by the helper
+  # build-sandbox-image.sh uses too, so both build paths build the same thing.
+  SANDBOX_BUILD_CF="$(fleet_sandbox_build_containerfile "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default")"
+  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$SANDBOX_BUILD_CF"; then
     sandbox_base="$("$FLEET_RELEASE_BIN" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
       || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify (above)"
     info "the bundle layers on the release's verified sandbox image ${sandbox_base}"
@@ -1347,13 +1351,17 @@ else
     info "building as ${SERVICE_USER} (rootless) → ${SANDBOX_TAG}"
     _base_args=()
     [[ -n "$sandbox_base" ]] && _base_args=(--build-arg "FLEET_SANDBOX_BASE=${sandbox_base}")
-    if sandbox_podman build --pull=newer "${_base_args[@]}" -t "$SANDBOX_TAG" -f "$SANDBOX_CONTAINERFILE" "$(dirname "$SANDBOX_CONTAINERFILE")"; then
-      ok "sandbox image ${SANDBOX_TAG} built into ${SERVICE_USER}'s rootless store"
+    if sandbox_podman build --pull=newer "${_base_args[@]}" -t "$SANDBOX_TAG" -f "$SANDBOX_BUILD_CF" "$(dirname "$SANDBOX_BUILD_CF")"; then
+      ok "sandbox image ${SANDBOX_TAG} built from ${SANDBOX_BUILD_CF} into ${SERVICE_USER}'s rootless store"
     else
-      warn "rootless sandbox build (as ${SERVICE_USER}) failed — fleet will have no runnable sandbox image."
+      # Enabling the service without a sandbox image starts a fleet whose
+      # every tool call fails: stop here instead.
+      die "rootless sandbox build (as ${SERVICE_USER}) of ${SANDBOX_BUILD_CF} failed — not enabling ${SERVICE_NAME} without a runnable sandbox image"
     fi
   elif FLEET_CLIENT_CONFIG_DIR="${CLIENT_CONFIG_DIR}" FLEET_SANDBOX_BASE="$sandbox_base" "$(dirname "$0")/build-sandbox-image.sh"; then
-    ok "sandbox image built from ${SANDBOX_CONTAINERFILE}"
+    ok "sandbox image built from ${SANDBOX_BUILD_CF}"
+  elif [[ "$ENABLE_SERVICE" == "1" ]]; then
+    die "sandbox image build failed — not enabling ${SERVICE_NAME} without a runnable sandbox image"
   else
     warn "sandbox image build failed — run scripts/build-sandbox-image.sh manually before starting fleet."
   fi

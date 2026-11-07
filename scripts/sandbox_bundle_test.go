@@ -163,3 +163,44 @@ func TestBuildSandboxImageFallsBackToTheGenericContainerfile(t *testing.T) {
 		t.Errorf("want a missing-Containerfile error, got:\n%s", out)
 	}
 }
+
+// TestBootstrapBuildsTheSameContainerfile — bootstrap's direct rootless build
+// (the --enable-service path) resolves its Containerfile with the helper
+// build-sandbox-image.sh uses, so a bundle that ships none builds the generic
+// one there too; and a failed build stops a bootstrap that enables the service.
+func TestBootstrapBuildsTheSameContainerfile(t *testing.T) {
+	root := repoRoot(t)
+	resolve := func(bundle string) string {
+		t.Helper()
+		cmd := exec.Command("bash", "-c", `set -u; . "$ROOT/scripts/lib/sandbox-bundle.sh"; fleet_sandbox_build_containerfile "$B" "$ROOT/config/default"`)
+		cmd.Env = append(os.Environ(), "ROOT="+root, "B="+bundle)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(out)
+	}
+	if got, want := resolve(sandboxBundle(t, "", map[string]string{})), filepath.Join(root, "config/default/sandbox/Containerfile"); got != want {
+		t.Errorf("no Containerfile, none named: got %s, want the generic %s", got, want)
+	}
+	own := sandboxBundle(t, "img/Containerfile", map[string]string{"img/Containerfile": "FROM registry.invalid/base\n"})
+	if got := resolve(own); got != filepath.Join(own, "img/Containerfile") {
+		t.Errorf("own Containerfile: got %s", got)
+	}
+	named := sandboxBundle(t, "img/Containerfile", map[string]string{})
+	if got := resolve(named); got != filepath.Join(named, "img/Containerfile") {
+		t.Errorf("a named, missing Containerfile must come back as is (so the build fails), got %s", got)
+	}
+
+	boot := readFile(t, root, "scripts/bootstrap.sh")
+	if !strings.Contains(boot, `SANDBOX_BUILD_CF="$(fleet_sandbox_build_containerfile "$CLIENT_CONFIG_DIR" "$REPO_ROOT/config/default")"`) ||
+		!strings.Contains(boot, `-f "$SANDBOX_BUILD_CF" "$(dirname "$SANDBOX_BUILD_CF")"`) {
+		t.Error("bootstrap's rootless build does not use fleet_sandbox_build_containerfile")
+	}
+	if strings.Contains(boot, `warn "rootless sandbox build`) {
+		t.Error("a failed rootless build while enabling the service must stop bootstrap, not warn")
+	}
+	if !strings.Contains(readFile(t, root, "scripts/build-sandbox-image.sh"), `fleet_sandbox_build_containerfile "$BUNDLE_DIR" "$REPO_ROOT/config/default"`) {
+		t.Error("build-sandbox-image.sh does not use fleet_sandbox_build_containerfile")
+	}
+}

@@ -43,6 +43,24 @@ fleet_sandbox_containerfile_named() {
   [[ -n "$(fleet_sandbox_manifest_value containerfile "$1/manifest.yaml")" ]]
 }
 
+# fleet_sandbox_build_containerfile BUNDLE_DIR GENERIC_BUNDLE_DIR — the
+# Containerfile an on-box build of BUNDLE_DIR's sandbox uses (its build
+# context is the file's directory). The bundle's own when it ships one; for a
+# bundle that ships none AND names none, the generic bundle's — such a bundle
+# customizes nothing, so its sandbox IS the generic image
+# (fleet_sandbox_uses_release_image agrees). A bundle that NAMES a missing
+# Containerfile gets that missing path back: the build must fail on it, never
+# quietly build the generic image instead. build-sandbox-image.sh and
+# bootstrap.sh both resolve the build through this.
+fleet_sandbox_build_containerfile() {
+  local cf
+  cf="$(fleet_sandbox_containerfile "$1")"
+  if [[ ! -f "$cf" ]] && ! fleet_sandbox_containerfile_named "$1"; then
+    cf="$(fleet_sandbox_containerfile "$2")"
+  fi
+  printf '%s' "$cf"
+}
+
 # fleet_sandbox_uses_release_image BUNDLE_DIR GENERIC_BUNDLE_DIR — true when
 # the release's published sandbox image IS this bundle's image: the bundle
 # ships no Containerfile (and names none), or its Containerfile and every file
