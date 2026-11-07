@@ -51,7 +51,7 @@ func runScript(t *testing.T, extraEnv []string, script string, args ...string) (
 	cmd.Dir = root
 	// A dry-run reads the bundle manifest; point at the in-repo generic bundle so
 	// the test is self-contained and never depends on an external checkout.
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(scriptEnviron(),
 		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
 		"TERM=dumb",
 	)
@@ -172,7 +172,7 @@ func TestBootstrapUnderXtraceHidesDBPasswords(t *testing.T) {
 	root := repoRootFromTest(t)
 	cmd := exec.Command(bash, "-x", filepath.Join(root, "scripts", "bootstrap.sh"), "--dry-run", "--postgres=local")
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(scriptEnviron(),
 		"FLEET_CLIENT_CONFIG_DIR="+filepath.Join(root, "config", "default"),
 		"TERM=dumb",
 		"FLEET_ENV_FILE="+envFile,

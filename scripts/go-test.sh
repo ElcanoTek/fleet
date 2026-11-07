@@ -72,6 +72,10 @@ classify() {
       echo both ;;
     github.com/ElcanoTek/fleet/cmd/fleet)
       echo both ;;
+    # Creates scratch databases on the server the chat/sched test DSNs name
+    # (and runs both stores' migrations in one of them, #2049).
+    github.com/ElcanoTek/fleet/internal/dbschema)
+      echo both ;;
     github.com/ElcanoTek/fleet/internal/runner|github.com/ElcanoTek/fleet/internal/runner/*)
       echo sched ;;
     github.com/ElcanoTek/fleet/internal/sched|github.com/ElcanoTek/fleet/internal/sched/*)

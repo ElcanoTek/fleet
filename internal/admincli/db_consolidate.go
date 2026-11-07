@@ -216,7 +216,7 @@ type consolidatePlan struct {
 	targetExists   bool
 	targetNonEmpty bool
 	leftoverTmp    []string
-	sourceSize     int64
+	sourceSize     uint64
 	inv            map[string]inventory // keyed by label
 	passwords      []string             // for redaction only
 }
@@ -422,17 +422,59 @@ func (p *consolidatePlan) redact(s string) string {
 
 // ── preflight ───────────────────────────────────────────────────────────────
 
-func preflight(ctx context.Context, o consolidateOptions, d consolidateDeps, p *consolidatePlan) []check {
-	var cs []check
-	add := func(ok bool, label, detail string) { cs = append(cs, check{ok: ok, label: label, detail: detail}) }
-	warn := func(label, detail string) { cs = append(cs, check{ok: true, warn: true, label: label, detail: detail}) }
+// preflighter collects the preflight verdicts. Each step adds its checks; a
+// step that leaves nothing below it able to run returns false.
+type preflighter struct {
+	ctx    context.Context
+	o      consolidateOptions
+	d      consolidateDeps
+	p      *consolidatePlan
+	cs     []check
+	exists map[string]string // database -> owner, for the names the plan uses
+	srcOK  bool
+}
 
-	// fleet and the units that touch the databases must be stopped.
+func (f *preflighter) add(ok bool, label, detail string) {
+	f.cs = append(f.cs, check{ok: ok, label: label, detail: detail})
+}
+
+func (f *preflighter) warn(label, detail string) {
+	f.cs = append(f.cs, check{ok: true, warn: true, label: label, detail: detail})
+}
+
+func (f *preflighter) q(db, sql string) ([][]string, error) { return f.d.pg.Query(f.ctx, db, sql) }
+
+// q1 is q for a query that must return exactly one row of cols columns.
+func (f *preflighter) q1(db, sql string, cols int) ([]string, error) {
+	rows, err := f.q(db, sql)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) != 1 || len(rows[0]) != cols {
+		return nil, fmt.Errorf("unexpected result from %s: %d row(s)", db, len(rows))
+	}
+	return rows[0], nil
+}
+
+func preflight(ctx context.Context, o consolidateOptions, d consolidateDeps, p *consolidatePlan) []check {
+	f := &preflighter{ctx: ctx, o: o, d: d, p: p}
+	f.units()
+	if f.tools() && f.databases() {
+		f.connections()
+		f.sources()
+		f.target()
+		f.diskAndInventory()
+	}
+	return f.cs
+}
+
+// units: fleet and the units that touch the databases must be stopped.
+func (f *preflighter) units() {
 	units := []string{serviceName("") + ".service", "fleet-backup.service", "fleet-maintenance.service", "fleet-backup.timer", "fleet-maintenance.timer"}
 	var running []string
 	systemdSeen := false
 	for _, u := range units {
-		st := d.unitState(u)
+		st := f.d.unitState(u)
 		if st != "" {
 			systemdSeen = true
 		}
@@ -443,180 +485,200 @@ func preflight(ctx context.Context, o consolidateOptions, d consolidateDeps, p *
 	}
 	switch {
 	case !systemdSeen:
-		warn("fleet services stopped", "systemd not available; relying on the connection check below")
+		f.warn("fleet services stopped", "systemd not available; relying on the connection check below")
 	case len(running) > 0:
-		add(false, "fleet services stopped", "still running: "+strings.Join(running, ", ")+" — stop them: systemctl stop "+strings.Join(stripStates(running), " "))
+		f.add(false, "fleet services stopped", "still running: "+strings.Join(running, ", ")+" — stop them: systemctl stop "+strings.Join(stripStates(running), " "))
 	default:
-		add(true, "fleet services stopped", strings.Join(units, ", ")+" inactive")
+		f.add(true, "fleet services stopped", strings.Join(units, ", ")+" inactive")
 	}
+}
 
-	if err := d.pg.Check(ctx); err != nil {
-		add(false, "postgres client tools", err.Error())
-		return cs // nothing below can run
+// tools: the client tools run, the server answers, and pg_dump is new
+// enough for it.
+func (f *preflighter) tools() bool {
+	if err := f.d.pg.Check(f.ctx); err != nil {
+		f.add(false, "postgres client tools", err.Error())
+		return false
 	}
-	add(true, "postgres client tools", "psql, pg_dump, pg_restore run as the postgres user")
-
-	q := func(db, sql string) ([][]string, error) { return d.pg.Query(ctx, db, sql) }
-	// q1 is q for a query that must return exactly one row of cols columns.
-	q1 := func(db, sql string, cols int) ([]string, error) {
-		rows, err := q(db, sql)
-		if err != nil {
-			return nil, err
-		}
-		if len(rows) != 1 || len(rows[0]) != cols {
-			return nil, fmt.Errorf("unexpected result from %s: %d row(s)", db, len(rows))
-		}
-		return rows[0], nil
+	f.add(true, "postgres client tools", "psql, pg_dump, pg_restore run as the postgres user")
+	row, err := f.q1("postgres", `SHOW server_version_num`, 1)
+	if err != nil {
+		f.add(false, "server reachable as superuser", err.Error())
+		return false
 	}
-
-	// The server is reachable and pg_dump is new enough for it.
-	rows, err := q("postgres", `SHOW server_version_num`)
-	if err != nil || len(rows) != 1 {
-		add(false, "server reachable as superuser", fmt.Sprintf("%v", err))
-		return cs
+	serverMajor := 0
+	if n, err := strconv.Atoi(row[0]); err == nil {
+		serverMajor = n / 10000
 	}
-	serverNum, _ := strconv.Atoi(rows[0][0])
-	clientMajor, err := d.pg.ClientMajor(ctx)
+	clientMajor, err := f.d.pg.ClientMajor(f.ctx)
 	switch {
 	case err != nil:
-		add(false, "pg_dump version", err.Error())
-	case clientMajor < serverNum/10000:
-		add(false, "pg_dump version", fmt.Sprintf("pg_dump %d is older than the server (%d); install the matching client", clientMajor, serverNum/10000))
+		f.add(false, "pg_dump version", err.Error())
+	case clientMajor < serverMajor:
+		f.add(false, "pg_dump version", fmt.Sprintf("pg_dump %d is older than the server (%d); install the matching client", clientMajor, serverMajor))
 	default:
-		add(true, "pg_dump version", fmt.Sprintf("client %d, server %d", clientMajor, serverNum/10000))
+		f.add(true, "pg_dump version", fmt.Sprintf("client %d, server %d", clientMajor, serverMajor))
 	}
+	return true
+}
 
-	// The databases and the role.
+// databases: which of the plan's databases exist, the sources among them,
+// and the target role.
+func (f *preflighter) databases() bool {
+	p := f.p
 	names := []string{p.chat.database, p.sched.database, p.target, p.tmpDB(p.chat), p.tmpDB(p.sched)}
-	rows, err = q("postgres", `SELECT datname, pg_get_userbyid(datdba) FROM pg_database WHERE datname IN (`+sqlList(names)+`)`)
+	rows, err := f.q("postgres", `SELECT datname, pg_get_userbyid(datdba) FROM pg_database WHERE datname IN (`+sqlList(names)+`)`)
 	if err != nil {
-		add(false, "list databases", err.Error())
-		return cs
+		f.add(false, "list databases", err.Error())
+		return false
 	}
-	exists := map[string]string{}
+	f.exists = map[string]string{}
 	for _, r := range rows {
-		exists[r[0]] = r[1]
-	}
-	srcOK := true
-	for _, s := range []pgSource{p.chat, p.sched} {
-		if _, ok := exists[s.database]; !ok {
-			add(false, s.label+" source exists", fmt.Sprintf("database %q not found", s.database))
-			srcOK = false
+		if len(r) == 2 {
+			f.exists[r[0]] = r[1]
 		}
 	}
-	rows, err = q("postgres", `SELECT 1 FROM pg_roles WHERE rolname = `+sqlLit(p.owner))
-	add(err == nil && len(rows) == 1, "target owner role exists", fmt.Sprintf("role %q (the sched DSN's user)", p.owner))
+	f.srcOK = true
+	for _, s := range []pgSource{p.chat, p.sched} {
+		if _, ok := f.exists[s.database]; !ok {
+			f.add(false, s.label+" source exists", fmt.Sprintf("database %q not found", s.database))
+			f.srcOK = false
+		}
+	}
+	rows, err = f.q("postgres", `SELECT 1 FROM pg_roles WHERE rolname = `+sqlLit(p.owner))
+	f.add(err == nil && len(rows) == 1, "target owner role exists", fmt.Sprintf("role %q (the sched DSN's user)", p.owner))
+	return true
+}
 
-	// No client connections: not to the sources (CREATE DATABASE … TEMPLATE
-	// needs that, and a writer would make the copy stale), not to the target.
-	rows, err = q("postgres", `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
+// connections: no client may be connected to a source (CREATE DATABASE …
+// TEMPLATE needs that, and a writer would make the copy stale) or the target.
+func (f *preflighter) connections() {
+	p := f.p
+	rows, err := f.q("postgres", `SELECT datname, usename, coalesce(application_name, ''), count(*) FROM pg_stat_activity
 		WHERE datname IN (`+sqlList([]string{p.chat.database, p.sched.database, p.target})+`) AND pid <> pg_backend_pid()
 		GROUP BY 1, 2, 3 ORDER BY 1`)
-	if err != nil {
-		add(false, "no client connections", err.Error())
-	} else if len(rows) > 0 {
+	switch {
+	case err != nil:
+		f.add(false, "no client connections", err.Error())
+	case len(rows) > 0:
 		var who []string
 		for _, r := range rows {
-			who = append(who, fmt.Sprintf("%s: %s connection(s) as %s (%s)", r[0], r[3], r[1], r[2]))
-		}
-		add(false, "no client connections", strings.Join(who, "; ")+" — stop whatever holds them")
-	} else {
-		add(true, "no client connections", "none to "+p.chat.database+", "+p.sched.database+" or "+p.target)
-	}
-
-	// The sources are legacy fleet stores, not already in schema mode, and
-	// the sched one is not dirty.
-	if srcOK {
-		for _, s := range []pgSource{p.chat, p.sched} {
-			row, err := q1(s.database, `SELECT to_regclass('public.schema_migrations') IS NOT NULL,
-				(SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched'))`, 2)
-			switch {
-			case err != nil:
-				add(false, s.label+" source is a legacy store", err.Error())
-			case row[0] != "t":
-				add(false, s.label+" source is a legacy store", fmt.Sprintf("%q has no public.schema_migrations — not a fleet store", s.database))
-			case row[1] != "0":
-				add(false, s.label+" source is a legacy store", fmt.Sprintf("%q already has a chat or sched schema", s.database))
-			default:
-				add(true, s.label+" source is a legacy store", fmt.Sprintf("%q, tables in public", s.database))
+			if len(r) == 4 {
+				who = append(who, fmt.Sprintf("%s: %s connection(s) as %s (%s)", r[0], r[3], r[1], r[2]))
 			}
 		}
-		rows, err := q(p.sched.database, `SELECT coalesce(bool_or(dirty), false) FROM public.schema_migrations`)
-		if err == nil && len(rows) == 1 && rows[0][0] == "t" {
-			add(false, "sched migrations clean", "the sched database is DIRTY (a migration failed); fix it with `fleet migrate force` first")
+		f.add(false, "no client connections", strings.Join(who, "; ")+" — stop whatever holds them")
+	default:
+		f.add(true, "no client connections", "none to "+p.chat.database+", "+p.sched.database+" or "+p.target)
+	}
+}
+
+// sources: both are legacy fleet stores, not already in schema mode, and the
+// sched one is not dirty.
+func (f *preflighter) sources() {
+	if !f.srcOK {
+		return
+	}
+	for _, s := range []pgSource{f.p.chat, f.p.sched} {
+		label := s.label + " source is a legacy store"
+		row, err := f.q1(s.database, `SELECT to_regclass('public.schema_migrations') IS NOT NULL,
+			(SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched'))`, 2)
+		switch {
+		case err != nil:
+			f.add(false, label, err.Error())
+		case row[0] != "t":
+			f.add(false, label, fmt.Sprintf("%q has no public.schema_migrations — not a fleet store", s.database))
+		case row[1] != "0":
+			f.add(false, label, fmt.Sprintf("%q already has a chat or sched schema", s.database))
+		default:
+			f.add(true, label, fmt.Sprintf("%q, tables in public", s.database))
 		}
 	}
+	rows, err := f.q(f.p.sched.database, `SELECT coalesce(bool_or(dirty), false) FROM public.schema_migrations`)
+	if err == nil && len(rows) == 1 && len(rows[0]) == 1 && rows[0][0] == "t" {
+		f.add(false, "sched migrations clean", "the sched database is DIRTY (a migration failed); fix it with `fleet migrate force` first")
+	}
+}
 
-	// The target is free.
-	if owner, ok := exists[p.target]; ok {
+// target: absent, or owned by the target role with nothing in public and
+// empty chat/sched schemas (--force-clean accepts a partly filled one);
+// leftover scratch copies are noted for dropping.
+func (f *preflighter) target() {
+	p := f.p
+	const label = "target database is free"
+	owner, ok := f.exists[p.target]
+	switch {
+	case !ok:
+		f.add(true, label, fmt.Sprintf("%q does not exist; it will be created owned by %q", p.target, p.owner))
+	case owner != p.owner:
 		p.targetExists = true
-		if owner != p.owner {
-			add(false, "target database is usable", fmt.Sprintf("%q exists but is owned by %q, not %q", p.target, owner, p.owner))
-		} else {
-			row, err := q1(p.target, `SELECT
-				(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('chat', 'sched'))
-				  + (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')),
-				to_regclass('public.schema_migrations') IS NOT NULL,
-				(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p'))`, 3)
-			switch {
-			case err != nil:
-				add(false, "target database is free", err.Error())
-			case row[1] == "t" || row[2] != "0":
-				add(false, "target database is free", fmt.Sprintf("%q has tables in public (a fleet store or something else); choose another --target-db", p.target))
-			case row[0] != "0" && !o.forceClean:
-				p.targetNonEmpty = true
-				add(false, "target database is free", fmt.Sprintf("%q already has chat/sched schemas (%s objects) — a partly filled target from an earlier run? Re-run with --force-clean to drop those two schemas (the env file still names the sources, so nothing uses them)", p.target, row[0]))
-			case row[0] != "0":
-				p.targetNonEmpty = true
-				warn("target database is free", fmt.Sprintf("%q has chat/sched schemas (%s objects); --force-clean will drop those two schemas first", p.target, row[0]))
-			default:
-				add(true, "target database is free", fmt.Sprintf("%q exists, owned by %q, empty", p.target, p.owner))
-			}
+		f.add(false, "target database is usable", fmt.Sprintf("%q exists but is owned by %q, not %q", p.target, owner, p.owner))
+	default:
+		p.targetExists = true
+		row, err := f.q1(p.target, `SELECT
+			(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('chat', 'sched'))
+			  + (SELECT count(*) FROM pg_namespace WHERE nspname IN ('chat', 'sched')),
+			to_regclass('public.schema_migrations') IS NOT NULL,
+			(SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p'))`, 3)
+		switch {
+		case err != nil:
+			f.add(false, label, err.Error())
+		case row[1] == "t" || row[2] != "0":
+			f.add(false, label, fmt.Sprintf("%q has tables in public (a fleet store or something else); choose another --target-db", p.target))
+		case row[0] != "0" && !f.o.forceClean:
+			p.targetNonEmpty = true
+			f.add(false, label, fmt.Sprintf("%q already has chat/sched schemas (%s objects) — a partly filled target from an earlier run? Re-run with --force-clean to drop those two schemas (the env file still names the sources, so nothing uses them)", p.target, row[0]))
+		case row[0] != "0":
+			p.targetNonEmpty = true
+			f.warn(label, fmt.Sprintf("%q has chat/sched schemas (%s objects); --force-clean will drop those two schemas first", p.target, row[0]))
+		default:
+			f.add(true, label, fmt.Sprintf("%q exists, owned by %q, empty", p.target, p.owner))
 		}
-	} else {
-		add(true, "target database is free", fmt.Sprintf("%q does not exist; it will be created owned by %q", p.target, p.owner))
 	}
 	for _, s := range []pgSource{p.chat, p.sched} {
-		if _, ok := exists[p.tmpDB(s)]; ok {
+		if _, ok := f.exists[p.tmpDB(s)]; ok {
 			p.leftoverTmp = append(p.leftoverTmp, p.tmpDB(s))
 		}
 	}
 	if len(p.leftoverTmp) > 0 {
-		warn("scratch databases", "left over from an interrupted run, will be dropped first: "+strings.Join(p.leftoverTmp, ", "))
+		f.warn("scratch databases", "left over from an interrupted run, will be dropped first: "+strings.Join(p.leftoverTmp, ", "))
 	}
+}
 
-	// Disk: the scratch copy of the larger source plus the target need about
-	// the sources' size twice over; ask for that plus a margin.
-	if srcOK {
-		rows, err := q("postgres", `SELECT pg_database_size(`+sqlLit(p.chat.database)+`) + pg_database_size(`+sqlLit(p.sched.database)+`), current_setting('data_directory')`)
-		if err != nil || len(rows) != 1 {
-			warn("disk space", fmt.Sprintf("could not measure: %v", err))
-		} else {
-			p.sourceSize, _ = strconv.ParseInt(rows[0][0], 10, 64)
-			need := uint64(p.sourceSize)*2 + uint64(p.sourceSize)/5 + 64<<20
-			free, ferr := d.freeBytes(rows[0][1])
-			switch {
-			case ferr != nil:
-				warn("disk space", fmt.Sprintf("could not measure free space at %s: %v (need about %s)", rows[0][1], ferr, consolidateBytes(need)))
-			case free < need:
-				add(false, "disk space", fmt.Sprintf("%s free at %s, need about %s", consolidateBytes(free), rows[0][1], consolidateBytes(need)))
-			default:
-				add(true, "disk space", fmt.Sprintf("%s free, need about %s", consolidateBytes(free), consolidateBytes(need)))
-			}
-		}
-		// The inventory the dry run shows and the copy is verified against.
-		p.inv = map[string]inventory{}
-		for _, s := range []pgSource{p.chat, p.sched} {
-			inv, err := takeInventory(ctx, d.pg, s.database, config.PublicSchema)
-			if err != nil {
-				add(false, s.label+" inventory", err.Error())
-				p.inv = nil
-				break
-			}
-			p.inv[s.label] = inv
+// diskAndInventory: enough free space (the scratch copy and the target need
+// about the sources' size twice over; ask for that plus a margin), then the
+// exact inventory the dry run shows and the copy is verified against.
+func (f *preflighter) diskAndInventory() {
+	if !f.srcOK {
+		return
+	}
+	p := f.p
+	row, err := f.q1("postgres", `SELECT pg_database_size(`+sqlLit(p.chat.database)+`) + pg_database_size(`+sqlLit(p.sched.database)+`), current_setting('data_directory')`, 2)
+	if err != nil {
+		f.warn("disk space", fmt.Sprintf("could not measure: %v", err))
+	} else {
+		p.sourceSize, _ = strconv.ParseUint(row[0], 10, 64)
+		need := p.sourceSize*2 + p.sourceSize/5 + 64<<20
+		free, ferr := f.d.freeBytes(row[1])
+		switch {
+		case ferr != nil:
+			f.warn("disk space", fmt.Sprintf("could not measure free space at %s: %v (need about %s)", row[1], ferr, consolidateBytes(need)))
+		case free < need:
+			f.add(false, "disk space", fmt.Sprintf("%s free at %s, need about %s", consolidateBytes(free), row[1], consolidateBytes(need)))
+		default:
+			f.add(true, "disk space", fmt.Sprintf("%s free, need about %s", consolidateBytes(free), consolidateBytes(need)))
 		}
 	}
-	return cs
+	p.inv = map[string]inventory{}
+	for _, s := range []pgSource{p.chat, p.sched} {
+		inv, err := takeInventory(f.ctx, f.d.pg, s.database, config.PublicSchema)
+		if err != nil {
+			f.add(false, s.label+" inventory", err.Error())
+			p.inv = nil
+			return
+		}
+		p.inv[s.label] = inv
+	}
 }
 
 func stripStates(units []string) []string {
@@ -733,7 +795,7 @@ func printInventory(out io.Writer, p *consolidatePlan) {
 		}
 	}
 	if p.sourceSize > 0 {
-		fmt.Fprintf(out, "  on disk: %s\n", consolidateBytes(uint64(p.sourceSize)))
+		fmt.Fprintf(out, "  on disk: %s\n", consolidateBytes(p.sourceSize))
 	}
 }
 
@@ -1007,7 +1069,7 @@ func rewriteEnvFile(p *consolidatePlan, now time.Time) (string, error) {
 	}
 	if err != nil {
 		if rerr := copyFileKeepMode(backup, p.envFile, info); rerr != nil {
-			return backup, fmt.Errorf("%w; RESTORING THE BACKUP ALSO FAILED (copy %s back by hand): %v", err, backup, rerr)
+			return backup, fmt.Errorf("%w; RESTORING THE BACKUP ALSO FAILED (copy %s back by hand): %w", err, backup, rerr)
 		}
 		return backup, fmt.Errorf("%w; the previous env file was restored", err)
 	}

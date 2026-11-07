@@ -231,7 +231,11 @@ Once every box reports `fleet db layout` → `schemas`:
    `internal/admincli/db_consolidate.go`, `db_consolidate_linux.go`,
    `db_consolidate_other.go`, `db_consolidate_test.go`,
    `db_consolidate_e2e_test.go` (the tool goes with the layout, or stays only
-   while it is useful).
+   while it is useful), and `internal/admincli/main_test_env_test.go` — the
+   `TestMain` that pins the admin CLI suites to the CI test databases'
+   legacy layout (`FLEET_TEST_DATABASE_URL` = chat, `DATABASE_URL` = sched,
+   both in `public`). Removing it means moving those suites to one test
+   database with schemas, which is M2's job.
 3. Delete the marked lines/branches: the `resolveLegacyDSNs` call in
    `ResolveDSNs`; `LayoutOf`/`LayoutLegacy` uses in `cmd/fleet/main.go`,
    `validate_config.go`, `internal/admincli/status.go`; the `db` verb and its

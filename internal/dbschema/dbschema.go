@@ -84,7 +84,7 @@ func Ensure(ctx context.Context, db Execer) error {
 		return fmt.Errorf("ensure schema %s: probe public: %w", schema, err)
 	}
 	if legacy {
-		return ErrLegacyDatabase{Schema: schema}
+		return LegacyDatabaseError{Schema: schema}
 	}
 	// schema is a plain identifier (Configured), so quoting is belt and braces.
 	if _, err := tx.ExecContext(ctx, `CREATE SCHEMA IF NOT EXISTS `+quoteIdent(schema)); err != nil {
@@ -93,19 +93,19 @@ func Ensure(ctx context.Context, db Execer) error {
 	return tx.Commit()
 }
 
-// ErrLegacyDatabase is Ensure's refusal to create Schema in a database whose
+// LegacyDatabaseError is Ensure's refusal to create Schema in a database whose
 // public schema already holds a fleet store.
-type ErrLegacyDatabase struct{ Schema string }
+type LegacyDatabaseError struct{ Schema string }
 
-func (e ErrLegacyDatabase) Error() string {
+func (e LegacyDatabaseError) Error() string {
 	return fmt.Sprintf("refusing to create schema %q: this database's public schema already holds a fleet store "+
 		"(a legacy two-database install's database). Point the per-store DSNs back at the two databases, "+
 		"or move them into one with `fleet db consolidate` (docs/ONE-DATABASE.md)", e.Schema)
 }
 
-// IsLegacyDatabase reports whether err is (or wraps) ErrLegacyDatabase.
+// IsLegacyDatabase reports whether err is (or wraps) LegacyDatabaseError.
 func IsLegacyDatabase(err error) bool {
-	var e ErrLegacyDatabase
+	var e LegacyDatabaseError
 	return errors.As(err, &e)
 }
 

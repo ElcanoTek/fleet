@@ -81,6 +81,63 @@ func dbURL(base *url.URL, name string) string {
 	return u.String()
 }
 
+// seedLegacyPair fills a legacy pair through the real stores: three chat
+// users, one sched user, and one chat sequence advanced to 4242 so the copy
+// must carry a non-trivial value. It returns that sequence's name.
+func seedLegacyPair(t *testing.T, chatDSN, schedDSN string) string {
+	t.Helper()
+	ctx := t.Context()
+	cs, err := store.Open(chatDSN, store.DefaultPoolConfig())
+	if err != nil {
+		t.Fatalf("open legacy chat: %v", err)
+	}
+	for _, e := range []string{"a@example.com", "b@example.com", "c@example.com"} {
+		if _, err := cs.CreateUser(ctx, e, "placeholder-password-1"); err != nil {
+			t.Fatalf("CreateUser: %v", err)
+		}
+	}
+	_ = cs.Close()
+	src, err := sql.Open("pgx", chatDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	var seqName string
+	if err := src.QueryRow(`SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1 LIMIT 1`).Scan(&seqName); err != nil {
+		t.Fatalf("find a chat sequence: %v", err)
+	}
+	if _, err := src.Exec(`SELECT setval(format('public.%I', $1::text), 4242)`, seqName); err != nil {
+		t.Fatalf("setval: %v", err)
+	}
+	sd := &scheddb.Database{}
+	if err := sd.Init(schedDSN, scheddb.DefaultPoolConfig()); err != nil {
+		t.Fatalf("open legacy sched: %v", err)
+	}
+	defer sd.Close()
+	if err := sd.AddUser(ctx, &models.User{ID: uuid.New(), Username: "a@example.com", PasswordHash: "x", Role: "admin", CreatedAt: time.Now()}); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	return seqName
+}
+
+// checkSourcesIntact: the chat source still holds its rows in public, and no
+// scratch copy is left behind.
+func checkSourcesIntact(t *testing.T, admin *sql.DB, chatDSN, target string) {
+	t.Helper()
+	src, err := sql.Open("pgx", chatDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	var n int
+	if err := src.QueryRow(`SELECT count(*) FROM public.users`).Scan(&n); err != nil || n != 3 {
+		t.Errorf("source chat users = %d, %v", n, err)
+	}
+	if err := admin.QueryRow(`SELECT count(*) FROM pg_database WHERE datname LIKE $1`, target+"_consolidate_%").Scan(&n); err != nil || n != 0 {
+		t.Errorf("%d scratch database(s) left behind (%v)", n, err)
+	}
+}
+
 // TestConsolidateEndToEnd moves a real legacy install — two databases filled
 // by the real migrations plus rows — into one database with the real client
 // tools, and checks the result through the real stores.
@@ -105,41 +162,7 @@ func TestConsolidateEndToEnd(t *testing.T) {
 		}
 	})
 	chatDSN, schedDSN := dbURL(base, chatDB), dbURL(base, schedDB)
-
-	// Fill the legacy pair through the real stores.
-	cs, err := store.Open(chatDSN, store.DefaultPoolConfig())
-	if err != nil {
-		t.Fatalf("open legacy chat: %v", err)
-	}
-	for _, e := range []string{"a@example.com", "b@example.com", "c@example.com"} {
-		if _, err := cs.CreateUser(ctx, e, "placeholder-password-1"); err != nil {
-			t.Fatalf("CreateUser: %v", err)
-		}
-	}
-	_ = cs.Close()
-	// Advance one chat sequence so the copy must carry a non-trivial value.
-	var seqName string
-	{
-		src, err := sql.Open("pgx", chatDSN)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := src.QueryRow(`SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' ORDER BY 1 LIMIT 1`).Scan(&seqName); err != nil {
-			t.Fatalf("find a chat sequence: %v", err)
-		}
-		if _, err := src.Exec(`SELECT setval(format('public.%I', $1::text), 4242)`, seqName); err != nil {
-			t.Fatalf("setval: %v", err)
-		}
-		_ = src.Close()
-	}
-	sd := &scheddb.Database{}
-	if err := sd.Init(schedDSN, scheddb.DefaultPoolConfig()); err != nil {
-		t.Fatalf("open legacy sched: %v", err)
-	}
-	if err := sd.AddUser(ctx, &models.User{ID: uuid.New(), Username: "a@example.com", PasswordHash: "x", Role: "admin", CreatedAt: time.Now()}); err != nil {
-		t.Fatalf("AddUser: %v", err)
-	}
-	_ = sd.Close()
+	seqName := seedLegacyPair(t, chatDSN, schedDSN)
 
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	body := "OPENROUTER_API_KEY=placeholder\nFLEET_CHAT_DATABASE_URL=" + chatDSN + "\nFLEET_SCHED_DATABASE_URL=" + schedDSN + "\n"
@@ -211,7 +234,7 @@ func TestConsolidateEndToEnd(t *testing.T) {
 	}
 
 	// Both stores open in schema mode with their data, migrations no-ops.
-	cs, err = store.Open(d.Chat, store.DefaultPoolConfig())
+	cs, err := store.Open(d.Chat, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("open consolidated chat: %v", err)
 	}
@@ -220,7 +243,7 @@ func TestConsolidateEndToEnd(t *testing.T) {
 	if err != nil || len(users) != 3 {
 		t.Fatalf("consolidated chat users = %d, %v; want 3", len(users), err)
 	}
-	sd = &scheddb.Database{}
+	sd := &scheddb.Database{}
 	if err := sd.Init(d.Sched, scheddb.DefaultPoolConfig()); err != nil {
 		t.Fatalf("open consolidated sched: %v", err)
 	}
@@ -244,19 +267,7 @@ func TestConsolidateEndToEnd(t *testing.T) {
 		t.Errorf("sched schema owner = %q, %v", owner, err)
 	}
 
-	// The sources are intact and the scratch copies gone.
-	src, err := sql.Open("pgx", chatDSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := src.QueryRow(`SELECT count(*) FROM public.users`).Scan(&n); err != nil || n != 3 {
-		t.Errorf("source chat users = %d, %v", n, err)
-	}
-	_ = src.Close()
-	_ = admin.QueryRow(`SELECT count(*) FROM pg_database WHERE datname LIKE $1`, target+"_consolidate_%").Scan(&n)
-	if n != 0 {
-		t.Errorf("%d scratch database(s) left behind", n)
-	}
+	checkSourcesIntact(t, admin, chatDSN, target)
 
 	// A re-run is a no-op.
 	out.Reset()
