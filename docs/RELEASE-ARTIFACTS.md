@@ -83,11 +83,16 @@ sudo scripts/bootstrap.sh --postgres=local --enable-web --domain fleet.example.c
 ```
 
 bootstrap installs runtime packages only (git, curl, jq, rsync, python3, pip,
-chromium-headless, gcc, podman, slirp4netns — no Go, no Node), then downloads
-and verifies the release this checkout contains (`--tag vYYYY.MM.DD.N` to pick
-one; a checkout with no release reachable falls back to the newest published
-one) with `scripts/lib/release.sh`, installs it to `/opt/fleet/fleet`, and sets
-up the sandbox image as described below. It needs outbound HTTPS to
+chromium-headless, gcc, podman, slirp4netns — no Go, no Node). It installs the
+newest **published** release — GitHub's "latest", which names a release only
+once its assets are uploaded — or the one `--tag vYYYY.MM.DD.N` names; never a
+tag that merely exists in the clone, whose artifacts may still be building or
+already pruned. It moves the checkout to that tag first and re-runs itself from
+it, so the units and scripts it installs are the release's; it refuses when the
+checkout has uncommitted changes or commits origin does not have. It then
+downloads and verifies the release with `scripts/lib/release.sh` (every
+download size-capped, no partial files left behind), installs it to
+`/opt/fleet/fleet`, and sets up the sandbox image as described below. It needs outbound HTTPS to
 github.com, ghcr.io and Sigstore's TUF CDN.
 
 ## Update
@@ -104,9 +109,14 @@ What it does, in order (`scripts/update.sh`):
 
 1. drain gate (unchanged: refuses while work is in flight unless `--wait` /
    `--force`);
-2. fast-forward the fleet checkout to the release **tag** — units, scripts and
-   the generic bundle then match the binary; a checkout already past the tag is
-   left where it is;
+2. move the fleet checkout to the release **tag** — units, scripts and the
+   generic bundle then match the binary. Usually a fast-forward; a checkout
+   PAST the tag (a downgrade, or a box that tracked the branch tip) is moved
+   back to it, which update announces and asks about like any other range. It
+   refuses with uncommitted changes, or when moving back would strand commits
+   origin does not have. `--no-pull --tag <other release>` refuses (it would
+   pair that binary with this checkout's content). If GitHub names a release
+   the tag fetch just missed, tags are fetched once more;
 3. pull the client-config bundle (unchanged);
 4. `fleet release fetch` — download and verify (above), using the
    **installed** fleet;
@@ -119,7 +129,20 @@ What it does, in order (`scripts/update.sh`):
    atomically, `systemctl restart`s (the service migrates on start, as before),
    waits for `/readyz` (`FLEET_HEALTH_TIMEOUT`, default 90 s), and on failure
    restores `fleet.prev`, restarts and re-checks — the failed binary is kept
-   as `fleet.failed` and the update exits non-zero saying it rolled back.
+   as `fleet.failed` and the update exits non-zero saying it rolled back. The
+   rollback runs under its own bounded context, so a Ctrl-C or SIGTERM that cut
+   the readiness wait short still completes it. Reinstalling the binary that is
+   already live swaps nothing and leaves `fleet.prev` alone. One install or
+   rollback runs per install dir at a time (a lock), and the staging copy is
+   refused up front when the filesystem lacks room for it. The readiness URL
+   is where the deployment listens: `FLEET_SERVER_ADDR` from the environment or
+   the env file, over https when `FLEET_TLS_MODE` is `manual` or `auto`.
+
+**No systemd, or no fleet unit (a custom supervisor).** Update still installs
+the verified binary — the same atomic swap, `fleet.prev` kept — but cannot
+restart it: `fleet release install --no-restart`. It says so and does not
+print the success banner; restart fleet with your supervisor, and if it does
+not come up, `fleet release rollback --no-restart` then restart again.
 
 ## Roll back
 
@@ -128,14 +151,28 @@ sudo fleet release rollback             # fleet.prev ↔ fleet, restart, /readyz
 sudo fleet update --tag <older> --allow-downgrade   # any release still published
 ```
 
-`rollback` swaps the two binaries, so running it twice undoes itself. The
-checkout and bundle are not moved by `rollback`; `fleet doctor` reports the
+`rollback` swaps the two binaries, so running it twice undoes itself, and
+gates on the address the deployment listens on (`FLEET_SERVER_ADDR` /
+`FLEET_TLS_MODE` from the env file, unless `--server-addr` or `--health-url`
+says otherwise). The checkout and bundle are not moved by `rollback`; `fleet doctor` reports the
 mismatch, and `fleet update --tag <that release> --allow-downgrade` realigns
 everything when you mean to stay back.
 
 **Retention.** The newest ten GitHub release objects are kept (they carry the
 downloadable files); images stay in GHCR for every tag; tags are permanent;
 each box keeps one previous binary.
+
+**Releases are immutable.** A re-run of release.yml never rebuilds a tag that
+published: the tag job skips a complete release, and REFUSES — loudly, for a
+human — a partial one (a draft, a release without `SHA256SUMS`, or GHCR images
+under the tag with no complete release), because a rebuild would put different
+bytes (a newer base layer or RPM) under a tag boxes already verified. The
+publish job checks GHCR again right before it pushes. Recovering a partial
+publish is deliberate: delete it and re-run, or let the next green push
+release. Overlapping runs both publish: a tag a newer one overtook while it
+was building still gets its release (with `--latest=false`), so no signed
+image is left without a release naming it; Latest, `:latest` and retention
+follow the newest tag.
 
 ## Sandbox images and client bundles
 
@@ -195,6 +232,44 @@ cosign verify-attestation --type spdxjson ghcr.io/elcanotek/fleet-sandbox@sha256
 | `FLEET_RELEASE_CACHE_DIR` | cosign + TUF cache (default `/var/cache/fleet` as root) |
 | `FLEET_HEALTH_TIMEOUT` | seconds `fleet update` waits for `/readyz` (default 90) |
 | `FLEET_UPDATE_TAG`, `FLEET_UPDATE_ALLOW_DOWNGRADE` | env forms of `--tag`, `--allow-downgrade` |
+
+## How pins are kept current
+
+Every pinned input of the release images and the workflows has an automated
+update path, and `scripts/check_pins_test.go` fails CI when one does not.
+Dependabot (`.github/dependabot.yml`, monthly, 7-day cooldown) covers what it
+can read; `.github/workflows/pins-update.yml` (monthly, after Dependabot) runs
+`scripts/update-pins.sh` over `scripts/lib/pins.tsv` for the rest and opens one
+PR (or, where Actions may not open PRs, pushes the branch and files an issue
+linking it).
+
+| Pin | Where | Updater |
+| --- | --- | --- |
+| fedora-minimal base, tag + digest | `deploy/fleet.Containerfile`, `config/default/sandbox/Containerfile` | Dependabot `docker` (`/deploy`, `/config/default/sandbox`) |
+| Python for the images, hash-locked (`--require-hashes --no-deps`) | `deploy/python/requirements.txt`, `config/default/sandbox/requirements.txt` (compiled from the `requirements.in` beside each) | Dependabot `pip` (re-compiles the lock with hashes) |
+| GitHub Actions, by commit SHA | every workflow | Dependabot `github-actions` (`/`) |
+| `COSIGN` — the verifier boxes and release.yml run | `internal/release/cosign.lock` | `update-pins.sh`: the new `cosign_checksums.txt` must carry Sigstore's keyless signature, verified by the cosign already pinned; both binaries hash-checked |
+| `GRYPE` | `ci.yml`, `grype-scheduled.yml` | `update-pins.sh`: checksums file, its keyless signature (anchore's release workflow), the asset's SHA-256 |
+| `GITLEAKS`, `ACTIONLINT`, `KUBECONFORM` | `ci.yml` | `update-pins.sh`: checksums file and the asset's SHA-256 (upstream publishes no signature) |
+| `RUFF`, `SEMGREP` (`pip install x==v`) | `ci.yml`, `semgrep.yml` | `update-pins.sh`: newest final PyPI release past the cooldown |
+
+The Playwright browser is not a pin: the control-plane image never downloads
+one (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`); fleet's browser runner launches the
+distribution's `chromium-headless`.
+
+**RPMs are not version-pinned, deliberately.** The images install Fedora
+packages with `microdnf`, which checks every package's GPG signature against
+Fedora's keys; the exact versions each release installed are in its SBOMs.
+Pinning NEVRAs would break the release build whenever Fedora's `updates`
+repository drops a superseded build (it keeps only the newest), would block
+the security fixes the Grype gate demands, and has no updater Dependabot or
+`update-pins.sh` could run. The pinned base digest plus immutable releases
+(above) is what makes a published release's bytes final.
+
+**CVE scanning.** CI's Grype job scans both release images — the sandbox and,
+built around a placeholder binary, the control-plane image (the fleet binary's
+Go modules are govulncheck's) — and blocks on a fixable CRITICAL/HIGH RPM
+finding.
 
 ## Development boxes: `--from-source`
 

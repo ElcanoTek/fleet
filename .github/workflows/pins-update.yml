@@ -1,0 +1,95 @@
+# Pin updates — the monthly refresh for the pins Dependabot cannot see
+# (docs/RELEASE-ARTIFACTS.md, "How pins are kept current").
+#
+# Dependabot keeps the GitHub Actions SHAs, Go and npm modules, the release
+# images' base digests (docker) and their hash-locked Python (pip) current.
+# What it cannot read is the rest: internal/release/cosign.lock (the verifier
+# every box runs) and the curl- or pip-fetched tools pinned as <NAME>_VERSION /
+# <NAME>_SHA256 in the workflows. scripts/lib/pins.tsv lists them;
+# scripts/update-pins.sh finds each one's newest release past a 7-day cooldown
+# (Dependabot's here), verifies it — the checksums file, upstream's keyless
+# signature where upstream signs (cosign's own checked by the cosign already
+# pinned), and the asset's SHA-256 — and rewrites the pin. This workflow opens
+# the result as one PR, on the same monthly cadence as Dependabot.
+#
+# PR creation: `gh pr create` with the default GITHUB_TOKEN. This org has
+# refused "GitHub Actions ... create or approve pull requests" before (see
+# publish-sandbox-image.yml), so when that fails the branch is still pushed
+# and an issue links it instead — the update is never silently dropped. A PR
+# or branch pushed with GITHUB_TOKEN does not start CI on its own; run CI on it
+# (workflow_dispatch) before merging, as for any automated PR.
+name: Pin updates
+
+on:
+  schedule:
+    # The 3rd of each month, 05:41 UTC: after Dependabot's monthly run, clear
+    # of the other scheduled scans' hours.
+    - cron: '41 5 3 * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins-update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Update and verify non-Dependabot pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # push the pins/ branch
+      pull-requests: write # open the PR
+      issues: write # fall back to an issue when Actions may not open PRs
+    steps:
+      # Default branch only (a schedule/dispatch on main): the code that runs
+      # with the write token is main's.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Update the pins (verified before anything is rewritten)
+        id: pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/update-pins.sh
+
+      - name: Open a PR with the changes
+        if: ${{ always() && steps.pins.outcome != 'skipped' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGES: ${{ steps.pins.outputs.changes }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "no pin moved."
+            [ "${PINS_OUTCOME}" = "success" ] || { echo "::error::a pin failed verification (above); nothing changed for it."; exit 1; }
+            exit 0
+          fi
+          branch="pins/update-$(date -u +%Y-%m-%d)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git checkout -b "${branch}"
+          git commit -qam "deps(pins): update verified non-Dependabot pins" -m "${CHANGES}"
+          git push --force origin "${branch}"
+          body="$(mktemp)"
+          {
+            echo "Automated by .github/workflows/pins-update.yml (scripts/update-pins.sh)."
+            echo
+            echo "Each pin below was verified before it was rewritten: the release's checksums file, upstream's keyless signature where upstream signs it, and the asset's SHA-256."
+            echo
+            printf '%s\n' "${CHANGES}" | sed 's/^/- /'
+            echo
+            echo "Run CI on this branch (Actions → CI → Run workflow) before merging: a branch pushed with GITHUB_TOKEN does not start it."
+          } > "${body}"
+          if gh pr create --base main --head "${branch}" --title "deps(pins): verified pin updates ($(date -u +%Y-%m))" --body-file "${body}"; then
+            exit 0
+          fi
+          echo "::warning::GitHub Actions may not open PRs here; filing an issue that links the branch instead."
+          title="Pin updates are ready on branch ${branch}"
+          if [ -z "$(gh issue list --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // empty')" ]; then
+            gh issue create --title "${title}" --body-file "${body}"
+          fi
+          [ "${PINS_OUTCOME}" = "success" ] || { echo "::error::a pin failed verification (above); the others were updated."; exit 1; }

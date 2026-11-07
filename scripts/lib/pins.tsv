@@ -1,0 +1,25 @@
+# Pinned inputs Dependabot cannot update, and how scripts/update-pins.sh
+# (run monthly by .github/workflows/pins-update.yml) keeps each one current.
+# docs/RELEASE-ARTIFACTS.md "How pins are kept current" lists every pin and its
+# updater; scripts/check_pins_test.go fails when a pin has none.
+#
+# Columns (tab-separated):
+#   name      the pin's name: <name>_VERSION / <name>_SHA256 in the workflows,
+#             or COSIGN for internal/release/cosign.lock
+#   kind      github   — a GitHub release asset, version + SHA-256 pinned
+#             pypi     — a PyPI package pinned by version (`pip install x==v`)
+#             cosign   — internal/release/cosign.lock (version + per-arch SHA-256)
+#   source    owner/repo (github, cosign) or the PyPI project name
+#   asset     the release asset, {v} = version without the leading v
+#   checksums the release's checksums file, {v} likewise
+#   identity  the keyless signing identity upstream signs the checksums with
+#             ("-" = upstream publishes no signature; the checksums file and
+#             the asset hash are what is verified)
+#   issuer    that identity's OIDC issuer ("-" with no identity)
+GITLEAKS	github	gitleaks/gitleaks	gitleaks_{v}_linux_x64.tar.gz	gitleaks_{v}_checksums.txt	-	-
+ACTIONLINT	github	rhysd/actionlint	actionlint_{v}_linux_amd64.tar.gz	actionlint_{v}_checksums.txt	-	-
+KUBECONFORM	github	yannh/kubeconform	kubeconform-linux-amd64.tar.gz	CHECKSUMS	-	-
+GRYPE	github	anchore/grype	grype_{v}_linux_amd64.tar.gz	grype_{v}_checksums.txt	https://github.com/anchore/grype/.github/workflows/release.yaml@refs/heads/main	https://token.actions.githubusercontent.com
+RUFF	pypi	ruff	-	-	-	-
+SEMGREP	pypi	semgrep	-	-	-	-
+COSIGN	cosign	sigstore/cosign	cosign-linux-{arch}	cosign_checksums.txt	keyless@projectsigstore.iam.gserviceaccount.com	https://accounts.google.com
