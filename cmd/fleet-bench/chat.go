@@ -14,6 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // chatOptions holds the resolved chat-load configuration.
@@ -45,7 +47,7 @@ func runChat(argv []string) error {
 	opts := chatOptions{
 		server:      resolveServer(*server),
 		email:       resolveEmail(*email),
-		token:       strings.TrimSpace(os.Getenv(*tokenEnv)),
+		token:       strings.TrimSpace(envreg.Unregistered(*tokenEnv)),
 		message:     *message,
 		concurrency: *concurrency,
 		duration:    *duration,
@@ -70,10 +72,10 @@ func resolveServer(flagVal string) string {
 	if v := strings.TrimSpace(flagVal); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_CHAT_URL")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_CHAT_URL")); v != "" {
 		return strings.TrimRight(v, "/")
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_SERVER_ADDR")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_SERVER_ADDR")); v != "" {
 		if !strings.HasPrefix(v, "http") {
 			if strings.HasPrefix(v, ":") {
 				v = "127.0.0.1" + v
@@ -86,7 +88,7 @@ func resolveServer(flagVal string) string {
 }
 
 func resolveEmail(flagVal string) string {
-	for _, v := range []string{flagVal, os.Getenv("FLEET_BENCH_EMAIL"), os.Getenv("E2E_TEST_EMAIL")} {
+	for _, v := range []string{flagVal, envreg.Get("FLEET_BENCH_EMAIL"), envreg.Get("E2E_TEST_EMAIL")} {
 		if s := strings.TrimSpace(v); s != "" {
 			return s
 		}

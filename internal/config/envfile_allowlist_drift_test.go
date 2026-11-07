@@ -94,9 +94,9 @@ func collectEnvReads(t *testing.T, dir string) map[string]bool {
 			}
 			switch fn := call.Fun.(type) {
 			case *ast.SelectorExpr:
-				// os.Getenv / os.LookupEnv
-				if pkg, ok := fn.X.(*ast.Ident); ok && pkg.Name == "os" &&
-					(fn.Sel.Name == "Getenv" || fn.Sel.Name == "LookupEnv") {
+				// os.Getenv / os.LookupEnv, and the registry accessor envreg.Get / envreg.Lookup (#2053)
+				if pkg, ok := fn.X.(*ast.Ident); ok && (pkg.Name == "os" || pkg.Name == "envreg") &&
+					(fn.Sel.Name == "Getenv" || fn.Sel.Name == "LookupEnv" || fn.Sel.Name == "Get" || fn.Sel.Name == "Lookup") {
 					if key, ok := stringLitArg(call, 0); ok {
 						keys[key] = true
 					}
@@ -183,6 +183,6 @@ func TestEnvFileAllowlistCoversLoaderReads(t *testing.T) {
 	}
 	sort.Strings(missing)
 	for _, k := range missing {
-		t.Errorf("%s is read by the loader but missing from allowedEnvVars — a value set only in FLEET_ENV_FILE is silently dropped (#1107); add it to the allowlist in config.go", k)
+		t.Errorf("%s is read by the loader but missing from allowedEnvVars — a value set only in FLEET_ENV_FILE is silently dropped (#1107); declare it in internal/config/envreg/table.go (not ProcessOnly)", k)
 	}
 }

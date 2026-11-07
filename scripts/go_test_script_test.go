@@ -22,6 +22,8 @@ import (
 // with whatever runs beside it — and the whole tree now runs in parallel.
 var sharedDBPatterns = []string{
 	`os.Getenv("DATABASE_URL")`,
+	`envreg.Get("DATABASE_URL")`,
+	`envreg.Lookup("DATABASE_URL")`,
 	`"FLEET_TEST_DATABASE_URL"`,
 	`pg_advisory_lock(1)`,
 	`TruncateAllForTest`,
@@ -135,6 +137,7 @@ func TestSharedDBUsesRecognisesEachPattern(t *testing.T) {
 		want int
 	}{
 		{`dsn := os.Getenv("DATABASE_URL")`, 1},
+		{`dsn := envreg.Get("DATABASE_URL")`, 1},
 		{`base := os.Getenv("FLEET_TEST_DATABASE_URL")`, 1},
 		{`conn.Exec("SELECT pg_advisory_lock(1)")`, 1},
 		{`s.TruncateAllForTest(ctx)`, 1},

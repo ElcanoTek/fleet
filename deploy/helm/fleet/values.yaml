@@ -195,7 +195,7 @@ config:
   #   OPENROUTER_API_KEY, DATABASE_URL (ONE database: fleet keeps the chat and
   #   sched stores in its schemas chat and sched; the per-store
   #   FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL are deprecated),
-  #   FLEET_SERVER_TOKEN (or its CHAT_SERVER_TOKEN alias), APP_SESSION_SECRET
+  #   FLEET_SERVER_TOKEN (or its CHAT_SERVER_TOKEN alias), APP_SESSION_SECRET # LEGACY-ENV-ALIAS: remove after migrate-env
   #   (signs the browser session cookie — required for sign-in), any
   #   FLEET_OIDC_* / AUTH_* sign-in settings, and any SMTP/webhook secrets.
   # When postgres.enabled=true the DB URL is wired automatically and may be

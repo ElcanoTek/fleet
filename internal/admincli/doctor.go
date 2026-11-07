@@ -33,6 +33,9 @@ import (
 // found; rather than failing uselessly we degrade to the in-process status
 // report so `fleet doctor` is never a dead verb.
 func cmdDoctor(argv []string) int {
+	// Deprecated CHAT_/CUTLASS_ env spellings (ADR-0099): warn first, on every
+	// path (script or status fallback); read-only, never a value.
+	warnDeprecatedEnvAliases(os.Stdout) // LEGACY-ENV-ALIAS: remove after migrate-env
 	script := findScript("doctor.sh")
 	if script == "" {
 		fmt.Fprintln(os.Stderr, "fleet doctor: scripts/doctor.sh not found (no checkout — set FLEET_ROOT or run from the repo); falling back to the read-only `fleet status` checks.")

@@ -18,6 +18,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 const (
@@ -955,7 +957,7 @@ func NewStdioTransportInDir(command string, args []string, env map[string]string
 	homedir, err := os.UserHomeDir()
 	if err != nil {
 		// Fallback if UserHomeDir fails, though unlikely
-		homedir = os.Getenv("HOME")
+		homedir = envreg.Get("HOME")
 	}
 	if homedir == "" {
 		homedir = "/root" // Sensible default for container if all else fails

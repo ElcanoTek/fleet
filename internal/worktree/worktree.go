@@ -25,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Subdir is the directory under the workspace root that holds per-run
@@ -270,10 +272,10 @@ func ResolveWorkspaceRoot(explicit string) string {
 	if v := strings.TrimSpace(explicit); v != "" {
 		return v
 	}
-	if v := os.Getenv("FLEET_WORKSPACE_ROOT"); v != "" {
+	if v := envreg.Get("FLEET_WORKSPACE_ROOT"); v != "" {
 		return v
 	}
-	if v := os.Getenv("CHAT_WORKSPACE_ROOT"); v != "" {
+	if v := envreg.Get("CHAT_WORKSPACE_ROOT"); v != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return v
 	}
 	if abs, err := filepath.Abs("workspace"); err == nil {

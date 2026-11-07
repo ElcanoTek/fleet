@@ -71,7 +71,6 @@ import (
 	"fmt"
 	"math"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -80,6 +79,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib" // the pgx database/sql driver
 )
@@ -178,7 +178,7 @@ var (
 // failing it on any other problem.
 func get(t testing.TB) *server {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv(EnvVar))
+	dsn := strings.TrimSpace(envreg.Get(EnvVar))
 	if dsn == "" {
 		t.Skip(EnvVar + " is not set — skipping Postgres-backed test")
 	}
@@ -194,7 +194,7 @@ func connect(dsn string) (*server, error) {
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return nil, fmt.Errorf("%s must be a postgres:// URL naming any database on the test server", EnvVar)
 	}
-	strategy := strings.ToLower(strings.TrimSpace(os.Getenv(StrategyEnvVar)))
+	strategy := strings.ToLower(strings.TrimSpace(envreg.Get(StrategyEnvVar)))
 	switch strategy {
 	case "", "wal_log", "file_copy":
 	default:
@@ -682,7 +682,7 @@ func Reserve(t testing.TB) (name, dsn string) {
 func MaintenanceDSN(t testing.TB) string {
 	t.Helper()
 	get(t)
-	return strings.TrimSpace(os.Getenv(EnvVar))
+	return strings.TrimSpace(envreg.Get(EnvVar))
 }
 
 func isInUse(err error) bool {

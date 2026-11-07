@@ -33,12 +33,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
 func envOr(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+	if v := envreg.Get(key); v != "" {
 		return v
 	}
 	return def
@@ -52,7 +53,7 @@ func main() {
 }
 
 func run() int {
-	image := envOr("FLEET_SANDBOX_IMAGE", os.Getenv("SANDBOX_IMAGE"))
+	image := envOr("FLEET_SANDBOX_IMAGE", envreg.Get("SANDBOX_IMAGE"))
 	if image == "" {
 		fmt.Fprintln(os.Stderr, "FLEET_SANDBOX_IMAGE (or SANDBOX_IMAGE) is required")
 		return 2

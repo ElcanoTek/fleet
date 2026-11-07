@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // The deployment env file — the ONE 0600 file that carries every credential
@@ -42,7 +44,7 @@ const (
 // EnvironmentFile=, and a bare `fleet` in a checkout keeps its documented
 // "process env, plus $FLEET_ENV_FILE when set" contract.
 func ResolveEnvFile(explicit string) string {
-	return resolveEnvFile(explicit, os.Getenv, isDir)
+	return resolveEnvFile(explicit, envreg.Get, isDir)
 }
 
 // resolveEnvFile is ResolveEnvFile with the environment and the directory

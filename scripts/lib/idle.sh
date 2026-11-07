@@ -940,8 +940,8 @@ fleet_probe_in_memory_counts() {
   local env_file="${1:-/etc/fleet/fleet.env}" svc_state="${2:-unknown}"
   local addr="" hdrs="" turns=0 approvals="" has_approvals_hdr=0
   addr="$(fleet_env_or_file FLEET_SERVER_ADDR "$env_file")"
-  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")"
-  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")"
+  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CHAT_SERVER_ADDR "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
+  [[ -n "$addr" ]] || addr="$(fleet_env_or_file CUTLASS_SERVER_ADDR "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
   if [[ -z "$addr" && ( "$svc_state" == "active" || "$svc_state" == "unknown" ) && "${FLEET_ASSUME_SERVICE_ACTIVE:-}" != "1" ]]; then
     addr="127.0.0.1:8080"
   fi
@@ -979,22 +979,22 @@ fleet_probe_in_memory_counts() {
     esac
     addr="${host_only}:${port_only}"
     tls_mode="$(fleet_env_or_file FLEET_TLS_MODE "$env_file")"
-    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")"
-    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")"
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CHAT_TLS_MODE "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
+    [[ -n "$tls_mode" ]] || tls_mode="$(fleet_env_or_file CUTLASS_TLS_MODE "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
     tls_mode="${tls_mode,,}"
     tls_mode="${tls_mode#"${tls_mode%%[![:space:]]*}"}"
     tls_mode="${tls_mode%"${tls_mode##*[![:space:]]}"}"
     if [[ "$tls_mode" == "manual" || "$tls_mode" == "auto" ]]; then
       cert_file="$(fleet_env_or_file FLEET_TLS_CERT_FILE "$env_file")"
-      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CHAT_TLS_CERT_FILE "$env_file")"
-      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CUTLASS_TLS_CERT_FILE "$env_file")"
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CHAT_TLS_CERT_FILE "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
+      [[ -n "$cert_file" ]] || cert_file="$(fleet_env_or_file CUTLASS_TLS_CERT_FILE "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
       if [[ -n "$cert_file" ]]; then
         [[ -r "$cert_file" ]] || { printf '0|0|0|err\n'; return 0; }
         curl_args+=(--cacert "$cert_file")
       fi
       tls_domain="$(fleet_env_or_file FLEET_TLS_DOMAIN "$env_file")"
-      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")"
-      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")"
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CHAT_TLS_DOMAIN "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
+      [[ -n "$tls_domain" ]] || tls_domain="$(fleet_env_or_file CUTLASS_TLS_DOMAIN "$env_file")" # LEGACY-ENV-ALIAS: remove after migrate-env
       if [[ -n "$tls_domain" ]]; then
         curl_args+=(--connect-to "${tls_domain}:${port_only}:${host_only}:${port_only}")
         addr="https://${tls_domain}:${port_only}"

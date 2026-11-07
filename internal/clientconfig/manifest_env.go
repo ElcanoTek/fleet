@@ -26,13 +26,13 @@ package clientconfig
 
 import (
 	"fmt"
-	"os"
 	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/goccy/go-yaml"
 )
 
@@ -63,7 +63,7 @@ var (
 //     later bundle load in the parent must never re-introduce those secrets.
 func applyBootEnvFile() error {
 	bootEnvFileOnce.Do(func() {
-		bootEnvFileResult = config.BootstrapEnvFile(os.Getenv("FLEET_ENV_FILE"))
+		bootEnvFileResult = config.BootstrapEnvFile(envreg.Get("FLEET_ENV_FILE"))
 	})
 	return bootEnvFileResult
 }

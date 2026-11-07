@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2" // nosemgrep: go.lang.security.audit.crypto.math_random.math-random-used -- used once, for +/-10% jitter on a retry interval (see rand.Int64N below). Nothing here is a secret, a token, or an identity; crypto/rand would only make backoff slower.
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +37,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/admission"
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/metrics"
 	"github.com/ElcanoTek/fleet/internal/notify"
 	"github.com/ElcanoTek/fleet/internal/observability"
@@ -362,7 +362,7 @@ func NewPool(store *storage.Storage, runner TaskRunner, cfg Config) *Pool {
 // invalid or negative → warn and keep the default, so a typo can never mean
 // "unbounded".
 func wallTimeoutFromEnv() time.Duration {
-	v := strings.TrimSpace(os.Getenv("FLEET_TASK_WALL_TIMEOUT"))
+	v := strings.TrimSpace(envreg.Get("FLEET_TASK_WALL_TIMEOUT"))
 	if v == "" {
 		return DefaultTaskWallClockTimeout
 	}
@@ -371,7 +371,6 @@ func wallTimeoutFromEnv() time.Duration {
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d < 0 {
-		//nolint:gosec // G706 false positive: v is rendered with %q (escapes CR/LF) and is an operator-set env var, not request input.
 		log.Printf("⚠ Ignoring invalid FLEET_TASK_WALL_TIMEOUT=%q; using default %s", v, DefaultTaskWallClockTimeout)
 		return DefaultTaskWallClockTimeout
 	}
@@ -386,13 +385,12 @@ func (p *Pool) StreamRegistry() *TaskStreamRegistry { return p.streams }
 // maxConcurrentFromEnv reads FLEET_MAX_CONCURRENT_AGENTS, validating it like
 // cutlass's iteration bound (a positive integer), falling back to the default.
 func maxConcurrentFromEnv() int {
-	v := os.Getenv("FLEET_MAX_CONCURRENT_AGENTS")
+	v := envreg.Get("FLEET_MAX_CONCURRENT_AGENTS")
 	if v == "" {
 		return DefaultMaxConcurrentAgents
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil || n < 1 {
-		//nolint:gosec // G706 false positive: v is rendered with %q, which escapes any CR/LF, so it cannot forge log lines. v is also an operator-set env var, not request input.
 		log.Printf("⚠ Ignoring invalid FLEET_MAX_CONCURRENT_AGENTS=%q; using default %d", v, DefaultMaxConcurrentAgents)
 		return DefaultMaxConcurrentAgents
 	}
