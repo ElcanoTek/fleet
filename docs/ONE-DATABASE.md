@@ -210,15 +210,18 @@ sources and an idempotent re-run.
   Postgres host. The chart's Postgres is an evaluation convenience; moving
   such a release is a manual dump/restore (not covered here) or a reinstall.
 
-## Deferred (later #2049 phases)
+## The rest of #2049 (follow-up PRs, in this order)
 
-- **M2 — template test databases:** create each test database from a migrated
-  template instead of migrating per suite. Test suites still use one database
-  per suite.
-- **M4 — one identity table:** the two `users` tables stay separate; the
-  Operations Center still resolves the session epoch through the chat-store
-  seam.
-- **M5 — one scheduler.**
+This PR is phase 1. The remaining phases ship as their own PRs under the same
+issue, each updating this note:
+
+1. **Removing the legacy layout** (below), once every box is consolidated.
+2. **M2 — template test databases:** each test gets a fresh database cloned
+   from a migrated template, so the DB test packages run in parallel.
+3. **M4 — one identity table:** one `users` table and one role vocabulary;
+   the shadow sync and the identity seams go.
+4. **M5 — one scheduler:** chat patrols run on the sched engine.
+5. **One migration runner** and one migration layout.
 
 ## Removing the legacy layout
 
