@@ -12,6 +12,7 @@ import { AdminStats, ConnGroup, type AdminStat } from "../../ui/panels";
 import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { formatBytes } from "../lib";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { plural } from "@/app/shared/lib/format";
 
 type StorageTree = { path: string; bytes: number; files: number };
 
@@ -114,8 +115,8 @@ export function StoragePanel() {
       }
       const out = (await res.json()) as CleanupResponse;
       setResult(
-        `Removed ${out.deleted_conversations} conversation${out.deleted_conversations === 1 ? "" : "s"}, ` +
-          `${out.removed_workspaces} workspace dir${out.removed_workspaces === 1 ? "" : "s"}, ` +
+        `Removed ${plural(out.deleted_conversations, "conversation")}, ` +
+          `${plural(out.removed_workspaces, "workspace dir")}, ` +
           `${out.removed_upload_files + out.removed_temp_files} file${out.removed_upload_files + out.removed_temp_files === 1 ? "" : "s"} — ` +
           `${formatBytes(out.bytes_freed)} freed.`,
       );

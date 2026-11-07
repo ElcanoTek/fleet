@@ -42,17 +42,18 @@ import {
   fetchConversationOutputs,
   filesLabel,
   formatDay,
-  plural,
   sharedToast,
   teamLinkUrl,
   type ConversationOutputs,
   type OutputChecklist,
   type ShareWithTeamResult,
 } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 import { useEffect, useId, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { CloseButton } from "@/app/shared/ui/CloseButton";
 import { copyText } from "@/app/shared/lib/clipboard";
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
 
 // ── shared button looks (live Fleet tokens only) ─────────────────────────
 const FOCUS =
@@ -132,12 +133,10 @@ export type MultiplayerState = {
 async function fetchMultiplayerState(
   conversationId: string,
 ): Promise<MultiplayerState | null> {
-  if (typeof fetch !== "function" || !conversationId) return null;
+  const url = conversationApiUrl(conversationId, "/multiplayer");
+  if (typeof fetch !== "function" || !url) return null;
   try {
-    const res = await fetch(
-      `/api/conversations/${encodeURIComponent(conversationId)}/multiplayer`,
-      { cache: "no-store" },
-    );
+    const res = await fetch(url, { cache: "no-store" });
     if (!res || !res.ok) return null;
     const data = (await res.json()) as Partial<MultiplayerState>;
     if (!data || typeof data.multiplayer !== "boolean") return null;
@@ -163,15 +162,13 @@ async function updateMultiplayerState(
     remove?: string[];
   },
 ): Promise<MultiplayerState | null> {
-  if (typeof fetch !== "function" || !conversationId) return null;
-  const res = await fetch(
-    `/api/conversations/${encodeURIComponent(conversationId)}/multiplayer`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    },
-  );
+  const url = conversationApiUrl(conversationId, "/multiplayer");
+  if (typeof fetch !== "function" || !url) return null;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
   if (!res.ok) {
     const text = (await res.text()).trim();
     throw new Error(text || `Couldn't update multiplayer mode (HTTP ${res.status}).`);

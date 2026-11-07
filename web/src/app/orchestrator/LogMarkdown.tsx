@@ -11,83 +11,94 @@
 // letting absolute http(s)/data hrefs pass through untouched, so a poisoned
 // log can't make the browser fetch an arbitrary remote URL.
 
-import { memo, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useMemo, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { resolveTaskWorkspaceHref } from "@/app/chat/ui/workspaceHref";
 
-export default function LogMarkdown({
+// Hoisted so every render hands react-markdown the same plugin list.
+const REMARK_PLUGINS = [remarkGfm];
+
+// The components map is memoised on taskId (the only thing the overrides
+// close over): a fresh map each render would give react-markdown new img/a
+// component types, so React would remount every image — re-fetching it and
+// resetting LogImage's error fallback — whenever the live log grew. Same
+// pattern as chat's AssistantContent.
+function LogMarkdown({
   content,
   taskId,
 }: {
   content: string;
   taskId: string;
 }) {
-  return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        // Rewrite relative <img> srcs to the task workspace file
-        // proxy so agent-generated images render inline (#271).
-        // Absolute http(s)/data URLs pass through unchanged, so a
-        // log can't make the browser fetch an arbitrary remote URL.
-        img: ({ src, alt, title }) => {
-          const { href, isWorkspaceFile, downloadFilename } =
-            resolveTaskWorkspaceHref(
-              typeof src === "string" ? src : "",
-              taskId,
-            );
-          return (
-            <LogImage
-              src={href}
-              alt={alt ?? ""}
-              title={title ?? undefined}
-              isWorkspaceFile={isWorkspaceFile}
-              downloadFilename={downloadFilename}
-            />
-          );
-        },
-        // Same rewrite for <a href>: a link to a workspace file
-        // (e.g. the agent links the image instead of embedding it)
-        // gets a working href + a download attribute; external
-        // links open in a new tab. Mirrors chat's anchor handling.
-        a: ({ href, title, children }) => {
-          const {
-            href: resolved,
-            isWorkspaceFile,
-            downloadFilename,
-          } = resolveTaskWorkspaceHref(
-            typeof href === "string" ? href : "",
+  const components = useMemo<Components>(
+    () => ({
+      // Rewrite relative <img> srcs to the task workspace file
+      // proxy so agent-generated images render inline (#271).
+      // Absolute http(s)/data URLs pass through unchanged, so a
+      // log can't make the browser fetch an arbitrary remote URL.
+      img: ({ src, alt, title }) => {
+        const { href, isWorkspaceFile, downloadFilename } =
+          resolveTaskWorkspaceHref(
+            typeof src === "string" ? src : "",
             taskId,
           );
-          const isExternal = /^https?:\/\//i.test(resolved);
-          const extraProps: {
-            target?: string;
-            rel?: string;
-            download?: string;
-          } = {};
-          if (isWorkspaceFile) {
-            extraProps.download = downloadFilename || "";
-          } else if (isExternal) {
-            extraProps.target = "_blank";
-            extraProps.rel = "noopener noreferrer";
-          }
-          return (
-            <a
-              href={resolved || undefined}
-              title={title ?? undefined}
-              {...extraProps}
-            >
-              {children}
-            </a>
-          );
-        },
-      }}
-    >
+        return (
+          <LogImage
+            src={href}
+            alt={alt ?? ""}
+            title={title ?? undefined}
+            isWorkspaceFile={isWorkspaceFile}
+            downloadFilename={downloadFilename}
+          />
+        );
+      },
+      // Same rewrite for <a href>: a link to a workspace file
+      // (e.g. the agent links the image instead of embedding it)
+      // gets a working href + a download attribute; external
+      // links open in a new tab. Mirrors chat's anchor handling.
+      a: ({ href, title, children }) => {
+        const {
+          href: resolved,
+          isWorkspaceFile,
+          downloadFilename,
+        } = resolveTaskWorkspaceHref(
+          typeof href === "string" ? href : "",
+          taskId,
+        );
+        const isExternal = /^https?:\/\//i.test(resolved);
+        const extraProps: {
+          target?: string;
+          rel?: string;
+          download?: string;
+        } = {};
+        if (isWorkspaceFile) {
+          extraProps.download = downloadFilename || "";
+        } else if (isExternal) {
+          extraProps.target = "_blank";
+          extraProps.rel = "noopener noreferrer";
+        }
+        return (
+          <a
+            href={resolved || undefined}
+            title={title ?? undefined}
+            {...extraProps}
+          >
+            {children}
+          </a>
+        );
+      },
+    }),
+    [taskId],
+  );
+  return (
+    <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={components}>
       {content}
     </ReactMarkdown>
   );
 }
+
+export default memo(LogMarkdown);
 
 // LogImage renders an agent-produced image from a task's workspace, with a
 // graceful fallback (#271). A workspace image that fails to load — the file was

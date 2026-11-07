@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import SkillsPage from "./page";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 // SkillsPage — declared allowed-tools are surfaced for REVIEW as an advisory
 // signal, never as an enforced boundary. Load-bearing: a skill that declares
@@ -10,16 +11,15 @@ import SkillsPage from "./page";
 function mockFetch(skills: unknown[]) {
   return vi.fn().mockImplementation(async (url: string) => {
     if (url.startsWith("/api/skills")) {
-      return { ok: true, status: 200, json: async () => ({ skills }) };
+      return jsonResponse({ skills });
     }
     // user-skills + anything else: empty.
-    return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+    return jsonResponse({ skills: [] });
   });
 }
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("SkillsPage declared allowed-tools", () => {
@@ -85,32 +85,20 @@ describe("SkillsPage workspace pack", () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url === "/api/skills/alpha") {
         await gateA;
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ name: "alpha", description: "", source: "builtin", content: "ALPHA BODY" }),
-        };
+        return jsonResponse({ name: "alpha", description: "", source: "builtin", content: "ALPHA BODY" });
       }
       if (url === "/api/skills/beta") {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ name: "beta", description: "", source: "builtin", content: "BETA BODY" }),
-        };
+        return jsonResponse({ name: "beta", description: "", source: "builtin", content: "BETA BODY" });
       }
       if (url.startsWith("/api/skills")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return jsonResponse({
             skills: [
               { name: "alpha", description: "First.", source: "builtin" },
               { name: "beta", description: "Second.", source: "builtin" },
             ],
-          }),
-        };
+          });
       }
-      return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+      return jsonResponse({ skills: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<SkillsPage />);
@@ -134,10 +122,10 @@ describe("SkillsPage failure states", () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url.startsWith("/api/user-skills")) {
         return userSkillsStatus === 200
-          ? { ok: true, status: 200, json: async () => ({ skills: [{ id: "u1", name: "mine", description: "", body: "", status: "active" }] }) }
-          : { ok: false, status: userSkillsStatus, json: async () => ({}), text: async () => "" };
+          ? jsonResponse({ skills: [{ id: "u1", name: "mine", description: "", body: "", status: "active" }] })
+          : textResponse("", userSkillsStatus);
       }
-      return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+      return jsonResponse({ skills: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<SkillsPage />);
@@ -159,17 +147,13 @@ describe("SkillsPage failure states", () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
       if (url === "/api/skills/alpha") {
         return detailStatus === 200
-          ? { ok: true, status: 200, json: async () => ({ name: "alpha", description: "", source: "builtin", content: "ALPHA BODY" }) }
-          : { ok: false, status: detailStatus, json: async () => ({}) };
+          ? jsonResponse({ name: "alpha", description: "", source: "builtin", content: "ALPHA BODY" })
+          : jsonResponse({}, detailStatus);
       }
       if (url.startsWith("/api/skills")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ skills: [{ name: "alpha", description: "First.", source: "builtin" }] }),
-        };
+        return jsonResponse({ skills: [{ name: "alpha", description: "First.", source: "builtin" }] });
       }
-      return { ok: true, status: 200, json: async () => ({ skills: [] }) };
+      return jsonResponse({ skills: [] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<SkillsPage />);
@@ -204,29 +188,22 @@ describe("SkillsPage failure states", () => {
   it("badges workspace-shared teammate skills and supports 1-click sharing and opt-in installation", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === "/api/user-skills/u1" && init?.method === "PUT") {
-        return { ok: true, status: 200, json: async () => ({}) };
+        return jsonResponse({});
       }
       if (url === "/api/user-skills" && init?.method === "POST") {
-        return { ok: true, status: 200, json: async () => ({ id: "u2" }) };
+        return jsonResponse({ id: "u2" });
       }
       if (url === "/api/skills/team-opt-log") {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return jsonResponse({
             name: "team-opt-log",
             description: "Shared optimization workflow",
             source: "workspace",
             body: "1. Open workbench.",
             content: "---\nname: team-opt-log\ndescription: Shared optimization workflow\n---\n\n1. Open workbench.",
-          }),
-        };
+          });
       }
       if (url.startsWith("/api/user-skills")) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return jsonResponse({
             skills: [
               {
                 id: "u1",
@@ -237,13 +214,9 @@ describe("SkillsPage failure states", () => {
                 visibility: "private",
               },
             ],
-          }),
-        };
+          });
       }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
+      return jsonResponse({
           skills: [],
           shared_skills: [
             {
@@ -253,8 +226,7 @@ describe("SkillsPage failure states", () => {
               shared_by: "brendan.dahlgren@elcanotek.com",
             },
           ],
-        }),
-      };
+        });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<SkillsPage />);

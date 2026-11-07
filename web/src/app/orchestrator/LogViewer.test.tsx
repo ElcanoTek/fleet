@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within, cleanup, fireEvent } from "@testing-library/react";
+import { act, render, screen, waitFor, within, cleanup, fireEvent } from "@testing-library/react";
 import { LogViewer } from "./LogViewer";
 import { OrchestratorError } from "@/app/shared/lib/orchestratorApi";
 import type { LogSession, Task } from "@/app/shared/lib/orchestratorApi";
@@ -17,6 +17,7 @@ const taskSubagentLog = vi.fn();
 const rerunTask = vi.fn();
 const wakeTask = vi.fn();
 const tasks = vi.fn();
+const streamTaskActivity = vi.fn();
 vi.mock("@/app/shared/lib/orchestratorApi", async (importOriginal) => {
   // Spread the real module so value exports the component imports (notably
   // OrchestratorError, used for the 404-vs-error branch) stay real; only the
@@ -32,6 +33,7 @@ vi.mock("@/app/shared/lib/orchestratorApi", async (importOriginal) => {
       rerunTask: (...args: unknown[]) => rerunTask(...args),
       wakeTask: (...args: unknown[]) => wakeTask(...args),
       tasks: (...args: unknown[]) => tasks(...args),
+      streamTaskActivity: (...args: unknown[]) => streamTaskActivity(...args),
     },
   };
 });
@@ -80,6 +82,83 @@ describe("LogViewer delete", () => {
       <LogViewer task={{ ...TASK, status: "running" }} onClose={() => {}} onDelete={onDelete} />,
     );
     expect(screen.queryByTestId("delete-task-button")).toBeNull();
+  });
+});
+
+// The live view reattaches its fetch stream after a failure, but a refusal
+// that a retry cannot change (the run is gone, or the session lapsed) ends
+// the watch with a final message instead of reconnecting forever (#2029).
+describe("LogViewer live stream reconnect", () => {
+  const LIVE: Task = { ...TASK, status: "running" };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    streamTaskActivity.mockReset();
+  });
+
+  it.each([
+    [403, "This run is no longer available."],
+    [401, "Sign in again to keep watching this run."],
+  ])("does not retry a %i and says why", async (status, message) => {
+    vi.useFakeTimers();
+    streamTaskActivity.mockRejectedValue(new OrchestratorError("stream failed", status));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(`Live stream error: ${message}`)).toBeTruthy();
+  });
+
+  it("rides out a brief 404 while the run registers its stream, then gives up", async () => {
+    vi.useFakeTimers();
+    // Two 404s (the leased → running handoff), then the stream attaches.
+    streamTaskActivity
+      .mockRejectedValueOnce(new OrchestratorError("not found", 404))
+      .mockRejectedValueOnce(new OrchestratorError("not found", 404))
+      .mockImplementation(() => new Promise(() => {}));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(3);
+    expect(screen.queryByText(/no longer available/)).toBeNull();
+  });
+
+  it("ends the watch after a run of 404s", async () => {
+    vi.useFakeTimers();
+    streamTaskActivity.mockRejectedValue(new OrchestratorError("not found", 404));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(5);
+    expect(screen.getByText("Live stream error: This run is no longer available.")).toBeTruthy();
+  });
+
+  it.each([503, 429, 408])("keeps retrying a %i with backoff", async (status) => {
+    vi.useFakeTimers();
+    streamTaskActivity.mockRejectedValue(new OrchestratorError(`stream failed (${status})`, status));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/reconnecting…/)).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+    expect(streamTaskActivity).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps retrying a network error", async () => {
+    vi.useFakeTimers();
+    streamTaskActivity.mockRejectedValue(new TypeError("Failed to fetch"));
+    render(<LogViewer task={LIVE} onClose={() => {}} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(streamTaskActivity.mock.calls.length).toBeGreaterThan(2);
   });
 });
 

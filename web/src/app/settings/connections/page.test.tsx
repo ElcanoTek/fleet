@@ -8,6 +8,7 @@ import {
   within,
 } from "@testing-library/react";
 import ConnectionsPage from "./page";
+import { jsonResponse } from "@/test/fetch";
 
 // Settings → Connections — the guided directory add plus the ?connector= deep
 // link. Load-bearing assertions: a deep-linked entry lands filtered with its
@@ -120,7 +121,7 @@ function mockFetch(
     const method = init?.method ?? "GET";
     // Per-seat actions (set default / rename / sign out / rotate key): 204.
     if (/^\/api\/remote-mcp-servers\/[^/]+\/(default|account|signout|key)$/.test(url)) {
-      return { ok: true, status: 204, json: async () => null, text: async () => "" };
+      return jsonResponse(null, 204);
     }
     if (url.startsWith("/api/remote-mcp-servers") && method === "POST") {
       const parsed = JSON.parse(String(init?.body ?? "{}")) as Record<
@@ -128,25 +129,20 @@ function mockFetch(
         unknown
       >;
       const out = onAdd?.(parsed) ?? { status: 200, body: { id: "srv1" } };
-      return {
-        ok: out.status < 400,
-        status: out.status,
-        json: async () => out.body,
-        text: async () => JSON.stringify(out.body),
-      };
+      return jsonResponse(out.body, out.status);
     }
     if (url.startsWith("/api/remote-mcp-servers")) {
-      return { ok: true, status: 200, json: async () => list };
+      return jsonResponse(list);
     }
     if (url.startsWith("/api/mcp-catalog")) {
-      return { ok: true, status: 200, json: async () => catalog };
+      return jsonResponse(catalog);
     }
     if (url.startsWith("/api/connector-prefs")) {
-      return { ok: true, status: 200, json: async () => ({ prefs: [] }) };
+      return jsonResponse({ prefs: [] });
     }
     // /api/orchestrator/mcp-servers (credential-accounts panel) and anything
     // else incidental: empty success.
-    return { ok: true, status: 200, json: async () => ({ servers: [] }) };
+    return jsonResponse({ servers: [] });
   });
 }
 
@@ -157,7 +153,6 @@ function visit(search: string) {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
   window.history.replaceState({}, "", "/settings/connections");
 });
 

@@ -24,6 +24,14 @@ import {
 import { computeContextUsage, type ContextUsage } from "@/app/lib/contextUsage";
 import { createSSEParser } from "@/app/lib/sse";
 import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import {
+  createSchedule,
+  deleteSchedule,
+  PatrolApiError,
+  runScheduleNow,
+  setScheduleAction,
+  type PatrolResponse,
+} from "@/app/shared/lib/patrolApi";
 import { decideSpreadsheetNudge } from "@/app/lib/spreadsheetNudge";
 import {
   DEFAULT_UPLOAD_MAX_BYTES,
@@ -71,7 +79,7 @@ import {
 import { isToggleable, type PickerCategory } from "./toolsPicker";
 import { useIsAdmin } from "@/app/settings/useIsAdmin";
 import { bootstrapFailureDestination } from "./bootstrapFailure";
-import { PENDING_CONV_KEY } from "./workspaceHref";
+import { isPendingKey, PENDING_CONV_KEY, realConvId } from "./workspaceHref";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { Icon } from "./Icon";
@@ -147,16 +155,10 @@ import {
   type TurnStreamDeps,
 } from "./useTurnStream";
 import { readChatSession, writeChatSession } from "./chatSessionStore";
-import { deriveGenUiState } from "./genui/transcript";
-import { boardManifest, boardStatus, cardRef, deriveBoard } from "./dashboard/board";
-import { DashboardTranscriptContext, panelDomId, type DashboardTranscriptValue } from "./dashboard/context";
+import { boardManifest } from "./dashboard/board";
+import { DashboardTranscriptContext } from "./dashboard/context";
 import { DashboardBoard, DashboardHud } from "./dashboard/DashboardView";
-import {
-  dashboardViewAfterSwitch,
-  readDashboardView,
-  useBoardPrefs,
-  writeDashboardView,
-} from "./dashboard/prefs";
+import { useDashboardViewState } from "./dashboard/useDashboardViewState";
 import type { UserPersonaOption } from "./userPersonas";
 import { readPref, writePref } from "@/app/shared/lib/storage";
 import { copyText } from "@/app/shared/lib/clipboard";
@@ -659,12 +661,6 @@ export function ChatExperience({
     pendingKeyCounterRef.current += 1;
     return `${PENDING_CONV_KEY}:${pendingKeyCounterRef.current}`;
   };
-  const isPendingKey = (key: string | null): boolean =>
-    key === null ||
-    key === PENDING_CONV_KEY ||
-    key.startsWith(`${PENDING_CONV_KEY}:`);
-  const realConvId = (key: string | null): string | null =>
-    key && !isPendingKey(key) ? key : null;
   // Cold start shows the full blocking spinner; a warm return (restoredSession
   // present) paints the cached transcript immediately and never blocks.
   const [isLoadingHistory, setIsLoadingHistory] = useState(
@@ -1916,13 +1912,27 @@ export function ChatExperience({
     };
   }, [selectedModel, modelRouting]);
 
+  // Catalog loads race: opening chat A then chat B (or a new chat's preview
+  // landing after a conversation's catalog) used to let whichever response
+  // arrived LAST paint the Tools picker, so B could show A's connectors. Every
+  // load takes a generation; a response is applied only while it is the
+  // latest one AND the conversation it was fetched for is still the open one
+  // (no real conversation, for the preview). The spinner follows the latest
+  // load.
+  const mcpCatalogGenRef = useRef(0);
+  const mcpCatalogIsCurrent = (gen: number, conversationId: string | null) =>
+    gen === mcpCatalogGenRef.current &&
+    (conversationId === null
+      ? realConvId(activeConversationIdRef.current) === null
+      : activeConversationIdRef.current === conversationId);
+
   // loadMcpServerCatalog fetches Optional connector controls plus locked
   // always-on status for the given conversation. Safe to call repeatedly —
-  // the backend is a cheap JSON read.
+  // the backend is a cheap JSON read, and a superseded load is ignored.
   const loadMcpServerCatalog = async (conversationId: string) => {
-    if (isLoadingMcpServers) return;
     const url = conversationApiUrl(conversationId, "/mcp-servers");
     if (!url) return;
+    const gen = ++mcpCatalogGenRef.current;
     setIsLoadingMcpServers(true);
     try {
       const response = await fetch(url, { cache: "no-store" });
@@ -1931,12 +1941,13 @@ export function ChatExperience({
         servers?: MCPServerInfo[];
         categories?: PickerCategory[];
       };
+      if (!mcpCatalogIsCurrent(gen, conversationId)) return;
       setMcpServers(data.servers ?? []);
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal — picker just stays empty */
     } finally {
-      setIsLoadingMcpServers(false);
+      if (gen === mcpCatalogGenRef.current) setIsLoadingMcpServers(false);
     }
   };
 
@@ -1958,6 +1969,7 @@ export function ChatExperience({
   // conversation loads. The backend has already merged the user's connector
   // prefs into `enabled`, so the response IS the seed state.
   const loadMcpServerCatalogPreview = async () => {
+    const gen = ++mcpCatalogGenRef.current;
     try {
       const response = await fetch("/api/mcp-servers", { cache: "no-store" });
       if (!response.ok) return;
@@ -1966,13 +1978,20 @@ export function ChatExperience({
         categories?: PickerCategory[];
       };
       const servers = data.servers ?? [];
+      // The seed is the user's saved prefs, not any chat's state: always
+      // refresh it. The picker rows only while no conversation took over.
       seededEnabledRef.current = new Map(
         servers.map((s) => [s.name, s.enabled]),
       );
+      if (!mcpCatalogIsCurrent(gen, null)) return;
       setMcpServers(servers);
       if (data.categories?.length) setMcpCategories(data.categories);
     } catch {
       /* non-fatal */
+    } finally {
+      // A preview that supersedes an in-flight conversation load takes over
+      // its spinner too: that load's own finally no longer owns the flag.
+      if (gen === mcpCatalogGenRef.current) setIsLoadingMcpServers(false);
     }
   };
 
@@ -2069,9 +2088,30 @@ export function ChatExperience({
     prev: MCPServerInfo[],
   ) => {
     const requested = enabledOptionalMcpServerNames(next);
+    // A failed save reverts only the rows THIS request changed (switch and
+    // seat), so a catalog load or another toggle that landed meanwhile is
+    // kept — and only while the picker still shows this conversation.
+    const before = new Map(prev.map((row) => [row.name, row]));
+    const changed = new Map<string, MCPServerInfo>();
+    for (const row of next) {
+      const old = before.get(row.name);
+      if (old && (old.enabled !== row.enabled || old.account !== row.account)) {
+        changed.set(row.name, old);
+      }
+    }
+    const stillShown = () => activeConversationIdRef.current === conversationId;
+    const revert = () => {
+      if (!stillShown()) return;
+      setMcpServers((curr) =>
+        curr.map((row) => {
+          const old = changed.get(row.name);
+          return old ? { ...row, enabled: old.enabled, account: old.account } : row;
+        }),
+      );
+    };
     const url = conversationApiUrl(conversationId, "/mcp-servers");
     if (!url) {
-      setMcpServers(prev);
+      revert();
       return;
     }
     try {
@@ -2084,7 +2124,7 @@ export function ChatExperience({
         }),
       });
       if (!response.ok) {
-        setMcpServers(prev);
+        revert();
         return;
       }
       const body = (await response.json()) as { enabled_optional?: unknown };
@@ -2097,7 +2137,7 @@ export function ChatExperience({
       const persisted = body.enabled_optional.filter(
         (n): n is string => typeof n === "string",
       );
-      setMcpServers(reconcileMcpSelection(next, persisted));
+      if (stillShown()) setMcpServers(reconcileMcpSelection(next, persisted));
       const dropped = droppedOptionalMcpServerNames(requested, persisted);
       if (dropped.length > 0) {
         // The toggle visibly springing back is the user-facing signal; this is
@@ -2110,7 +2150,7 @@ export function ChatExperience({
         );
       }
     } catch {
-      setMcpServers(prev);
+      revert();
     }
   };
 
@@ -2510,6 +2550,10 @@ export function ChatExperience({
         });
       }
       if (movesTheUser) {
+        // The ref moves with the state synchronously (as the new-chat and
+        // stream paths do) so the catalog load below, which checks it when
+        // its response lands, never compares against the previous chat.
+        activeConversationIdRef.current = hydratedConversation.id;
         setActiveConversationId(hydratedConversation.id);
         // Opening a conversation clears the keyboard focus cursor (#306): the
         // cursor is a transient nav aid, and letting it linger would keep the
@@ -3460,183 +3504,34 @@ export function ChatExperience({
     Boolean(teamLinkNotice);
 
   // ── Dashboard view (docs/DASHBOARD-VIEW.md) ──────────────────────────
-  // The chat as a live board: panels are the conversation's show_ui cards,
-  // the chat narrows to a rail beside them. Remembered per conversation in
-  // this browser. A draft keeps the view it had when it gets its id, and so
-  // does a new chat started from dashboard view.
-  const dashboardConvId = realConvId(currentConvKey);
-  const [dashboardView, setDashboardView] = useState(() =>
-    readDashboardView(dashboardConvId),
-  );
-  // The slot key last seen. A draft becomes a conversation by way of a
-  // per-submission pending key ("<PENDING>:<n>", renamed to the real id when
-  // the server names it): only that path keeps the current view. Opening any
-  // other conversation, from a blank chat included, restores that
-  // conversation's own saved view.
+  // The chat as a live board; the state lives in useDashboardViewState.
   // Share before the first message creates the conversation straight from
   // the blank slot (openShareFromComposer); that is still this draft.
+  const dashboardConvId = realConvId(currentConvKey);
   const dashboardJustCreated =
     dashboardConvId !== null && shareCreatedSummariesRef.current.has(dashboardConvId);
-  const [dashboardKeySeen, setDashboardKeySeen] = useState(currentConvKey);
-  if (dashboardKeySeen !== currentConvKey) {
-    setDashboardKeySeen(currentConvKey);
-    const next = dashboardViewAfterSwitch(
-      dashboardKeySeen,
-      dashboardConvId,
-      dashboardView,
-      PENDING_CONV_KEY,
-      dashboardJustCreated,
-    );
-    if (next !== dashboardView) setDashboardView(next);
-  }
-  useEffect(() => {
-    if (dashboardConvId) writeDashboardView(dashboardConvId, dashboardView);
-  }, [dashboardConvId, dashboardView]);
-  const dashboardActive = dashboardView && !fullPageOverlay;
-  const [dashboardPane, setDashboardPane] = useState<"board" | "chat">("board");
-  const [dashboardFocus, setDashboardFocus] = useState("");
-  const [dashboardJump, setDashboardJump] = useState<{
-    messageId: number;
-    approvalId: string;
-    nonce: number;
-  } | null>(null);
-  const [boardPrefs, updateBoardPrefs] = useBoardPrefs(
+  const {
+    dashboardActive,
+    dashboardPane,
+    setDashboardPane,
+    dashboardFocus,
+    setDashboardFocus,
+    updateBoardPrefs,
+    dashboardGenUi,
+    board,
+    dashboardStatus,
+    toggleDashboardView,
+    dashboardTranscript,
+    showDashboardApprovals,
+  } = useDashboardViewState({
     currentConvKey,
+    fullPageOverlay,
     dashboardConvId,
-    PENDING_CONV_KEY,
     dashboardJustCreated,
-  );
-  const dashboardGenUi = useMemo(
-    () => (dashboardActive ? deriveGenUiState(messages) : null),
-    [dashboardActive, messages],
-  );
-  const board = useMemo(
-    () =>
-      dashboardGenUi ? deriveBoard(messages, dashboardGenUi, boardPrefs) : null,
-    [dashboardGenUi, messages, boardPrefs],
-  );
-  const dashboardStatus = useMemo(
-    () => boardStatus(messages, isStreaming),
-    [messages, isStreaming],
-  );
-  const toggleDashboardView = useCallback(() => {
-    setDashboardView((on) => !on);
-    setDashboardFocus("");
-    setDashboardPane("board");
-    // A drawer left open on a phone would reappear on the way out.
-    setSidebarOpen(false);
-    dashboardToggledRef.current = true;
-  }, []);
-  // The control that was pressed unmounts with the layout it lived in: once
-  // the new layout has rendered, put the keyboard focus on its toggle (HUD
-  // Exit on the way in, the header Dashboard button on the way out). Only
-  // after a toggle — never when a conversation simply opens in the view.
-  const dashboardToggledRef = useRef(false);
-  useEffect(() => {
-    if (!dashboardToggledRef.current) {
-      // Opening a conversation that restores dashboard view hides the rail
-      // the user just activated a row in: bring the focus into the HUD
-      // rather than leave it inside a hidden subtree.
-      if (
-        dashboardActive &&
-        document.activeElement?.closest('[data-dashboard-rail-wrapper]')
-      ) {
-        document.querySelector<HTMLElement>('[data-testid="dashboard-exit"]')?.focus();
-      }
-      return;
-    }
-    dashboardToggledRef.current = false;
-    // Not if the toggle came from inside a dialog that keeps the focus.
-    if (document.activeElement?.closest('[role="dialog"]')) return;
-    if (dashboardActive) {
-      document.querySelector<HTMLElement>('[data-testid="dashboard-exit"]')?.focus();
-    } else {
-      const enterBtn = document.querySelector<HTMLElement>('[data-testid="dashboard-enter"]');
-      if (enterBtn && enterBtn.getClientRects().length > 0) {
-        enterBtn.focus();
-      } else {
-        document.querySelector<HTMLElement>('[data-testid="composer-more-button"]')?.focus();
-      }
-    }
-  }, [dashboardActive]);
-  const focusDashboardPanel = useCallback((key: string) => {
-    setDashboardFocus("");
-    setDashboardPane("board");
-    // After the pane switch paints: bring the panel into view and flash it.
-    // The focus moves only if the person has not already put it somewhere
-    // else in the meantime (typing in the composer, say): a delayed focus
-    // must never pull the caret out from under them. A focus left on the
-    // page body (the pane switch unmounted the old target) still moves.
-    const focusedAtRequest = document.activeElement;
-    window.setTimeout(() => {
-      const el = document.getElementById(panelDomId(key));
-      if (!el) return;
-      el.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
-      const now = document.activeElement;
-      const movedOn = now !== null && now !== document.body && now !== focusedAtRequest;
-      if (!movedOn) el.focus({ preventScroll: true });
-      el.classList.remove("dash-panel-flash");
-      void el.offsetWidth; // restart the animation
-      el.classList.add("dash-panel-flash");
-      window.setTimeout(() => el.classList.remove("dash-panel-flash"), 1600);
-    }, 60);
-  }, []);
-  const dashboardTranscript = useMemo<DashboardTranscriptValue | null>(
-    () =>
-      board
-        ? {
-            cardSlots: board.cardSlots,
-            focusPanel: focusDashboardPanel,
-            pinCard: (cardId, occurrence, panelKey) => {
-              const ref = cardRef(cardId, occurrence);
-              // A card whose panel was taken off the board (its own slot or one
-              // it inherited through `replaces`): bring that slot back as it
-              // was, rather than pinning a second slot for the card.
-              const hidden = board.removedKeysOf.get(cardId);
-              if (hidden && hidden.length > 0) {
-                updateBoardPrefs((p) => ({
-                  ...p,
-                  removed: p.removed.filter((k) => !hidden.includes(k)),
-                }));
-                focusDashboardPanel(hidden[0]);
-                return;
-              }
-              updateBoardPrefs((p) => ({
-                ...p,
-                pinned: p.pinned.includes(ref) ? p.pinned : [...p.pinned, ref],
-                // Every key the card's hidden slot answers to: it may have
-                // been removed under a key it has since moved away from.
-                removed: p.removed.filter(
-                  (k) =>
-                    k !== `c:${ref}` &&
-                    (!panelKey || k !== `p:${panelKey}`) &&
-                    !(board.removedKeysOf.get(cardId) ?? []).includes(k),
-                ),
-              }));
-              focusDashboardPanel(panelKey ? `p:${panelKey}` : `c:${ref}`);
-            },
-            jumpRequest: dashboardJump,
-          }
-        : null,
-    [board, focusDashboardPanel, updateBoardPrefs, dashboardJump],
-  );
-  // The HUD's "approvals waiting" light: the transcript is virtualized, so
-  // the rail is asked to scroll the message holding the first pending
-  // approval into view (ChatTranscript), which then centres the card.
-  const showDashboardApprovals = useCallback(() => {
-    setDashboardPane("chat");
-    for (const m of messages) {
-      const a = (m.approvals ?? []).find((x) => x.status === "pending");
-      if (a) {
-        setDashboardJump((prev) => ({
-          messageId: m.id,
-          approvalId: a.id,
-          nonce: (prev?.nonce ?? 0) + 1,
-        }));
-        return;
-      }
-    }
-  }, [messages]);
+    messages,
+    isStreaming,
+    setSidebarOpen,
+  });
 
   // A teammate's branch (B20): the banner, and the outputs its transcript
   // names that were NOT shared at branch time — those render as locked names,
@@ -5375,7 +5270,6 @@ export function ChatExperience({
     loadRankedModels,
     loadCatalogModels,
     nextPendingKey,
-    isPendingKey,
     setPromptForKey,
     setPendingAttachmentsForKey,
     setAttachmentErrorForKey,
@@ -5470,13 +5364,7 @@ export function ChatExperience({
 
   const activeSchedules = useMemo(() => {
     const id = activeConversationId;
-    if (
-      !id ||
-      id === PENDING_CONV_KEY ||
-      id.startsWith(`${PENDING_CONV_KEY}:`)
-    ) {
-      return [];
-    }
+    if (!id || isPendingKey(id)) return [];
     return schedulesByConv.get(id) ?? [];
   }, [activeConversationId, schedulesByConv]);
   const activePatrolCount = useMemo(
@@ -5523,31 +5411,15 @@ export function ChatExperience({
       await submitPrompt(synthesized);
       return true;
     }
-    const url = conversationApiUrl(convId, "/schedules");
-    if (!url) return false;
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: input.title,
-          prompt: input.prompt,
-          cron: input.cron,
-          timezone: input.timezone,
-          duration_seconds: input.durationSeconds,
-          auto_approve: input.autoApprove,
-        }),
+      const data = await createSchedule(convId, {
+        title: input.title,
+        prompt: input.prompt,
+        cron: input.cron,
+        timezone: input.timezone,
+        duration_seconds: input.durationSeconds,
+        auto_approve: input.autoApprove,
       });
-      if (!res.ok) {
-        const msg = (await res.text()).trim();
-        showRailError(msg || `Couldn't schedule patrol (HTTP ${res.status}).`);
-        return false;
-      }
-      const data = (await res.json()) as {
-        schedule?: ChatSchedule;
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
       applyScheduleResponse(convId, data);
       notify({
         message: data.schedule
@@ -5555,93 +5427,57 @@ export function ChatExperience({
           : "Patrol scheduled.",
       });
       return true;
-    } catch {
-      showRailError("Couldn't reach the server to schedule the patrol.");
+    } catch (e) {
+      showRailError(
+        e instanceof PatrolApiError ? e.message : "Couldn't reach the server to schedule the patrol.",
+      );
       return false;
     }
   };
 
-  const handleRunPatrolNow = async (scheduleId: string) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
+  // mutatePatrol runs one Patrol-bar action against the open conversation's
+  // schedule and applies the reply; a refusal shows the server's reason, an
+  // unreachable server says so. A pending (not yet created) chat has no
+  // schedules to act on.
+  const mutatePatrol = async (
+    verb: string,
+    call: (convId: string) => Promise<PatrolResponse>,
+    after?: (convId: string) => void,
+  ) => {
     const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}/run-now`,
-    );
-    if (!url) return;
+    if (!convId || isPendingKey(convId)) return;
     try {
-      const res = await fetch(url, { method: "POST" });
-      if (!res.ok) {
-        showRailError(`Couldn't trigger patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-      void refreshQueue(convId);
-      void followApprovalResume(convId, approvalResumeFollowSettledMs);
-    } catch {
-      showRailError("Couldn't reach the server to trigger patrol.");
+      applyScheduleResponse(convId, await call(convId));
+      after?.(convId);
+    } catch (e) {
+      showRailError(
+        e instanceof PatrolApiError ? e.message : `Couldn't reach the server to ${verb} patrol.`,
+      );
     }
   };
 
-  const handleTogglePausePatrol = async (
+  const handleRunPatrolNow = (scheduleId: string) =>
+    mutatePatrol(
+      "trigger",
+      (convId) => runScheduleNow(convId, scheduleId),
+      (convId) => {
+        void refreshQueue(convId);
+        void followApprovalResume(convId, approvalResumeFollowSettledMs);
+      },
+    );
+
+  const handleTogglePausePatrol = (
     scheduleId: string,
     currentStatus: ChatSchedule["status"],
   ) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
-    const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}`,
-    );
-    if (!url) return;
     const action = currentStatus === "paused" ? "resume" : "pause";
-    try {
-      const res = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      if (!res.ok) {
-        showRailError(`Couldn't ${action} patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-    } catch {
-      showRailError(`Couldn't reach the server to ${action} patrol.`);
-    }
+    return mutatePatrol(action, (convId) => setScheduleAction(convId, scheduleId, action));
   };
 
-  const handleCancelPatrol = async (scheduleId: string) => {
-    if (!activeConversationId || isPendingKey(activeConversationId)) return;
-    const convId = activeConversationId;
-    const url = conversationApiUrl(
-      convId,
-      `/schedules/${encodeURIComponent(scheduleId)}`,
-    );
-    if (!url) return;
-    try {
-      const res = await fetch(url, { method: "DELETE" });
-      if (!res.ok) {
-        showRailError(`Couldn't cancel patrol (HTTP ${res.status}).`);
-        return;
-      }
-      const data = (await res.json()) as {
-        schedules?: ChatSchedule[];
-        auto_approve?: boolean;
-      };
-      applyScheduleResponse(convId, data);
-    } catch {
-      showRailError("Couldn't reach the server to cancel patrol.");
-    }
-  };
+  // Chat cancels with DELETE (the Launchpad's rollback uses PATCH
+  // {action:"cancel"}); both end the schedule server-side.
+  const handleCancelPatrol = (scheduleId: string) =>
+    mutatePatrol("cancel", (convId) => deleteSchedule(convId, scheduleId));
 
   // When the open conversation has an active patrol and is currently idle,
   // poll /inflight via reattachToConv every 15s while the tab is visible so
@@ -5651,8 +5487,7 @@ export function ChatExperience({
     const convId = activeConversationId;
     if (
       !convId ||
-      convId === PENDING_CONV_KEY ||
-      convId.startsWith(`${PENDING_CONV_KEY}:`) ||
+      isPendingKey(convId) ||
       activePatrolCount === 0 ||
       isStreaming
     ) {
@@ -5901,14 +5736,11 @@ export function ChatExperience({
     // when no conversation is being loaded, and flip this flag before awaiting
     // loadConversation so a late personas resolution skips the write.
     let willLoadConversation = false;
-    // Local pending-key check (mirrors the component's isPendingKey) so this
-    // mount-once effect keeps `[]` deps instead of depending on a per-render
-    // helper. PENDING_CONV_KEY is a module constant. A real conversation id is
-    // anything that isn't the empty-new-chat sentinel or a per-submission slot.
-    const isRealConvId = (id: string | null): id is string =>
-      id !== null &&
-      id !== PENDING_CONV_KEY &&
-      !id.startsWith(`${PENDING_CONV_KEY}:`);
+    // A real conversation id is anything that isn't the empty-new-chat
+    // sentinel or a per-submission slot (the module-level isPendingKey, so
+    // this mount-once effect keeps `[]` deps); narrowed to string for the
+    // callers below.
+    const isRealConvId = (id: string | null): id is string => !isPendingKey(id);
 
     // Deep-link (?c=<conversation id>): open a specific conversation on boot.
     // Used by the orchestrator's "Discuss this run" bridge, which creates a

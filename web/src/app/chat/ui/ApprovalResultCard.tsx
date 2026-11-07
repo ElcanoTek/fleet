@@ -31,6 +31,7 @@ import {
   RecordBox,
   RecordLink,
 } from "./ApprovalReadableCard";
+import { plural } from "@/app/shared/lib/format";
 
 type Tone = { border: string; bg: string; tint: string; fg: string; icon: string | null };
 
@@ -122,9 +123,9 @@ export function retryFailedPrompt(approval: Approval, keys: string[]): string {
     // A call the person stopped part way (docs/APPROVAL-STOP.md): the keys
     // are the items it never reached.
     const list = keys.map((k) => JSON.stringify(k)).join(", ");
-    return `Run the remaining ${n} item${n === 1 ? "" : "s"} of the approved ${approval.tool} call (approval_id=${approval.id}) that were not run because I stopped it: ${list}. Run only ${n === 1 ? "this one" : "these"}, and stage the run for my approval.`;
+    return `Run the remaining ${plural(n, "item")} of the approved ${approval.tool} call (approval_id=${approval.id}) that were not run because I stopped it: ${list}. Run only ${n === 1 ? "this one" : "these"}, and stage the run for my approval.`;
   }
-  const what = `${n} failed item${n === 1 ? "" : "s"}`;
+  const what = plural(n, "failed item");
   const list = keys.map((k) => JSON.stringify(k)).join(", ");
   return `Retry the ${what} from the approved ${approval.tool} call (approval_id=${approval.id}): ${list}. Retry only ${n === 1 ? "this one" : "these"}, and stage the retry for my approval.`;
 }

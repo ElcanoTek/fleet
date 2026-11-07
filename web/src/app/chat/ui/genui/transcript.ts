@@ -21,6 +21,7 @@ import {
   type Reply,
   type Submission,
 } from "./model";
+import { plural } from "@/app/shared/lib/format";
 
 export type GenUiState = {
   cards: Map<string, CardSpec>;
@@ -260,7 +261,7 @@ export function summarizeValue(v: unknown): string {
       const shown = v.slice(0, 8).map((x) => clip(String(x)));
       return v.length > 8 ? `${shown.join(", ")} +${v.length - 8} more` : shown.join(", ");
     }
-    return `${v.length} item${v.length === 1 ? "" : "s"}`;
+    return plural(v.length, "item");
   }
   if (typeof v === "object") {
     const o = v as Record<string, unknown>;

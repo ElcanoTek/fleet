@@ -155,8 +155,7 @@ export function FileUpload({
         const pending = current.filter((e) => e.status === "pending" || e.status === "error");
         if (pending.length === 0) {
           return current
-            .filter((e) => e.status === "uploaded" && e.filename)
-            .map((e) => e.filename!);
+            .flatMap((e) => (e.status === "uploaded" && e.filename ? [e.filename] : []));
         }
         for (const entry of pending) {
           entry.status = "uploading";
@@ -176,8 +175,7 @@ export function FileUpload({
           updateRef.current([...entriesRef.current]);
         }
         return entriesRef.current
-          .filter((e) => e.status === "uploaded" && e.filename)
-          .map((e) => e.filename!);
+          .flatMap((e) => (e.status === "uploaded" && e.filename ? [e.filename] : []));
       },
     });
   }, [registerHandle]);

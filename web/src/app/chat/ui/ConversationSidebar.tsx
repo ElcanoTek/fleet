@@ -47,7 +47,7 @@ import type {
   ServerConfig,
 } from "./chat-experience";
 import type { Project } from "./ProjectsModal";
-import { renderPreview, type SearchResult } from "./SearchBar";
+import { previewNodes, type SearchResult } from "./SearchBar";
 import { ShareGlyph, TeamGlyph } from "./ShareGlyphs";
 import { ChatReorderList } from "./ChatReorderList";
 
@@ -2040,10 +2040,9 @@ export function ConversationSidebar({
                         </span>
                         <span
                           className="block truncate text-[0.75rem] text-[var(--color-text-muted)] [&_mark]:rounded-[2px] [&_mark]:bg-[var(--color-accent)]/25 [&_mark]:text-[var(--color-text-primary)]"
-                          dangerouslySetInnerHTML={{
-                            __html: renderPreview(r.match_preview),
-                          }}
-                        />
+                        >
+                          {previewNodes(r.match_preview)}
+                        </span>
                       </button>
                     );
                   })}

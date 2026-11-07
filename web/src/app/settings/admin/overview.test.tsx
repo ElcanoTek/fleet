@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminOverviewPage from "./page";
+import { jsonResponse } from "@/test/fetch";
 
 // Settings → Admin → Overview: system health (GET /api/admin/health-summary)
 // + usage aggregates (GET /api/admin/stats) on one page.
@@ -77,10 +78,10 @@ const STATS = {
 function mockFetch({ summary = SUMMARY as unknown, healthStatus = 200 } = {}) {
   return vi.fn().mockImplementation(async (url: string) => {
     if (String(url).startsWith("/api/admin/health-summary")) {
-      return { ok: healthStatus === 200, status: healthStatus, json: async () => summary };
+      return jsonResponse(summary, healthStatus);
     }
     if (String(url).startsWith("/api/admin/stats")) {
-      return { ok: true, status: 200, json: async () => STATS };
+      return jsonResponse(STATS);
     }
     throw new Error(`unexpected ${url}`);
   });
@@ -88,7 +89,6 @@ function mockFetch({ summary = SUMMARY as unknown, healthStatus = 200 } = {}) {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
   adminState = "admin";
 });
 
@@ -254,13 +254,10 @@ describe("AdminOverviewPage usage", () => {
       "fetch",
       vi.fn().mockImplementation(async (url: string) => {
         if (String(url).startsWith("/api/admin/health-summary")) {
-          return { ok: true, status: 200, json: async () => SUMMARY };
+          return jsonResponse(SUMMARY);
         }
         if (String(url).startsWith("/api/admin/stats")) {
-          return {
-            ok: true,
-            status: 200,
-            json: async () => ({
+          return jsonResponse({
               users: [
                 {
                   ...STATS.users[0],
@@ -281,8 +278,7 @@ describe("AdminOverviewPage usage", () => {
                   cache_hit_rate_pct: 75.0,
                 },
               ],
-            }),
-          };
+            });
         }
         throw new Error(`unexpected ${url}`);
       }),

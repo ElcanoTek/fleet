@@ -355,8 +355,6 @@ const makeHarness = (opts: {
     loadRankedModels: asyncNoop,
     loadCatalogModels: asyncNoop,
     nextPendingKey: () => "__pending__:1",
-    isPendingKey: (key: string | null) =>
-      !!key && key.startsWith("__pending__"),
     setPromptForKey: noop,
     setPendingAttachmentsForKey: noop,
     setAttachmentErrorForKey: noop,

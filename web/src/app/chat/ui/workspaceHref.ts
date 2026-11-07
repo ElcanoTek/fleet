@@ -23,6 +23,18 @@ import { conversationWorkspaceUrl } from "@/app/lib/conversationApiUrl";
 // id we haven't received yet. Mirrors the constant in chat-experience.tsx.
 export const PENDING_CONV_KEY = "__pending__";
 
+// isPendingKey: the key names no server conversation yet — null, the empty
+// new-chat singleton, or a per-submission `__pending__:<n>` slot that the
+// conversation event renames to the real id.
+export function isPendingKey(key: string | null): boolean {
+  return key === null || key === PENDING_CONV_KEY || key.startsWith(`${PENDING_CONV_KEY}:`);
+}
+
+// realConvId: the key itself when it is a real conversation id, else null.
+export function realConvId(key: string | null): string | null {
+  return key && !isPendingKey(key) ? key : null;
+}
+
 export type WorkspaceHref = {
   /** The href to put on the <a>/<img>. Empty string if the raw value was empty. */
   href: string;
@@ -382,8 +394,11 @@ export function isPrivateWorkspacePath(path: string): boolean {
 export type SharedFileLinks = {
   /** The owner's shared outputs, by workspace-relative path (`out/report.xlsx`). */
   shared: ReadonlySet<string>;
-  /** Builds the reader's download URL for a shared path (teamFileUrl). */
-  fileUrl: (path: string) => string;
+  /**
+   * Builds the reader's download URL for a shared path
+   * (conversationTeamFileUrl); null when the URL gate refuses the path.
+   */
+  fileUrl: (path: string) => string | null;
 };
 
 /**
@@ -434,12 +449,8 @@ export function decideReadOnlyFile(
     return { kind: "upload", name: ref.name, path: ref.path };
   }
   if (ref.path && policy.links.shared.has(ref.path)) {
-    return {
-      kind: "shared",
-      name: ref.name,
-      path: ref.path,
-      url: policy.links.fileUrl(ref.path),
-    };
+    const url = policy.links.fileUrl(ref.path);
+    if (url) return { kind: "shared", name: ref.name, path: ref.path, url };
   }
   return { kind: "locked", ...ref };
 }

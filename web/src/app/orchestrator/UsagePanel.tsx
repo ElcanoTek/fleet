@@ -9,7 +9,7 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import { downloadFile } from "@/app/shared/lib/downloadFile";
-import { plural } from "./plural";
+import { plural } from "@/app/shared/lib/format";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 
 // UsagePanel — the Operations Center Usage tab (#601 part 1): cost/token

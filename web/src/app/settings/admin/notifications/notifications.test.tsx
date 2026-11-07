@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import NotificationsAdminPage from "./page";
+import { jsonResponse } from "@/test/fetch";
 
 // Settings → Admin → Notifications — admin-managed task notifications.
 // Load-bearing assertions: the env view renders with honest channel status
@@ -51,27 +52,21 @@ function mockFetch(
   let current = view;
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     if (!init || init.method === undefined || init.method === "GET") {
-      return { ok: true, status: 200, json: async () => current };
+      return jsonResponse(current);
     }
     const custom = onWrite?.(url, init);
     if (custom) {
       if (custom.status < 400 && (custom.body as View).source) {
         current = custom.body as View;
       }
-      return {
-        ok: custom.status < 400,
-        status: custom.status,
-        json: async () => custom.body,
-        text: async () => JSON.stringify(custom.body),
-      };
+      return jsonResponse(custom.body, custom.status);
     }
-    return { ok: true, status: 200, json: async () => current, text: async () => "{}" };
+    return jsonResponse(current);
   });
 }
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("NotificationsAdminPage", () => {

@@ -9,6 +9,7 @@ import {
 } from "@/app/shared/lib/orchestratorApi";
 import { isFormPrompt, PromptLibraryForm } from "./PromptLibraryForm";
 import { useDialogA11y } from "./useDialogA11y";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { saveBlob } from "@/app/shared/lib/downloadFile";
 
@@ -153,14 +154,27 @@ export function PromptLibrary({
     }
   };
 
-  const remove = async () => {
+  // Delete asks first in the app's own confirm (not window.confirm, which is
+  // the browser's unstyled, tab-blocking dialog), rendered inside this sheet so
+  // it stacks above it and its Tab/Escape take precedence (useDialogA11y).
+  const [confirmDelete, setConfirmDelete] = useState<PromptLibraryItem | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const remove = () => {
     if (!selected || !selected.owned_by_caller || selected.read_only) return;
-    if (!window.confirm(`Delete “${selected.name}”?`)) return;
+    setConfirmDelete(selected);
+  };
+  const confirmRemove = async () => {
+    if (!confirmDelete) return;
+    setDeleting(true);
     try {
-      await orchestratorApi.deletePrompt(selected.id);
+      await orchestratorApi.deletePrompt(confirmDelete.id);
+      setConfirmDelete(null);
       await load();
     } catch (err) {
+      setConfirmDelete(null);
       setError(errorMessage(err, "Could not delete prompt"));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -462,7 +476,7 @@ export function PromptLibrary({
                               <button
                                 type="button"
                                 className="btn btn-danger btn-small"
-                                onClick={() => void remove()}
+                                onClick={remove}
                               >
                                 Delete
                               </button>
@@ -529,6 +543,15 @@ export function PromptLibrary({
                   </main>
                 </div>
               </div>
+              <ConfirmDialog
+                open={confirmDelete !== null}
+                title="Delete prompt"
+                message={`Delete “${confirmDelete?.name ?? ""}”?`}
+                confirmLabel={deleting ? "Deleting…" : "Delete"}
+                busy={deleting}
+                onConfirm={() => void confirmRemove()}
+                onCancel={() => setConfirmDelete(null)}
+              />
             </div>,
             document.body,
           )

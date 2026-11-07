@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { RefObject } from "react";
 
 // useDialogA11y — shared modal accessibility behavior for the Operations Center
@@ -48,8 +48,10 @@ export function useDialogA11y(
   onClose: () => void,
   options?: DialogA11yOptions,
 ): void {
+  // Updated in a layout effect so an Escape right after a render reaches the
+  // current onClose, not the previous render's (see DialogShell).
   const onCloseRef = useRef(onClose);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onCloseRef.current = onClose;
   });
   // Same ref pattern as onClose: a fresh options object per render must not

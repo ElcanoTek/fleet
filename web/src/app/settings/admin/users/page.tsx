@@ -37,6 +37,7 @@ import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { getGatedJson } from "@/app/settings/lib/getGated";
+import { plural } from "@/app/shared/lib/format";
 
 export type AdminUser = {
   email: string;
@@ -837,7 +838,7 @@ export default function AdminUsersPage() {
       const members = out.users_updated ?? 0;
       const projects = out.projects_updated ?? 0;
       setRenameStatus(
-        `Renamed "${from}" to "${to.trim()}" (${members} member${members === 1 ? "" : "s"}, ${projects} shared project${projects === 1 ? "" : "s"}).`,
+        `Renamed "${from}" to "${to.trim()}" (${plural(members, "member")}, ${plural(projects, "shared project")}).`,
       );
       setRenameDraft(null);
       setFilterTeam(to.trim());

@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
+import { mockShellBasics } from "./_mocks";
 
 // Mocked e2e for Settings → Team (#1157, copy corrected by ADR-0057): a member
 // with no team can create one from the UI (the fix for "team is not editable,
@@ -9,20 +10,10 @@ import { loginViaCookie } from "./_session";
 // joining stays an admin grant (ADR-0047); and leaving, which now unshares the
 // chats you shared with the team, confirms before it acts.
 
+// Not an admin: the nav's Admin parent stays hidden, and the page shows the
+// "ask an admin" wording.
 async function mockShell(page: Page) {
-  await page.route("**/api/session", (r: Route) =>
-    r.fulfill({ json: { email: "e2e@example.com" } }),
-  );
-  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
-  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
-  await page.route("**/api/push/vapid-public-key", (r: Route) =>
-    r.fulfill({ status: 501, json: { error: "not configured" } }),
-  );
-  // Not an admin: the nav's Admin parent stays hidden, and the page shows the
-  // "ask an admin" wording.
-  await page.route("**/api/admin/settings", (r: Route) =>
-    r.fulfill({ status: 403, body: "forbidden — not an admin" }),
-  );
+  await mockShellBasics(page);
 }
 
 test.beforeEach(async ({ context }) => {

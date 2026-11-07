@@ -27,6 +27,9 @@ import {
   taskRunLabel,
   TaskSlaBadge,
   TaskStatusBadge,
+  isLive,
+  isRunnable,
+  isTerminal,
 } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
@@ -98,7 +101,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
-  const live = task.status === "running" || task.status === "leased";
+  const live = isLive(task.status);
   if (live) {
     return (
       <LiveTaskView
@@ -123,16 +126,6 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
     />
   );
 }
-
-// Terminal statuses that make sense to resubmit as a fresh one-off run.
-const RESUBMITTABLE = new Set(["success", "error", "cancelled", "dead_lettered"]);
-
-// Statuses that can be kicked off on demand: the terminal ones (resubmit) plus
-// the not-yet-run ones (run now). A pending/scheduled task does run on its own
-// eventually — but "eventually" is the next cron tick, which is why a freshly
-// created daily job could not be exercised until the following day. Only an
-// in-flight task is excluded; it is already running.
-const RUNNABLE = new Set([...RESUBMITTABLE, "pending", "scheduled"]);
 
 // TaskSummary mirrors the Recent Tasks row the user clicked (ID / Status /
 // SLA / Schedule / Created By / Created) so the modal carries the row's
@@ -492,6 +485,21 @@ const clampText = (s: string, max = 20_000) =>
     ? s.slice(0, max) + "\n… output capped at 20,000 characters"
     : s;
 
+// streamGoneMessage maps a stream failure that will not heal on reconnect to
+// the final message shown in place of "reconnecting…"; null means transient.
+// A live task can 404 for a moment during the leased → running handoff,
+// before the run registers its in-memory stream (and before any log exists),
+// so a 404 ends the watch only after this many in a row; 401/403 end it at
+// once.
+const STREAM_NOT_FOUND_GRACE = 5;
+
+function streamGoneMessage(err: unknown): string | null {
+  if (!(err instanceof OrchestratorError)) return null;
+  if (err.status === 401) return "Sign in again to keep watching this run.";
+  if (err.status === 403 || err.status === 404) return "This run is no longer available.";
+  return null;
+}
+
 // LiveTaskView attaches to GET /tasks/{id}/stream and renders the run's
 // tool-by-tool activity as it happens (#508): each tool call, its result, and
 // the assistant's text, chronologically, with an optional Stop control that
@@ -666,6 +674,7 @@ function LiveTaskView({
     // blip does not silently freeze the live Operations Center view.
     const pump = async () => {
       let failures = 0;
+      let notFound = 0;
       while (!ac.signal.aborted && !terminalRef.current) {
         try {
           await orchestratorApi.streamTaskActivity(
@@ -675,10 +684,24 @@ function LiveTaskView({
             lastEventID.current,
           );
           failures = 0;
+          notFound = 0;
           if (!terminalRef.current)
             await new Promise((resolve) => window.setTimeout(resolve, 500));
         } catch (err) {
           if (ac.signal.aborted) return;
+          // A refusal that retrying cannot change ends the watch with a final
+          // message instead of reconnecting forever: the run is gone or not
+          // ours (404/403), or the session lapsed (401). Network errors, 5xx,
+          // 408 and 429 stay transient and keep the backoff loop, and so does
+          // a 404 until STREAM_NOT_FOUND_GRACE in a row (the stream may not be
+          // registered yet).
+          const is404 = err instanceof OrchestratorError && err.status === 404;
+          notFound = is404 ? notFound + 1 : 0;
+          const gone = streamGoneMessage(err);
+          if (gone && (!is404 || notFound >= STREAM_NOT_FOUND_GRACE)) {
+            setStreamError(gone);
+            return;
+          }
           failures += 1;
           setStreamError(
             `${errorMessage(err, "stream failed")}; reconnecting…`,
@@ -929,7 +952,7 @@ function LogViewerBody({
   // one-off copy and leave the source (and its schedule) untouched; only the
   // wording differs, because "Resubmit" on a job that has never run reads as
   // though something went wrong.
-  const hasRun = RESUBMITTABLE.has(task.status ?? "");
+  const hasRun = isTerminal(task.status);
   const actionLabel = hasRun ? "Resubmit" : "Run now";
 
   const resubmit = async () => {
@@ -964,7 +987,7 @@ function LogViewerBody({
     saveBlob(blob, `fleet-task-${task.id.slice(0, 8)}-logs.json`);
   };
 
-  const canResubmit = RUNNABLE.has(task.status ?? "");
+  const canResubmit = isRunnable(task.status);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [wakeNote, setWakeNote] = useState("");
   const [waking, setWaking] = useState(false);
@@ -1062,7 +1085,7 @@ function LogViewerBody({
                   ))}
                 </select>
               ) : null}
-              {onEdit && RUNNABLE.has(task.status ?? "") ? (
+              {onEdit && isRunnable(task.status) ? (
                 <button
                   type="button"
                   className="btn btn-secondary"

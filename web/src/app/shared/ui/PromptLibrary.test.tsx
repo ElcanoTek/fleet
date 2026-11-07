@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PromptLibrary } from "./PromptLibrary";
 import { orchestratorApi } from "@/app/shared/lib/orchestratorApi";
@@ -43,6 +43,42 @@ describe("PromptLibrary", () => {
     // inserted (the task form seeds an empty Title from it).
     expect(onInsert).toHaveBeenCalledWith(gitPrompt.content, gitPrompt.name);
     expect(screen.queryByRole("dialog", { name: "Prompt library" })).not.toBeInTheDocument();
+  });
+
+  it("asks in the app's confirm before deleting an owned prompt", async () => {
+    const mine = {
+      ...gitPrompt,
+      id: "mine-1",
+      name: "My scan",
+      source: "workspace" as const,
+      visibility: "private" as const,
+      read_only: false,
+      owned_by_caller: true,
+    };
+    vi.mocked(orchestratorApi.prompts).mockResolvedValue([mine]);
+    vi.mocked(orchestratorApi.deletePrompt).mockResolvedValue(undefined as never);
+    const nativeConfirm = vi.spyOn(window, "confirm");
+    render(<PromptLibrary currentText="" onInsert={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "Open prompt library" }));
+    await screen.findAllByText("My scan");
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirm = screen.getByRole("dialog", { name: "Delete prompt" });
+    expect(confirm).toHaveTextContent("Delete “My scan”?");
+    expect(nativeConfirm).not.toHaveBeenCalled();
+    // Cancel keeps it and the library stays open.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog", { name: "Delete prompt" })).not.toBeInTheDocument();
+    expect(orchestratorApi.deletePrompt).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog", { name: "Prompt library" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete prompt" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() => expect(orchestratorApi.deletePrompt).toHaveBeenCalledWith("mine-1"));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "Delete prompt" })).not.toBeInTheDocument(),
+    );
   });
 
   it("starts a private workspace prompt from the current draft", async () => {

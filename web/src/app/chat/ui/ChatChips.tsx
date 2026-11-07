@@ -29,6 +29,7 @@ import { Icon } from "./Icon";
 import { formatBytes, formatDuration, formatTokens, formatUsd } from "./formatters";
 import { StatusChip } from "@/app/shared/ui/StatusChip";
 import { copyText } from "@/app/shared/lib/clipboard";
+import { plural } from "@/app/shared/lib/format";
 
 // PendingAttachment describes a file the user has picked to send with the
 // next turn. We carry the live File object for display (chip name/size
@@ -139,9 +140,9 @@ export function TurnSummaryChip({
   if (executionCount > 0) {
     parts.push(
       <span key="execution">
-        {toolCalls.length > 0 ? `${toolCalls.length} tool${toolCalls.length === 1 ? "" : "s"}` : null}
+        {toolCalls.length > 0 ? plural(toolCalls.length, "tool") : null}
         {toolCalls.length > 0 && pythonStreams.length > 0 ? " + " : null}
-        {pythonStreams.length > 0 ? `${pythonStreams.length} log${pythonStreams.length === 1 ? "" : "s"}` : null}
+        {pythonStreams.length > 0 ? plural(pythonStreams.length, "log") : null}
       </span>,
     );
   }
@@ -242,7 +243,7 @@ export function SummaryBanner({
               onClick={onToggleExpand}
               aria-expanded={summaryExpanded}
             >
-              {summaryExpanded ? `Collapse earlier ${collapsedRangeCount} turn${collapsedRangeCount === 1 ? "" : "s"}` : `Show earlier ${collapsedRangeCount} turn${collapsedRangeCount === 1 ? "" : "s"}`}
+              {summaryExpanded ? `Collapse earlier ${plural(collapsedRangeCount, "turn")}` : `Show earlier ${plural(collapsedRangeCount, "turn")}`}
             </button>
           ) : null}
           {onResummarize ? (
@@ -264,7 +265,7 @@ export function SummaryBanner({
       {meta?.model || (meta?.costUsd ?? 0) > 0 ? (
         <p className="mt-2 text-[0.65rem] text-[var(--color-text-muted)] tabular-nums">
           {meta?.model ? <>Summarized by <span className="font-medium">{shortModelName(meta.model)}</span></> : null}
-          {(meta?.costUsd ?? 0) > 0 ? <> · {meta!.costUsd! < 0.01 ? `$${meta!.costUsd!.toFixed(4)}` : `$${meta!.costUsd!.toFixed(2)}`}</> : null}
+          {meta?.costUsd && meta.costUsd > 0 ? <> · {meta.costUsd < 0.01 ? `$${meta.costUsd.toFixed(4)}` : `$${meta.costUsd.toFixed(2)}`}</> : null}
           {meta?.promptTokens ? <> · {meta.promptTokens.toLocaleString()} prompt tokens condensed</> : null}
         </p>
       ) : null}
@@ -313,7 +314,7 @@ export function ConversationTotalsChip({
   const parts: string[] = [];
   parts.push(`Σ ${formatUsd(totals.costUsd)}`);
   if (totals.cachedPercent !== null) parts.push(`${totals.cachedPercent}% cached`);
-  parts.push(`${totals.turns} turn${totals.turns === 1 ? "" : "s"}`);
+  parts.push(plural(totals.turns, "turn"));
   if (usage) parts.push(formatContextUsage(usage));
 
   // Only the context-usage cell color-shifts; the rest stays muted so

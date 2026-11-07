@@ -53,8 +53,21 @@
     "jsx-a11y/no-redundant-roles": "error",
     "jsx-a11y/no-noninteractive-tabindex": "error",
     "react/immutability": "error",
+    // Markup reaches the DOM only as React elements (search previews are
+    // split into text + <mark> nodes, Markdown goes through react-markdown).
+    "react/no-danger": "error",
+    // A `!` asserts what the compiler could not prove; app code narrows
+    // instead (an early return, a guard, a captured local). Tests and e2e
+    // specs may still assert on fixtures they built themselves (overrides).
+    "typescript/no-non-null-assertion": "error",
     "eslint/no-control-regex": "error"
   },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx", "e2e/**", "src/test/**"],
+      "rules": { "typescript/no-non-null-assertion": "off" }
+    }
+  ],
   "ignorePatterns": [
     "node_modules/**",
     "out/**",

@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   type ReactNode,
   type RefObject,
@@ -110,8 +111,11 @@ export function DialogShell({
   // onDismiss through a ref so `dismiss` stays stable: useDialogDismiss
   // re-arms its listener whenever its callback changes, and a parent
   // re-render hands us a fresh closure on every keystroke.
+  // A layout effect, not a passive one: it runs in the same commit that
+  // painted the new state, so an Escape pressed right after (a launch error
+  // appearing, say) reaches the CURRENT onDismiss, never the previous render's.
   const onDismissRef = useRef(onDismiss);
-  useEffect(() => {
+  useLayoutEffect(() => {
     onDismissRef.current = onDismiss;
   });
   const dismiss = useCallback(() => {

@@ -22,7 +22,7 @@
 // on a short interval while the tab is visible (and on returning to it).
 
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { conversationApiUrl, conversationTeamFileUrl } from "@/app/lib/conversationApiUrl";
 import { Icon } from "./Icon";
 import { LockGlyph, TeamGlyph } from "./ShareGlyphs";
 import { CopyButton } from "./ChatChips";
@@ -35,7 +35,6 @@ import {
 import { ViewerBranchBanner } from "./TeamBranchBanners";
 import {
   ownerFirstName,
-  teamFileUrl,
   type OutputFile,
   type ViewerBranch,
 } from "./teamSharing";
@@ -218,7 +217,8 @@ export function TeamChatViewer({
       shared: new Set(files.filter((f) => f.shared).map((f) => f.path)),
       fileUrl: (path: string) => {
         const v = rev.get(path);
-        const url = teamFileUrl(conversationId, path);
+        const url = conversationTeamFileUrl(conversationId, path);
+        if (!url) return null;
         return v ? `${url}?v=${encodeURIComponent(v)}` : url;
       },
     };

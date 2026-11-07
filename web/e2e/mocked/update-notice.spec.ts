@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page, Route } from "@playwright/test";
 import { loginViaCookie } from "./_session";
-import { mockChatBoot } from "./_mocks";
+import { mockChatBoot, mockShellBasics } from "./_mocks";
 
 // The "was updated — Reload" notice is app-wide: a deploy is noticed on every
 // signed-in page, and the notice is visible on a phone, where the chat
@@ -19,13 +19,9 @@ async function serveNewerBuild(page: Page) {
   await page.route("**/api/version", (r: Route) => r.fulfill({ json: { buildId: "e2e-newer-build" } }));
 }
 
+// Its /api/version stub is overridden by serveNewerBuild, registered after.
 async function mockSettingsShell(page: Page) {
-  await page.route("**/api/session", (r: Route) => r.fulfill({ json: { email: "e2e@example.com" } }));
-  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
-  await page.route("**/api/push/vapid-public-key", (r: Route) =>
-    r.fulfill({ status: 501, json: { error: "not configured" } }),
-  );
-  await page.route("**/api/admin/settings", (r: Route) => r.fulfill({ status: 403, body: "forbidden" }));
+  await mockShellBasics(page);
 }
 
 test("a deploy is announced on a non-chat page, on a phone, and can be dismissed", async ({ page }) => {

@@ -13,6 +13,13 @@ describe("GuideMarkdown", () => {
     expect(screen.getByRole("heading", { name: "4. Run states" }).id).toBe("4-run-states");
   });
 
+  it("keeps rendered nodes across re-renders (hoisted component overrides)", () => {
+    const { rerender } = render(<GuideMarkdown content={"## Section\n"} />);
+    const heading = screen.getByRole("heading", { name: "Section" });
+    rerender(<GuideMarkdown content={"## Section\n\nmore\n"} />);
+    expect(screen.getByRole("heading", { name: "Section" })).toBe(heading);
+  });
+
   it("drops the leading h1 — the page header already carries the title", () => {
     render(<GuideMarkdown content={"# Chat\n\n## Section\n"} />);
     expect(screen.queryByRole("heading", { name: "Chat" })).toBeNull();

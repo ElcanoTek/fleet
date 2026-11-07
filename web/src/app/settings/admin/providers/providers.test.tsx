@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import ProvidersAdminPage, { type LLMProvider } from "./page";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 // Settings → Admin → Providers — the admin surface for admin-managed LLM
 // providers. The load-bearing assertions: rows render with an honest
@@ -36,15 +37,14 @@ const ROW: LLMProvider = {
 function mockFetch(providers: LLMProvider[]) {
   return vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
     if (!init || init.method === undefined || init.method === "GET") {
-      return { ok: true, status: 200, json: async () => ({ providers }) };
+      return jsonResponse({ providers });
     }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => "{}" };
+    return textResponse("{}");
   });
 }
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 describe("ProvidersAdminPage", () => {
@@ -561,18 +561,14 @@ describe("ProvidersAdminPage", () => {
   it("runs the connection test and renders the key-free result line", async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string, init?: RequestInit) => {
       if (String(url).endsWith("/test") && init?.method === "POST") {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
+        return jsonResponse({
             ok: true,
             detail: "connected — 12 models served",
             served_model_count: 12,
             latency_ms: 245,
-          }),
-        };
+          });
       }
-      return { ok: true, status: 200, json: async () => ({ providers: [ROW] }) };
+      return jsonResponse({ providers: [ROW] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);
@@ -621,7 +617,7 @@ describe("ProvidersAdminPage", () => {
     const fetchMock = vi.fn().mockImplementation(async () => {
       calls += 1;
       if (calls === 1) throw new TypeError("Failed to fetch");
-      return { ok: true, status: 200, json: async () => ({ providers: [ROW] }) };
+      return jsonResponse({ providers: [ROW] });
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<ProvidersAdminPage />);

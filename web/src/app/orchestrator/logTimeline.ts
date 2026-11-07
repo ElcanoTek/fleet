@@ -9,6 +9,7 @@
 // recognized as events. No React here, so all of it is unit-tested directly.
 
 import type { LogMessage, LogToolCall } from "@/app/shared/lib/orchestratorApi";
+import { plural } from "@/app/shared/lib/format";
 
 // ── tool identity ────────────────────────────────────────────────────────────
 
@@ -335,8 +336,8 @@ function jsonHeadline(obj: Record<string, unknown>): string {
     const errors = Array.isArray(obj.errors) ? obj.errors.length : 0;
     const warnings = Array.isArray(obj.warnings) ? obj.warnings.length : 0;
     bits.push(obj.valid ? "valid" : "invalid");
-    if (errors) bits.push(`${errors} error${errors === 1 ? "" : "s"}`);
-    if (warnings) bits.push(`${warnings} warning${warnings === 1 ? "" : "s"}`);
+    if (errors) bits.push(plural(errors, "error"));
+    if (warnings) bits.push(plural(warnings, "warning"));
   }
   if (typeof obj.matches_found === "number") bits.push(`${obj.matches_found} match${obj.matches_found === 1 ? "" : "es"}`);
   else if (typeof obj.match_count === "number") bits.push(`${obj.match_count} match${obj.match_count === 1 ? "" : "es"}`);

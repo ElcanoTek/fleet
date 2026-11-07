@@ -5,6 +5,7 @@ const navigateMock = vi.fn();
 vi.mock("@/app/lib/navigation", () => ({ navigate: (href: string) => navigateMock(href) }));
 
 import PersonasPage from "./page";
+import { jsonResponse } from "@/test/fetch";
 
 // Settings → Personas (docs/USER-PERSONAS.md): drafts wait for approval, the
 // editor saves the server's shape, Start patrol creates the chat + schedule
@@ -18,19 +19,15 @@ function mockApi(personas: unknown[]) {
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (url === "/api/user-personas" && method === "GET") {
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ personas, workspace_personas: ["assistant", "trader"], default: "assistant" }),
-      };
+      return jsonResponse({ personas, workspace_personas: ["assistant", "trader"], default: "assistant" });
     }
     if (url === "/api/conversations" && method === "POST") {
-      return { ok: true, status: 200, json: async () => ({ id: "conv-1" }) };
+      return jsonResponse({ id: "conv-1" });
     }
     if (url.endsWith("/schedules") && method === "POST") {
-      return { ok: true, status: 200, json: async () => ({ schedule: { id: "s-1" } }) };
+      return jsonResponse({ schedule: { id: "s-1" } });
     }
-    return { ok: true, status: 200, json: async () => ({}), text: async () => "" };
+    return jsonResponse({});
   });
   vi.stubGlobal("fetch", fn);
   return calls;
@@ -52,8 +49,6 @@ const twin = {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
   navigateMock.mockReset();
 });
 

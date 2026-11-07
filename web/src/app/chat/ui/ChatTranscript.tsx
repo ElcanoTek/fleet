@@ -309,6 +309,8 @@ export function ChatTranscript({
 }: ChatTranscriptProps) {
   "use no memo";
   const { setModelPickerOpen, setModelSearchQuery, loadRankedModels, loadCatalogModels } = modelCatalog;
+  // The empty state's open protocol-pill form, when its pill still exists.
+  const activePill = activePillId ? getPill(activePillId, pills) : undefined;
   // TanStack Virtual returns imperative functions whose identities cannot be
   // safely memoized by React Compiler. Keep this component opted out until the
   // library exposes a compiler-compatible API; its own virtualizer still
@@ -598,9 +600,9 @@ export function ChatTranscript({
                     ) : null}
                   </div>
                   {!isLockdown && pills.length > 0 ? (
-                    activePillId && getPill(activePillId, pills) ? (
+                    activePill ? (
                       <ProtocolPillForm
-                        pill={getPill(activePillId, pills)!}
+                        pill={activePill}
                         onRun={(promptText) => {
                           setActivePillId(null);
                           void submitPrompt(promptText);

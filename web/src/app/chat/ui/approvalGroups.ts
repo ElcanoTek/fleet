@@ -39,12 +39,15 @@ export function approvalRenderItems(
   const items: ApprovalRenderItem[] = [];
   const placed = new Set<string>();
   for (const a of approvals) {
-    if (groupable(a, split) && (members.get(a.groupId)?.length ?? 0) >= 2) {
-      if (!placed.has(a.groupId)) {
-        placed.add(a.groupId);
-        items.push({ kind: "group", groupId: a.groupId, approvals: members.get(a.groupId)! });
+    if (groupable(a, split)) {
+      const group = members.get(a.groupId);
+      if (group && group.length >= 2) {
+        if (!placed.has(a.groupId)) {
+          placed.add(a.groupId);
+          items.push({ kind: "group", groupId: a.groupId, approvals: group });
+        }
+        continue;
       }
-      continue;
     }
     items.push({ kind: "single", approval: a });
   }

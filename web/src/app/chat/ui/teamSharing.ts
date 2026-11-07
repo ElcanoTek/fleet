@@ -4,6 +4,8 @@
 // the teammate viewer all speak the same wire shapes. The Go handlers are the
 // source of truth; every helper here is a thin, typed wrapper over one route.
 
+import { conversationApiUrl } from "@/app/lib/conversationApiUrl";
+import { plural } from "@/app/shared/lib/format";
 import type { ChatToastInput } from "./ChatToasts";
 
 /** One output: a workspace file the agent presented in a reply (a file chip). */
@@ -112,24 +114,13 @@ export type ProjectMyState = {
 
 const enc = encodeURIComponent;
 
-/** /api/conversations/<id>/team-files/<path> — a teammate's download of a shared output. */
-export function teamFileUrl(conversationId: string, path: string): string {
-  const segments = path
-    .split("/")
-    .filter((s) => s.length > 0)
-    .map((s) => enc(s))
-    .join("/");
-  return `/api/conversations/${enc(conversationId)}/team-files/${segments}`;
-}
-
-/** /api/conversations/<id>/workspace/<path> — the owner's own download. */
-export function ownerFileUrl(conversationId: string, path: string): string {
-  const segments = path
-    .split("/")
-    .filter((s) => s.length > 0)
-    .map((s) => enc(s))
-    .join("/");
-  return `/api/conversations/${enc(conversationId)}/workspace/${segments}`;
+// conversationUrl is the gated conversation route for a fetch helper below:
+// an id that is not a single path-safe token never reaches fetch (the
+// helper rejects instead, like any other failed request).
+function conversationUrl(conversationId: string, suffix: string): string {
+  const url = conversationApiUrl(conversationId, suffix);
+  if (!url) throw new Error("Invalid conversation id.");
+  return url;
 }
 
 /** The team link a teammate opens: lands on the read-only view. */
@@ -151,7 +142,7 @@ export async function fetchConversationOutputs(
   conversationId: string,
 ): Promise<ConversationOutputs> {
   return json(
-    await fetch(`/api/conversations/${enc(conversationId)}/outputs`, {
+    await fetch(conversationUrl(conversationId, "/outputs"), {
       cache: "no-store",
     }),
   );
@@ -163,7 +154,7 @@ export async function setOutputShared(
   shared: boolean,
 ): Promise<ConversationOutputs> {
   return json(
-    await fetch(`/api/conversations/${enc(conversationId)}/outputs/share`, {
+    await fetch(conversationUrl(conversationId, "/outputs/share"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path, shared }),
@@ -203,7 +194,7 @@ export async function shareChatWithTeam(
     body.listed_paths = checklist.listedPaths;
   }
   return json(
-    await fetch(`/api/conversations/${enc(conversationId)}/share-with-team`, {
+    await fetch(conversationUrl(conversationId, "/share-with-team"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -215,7 +206,7 @@ export async function fetchTeamLinkStatus(
   conversationId: string,
 ): Promise<TeamLinkStatus> {
   return json(
-    await fetch(`/api/conversations/${enc(conversationId)}/team-link`, {
+    await fetch(conversationUrl(conversationId, "/team-link"), {
       cache: "no-store",
     }),
   );
@@ -256,11 +247,6 @@ export async function updateProjectMyState(
       body: JSON.stringify(patch),
     }),
   );
-}
-
-/** "1 chat" / "2 chats" — the count-plus-noun every confirm and toast uses. */
-export function plural(n: number, one: string, many: string): string {
-  return `${n} ${n === 1 ? one : many}`;
 }
 
 /** "1 file" / "3 files". */

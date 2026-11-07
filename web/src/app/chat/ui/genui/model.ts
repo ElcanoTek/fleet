@@ -424,6 +424,8 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
     if (weight && c.id && Array.isArray(out[c.id])) rowsLeft -= (out[c.id] as unknown[]).length * weight;
   });
   for (const { c, raw, weight, perItem } of pending) {
+    // Only an input with an id is ever pending (see above).
+    if (!c.id) continue;
     // Rows, and (like the server's cap on starting items) at most
     // MAX_LIST_ITEMS default entries copied across the items.
     // And never more than the repeater's own max_items, which the server
@@ -437,7 +439,7 @@ export function normalizeValues(spec: CardSpec, saved: Values | null | undefined
     const v = restoredValue(c, raw.slice(0, fit));
     if (!Array.isArray(v)) continue;
     rowsLeft -= v.length * weight;
-    out[c.id!] = v;
+    out[c.id] = v;
   }
   return out;
 }

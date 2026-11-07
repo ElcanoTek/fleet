@@ -65,6 +65,31 @@ export function fulfillRecordedTurn(route: Route, name: string, conversationId: 
   });
 }
 
+// mockShellBasics stubs what every page's shell fetches before its own data:
+// the session, the build version (the update-notice probe), the client
+// config (neutral: `{}`), the Web Push key (501, not configured) and the
+// admin probe (/api/admin/settings — 200 makes the session an admin, 403 a
+// member; member by default). A spec that needs a different answer for one
+// of these registers its own route afterwards, which takes precedence.
+export async function mockShellBasics(
+  page: Page,
+  opts: { admin?: boolean; email?: string } = {},
+) {
+  await page.route("**/api/session", (r: Route) =>
+    r.fulfill({ json: { email: opts.email ?? "e2e@example.com" } }),
+  );
+  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
+  await page.route("**/api/client-config", (r: Route) => r.fulfill({ json: {} }));
+  await page.route("**/api/push/vapid-public-key", (r: Route) =>
+    r.fulfill({ status: 501, json: { error: "not configured" } }),
+  );
+  await page.route("**/api/admin/settings", (r: Route) =>
+    opts.admin
+      ? r.fulfill({ json: { settings: [] } })
+      : r.fulfill({ status: 403, body: "forbidden — not an admin" }),
+  );
+}
+
 // ── Chat shell boot ─────────────────────────────────────────────────────────
 // The set of /api/* calls the chat experience makes on mount (session, version,
 // personas, server-config, the MCP catalog, conversation history, model lists).
@@ -89,8 +114,7 @@ export async function mockChatBoot(page: Page, opts: ChatBootOptions = {}) {
       ? [{ id: "victoria", name: "Victoria" }]
       : [{ id: "default", name: "Default" }]);
 
-  await page.route("**/api/session", (r: Route) => r.fulfill({ json: { email: "e2e@example.com" } }));
-  await page.route("**/api/version", (r: Route) => r.fulfill({ json: { build_id: "test" } }));
+  await mockShellBasics(page);
   await page.route("**/api/personas", (r: Route) =>
     r.fulfill({ json: { personas, default: personaDefault } }),
   );

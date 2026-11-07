@@ -74,8 +74,7 @@ function finite(value: unknown): number | null {
 export function blendedPricePerMillion(prices: ModelPrices): number | null {
   const prompt = finite(prices.pricePrompt);
   const completion = finite(prices.priceCompletion);
-  if (prompt === null && completion === null) return null;
-  if (prompt === null) return completion! * 1e6;
+  if (prompt === null) return completion === null ? null : completion * 1e6;
   if (completion === null) return prompt * 1e6;
   const blended =
     (prompt * PROMPT_WEIGHT + completion * COMPLETION_WEIGHT) /

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { DialogShell } from "@/app/shared/ui/DialogShell";
 import { TeamChip } from "./MoveChatConfirmDialog";
-import { fetchConversationOutputs, plural } from "./teamSharing";
+import { fetchConversationOutputs } from "./teamSharing";
+import { plural } from "@/app/shared/lib/format";
 
 // BulkDeleteConfirmModal is the multi-select bulk-delete confirmation (#279).
 // It shows the exact selection count and disables the confirm button for a
@@ -109,7 +110,7 @@ export function BulkDeleteConfirmModal({
   // the confirm never fires over copy that is still missing its number.
   const ready = remaining <= 0 && sharedFiles !== undefined;
   // The heading is also the dialog's accessible name, so it is built once.
-  const heading = `Delete ${count} conversation${count === 1 ? "" : "s"}?`;
+  const heading = `Delete ${plural(count, "conversation")}?`;
 
   return (
     <DialogShell

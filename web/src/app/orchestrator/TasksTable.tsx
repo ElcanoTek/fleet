@@ -15,49 +15,10 @@ import {
   TaskSlaBadge,
   SlaChip,
   TaskStatusBadge,
+  isDeletable,
+  isRunnable,
+  isStoppable,
 } from "./taskDisplay";
-
-// Statuses whose tasks can be edited: pending/scheduled edit in place;
-// terminal ones reopen the form to resubmit with changes. In-flight tasks
-// (leased/running) can only be stopped, not edited.
-const EDITABLE_STATUSES = new Set([
-  "pending",
-  "scheduled",
-  "success",
-  "error",
-  "cancelled",
-  "dead_lettered",
-]);
-
-// Statuses whose tasks can be kicked off on demand ("Run now"): a copy of the
-// task runs immediately and the source's schedule is left alone. Deliberately
-// the same set as EDITABLE_STATUSES — a task that is already in flight
-// (leased/running) is excluded, because a second concurrent
-// copy of a running job is a footgun, not a feature. A scheduled/pending task
-// IS included: waiting a day for the next cron tick to see whether a new job
-// works was the gap this closes.
-const RUNNABLE_STATUSES = EDITABLE_STATUSES;
-
-// Statuses whose tasks can be stopped/cancelled from the list. The complement
-// of EDITABLE_STATUSES: a task that has already reached a terminal state has
-// nothing left to stop, and everything else does — including pending/scheduled,
-// which is the case that mattered. Stopping a live run was reachable only from
-// inside the Live-activity modal, and a RECURRING job that had not yet fired
-// could not be stopped from anywhere in the UI at all, even though the API has
-// always supported it (#1152).
-const STOPPABLE_STATUSES = new Set([
-  "pending",
-  "scheduled",
-  "leased",
-  "running",
-  "paused_awaiting_input",
-  "paused_awaiting_wake",
-]);
-
-// Everything except a live run can be deleted. A leased/running task is refused
-// server-side — the worker holds the lease and is still writing to the row — so
-// the affordance is hidden rather than offered and then rejected. Stop it first.
-const UNDELETABLE_STATUSES = new Set(["leased", "running"]);
 
 // taskControlLabel is the accessible name for a per-row task control. The
 // human-readable part comes from taskRunLabel — the shared title →
@@ -427,7 +388,7 @@ export function TasksTable({
                         <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
                           {hasLogs ? "View" : "None"}
                         </StatusChip>
-                        {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
+                        {onRunNow && isRunnable(task.status) ? (
                           <button
                             type="button"
                             className="icon-action task-run-now-btn"
@@ -442,7 +403,7 @@ export function TasksTable({
                             <Icon name="zap" className="size-3.5" />
                           </button>
                         ) : null}
-                        {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
+                        {onEdit && isRunnable(task.status) ? (
                           <button
                             type="button"
                             className="icon-action task-edit-btn"
@@ -457,7 +418,7 @@ export function TasksTable({
                             <Icon name="edit" className="size-3.5" />
                           </button>
                         ) : null}
-                        {onStop && STOPPABLE_STATUSES.has(task.status ?? "") ? (
+                        {onStop && isStoppable(task.status) ? (
                           <button
                             type="button"
                             className="icon-action task-stop-btn"
@@ -472,7 +433,7 @@ export function TasksTable({
                             <Icon name="stop" className="size-3.5" />
                           </button>
                         ) : null}
-                        {onDelete && !UNDELETABLE_STATUSES.has(task.status ?? "") ? (
+                        {onDelete && isDeletable(task.status) ? (
                           <button
                             type="button"
                             className="icon-action task-delete-btn"
@@ -554,7 +515,7 @@ export function TasksTable({
                     <StatusChip tone={hasLogs ? "run-assigned" : "neutral"} className={`logs-badge${hasLogs ? "" : " no-logs"}`}>
                       {hasLogs ? "View logs" : "No logs"}
                     </StatusChip>
-                    {onRunNow && RUNNABLE_STATUSES.has(task.status ?? "") ? (
+                    {onRunNow && isRunnable(task.status) ? (
                       <span
                         role="button"
                         tabIndex={0}
@@ -577,7 +538,7 @@ export function TasksTable({
                         <Icon name="zap" className="size-3.5" />
                       </span>
                     ) : null}
-                    {onEdit && EDITABLE_STATUSES.has(task.status ?? "") ? (
+                    {onEdit && isRunnable(task.status) ? (
                       <span
                         role="button"
                         tabIndex={0}
@@ -600,7 +561,7 @@ export function TasksTable({
                         <Icon name="edit" className="size-3.5" />
                       </span>
                     ) : null}
-                    {onStop && STOPPABLE_STATUSES.has(task.status ?? "") ? (
+                    {onStop && isStoppable(task.status) ? (
                       <span
                         role="button"
                         tabIndex={0}
@@ -623,7 +584,7 @@ export function TasksTable({
                         <Icon name="stop" className="size-3.5" />
                       </span>
                     ) : null}
-                    {onDelete && !UNDELETABLE_STATUSES.has(task.status ?? "") ? (
+                    {onDelete && isDeletable(task.status) ? (
                       <span
                         role="button"
                         tabIndex={0}

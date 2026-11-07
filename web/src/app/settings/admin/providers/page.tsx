@@ -37,6 +37,7 @@ import { AdminGateFallback } from "../../AdminGateFallback";
 import { responseErrorText } from "@/app/lib/responseError";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { getGatedJson } from "@/app/settings/lib/getGated";
+import { plural } from "@/app/shared/lib/format";
 
 export type LLMProvider = {
   id: string;
@@ -872,7 +873,7 @@ function ProvidersAdmin() {
               const typeLabel = PROVIDER_TYPES[p.type]?.label ?? p.type;
               const modelsPart =
                 p.models.length > 0
-                  ? `${p.models.length} model${p.models.length === 1 ? "" : "s"}`
+                  ? plural(p.models.length, "model")
                   : "catch-all (any model)";
               // A row with no declared window cannot be enabled (rows saved
               // before the field existed may still be): flag it so the admin
@@ -952,8 +953,8 @@ function ProvidersAdmin() {
                       <ActStatus state={probe.ok ? "ok" : "err"}>
                         {probe.ok ? "✓" : "✗"} {probe.detail}
                         {probe.latency_ms > 0 ? ` · ${probe.latency_ms}ms` : ""}
-                        {(probe.missing_models?.length ?? 0) > 0
-                          ? ` — missing: ${probe.missing_models!.join(", ")}`
+                        {probe.missing_models && probe.missing_models.length > 0
+                          ? ` — missing: ${probe.missing_models.join(", ")}`
                           : ""}
                       </ActStatus>
                     </span>

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import AdminServerPage from "./page";
+import { jsonResponse, textResponse } from "@/test/fetch";
 
 vi.mock("@/app/lib/navigation", () => ({ useRouter: () => ({ replace: vi.fn() }) }));
 vi.mock("../../useIsAdmin", () => ({ useIsAdmin: () => "admin" }));
@@ -20,7 +21,6 @@ const STATS = {
 
 afterEach(() => {
   cleanup();
-  vi.restoreAllMocks();
 });
 
 const STORAGE = {
@@ -45,7 +45,7 @@ const routedFetch = (stats: unknown = STATS, storage: unknown = STORAGE) =>
   vi.fn().mockImplementation((input: RequestInfo | URL) => {
     const url = String(input);
     const body = url.includes("/api/admin/storage") ? storage : stats;
-    return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+    return Promise.resolve(jsonResponse(body));
   });
 
 describe("AdminServerPage", () => {
@@ -124,7 +124,7 @@ describe("AdminServerPage", () => {
         : url.includes("/api/admin/storage")
           ? STORAGE
           : STATS;
-      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+      return Promise.resolve(jsonResponse(body));
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminServerPage />);
@@ -148,10 +148,10 @@ describe("AdminServerPage", () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/api/admin/storage")) {
-        return Promise.resolve({ ok: true, status: 200, json: async () => STORAGE, text: async () => "" });
+        return Promise.resolve(jsonResponse(STORAGE));
       }
-      if (fail) return Promise.resolve({ ok: false, status: 502, json: async () => ({}), text: async () => "" });
-      return Promise.resolve({ ok: true, status: 200, json: async () => STATS, text: async () => "" });
+      if (fail) return Promise.resolve(textResponse("", 502));
+      return Promise.resolve(jsonResponse(STATS));
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminServerPage />);
@@ -177,8 +177,8 @@ describe("AdminServerPage", () => {
       vi.fn().mockImplementation((input: RequestInfo | URL) =>
         Promise.resolve(
           String(input).includes("/api/admin/storage")
-            ? { ok: true, status: 200, json: async () => STORAGE, text: async () => "" }
-            : { ok: false, status: 500, json: async () => ({}), text: async () => "" },
+            ? jsonResponse(STORAGE)
+            : textResponse("", 500),
         ),
       ),
     );
@@ -192,10 +192,10 @@ describe("AdminServerPage", () => {
     const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/storage/cleanup") && init?.method === "POST") {
-        return Promise.resolve({ ok: false, status: 500, json: async () => ({}), text: async () => "sweep refused" });
+        return Promise.resolve(textResponse("sweep refused", 500));
       }
       const body = url.includes("/api/admin/storage") ? STORAGE : STATS;
-      return Promise.resolve({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+      return Promise.resolve(jsonResponse(body));
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<AdminServerPage />);
