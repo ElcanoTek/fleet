@@ -90,11 +90,16 @@ func resolvedDSNs() config.DSNs {
 // (FLEET_CHAT_DATABASE_URL, DATABASE_URL, DB_* parts). Unlike the server it
 // refuses to fall through to the bare localhost defaults: a CLI verb aimed at
 // nothing in particular should say so rather than guess.
+//
+// In the one-database layout the result carries the chat schema, and so does
+// a --database-url naming that same database (config.DSNs.ForChat), so a verb
+// can never read or write the sched schema — or public — by mistake.
 func chatDSN(dbURL string) (string, error) {
+	d := resolvedDSNs()
 	if v := strings.TrimSpace(dbURL); v != "" {
-		return v, nil
+		return d.ForChat(v), nil
 	}
-	if d := resolvedDSNs(); d.ChatConfigured() {
+	if d.ChatConfigured() {
 		return d.Chat, nil
 	}
 	return "", fmt.Errorf("chat DB DSN unset — pass --database-url or set FLEET_CHAT_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
@@ -104,10 +109,11 @@ func chatDSN(dbURL string) (string, error) {
 // (FLEET_SCHED_DATABASE_URL, SCHED_DATABASE_URL, DATABASE_URL, DB_* parts),
 // refusing the bare localhost defaults like chatDSN.
 func schedDSN(dbURL string) (string, error) {
+	d := resolvedDSNs()
 	if v := strings.TrimSpace(dbURL); v != "" {
-		return v, nil
+		return d.ForSched(v), nil
 	}
-	if d := resolvedDSNs(); d.SchedConfigured() {
+	if d.SchedConfigured() {
 		return d.Sched, nil
 	}
 	return "", fmt.Errorf("sched DB DSN unset — pass --database-url or set FLEET_SCHED_DATABASE_URL / DATABASE_URL (in the shell or in %s)", serverEnvFile(""))
@@ -115,21 +121,11 @@ func schedDSN(dbURL string) (string, error) {
 
 // idleChatDSN resolves the chat DB DSN including the unconditional
 // localhost:5432 default the server itself falls back to.
-func idleChatDSN(dbURL string) string {
-	if v := strings.TrimSpace(dbURL); v != "" {
-		return v
-	}
-	return resolvedDSNs().Chat
-}
+func idleChatDSN(dbURL string) string { return resolvedDSNs().ForChat(dbURL) }
 
 // idleSchedDSN resolves the sched DB DSN including the unconditional
 // localhost:5432 default the server itself falls back to.
-func idleSchedDSN(dbURL string) string {
-	if v := strings.TrimSpace(dbURL); v != "" {
-		return v
-	}
-	return resolvedDSNs().Sched
-}
+func idleSchedDSN(dbURL string) string { return resolvedDSNs().ForSched(dbURL) }
 
 // envOrFile reads key from the process environment, falling back to the
 // deployment's server env file (serverEnvFile: FLEET_ENV_FILE, else
