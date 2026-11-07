@@ -147,18 +147,18 @@ func TestRedactDSN(t *testing.T) {
 	for in, want := range map[string]string{
 		"postgres://chat:s3cret@db.internal:5432/chat?sslmode=disable": "postgres://***@db.internal:5432/chat?sslmode=disable",
 		"postgres://chat@db/chat":                                      "postgres://***@db/chat",
-		"https://hooks.example.com/x?token=abc&channel=ops#frag":       "https://hooks.example.com/x?token=REDACTED&channel=ops#frag",
+		"https://hooks.example.com/x?token=abc&channel=ops#frag":       "https://hooks.example.com/x?token=***&channel=ops#frag",
 		"https://key@o1.ingest.sentry.io/42":                           "https://***@o1.ingest.sentry.io/42",
-		"https://u:p@h/p?sig=1&X-Amz-Signature=2&Api_Key=3&plain=4":    "https://***@h/p?sig=REDACTED&X-Amz-Signature=REDACTED&Api_Key=REDACTED&plain=4",
+		"https://u:p@h/p?sig=1&X-Amz-Signature=2&Api_Key=3&plain=4":    "https://***@h/p?sig=***&X-Amz-Signature=***&Api_Key=***&plain=4",
 		"host=db port=5432 user=chat password=s3cret dbname=chat":      "host=db port=5432 user=chat password=*** dbname=chat",
 		"host=db sslpassword='a b' password = x":                       "host=db sslpassword=*** password=***",
 		"https://example.com/path@not-userinfo":                        "https://example.com/path@not-userinfo",
 		"no credentials here":                                          "no credentials here",
 		// Codex round 3 (#2057): percent-encoded parameter names are matched
 		// decoded, and keep their spelling in the output.
-		"https://h/p?%74oken=abc&api%5Fkey=def&%zz=1&ok=2":                "https://h/p?%74oken=REDACTED&api%5Fkey=REDACTED&%zz=1&ok=2",
-		"https://h/p?Pass%77ord=x":                                        "https://h/p?Pass%77ord=REDACTED",
-		"postgres://u:p%40ss@[2001:db8::1]:5432/chat?password=x&user=bob": "postgres://***@[2001:db8::1]:5432/chat?password=REDACTED&user=bob",
+		"https://h/p?%74oken=abc&api%5Fkey=def&%zz=1&ok=2":                "https://h/p?%74oken=***&api%5Fkey=***&%zz=1&ok=2",
+		"https://h/p?Pass%77ord=x":                                        "https://h/p?Pass%77ord=***",
+		"postgres://u:p%40ss@[2001:db8::1]:5432/chat?password=x&user=bob": "postgres://***@[2001:db8::1]:5432/chat?password=***&user=bob",
 	} {
 		if got := RedactDSN(in); got != want {
 			t.Errorf("RedactDSN(%q) = %q, want %q", in, got, want)

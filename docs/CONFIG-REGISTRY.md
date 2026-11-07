@@ -36,9 +36,9 @@ proper. Each `Entry` carries:
 | `Knob` | makes it a boot-validated typed knob: `Min`/`Max`, `ReadBy` (a consumer outside `config.Load`), `Lenient`/`Why` |
 | `Helm` | the chart value that sets it (the explicit values↔settings mapping) |
 
-The table holds 392 settings. 276 are admitted from the env file under their
+The table holds 401 settings. 276 are admitted from the env file under their
 canonical name (the old allowlist's 300 keys are those plus 22 legacy alias
-spellings and the bare `PERSONA` / `PERSONA_DEFAULT`). The other 116 are read only
+spellings and the bare `PERSONA` / `PERSONA_DEFAULT`). The other 125 are read only
 from the process environment and were in no table before: CLI, Kubernetes,
 platform and harness variables, and the operator-facing inputs of the shell
 scripts. 149 settings resolve through the legacy-prefix chain, which with 9
@@ -377,7 +377,15 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
 - **DSN redaction is stricter.** `fleet status`, `fleet diagnose` and `fleet
   backup` errors used to strip only a URL's userinfo; they now share
   `config.RedactDSN`, which also removes credential-like query parameters and
-  the password of a key=value DSN.
+  the password of a key=value DSN. It is one function: ADR-0098's
+  (`internal/config/dsn.go`: pgx's `password`/`sslpassword`/`passfile` and
+  key=value DSNs) widened to any `scheme://` URL and to credential-shaped
+  query keys matched decoded, each masked as `***`.
+- **The keys ADR-0098 added are registered**: the libpq/pgx `PG*` target
+  variables `fleet db consolidate` refuses (`PGHOST`, `PGPORT`,
+  `PGDATABASE`, `PGUSER`, `PGSERVICE`, `PGSERVICEFILE`), and the script
+  inputs `FLEET_IDENTITY_BIN`, `FLEET_REDACT_CHAT_PH` and
+  `FLEET_REDACT_SCHED_PH`; `fleet db consolidate` reads them through `envreg`.
 - **Four more settings are secrets** (`OPENAI_CUSTOM_HEADERS`,
   `FLEET_WEBHOOK_URL`, `FLEET_WEBHOOK_BODY_TEMPLATE`, plus the internal
   `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm

@@ -116,15 +116,15 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `DATABASE_URL` | dsn | — | server | Generic Postgres DSN. Used for a store whose explicit DSN is unset (see internal/config/dsn.go for the resolution order). **Secret.** |
-| `FLEET_CHAT_DATABASE_URL` | dsn | — | server | Postgres DSN of the chat store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
-| `FLEET_SCHED_DATABASE_URL` | dsn | — | server | Postgres DSN of the scheduler store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
-| `SCHED_DATABASE_URL` | dsn | — | server | Bare legacy spelling of the scheduler DSN, read as a fallback. **Secret.** |
+| `DATABASE_URL` | dsn | — | server | The Postgres DSN: ONE database, the chat store in schema chat and the scheduler store in schema sched (ADR-0098). Unset, it is built from the DB_* parts. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
+| `FLEET_CHAT_DATABASE_URL` | dsn | — | server | Deprecated (ADR-0098): the chat store's own database on a box not yet consolidated (`fleet db consolidate`); set, it selects the legacy two-database layout. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
+| `FLEET_SCHED_DATABASE_URL` | dsn | — | server | Deprecated (ADR-0098): the scheduler store's own database on a box not yet consolidated; set, it selects the legacy two-database layout. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
+| `SCHED_DATABASE_URL` | dsn | — | server | Deprecated (ADR-0098): bare legacy spelling of the scheduler store's DSN in the legacy two-database layout. **Secret.** |
 | `DB_HOST` | string | `localhost` | server | Postgres host, used to build a DSN when no URL is set. |
 | `DB_PORT` | int | `5432` | server | Postgres port for the discrete DSN parts. |
-| `DB_USER` | string | (per store) | server | Postgres user for the discrete DSN parts. |
+| `DB_USER` | string | `fleet` | server | Postgres user for the discrete DSN parts. |
 | `DB_PASSWORD` | string | — | server | Postgres password for the discrete DSN parts. **Secret.** |
-| `DB_NAME` | string | (per store) | server | Postgres database name for the discrete DSN parts. |
+| `DB_NAME` | string | `fleet` | server | Postgres database name for the discrete DSN parts. |
 | `DB_SSLMODE` | string | `disable` | server | Postgres sslmode for the discrete DSN parts. |
 | `FLEET_CHAT_DB_MAX_CONNS` | int | `25` | server | Chat pool: maximum open connections. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MAX_CONNS` (process env only), `CUTLASS_CHAT_DB_MAX_CONNS` (process env only). |
 | `FLEET_CHAT_DB_MIN_CONNS` | int | `5` | server | Chat pool: maximum idle connections kept. *Validated at boot*. Deprecated aliases: `CHAT_CHAT_DB_MIN_CONNS` (process env only), `CUTLASS_CHAT_DB_MIN_CONNS` (process env only). |
@@ -428,6 +428,12 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `VISUAL` | string | — | cli | Editor `fleet env edit` opens (before EDITOR). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `EDITOR` | string | — | cli | Editor `fleet env edit` opens when VISUAL is unset. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `NO_COLOR` | string | — | cli | Any value turns colour off in `fleet motd` (no-color.org). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGHOST` | string | — | cli | libpq/pgx default host for a DSN that names none. `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGPORT` | string | — | cli | libpq/pgx default port for a DSN that names none. `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGDATABASE` | string | — | cli | libpq/pgx default database for a DSN that names none. `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGUSER` | string | — | cli | libpq/pgx default user for a DSN that names none. `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGSERVICE` | string | — | cli | libpq/pgx connection service name (pg_service.conf). `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `PGSERVICEFILE` | path | — | cli | libpq/pgx connection service file. `fleet db consolidate` refuses while it is set (ADR-0098). *Process env only* (fleet's env-file loader does not admit it; export it). |
 
 ## Install, update and doctor scripts
 
@@ -476,6 +482,9 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_SSH_ROOT` | path | — | test | Test seam: prefixes every path scripts/lib/ssh.sh touches. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_REDACT_CHAT_PW` | string | — | scripts | Internal: a generated password scripts/lib/pgprovision.sh redacts from its output. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_REDACT_SCHED_PW` | string | — | scripts | Internal: a generated password scripts/lib/pgprovision.sh redacts from its output. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_REDACT_CHAT_PH` | string | — | scripts | Internal: the placeholder scripts/lib/pgprovision.sh shows in place of the chat password. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_REDACT_SCHED_PH` | string | — | scripts | Internal: the placeholder scripts/lib/pgprovision.sh shows in place of the scheduler password. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_IDENTITY_BIN` | path | (fleet in the install directory, else fleet on PATH) | scripts | scripts/lib/idle.sh: the fleet binary whose `db dsn-identity` verb answers which database a DSN names (unset: the install directory's fleet, then fleet on PATH); set it empty to force the shell fallback. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DB_NAME` | string | `chat` | scripts | bootstrap.sh: chat database name to provision. A canonical name, not a legacy alias. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DB_USER` | string | `chat` | scripts | bootstrap.sh: chat database role to provision. A canonical name, not a legacy alias. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_DB_PASSWORD` | string | (generated) | scripts | bootstrap.sh: chat database password. A canonical name, not a legacy alias. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |

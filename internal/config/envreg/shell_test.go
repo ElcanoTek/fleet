@@ -31,7 +31,7 @@ var shellInternal = map[string]bool{
 	"GITHUB_WORKSPACE": true, "GITHUB_SHA": true, "GITHUB_REF": true, "RUNNER_TEMP": true,
 	// tools fleet's scripts drive, read under their own names
 	"GOPATH": true, "GOBIN": true, "GOFLAGS": true, "GOTOOLCHAIN": true, "GOCACHE": true, "GOMODCACHE": true,
-	"PGPASSWORD": true, "PGHOST": true, "PGUSER": true, "PGDATABASE": true, "PGPORT": true,
+	"PGPASSWORD":      true,
 	"DEBIAN_FRONTEND": true, "SSH_AUTH_SOCK": true, "SSH_CONNECTION": true, "SSH_TTY": true,
 	"HTTP_PROXY": true, "HTTPS_PROXY": true, "NO_PROXY": true,
 	"XDG_DATA_HOME": true, "XDG_STATE_HOME": true, "MAINPID": true,
