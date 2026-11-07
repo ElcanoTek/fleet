@@ -74,6 +74,7 @@ import {
   droppedOptionalMcpServerNames,
   setOptionalMcpServersEnabled,
   enabledOptionalMcpServerNames,
+  reconcileMcpAccounts,
   reconcileMcpSelection,
 } from "./mcpSelection";
 import { isToggleable, type PickerCategory } from "./toolsPicker";
@@ -2183,7 +2184,10 @@ export function ChatExperience({
         revert();
         return;
       }
-      const body = (await response.json()) as { enabled_optional?: unknown };
+      const body = (await response.json()) as {
+        enabled_optional?: unknown;
+        accounts?: unknown;
+      };
       if (!Array.isArray(body.enabled_optional)) {
         // No authoritative list came back (an older server, or a proxy that
         // rewrote the body). Leave the optimistic state alone rather than
@@ -2196,8 +2200,25 @@ export function ChatExperience({
       // An older save's answer is superseded by the newer one queued behind
       // it; reconciling the CURRENT rows (not this request's snapshot) keeps
       // anything a catalog load or another save put there meanwhile.
+      // Seats too: a catalog read (reopening the picker) that landed while
+      // this save was in flight carries the seats from before it. The
+      // response's `accounts` is what was persisted; an older server that
+      // omits it is trusted to have taken what was sent.
+      const persistedAccounts =
+        body.accounts && typeof body.accounts === "object"
+          ? Object.fromEntries(
+              Object.entries(body.accounts as Record<string, unknown>).filter(
+                (e): e is [string, string] => typeof e[1] === "string",
+              ),
+            )
+          : mcpAccountOverrides(sent);
       if (isLatest() && stillShown()) {
-        setMcpServers((curr) => reconcileMcpSelection(curr, persisted));
+        setMcpServers((curr) =>
+          reconcileMcpAccounts(
+            reconcileMcpSelection(curr, persisted),
+            persistedAccounts,
+          ),
+        );
       }
       const dropped = droppedOptionalMcpServerNames(requested, persisted);
       if (dropped.length > 0) {

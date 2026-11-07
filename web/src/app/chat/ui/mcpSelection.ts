@@ -57,6 +57,26 @@ export function reconcileMcpSelection<T extends ChatConnectorSelectionRow>(
 }
 
 /**
+ * Fold the credential seats a save persisted (`accounts`: server name → seat,
+ * default seats omitted) back into the local rows, so a catalog read that
+ * landed while the save was in flight cannot leave an older seat on screen.
+ * A row keeps its identity when its seat already matches; names compare
+ * case-insensitively, as above.
+ */
+export function reconcileMcpAccounts<T extends { name: string; account?: string }>(
+  rows: readonly T[],
+  accounts: Readonly<Record<string, string>>,
+): T[] {
+  const byName = new Map(
+    Object.entries(accounts).map(([name, seat]) => [name.toLowerCase(), seat]),
+  );
+  return rows.map((row) => {
+    const seat = byName.get(row.name.toLowerCase()) ?? "";
+    return (row.account ?? "") === seat ? row : { ...row, account: seat };
+  });
+}
+
+/**
  * The requested names the server did not persist — connectors its catalog does
  * not know. A name reaching here is usually one added or renamed in the bundle
  * since boot, which `fleet mcp reload` resolves.

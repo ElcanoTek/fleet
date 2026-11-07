@@ -224,4 +224,73 @@ describe("Tools picker connector saves", () => {
     expect(await answerNewestPost()).toEqual(["srv0"]);
     expect(checked("srv0")).toBe("true");
   });
+
+  it("a seat change survives a catalog read that landed while its save was in flight", async () => {
+    const seated = {
+      servers: [
+        {
+          name: "gamma",
+          display_name: "Gamma",
+          description: "",
+          tools: [],
+          tool_count: 1,
+          enabled: true,
+          accounts: ["personal", "work"],
+          default_account: "work",
+          remote: true,
+        },
+      ],
+    };
+    let post: { body: { accounts: Record<string, string> }; resolve: () => void } | null = null;
+    let catalogGets = 0;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
+          const body = JSON.parse(String(init.body)) as { enabled_optional: string[]; accounts: Record<string, string> };
+          return new Promise<Response>((resolve) => {
+            post = { body, resolve: () => resolve(json({ enabled_optional: body.enabled_optional, accounts: body.accounts })) };
+          });
+        }
+        if (url === "/api/conversations/conv-a/mcp-servers") {
+          catalogGets++;
+          // Every read answers with the seat as persisted BEFORE the save.
+          return json(seated);
+        }
+        if (url === "/api/mcp-servers" || /\/mcp-servers$/.test(url)) return json(seated);
+        if (url === "/api/conversations") return json({ conversations: CONVS });
+        if (url === "/api/conversations?archived=true") return json({ conversations: [] });
+        if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
+        if (/\/inflight$/.test(url)) return json({ inflight: false });
+        return json({}, 404);
+      }),
+    );
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    await waitFor(() => expect(catalogGets).toBe(1));
+    const toolsButton = screen.getByRole("button", { name: "Tools" });
+    fireEvent.click(toolsButton);
+    await waitFor(() => expect(catalogGets).toBe(2));
+    await act(async () => {});
+
+    fireEvent.click(await screen.findByTestId("mcp-seat-gamma"));
+    fireEvent.mouseDown(screen.getByRole("option", { name: /personal/ }));
+    fireEvent.click(screen.getByRole("option", { name: /personal/ }));
+    await waitFor(() => expect(post).not.toBeNull());
+    expect(post!.body.accounts).toEqual({ gamma: "personal" });
+
+    // Close and reopen the picker: its read lands with the old seat.
+    fireEvent.click(toolsButton);
+    fireEvent.click(toolsButton);
+    await waitFor(() => expect(catalogGets).toBe(3));
+    await waitFor(() => expect(screen.getByTestId("mcp-seat-gamma")).toHaveTextContent("work"));
+
+    // The save answers: the seat it persisted is what the picker shows.
+    await act(async () => {
+      post!.resolve();
+    });
+    await waitFor(() => expect(screen.getByTestId("mcp-seat-gamma")).toHaveTextContent("personal"));
+  });
 });
