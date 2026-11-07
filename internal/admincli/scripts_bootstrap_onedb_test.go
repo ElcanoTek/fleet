@@ -11,7 +11,7 @@ import (
 // ONE database and writes DATABASE_URL only (#2049); a re-run reuses the
 // password recorded in DATABASE_URL and never prints it.
 func TestBootstrapProvisionsOneDatabase(t *testing.T) {
-	const livePassword = "fleetLivePw3Z8kQ1"
+	const livePassword = "placeholder-not-a-secret"
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, []byte("DATABASE_URL=postgres://fleet:"+livePassword+"@127.0.0.1:5432/fleet?sslmode=disable\n"), 0o600); err != nil {
 		t.Fatal(err)
