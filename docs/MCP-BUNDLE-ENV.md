@@ -113,10 +113,12 @@ therefore reaches the server as
 `<operator dirs>:<workspace-root>:<EMAIL_ATTACHMENT_DIR>/outbound`. A key that
 does not admit the root, or a single-directory key such as
 `CUTLASS_REPORT_DIR: "${FLEET_WORKSPACE_ROOT}"`, is left alone, and nothing
-wider than the outbound directory (uploads, downloads) is ever added. `fleet
-serve` exports the directory as `FLEET_MCP_OUTBOUND_ATTACHMENT_DIR` before
-starting the MCP broker, which inherits it; boot overwrites any value the
-environment held, so it is not an operator knob.
+wider than the outbound directory (uploads, downloads) is ever added. Loading
+the configuration exports the directory as `FLEET_MCP_OUTBOUND_ATTACHMENT_DIR`,
+so every entrypoint that spawns MCP servers has it: `fleet serve` (and the MCP
+broker it starts, which inherits it), `fleet task run` and `fleet mcp test`.
+Loading overwrites any value the environment held, so it is not
+an operator knob.
 
 **Honest scope.** On the *shared* spawn paths (the boot roster the broker child
 keeps for tool discovery, hot reload, `fleet mcp test`, and load-on-demand onto

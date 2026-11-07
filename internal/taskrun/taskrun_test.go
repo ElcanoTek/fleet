@@ -11,6 +11,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/fakellm"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
@@ -147,6 +148,39 @@ func TestOneShot_FakeLLM(t *testing.T) {
 	}
 	if len(session.Messages) == 0 {
 		t.Fatalf("session log has no messages: %s", data)
+	}
+}
+
+// TestOneShotAdmitsOutboundAttachmentDir: `fleet task run` spawns its MCP
+// servers in-process, without `fleet serve`, so it must export the outbound
+// attachment staging dir itself (config.Load does it for every entrypoint).
+// The exported dir is the absolute one the snapshot writes copies to, and an
+// allowlist that admits the workspace root receives it.
+func TestOneShotAdmitsOutboundAttachmentDir(t *testing.T) {
+	startFakeLLM(t, "ok")
+	base := t.TempDir()
+	t.Setenv("FLEET_WORKSPACE_ROOT", base)
+	t.Setenv("EMAIL_ATTACHMENT_DIR", "./data/attachments") // the relative default, spelled out
+	t.Setenv(agentcore.OutboundAttachmentDirEnv, "")
+	cwd := t.TempDir()
+	t.Chdir(cwd)
+
+	taskFile := writeTaskFile(t, `"hello"`)
+	logPath := filepath.Join(t.TempDir(), "session.json")
+	if err := run([]string{"--log", logPath, taskFile}, "taskrun-test"); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	want := tools.OutboundAttachmentStagingDir("./data/attachments")
+	if !filepath.IsAbs(want) {
+		t.Fatalf("staging dir %q is not absolute", want)
+	}
+	if got := envreg.Get(agentcore.OutboundAttachmentDirEnv); got != want {
+		t.Fatalf("%s = %q after a one-shot run, want %q (where the copies are written)", agentcore.OutboundAttachmentDirEnv, got, want)
+	}
+	env := agentcore.SpawnEnv(map[string]string{"CUTLASS_ALLOWED_DIRS": agentcore.WorkspaceRootEnvToken}, "", "", agentcore.MCPUserIdentity{})
+	if got := env["CUTLASS_ALLOWED_DIRS"]; !strings.HasSuffix(got, string(os.PathListSeparator)+want) {
+		t.Fatalf("CUTLASS_ALLOWED_DIRS = %q, want the staging dir %q appended", got, want)
 	}
 }
 

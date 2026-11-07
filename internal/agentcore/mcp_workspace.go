@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Reserved ${FLEET_WORKSPACE} manifest-env token.
@@ -180,10 +182,11 @@ func ExpandWorkspaceRootEnv(env map[string]string) map[string]string {
 
 // OutboundAttachmentDirEnv names the env var that carries fleet's outbound
 // attachment staging directory (tools.OutboundAttachmentStagingDir) to every
-// process that spawns MCP servers. `fleet serve` writes it at boot
-// (PinOutboundAttachmentDir) and the out-of-process MCP broker inherits it, so
-// both sides admit the same directory. It is fleet-owned plumbing, not an
-// operator knob: boot overwrites whatever the environment held, and the
+// process that spawns MCP servers. config.Load writes it
+// (PinOutboundAttachmentDir), so every entrypoint has it (fleet serve, fleet
+// task run, fleet mcp test), and the out-of-process MCP broker
+// inherits it from fleet serve. It is fleet-owned plumbing, not an operator
+// knob: loading the config overwrites whatever the environment held, and the
 // FLEET_ prefix keeps a bundle from claiming the name as connector env.
 const OutboundAttachmentDirEnv = "FLEET_MCP_OUTBOUND_ATTACHMENT_DIR"
 
@@ -209,7 +212,7 @@ func PinOutboundAttachmentDir(dir string) {
 // outboundAttachmentDir returns the pinned staging directory, or "" when none
 // is pinned or the value is not a clean absolute path.
 func outboundAttachmentDir() string {
-	dir := strings.TrimSpace(os.Getenv(OutboundAttachmentDirEnv))
+	dir := strings.TrimSpace(envreg.Get(OutboundAttachmentDirEnv))
 	if dir == "" || !filepath.IsAbs(dir) || strings.ContainsAny(dir, "$"+string(os.PathListSeparator)) {
 		return ""
 	}

@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // TestSpawnEnvAdmitsOutboundAttachmentDir pins the outbound-attachment half of
@@ -72,7 +74,7 @@ func TestSpawnEnvAdmitsOutboundAttachmentDir(t *testing.T) {
 	cwd := t.TempDir()
 	t.Chdir(cwd)
 	PinOutboundAttachmentDir("data/attachments/outbound")
-	if got := os.Getenv(OutboundAttachmentDirEnv); !filepath.IsAbs(got) || !strings.HasSuffix(got, filepath.Join("data", "attachments", "outbound")) {
+	if got := envreg.Get(OutboundAttachmentDirEnv); !filepath.IsAbs(got) || !strings.HasSuffix(got, filepath.Join("data", "attachments", "outbound")) {
 		t.Errorf("pinned dir must be absolute, got %q", got)
 	}
 }

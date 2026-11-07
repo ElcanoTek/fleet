@@ -1606,6 +1606,15 @@ func Load(envFile string) (*Config, error) {
 		}
 	}
 
+	// Every entrypoint that can spawn MCP servers (fleet serve and the broker
+	// it starts, fleet task run, fleet mcp test) loads its config
+	// here, so this is where the outbound attachment staging dir is exported
+	// for agentcore.AdmitOutboundAttachmentDir. The value must equal
+	// tools.OutboundAttachmentStagingDir(cfg.EmailAttachmentDir), where the
+	// copies are actually written (pinned by a taskrun test; config cannot
+	// import tools).
+	agentcore.PinOutboundAttachmentDir(outboundAttachmentStagingDir(cfg.EmailAttachmentDir))
+
 	// Capture the boot environment last, once the process env is in its final
 	// (file-loaded, winners-restored) state, so a later hot-reload (#286) can
 	// reproduce boot precedence exactly and report changed non-reloadable settings.
@@ -1939,6 +1948,16 @@ func absoluteDir(dir string) string {
 		return abs
 	}
 	return dir
+}
+
+// outboundAttachmentStagingDir mirrors tools.OutboundAttachmentStagingDir:
+// <emailAttachmentDir>/outbound, absolute, or "" when the dir is unset.
+func outboundAttachmentStagingDir(emailAttachmentDir string) string {
+	dir := absoluteDir(emailAttachmentDir)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "outbound")
 }
 
 func getenvDefault(key, def string) string {

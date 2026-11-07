@@ -3,6 +3,9 @@ package config
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/ElcanoTek/fleet/internal/agentcore"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // TestEmailAttachmentDirIsAbsolute: the default "./data/attachments" and a
@@ -11,6 +14,7 @@ import (
 // particular are read by MCP subprocesses running in a different cwd.
 func TestEmailAttachmentDirIsAbsolute(t *testing.T) {
 	isolateEnv(t)
+	t.Setenv(agentcore.OutboundAttachmentDirEnv, "")
 	dir := t.TempDir()
 	t.Chdir(dir)
 
@@ -20,6 +24,9 @@ func TestEmailAttachmentDirIsAbsolute(t *testing.T) {
 	}
 	if want := filepath.Join(dir, "data", "attachments"); cfg.EmailAttachmentDir != want {
 		t.Fatalf("default EmailAttachmentDir = %q, want %q", cfg.EmailAttachmentDir, want)
+	}
+	if got, want := envreg.Get(agentcore.OutboundAttachmentDirEnv), filepath.Join(dir, "data", "attachments", "outbound"); got != want {
+		t.Fatalf("Load exported %s = %q, want %q", agentcore.OutboundAttachmentDirEnv, got, want)
 	}
 
 	t.Setenv("EMAIL_ATTACHMENT_DIR", "state/att")
