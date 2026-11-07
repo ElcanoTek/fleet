@@ -406,9 +406,13 @@ fi
 # already records the per-store DSNs, or of a run given the per-store flags or
 # CHAT_DB_*/SCHED_DB_* inputs. A legacy box is converged as it is: bootstrap
 # never moves data between databases (`fleet db consolidate` does).
+#
+# The env file is read with fleet's own parser (fleet_env_value: what
+# config.ResolveDSNs sees), so a key that is present but empty —
+# FLEET_CHAT_DATABASE_URL="" — does not count, exactly as in Go.
 DB_LAYOUT="one"
 if [[ "$LEGACY_DB_FLAGS" == "1" ]] \
-  || grep -qE '^[[:space:]]*(export[[:space:]]+)?(FLEET_CHAT_DATABASE_URL|FLEET_SCHED_DATABASE_URL|SCHED_DATABASE_URL)=.' "$ENV_FILE" 2>/dev/null \
+  || [[ -n "$(fleet_env_value "$ENV_FILE" FLEET_CHAT_DATABASE_URL)$(fleet_env_value "$ENV_FILE" FLEET_SCHED_DATABASE_URL)$(fleet_env_value "$ENV_FILE" SCHED_DATABASE_URL)" ]] \
   || [[ -n "${CHAT_DB_NAME:-}${CHAT_DB_USER:-}${SCHED_DB_NAME:-}${SCHED_DB_USER:-}" ]] \
   || [[ "$POSTGRES_MODE" == "external" && -n "${FLEET_CHAT_DATABASE_URL:-}${FLEET_SCHED_DATABASE_URL:-}" ]]; then
   DB_LAYOUT="legacy" # LEGACY-DB-LAYOUT: remove after consolidation
@@ -427,7 +431,7 @@ FLEET_DB_USER="${DB_USER_ARG:-fleet}"
 # disagrees with it is refused rather than silently switching databases.
 RECORDED_DB_URL=""
 if [[ "$DB_LAYOUT" == "one" && "$POSTGRES_MODE" == "local" && "$ADOPT_DB" != "1" ]]; then
-  RECORDED_DB_URL="$(env_get DATABASE_URL)"
+  RECORDED_DB_URL="$(fleet_env_value "$ENV_FILE" DATABASE_URL)"
 fi
 if [[ -n "$RECORDED_DB_URL" ]]; then
   _rd="$(fleet_dsn_role_db "$RECORDED_DB_URL")" \
@@ -454,7 +458,7 @@ if [[ "$POSTGRES_MODE" == "external" && "$ADOPT_DB" == "1" ]]; then
 fi
 ADOPTED_DB_URL=""
 if [[ "$ADOPT_DB" == "1" ]]; then
-  ADOPTED_DB_URL="${DATABASE_URL:-$(env_get DATABASE_URL)}"
+  ADOPTED_DB_URL="${DATABASE_URL:-$(fleet_env_value "$ENV_FILE" DATABASE_URL)}"
   [[ -n "$ADOPTED_DB_URL" ]] \
     || die "--adopt-existing-db needs the existing database's working DSN: set DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
 fi
@@ -481,12 +485,12 @@ fi
 ADOPTED_CHAT_URL=""
 ADOPTED_SCHED_URL=""
 if [[ "$ADOPT_CHAT_DB" == "1" ]]; then
-  ADOPTED_CHAT_URL="${FLEET_CHAT_DATABASE_URL:-$(grep '^FLEET_CHAT_DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  ADOPTED_CHAT_URL="${FLEET_CHAT_DATABASE_URL:-$(fleet_env_value "$ENV_FILE" FLEET_CHAT_DATABASE_URL)}"
   [[ -n "$ADOPTED_CHAT_URL" ]] \
     || die "--adopt-existing-chat-db needs the existing database's working DSN: set FLEET_CHAT_DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
 fi
 if [[ "$ADOPT_SCHED_DB" == "1" ]]; then
-  ADOPTED_SCHED_URL="${FLEET_SCHED_DATABASE_URL:-$(grep '^FLEET_SCHED_DATABASE_URL=' "$ENV_FILE" 2>/dev/null | cut -d= -f2- || true)}"
+  ADOPTED_SCHED_URL="${FLEET_SCHED_DATABASE_URL:-$(fleet_env_value "$ENV_FILE" FLEET_SCHED_DATABASE_URL)}"
   [[ -n "$ADOPTED_SCHED_URL" ]] \
     || die "--adopt-existing-sched-db needs the existing database's working DSN: set FLEET_SCHED_DATABASE_URL (env, or already present in ${ENV_FILE}). This script never creates or alters an adopted role — supply its CURRENT password."
 fi
@@ -497,15 +501,18 @@ gen_pass() { head -c 24 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 24;
 # fleet's stores there: each store creates its schema (chat, sched) on first
 # start, so a role that passes SELECT 1 but lacks CREATE on the database would
 # be reported ready and then fail at boot (lib/pgprovision.sh
-# fleet_db_store_readiness), or next to a legacy store in public. Every path that accepts a DSN it did not
+# fleet_db_store_readiness): it refuses a role that cannot create a missing
+# store schema, does not own an existing one (or what is in it), or a database
+# with a legacy store in public. Every path that accepts a DSN it did not
 # provision itself — external mode, --adopt-existing-db — calls it.
 require_schema_privilege() {
-  local rc=0
-  fleet_db_store_readiness "$1" || rc=$?
+  local rc=0 found
+  found="$(fleet_db_store_readiness "$1")" || rc=$?
   case "$rc" in
     0) return 0 ;;
+    4) die "${2}'s role must OWN the existing store schemas (chat, sched) and everything in them, but found: ${found} — transfer them (ALTER SCHEMA … OWNER TO <role>, ALTER TABLE … OWNER TO <role>), or drop the schemas so fleet creates them${3:+, $3}" ;;
     2) die "${2} names a database whose public schema already holds a fleet store (a legacy two-database install's database) — fleet will not run its stores next to it. Point DATABASE_URL at a new database, or move the legacy install with: fleet db consolidate (docs/ONE-DATABASE.md)" ;;
-    1) die "${2}'s role cannot run fleet's stores there: it needs CREATE on the database for a schema (chat, sched) that does not exist yet (GRANT CREATE ON DATABASE <db> TO <role>), and CREATE + USAGE on each that does (GRANT CREATE, USAGE ON SCHEMA <schema> TO <role>)${3:+, $3}" ;;
+    1) die "${2}'s role cannot run fleet's stores there: it needs CREATE on the database for a schema (chat, sched) that does not exist yet (GRANT CREATE ON DATABASE <db> TO <role>), and must own each that does${3:+, $3}" ;;
     *) die "${2}: could not check the role's privileges (psql failed)" ;;
   esac
 }
@@ -1283,7 +1290,7 @@ fi
 # rejects — the "idempotent re-run" broke DB auth on the next restart.
 env_dsn_password() {
   local url
-  url="$(env_get "$1")"
+  url="$(fleet_env_value "$ENV_FILE" "$1")"
   if [[ "$url" =~ ^postgres(ql)?://[^:/@]+:([^@/]+)@ ]]; then
     # The DSN carries the password percent-encoded; the role gets it decoded,
     # exactly as the driver will send it.
@@ -1318,9 +1325,9 @@ pg_exists() {
 # re-using its password and converging the role is the normal idempotent path.
 env_file_records() {
   local url re
-  # env_get, like env_dsn_password: the last assignment, quotes stripped —
-  # the value the service and the password read-back both see.
-  url="$(env_get "$1")"
+  # fleet_env_value, like env_dsn_password: what fleet itself reads (last
+  # assignment, export/comments/quotes handled) — the DSN the server uses.
+  url="$(fleet_env_value "$ENV_FILE" "$1")"
   re="^postgres(ql)?://$2:[^@]*@[^/]+/$3(\?.*)?$"
   [[ "$url" =~ $re ]]
 }
@@ -1564,7 +1571,7 @@ elif [[ "$DB_LAYOUT" == "one" ]]; then
   step "Branch B (external): validate the pre-provisioned DATABASE_URL (SELECT 1 + schema privilege)"
   # The process env first, then the env file — a re-run converges on the DSN
   # a previous run recorded, like every other persisted setting.
-  DB_URL="${DATABASE_URL:-$(env_get DATABASE_URL)}"
+  DB_URL="${DATABASE_URL:-$(fleet_env_value "$ENV_FILE" DATABASE_URL)}"
   [[ -n "$DB_URL" ]] || die "external mode needs DATABASE_URL (in the environment, or already in ${ENV_FILE})"
   if [[ -n "${FLEET_DB_SUPERUSER_URL:-}" ]]; then
     step "Opt-in: creating the database and granting the role CREATE on it via FLEET_DB_SUPERUSER_URL"

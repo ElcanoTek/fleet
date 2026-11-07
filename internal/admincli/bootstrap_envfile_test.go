@@ -10,7 +10,7 @@ import (
 
 // TestBootstrapEnvFileRecordsReadsLikeTheService: the guard that decides
 // whether a role/database was provisioned by an earlier run reads the env
-// file as everything else does (last assignment, quotes stripped), so a
+// file as fleet does (fleet_env_value: last assignment, quotes stripped), so a
 // quoted DATABASE_URL is still recognised (adversarial review, #2055).
 func TestBootstrapEnvFileRecordsReadsLikeTheService(t *testing.T) {
 	if _, err := exec.LookPath("bash"); err != nil {
@@ -21,9 +21,10 @@ func TestBootstrapEnvFileRecordsReadsLikeTheService(t *testing.T) {
 	if err := os.WriteFile(envFile, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	src := bootstrapFunc(t, "env_get") + bootstrapFunc(t, "env_file_records")
+	src := bootstrapFunc(t, "env_file_records")
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "envfile.sh")
 	run := func(role, db string) bool {
-		return exec.Command("bash", "-c", `ENV_FILE="$1"; eval "$2"; env_file_records DATABASE_URL "$3" "$4"`, "_", envFile, src, role, db).Run() == nil
+		return exec.Command("bash", "-c", `ENV_FILE="$1"; . "$5"; eval "$2"; env_file_records DATABASE_URL "$3" "$4"`, "_", envFile, src, role, db, lib).Run() == nil
 	}
 	if !run("fleet", "fleet") {
 		t.Error("a quoted DATABASE_URL (the last assignment) is not recognised as recorded")

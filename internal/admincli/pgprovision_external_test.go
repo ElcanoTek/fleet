@@ -114,27 +114,37 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tdb.Close()
-	// #2055 review: CREATE on the database is not enough for a store schema
-	// that already exists without privileges for the role.
-	if _, err := tdb.ExecContext(ctx, "CREATE SCHEMA chat"); err != nil { // owned by the test superuser
-		t.Fatal(err)
+	superuser := mustQueryString(t, tdb, "SELECT current_user")
+	// #2055 review: an existing store schema must be OWNED by the role — not
+	// merely usable — even with CREATE on the database; the refusal names
+	// the owner it found.
+	mustExec(t, tdb, "CREATE SCHEMA chat; GRANT CREATE, USAGE ON SCHEMA chat TO "+role) // owned by the test superuser
+	if got := readiness(); got != 4 {
+		t.Fatalf("an existing chat schema owned by another role: readiness %d, want 4", got)
 	}
-	if got := readiness(); got != 1 {
-		t.Fatalf("an existing chat schema the role cannot use: readiness %d, want 1", got)
+	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "schema chat is owned by "+superuser) || !strings.Contains(out, "must OWN") {
+		t.Fatalf("the gate did not name the owner it found: %v: %s", err, out)
 	}
-	if _, err := tdb.ExecContext(ctx, "DROP SCHEMA chat"); err != nil {
-		t.Fatal(err)
-	}
+	mustExec(t, tdb, "DROP SCHEMA chat")
 
-	// Pre-created schemas with CREATE + USAGE are the other accepted shape.
-	if _, err := admin.ExecContext(ctx, "REVOKE CREATE ON DATABASE "+db+" FROM "+role); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tdb.ExecContext(ctx, "CREATE SCHEMA chat AUTHORIZATION "+role+"; CREATE SCHEMA sched AUTHORIZATION "+role); err != nil {
-		t.Fatal(err)
-	}
+	// Pre-created schemas OWNED by the role are the other accepted shape —
+	// without CREATE on the database.
+	mustExec(t, admin, "REVOKE CREATE ON DATABASE "+db+" FROM "+role)
+	mustExec(t, tdb, "CREATE SCHEMA chat AUTHORIZATION "+role+"; CREATE SCHEMA sched AUTHORIZATION "+role)
 	if !can() {
 		t.Fatal("pre-created schemas owned by the role were not accepted")
+	}
+	// …but every table and sequence in them must be the role's too.
+	mustExec(t, tdb, "CREATE TABLE sched.stray (id serial)") // owned by the test superuser
+	if got := readiness(); got != 4 {
+		t.Fatalf("a table in sched owned by another role: readiness %d, want 4", got)
+	}
+	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "sched.stray is owned by "+superuser) || !strings.Contains(out, "sched.stray_id_seq is owned by "+superuser) {
+		t.Fatalf("the gate did not name the table and sequence it found: %v: %s", err, out)
+	}
+	mustExec(t, tdb, "DROP TABLE sched.stray")
+	if !can() {
+		t.Fatal("the role's own schemas were refused once the stray table was gone")
 	}
 
 	// #2055 review: a database whose public holds a fleet store is refused,
@@ -148,7 +158,15 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	if out, err := runGate("DATABASE_URL"); err == nil || !strings.Contains(out, "fleet db consolidate") {
 		t.Fatalf("the gate did not refuse a legacy store in public: %v: %s", err, out)
 	}
+}
 
+// TestDSNRoleDB: fleet_dsn_role_db takes the role and database only from a
+// URL DSN whose names are lower-case plain identifiers.
+func TestDSNRoleDB(t *testing.T) {
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	lib := filepath.Join(repoRootFromTest(t), "scripts", "lib", "pgprovision.sh")
 	for dsn, ok := range map[string]bool{
 		"postgres://app:x@h:5432/appdb?sslmode=require": true,
 		"postgres://App:x@h/appdb":                      false,

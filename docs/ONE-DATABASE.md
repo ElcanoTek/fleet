@@ -76,9 +76,12 @@ schema, or one schema forced on both).
 - `scripts/bootstrap.sh` provisions one role and one database (default
   `fleet`/`fleet`; `--db-name`, `--db-user`, `--adopt-existing-db`) and writes
   only `DATABASE_URL` (names must be lower-case). External mode reads
-  `DATABASE_URL` from the environment, else the env file, and refuses a role
-  that cannot create the `chat` and `sched` schemas (CREATE on the database,
-  or both schemas pre-created with CREATE + USAGE for it); with
+  `DATABASE_URL` from the environment, else the env file (read as fleet reads
+  it: `KEY=""` is unset), and refuses a database whose `public` holds a fleet
+  store, and a role that cannot run the stores: for each of `chat` and
+  `sched`, CREATE on the database if the schema does not exist yet, or — if it
+  does — OWNERSHIP of the schema and of every table, sequence and view in it
+  (the refusal names the owners it found); with
   `FLEET_DB_SUPERUSER_URL` it creates the DSN's database if missing and grants
   the DSN's role CONNECT + CREATE on it.
 - The Helm chart's in-cluster Postgres creates one database, `fleet`

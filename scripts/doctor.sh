@@ -911,7 +911,8 @@ else
   fi
   # One DSN, both stores in its schemas chat and sched (ADR-0098).
   # LEGACY-DB-LAYOUT: remove after consolidation — the per-store branch.
-  if [[ -n "$(env_get FLEET_CHAT_DATABASE_URL)$(env_get FLEET_SCHED_DATABASE_URL)$(env_get SCHED_DATABASE_URL)" ]]; then
+  # Read as fleet reads the file (fleet_env_value): KEY="" is unset, as in Go.
+  if [[ -n "$(fleet_env_value "$ENV_FILE" FLEET_CHAT_DATABASE_URL)$(fleet_env_value "$ENV_FILE" FLEET_SCHED_DATABASE_URL)$(fleet_env_value "$ENV_FILE" SCHED_DATABASE_URL)" ]]; then
     _layout=""
     _fleet_bin="${INSTALL_DIR:-/opt/fleet}/fleet"
     [[ -x "$_fleet_bin" ]] || _fleet_bin="$(command -v fleet || true)"
@@ -923,7 +924,7 @@ else
       advise "legacy two-database layout (FLEET_CHAT_DATABASE_URL / FLEET_SCHED_DATABASE_URL) — still supported; move it into one database with: fleet db consolidate   (dry run first; docs/ONE-DATABASE.md)"
     fi
     unset _layout
-  elif [[ -n "$(env_get DATABASE_URL)" ]]; then
+  elif [[ -n "$(fleet_env_value "$ENV_FILE" DATABASE_URL)" ]]; then
     pass "DATABASE_URL set (one database: schemas chat + sched)"
   else
     fail "no DATABASE_URL in $ENV_FILE — rerun scripts/bootstrap.sh"

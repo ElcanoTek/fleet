@@ -46,11 +46,49 @@ fleet_dsn_role_db() {
 # fleet_dsn_is_local_default DSN — true when a postgres:// URL DSN names the
 # local cluster bootstrap provisions: loopback or the default socket, port
 # 5432 (or none), no host/port query override.
+#
+# Parsed, not globbed: the authority's port must be absent or exactly 5432,
+# and so must every port query parameter once percent-decoded (5432 only —
+# not 54321, not 5432x); any host or hostaddr query parameter refuses.
 fleet_dsn_is_local_default() {
-  local re='^postgres(ql)?://[^@/?#]*@(127\.0\.0\.1|localhost|\[::1\])?(:5432)?/[^?#]*([?#].*)?$'
-  [[ "$1" =~ $re ]] || return 1
-  [[ "$1" != *[?\&]host=* && "$1" != *[?\&]hostaddr=* ]] || return 1
-  [[ "$1" != *[?\&]port=* || "$1" == *[?\&]port=5432* ]]
+  local LC_ALL=C dsn="$1" rest auth hostport host port query p k v
+  case "$dsn" in
+    postgres://*|postgresql://*) rest="${dsn#*://}" ;;
+    *) return 1 ;;
+  esac
+  rest="${rest%%#*}"
+  query=""
+  [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
+  rest="${rest%%\?*}"
+  [[ "$rest" == */* ]] || return 1
+  auth="${rest%%/*}"
+  hostport="${auth##*@}"
+  if [[ "$hostport" == \[* ]]; then
+    host="${hostport%%\]*}]"
+    port=""
+    [[ "$hostport" == *\]:* ]] && port="${hostport##*\]:}"
+    [[ "$hostport" == "$host" || "$hostport" == "$host:$port" ]] || return 1
+  else
+    host="${hostport%%:*}"
+    port=""
+    [[ "$hostport" == *:* ]] && port="${hostport#*:}"
+  fi
+  case "$host" in ""|127.0.0.1|localhost|"[::1]") ;; *) return 1 ;; esac
+  [[ -z "$port" || "$port" == "5432" ]] || return 1
+  local -a pairs=()
+  [[ -n "$query" ]] && IFS='&' read -r -a pairs <<< "$query"
+  for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    v=""
+    [[ "$p" == *=* ]] && v="${p#*=}"
+    v="${v//+/ }"
+    printf -v v '%b' "${v//%/\\x}"
+    case "$k" in
+      host|hostaddr) return 1 ;;
+      port) [[ "$v" == "5432" ]] || return 1 ;;
+    esac
+  done
+  return 0
 }
 
 # fleet_external_db_sql ROLE DATABASE — the superuser SQL external mode runs
@@ -68,30 +106,50 @@ SQL
 
 # fleet_db_store_readiness DSN — can fleet's stores run in the database DSN
 # names, as DSN's role? Returns
-#   0  yes: for each of the schemas chat and sched, the role has CREATE and
-#      USAGE on it when it exists, or CREATE on the database when it does
-#      not (each store creates its schema on first start);
-#   1  no: a privilege is missing;
+#   0  yes: each of the schemas chat and sched either does not exist and the
+#      role has CREATE on the database (the store creates it on first
+#      start), or exists and is OWNED by the role, as is every table,
+#      sequence and view in it — the migrations ALTER and the stores write
+#      them, which nothing short of ownership guarantees;
+#   1  no: CREATE on the database is missing for a schema that does not exist;
 #   2  no: the database's public schema holds a fleet store
 #      (public.schema_migrations) — a legacy two-database install's
 #      database, which the stores refuse to run next to;
-#   3  the check could not run (psql failed).
+#   3  the check could not run (psql failed);
+#   4  no: an existing store schema, or something in it, is owned by another
+#      role; what was found (up to five "x is owned by y") is printed.
 fleet_db_store_readiness() {
-  local out
-  out="$(psql -X -v ON_ERROR_STOP=1 -tAq -F '|' "$1" -c "SELECT
+  local out legacy create owned sep=$'\x1f'
+  out="$(psql -X -v ON_ERROR_STOP=1 -tAq -F "$sep" "$1" -c "SELECT
       EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace pn ON pn.oid = c.relnamespace
               WHERE pn.nspname = 'public' AND c.relname = 'schema_migrations' AND c.relkind IN ('r', 'p')),
-      bool_and(CASE WHEN n.oid IS NULL THEN has_database_privilege(current_database(), 'CREATE')
-                    ELSE has_schema_privilege(n.oid, 'CREATE') AND has_schema_privilege(n.oid, 'USAGE') END)
+      bool_and(n.oid IS NOT NULL OR has_database_privilege(current_database(), 'CREATE')),
+      coalesce((SELECT string_agg(x, '; ') FROM (
+        SELECT x FROM (
+          SELECT format('schema %s is owned by %s', n2.nspname, pg_get_userbyid(n2.nspowner)) AS x
+            FROM pg_catalog.pg_namespace n2
+           WHERE n2.nspname IN ('chat', 'sched') AND pg_get_userbyid(n2.nspowner) <> current_user
+          UNION ALL
+          SELECT format('%s.%s is owned by %s', n3.nspname, c.relname, pg_get_userbyid(c.relowner))
+            FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n3 ON n3.oid = c.relnamespace
+           WHERE n3.nspname IN ('chat', 'sched') AND c.relkind IN ('r', 'p', 'S', 'v', 'm')
+             AND pg_get_userbyid(c.relowner) <> current_user
+        ) f ORDER BY x LIMIT 5) l), '')
     FROM (VALUES ('chat'), ('sched')) AS s(name)
-    LEFT JOIN pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
-  case "$out" in
-    t\|*) return 2 ;;
-    f\|t) return 0 ;;
-    f\|f) return 1 ;;
+    LEFT JOIN pg_catalog.pg_namespace n ON n.nspname = s.name" 2>/dev/null)" || return 3
+  IFS="$sep" read -r legacy create owned <<< "$out"
+  [[ "$legacy" == "t" ]] && return 2
+  if [[ -n "$owned" ]]; then
+    printf '%s\n' "$owned"
+    return 4
+  fi
+  case "$create" in
+    t) return 0 ;;
+    f) return 1 ;;
     *) return 3 ;;
   esac
 }
+
 
 # fleet_redact_db_passwords < TEXT — TEXT with every occurrence of the
 # passwords in FLEET_REDACT_CHAT_PW and FLEET_REDACT_SCHED_PW replaced by their
