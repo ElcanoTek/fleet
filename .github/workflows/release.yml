@@ -1,4 +1,5 @@
-# Automatic date-based release tagging (ADR-0059, docs/VERSIONING.md).
+# Automatic date-based releases with signed artifacts (ADR-0059, ADR-0098,
+# docs/VERSIONING.md, docs/RELEASE-ARTIFACTS.md).
 #
 # fleet ships from a rolling release train: every PR squash-merges into `main`
 # (the only branch, ADR-0062), and every commit on `main` is a shippable release.
@@ -8,9 +9,25 @@
 # Each release is `vYYYY.MM.DD.N` (UTC date, N counting that day's releases from
 # 1) — several a day is the normal case. scripts/version.sh owns the format and
 # derives N from the tags already on the repo; builds derive their own identity
-# from `git describe` against these tags, which is what makes the tag the only
-# artifact a release needs. The GitHub release OBJECT is a view of the newest
-# tag, and only the newest is kept; tags are permanent.
+# from `git describe` against these tags. Tags are permanent.
+#
+# Three jobs, split by privilege (ADR-0098):
+#
+#   tag      contents: write. Mints the tag on the certified SHA; runs only the
+#            default branch's scripts/version.sh.
+#   build    contents: read, nothing else. Per architecture (native amd64 and
+#            arm64 runners): the web bundle, the static fleet binary — asserted
+#            to carry no host executor and to embed the bundle — the
+#            fleet-sandbox and fleet images, an SPDX SBOM for each, the
+#            stamped Helm chart. The only job that runs the release's code.
+#   publish  packages/id-token/attestations/contents write. Pushes the
+#            multi-arch images, signs them and the binaries + SHA256SUMS with
+#            keyless cosign, attaches SBOM attestations and SLSA provenance,
+#            writes release.json, and publishes the GitHub release with every
+#            file. Runs no code from the release.
+#
+# The release OBJECT carries the downloadable artifacts, so the newest ten are
+# kept (the rollback window); the GHCR images are kept for every tag.
 #
 # WHY `workflow_run` RATHER THAN A JOB IN ci.yml: a release job would have to
 # `needs: [ci-gate]`, and scripts/check_gate_needs_test.go requires every job in
@@ -70,7 +87,10 @@ jobs:
           && github.event.workflow_run.event == 'push'
           && github.event.workflow_run.head_branch == 'main' }}
     permissions:
-      contents: write # creates the tag and the GitHub release
+      contents: write # creates the tag; the release object is the publish job's
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      released: ${{ steps.tag.outputs.released }}
     steps:
       # Checks out the DEFAULT BRANCH, deliberately NOT the SHA from the event.
       #
@@ -169,21 +189,360 @@ jobs:
           exit 1
         id: tag
 
-      - name: Publish the GitHub release
-        if: ${{ steps.tag.outputs.released == 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+  # ── build: one job per architecture, NO write permission of any kind ────────
+  #
+  # This is the only job that executes the released commit's code (npm ci, the
+  # Vite build, go build, podman build of the Containerfiles), so it holds the
+  # read-only token and nothing else: no packages, no id-token, no contents
+  # write. What it produces leaves through upload-artifact and is signed by the
+  # publish job below, which in turn never runs code from this checkout. That
+  # split is the reason the untrusted-checkout rule that shapes the tag job does
+  # not bite here: there is no privilege in this job to escalate to.
+  #
+  # Native runners for both architectures (ubuntu-24.04-arm for arm64), so each
+  # binary is EXECUTED on its own architecture for the --web / --build-info
+  # assertions, and each image is built without emulation.
+  build:
+    name: Build linux/${{ matrix.arch }}
+    needs: tag
+    if: ${{ needs.tag.outputs.released == 'true' }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      ARCH: ${{ matrix.arch }}
+      TAG: ${{ needs.tag.outputs.tag }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      # The release TAG, which the tag job created on the certified SHA and
+      # proved is on main. fetch-depth 0 so scripts/version.sh can describe the
+      # build from the tags, exactly as `make bins` does.
+      - name: Check out the release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ needs.tag.outputs.tag }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: The tag names the commit CI certified
         run: |
           set -euo pipefail
-          # Idempotent by construction: this step also runs on a re-run for a
-          # commit that was already tagged (see the step above), which is what
+          got="$(git rev-parse HEAD)"
+          if [ "${got}" != "${HEAD_SHA}" ]; then
+            echo "::error::${TAG} resolves to ${got}, but CI certified ${HEAD_SHA}. Refusing to build."
+            exit 1
+          fi
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: web/.nvmrc
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: false
+
+      - name: Build the web bundle
+        working-directory: web
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      # Static (CGO_ENABLED=0), trimmed paths, version stamped from the tag the
+      # same way the Makefile's `bins` target does. Deliberately NO -tags: the
+      # unsandboxed host executor is fenced behind fleet_host_executor (#159),
+      # and the next step proves it stayed out.
+      - name: Build the static fleet binary
+        run: |
+          set -euo pipefail
+          version="$(scripts/version.sh describe)"
+          if [ "v${version}" != "${TAG}" ]; then
+            echo "::error::scripts/version.sh describes this tree as ${version}, not ${TAG#v}."
+            exit 1
+          fi
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH="${ARCH}" go build -trimpath \
+            -ldflags "-X github.com/ElcanoTek/fleet/internal/version.version=${version}" \
+            -o "dist/fleet-linux-${ARCH}" ./cmd/fleet
+
+      # The invariant "the host executor cannot ship enabled in a production
+      # build" checked on the ARTIFACT, two independent ways: the toolchain's
+      # own record of the build settings, and the binary's compile-time marker.
+      # Either one failing fails the release.
+      - name: Assert the binary has no host executor, has the web bundle, and is static
+        run: |
+          set -euo pipefail
+          bin="dist/fleet-linux-${ARCH}"
+          settings="$(go version -m "${bin}")"
+          printf '%s\n' "${settings}"
+          if printf '%s\n' "${settings}" | grep -Eq '^[[:space:]]+build[[:space:]]+-tags=.*fleet_host_executor'; then
+            echo "::error::${bin} was built with -tags fleet_host_executor. A release must never carry the host executor."
+            exit 1
+          fi
+          printf '%s\n' "${settings}" | grep -Eq '^[[:space:]]+build[[:space:]]+CGO_ENABLED=0$' \
+            || { echo "::error::${bin} is not a static (CGO_ENABLED=0) build."; exit 1; }
+          info="$("${bin}" version --build-info)"
+          printf '%s\n' "${info}"
+          [ "$(printf '%s' "${info}" | jq -r '.host_executor')" = "false" ] \
+            || { echo "::error::${bin} reports host_executor != false."; exit 1; }
+          [ "$(printf '%s' "${info}" | jq -r '.goarch')" = "${ARCH}" ] \
+            || { echo "::error::${bin} is not a ${ARCH} binary."; exit 1; }
+          [ "$(printf '%s' "${info}" | jq -r '.version')" = "${TAG#v}" ] \
+            || { echo "::error::${bin} is not stamped ${TAG#v}."; exit 1; }
+          test "$("${bin}" version --web)" = "web bundle: $(cat internal/webui/bundle/dist/build-id.txt)"
+
+      - name: Build the sandbox image (generic bundle)
+        run: |
+          set -euo pipefail
+          IMAGE_NAME=localhost/fleet-sandbox scripts/build-sandbox-image.sh "build-${ARCH}"
+          podman save --format oci-archive -o "dist/fleet-sandbox-image-linux-${ARCH}.oci.tar" "localhost/fleet-sandbox:build-${ARCH}"
+
+      - name: Build the control-plane image (from the checked binary)
+        run: |
+          set -euo pipefail
+          podman build --pull=newer -f deploy/fleet.Containerfile \
+            --build-arg "FLEET_ARCH=${ARCH}" -t "localhost/fleet:build-${ARCH}" .
+          podman save --format oci-archive -o "dist/fleet-image-linux-${ARCH}.oci.tar" "localhost/fleet:build-${ARCH}"
+
+      # One SPDX SBOM per artifact: the binary (from its Go build info) and each
+      # image (from its layers). They ship as release assets, covered by the
+      # signed SHA256SUMS, and the image ones are also attached to the image
+      # digests as signed cosign attestations by the publish job.
+      - name: SBOM — binary
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          file: dist/fleet-linux-${{ matrix.arch }}
+          format: spdx-json
+          output-file: dist/fleet-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM — sandbox image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: oci-archive:dist/fleet-sandbox-image-linux-${{ matrix.arch }}.oci.tar
+          format: spdx-json
+          output-file: dist/fleet-sandbox-image-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: SBOM — control-plane image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: oci-archive:dist/fleet-image-linux-${{ matrix.arch }}.oci.tar
+          format: spdx-json
+          output-file: dist/fleet-image-linux-${{ matrix.arch }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+
+      # The chart, stamped from the tags (appVersion = this release, so its
+      # image tags default to this release's images). Once, not per arch.
+      - name: Package the Helm chart
+        if: ${{ matrix.arch == 'amd64' }}
+        run: |
+          set -euo pipefail
+          helm package deploy/helm/fleet --destination dist \
+            --version "$(scripts/version.sh semver)" \
+            --app-version "$(scripts/version.sh current)"
+
+      - name: Upload the build
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-${{ matrix.arch }}
+          path: dist/
+          retention-days: 3
+          if-no-files-found: error
+
+  # ── publish: push, sign, attest, release — and run NO code from the release ─
+  #
+  # The privileged job. It checks out the DEFAULT BRANCH (trusted code, the
+  # same rule and reasoning as the tag job) only for scripts/version.sh and
+  # internal/release/cosign.lock, and otherwise handles the build job's outputs
+  # as data: load, push, hash, sign. Nothing from the released commit is
+  # executed here.
+  publish:
+    name: Sign + publish the release
+    needs: [tag, build]
+    if: ${{ needs.tag.outputs.released == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write     # the GitHub release + its assets
+      packages: write     # push ghcr.io/elcanotek/fleet and fleet-sandbox
+      id-token: write     # keyless cosign signatures + provenance (GitHub OIDC)
+      attestations: write # SLSA build provenance in the attestations API
+    env:
+      TAG: ${{ needs.tag.outputs.tag }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+      FLEET_IMAGE: ghcr.io/elcanotek/fleet
+      SANDBOX_IMAGE: ghcr.io/elcanotek/fleet-sandbox
+      # The ONE identity every verifier pins (internal/release.SignerIdentity;
+      # scripts/check_release_artifacts_test.go keeps them equal). Verified
+      # below against what was just signed, so a drift between the signer and
+      # the verifiers fails the release instead of every box's next update.
+      SIGNER_IDENTITY: https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main
+      OIDC_ISSUER: https://token.actions.githubusercontent.com
+    steps:
+      - name: Check out the default branch (trusted code) with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download the builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: build-*
+          path: dist
+          merge-multiple: true
+
+      # The same cosign every box verifies with: version and digest from
+      # internal/release/cosign.lock, checked before it runs.
+      - name: Install the pinned cosign
+        run: |
+          set -euo pipefail
+          lock=internal/release/cosign.lock
+          ver="$(awk '$1=="version"{print $2}' "${lock}")"
+          want="$(awk '$1=="linux/amd64"{print $2}' "${lock}")"
+          curl -fsSL -o "${RUNNER_TEMP}/cosign" "https://github.com/sigstore/cosign/releases/download/${ver}/cosign-linux-amd64"
+          echo "${want}  ${RUNNER_TEMP}/cosign" | sha256sum -c -
+          chmod 0755 "${RUNNER_TEMP}/cosign"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | podman login ghcr.io --username "$GHCR_USER" --password-stdin
+          printf '%s' "$GHCR_TOKEN" | cosign login ghcr.io --username "$GHCR_USER" --password-stdin
+
+      # Each architecture's image is pushed by digest, then one multi-arch
+      # index per repository is pushed under the release tag. The index digest
+      # is what release.json records and what is signed; a pull by that digest
+      # resolves the platform image through it, so the signature covers both.
+      - name: Push the multi-arch images
+        id: images
+        run: |
+          set -euo pipefail
+          for name in fleet fleet-sandbox; do
+            repo="ghcr.io/elcanotek/${name}"
+            key="${name//-/_}"
+            podman manifest rm "${repo}:${TAG}" >/dev/null 2>&1 || true
+            podman manifest create "${repo}:${TAG}"
+            for arch in amd64 arm64; do
+              podman load -q -i "dist/${name}-image-linux-${arch}.oci.tar"
+              podman push --digestfile "${RUNNER_TEMP}/${name}-${arch}.digest" \
+                "localhost/${name}:build-${arch}" "docker://${repo}:${TAG}-${arch}"
+              digest="$(cat "${RUNNER_TEMP}/${name}-${arch}.digest")"
+              echo "${key}_${arch}=${repo}@${digest}" >> "${GITHUB_OUTPUT}"
+              podman manifest add "${repo}:${TAG}" "docker://${repo}@${digest}"
+            done
+            podman manifest push --all --digestfile "${RUNNER_TEMP}/${name}.digest" \
+              "${repo}:${TAG}" "docker://${repo}:${TAG}"
+            digest="$(cat "${RUNNER_TEMP}/${name}.digest")"
+            {
+              echo "${key}=${repo}@${digest}"
+              echo "${key}_digest=${digest}"
+            } >> "${GITHUB_OUTPUT}"
+          done
+
+      - name: Sign the images and attach their SBOMs
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          FLEET_AMD64: ${{ steps.images.outputs.fleet_amd64 }}
+          FLEET_ARM64: ${{ steps.images.outputs.fleet_arm64 }}
+          SANDBOX_AMD64: ${{ steps.images.outputs.fleet_sandbox_amd64 }}
+          SANDBOX_ARM64: ${{ steps.images.outputs.fleet_sandbox_arm64 }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "${FLEET_REF}"
+          cosign sign --yes "${SANDBOX_REF}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
+          cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
+          for ref in "${FLEET_REF}" "${SANDBOX_REF}"; do
+            cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
+          done
+
+      - name: SLSA provenance — control-plane image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet
+          subject-digest: ${{ steps.images.outputs.fleet_digest }}
+          push-to-registry: true
+      - name: SLSA provenance — sandbox image
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/elcanotek/fleet-sandbox
+          subject-digest: ${{ steps.images.outputs.fleet_sandbox_digest }}
+          push-to-registry: true
+      - name: SLSA provenance — binaries
+        id: provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/fleet-linux-amd64
+            dist/fleet-linux-arm64
+
+      # release.json is the signed statement of what this release IS: its tag
+      # (the updater's replay check), its commit, and the image digests (what
+      # the updater pulls). SHA256SUMS then covers every published file, and
+      # its signature is the root a box verifies first.
+      - name: Write release.json and SHA256SUMS, and sign them
+        env:
+          FLEET_REF: ${{ steps.images.outputs.fleet }}
+          SANDBOX_REF: ${{ steps.images.outputs.fleet_sandbox }}
+          PROVENANCE: ${{ steps.provenance.outputs.bundle-path }}
+        run: |
+          set -euo pipefail
+          cd dist
+          rm -f ./*.oci.tar
+          cp "${PROVENANCE}" fleet-linux.provenance.sigstore.json
+          jq -n --arg tag "${TAG}" --arg commit "${HEAD_SHA}" \
+                --arg fleet "${FLEET_REF}" --arg sandbox "${SANDBOX_REF}" \
+                --arg fimg "${FLEET_IMAGE}" --arg simg "${SANDBOX_IMAGE}" \
+            '{schema: 1, tag: $tag, commit: $commit, images: {($fimg): $fleet, ($simg): $sandbox}}' > release.json
+          sha256sum fleet-linux-amd64 fleet-linux-arm64 release.json ./*.spdx.json ./*.tgz \
+            fleet-linux.provenance.sigstore.json | sed 's#  \./#  #' > SHA256SUMS
+          cat SHA256SUMS
+          for f in SHA256SUMS fleet-linux-amd64 fleet-linux-arm64; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "${f}"
+            # Verify exactly as a box will: a signer/verifier identity drift
+            # fails HERE, not on every box's next update.
+            cosign verify-blob --bundle "${f}.sigstore.json" \
+              --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${f}"
+          done
+          ls -la
+
+      - name: Publish the GitHub release
+        run: |
+          set -euo pipefail
+          # Idempotent by construction: this job also runs on a re-run for a
+          # commit that was already tagged (see the tag job), which is what
           # recovers a tag whose publication failed the first time. `gh release
-          # create` errors on an existing release, so ask first — and skip only
-          # the CREATION: the prune below still runs, so a re-run after a
-          # cancelled or failed prune also restores the "one release listed"
-          # property instead of leaving it to the next release.
+          # create` errors on an existing release, so ask first — and on an
+          # existing one re-upload the assets (--clobber) instead: a re-run
+          # after a publish that died mid-upload repairs the release rather
+          # than leaving it without its binaries. The prune below still runs,
+          # so a re-run after a cancelled or failed prune also restores the
+          # retention window instead of leaving it to the next release.
           #
           # A re-run for a tag that a NEWER release has since superseded must
           # not publish either: its release object was pruned on purpose, and
@@ -199,7 +558,8 @@ jobs:
           if [ "${TAG}" != "${newest}" ]; then
             echo "::notice::${TAG} is superseded by ${newest}; not publishing a release for it."
           elif gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "::notice::release ${TAG} is already published; skipping creation."
+            echo "::notice::release ${TAG} is already published; re-uploading its assets."
+            gh release upload "${TAG}" dist/* --clobber
           else
             # The release notes are the released commit's message, then
             # GitHub's generated list — the two-part shape openai/codex ships
@@ -222,12 +582,17 @@ jobs:
             notes="$(mktemp)"
             git log -1 --format=%B "${HEAD_SHA}" >"${notes}"
 
+            # With files, gh creates the release as a draft, uploads every
+            # asset and only then publishes it — so /releases/latest, which is
+            # what `fleet update` asks, never names a release whose binaries
+            # are still uploading.
             gh release create "${TAG}" \
               --title "fleet ${TAG#v}" \
               --notes-file "${notes}" \
               --generate-notes \
               --latest \
-              --verify-tag
+              --verify-tag \
+              dist/*
 
             # The newest-tag check above and this create are two steps, and
             # a concurrent run for the next commit can tag AND publish .N+1
@@ -243,13 +608,25 @@ jobs:
               echo "::notice::${TAG} was superseded by ${newest} while publishing; clearing its Latest mark."
               gh release edit "${TAG}" --latest=false \
                 || echo "::warning::could not clear the Latest mark on ${TAG}; /releases/latest may name it until the next release."
+            else
+              # :latest follows the newest release only, by digest (no
+              # re-push: --preserve-digests copies the signed index as is).
+              for name in fleet fleet-sandbox; do
+                skopeo copy --all --preserve-digests \
+                  "docker://ghcr.io/elcanotek/${name}:${TAG}" "docker://ghcr.io/elcanotek/${name}:latest"
+              done
             fi
           fi
 
-          # Keep only the newest release OBJECT. A rolling train tags several
-          # times a day, and a Releases page that lists every one of them is a
-          # feed nobody reads; the current release is the only entry that
-          # answers "what is fleet right now". What is lost is bounded and
+          # Keep the newest RETAIN release OBJECTS — the rollback window for
+          # `fleet update --tag <older> --allow-downgrade` (ADR-0098). It was
+          # one: a rolling train tags several times a day, and a Releases page
+          # that lists every one of them is a feed nobody reads. Release
+          # objects now carry the signed binaries, so pruning one removes a
+          # downloadable release, and ten is a few days of the train — enough
+          # to step back past a bad day, short enough to stay readable. (Each
+          # box also keeps its previous binary as fleet.prev, and the GHCR
+          # images are kept for every tag.) What is lost is bounded and
           # reconstructible: an older release's prose is its commit message
           # (`git log -1 <tag>`), and the generated half — the merged-PR list
           # and compare link — is `git log <prev>..<tag>` and
@@ -270,15 +647,16 @@ jobs:
           # any failure here warns, it does not un-publish anything — and
           # every deletion's status is kept, so one that failed among several
           # cannot hide behind a later one that succeeded. Listing is paged
-          # (`--limit`), so list-and-delete repeats until a listing shows one
-          # release or nothing more can be deleted; a backlog larger than one
+          # (`--limit`), so list-and-delete repeats until a listing shows RETAIN
+          # releases or nothing more can be deleted; a backlog larger than one
           # page (a long run of failed prunes) is cleared in one run rather
           # than one page per release.
+          RETAIN=10
           prune_failed=0
           for _pass in 1 2 3 4 5; do
             if ! superseded="$(gh release list --limit 200 --exclude-drafts --json tagName --jq '.[].tagName' \
-                                | scripts/version.sh filter | head -n -1)"; then
-              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than one entry."
+                                | scripts/version.sh filter | head -n "-${RETAIN}")"; then
+              echo "::warning::could not list releases to prune; ${TAG} is published, the Releases page just lists more than ${RETAIN} entries."
               prune_failed=1
               break
             fi
@@ -293,5 +671,5 @@ jobs:
             [ "${deleted}" -eq 1 ] || break
           done
           if [ "${prune_failed}" -ne 0 ]; then
-            echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than one entry."
+            echo "::warning::could not prune every older release; ${TAG} is published, the Releases page just lists more than ${RETAIN} entries."
           fi

@@ -132,6 +132,15 @@ BUILD_CONTEXT="$(dirname "$CONTAINERFILE")"
 # Pull errors are suppressed by podman when a local copy of the base exists, so
 # an offline box still rebuilds from what it has instead of failing.
 BUILD_ARGS=(--pull=newer)
+# FLEET_SANDBOX_BASE: the release's signed sandbox image, as a VERIFIED digest
+# reference (update.sh/bootstrap.sh pass what `fleet release sandbox` printed).
+# A bundle Containerfile that starts `ARG FLEET_SANDBOX_BASE` / `FROM
+# ${FLEET_SANDBOX_BASE}` layers its additions on that base instead of
+# rebuilding the whole Python stack on the box (docs/RELEASE-ARTIFACTS.md);
+# one that does not declare the ARG ignores it.
+if [[ -n "${FLEET_SANDBOX_BASE:-}" ]]; then
+    BUILD_ARGS+=(--build-arg "FLEET_SANDBOX_BASE=${FLEET_SANDBOX_BASE}")
+fi
 if [[ "$NO_CACHE" == "1" ]]; then
     # Full refresh: re-run every RUN layer so unpinned dnf/pip installs pick up
     # current package versions even when the base digest did not move.
