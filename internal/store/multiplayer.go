@@ -702,7 +702,7 @@ func (s *Store) ListActiveMultiplayerAndPendingConversationIDs(ctx context.Conte
 		UNION
 		SELECT DISTINCT conversation_id FROM approvals WHERE status = 'pending' OR (status = 'approved' AND is_err IS NULL)
 		UNION
-		SELECT DISTINCT conversation_id FROM chat_schedules WHERE status IN ('active', 'paused')
+		SELECT DISTINCT conversation_id FROM `+chatSchedulesTable+` WHERE status IN ('active', 'paused')
 	`)
 	if err != nil {
 		return nil, err

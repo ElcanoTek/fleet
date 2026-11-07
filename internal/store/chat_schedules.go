@@ -10,15 +10,26 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/cron"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 )
 
-// ChatSchedule status values (mirrors migration 086 CHECK constraint).
+// Chat schedules are rows of the scheduler (#2049 M5, ADR-0104): the table is
+// sched.chat_schedules, created and owned by the sched migrations (076, rows moved by 077), and
+// the scheduler's one tick loop claims, leases, settles and records every
+// fire (internal/sched/db/chat_schedules.go). The chat store keeps the half
+// that belongs to a conversation, in the same database: editing a schedule's
+// definition in the transaction that locks and checks its conversation, and
+// delivering a fire as a queued turn (DeliverChatScheduleFire).
+const chatSchedulesTable = config.SchedSchema + ".chat_schedules"
+
+// ChatSchedule status values (the sched.chat_schedules CHECK constraint).
 const (
-	ChatScheduleStatusActive    = "active"
-	ChatScheduleStatusPaused    = "paused"
-	ChatScheduleStatusCompleted = "completed"
-	ChatScheduleStatusCancelled = "cancelled"
+	ChatScheduleStatusActive    = models.ChatScheduleStatusActive
+	ChatScheduleStatusPaused    = models.ChatScheduleStatusPaused
+	ChatScheduleStatusCompleted = models.ChatScheduleStatusCompleted
+	ChatScheduleStatusCancelled = models.ChatScheduleStatusCancelled
 )
 
 // ChatScheduleKind values derived from CronExpr vs DurationSeconds.
@@ -99,13 +110,6 @@ type ChatSchedulePatch struct {
 	DurationSeconds *int
 	MaxRuns         *int
 	Status          *string
-}
-
-// ClaimedChatSchedule pairs a schedule that just fired with the input-queue
-// row enqueued for its turn.
-type ClaimedChatSchedule struct {
-	Schedule ChatSchedule
-	Input    InputQueueRow
 }
 
 const chatScheduleSelectCols = `
@@ -280,7 +284,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 	if cronSpec != "" && !in.AllowMultiple {
 		var existingID string
 		err := tx.QueryRowContext(ctx,
-			`SELECT id FROM chat_schedules
+			`SELECT id FROM `+chatSchedulesTable+`
 			  WHERE conversation_id = $1 AND user_email = $2
 			    AND status IN ('active', 'paused') AND cron_expr <> ''
 			  ORDER BY created_at DESC, id DESC LIMIT 1
@@ -289,7 +293,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 		).Scan(&existingID)
 		if err == nil && existingID != "" {
 			sched, err := scanChatSchedule(tx.QueryRowContext(ctx,
-				`UPDATE chat_schedules
+				`UPDATE `+chatSchedulesTable+`
 				    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 				        duration_seconds = 0, status = 'active', next_run_at = $5,
 				        max_runs = $6, updated_at = $7
@@ -311,7 +315,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 
 	var activeCount int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM chat_schedules
+		`SELECT count(*) FROM `+chatSchedulesTable+`
 		  WHERE conversation_id = $1 AND status IN ('active', 'paused')`,
 		in.ConversationID,
 	).Scan(&activeCount); err != nil {
@@ -324,7 +328,7 @@ func (s *Store) CreateChatSchedule(ctx context.Context, in ChatScheduleInput) (*
 
 	id := uuid.NewString()
 	sched, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`INSERT INTO chat_schedules (
+		`INSERT INTO `+chatSchedulesTable+` (
 			id, conversation_id, user_email, title, prompt, cron_expr, timezone,
 			duration_seconds, status, next_run_at, run_count, max_runs,
 			created_at, updated_at
@@ -349,7 +353,7 @@ func (s *Store) ListChatSchedules(ctx context.Context, userEmail, convID string,
 		return []ChatSchedule{}, nil
 	}
 	query := `SELECT ` + chatScheduleSelectCols + `
-		FROM chat_schedules
+		FROM ` + chatSchedulesTable + `
 		WHERE conversation_id = $1 AND ($2 = '' OR user_email = $2)`
 	if !includeTerminal {
 		query += ` AND status IN ('active', 'paused')`
@@ -404,7 +408,7 @@ func (s *Store) ListUserPatrols(ctx context.Context, userEmail string, limit, of
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT cs.id, cs.conversation_id, cs.title, c.title, cs.cron_expr, cs.timezone,
 		        cs.status, cs.next_run_at, c.user_email
-		   FROM chat_schedules cs
+		   FROM `+chatSchedulesTable+` cs
 		   JOIN conversations c ON c.id = cs.conversation_id
 		  WHERE cs.user_email = $1
 		    AND c.deleted_at IS NULL
@@ -445,7 +449,7 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 
 	cur, err := scanChatSchedule(tx.QueryRowContext(ctx,
 		`SELECT `+chatScheduleSelectCols+`
-		   FROM chat_schedules
+		   FROM `+chatSchedulesTable+`
 		  WHERE id = $1 AND conversation_id = $2 AND user_email = $3
 		  FOR UPDATE`,
 		scheduleID, convID, userEmail,
@@ -469,7 +473,7 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 	}
 
 	updated, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`UPDATE chat_schedules
+		`UPDATE `+chatSchedulesTable+`
 		    SET title = $1, prompt = $2, cron_expr = $3, timezone = $4,
 		        duration_seconds = $5, status = $6, next_run_at = $7,
 		        max_runs = $8, updated_at = $9
@@ -587,340 +591,170 @@ func (s *Store) CancelChatSchedule(ctx context.Context, userEmail, convID, sched
 	return s.UpdateChatSchedule(ctx, userEmail, convID, scheduleID, ChatSchedulePatch{Status: &status})
 }
 
-// TriggerChatScheduleNow immediately enqueues a turn for scheduleID (used by
-// the UI's "Run now" button and manual test triggers).
-func (s *Store) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, scheduleID string, maxPending int) (*ClaimedChatSchedule, error) {
-	now := time.Now()
-	nowUnix := now.Unix()
+// ChatScheduleInputKey is the chat_input_queue idempotency key of a fire's
+// turn: chat-patrol:<schedule>:<run> for a scheduled fire, and
+// chat-patrol:<schedule>:<run>:<claim unix> for Run now (two clicks are two
+// runs). A fire delivered twice — its lease expired before it settled — finds
+// its own row under the same key instead of queueing a second turn.
+func ChatScheduleInputKey(fire models.ChatScheduleFire) string {
+	if fire.Trigger == models.ChatScheduleTriggerManual {
+		return fmt.Sprintf("%s%s:%d:%d", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber, fire.ClaimedAt.Unix())
+	}
+	return fmt.Sprintf("%s%s:%d", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber)
+}
 
+// DeliverChatScheduleFire is the chat side of a chat schedule fire claimed by
+// the scheduler: it enqueues the patrol or timer turn into the conversation's
+// input queue, in one transaction that locks the conversation (the same lock
+// order as insertInputTx and ClaimApprovalResume) and then the schedule row,
+// and re-checks under those locks that the fire is still current.
+//
+// Outcomes:
+//   - gone: the conversation was deleted, or the schedule's owner can no
+//     longer use it. The scheduler cancels the schedule.
+//   - stale: the schedule left the state the fire was claimed in (paused or
+//     cancelled since, or re-claimed after this claim's lease expired).
+//   - queued: the turn was enqueued, or had already been by an earlier
+//     delivery of this same fire (InputID either way).
+//   - coalesced (Run now): a patrol turn of the owner's is already queued or
+//     running in this chat; InputID names it and the run does not count.
+//   - busy (scheduled): a patrol turn of the owner's is in flight, an approval
+//     card is waiting on them, or the input queue holds maxPending rows. The
+//     slot is skipped, so patrols never pile up behind one another.
+//
+// A Run now against a full queue is an error, as it always was.
+func (s *Store) DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, maxPending int) (models.ChatScheduleDelivery, error) {
+	nowUnix := time.Now().Unix()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, err
+		return models.ChatScheduleDelivery{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, userEmail, convID); err != nil {
-		return nil, err
+	gone := models.ChatScheduleDelivery{Outcome: models.ChatScheduleGone}
+	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, fire.UserEmail, fire.ConversationID); err != nil {
+		if errors.Is(err, ErrConversationNotFound) {
+			return gone, nil
+		}
+		return models.ChatScheduleDelivery{}, err
 	}
 
-	sched, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`SELECT `+chatScheduleSelectCols+`
-		   FROM chat_schedules
-		  WHERE id = $1 AND conversation_id = $2 AND user_email = $3
-		  FOR UPDATE`,
-		scheduleID, convID, userEmail,
-	))
+	var status string
+	var lease sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT status, lease_owner FROM `+chatSchedulesTable+` WHERE id = $1 FOR UPDATE`,
+		fire.ScheduleID,
+	).Scan(&status, &lease)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrChatScheduleNotFound
+		return gone, nil
 	}
 	if err != nil {
-		return nil, err
+		return models.ChatScheduleDelivery{}, err
 	}
-	if sched.Status != ChatScheduleStatusActive && sched.Status != ChatScheduleStatusPaused {
-		return nil, fmt.Errorf("%w: cannot trigger a %s schedule", ErrInvalidChatSchedule, sched.Status)
+	stale := models.ChatScheduleDelivery{Outcome: models.ChatScheduleStale}
+	if !lease.Valid || lease.String != fire.LeaseToken {
+		return stale, nil
+	}
+	manual := fire.Trigger == models.ChatScheduleTriggerManual
+	if status != ChatScheduleStatusActive && (!manual || status != ChatScheduleStatusPaused) {
+		return stale, nil
 	}
 
-	// Coalesce repeated Run-now clicks when a patrol turn is already queued or
-	// running for this schedule's owner in this conversation, so clicking
-	// Run-now while busy does not stack duplicate patrol turns or burn run_count
-	// against MaxRuns.
-	existingInput, err := scanInputRow(tx.QueryRowContext(ctx,
+	key := ChatScheduleInputKey(fire)
+	if row, err := scanInputRow(tx.QueryRowContext(ctx,
+		inputQueueSelect+` WHERE conversation_id = $1 AND client_input_id = $2`,
+		fire.ConversationID, key)); err == nil {
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: row.ID}, tx.Commit()
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return models.ChatScheduleDelivery{}, err
+	}
+
+	// An earlier patrol turn of this owner's still queued or running.
+	inFlight, err := scanInputRow(tx.QueryRowContext(ctx,
 		inputQueueSelect+`
 		  WHERE conversation_id = $1
 		    AND user_email = $2
 		    AND state IN ('queued', 'running')
 		    AND (mode = 'patrol' OR client_input_id LIKE $3)
 		  ORDER BY position ASC LIMIT 1`,
-		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
+		fire.ConversationID, fire.UserEmail, ChatPatrolInputKeyPrefix+"%",
 	))
-	if err == nil {
-		if cerr := tx.Commit(); cerr != nil {
-			return nil, cerr
-		}
-		return &ClaimedChatSchedule{Schedule: sched, Input: existingInput}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
+	hasInFlight := err == nil
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return models.ChatScheduleDelivery{}, err
+	}
+	if manual && hasInFlight {
+		// Coalesce repeated Run-now clicks while a patrol turn is queued or
+		// running, so they neither stack turns nor spend max_runs.
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleCoalesced, InputID: inFlight.ID}, tx.Commit()
 	}
 
+	busy := models.ChatScheduleDelivery{Outcome: models.ChatScheduleBusy}
+	if hasInFlight {
+		return busy, tx.Commit()
+	}
+	if !manual {
+		var hasPendingApproval bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (
+				SELECT 1 FROM approvals
+				 WHERE conversation_id = $1
+				   AND user_email = $2
+				   AND status = 'pending'
+				   AND tool_name NOT IN ('preview_email', 'suggest_advanced_model')
+			)`,
+			fire.ConversationID, fire.UserEmail,
+		).Scan(&hasPendingApproval); err != nil {
+			return models.ChatScheduleDelivery{}, err
+		}
+		if hasPendingApproval {
+			return busy, tx.Commit()
+		}
+	}
 	if maxPending > 0 {
 		var pending int
 		if err := tx.QueryRowContext(ctx,
 			`SELECT count(*) FROM chat_input_queue WHERE conversation_id = $1 AND state = 'queued'`,
-			convID,
+			fire.ConversationID,
 		).Scan(&pending); err != nil {
-			return nil, err
+			return models.ChatScheduleDelivery{}, err
 		}
 		if pending >= maxPending {
-			return nil, fmt.Errorf("conversation input queue is full (%d queued)", pending)
+			if manual {
+				return models.ChatScheduleDelivery{}, fmt.Errorf("conversation input queue is full (%d queued)", pending)
+			}
+			return busy, tx.Commit()
 		}
 	}
 
-	newRunCount := sched.RunCount + 1
-	nextStatus := sched.Status
-	nextRunAt := sched.NextRunAt
-	if sched.CronExpr != "" {
-		if sched.MaxRuns > 0 && newRunCount >= sched.MaxRuns {
-			nextStatus = ChatScheduleStatusCompleted
-		} else if _, _, nextAt, err := validateAndComputeNextCron(sched.CronExpr, sched.Timezone, now); err == nil {
-			nextRunAt = nextAt
+	if !manual {
+		if err := supersedePendingModelSuggestionsTx(ctx, tx, fire.ConversationID, nowUnix); err != nil {
+			return models.ChatScheduleDelivery{}, err
 		}
-	} else {
-		nextStatus = ChatScheduleStatusCompleted
 	}
-
-	updated, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`UPDATE chat_schedules
-		    SET run_count = $1, last_run_at = $2, next_run_at = $3,
-		        status = $4, updated_at = $2
-		  WHERE id = $5
-		  RETURNING `+chatScheduleSelectCols,
-		newRunCount, nowUnix, nextRunAt, nextStatus, sched.ID,
-	))
-	if err != nil {
-		return nil, err
-	}
-
-	clientInputID := fmt.Sprintf("%s%s:%d:%d", ChatPatrolInputKeyPrefix, sched.ID, newRunCount, nowUnix)
 	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
 		ID:             uuid.NewString(),
-		ConversationID: convID,
-		UserEmail:      sched.UserEmail,
-		ClientInputID:  clientInputID,
-		Message:        ChatPatrolInputText(updated, newRunCount),
-		Attachments:    "[]",
-		Mode:           InputModePatrol,
-		State:          InputStateQueued,
+		ConversationID: fire.ConversationID,
+		UserEmail:      fire.UserEmail,
+		ClientInputID:  key,
+		Message: ChatPatrolInputText(ChatSchedule{
+			ID:              fire.ScheduleID,
+			Title:           fire.Title,
+			Prompt:          fire.Prompt,
+			CronExpr:        fire.CronExpr,
+			DurationSeconds: fire.DurationSeconds,
+		}, fire.RunNumber),
+		Attachments: "[]",
+		Mode:        InputModePatrol,
+		State:       InputStateQueued,
 	})
 	if err != nil {
-		return nil, err
+		return models.ChatScheduleDelivery{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, err
+		return models.ChatScheduleDelivery{}, err
 	}
-	return &ClaimedChatSchedule{Schedule: updated, Input: row}, nil
-}
-
-// ClaimDueChatSchedules claims active schedules whose next_run_at <= now and
-// enqueues their patrol/timer turns into chat_input_queue.
-//
-// Coalescing and backpressure rules:
-//   - If the owning conversation was deleted, the schedule is marked cancelled.
-//   - If the conversation already has a queued or running patrol input in
-//     chat_input_queue, or has a pending non-preview approval waiting on the
-//     user, or its input queue is at maxPending, a recurring cron schedule
-//     advances next_run_at to the next future tick without inserting a
-//     duplicate queue row (so patrols never pile up while a previous patrol or
-//     approval is still in flight).
-func (s *Store) ClaimDueChatSchedules(ctx context.Context, now time.Time, maxPending int) ([]ClaimedChatSchedule, error) {
-	nowUnix := now.Unix()
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, conversation_id
-		   FROM chat_schedules
-		  WHERE status = 'active' AND next_run_at <= $1
-		  ORDER BY next_run_at ASC, id ASC
-		  LIMIT 25`,
-		nowUnix,
-	)
-	if err != nil {
-		return nil, err
-	}
-	type dueRef struct {
-		id     string
-		convID string
-	}
-	var due []dueRef
-	for rows.Next() {
-		var d dueRef
-		if err := rows.Scan(&d.id, &d.convID); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		due = append(due, d)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	_ = rows.Close()
-
-	var claimed []ClaimedChatSchedule
-	for _, d := range due {
-		item, err := s.claimOneChatSchedule(ctx, d.id, d.convID, now, maxPending)
-		if err != nil {
-			return claimed, err
-		}
-		if item != nil {
-			claimed = append(claimed, *item)
-		}
-	}
-	return claimed, nil
-}
-
-func (s *Store) claimOneChatSchedule(ctx context.Context, scheduleID, convID string, now time.Time, maxPending int) (*ClaimedChatSchedule, error) {
-	nowUnix := now.Unix()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Lock the conversation first (same lock order as insertInputTx and
-	// ClaimApprovalResume) so concurrent queue operations never deadlock.
-	var owner string
-	err = tx.QueryRowContext(ctx,
-		`SELECT user_email FROM conversations WHERE id = $1 AND deleted_at IS NULL FOR UPDATE`,
-		convID,
-	).Scan(&owner)
-	if errors.Is(err, sql.ErrNoRows) {
-		_, _ = tx.ExecContext(ctx,
-			`UPDATE chat_schedules SET status = 'cancelled', updated_at = $1 WHERE id = $2`,
-			nowUnix, scheduleID,
-		)
-		return nil, tx.Commit()
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	sched, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`SELECT `+chatScheduleSelectCols+`
-		   FROM chat_schedules
-		  WHERE id = $1 AND status = 'active' AND next_run_at <= $2
-		  FOR UPDATE`,
-		scheduleID, nowUnix,
-	))
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.lockAndVerifyOwnedOrMultiplayerTx(ctx, tx, sched.UserEmail, convID); err != nil {
-		if errors.Is(err, ErrConversationNotFound) {
-			_, _ = tx.ExecContext(ctx,
-				`UPDATE chat_schedules SET status = 'cancelled', updated_at = $1 WHERE id = $2`,
-				nowUnix, scheduleID,
-			)
-			return nil, tx.Commit()
-		}
-		return nil, err
-	}
-
-	// Check whether an earlier patrol turn for this schedule's owner is still
-	// queued/running, an approval card for this owner is awaiting human action,
-	// or the conversation queue is full.
-	var hasInFlightPatrol bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM chat_input_queue
-			 WHERE conversation_id = $1
-			   AND user_email = $2
-			   AND state IN ('queued', 'running')
-			   AND (mode = 'patrol' OR client_input_id LIKE $3)
-		)`,
-		convID, sched.UserEmail, ChatPatrolInputKeyPrefix+"%",
-	).Scan(&hasInFlightPatrol); err != nil {
-		return nil, err
-	}
-
-	var hasPendingApproval bool
-	if err := tx.QueryRowContext(ctx,
-		`SELECT EXISTS (
-			SELECT 1 FROM approvals
-			 WHERE conversation_id = $1
-			   AND user_email = $2
-			   AND status = 'pending'
-			   AND tool_name NOT IN ('preview_email', 'suggest_advanced_model')
-		)`,
-		convID, sched.UserEmail,
-	).Scan(&hasPendingApproval); err != nil {
-		return nil, err
-	}
-
-	var pendingCount int
-	if maxPending > 0 {
-		if err := tx.QueryRowContext(ctx,
-			`SELECT count(*) FROM chat_input_queue WHERE conversation_id = $1 AND state = 'queued'`,
-			convID,
-		).Scan(&pendingCount); err != nil {
-			return nil, err
-		}
-	}
-
-	busy := hasInFlightPatrol || hasPendingApproval || (maxPending > 0 && pendingCount >= maxPending)
-	if busy {
-		// Advance next_run_at so a blocked one-shot timer or recurring patrol
-		// never sits at the head of ORDER BY next_run_at ASC and starves later
-		// due schedules in other conversations.
-		nextAt := nowUnix + 30
-		if sched.CronExpr != "" {
-			if _, _, cronNext, err := validateAndComputeNextCron(sched.CronExpr, sched.Timezone, now); err == nil {
-				nextAt = cronNext
-			}
-		}
-		_, _ = tx.ExecContext(ctx,
-			`UPDATE chat_schedules SET next_run_at = $1, updated_at = $2 WHERE id = $3`,
-			nextAt, nowUnix, sched.ID,
-		)
-		_ = tx.Commit()
-		return nil, nil
-	}
-
-	newRunCount := sched.RunCount + 1
-	nextStatus := ChatScheduleStatusActive
-	nextRunAt := sched.NextRunAt
-	if sched.CronExpr != "" {
-		if sched.MaxRuns > 0 && newRunCount >= sched.MaxRuns {
-			nextStatus = ChatScheduleStatusCompleted
-		} else {
-			_, _, nextAt, err := validateAndComputeNextCron(sched.CronExpr, sched.Timezone, now)
-			if err != nil {
-				_, _ = tx.ExecContext(ctx,
-					`UPDATE chat_schedules SET status = 'cancelled', updated_at = $1 WHERE id = $2`,
-					nowUnix, sched.ID,
-				)
-				return nil, tx.Commit()
-			}
-			nextRunAt = nextAt
-		}
-	} else {
-		nextStatus = ChatScheduleStatusCompleted
-	}
-
-	updated, err := scanChatSchedule(tx.QueryRowContext(ctx,
-		`UPDATE chat_schedules
-		    SET run_count = $1, last_run_at = $2, next_run_at = $3,
-		        status = $4, updated_at = $2
-		  WHERE id = $5
-		  RETURNING `+chatScheduleSelectCols,
-		newRunCount, nowUnix, nextRunAt, nextStatus, sched.ID,
-	))
-	if err != nil {
-		return nil, err
-	}
-
-	if err := supersedePendingModelSuggestionsTx(ctx, tx, convID, nowUnix); err != nil {
-		return nil, err
-	}
-
-	clientInputID := fmt.Sprintf("%s%s:%d", ChatPatrolInputKeyPrefix, sched.ID, newRunCount)
-	row, _, err := s.insertInputTx(ctx, tx, InputQueueRow{
-		ID:             uuid.NewString(),
-		ConversationID: convID,
-		UserEmail:      sched.UserEmail,
-		ClientInputID:  clientInputID,
-		Message:        ChatPatrolInputText(updated, newRunCount),
-		Attachments:    "[]",
-		Mode:           InputModePatrol,
-		State:          InputStateQueued,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-	return &ClaimedChatSchedule{Schedule: updated, Input: row}, nil
+	return models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: row.ID}, nil
 }
 
 // ChatPatrolInputText formats the synthetic input message for a scheduled

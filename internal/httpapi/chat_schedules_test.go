@@ -13,6 +13,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agent"
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -137,54 +138,64 @@ func (s *scheduleFakeStore) CancelChatSchedule(ctx context.Context, userEmail, c
 	return s.UpdateChatSchedule(ctx, userEmail, convID, scheduleID, store.ChatSchedulePatch{Status: &st})
 }
 
-func (s *scheduleFakeStore) TriggerChatScheduleNow(ctx context.Context, userEmail, convID, scheduleID string, _ int) (*store.ClaimedChatSchedule, error) {
+func (s *scheduleFakeStore) DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, _ int) (models.ChatScheduleDelivery, error) {
 	s.mu.Lock()
-	sc, ok := s.schedules[scheduleID]
-	if !ok || sc.ConversationID != convID || sc.UserEmail != userEmail {
-		s.mu.Unlock()
-		return nil, store.ErrChatScheduleNotFound
-	}
-	sc.RunCount++
-	now := time.Now().Unix()
-	sc.LastRunAt = &now
-	s.schedules[scheduleID] = sc
+	sc, ok := s.schedules[fire.ScheduleID]
 	s.mu.Unlock()
-
+	if !ok {
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleGone}, nil
+	}
 	row, _, err := s.EnqueueInput(ctx, store.InputQueueRow{
 		ID:             "q-patrol-1",
-		ConversationID: convID,
-		UserEmail:      userEmail,
-		ClientInputID:  store.ChatPatrolInputKeyPrefix + scheduleID + ":1",
-		Message:        store.ChatPatrolInputText(sc, sc.RunCount),
+		ConversationID: fire.ConversationID,
+		UserEmail:      fire.UserEmail,
+		ClientInputID:  store.ChatScheduleInputKey(fire),
+		Message:        store.ChatPatrolInputText(sc, fire.RunNumber),
 		Attachments:    "[]",
 		Mode:           store.InputModePatrol,
 	})
 	if err != nil {
-		return nil, err
+		return models.ChatScheduleDelivery{}, err
 	}
-	return &store.ClaimedChatSchedule{Schedule: sc, Input: row}, nil
+	return models.ChatScheduleDelivery{Outcome: models.ChatScheduleQueued, InputID: row.ID}, nil
 }
 
-func (s *scheduleFakeStore) ClaimDueChatSchedules(ctx context.Context, _ time.Time, maxPending int) ([]store.ClaimedChatSchedule, error) {
-	s.mu.Lock()
-	var ids []struct{ user, conv, id string }
-	for _, sc := range s.schedules {
-		if sc.Status == store.ChatScheduleStatusActive {
-			ids = append(ids, struct{ user, conv, id string }{sc.UserEmail, sc.ConversationID, sc.ID})
-		}
-	}
-	s.mu.Unlock()
-
-	var out []store.ClaimedChatSchedule
-	for _, item := range ids {
-		claimed, err := s.TriggerChatScheduleNow(ctx, item.user, item.conv, item.id, maxPending)
-		if err != nil {
-			return out, err
-		}
-		out = append(out, *claimed)
-	}
-	return out, nil
+// fakeChatScheduleEngine stands in for the scheduler: Run now claims the
+// fake store's row, delivers through the server and settles the run count.
+type fakeChatScheduleEngine struct {
+	st    *scheduleFakeStore
+	srv   *Server
+	wakes []time.Time
 }
+
+func (e *fakeChatScheduleEngine) RunChatScheduleNow(ctx context.Context, scheduleID string) (models.ChatScheduleDelivery, error) {
+	e.st.mu.Lock()
+	sc, ok := e.st.schedules[scheduleID]
+	e.st.mu.Unlock()
+	if !ok {
+		return models.ChatScheduleDelivery{}, store.ErrChatScheduleNotFound
+	}
+	fire := models.ChatScheduleFire{
+		ScheduleID: sc.ID, ConversationID: sc.ConversationID, UserEmail: sc.UserEmail,
+		Title: sc.Title, Prompt: sc.Prompt, CronExpr: sc.CronExpr, RunNumber: sc.RunCount + 1,
+		Trigger: models.ChatScheduleTriggerManual, ClaimedAt: time.Now(),
+	}
+	d, err := e.srv.DeliverChatScheduleFire(ctx, fire)
+	if err != nil {
+		return d, err
+	}
+	if d.Outcome == models.ChatScheduleQueued {
+		e.st.mu.Lock()
+		sc.RunCount++
+		now := time.Now().Unix()
+		sc.LastRunAt = &now
+		e.st.schedules[scheduleID] = sc
+		e.st.mu.Unlock()
+	}
+	return d, nil
+}
+
+func (e *fakeChatScheduleEngine) WakeChatSchedulesAt(t time.Time) { e.wakes = append(e.wakes, t) }
 
 type patrolRecordingEngine struct {
 	fakeEngine
@@ -220,6 +231,7 @@ func TestChatScheduleRoutes_AndPatrolDrain(t *testing.T) {
 	st := newScheduleFakeStore()
 	eng := &patrolRecordingEngine{}
 	srv := newDefaultChatServer(t, eng, st)
+	srv.chatSchedules = &fakeChatScheduleEngine{st: st, srv: srv}
 	defer srv.StopBackground()
 	h := srv.Routes()
 

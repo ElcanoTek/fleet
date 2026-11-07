@@ -4,68 +4,72 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
 
-// SweepDueChatSchedules claims any active in-chat patrols or timers whose
-// next_run_at has arrived and enqueues their turns into chat_input_queue, then
-// kicks each conversation's queue drain.
-func (s *Server) SweepDueChatSchedules(ctx context.Context) (int, error) {
+// Chat schedules are fired by the scheduler's tick loop (ADR-0104): it claims
+// a due schedule (a lease), asks this server to deliver the fire, and settles
+// it. Server is that deliverer (scheduler.ChatScheduleDeliverer).
+
+// DeliverChatScheduleFire enqueues a claimed fire's turn into its
+// conversation. While the server is shutting down or an update drain is on,
+// the fire is deferred: the scheduler releases its lease and retries later.
+func (s *Server) DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
 	if s == nil || s.store == nil || s.shuttingDown.Load() || UpdateDrainActive() {
-		return 0, nil
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleDeferred}, nil
 	}
-	claimed, err := s.store.ClaimDueChatSchedules(ctx, time.Now(), maxPendingInputs)
-	for _, item := range claimed {
-		log.Printf("audit: chat schedule %q (run #%d) queued for conversation %q as input %q",
-			item.Schedule.ID, item.Schedule.RunCount, item.Schedule.ConversationID, item.Input.ID)
-		s.emitQueueUpdate(ctx, item.Input.UserEmail, item.Schedule.ConversationID)
-		s.maybeDrainQueue(item.Schedule.ConversationID)
-		autoApprove := false
-		if conv, cerr := s.store.Get(ctx, item.Input.UserEmail, item.Schedule.ConversationID); cerr == nil && conv != nil {
-			autoApprove = conv.AutoApprove
-		}
-		s.emitPatrolUpdate(ctx, item.Input.UserEmail, item.Schedule.ConversationID, nil, autoApprove)
+	return s.store.DeliverChatScheduleFire(ctx, fire, maxPendingInputs)
+}
+
+// ChatScheduleFireSettled publishes a settled fire: the queue and patrol
+// updates for open clients, and the drain of a newly queued turn.
+func (s *Server) ChatScheduleFireSettled(ctx context.Context, fire models.ChatScheduleFire, d models.ChatScheduleDelivery) {
+	if s == nil || s.store == nil {
+		return
+	}
+	if d.Outcome == models.ChatScheduleQueued {
+		s.emitQueueUpdate(ctx, fire.UserEmail, fire.ConversationID)
+		s.maybeDrainQueue(fire.ConversationID)
+	}
+	autoApprove := false
+	if conv, cerr := s.store.Get(ctx, fire.UserEmail, fire.ConversationID); cerr == nil && conv != nil {
+		autoApprove = conv.AutoApprove
+	}
+	s.emitPatrolUpdate(ctx, fire.UserEmail, fire.ConversationID, nil, autoApprove)
+}
+
+// KickQueuedChatScheduleTurns starts the drain of every conversation holding
+// a queued patrol turn — one RecoverInputQueue returned to 'queued' on
+// restart, say — on each scheduler pass.
+func (s *Server) KickQueuedChatScheduleTurns(ctx context.Context) {
+	if s == nil || s.store == nil || s.shuttingDown.Load() || UpdateDrainActive() {
+		return
 	}
 	if ql, ok := s.store.(interface {
 		ListQueuedPatrolConversations(context.Context) ([]string, error)
 	}); ok {
-		if convIDs, qerr := ql.ListQueuedPatrolConversations(ctx); qerr == nil {
+		if convIDs, err := ql.ListQueuedPatrolConversations(ctx); err == nil {
 			for _, convID := range convIDs {
 				s.maybeDrainQueue(convID)
 			}
 		}
 	}
-	return len(claimed), err
 }
 
-// armShortScheduleTimer schedules a tracked background wakeup when a newly
-// created or updated schedule fires within 5 minutes so short one-shot timers
-// (and integration tests) fire right at next_run_at without waiting on the
-// daemon's periodic sweep ticker.
+// armShortScheduleTimer asks the scheduler for a firing pass at nextRunAt
+// when a newly created, edited or resumed schedule falls due before the next
+// tick, so a short one-shot timer fires right on time.
 func (s *Server) armShortScheduleTimer(nextRunAt int64) {
-	if s == nil || nextRunAt <= 0 {
+	if s == nil || nextRunAt <= 0 || s.chatSchedules == nil {
 		return
 	}
-	delay := time.Until(time.Unix(nextRunAt, 0))
-	if delay < 50*time.Millisecond {
-		delay = 50 * time.Millisecond
-	}
-	if delay > 5*time.Minute {
-		return
-	}
-	s.background.After("httpapi.chat_schedule_due", delay, func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if _, err := s.SweepDueChatSchedules(ctx); err != nil {
-			log.Printf("chat schedule timer sweep: %v", err)
-		}
-	})
+	s.chatSchedules.WakeChatSchedulesAt(time.Unix(nextRunAt, 0))
 }
 
 func toChatPatrolScheduleView(sc store.ChatSchedule) tools.ChatPatrolScheduleView {
@@ -376,10 +380,13 @@ func (s *Server) handleSubresourceWithArg(w http.ResponseWriter, r *http.Request
 
 func writeScheduleError(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrChatScheduleNotFound), errors.Is(err, store.ErrConversationNotFound):
+	case errors.Is(err, store.ErrChatScheduleNotFound), errors.Is(err, store.ErrConversationNotFound),
+		errors.Is(err, models.ErrChatScheduleNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
-	case errors.Is(err, store.ErrInvalidChatSchedule):
+	case errors.Is(err, store.ErrInvalidChatSchedule), errors.Is(err, models.ErrChatScheduleNotRunnable):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, models.ErrChatScheduleFiring):
+		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
@@ -560,18 +567,61 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		http.Error(w, "invalid schedule id", http.StatusBadRequest)
 		return
 	}
-	claimed, err := s.store.TriggerChatScheduleNow(r.Context(), user, conv.ID, scheduleID, maxPendingInputs)
+	if s.chatSchedules == nil {
+		http.Error(w, "the scheduler is not running", http.StatusServiceUnavailable)
+		return
+	}
+	// The schedule must be the caller's, in this conversation, and live.
+	current, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, true)
 	if err != nil {
 		writeScheduleError(w, err)
 		return
+	}
+	var target *store.ChatSchedule
+	for i := range current {
+		if current[i].ID == scheduleID {
+			target = &current[i]
+		}
+	}
+	if target == nil {
+		writeScheduleError(w, store.ErrChatScheduleNotFound)
+		return
+	}
+	if target.Status != store.ChatScheduleStatusActive && target.Status != store.ChatScheduleStatusPaused {
+		writeScheduleError(w, fmt.Errorf("%w: cannot trigger a %s schedule", store.ErrInvalidChatSchedule, target.Status))
+		return
+	}
+	delivery, err := s.chatSchedules.RunChatScheduleNow(r.Context(), scheduleID)
+	if err != nil {
+		writeScheduleError(w, err)
+		return
+	}
+	switch delivery.Outcome {
+	case models.ChatScheduleGone:
+		writeScheduleError(w, store.ErrConversationNotFound)
+		return
+	case models.ChatScheduleStale:
+		http.Error(w, "the schedule changed while it was being run; try again", http.StatusConflict)
+		return
+	case models.ChatScheduleDeferred:
+		http.Error(w, "the server is not taking new turns right now", http.StatusServiceUnavailable)
+		return
+	case models.ChatScheduleQueued, models.ChatScheduleCoalesced, models.ChatScheduleBusy:
 	}
 	s.emitQueueUpdate(r.Context(), user, conv.ID)
 	s.emitPatrolUpdate(r.Context(), user, conv.ID, nil, conv.AutoApprove)
 	s.maybeDrainQueue(conv.ID)
 	items, _ := s.store.ListChatSchedules(r.Context(), user, conv.ID, false)
+	if all, err := s.store.ListChatSchedules(r.Context(), user, conv.ID, true); err == nil {
+		for i := range all {
+			if all[i].ID == scheduleID {
+				target = &all[i]
+			}
+		}
+	}
 	writeJSON(w, map[string]any{
-		"schedule":     claimed.Schedule,
-		"input_id":     claimed.Input.ID,
+		"schedule":     *target,
+		"input_id":     delivery.InputID,
 		"schedules":    items,
 		"auto_approve": conv.AutoApprove,
 	})
