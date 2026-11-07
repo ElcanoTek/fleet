@@ -5,5 +5,5 @@ Ingress. A values file that still enables the old tier fails here with the
 upgrade steps rather than silently dropping the UI.
 */ -}}
 {{- if and .Values.web .Values.web.enabled }}
-{{- fail "web.enabled: the separate web tier was removed — the fleet image now serves the web UI on port 3000 (ADR-0091). Delete the web: block from your values, move APP_SESSION_SECRET and any FLEET_OIDC_* / AUTH_* keys from web.existingSecret into config.existingSecret, and rebuild the fleet image with `make build` so it embeds the web bundle. See deploy/helm/fleet/README.md (Upgrading)." }}
+{{- fail "web.enabled: the separate web tier was removed — the fleet image now serves the web UI on port 3000 (ADR-0091). Delete the web: block from your values, move APP_SESSION_SECRET and any FLEET_OIDC_* / AUTH_* keys from web.existingSecret into config.existingSecret, and use the published ghcr.io/elcanotek/fleet image (or one built FROM it), which embeds the web bundle. See deploy/helm/fleet/README.md (Upgrading)." }}
 {{- end }}

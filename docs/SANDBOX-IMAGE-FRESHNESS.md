@@ -1,5 +1,11 @@
 # Sandbox image freshness — the max-age rebuild backstop
 
+> **Since ADR-0098** a bundle with no Containerfile, or the generic one, runs the
+> sandbox image every release publishes (signed, rebuilt from a fresh base by
+> release.yml), so its freshness is the release cadence and this backstop does
+> not apply to it. The backstop below still governs bundles whose own
+> Containerfile is built on the box ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md)).
+
 ## The problem this fixes
 
 `fleet update` used to rebuild the on-box sandbox image only when one of its

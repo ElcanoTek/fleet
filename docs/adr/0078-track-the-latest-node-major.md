@@ -1,6 +1,13 @@
 # ADR-0078: Track the latest node major; install the signed upstream build when the distro lags
 
 - **Status:** Accepted
+- **Amended by:** [ADR-0098](0098-signed-release-artifacts.md) (2026-11-07). No
+  box installs, repairs or runs node any more: the web bundle is built in CI
+  and release.yml and ships inside the signed binary. Tracking the latest major
+  in `web/.nvmrc` still holds for those builds; everything below about the
+  box-side install — the versioned dnf stream, the signed nodejs.org fallback,
+  `scripts/lib/node-version.sh`, the vendored keyring and `doctor --node` — was
+  removed with the on-box build.
 - **Date:** 2026-10-06
 - **Deciders:** fleet maintainers
 - **Supersedes:** the "production should track Active or Maintenance LTS, never

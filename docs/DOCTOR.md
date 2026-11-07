@@ -59,28 +59,17 @@ Division of labor across the three health verbs:
 |---|---|---|---|
 | `fleet status` | none | never | quick in-process checks (bundle, env, DBs, sandbox, unit) |
 | `fleet doctor` | root — `--dry-run` needs none, but **`--check` still does** (it probes the service user's rootless podman and reads 0600 env files) | **repairs** | everything status checks **plus** packages, podman prereqs, unit drift, env files — and fixes them (except a stale podman pause process: reported with the manual repair, never run) |
-| `fleet doctor --node` | root — **except `--node --check`**, the one read-only path needing none (it is what `fleet update --check` calls) | **repairs** | the node toolchain ONLY: install `nodejs<major>` + `-npm` per `web/.nvmrc` (or, when the distro has no such stream, the signed nodejs.org release into `/usr/local/bin/node-<major>` — [ADR-0078](adr/0078-track-the-latest-node-major.md)), assert the resolved interpreter **and that an npm belongs to it**, exit (node builds the web bundle; nothing runs on it — ADR-0091) |
 | `/admin/doctor` (UI) | admin session | never | doctor's *diagnosable-from-the-process* subset, with fix hints |
 
 ## Design decisions
 
-- **`--node` is a seam, not a convenience flag.** `scripts/update.sh` is an
-  updater, not a provisioner, so it must not grow its own `dnf install nodejs`;
-  but an update that dies because the box is a node major behind sends the
-  operator away to find the repair command. `--node` lets update call *this*
-  code path — the one implementation of the node install — and then re-resolve.
-  It is scoped to the node blocks deliberately: a full doctor pass adopts
-  drifted units, a write `fleet update` performs only behind explicit consent
-  (`--adopt-units`), so invoking one from inside update would launder a
-  consent-gated write. It asserts the interpreter **and its npm** separately,
-  because on Fedora npm is its own package whose shebang names its interpreter
-  absolutely: a box can have node 24 while `npm` still builds on 22, which is
-  how the web tier was built on the old major through green updates (see
-  [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md), "The npm
-  interpreter pin"). `--node --check` drops the root requirement because it
-  installs nothing and `fleet update --check` (a documented no-root dev-box
-  probe) calls it. Full story:
-  [`NODE-TOOLCHAIN-HANDOFF.md`](NODE-TOOLCHAIN-HANDOFF.md).
+- **No build toolchain.** Boxes install signed release binaries
+  ([RELEASE-ARTIFACTS.md](RELEASE-ARTIFACTS.md), ADR-0098), so doctor checks
+  no Go or Node and keeps neither current; the node repair seam it used to
+  offer `fleet update` (`--node`) is gone with the on-box web build. What it
+  checks instead is the installed binary itself — no host executor compiled
+  in, a web bundle embedded (`fleet version --build-info`) — and the release
+  it runs against the newest published one and the checkout's.
 
 - **Repairs are shell, diagnosis is Go.** The repair pass needs root and is
   genuinely shell-shaped (dnf, useradd, install, systemctl), so it lives in
