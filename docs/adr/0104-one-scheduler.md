@@ -90,7 +90,12 @@ are fired by it; the chat server is only the deliverer of a fire.**
   a failing schedule is retried by recovery and never crowds out the healthy
   ones. A fire the chat server defers (draining, shutting down) is kept the
   same way with a 10s retry — not counted, not dropped, and delivered once
-  when turns are taken again, a Run now on a paused schedule included. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
+  when turns are taken again, a Run now on a paused schedule included. A
+  refusal a retry would not change — a Run now on a conversation whose input
+  queue is full — is the opposite: the fire ends at once, uncounted and
+  unrecorded, and the caller is told (429); nothing runs it later. A
+  scheduled fire meeting a full queue is `busy` (its slot skipped), as the
+  chat sweeper always did. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
   its claim runs on the caller's context; delivery and settle run on a
   detached, bounded one, and a second Run now while a fire is pending is
   refused rather than minting a new fire for the same run; so is a Run now

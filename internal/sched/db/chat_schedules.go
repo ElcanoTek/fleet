@@ -267,7 +267,8 @@ func (db *Database) FailChatScheduleFire(ctx context.Context, fire models.ChatSc
 //     retries in chatScheduleBusyRetry — so a blocked schedule never sits at
 //     the head of the due scan.
 //   - gone: the schedule is cancelled.
-//   - coalesced, stale: the definition is left as it is and the fire ends.
+//   - coalesced, stale, rejected: the definition is left as it is and the
+//     fire ends (a rejected Run now is terminal: nothing retries it).
 //     Nothing is recorded: a Run now that found a patrol turn in flight did
 //     not run.
 //   - deferred (the chat server is draining or shutting down): the fire is
@@ -360,7 +361,7 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 			UPDATE chat_schedules SET lease_expires_at = now() + make_interval(secs => $2)
 			 WHERE id = $1`,
 			fire.ScheduleID, ChatScheduleDeferRetry.Seconds())
-	default: // coalesced, stale
+	default: // coalesced, stale, rejected
 		recordRun = false
 		_, err = tx.ExecContext(ctx, `UPDATE chat_schedules SET `+releaseFireSQL+` WHERE id = $1`, fire.ScheduleID)
 	}

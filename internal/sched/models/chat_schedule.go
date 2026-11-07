@@ -31,6 +31,9 @@ var (
 	ErrChatScheduleNotRunnable = errors.New("chat schedule is not active or paused")
 	// ErrChatScheduleFiring: another fire holds the schedule's lease.
 	ErrChatScheduleFiring = errors.New("chat schedule is firing; try again in a moment")
+	// ErrChatScheduleQueueFull: Run now found the conversation's input queue
+	// full. The run is refused, not deferred: nothing runs it later.
+	ErrChatScheduleQueueFull = errors.New("the conversation's input queue is full; try again once it drains")
 )
 
 // ChatScheduleTrigger says what fired a run.
@@ -67,6 +70,12 @@ const (
 	// (shutting down, update drain). The lease is released untouched and the
 	// fire is retried on a later tick. Nothing is recorded.
 	ChatScheduleDeferred ChatScheduleOutcome = "deferred"
+	// ChatScheduleRejected: the chat server refused a manual fire for a
+	// reason a retry would not change on its own (Delivery.Reason; today
+	// "queue_full"). The fire ends — not counted, not recorded, never retried
+	// — and Run now answers it as an error. (A scheduled fire meeting a full
+	// queue is busy instead: its slot is skipped, as the chat sweeper did.)
+	ChatScheduleRejected ChatScheduleOutcome = "rejected"
 )
 
 // ChatScheduleFire is one claimed fire of a chat schedule: the definition as
@@ -101,6 +110,8 @@ type ChatScheduleFire struct {
 // ChatScheduleDelivery is the chat server's answer to a fire.
 type ChatScheduleDelivery struct {
 	Outcome ChatScheduleOutcome
+	// Reason says why a fire was rejected ("queue_full").
+	Reason string
 	// InputID is the chat_input_queue row of a queued or coalesced fire.
 	InputID string
 }
