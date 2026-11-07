@@ -624,7 +624,7 @@ func (e *engine) logFallbackSwap(reason streamErrorClass, providerErr *fantasy.P
 		status = providerErr.StatusCode
 		body = summarizeForConsole(providerErr.Message)
 	}
-	slog.Error("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "fallback_model", e.fallbackModel.Model())
+	slog.Warn("⚠️ Primary model failed; swapping to fallback", "reason", reason, "status", status, "fallback_model", e.fallbackModel.Model())
 	if e.logSession == nil {
 		return
 	}

@@ -390,7 +390,7 @@ func storeApprovalResultCard(ctx context.Context, st chatStore, user, approvalID
 	card, ok, reason := extractResultCard(governed)
 	if !ok {
 		if reason != "" {
-			logging.From(ctx).Error("approval result card: refused", "tool", toolName, "reason", reason)
+			logging.From(ctx).Warn("approval result card: refused", "tool", toolName, "reason", reason)
 		}
 		return nil
 	}

@@ -333,7 +333,7 @@ func (s *Service) Tick(ctx context.Context) TickResult {
 	if !cfg.DirectEmailConfigured() {
 		if s.noSMTPDay != day {
 			s.noSMTPDay = day
-			s.log(ctx).Info("owner digest: not sent — SMTP is not configured (an SMTP host and a From address are needed; Settings → Admin → Notifications)", "day", day)
+			s.log(ctx).Warn("owner digest: not sent — SMTP is not configured (an SMTP host and a From address are needed; Settings → Admin → Notifications)", "day", day)
 		}
 		return TickResult{Outcome: OutcomeNoSMTP}
 	}
@@ -367,7 +367,11 @@ func (s *Service) Tick(ctx context.Context) TickResult {
 		}
 		res.Sent++
 	}
-	s.log(ctx).Info("owner digest: day settled", "day", day, "sent", res.Sent, "owners", res.Owners, "failed", res.Failed, "skipped_no_email", res.Skipped)
+	level := slog.LevelInfo
+	if res.Failed > 0 {
+		level = slog.LevelWarn // some owners' digests were not delivered
+	}
+	s.log(ctx).Log(ctx, level, "owner digest: day settled", "day", day, "sent", res.Sent, "owners", res.Owners, "failed", res.Failed, "skipped_no_email", res.Skipped)
 	return res
 }
 

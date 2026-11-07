@@ -169,7 +169,7 @@ func (r *Runner) evaluateExitCondition(ctx context.Context, lc *models.LoopConfi
 	case cond == "llm":
 		return r.evalLLMExit(ctx, lc, session, fallback)
 	default:
-		logging.From(ctx).Info("scheduled loop: unknown exit_condition; treating as not-passed", "condition", cond)
+		logging.From(ctx).Warn("scheduled loop: unknown exit_condition; treating as not-passed", "condition", cond)
 		return false, "unknown_exit_condition"
 	}
 }
@@ -196,7 +196,7 @@ func (r *Runner) evalLLMExit(ctx context.Context, lc *models.LoopConfig, session
 		if m, err := r.mgr.Resolve(ctx, slug); err == nil {
 			verifier = m
 		} else {
-			logging.From(ctx).Error("scheduled loop: verifier model unresolved; using fallback", "slug", slug, "err", err)
+			logging.From(ctx).Warn("scheduled loop: verifier model unresolved; using fallback", "slug", slug, "err", err)
 		}
 	}
 	if verifier == nil {

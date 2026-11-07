@@ -1960,7 +1960,7 @@ func (s *Server) SweepExpiredApprovals(ctx context.Context) (int, error) {
 		// keeps each processed row's claim+append atomic-in-practice; the
 		// unprocessed rows stay pending and are swept on the next tick.
 		if err := ctx.Err(); err != nil {
-			logging.From(ctx).Error("approval expiry sweep: stopping early; remainder handled next tick", "denied", denied, "expired", len(expired), "err", err)
+			logging.From(ctx).Warn("approval expiry sweep: stopping early; remainder handled next tick", "denied", denied, "expired", len(expired), "err", err)
 			break
 		}
 		a := expired[i]

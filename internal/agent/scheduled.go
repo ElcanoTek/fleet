@@ -881,7 +881,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 			// unresolved failed critical call: fail OPEN with a recorded warning instead of dead-lettering
 			// audited work on the verifier's own outage (the phone-a-friend
 			// reviewer already fails open on its errors).
-			logging.From(ctx).Error("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified", "err", err)
+			logging.From(ctx).Warn("verifier unavailable twice; the audit passed with no unresolved failed critical call, finishing unverified", "err", err)
 			p.verifierWarning = err.Error()
 			p.verified = true
 		case err != nil:
@@ -920,7 +920,7 @@ func (p *scheduledPolicy) CanFinish(round int) (bool, []string) {
 		answer := p.latestRunText()
 		issues, err := p.agent.runPhoneAFriendReview(ctx, p.agent.reviewerModel, p.task, answer, records)
 		if err != nil {
-			logging.From(ctx).Error("phone_a_friend review skipped", "err", err)
+			logging.From(ctx).Warn("phone_a_friend review skipped", "err", err)
 		} else if len(issues) > 0 {
 			p.verified = false
 			p.keepJudgedAnswer()
@@ -1233,7 +1233,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	systemPrompt := a.systemPrompt
 	if a.notesProvider != nil {
 		if notes, err := a.notesProvider.PublishedNotes(ctx); err != nil {
-			logging.From(ctx).Error("agent notes unavailable; running without notes section", "err", err)
+			logging.From(ctx).Warn("agent notes unavailable; running without notes section", "err", err)
 		} else {
 			systemPrompt = appendScheduledAgentNotes(systemPrompt, notes)
 		}
@@ -1247,7 +1247,7 @@ func (a *Agent) Execute(ctx context.Context, task string) (retErr error) {
 	if a.taskMemory != nil {
 		mems, err := a.taskMemory.ListTaskMemories(ctx, a.taskID)
 		if err != nil {
-			logging.From(ctx).Error("task memory unavailable; running without the persistent-memory section", "err", err)
+			logging.From(ctx).Warn("task memory unavailable; running without the persistent-memory section", "err", err)
 			mems = nil
 		}
 		systemPrompt = appendTaskMemorySection(systemPrompt, mems)

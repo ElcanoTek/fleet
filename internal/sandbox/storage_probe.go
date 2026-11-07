@@ -96,14 +96,14 @@ func ProbeStorageOptSupport(ctx context.Context, podmanBin, image string) (suppo
 			// from this bundle's rootfs. Report support, and say so rather than
 			// leaving an operator to wonder why a quota-capable host logged a
 			// probe failure.
-			logging.From(ctx).Error("sandbox: --storage-opt size probe could not exec /usr/bin/true — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", "image", image, "detail", detail)
+			logging.From(ctx).Warn("sandbox: --storage-opt size probe could not exec /usr/bin/true — the quota itself was ACCEPTED (podman validates it before the exec), so treating the driver as quota-capable", "image", image, "detail", detail)
 			return true, true
 		}
 		if probeCtx.Err() != nil {
 			// The probe was cut short (caller cancelled, or the probe's own
 			// timeout fired) before podman answered — that is not a statement
 			// about the storage driver.
-			logging.From(ctx).Error("sandbox: --storage-opt size probe did not complete — no determination made", "err", probeCtx.Err(), "detail", detail)
+			logging.From(ctx).Warn("sandbox: --storage-opt size probe did not complete — no determination made", "err", probeCtx.Err(), "detail", detail)
 			return false, false
 		}
 		logging.From(ctx).Error("sandbox: --storage-opt size probe failed", "err", err, "detail", detail)

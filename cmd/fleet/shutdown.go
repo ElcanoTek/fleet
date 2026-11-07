@@ -46,6 +46,25 @@ func awaitShutdown(sigCh <-chan os.Signal, errCh <-chan error, chatSrv *httpapi.
 	}
 }
 
+// logChatDrain logs how the chat-turn drain ended: Info when every turn
+// finished within grace; otherwise the stragglers are force-cancelled
+// (cancel) and that is a Warn — work was cut short.
+func logChatDrain(drained bool, grace time.Duration, cancel func() int) {
+	if drained {
+		slog.Info("fleet: all in-flight chat turns drained within grace")
+		return
+	}
+	slog.Warn("fleet: grace period expired; force-cancelled in-flight chat turns", "grace", grace, "cancelled", cancel())
+}
+
+// logApprovalDrain warns when approved actions were still executing at the
+// end of the grace period: their outcome becomes unknown.
+func logApprovalDrain(drained bool, grace time.Duration) {
+	if !drained {
+		slog.Warn("fleet: grace period expired with approved actions still executing; their outcome will be recorded as unknown at the next start", "grace", grace)
+	}
+}
+
 // performShutdown runs the drain sequence: stop admitting, drain in-flight chat
 // turns + scheduled tasks within the grace budget (force-cancelling stragglers),
 // then close the listeners. graceful=false is the fast path (cancel everything
@@ -62,19 +81,13 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		// decoupled context and drain within the pool's own grace budget (parallel).
 		cancel()
 		graceCtx, graceStop := context.WithTimeout(context.Background(), grace)
-		if chatSrv.DrainTurns(graceCtx) {
-			slog.Info("fleet: all in-flight chat turns drained within grace")
-		} else {
-			slog.Info("fleet: grace period expired; force-cancelled in-flight chat turns", "grace", grace, "cancelled", chatSrv.CancelInflightTurns())
-		}
+		logChatDrain(chatSrv.DrainTurns(graceCtx), grace, chatSrv.CancelInflightTurns)
 		// An approved card's call can outlive its POST (a long deal write
 		// answers "executing" and finishes detached), so the HTTP handler
 		// drain no longer covers it. Wait for it within the same grace; one
 		// still running when the process exits keeps its executing sentinel,
 		// which the next boot records as outcome unknown.
-		if !chatSrv.DrainApprovalRuns(graceCtx) {
-			slog.Info("fleet: grace period expired with approved actions still executing; their outcome will be recorded as unknown at the next start", "grace", grace)
-		}
+		logApprovalDrain(chatSrv.DrainApprovalRuns(graceCtx), grace)
 		graceStop()
 		// After the turns, not before: a turn's completion tail can schedule a
 		// queue-drain re-kick, so background work has to settle second or the
@@ -86,7 +99,7 @@ func performShutdown(graceful bool, grace time.Duration, cancel context.CancelFu
 		cancel()
 		pool.ForceCancel()
 		if n := chatSrv.CancelInflightTurns(); n > 0 {
-			slog.Info("fleet: cancelled in-flight chat turns", "cancelled", n)
+			slog.Warn("fleet: cancelled in-flight chat turns", "cancelled", n)
 		}
 		// Cancels pending timers and waits only for background work already
 		// running, so this stays an immediate path.

@@ -195,7 +195,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request, u
 		var oerr error
 		origin, oerr = s.store.GetBranchOrigin(r.Context(), user, id)
 		if oerr != nil {
-			logging.From(r.Context()).Info("conversation get: branch origin lookup failed", "conv_id", safe.LogSafe(id), "err", safe.LogSafe(oerr.Error()))
+			logging.From(r.Context()).Warn("conversation get: branch origin lookup failed", "conv_id", safe.LogSafe(id), "err", safe.LogSafe(oerr.Error()))
 			origin = nil
 		}
 	}

@@ -1,8 +1,11 @@
 package logging
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 
@@ -103,12 +106,103 @@ func replaceAttr(groups []string, a slog.Attr) slog.Attr {
 		case []byte:
 			return slog.String(a.Key, Redact(string(x)))
 		}
-		return a
+		return slog.Any(a.Key, redactComposite(v.Any()))
 	default:
 		// Int64/Uint64/Float64/Bool/Duration/Time/Group/LogValuer: no text to
 		// scrub (a group's members are visited individually).
 		return a
 	}
+}
+
+// redactComposite scrubs every string a composite attribute value holds —
+// a slice, map, struct, pointer, or any nesting of them (a model-authored
+// []string of review issues, a decoded JSON object) — keeping its structure.
+// Scalars pass through. Common shapes are walked directly; anything else is
+// round-tripped through JSON (marshal, walk, keep the decoded structure),
+// which is also how the JSON handler would have rendered it. A value that
+// cannot be marshalled is logged as its redacted fmt text, never raw.
+func redactComposite(v any) any {
+	switch x := v.(type) {
+	case nil:
+		return nil
+	case bool, json.Number,
+		int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr,
+		float32, float64, complex64, complex128:
+		// json.Number is a Stringer; it must stay a number, not become text.
+		return x
+	case string:
+		return Redact(x)
+	case []string:
+		out := make([]string, len(x))
+		for i, s := range x {
+			out[i] = Redact(s)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = redactComposite(e)
+		}
+		return out
+	case map[string]string:
+		out := make(map[string]string, len(x))
+		for k, s := range x {
+			if secretAttrKey(k) {
+				out[k] = redactedValue
+				continue
+			}
+			out[k] = Redact(s)
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, e := range x {
+			if secretAttrKey(k) && !isNumberOrBool(e) {
+				out[k] = redactedValue
+				continue
+			}
+			out[k] = redactComposite(e)
+		}
+		return out
+	case error:
+		return Redact(errorText(x))
+	case fmt.Stringer:
+		return Redact(x.String())
+	case []byte:
+		return Redact(string(x))
+	}
+	// A named scalar type (type Status int) has no text to scrub.
+	switch reflect.ValueOf(v).Kind() {
+	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64, reflect.Complex64, reflect.Complex128:
+		return v
+	case reflect.String:
+		return Redact(reflect.ValueOf(v).String())
+	default:
+		// Composite or other kinds: walked through JSON below.
+	}
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return Redact(fmt.Sprintf("%+v", v))
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var walked any
+	if err := dec.Decode(&walked); err != nil {
+		return Redact(fmt.Sprintf("%+v", v))
+	}
+	return redactComposite(walked)
+}
+
+// isNumberOrBool reports a decoded JSON scalar that carries no text, so a
+// secret-named key holding a count ("max_tokens": 4096) keeps its value.
+func isNumberOrBool(v any) bool {
+	switch v.(type) {
+	case json.Number, bool, int, int64, float64:
+		return true
+	}
+	return false
 }
 
 // errorText is err.Error() with a nil-pointer error guarded, so a typed-nil

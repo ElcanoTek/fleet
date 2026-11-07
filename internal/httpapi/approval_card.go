@@ -361,7 +361,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 	text, isErr, err := broker.CallMCP(ctx, server, describer, args)
 	switch {
 	case err != nil && (errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil):
-		logging.From(ctx).Info("approval card: describer timed out", "describer", full, "timeout", approvalCardDescriberTimeout)
+		logging.From(ctx).Warn("approval card: describer timed out", "describer", full, "timeout", approvalCardDescriberTimeout)
 		return "", cardFallbackTimeout
 	case err != nil:
 		logging.From(ctx).Error("approval card: describer failed", "describer", full, "err", redactedForLog(err))
@@ -376,7 +376,7 @@ func (a *approvalStager) describeApproval(toolName, rawInput string) (cardJSON, 
 		return "", cardFallbackInvalid
 	}
 	if tools.RedactionWouldAlter(canonical) {
-		logging.From(ctx).Info("approval card: describer output carries a secret-like value; card withheld", "describer", full)
+		logging.From(ctx).Warn("approval card: describer output carries a secret-like value; card withheld", "describer", full)
 		return "", cardFallbackRedacted
 	}
 	return string(canonical), ""

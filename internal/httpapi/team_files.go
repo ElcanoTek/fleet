@@ -348,7 +348,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 	for _, o := range shared {
 		if !closed && ctx.Err() != nil {
 			closed = true
-			logging.From(ctx).Info("branch files: copy budget ran out; withholding the remaining files", "dst_conv_id", safe.LogSafe(dstConvID))
+			logging.From(ctx).Warn("branch files: copy budget ran out; withholding the remaining files", "dst_conv_id", safe.LogSafe(dstConvID))
 		}
 		decision := branchCopyFile
 		if !closed && gate != nil {
@@ -356,7 +356,7 @@ func copySharedOutputsIntoBranch(ctx context.Context, srcConvID, dstConvID strin
 		}
 		if !closed && decision == branchCopyClosed {
 			closed = true
-			logging.From(ctx).Info("branch files: source is no longer readable by the brancher; withholding the remaining files", "src_conv_id", safe.LogSafe(srcConvID), "dst_conv_id", safe.LogSafe(dstConvID))
+			logging.From(ctx).Warn("branch files: source is no longer readable by the brancher; withholding the remaining files", "src_conv_id", safe.LogSafe(srcConvID), "dst_conv_id", safe.LogSafe(dstConvID))
 		}
 		if closed || decision == branchCopySkip {
 			withheld = append(withheld, o.Path)

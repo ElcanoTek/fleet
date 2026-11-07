@@ -359,7 +359,7 @@ func (c *modelsCache) ensureFresh() {
 	if err != nil {
 		// Don't spam on every cold-start miss; the static table still answers
 		// context windows and AllEntries keeps serving the last-known catalog.
-		slog.Error("⚠️ OpenRouter /models fetch failed; serving last-known catalog + static context-window table", "err", err)
+		slog.Warn("⚠️ OpenRouter /models fetch failed; serving last-known catalog + static context-window table", "err", err)
 		// Back off for half the TTL before trying again.
 		c.fetchedAt = time.Now().Add(-ttl / 2)
 		return

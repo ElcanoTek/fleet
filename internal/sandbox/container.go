@@ -982,7 +982,7 @@ func (c *containerImpl) killContainerNow(containerID string) bool {
 		if containerAlreadyGone(string(out)) {
 			return true
 		}
-		slog.Error("sandbox: cancelled-exec container kill unconfirmed", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
+		slog.Warn("sandbox: cancelled-exec container kill unconfirmed", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 		return false
 	}
 	return true
@@ -1079,7 +1079,7 @@ for pid in proc_info:
 		if containerAlreadyGone(string(out)) {
 			return false
 		}
-		slog.Error("sandbox: persistent turn-release process reap failed; retiring container", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
+		slog.Warn("sandbox: persistent turn-release process reap failed; retiring container", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 		c.execPoisoned.Store(true)
 		c.killContainerNow(containerID)
 		return false
@@ -1422,7 +1422,7 @@ func (c *containerImpl) terminateBridgeLocked() {
 			select {
 			case <-done:
 			case <-time.After(bridgeReapTimeout):
-				slog.Info("sandbox: bridge exec client did not reap in time after SIGKILL; abandoning the wait and clearing the bridge state", "timeout", bridgeReapTimeout)
+				slog.Warn("sandbox: bridge exec client did not reap in time after SIGKILL; abandoning the wait and clearing the bridge state", "timeout", bridgeReapTimeout)
 			}
 		}
 	}
@@ -1554,7 +1554,7 @@ func (c *containerImpl) close() {
 		select {
 		case <-statsDone:
 		case <-time.After(statsDrainTimeout):
-			slog.Info("sandbox: telemetry poller did not stop in time; abandoning its resource rollup and tearing the container down anyway", "timeout", statsDrainTimeout)
+			slog.Warn("sandbox: telemetry poller did not stop in time; abandoning its resource rollup and tearing the container down anyway", "timeout", statsDrainTimeout)
 		}
 	}
 
@@ -1570,7 +1570,7 @@ func (c *containerImpl) close() {
 		stop := exec.CommandContext(killCtx, c.cfg.PodmanBinary, c.podmanArgs([]string{"kill", containerID})...) //nolint:gosec // containerID is our generated UUID, not user input
 		if out, err := stop.CombinedOutput(); err != nil {
 			if !containerAlreadyGone(string(out)) {
-				slog.Error("sandbox: close-time container kill unconfirmed — the container may linger until the boot-time orphan prune", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
+				slog.Warn("sandbox: close-time container kill unconfirmed — the container may linger until the boot-time orphan prune", "container_id", containerID, "err", err, "output", fmt.Sprintf("%.200s", string(out)))
 			}
 		}
 	}

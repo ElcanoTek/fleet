@@ -315,7 +315,7 @@ func (b *turnBuffer) Emit(event string, payload any) {
 		default:
 			b.needsBackfill = true // already under b.mu
 			b.droppedOnFull++
-			slog.Info("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "event_id", ev.ID)
+			slog.Warn("persister channel full; event deferred to Finish backfill", "turn_id", b.turnID, "event_id", ev.ID)
 		}
 	}
 }

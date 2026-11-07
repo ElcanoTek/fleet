@@ -36,7 +36,7 @@ func (g *Gateway) verifyOrigin(w http.ResponseWriter, r *http.Request) bool {
 	if reason == "" {
 		return true
 	}
-	logging.From(r.Context()).Info("webui: csrf rejected", "reason", safe.LogSafe(reason))
+	logging.From(r.Context()).Warn("webui: csrf rejected", "reason", safe.LogSafe(reason))
 	writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden"})
 	return false
 }

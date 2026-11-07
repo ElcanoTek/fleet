@@ -204,7 +204,7 @@ func ensureStagedRoot(dir string) error {
 	}
 	if _, err := os.Lstat(dir); err == nil {
 		if verr := verifyExistingDir(dir); verr != nil {
-			slog.Error("clientconfig: staged skills root is not a trusted directory; replacing it", "dir", dir, "err", verr)
+			slog.Warn("clientconfig: staged skills root is not a trusted directory; replacing it", "dir", dir, "err", verr)
 			if rerr := os.RemoveAll(dir); rerr != nil {
 				return fmt.Errorf("replace untrusted staged skills root: %w", rerr)
 			}

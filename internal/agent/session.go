@@ -647,7 +647,7 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, a.Path)
 		if !ok {
-			slog.Info("loadImageAttachments: attachment is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
+			slog.Warn("loadImageAttachments: attachment is outside the uploads root (skipped)", "path", safe.LogSafe(a.Path))
 			continue
 		}
 		info, err := os.Stat(p)
@@ -656,7 +656,7 @@ func loadImageAttachments(atts []ImageAttachment, uploadsRoot string) ([]fantasy
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Info("loadImageAttachments: attachment exceeds the size cap", "path", safe.LogSafe(a.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
+			slog.Warn("loadImageAttachments: attachment exceeds the size cap", "path", safe.LogSafe(a.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)
@@ -698,7 +698,7 @@ func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.Fi
 		}
 		p, ok := confineToUploadsRoot(uploadsRoot, r.Path)
 		if !ok {
-			slog.Info("loadHistoryImageParts: image is outside the uploads root (dropped from replay)", "path", safe.LogSafe(r.Path))
+			slog.Warn("loadHistoryImageParts: image is outside the uploads root (dropped from replay)", "path", safe.LogSafe(r.Path))
 			continue
 		}
 		info, err := os.Stat(p)
@@ -707,7 +707,7 @@ func loadHistoryImageParts(refs []ImageRefMeta, uploadsRoot string) []fantasy.Fi
 			continue
 		}
 		if info.Size() > maxBytesPerFile {
-			slog.Info("loadHistoryImageParts: image exceeds the size cap", "path", safe.LogSafe(r.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
+			slog.Warn("loadHistoryImageParts: image exceeds the size cap", "path", safe.LogSafe(r.Path), "size_bytes", info.Size(), "max_bytes", maxBytesPerFile)
 			continue
 		}
 		data, err := os.ReadFile(p) //nolint:gosec // G304: p rebuilt by confineToUploadsRoot (Rel + IsLocal + Join)

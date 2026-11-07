@@ -353,7 +353,7 @@ func ConfigureAgentPolicy(p AgentPolicy) {
 			continue
 		}
 		if v == ApprovalModeNotify && nonReversibleSuffixes[k] {
-			slog.Error("agent_policy: refusing approval mode — a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
+			slog.Warn("agent_policy: refusing approval mode — a sent message cannot be undone, so its approval card is the review step", "mode", ApprovalModeNotify, "tool", k, "pinned_to", ApprovalModeApprove)
 			continue
 		}
 		modes[k] = v

@@ -1164,7 +1164,7 @@ func sandboxReadOnlyMounts(cfg *config.Config, personasDir, protocolsDir, system
 			// Enforced, not just documented: a doc dir configured to sit
 			// inside the uploads tree (or a future edit that adds the tree
 			// itself) is dropped rather than quietly re-opening the hole.
-			slog.Error("sandbox: refusing to mount a path inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", "mount", safe.LogSafe(m))
+			slog.Warn("sandbox: refusing to mount a path inside the chat-attachment uploads tree, which no sandbox may see (ADR-0058); attachments reach a turn as a per-conversation staged copy", "mount", safe.LogSafe(m))
 			continue
 		}
 		kept = append(kept, m)
@@ -1540,7 +1540,7 @@ func (m *Manager) configureTurnWorkspace(ctx context.Context, sb *sandbox.Sandbo
 	}
 	artifactCtx, releaseArtifacts, artifactErr := tools.WithSandboxModelOutputArtifacts(ctx, sb, fileOpRoot)
 	if artifactErr != nil {
-		logging.From(ctx).Error("RunTurn: governed tool-output artifact recovery unavailable", "conv_id", conversationID, "err", artifactErr)
+		logging.From(ctx).Warn("RunTurn: governed tool-output artifact recovery unavailable", "conv_id", conversationID, "err", artifactErr)
 		return ctx, fileOpRoot, func() {}, nil
 	}
 	return artifactCtx, fileOpRoot, releaseArtifacts, nil
@@ -1696,7 +1696,7 @@ func (m *Manager) composeTurnSystemPrompt(ctx context.Context, in TurnInput, per
 	var notes []agentcore.Note
 	if m.notesProvider != nil {
 		if got, err := m.notesProvider.PublishedNotes(ctx); err != nil {
-			logging.From(ctx).Error("agent notes unavailable; running without notes section", "err", err)
+			logging.From(ctx).Warn("agent notes unavailable; running without notes section", "err", err)
 		} else {
 			notes = got
 		}
@@ -1766,14 +1766,14 @@ func (m *Manager) openTurnRemoteOverlay(ctx context.Context, in TurnInput, turnC
 		// without an entry mounts its default seat (#988).
 		ov, oerr := m.openRemoteOverlay(ctx, in.UserEmail, turnCatalog, RemoteMCPEnabledOnly(in.OptionalMCPServersEnabled, in.MCPAccountDefaults))
 		if oerr != nil {
-			logging.From(ctx).Error("RunTurn: remote-mcp overlay unavailable", "user", safe.LogSafe(in.UserEmail), "err", oerr)
+			logging.From(ctx).Warn("RunTurn: remote-mcp overlay unavailable", "user", safe.LogSafe(in.UserEmail), "err", oerr)
 		} else if ov != nil {
 			overlay = ov
 			if len(ov.Skipped) > 0 {
 				// Interactive: the user can see+fix these on the Connections page.
 				// Skipped carries USER-NAMED servers — CR/LF-strip them so a
 				// hostile name cannot forge a log entry (log-injection guard).
-				logging.From(ctx).Info("RunTurn: remote MCP servers not mounted", "user", safe.LogSafe(in.UserEmail), "skipped", safe.LogSafe(skippedWithReasons(ov)))
+				logging.From(ctx).Warn("RunTurn: remote MCP servers not mounted", "user", safe.LogSafe(in.UserEmail), "skipped", safe.LogSafe(skippedWithReasons(ov)))
 			}
 		}
 	}

@@ -845,7 +845,7 @@ func (s *Server) startTurn(w http.ResponseWriter, r *http.Request, user string, 
 	// 400s until reload. A failed write here is logged and the turn goes on
 	// with the stored model; the manager's own guard then decides.
 	if err := s.reconcileLockdownModelCtx(turnCtx, user, conv); err != nil {
-		logging.From(turnCtx).Error("lockdown: model migration write failed, running with the stored model", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+		logging.From(turnCtx).Warn("lockdown: model migration write failed, running with the stored model", "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 	}
 
 	// If this conversation was materialized before its first message (for
@@ -1234,7 +1234,7 @@ func (s *Server) runTurnAsync(
 			// error. A Stop is confirmed only by turn.cancelled, so a
 			// turn.error here would read as a failure of the turn's own —
 			// and so would an "error" log line, which is what operators grep.
-			logging.From(turnCtx).Warn("RunTurn cancelled before it finished", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
+			logging.From(turnCtx).Info("RunTurn cancelled before it finished", "user", safe.LogSafe(user), "conv_id", safe.LogSafe(conv.ID), "err", safe.LogSafe(err.Error()))
 			buf.Emit("turn.cancelled", map[string]any{"reason": "cancelled", "user_email": user})
 			return
 		}

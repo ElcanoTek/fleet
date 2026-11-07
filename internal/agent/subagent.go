@@ -834,7 +834,7 @@ func (a *Agent) resolveChildModel(ctx context.Context, override string) (fantasy
 	}
 	m, err := a.subagent.resolver.Resolve(ctx, slug)
 	if err != nil {
-		logging.From(ctx).Error("spawn_subagent: child model unresolved; inheriting parent model", "slug", slug, "err", err)
+		logging.From(ctx).Warn("spawn_subagent: child model unresolved; inheriting parent model", "slug", slug, "err", err)
 		return a.model, "inherited(parent, resolve-failed)"
 	}
 	return m, slug

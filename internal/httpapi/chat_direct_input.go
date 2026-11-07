@@ -305,7 +305,7 @@ func (s *Server) tryReleaseDirectInput(id string) bool {
 // would answer every resend of its key "already running".
 func (s *Server) retryDirectInput(what, id string, attempt int, delay time.Duration, try func() bool) {
 	if attempt > directReleaseRetries {
-		slog.Info("direct input: giving up after retries; boot recovery settles it", "op", what, "input_id", id, "retries", directReleaseRetries)
+		slog.Warn("direct input: giving up after retries; boot recovery settles it", "op", what, "input_id", id, "retries", directReleaseRetries)
 		return
 	}
 	s.background.After("httpapi.direct_"+what, delay, func() {

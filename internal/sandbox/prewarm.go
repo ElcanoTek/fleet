@@ -67,7 +67,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 	// name, or runtime flag needed — the copy is runtime-independent.
 	cmd := exec.CommandContext(runCtx, podmanBinary, "run", "--rm", keepIDUserns, image, "true") //nolint:gosec // podman binary + image are operator-configured, not user input
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logging.From(ctx).Error("sandbox: keep-id pre-warm failed (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead)", "elapsed", time.Since(start).Round(time.Second), "err", err, "output", out)
+		logging.From(ctx).Warn("sandbox: keep-id pre-warm failed (continuing — sandbox starts will pay the id-remap cost under FLEET_SANDBOX_START_TIMEOUT_SECONDS instead)", "elapsed", time.Since(start).Round(time.Second), "err", err, "output", out)
 		return
 	}
 	logging.From(ctx).Info("sandbox: keep-id id-remapped image copy ready", "elapsed", time.Since(start).Round(time.Second))
@@ -81,7 +81,7 @@ func PrewarmKeepIDImage(ctx context.Context, podmanBinary, image, markerPath str
 		}
 	}
 	if err := writePrewarmMarker(markerPath, imageID); err != nil {
-		logging.From(ctx).Error("sandbox: keep-id pre-warm marker write failed (the next boot re-warms)", "err", err)
+		logging.From(ctx).Warn("sandbox: keep-id pre-warm marker write failed (the next boot re-warms)", "err", err)
 	}
 }
 
