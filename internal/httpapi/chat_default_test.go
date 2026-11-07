@@ -180,6 +180,11 @@ type fakeChatStore struct {
 	webhookCommitErr error
 	// createTurnErr makes the next CreateTurn fail with it.
 	createTurnErr error
+	// beforeWebhookCommit runs (unlocked) at the start of
+	// CommitWebhookUserMessage.
+	beforeWebhookCommit func()
+	// turnConvs maps turn id → conversation id for created turn rows.
+	turnConvs map[string]string
 	// beforeWebhookBind runs (unlocked) at the start of
 	// CreateWebhookConversation.
 	beforeWebhookBind func()
@@ -366,13 +371,17 @@ func (s *fakeChatStore) RecordTurn(context.Context, store.TurnMetric) error {
 	return nil
 }
 
-func (s *fakeChatStore) CreateTurn(context.Context, string, string, int64) error {
+func (s *fakeChatStore) CreateTurn(_ context.Context, turnID, convID string, _ int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err := s.createTurnErr; err != nil {
 		s.createTurnErr = nil
 		return err
 	}
+	if s.turnConvs == nil {
+		s.turnConvs = map[string]string{}
+	}
+	s.turnConvs[turnID] = convID
 	s.turnRows++
 	return nil
 }

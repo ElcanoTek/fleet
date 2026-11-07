@@ -17,9 +17,9 @@
 --              is durable leaves it retryable.
 -- claim_token is a random value the claiming request holds; binding,
 -- completing, releasing and discarding all require it, and a takeover of a
--- stale unfinished row rotates it (keeping a bound conversation for reuse), so
--- a request that lost its claim cannot act on the row of the request that took
--- it over. No FK to conversations: deleting the conversation must not make a
+-- stale unfinished row rotates it and starts afresh (the conversation the row
+-- named is deleted if still empty), so a request that lost its claim cannot
+-- act on the row of the request that took it over. No FK to conversations: deleting the conversation must not make a
 -- later repeat of the same delivery start a new one. Rows are kept for 24 h,
 -- then removed by the retention sweep (Store.SweepWebhookDeliveries).
 CREATE TABLE IF NOT EXISTS webhook_deliveries (

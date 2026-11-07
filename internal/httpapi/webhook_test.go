@@ -66,6 +66,20 @@ type fakeWebhookDelivery struct {
 	completed   bool
 }
 
+// discardIfEmptyLocked mirrors the store's empty-only delete: no messages and
+// no turns other than exceptTurn.
+func (s *fakeChatStore) discardIfEmptyLocked(convID, exceptTurn string) {
+	if len(s.history[convID]) > 0 {
+		return
+	}
+	for turnID, c := range s.turnConvs {
+		if c == convID && turnID != exceptTurn {
+			return
+		}
+	}
+	delete(s.convs, convID)
+}
+
 func (s *fakeChatStore) ClaimWebhookDelivery(_ context.Context, slug, key string) (store.WebhookClaim, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -77,17 +91,16 @@ func (s *fakeChatStore) ClaimWebhookDelivery(_ context.Context, slug, key string
 	if ok && (d.completed || !s.webhookClaimsStale) {
 		return store.WebhookClaim{ConversationID: d.conv, Completed: d.completed}, nil
 	}
+	if ok && d.conv != "" {
+		s.discardIfEmptyLocked(d.conv, "") // a takeover starts afresh
+	}
 	s.webhookTokens++
 	tok := fmt.Sprintf("tok-%d", s.webhookTokens)
-	next := &fakeWebhookDelivery{token: tok}
-	if ok {
-		next.conv = d.conv // a takeover keeps a bound conversation for reuse
-	}
-	s.webhookDeliveries[k] = next
-	return store.WebhookClaim{Claimed: true, Token: tok, ConversationID: next.conv}, nil
+	s.webhookDeliveries[k] = &fakeWebhookDelivery{token: tok}
+	return store.WebhookClaim{Claimed: true, Token: tok}, nil
 }
 
-func (s *fakeChatStore) CreateWebhookConversation(ctx context.Context, slug, key, token, prevConvID, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
+func (s *fakeChatStore) CreateWebhookConversation(ctx context.Context, slug, key, token, userEmail, title, persona, model string, lockdown bool) (*store.Conversation, error) {
 	if s.beforeWebhookBind != nil {
 		hook := s.beforeWebhookBind
 		s.beforeWebhookBind = nil
@@ -100,7 +113,7 @@ func (s *fakeChatStore) CreateWebhookConversation(ctx context.Context, slug, key
 		return nil, err
 	}
 	d := s.webhookDeliveries[slug+"\x00"+key]
-	if d == nil || d.token != token || d.conv != prevConvID || d.completed {
+	if d == nil || d.token != token || d.conv != "" || d.completed {
 		s.mu.Unlock()
 		return nil, store.ErrWebhookClaimLost
 	}
@@ -117,6 +130,12 @@ func (s *fakeChatStore) CreateWebhookConversation(ctx context.Context, slug, key
 
 func (s *fakeChatStore) CommitWebhookUserMessage(ctx context.Context, slug, key, token, convID, turnID string, entry agent.HistoryEntry) (int64, error) {
 	s.mu.Lock()
+	hook := s.beforeWebhookCommit
+	s.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
+	s.mu.Lock()
 	if err := s.webhookCommitErr; err != nil {
 		s.webhookCommitErr = nil
 		s.mu.Unlock()
@@ -132,51 +151,30 @@ func (s *fakeChatStore) CommitWebhookUserMessage(ctx context.Context, slug, key,
 	return s.CommitUserMessage(ctx, convID, turnID, entry)
 }
 
-// waitWebhookDeliveriesCompleted waits until every bound delivery in the fake
-// is complete — the turn goroutine commits its user message (and with it the
-// completion) shortly after the 202, and only then is a repeat a duplicate.
-func waitWebhookDeliveriesCompleted(t *testing.T, st *fakeChatStore) {
-	t.Helper()
-	eventually(t, func() bool {
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		for _, d := range st.webhookDeliveries {
-			if d.conv != "" && !d.completed {
-				return false
-			}
-		}
-		return true
-	}, "a webhook turn never committed its user message")
-}
-
-// webhookDeliveryCompleted reports whether the fake's delivery record is
-// complete (the turn's user message committed).
-func webhookDeliveryCompleted(st *fakeChatStore, key string) bool {
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	d := st.webhookDeliveries["gh\x00"+key]
-	return d != nil && d.completed
-}
-
 func (s *fakeChatStore) ReleaseWebhookDelivery(_ context.Context, slug, key, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && !d.completed {
+	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && d.conv == "" && !d.completed {
 		delete(s.webhookDeliveries, slug+"\x00"+key)
 	}
 	return nil
 }
 
-func (s *fakeChatStore) AbandonWebhookConversation(_ context.Context, slug, key, token, convID string) error {
+func (s *fakeChatStore) AbandonWebhookConversation(_ context.Context, slug, key, token, ownTurnID string) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if d := s.webhookDeliveries[slug+"\x00"+key]; d != nil && d.token == token && d.conv == convID && !d.completed {
-		delete(s.webhookDeliveries, slug+"\x00"+key)
-		if len(s.history[convID]) == 0 { // only while empty
-			delete(s.convs, convID)
-		}
+	d := s.webhookDeliveries[slug+"\x00"+key]
+	if d == nil || d.token != token {
+		return false, store.ErrWebhookClaimLost
 	}
-	return nil
+	if d.completed {
+		return true, nil
+	}
+	delete(s.webhookDeliveries, slug+"\x00"+key)
+	if d.conv != "" {
+		s.discardIfEmptyLocked(d.conv, ownTurnID)
+	}
+	return false, nil
 }
 
 func (s *fakeChatStore) SweepWebhookDeliveries(context.Context, time.Duration) (int, error) {
@@ -555,7 +553,6 @@ func TestWebhookDuplicateDeliveryStartsOneConversation(t *testing.T) {
 	}
 	first, _ := webhookResult(t, w1)
 
-	waitWebhookDeliveriesCompleted(t, st)
 	w2 := postWebhook(t, srv, "gh", body, hdr)
 	if w2.Code != http.StatusOK {
 		t.Fatalf("repeat delivery: status %d, want 200: %s", w2.Code, w2.Body.String())
@@ -606,7 +603,6 @@ func TestWebhookGitHubDeliveryIDs(t *testing.T) {
 	if convA == convB {
 		t.Fatalf("distinct deliveries shared conversation %q", convA)
 	}
-	waitWebhookDeliveriesCompleted(t, st)
 	again := send("11111111-aaaa")
 	if again.Code != http.StatusOK {
 		t.Fatalf("redelivery: status %d, want 200: %s", again.Code, again.Body.String())
@@ -647,7 +643,6 @@ func TestWebhookSlackRetryIsDuplicate(t *testing.T) {
 	}
 	first, _ := webhookResult(t, w1)
 
-	waitWebhookDeliveriesCompleted(t, st)
 	w2 := send(event, strconv.FormatInt(now+3, 10), "1")
 	if w2.Code != http.StatusOK {
 		t.Fatalf("slack retry: status %d, want 200: %s", w2.Code, w2.Body.String())
@@ -749,7 +744,6 @@ func TestWebhookBindFailureStartsNoTurn(t *testing.T) {
 	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusAccepted {
 		t.Fatalf("retry after a bind failure: status %d, want 202: %s", w.Code, w.Body.String())
 	}
-	waitWebhookDeliveriesCompleted(t, st)
 	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusOK {
 		t.Fatalf("repeat of the accepted retry: status %d, want 200: %s", w.Code, w.Body.String())
 	}
@@ -766,64 +760,6 @@ func TestWebhookBindFailureStartsNoTurn(t *testing.T) {
 	}
 }
 
-// A process that bound the delivery's conversation and then died before the
-// turn row existed leaves the delivery unfinished. A repeat inside the stale
-// window is told to retry; one after it takes the claim over and runs the turn
-// in the conversation the dead request created — one turn, no orphan.
-func TestWebhookCrashBeforeTurnRetryRunsOnce(t *testing.T) {
-	engine := &fakeEngine{}
-	st := newFakeChatStore()
-	srv := newWebhookServer(t, engine, st)
-
-	body := []byte(`{"title":"crash"}`)
-	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body), "X-GitHub-Delivery": "d-crash"}
-	key := deliveryKeyFor(t, body, hdr)
-
-	// The dead request got as far as the bind and its turn row, but not the
-	// turn's user message.
-	ctx := context.Background()
-	claim, err := st.ClaimWebhookDelivery(ctx, "gh", key)
-	if err != nil || !claim.Claimed {
-		t.Fatalf("claim: %+v %v", claim, err)
-	}
-	orphan, err := st.CreateWebhookConversation(ctx, "gh", key, claim.Token, "", webhookOwner, "t", "code-reviewer", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := st.CreateTurn(ctx, "dead-turn", orphan.ID, time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-
-	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusConflict {
-		t.Fatalf("repeat inside the window: status %d, want 409: %s", w.Code, w.Body.String())
-	}
-
-	st.mu.Lock()
-	st.webhookClaimsStale = true
-	st.mu.Unlock()
-	w := postWebhook(t, srv, "gh", body, hdr)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("retry after the window: status %d, want 202: %s", w.Code, w.Body.String())
-	}
-	if conv, _ := webhookResult(t, w); conv != orphan.ID {
-		t.Fatalf("retry ran in %q, want the bound conversation %q", conv, orphan.ID)
-	}
-	eventually(t, func() bool { return webhookDeliveryCompleted(st, key) }, "the retry's user message never committed")
-
-	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusOK {
-		t.Fatalf("repeat after the input is durable: status %d, want 200: %s", w.Code, w.Body.String())
-	}
-	time.Sleep(50 * time.Millisecond)
-	engine.mu.Lock()
-	turns := engine.turns
-	engine.mu.Unlock()
-	st.mu.Lock()
-	defer st.mu.Unlock()
-	if turns != 1 || st.created != 1 || countUserTexts(st.history[orphan.ID]) != 1 {
-		t.Fatalf("turns=%d conversations=%d user messages=%d, want 1/1/1", turns, st.created, countUserTexts(st.history[orphan.ID]))
-	}
-}
-
 func countUserTexts(h []agent.HistoryEntry) int {
 	n := 0
 	for _, e := range h {
@@ -834,11 +770,69 @@ func countUserTexts(h []agent.HistoryEntry) int {
 	return n
 }
 
-// The delivery completes only with the turn's user message: if that commit
-// fails, the turn runs nothing, the delivery stays retryable (in progress
-// inside the stale window), and a retry after it runs the turn once in the
-// same conversation.
-func TestWebhookUserCommitFailureLeavesDeliveryRetryable(t *testing.T) {
+// A process that bound the delivery's conversation, created its turn row and
+// then died before the turn's input was saved leaves the delivery unfinished.
+// A repeat inside the stale window is told to retry; one after it takes the
+// delivery over and starts afresh in a new conversation (the dead one, not
+// empty because of its turn row, is left alone) — exactly one turn runs.
+func TestWebhookCrashAfterBindRetryRunsOnceFresh(t *testing.T) {
+	engine := &fakeEngine{}
+	st := newFakeChatStore()
+	srv := newWebhookServer(t, engine, st)
+
+	body := []byte(`{"title":"crash"}`)
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body), "X-GitHub-Delivery": "d-crash"}
+	key := deliveryKeyFor(t, body, hdr)
+
+	ctx := context.Background()
+	claim, err := st.ClaimWebhookDelivery(ctx, "gh", key)
+	if err != nil || !claim.Claimed {
+		t.Fatalf("claim: %+v %v", claim, err)
+	}
+	dead, err := st.CreateWebhookConversation(ctx, "gh", key, claim.Token, webhookOwner, "t", "code-reviewer", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.CreateTurn(ctx, "dead-turn", dead.ID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusConflict {
+		t.Fatalf("repeat inside the window: status %d, want 409: %s", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	st.webhookClaimsStale = true
+	st.mu.Unlock()
+	w := postWebhook(t, srv, "gh", body, hdr)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry after the window: status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	fresh, _ := webhookResult(t, w)
+	if fresh == dead.ID {
+		t.Fatal("the retry reused the dead request's conversation")
+	}
+	// 202 means the input is saved: a repeat now is a duplicate at once.
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusOK {
+		t.Fatalf("repeat after the 202: status %d, want 200: %s", w.Code, w.Body.String())
+	}
+	time.Sleep(50 * time.Millisecond)
+	engine.mu.Lock()
+	turns := engine.turns
+	engine.mu.Unlock()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if turns != 1 || countUserTexts(st.history[fresh]) != 1 || len(st.history[dead.ID]) != 0 {
+		t.Fatalf("turns=%d inputs in the new conversation=%d in the dead one=%d, want 1/1/0",
+			turns, countUserTexts(st.history[fresh]), len(st.history[dead.ID]))
+	}
+	if _, ok := st.convs[dead.ID]; !ok {
+		t.Fatal("the dead conversation (it has a turn row) was deleted")
+	}
+}
+
+// If the turn's input cannot be saved, the handler answers 500, the
+// conversation it created is discarded, and the sender's retry runs once.
+func TestWebhookInputCommitFailureAnswers500(t *testing.T) {
 	engine := &fakeEngine{}
 	st := newFakeChatStore()
 	st.webhookCommitErr = errors.New("database unavailable")
@@ -846,94 +840,109 @@ func TestWebhookUserCommitFailureLeavesDeliveryRetryable(t *testing.T) {
 
 	body := []byte(`{"title":"x"}`)
 	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body), "X-GitHub-Delivery": "d-commit"}
-	key := deliveryKeyFor(t, body, hdr)
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusInternalServerError {
+		t.Fatalf("input commit failure: status %d, want 500: %s", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	left := len(st.convs)
+	st.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("conversations left after the failure = %d, want 0", left)
+	}
 	w := postWebhook(t, srv, "gh", body, hdr)
 	if w.Code != http.StatusAccepted {
-		t.Fatalf("first delivery: status %d, want 202: %s", w.Code, w.Body.String())
+		t.Fatalf("retry: status %d, want 202: %s", w.Code, w.Body.String())
 	}
-	first, _ := webhookResult(t, w)
-	eventually(t, func() bool {
-		engine.mu.Lock()
-		defer engine.mu.Unlock()
-		return engine.turns == 1
-	}, "the first turn never started")
-	time.Sleep(50 * time.Millisecond)
-	if webhookDeliveryCompleted(st, key) {
-		t.Fatal("the delivery completed although its user message did not commit")
+	conv, _ := webhookResult(t, w)
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusOK {
+		t.Fatalf("repeat of the accepted retry: status %d, want 200: %s", w.Code, w.Body.String())
 	}
-	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusConflict {
-		t.Fatalf("repeat inside the window: status %d, want 409: %s", w.Code, w.Body.String())
-	}
-
-	st.mu.Lock()
-	st.webhookClaimsStale = true
-	st.mu.Unlock()
-	w = postWebhook(t, srv, "gh", body, hdr)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("retry after the window: status %d, want 202: %s", w.Code, w.Body.String())
-	}
-	if conv, _ := webhookResult(t, w); conv != first {
-		t.Fatalf("retry ran in %q, want the bound conversation %q", conv, first)
-	}
-	eventually(t, func() bool { return webhookDeliveryCompleted(st, key) }, "the retry's user message never committed")
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if n := countUserTexts(st.history[first]); n != 1 || st.created != 1 {
-		t.Fatalf("user messages=%d conversations=%d, want 1/1", n, st.created)
+	if n := countUserTexts(st.history[conv]); n != 1 || len(st.convs) != 1 {
+		t.Fatalf("inputs=%d conversations=%d, want 1/1", n, len(st.convs))
 	}
 }
 
-// A conversation inherited through a takeover is never discarded: when the
-// retry that inherited it fails before its turn starts, only the claim is
-// released, and the conversation (which its owner has used meanwhile) stays.
-func TestWebhookFailedRetryKeepsInheritedConversation(t *testing.T) {
-	engine := &fakeEngine{}
+// No 2xx before the turn's input is saved: while the input commit is held,
+// the handler has not answered; once it lands, it answers 202.
+func TestWebhookAnswersOnlyAfterInputCommit(t *testing.T) {
 	st := newFakeChatStore()
-	st.webhookClaimsStale = true
-	srv := newWebhookServer(t, engine, st)
+	srv := newWebhookServer(t, &fakeEngine{}, st)
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	st.beforeWebhookCommit = func() {
+		entered <- struct{}{}
+		<-release
+	}
 
 	body := []byte(`{"title":"x"}`)
-	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body), "X-GitHub-Delivery": "d-inherit"}
-	key := deliveryKeyFor(t, body, hdr)
-	ctx := context.Background()
-	claim, _ := st.ClaimWebhookDelivery(ctx, "gh", key)
-	inherited, err := st.CreateWebhookConversation(ctx, "gh", key, claim.Token, "", webhookOwner, "t", "code-reviewer", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The owner wrote in it.
-	if _, err := st.AppendHistory(ctx, inherited.ID, []agent.HistoryEntry{histEntryText("user", "my own notes")}); err != nil {
-		t.Fatal(err)
-	}
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body)}
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- postWebhook(t, srv, "gh", body, hdr) }()
 
-	st.mu.Lock()
-	st.createTurnErr = errors.New("database unavailable")
-	st.mu.Unlock()
-	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusInternalServerError {
-		t.Fatalf("retry failing before its turn: status %d, want 500: %s", w.Code, w.Body.String())
+	select {
+	case <-entered:
+	case <-time.After(waitForBudget):
+		t.Fatal("the turn never reached its input commit")
 	}
-	st.mu.Lock()
-	_, kept := st.convs[inherited.ID]
-	st.mu.Unlock()
-	if !kept {
-		t.Fatal("the inherited conversation was deleted")
+	select {
+	case w := <-done:
+		t.Fatalf("the handler answered %d before the input was saved", w.Code)
+	case <-time.After(200 * time.Millisecond):
 	}
-	// The claim was released: the next retry starts afresh in a new conversation.
-	w := postWebhook(t, srv, "gh", body, hdr)
-	if w.Code != http.StatusAccepted {
-		t.Fatalf("next retry: status %d, want 202: %s", w.Code, w.Body.String())
+	close(release)
+	select {
+	case w := <-done:
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("after the input commit: status %d, want 202: %s", w.Code, w.Body.String())
+		}
+	case <-time.After(waitForBudget):
+		t.Fatal("the handler never answered")
 	}
-	if conv, _ := webhookResult(t, w); conv == inherited.ID {
-		t.Fatal("the next retry reused the released conversation")
-	}
-	eventually(t, func() bool {
-		engine.mu.Lock()
-		defer engine.mu.Unlock()
-		return engine.turns == 1
-	}, "the next retry's turn never ran")
 }
 
-func histEntryText(role, text string) agent.HistoryEntry {
-	raw, _ := json.Marshal(agent.TextContent{Text: text})
-	return agent.HistoryEntry{Role: role, Type: "text", Content: raw}
+// A commit that does not land in time is a failure: 500, and the delivery is
+// given back before the commit can land, so the late commit finds no claim
+// and the turn runs nothing; the retry runs once.
+func TestWebhookInputCommitTimeoutAnswers500(t *testing.T) {
+	prev := webhookInputCommitTimeout
+	webhookInputCommitTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { webhookInputCommitTimeout = prev })
+
+	st := newFakeChatStore()
+	srv := newWebhookServer(t, &fakeEngine{}, st)
+	release := make(chan struct{})
+	st.beforeWebhookCommit = func() { <-release }
+
+	body := []byte(`{"title":"x"}`)
+	hdr := map[string]string{"X-Hub-Signature-256": hmacSig("hmac-signing-secret", body)}
+	if w := postWebhook(t, srv, "gh", body, hdr); w.Code != http.StatusInternalServerError {
+		t.Fatalf("slow input commit: status %d, want 500: %s", w.Code, w.Body.String())
+	}
+	st.mu.Lock()
+	st.beforeWebhookCommit = nil
+	st.mu.Unlock()
+	close(release) // the late commit now runs, and must find no claim
+	time.Sleep(50 * time.Millisecond)
+	st.mu.Lock()
+	inputs := 0
+	for _, h := range st.history {
+		inputs += countUserTexts(h)
+	}
+	st.mu.Unlock()
+	if inputs != 0 {
+		t.Fatalf("the late commit saved %d inputs after the 500", inputs)
+	}
+
+	w := postWebhook(t, srv, "gh", body, hdr)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("retry: status %d, want 202: %s", w.Code, w.Body.String())
+	}
+	conv, _ := webhookResult(t, w)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if n := countUserTexts(st.history[conv]); n != 1 {
+		t.Fatalf("inputs in the retry's conversation = %d, want 1", n)
+	}
 }

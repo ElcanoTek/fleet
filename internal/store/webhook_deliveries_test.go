@@ -10,6 +10,44 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 )
 
+func bindWebhook(t *testing.T, s *Store, key, token string) *Conversation {
+	t.Helper()
+	conv, err := s.CreateWebhookConversation(context.Background(), "gh", key, token, "u@x.com", "t", "victoria", "", false)
+	if err != nil {
+		t.Fatalf("bind %s: %v", key, err)
+	}
+	return conv
+}
+
+// completeWebhook does what the turn does: its row, then its input commit.
+func completeWebhook(t *testing.T, s *Store, key, token, convID, turnID string) error {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.CreateTurn(ctx, turnID, convID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.CommitWebhookUserMessage(ctx, "gh", key, token, convID, turnID, textEntry("user", "prompt"))
+	return err
+}
+
+func ageWebhook(t *testing.T, s *Store, key string, by time.Duration) {
+	t.Helper()
+	if _, err := s.db.ExecContext(context.Background(),
+		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = $2`,
+		time.Now().Add(-by).Unix(), key); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func conversationExists(t *testing.T, s *Store, id string) bool {
+	t.Helper()
+	got, err := s.Get(context.Background(), "u@x.com", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got != nil
+}
+
 func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -19,38 +57,16 @@ func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 		t.Fatalf("first claim = %+v, %v; want claimed with a token", c, err)
 	}
 	tok := c.Token
-	// Unfinished: a repeat is refused with no conversation yet.
-	if c, err = s.ClaimWebhookDelivery(ctx, "gh", "github:a"); err != nil || c.Claimed || c.ConversationID != "" {
-		t.Fatalf("repeat of an unfinished claim = %+v, %v; want refused, no conversation", c, err)
+	// Unfinished: a repeat is refused, not a duplicate.
+	if c, err = s.ClaimWebhookDelivery(ctx, "gh", "github:a"); err != nil || c.Claimed || c.Completed {
+		t.Fatalf("repeat of an unfinished claim = %+v, %v; want refused, not completed", c, err)
 	}
 	// The same key under another slug is a different delivery.
 	other, err := s.ClaimWebhookDelivery(ctx, "other", "github:a")
 	if err != nil || !other.Claimed {
 		t.Fatalf("same key, other slug = %+v, %v; want claimed", other, err)
 	}
-
-	// A wrong token binds nothing and creates no conversation.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", "not-the-token", "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
-		t.Fatalf("bind with a wrong token: err = %v, want ErrWebhookClaimLost", err)
-	}
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := s.Get(ctx, "u@x.com", conv.ID); got == nil {
-		t.Fatal("the bound conversation was not created")
-	}
-	if n := countConversations(t, s, "u@x.com"); n != 1 {
-		t.Fatalf("conversations = %d, want 1", n)
-	}
-	if c, err = s.ClaimWebhookDelivery(ctx, "gh", "github:a"); err != nil || c.Claimed || c.ConversationID != conv.ID {
-		t.Fatalf("repeat of an accepted delivery = %+v, %v; want refused with %s", c, err, conv.ID)
-	}
-	// Binding twice is refused: the claim is complete.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
-		t.Fatalf("second bind: err = %v, want ErrWebhookClaimLost", err)
-	}
-	// Release needs the token.
+	// Release needs the token, and gives an unbound claim back.
 	if err := s.ReleaseWebhookDelivery(ctx, "other", "github:a", "not-the-token"); err != nil {
 		t.Fatal(err)
 	}
@@ -64,84 +80,169 @@ func TestWebhookDeliveryClaimLifecycle(t *testing.T) {
 		t.Fatal("a released claim could not be claimed again")
 	}
 
-	// Abandon removes the record and the conversation, with the right token only.
-	if err := s.AbandonWebhookConversation(ctx, "gh", "github:a", "not-the-token", conv.ID); err != nil {
-		t.Fatal(err)
+	// A wrong token binds nothing and creates no conversation.
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", "not-the-token", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("bind with a wrong token: err = %v, want ErrWebhookClaimLost", err)
 	}
-	if got, _ := s.Get(ctx, "u@x.com", conv.ID); got == nil {
+	if n := countConversations(t, s, "u@x.com"); n != 0 {
+		t.Fatalf("conversations = %d, want 0", n)
+	}
+	conv := bindWebhook(t, s, "github:a", tok)
+	if c, _ = s.ClaimWebhookDelivery(ctx, "gh", "github:a"); c.Claimed || c.Completed || c.ConversationID != conv.ID {
+		t.Fatalf("repeat of a bound delivery = %+v; want refused, not completed", c)
+	}
+	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:a", tok, "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("second bind: err = %v, want ErrWebhookClaimLost", err)
+	}
+
+	// Abandon needs the token; with it, the empty conversation goes and the
+	// delivery is claimable afresh.
+	if _, err := s.AbandonWebhookConversation(ctx, "gh", "github:a", "not-the-token", ""); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("abandon with a wrong token: err = %v, want ErrWebhookClaimLost", err)
+	}
+	if !conversationExists(t, s, conv.ID) {
 		t.Fatal("abandon with the wrong token deleted the conversation")
 	}
-	if err := s.AbandonWebhookConversation(ctx, "gh", "github:a", tok, conv.ID); err != nil {
-		t.Fatal(err)
+	if completed, err := s.AbandonWebhookConversation(ctx, "gh", "github:a", tok, ""); err != nil || completed {
+		t.Fatalf("abandon = %v, %v", completed, err)
 	}
-	if got, _ := s.Get(ctx, "u@x.com", conv.ID); got != nil {
-		t.Fatal("abandon left the conversation behind")
+	if conversationExists(t, s, conv.ID) {
+		t.Fatal("abandon left the empty conversation behind")
 	}
+	// The abandoned token can no longer complete anything.
+	if _, err := s.CommitWebhookUserMessage(ctx, "gh", "github:a", tok, conv.ID, "t0", textEntry("user", "x")); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("input commit after abandon: err = %v, want ErrWebhookClaimLost", err)
+	}
+
+	// Completion comes with the turn's input; then the delivery is a
+	// duplicate, and abandon reports it completed and touches nothing.
 	c, _ = s.ClaimWebhookDelivery(ctx, "gh", "github:a")
 	if !c.Claimed {
 		t.Fatal("an abandoned delivery could not be claimed again")
 	}
-
-	// Completion comes with the turn's user message; a completed delivery is
-	// a duplicate, and neither release nor abandon touches it.
-	conv, err = s.CreateWebhookConversation(ctx, "gh", "github:a", c.Token, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
+	conv = bindWebhook(t, s, "github:a", c.Token)
+	if err := completeWebhook(t, s, "github:a", c.Token, conv.ID, "turn-a"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.CreateTurn(ctx, "turn-a", conv.ID, time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CommitWebhookUserMessage(ctx, "gh", "github:a", c.Token, conv.ID, "turn-a", textEntry("user", "prompt")); err != nil {
-		t.Fatal(err)
+	if completed, err := s.AbandonWebhookConversation(ctx, "gh", "github:a", c.Token, "turn-a"); err != nil || !completed {
+		t.Fatalf("abandon after the input committed = %v, %v; want completed", completed, err)
 	}
 	if err := s.ReleaseWebhookDelivery(ctx, "gh", "github:a", c.Token); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.AbandonWebhookConversation(ctx, "gh", "github:a", c.Token, conv.ID); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:a"); got.Claimed || !got.Completed || got.ConversationID != conv.ID {
 		t.Fatalf("a completed delivery = %+v; want a duplicate of %s", got, conv.ID)
 	}
+	if !conversationExists(t, s, conv.ID) {
+		t.Fatal("the completed delivery's conversation was deleted")
+	}
 }
 
-// A request that outlives its claim: a repeat takes the stale claim over under
-// a new token, and the original can then neither bind a conversation nor drop
-// the repeat's claim.
-func TestWebhookDeliveryTakeoverRotatesToken(t *testing.T) {
+// A request that bound a conversation and then died before its turn's input
+// committed: a repeat inside the window is refused, one after it takes the
+// delivery over under a new token and starts afresh — the dead request's empty
+// conversation is deleted, and its token can do nothing more.
+func TestWebhookDeliveryTakeoverStartsAfresh(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	orig, err := s.ClaimWebhookDelivery(ctx, "gh", "github:slow")
-	if err != nil || !orig.Claimed {
-		t.Fatalf("claim: %+v %v", orig, err)
+	orig, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
+	dead := bindWebhook(t, s, "github:crash", orig.Token)
+
+	ageWebhook(t, s, "github:crash", 2*webhookClaimStaleAfter)
+	retry, err := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
+	if err != nil || !retry.Claimed || retry.Token == orig.Token || retry.ConversationID != "" {
+		t.Fatalf("takeover = %+v, %v; want claimed under a new token, nothing inherited", retry, err)
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:slow'`,
-		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
+	if conversationExists(t, s, dead.ID) {
+		t.Fatal("the dead request's empty conversation was left behind")
+	}
+	if _, err := s.CommitWebhookUserMessage(ctx, "gh", "github:crash", orig.Token, dead.ID, "t-dead", textEntry("user", "x")); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("stale token's input commit: err = %v, want ErrWebhookClaimLost", err)
+	}
+	if _, err := s.AbandonWebhookConversation(ctx, "gh", "github:crash", orig.Token, ""); !errors.Is(err, ErrWebhookClaimLost) {
+		t.Fatalf("stale token's abandon: err = %v, want ErrWebhookClaimLost", err)
+	}
+	if err := s.ReleaseWebhookDelivery(ctx, "gh", "github:crash", orig.Token); err != nil {
 		t.Fatal(err)
-	}
-	retry, err := s.ClaimWebhookDelivery(ctx, "gh", "github:slow")
-	if err != nil || !retry.Claimed || retry.Token == orig.Token {
-		t.Fatalf("takeover = %+v, %v; want claimed under a new token", retry, err)
 	}
 
-	// The original's release is a no-op...
-	if err := s.ReleaseWebhookDelivery(ctx, "gh", "github:slow", orig.Token); err != nil {
+	fresh := bindWebhook(t, s, "github:crash", retry.Token)
+	if err := completeWebhook(t, s, "github:crash", retry.Token, fresh.ID, "turn-retry"); err != nil {
 		t.Fatal(err)
 	}
-	// ...and so is its bind: no conversation is created.
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", orig.Token, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
-		t.Fatalf("stale original's bind: err = %v, want ErrWebhookClaimLost", err)
+	hist, _ := s.LoadHistory(ctx, fresh.ID)
+	if len(hist) != 1 || countConversations(t, s, "u@x.com") != 1 {
+		t.Fatalf("history=%d conversations=%d, want 1/1", len(hist), countConversations(t, s, "u@x.com"))
 	}
-	if n := countConversations(t, s, "u@x.com"); n != 0 {
-		t.Fatalf("the stale original created %d conversations", n)
+	// Completed: a duplicate, even after the stale window.
+	ageWebhook(t, s, "github:crash", 2*webhookClaimStaleAfter)
+	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash"); c.Claimed || !c.Completed || c.ConversationID != fresh.ID {
+		t.Fatalf("repeat of a completed delivery = %+v; want a duplicate of %s", c, fresh.ID)
 	}
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:slow", retry.Token, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatalf("the retry's bind after the original's release: %v", err)
+}
+
+// A takeover leaves the dead request's conversation alone when it is not
+// empty (here: the dead request's turn row).
+func TestWebhookDeliveryTakeoverKeepsANonEmptyConversation(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	orig, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:dead-turn")
+	dead := bindWebhook(t, s, "github:dead-turn", orig.Token)
+	if err := s.CreateTurn(ctx, "dead-turn", dead.ID, time.Now().Unix()); err != nil {
+		t.Fatal(err)
 	}
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:slow"); c.Claimed || c.ConversationID != conv.ID {
-		t.Fatalf("delivery record = %+v, want bound to the retry's %s", c, conv.ID)
+	ageWebhook(t, s, "github:dead-turn", 2*webhookClaimStaleAfter)
+	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:dead-turn"); !c.Claimed {
+		t.Fatalf("takeover refused: %+v", c)
+	}
+	if !conversationExists(t, s, dead.ID) {
+		t.Fatal("a takeover deleted a conversation that has a turn")
+	}
+}
+
+// Abandon deletes the conversation only while it is empty: no messages and
+// no turns other than the abandoning request's own.
+func TestWebhookAbandonDeletesOnlyEmptyConversations(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name    string
+		content func(convID string)
+		kept    bool
+	}{
+		{"empty", func(string) {}, false},
+		{"own turn only", func(convID string) {
+			if err := s.CreateTurn(ctx, "own-"+convID, convID, time.Now().Unix()); err != nil {
+				t.Fatal(err)
+			}
+		}, false},
+		{"with a message", func(convID string) {
+			if _, err := s.AppendHistory(ctx, convID, []agent.HistoryEntry{textEntry("user", "mine now")}); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+		{"with another turn", func(convID string) {
+			if err := s.CreateTurn(ctx, "other-"+convID, convID, time.Now().Unix()); err != nil {
+				t.Fatal(err)
+			}
+		}, true},
+	} {
+		key := "github:" + tc.name
+		c, err := s.ClaimWebhookDelivery(ctx, "gh", key)
+		if err != nil || !c.Claimed {
+			t.Fatalf("%s: claim %+v %v", tc.name, c, err)
+		}
+		conv := bindWebhook(t, s, key, c.Token)
+		tc.content(conv.ID)
+		if _, err := s.AbandonWebhookConversation(ctx, "gh", key, c.Token, "own-"+conv.ID); err != nil {
+			t.Fatalf("%s: abandon: %v", tc.name, err)
+		}
+		if got := conversationExists(t, s, conv.ID); got != tc.kept {
+			t.Fatalf("%s: conversation kept = %v, want %v", tc.name, got, tc.kept)
+		}
+		if c, _ := s.ClaimWebhookDelivery(ctx, "gh", key); !c.Claimed {
+			t.Fatalf("%s: after abandon the delivery should be claimable afresh, got %+v", tc.name, c)
+		}
 	}
 }
 
@@ -230,167 +331,5 @@ func TestWebhookDeliveryConcurrentClaims(t *testing.T) {
 	wg.Wait()
 	if claimed != 1 {
 		t.Fatalf("%d concurrent claims succeeded, want exactly 1", claimed)
-	}
-}
-
-// A delivery is a duplicate only once its turn's input is durable: a request
-// that bound a conversation, created its turn row and then died before the
-// user message committed leaves the delivery unfinished; a retry after the
-// stale window takes it over, gets the bound conversation back to reuse, and
-// completes it with its own turn's user message. The dead request's token can
-// complete nothing.
-func TestWebhookDeliveryCrashBeforeTurnIsRetryable(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	orig, err := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
-	if err != nil || !orig.Claimed {
-		t.Fatalf("claim: %+v %v", orig, err)
-	}
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:crash", orig.Token, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// "Crash" after the turn row, before the user message.
-	if err := s.CreateTurn(ctx, "turn-orig", conv.ID, time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-	// A repeat inside the window is refused as in progress, not answered as
-	// a duplicate.
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash"); c.Claimed || c.Completed {
-		t.Fatalf("repeat of a bound, uncompleted delivery = %+v; want refused, not completed", c)
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:crash'`,
-		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
-		t.Fatal(err)
-	}
-	retry, err := s.ClaimWebhookDelivery(ctx, "gh", "github:crash")
-	if err != nil || !retry.Claimed || retry.Token == orig.Token || retry.ConversationID != conv.ID {
-		t.Fatalf("takeover = %+v, %v; want claimed under a new token, reusing %s", retry, err, conv.ID)
-	}
-	if _, err := s.CommitWebhookUserMessage(ctx, "gh", "github:crash", orig.Token, conv.ID, "turn-orig", textEntry("user", "prompt")); !errors.Is(err, ErrWebhookClaimLost) {
-		t.Fatalf("stale token's user message: err = %v, want ErrWebhookClaimLost", err)
-	}
-	if err := s.CreateTurn(ctx, "turn-retry", conv.ID, time.Now().Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CommitWebhookUserMessage(ctx, "gh", "github:crash", retry.Token, conv.ID, "turn-retry", textEntry("user", "prompt")); err != nil {
-		t.Fatal(err)
-	}
-	hist, err := s.LoadHistory(ctx, conv.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hist) != 1 {
-		t.Fatalf("history = %d entries, want exactly the retry's user message", len(hist))
-	}
-	if n := countConversations(t, s, "u@x.com"); n != 1 {
-		t.Fatalf("conversations = %d, want 1 (the bound one reused)", n)
-	}
-	// Completed: a repeat is a duplicate, even after the stale window.
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:crash'`,
-		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
-		t.Fatal(err)
-	}
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:crash"); c.Claimed || !c.Completed || c.ConversationID != conv.ID {
-		t.Fatalf("repeat of a completed delivery = %+v; want a duplicate of %s", c, conv.ID)
-	}
-}
-
-// A reused conversation that no longer exists is replaced: the bind names the
-// conversation the claim currently holds.
-func TestWebhookDeliveryRebindsAMissingConversation(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:gone")
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM conversations WHERE id = $1`, conv.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, "", "u@x.com", "t", "victoria", "", false); !errors.Is(err, ErrWebhookClaimLost) {
-		t.Fatalf("bind with the wrong previous conversation: err = %v, want ErrWebhookClaimLost", err)
-	}
-	conv2, err := s.CreateWebhookConversation(ctx, "gh", "github:gone", c.Token, conv.ID, "u@x.com", "t", "victoria", "", false)
-	if err != nil || conv2.ID == conv.ID {
-		t.Fatalf("rebind = %v, %v; want a new conversation", conv2, err)
-	}
-}
-
-// Abandon removes a conversation only while it is empty: one that has
-// messages (or a turn) is kept, and only the claim is released.
-func TestWebhookAbandonKeepsAConversationWithContent(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	for _, tc := range []struct {
-		name    string
-		content func(convID string)
-		kept    bool
-	}{
-		{"empty", func(string) {}, false},
-		{"with a message", func(convID string) {
-			if _, err := s.AppendHistory(ctx, convID, []agent.HistoryEntry{textEntry("user", "mine now")}); err != nil {
-				t.Fatal(err)
-			}
-		}, true},
-		{"with a turn", func(convID string) {
-			if err := s.CreateTurn(ctx, "turn-"+convID, convID, time.Now().Unix()); err != nil {
-				t.Fatal(err)
-			}
-		}, true},
-	} {
-		key := "github:" + tc.name
-		c, err := s.ClaimWebhookDelivery(ctx, "gh", key)
-		if err != nil || !c.Claimed {
-			t.Fatalf("%s: claim %+v %v", tc.name, c, err)
-		}
-		conv, err := s.CreateWebhookConversation(ctx, "gh", key, c.Token, "", "u@x.com", "t", "victoria", "", false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		tc.content(conv.ID)
-		if err := s.AbandonWebhookConversation(ctx, "gh", key, c.Token, conv.ID); err != nil {
-			t.Fatalf("%s: abandon: %v", tc.name, err)
-		}
-		got, _ := s.Get(ctx, "u@x.com", conv.ID)
-		if (got != nil) != tc.kept {
-			t.Fatalf("%s: conversation kept = %v, want %v", tc.name, got != nil, tc.kept)
-		}
-		if c, _ := s.ClaimWebhookDelivery(ctx, "gh", key); !c.Claimed || c.ConversationID != "" {
-			t.Fatalf("%s: after abandon the delivery should be claimable afresh, got %+v", tc.name, c)
-		}
-	}
-}
-
-// Releasing a claim that inherited a conversation through a takeover drops
-// the claim and leaves the conversation alone.
-func TestWebhookReleaseLeavesAnInheritedConversation(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	orig, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:inherit")
-	conv, err := s.CreateWebhookConversation(ctx, "gh", "github:inherit", orig.Token, "", "u@x.com", "t", "victoria", "", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE webhook_deliveries SET created_at = $1 WHERE delivery_key = 'github:inherit'`,
-		time.Now().Add(-2*webhookClaimStaleAfter).Unix()); err != nil {
-		t.Fatal(err)
-	}
-	retry, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:inherit")
-	if !retry.Claimed || retry.ConversationID != conv.ID {
-		t.Fatalf("takeover = %+v", retry)
-	}
-	if err := s.ReleaseWebhookDelivery(ctx, "gh", "github:inherit", retry.Token); err != nil {
-		t.Fatal(err)
-	}
-	if got, _ := s.Get(ctx, "u@x.com", conv.ID); got == nil {
-		t.Fatal("release deleted the inherited conversation")
-	}
-	if c, _ := s.ClaimWebhookDelivery(ctx, "gh", "github:inherit"); !c.Claimed || c.ConversationID != "" {
-		t.Fatalf("after release the delivery should be claimable afresh, got %+v", c)
 	}
 }

@@ -26,94 +26,122 @@ import (
 const WebhookDeliveryTTL = 24 * time.Hour
 
 // webhookClaimStaleAfter bounds an unfinished row (claimed or bound, not yet
-// completed). The claiming request gets from claim to a durable turn row within
-// milliseconds; a row unfinished for longer belongs to a request that died or
-// stalled, and a repeat may take it over rather than be refused for the rest
-// of the TTL.
+// completed). The claiming request gets from claim to a durable turn input
+// within seconds (the webhook handler waits for it, bounded at 10 s);
+// a row unfinished for longer belongs to a request that died or stalled, and a
+// repeat may take it over rather than be refused for the rest of the TTL.
 const webhookClaimStaleAfter = time.Minute
 
-// ErrWebhookClaimLost is returned by CreateWebhookConversation and
-// CommitWebhookUserMessage when the caller no longer holds the delivery claim: it went
-// stale and a repeat took it over (rotating the token), or the row moved on
-// without it. The caller must not start a turn.
+// ErrWebhookClaimLost is returned by CreateWebhookConversation,
+// CommitWebhookUserMessage and AbandonWebhookConversation when the caller no
+// longer holds the delivery claim: it went stale and a repeat took it over
+// (rotating the token). The caller must not start, or answer for, a turn.
 var ErrWebhookClaimLost = errors.New("webhook delivery claim is no longer held")
 
 // WebhookClaim is the result of ClaimWebhookDelivery.
 type WebhookClaim struct {
-	// Claimed is true when this caller now owns the delivery: it starts the
-	// turn (CreateWebhookConversation unless ConversationID names one to
-	// reuse; the turn's CommitWebhookUserMessage completes it), or gives the
-	// claim back.
+	// Claimed is true when this caller now owns the delivery: it creates the
+	// conversation (CreateWebhookConversation) and the turn's
+	// CommitWebhookUserMessage completes the delivery — or it gives the claim
+	// back (ReleaseWebhookDelivery / AbandonWebhookConversation).
 	Claimed bool
 	// Token proves ownership of a claim; every later call on it needs it.
 	Token string
-	// ConversationID is, when Claimed, a conversation an earlier request for
-	// the same delivery created and bound but never started a turn in — reuse
-	// it (CreateWebhookConversation only if it no longer exists). When not
-	// Claimed, it is the conversation of the earlier request ("" while that
-	// request has not created it yet).
+	// ConversationID and Completed describe, when not Claimed, the earlier
+	// request for the same delivery: its conversation ("" until created) and
+	// whether its turn's input is durable — only then is this a duplicate.
 	ConversationID string
-	// Completed is, when not Claimed, whether the earlier request's turn is
-	// durable — only then is this a duplicate of an accepted delivery.
-	Completed bool
+	Completed      bool
 }
 
 // ClaimWebhookDelivery atomically claims (slug, deliveryKey). A completed row
 // older than WebhookDeliveryTTL is a new delivery; an unfinished row older
-// than a minute is taken over under a new token — so the request that held it
-// can no longer act on it — keeping any conversation it had bound, so the new
-// owner starts the turn there instead of leaving it empty. Concurrent claims of
-// one key serialize on the primary key: exactly one of them gets Claimed.
+// than a minute is taken over under a new token, so the request that held it
+// can no longer act on it. A takeover always starts afresh: the conversation
+// the stale row named (which, its input never having committed, holds nothing
+// of the delivery) is deleted in the same transaction if it is still empty,
+// and otherwise left alone. The new owner creates its conversation under the
+// current settings like any first delivery. Concurrent claims of one key
+// serialize on the row: exactly one of them gets Claimed.
 func (s *Store) ClaimWebhookDelivery(ctx context.Context, slug, deliveryKey string) (WebhookClaim, error) {
 	token, err := newClaimToken()
 	if err != nil {
 		return WebhookClaim{}, err
 	}
+	// A row can vanish between the insert and the read (released, swept);
+	// the next attempt then inserts it.
+	for range 3 {
+		claim, retry, err := s.claimWebhookDeliveryOnce(ctx, slug, deliveryKey, token)
+		if !retry {
+			return claim, err
+		}
+	}
+	return WebhookClaim{}, errors.New("webhook delivery claim: row kept changing")
+}
+
+func (s *Store) claimWebhookDeliveryOnce(ctx context.Context, slug, deliveryKey, token string) (claim WebhookClaim, retry bool, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return WebhookClaim{}, false, err
+	}
+	defer func() { _ = tx.Rollback() }()
 	now := time.Now()
-	var convID string
-	err = s.db.QueryRowContext(ctx,
+
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO webhook_deliveries (slug, delivery_key, conversation_id, claim_token, completed_at, created_at)
 		 VALUES ($1, $2, '', $3, 0, $4)
-		 ON CONFLICT (slug, delivery_key) DO UPDATE
-		    SET conversation_id = CASE WHEN webhook_deliveries.completed_at = 0
-		                               THEN webhook_deliveries.conversation_id ELSE '' END,
-		        claim_token = EXCLUDED.claim_token,
-		        completed_at = 0,
-		        created_at = EXCLUDED.created_at
-		  WHERE (webhook_deliveries.completed_at <> 0 AND webhook_deliveries.created_at < $5)
-		     OR (webhook_deliveries.completed_at = 0 AND webhook_deliveries.created_at < $6)
-		 RETURNING conversation_id`,
-		slug, deliveryKey, token, now.Unix(),
-		now.Add(-WebhookDeliveryTTL).Unix(), now.Add(-webhookClaimStaleAfter).Unix(),
-	).Scan(&convID)
-	if err == nil {
-		return WebhookClaim{Claimed: true, Token: token, ConversationID: convID}, nil
+		 ON CONFLICT (slug, delivery_key) DO NOTHING`,
+		slug, deliveryKey, token, now.Unix())
+	if err != nil {
+		return WebhookClaim{}, false, err
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return WebhookClaim{}, err
+	if n, err := res.RowsAffected(); err != nil {
+		return WebhookClaim{}, false, err
+	} else if n == 1 {
+		return WebhookClaim{Claimed: true, Token: token}, false, tx.Commit()
 	}
-	var completedAt int64
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT conversation_id, completed_at FROM webhook_deliveries WHERE slug = $1 AND delivery_key = $2`,
+
+	var (
+		convID                 string
+		completedAt, createdAt int64
+	)
+	if err := tx.QueryRowContext(ctx,
+		`SELECT conversation_id, completed_at, created_at FROM webhook_deliveries
+		  WHERE slug = $1 AND delivery_key = $2 FOR UPDATE`,
 		slug, deliveryKey,
-	).Scan(&convID, &completedAt); err != nil {
+	).Scan(&convID, &completedAt, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			// Released between the two statements: the next repeat claims it.
-			return WebhookClaim{}, nil
+			return WebhookClaim{}, true, nil
 		}
-		return WebhookClaim{}, err
+		return WebhookClaim{}, false, err
 	}
-	return WebhookClaim{ConversationID: convID, Completed: completedAt != 0}, nil
+	completed := completedAt != 0
+	takeover := (completed && createdAt < now.Add(-WebhookDeliveryTTL).Unix()) ||
+		(!completed && createdAt < now.Add(-webhookClaimStaleAfter).Unix())
+	if !takeover {
+		return WebhookClaim{ConversationID: convID, Completed: completed}, false, tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE webhook_deliveries
+		    SET conversation_id = '', claim_token = $3, completed_at = 0, created_at = $4
+		  WHERE slug = $1 AND delivery_key = $2`,
+		slug, deliveryKey, token, now.Unix()); err != nil {
+		return WebhookClaim{}, false, err
+	}
+	if !completed && convID != "" {
+		if err := discardEmptyConversation(ctx, tx, convID, ""); err != nil {
+			return WebhookClaim{}, false, err
+		}
+	}
+	return WebhookClaim{Claimed: true, Token: token}, false, tx.Commit()
 }
 
 // CreateWebhookConversation creates the conversation for a claimed delivery
 // and binds it to the claim in ONE transaction, so a conversation never exists
-// for a delivery whose row does not name it. prevConvID is the conversation
-// the claim currently names: "" for a fresh claim, or a reused conversation
-// that turned out to be gone. The claim row is locked first: a concurrent
-// takeover waits for this commit. Returns ErrWebhookClaimLost, creating
-// nothing, when the token no longer holds the claim.
-func (s *Store) CreateWebhookConversation(ctx context.Context, slug, deliveryKey, token, prevConvID, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
+// for a delivery whose row does not name it. The claim row is locked first: a
+// concurrent takeover waits for this commit. Returns ErrWebhookClaimLost,
+// creating nothing, when the token no longer holds an unbound claim.
+func (s *Store) CreateWebhookConversation(ctx context.Context, slug, deliveryKey, token, userEmail, title, persona, model string, lockdown bool) (*Conversation, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -122,10 +150,10 @@ func (s *Store) CreateWebhookConversation(ctx context.Context, slug, deliveryKey
 
 	id := newConversationID(ctx)
 	res, err := tx.ExecContext(ctx,
-		`UPDATE webhook_deliveries SET conversation_id = $5
+		`UPDATE webhook_deliveries SET conversation_id = $4
 		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3
-		    AND conversation_id = $4 AND completed_at = 0`,
-		slug, deliveryKey, token, prevConvID, id)
+		    AND conversation_id = '' AND completed_at = 0`,
+		slug, deliveryKey, token, id)
 	if err != nil {
 		return nil, fmt.Errorf("bind webhook delivery: %w", err)
 	}
@@ -149,7 +177,7 @@ func (s *Store) CreateWebhookConversation(ctx context.Context, slug, deliveryKey
 // delivery completed, in ONE transaction. Completion is what makes a repeat a
 // duplicate, so it must not precede a durable input: before this commits a
 // crash leaves the delivery unfinished, and a retry after the stale window
-// takes it over and runs the turn in the bound conversation; after it, the
+// takes it over and starts afresh; after it, the
 // turn's input is in history and startup recovery owns the turn like any
 // other. Returns ErrWebhookClaimLost, writing nothing, when the token no
 // longer holds the claim on convID.
@@ -179,58 +207,82 @@ func (s *Store) CommitWebhookUserMessage(ctx context.Context, slug, deliveryKey,
 	return ids[0], tx.Commit()
 }
 
-// ReleaseWebhookDelivery drops an unfinished claim held by token, so a repeat
-// of a delivery that was not accepted (throttled, refused, failed) is
-// processed afresh. It never touches a conversation: one the claim inherited
-// through a takeover belongs to an earlier request (and may have been used
-// since), so the next repeat simply creates a new one. A no-op when the token
-// no longer holds the claim or the delivery is completed.
+// ReleaseWebhookDelivery drops a claim held by token that has no conversation
+// yet, so a repeat of a delivery that was not accepted (throttled, refused,
+// failed) is processed afresh. A no-op when the token no longer holds it.
 func (s *Store) ReleaseWebhookDelivery(ctx context.Context, slug, deliveryKey, token string) error {
 	_, err := s.db.ExecContext(ctx,
 		`DELETE FROM webhook_deliveries
-		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3 AND completed_at = 0`,
+		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3
+		    AND conversation_id = '' AND completed_at = 0`,
 		slug, deliveryKey, token)
 	return err
 }
 
-// AbandonWebhookConversation undoes a delivery whose turn could not be
-// started after this request created and bound convID: in one transaction it
-// releases the claim held by token and deletes the conversation — but only
-// while it is still empty (no messages, no turns), so a conversation that has
-// content is never removed. A no-op when the token no longer holds the claim
-// on convID or the delivery is completed.
-func (s *Store) AbandonWebhookConversation(ctx context.Context, slug, deliveryKey, token, convID string) error {
+// AbandonWebhookConversation gives back a bound delivery whose turn input did
+// not commit: in one transaction it drops the delivery row held by token and
+// deletes the conversation the row names while it is still empty — no
+// messages, and no turns other than ownTurnID (the abandoning request's own,
+// which the delete then removes; "" for none). A conversation with any other
+// content is left alone.
+//
+// It serializes with CommitWebhookUserMessage on the delivery row, so exactly
+// one of them wins: if the input committed first, the delivery is accepted,
+// nothing is touched, and completed is true; once this has committed, the
+// input commit finds no claim and the turn runs nothing. ErrWebhookClaimLost
+// when the token no longer holds the row.
+func (s *Store) AbandonWebhookConversation(ctx context.Context, slug, deliveryKey, token, ownTurnID string) (completed bool, err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx,
-		`DELETE FROM webhook_deliveries
-		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3
-		    AND conversation_id = $4 AND completed_at = 0`,
-		slug, deliveryKey, token, convID)
-	if err != nil {
-		return err
+	var (
+		convID      string
+		completedAt int64
+	)
+	if err := tx.QueryRowContext(ctx,
+		`SELECT conversation_id, completed_at FROM webhook_deliveries
+		  WHERE slug = $1 AND delivery_key = $2 AND claim_token = $3 FOR UPDATE`,
+		slug, deliveryKey, token,
+	).Scan(&convID, &completedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, ErrWebhookClaimLost
+		}
+		return false, err
 	}
-	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		return err
+	if completedAt != 0 {
+		return true, tx.Commit()
 	}
-	// Lock the conversation row first, as every history writer does
-	// (lockConversationForAppend), so the emptiness check cannot race a write.
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM webhook_deliveries WHERE slug = $1 AND delivery_key = $2`,
+		slug, deliveryKey); err != nil {
+		return false, err
+	}
+	if convID != "" {
+		if err := discardEmptyConversation(ctx, tx, convID, ownTurnID); err != nil {
+			return false, err
+		}
+	}
+	return false, tx.Commit()
+}
+
+// discardEmptyConversation deletes convID inside tx only while it has no
+// messages and no turns other than exceptTurnID. The conversation row is
+// locked first, as every history writer locks it (lockConversationForAppend),
+// so the emptiness check cannot race a write.
+func discardEmptyConversation(ctx context.Context, tx *sql.Tx, convID, exceptTurnID string) error {
 	if _, err := tx.ExecContext(ctx,
 		`SELECT 1 FROM conversations WHERE id = $1 FOR UPDATE`, convID); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx,
+	_, err := tx.ExecContext(ctx,
 		`DELETE FROM conversations c
 		  WHERE c.id = $1
 		    AND NOT EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id)
-		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id)`,
-		convID); err != nil {
-		return err
-	}
-	return tx.Commit()
+		    AND NOT EXISTS (SELECT 1 FROM turns t WHERE t.conversation_id = c.id AND t.turn_id <> $2)`,
+		convID, exceptTurnID)
+	return err
 }
 
 // newClaimToken is 128 random bits, hex-encoded.

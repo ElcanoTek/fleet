@@ -123,12 +123,12 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 	// original conversation and starts nothing — and spends none of the slug's
 	// rate budget. A delivery counts as accepted only once its turn's input is
 	// durable (CommitWebhookUserMessage completes the claim in the same
-	// transaction that commits the user message), so a crash before that
-	// leaves it retryable. Every early return below
-	// gives the claim back (and discards a conversation created for it without
-	// a turn), so a delivery that was not accepted is processed afresh when it
-	// comes again. The claim token makes those calls no-ops once a repeat has
-	// taken a stale claim over.
+	// transaction that commits the user message), and the handler answers 202
+	// only after that, so a crash before it leaves the delivery retryable.
+	// Every failure gives the claim back (and discards the conversation
+	// created for it while still empty), so a delivery that was not accepted
+	// is processed afresh when it comes again. The claim token makes those
+	// calls no-ops once a repeat has taken a stale claim over.
 	deliveryKey := webhookDeliveryKey(r, body, payload, trig)
 	claim, err := s.store.ClaimWebhookDelivery(r.Context(), trig.Slug, deliveryKey)
 	if err != nil {
@@ -150,20 +150,14 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var (
-		// The conversation the claim inherited: one an earlier request for
-		// this delivery created but never completed (reused below), or "".
-		boundConvID = claim.ConversationID
-		// createdConvID is set only for a conversation THIS request created.
-		// Only that one may be discarded on failure (and only while empty); one
-		// inherited through a takeover belongs to an earlier request.
-		createdConvID string
-		launched      bool // set once the turn goroutine is started
+		bound    bool // the conversation is created and bound to the claim
+		launched bool // the turn goroutine is started; it settles the claim itself
 	)
 	defer func() {
 		switch {
 		case launched:
-		case createdConvID != "":
-			s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, createdConvID)
+		case bound:
+			_, _ = s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, "")
 		default:
 			s.releaseWebhookClaim(trig.Slug, deliveryKey, claim.Token)
 		}
@@ -246,28 +240,12 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Reuse the conversation an earlier request for this delivery bound but
-	// never started a turn in (it stopped before the turn was durable), so
-	// the retry does not leave it behind empty.
-	var conv *store.Conversation
-	if boundConvID != "" {
-		conv, err = s.store.Get(r.Context(), user, boundConvID)
-		if err != nil {
-			releaseTurn()
-			metrics.RecordWebhookTrigger(trig.Slug, "error")
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-	}
-	// Otherwise create the conversation and bind it to the delivery claim in
-	// one transaction: a turn is only ever launched for a delivery whose
-	// record names its conversation.
-	created := false
-	if conv == nil {
-		conv, err = s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token, boundConvID,
-			user, agent.HeuristicTitle(prompt), persona, model, lockdown)
-		created = err == nil
-	}
+	// Create the conversation and bind it to the delivery claim in one
+	// transaction: a turn is only ever launched for a delivery whose record
+	// names its conversation. Always a new conversation under the current
+	// settings (lockdown seal, model), also after a takeover.
+	conv, err := s.store.CreateWebhookConversation(r.Context(), trig.Slug, deliveryKey, claim.Token,
+		user, agent.HeuristicTitle(prompt), persona, model, lockdown)
 	if errors.Is(err, store.ErrWebhookClaimLost) {
 		// This request outlived its claim and a repeat now owns the delivery.
 		releaseTurn()
@@ -281,9 +259,7 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if created {
-		createdConvID = conv.ID
-	}
+	bound = true
 	s.autoShareNewConversationIfConfigured(r.Context(), user, conv)
 
 	history, err := s.store.LoadHistory(r.Context(), conv.ID)
@@ -345,11 +321,13 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// The turn's user-message commit (the shared #798 commit point, before
 	// the first provider call) also completes the delivery claim, in one
-	// transaction (store.CommitWebhookUserMessage). A turn whose claim was
-	// taken over meanwhile fails that commit and runs nothing.
-	buf.userCommitStore = webhookCommitStore{
+	// transaction (store.CommitWebhookUserMessage), and reports its result
+	// here. A turn whose claim is gone fails that commit and runs nothing.
+	commit := &webhookCommitStore{
 		chatStore: s.store, slug: trig.Slug, deliveryKey: deliveryKey, token: claim.Token,
+		done: make(chan error, 1),
 	}
+	buf.userCommitStore = commit
 	launched = true
 	go func() {
 		defer releaseTurn()
@@ -357,31 +335,83 @@ func (s *Server) postWebhook(w http.ResponseWriter, r *http.Request) {
 		// for scoping, but nobody at a keyboard sent this turn, so the
 		// bundle's ${FLEET_USER_EMAIL} keys are dropped (ADR-0087).
 		s.runTurnAsync(turnCtx, turnCancel, buf, turnToken, conv, user, prompt, injected, "", history, memoryContents(memories), "", nil, nil, agentcore.MCPUserIdentity{})
+		// A turn that ended without reaching its input commit (it failed
+		// while preparing) reports that, so the handler stops waiting.
+		commit.report(errWebhookTurnEndedEarly)
 		// Webhook turns participate in the #785 drain loop too: anything
 		// queued behind this turn must not stall until the next submission.
 		s.maybeDrainQueue(conv.ID)
 	}()
 
+	// Answer 202 only once the turn's input is durable and the delivery
+	// complete: a 2xx tells the sender the event was taken, and it will not
+	// send it again.
+	var commitErr error
+	select {
+	case commitErr = <-commit.done:
+	case <-time.After(webhookInputCommitTimeout):
+		commitErr = errWebhookInputTimeout
+	}
+	if commitErr != nil {
+		// Stop the turn, then give the delivery back. Cancelling does not
+		// stop an input commit already in flight (it runs on its own
+		// context), so the order that keeps the answer honest is the delivery
+		// row: AbandonWebhookConversation and CommitWebhookUserMessage both
+		// lock it and both require it unfinished, so exactly one wins. If the
+		// commit won, the delivery IS accepted and the answer is 202; if the
+		// abandon won, the commit finds no claim and the turn runs nothing,
+		// and the answer is 500 so the sender retries.
+		turnCancel()
+		completed, err := s.abandonWebhookConversation(trig.Slug, deliveryKey, claim.Token, turnID)
+		if !completed || err != nil {
+			log.Printf("webhook trigger: turn input not saved (conv=%s): %v", conv.ID, commitErr)
+			metrics.RecordWebhookTrigger(trig.Slug, "error")
+			http.Error(w, "could not start the turn", http.StatusInternalServerError)
+			return
+		}
+	}
+
 	metrics.RecordWebhookTrigger(trig.Slug, "ok")
 	writeJSONStatus(w, http.StatusAccepted, map[string]any{"conversation_id": conv.ID})
 }
 
+// webhookInputCommitTimeout bounds how long the webhook handler waits for the
+// turn's input to be saved before answering. Past it the handler gives the
+// delivery back and answers 500, so the sender retries.
+var webhookInputCommitTimeout = 10 * time.Second
+
+var (
+	errWebhookTurnEndedEarly = errors.New("the turn ended before its input was saved")
+	errWebhookInputTimeout   = errors.New("timed out waiting for the turn's input to be saved")
+)
+
 // webhookCommitStore is the store a webhook turn commits through: identical,
 // except that committing the turn's user message also completes the delivery
-// claim, in one transaction (store.CommitWebhookUserMessage). The turn runs
-// the shared path (runTurnAsync, agentcore.Run) unchanged.
+// claim, in one transaction (store.CommitWebhookUserMessage), and reports the
+// result on done for the waiting handler. The turn runs the shared path
+// (runTurnAsync, agentcore.Run) unchanged.
 type webhookCommitStore struct {
 	chatStore
 	slug, deliveryKey, token string
+	done                     chan error // capacity 1; the first report wins
 }
 
-func (c webhookCommitStore) CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error) {
-	return c.CommitWebhookUserMessage(ctx, c.slug, c.deliveryKey, c.token, convID, turnID, entry)
+func (c *webhookCommitStore) CommitUserMessage(ctx context.Context, convID, turnID string, entry agent.HistoryEntry) (int64, error) {
+	id, err := c.CommitWebhookUserMessage(ctx, c.slug, c.deliveryKey, c.token, convID, turnID, entry)
+	c.report(err)
+	return id, err
+}
+
+// report delivers the first outcome to the handler; later ones are dropped.
+func (c *webhookCommitStore) report(err error) {
+	select {
+	case c.done <- err:
+	default:
+	}
 }
 
 // releaseWebhookClaim drops the delivery claim of a request that did not
-// start a turn and did not create the conversation, so the sender's retry is
-// processed afresh. An inherited conversation is left as it is.
+// create a conversation, so the sender's retry is processed afresh.
 // Background-rooted: the request context may already be cancelled, and a
 // leaked claim would refuse the retry until it goes stale.
 func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
@@ -392,16 +422,19 @@ func (s *Server) releaseWebhookClaim(slug, deliveryKey, token string) {
 	}
 }
 
-// abandonWebhookConversation releases the claim of a delivery whose turn could
-// not be started and discards the conversation this request created for it if
-// it is still empty, so the sender's retry is processed afresh instead of
-// being answered with a conversation in which nothing ran.
-func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, convID string) {
+// abandonWebhookConversation gives back a delivery whose turn input was not
+// saved and discards the conversation this request created for it while it is
+// still empty (ownTurnID, the request's own turn row, does not count), so the
+// sender's retry is processed afresh. completed reports that the input commit
+// won the race and the delivery is accepted after all.
+func (s *Server) abandonWebhookConversation(slug, deliveryKey, token, ownTurnID string) (completed bool, err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, convID); err != nil {
-		log.Printf("webhook trigger: discard unstarted conversation: %v", err)
+	completed, err = s.store.AbandonWebhookConversation(ctx, slug, deliveryKey, token, ownTurnID)
+	if err != nil {
+		log.Printf("webhook trigger: give back delivery: %v", err)
 	}
+	return completed, err
 }
 
 // webhookDeliveryKey names one delivery for the per-slug idempotency claim, in

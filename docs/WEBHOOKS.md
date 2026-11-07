@@ -100,13 +100,13 @@ curl -sS -X POST https://your-fleet/webhooks/github-pr-review \
 
 | Status | Meaning |
 |--------|---------|
-| `202` | Accepted. Body is `{"conversation_id":"…"}`; the turn runs asynchronously. |
+| `202` | Accepted: the turn's input is saved. Body is `{"conversation_id":"…"}`; the turn itself runs asynchronously. |
 | `200` | Slack `url_verification` handshake echoed, **or** a repeat of an already-accepted delivery: body `{"conversation_id":"…","duplicate":true}` names the conversation the first delivery started, and nothing new runs. |
 | `409` | A repeat arrived while the first request for the same delivery had not yet saved its turn's input (or this request lost its claim to such a repeat). Retry later. |
 | `400` | Body was not valid JSON. |
 | `401` | Unknown slug **or** invalid/missing signature (deliberately indistinguishable — no slug enumeration). |
 | `429` | Per-slug rate limit (`FLEET_WEBHOOK_RATE_LIMIT_PER_MINUTE`, default 10) or the per-owner concurrent-turn cap. |
-| `500` | The `prompt_template` failed to render (detail is logged host-side, not returned). |
+| `500` | The `prompt_template` failed to render (detail is logged host-side, not returned), or the turn's input could not be saved within 10 seconds; nothing was accepted, so retry. |
 | `503` | The server is draining (graceful shutdown). |
 
 The triggered conversation appears in `notify_user`'s conversation list the next
@@ -133,19 +133,27 @@ A repeat of an accepted delivery is answered `200` with the original
 limit. The conversation is created and recorded against the delivery in one
 database transaction; the delivery counts as accepted only when the turn's
 input (the rendered prompt) is saved as its first message, in the same
-transaction that marks the delivery complete. Until then a repeat is answered
-`409`. A delivery that was **not** accepted — throttled, refused, or failed
-before its turn started — is not remembered, and a conversation this request
-created for it is discarded while it is still empty, so the sender's retry is
-processed normally. Each claim carries a random token: a request still
-unfinished after a minute loses its claim to a repeat, and from then on can
-neither record nor complete anything (it answers `409`, or its turn stops
-before doing anything). If the server stopped after creating the conversation
-but before saving the turn's input, a repeat arriving after that minute runs
-the turn in that same conversation; a conversation inherited that way is never
-discarded, even if the repeat fails. A conversation left by a request that
-stopped stays (empty) in `notify_user`'s list if no repeat comes within 24
-hours. Two different events with byte-identical bodies and no
+transaction that marks the delivery complete. **The endpoint answers `202` only
+after that** — it waits for the input to be saved, for at most 10 seconds — so a
+`2xx` always means the event is durably taken. Until then a repeat is answered
+`409`. If the input cannot be saved in time (or the turn fails before saving
+it), the turn is stopped, the delivery is given back, the conversation created
+for it is discarded while it is still empty, and the answer is `500`, so the
+sender retries. A delivery that was not accepted for any other reason
+(throttled, refused) is not remembered either. Each claim carries a random
+token: a request still unfinished after a minute loses its claim to a repeat,
+and from then on can neither record nor complete anything. A repeat that takes
+a delivery over always starts afresh in a new conversation, under the server's
+current settings (lockdown, model); the earlier request's conversation is
+deleted if it is still empty and otherwise left as it is.
+
+Because of the wait, the first answer can take as long as the turn takes to
+get ready to start (seconds, usually). A sender with a short timeout (Slack
+expects an answer within 3 seconds) may retry meanwhile; that retry is answered
+`409` while the first request is still working, and `200` with the
+conversation once it has finished.
+
+Two different events with byte-identical bodies and no
 delivery id (case 3) within 24 hours are treated as one; senders that need
 otherwise should send a distinguishing field or header.
 
