@@ -27,6 +27,9 @@ import {
   taskRunLabel,
   TaskSlaBadge,
   TaskStatusBadge,
+  isLive,
+  isRunnable,
+  isTerminal,
 } from "./taskDisplay";
 import { useCancellableFetch } from "@/app/shared/hooks/useCancellableFetch";
 import {
@@ -98,7 +101,7 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
   // Key the inner body on the task id so switching tasks remounts the fetch
   // hook — that reproduces the old "reset session to null then refetch on task
   // change" behavior cleanly, without a manual reset effect.
-  const live = task.status === "running" || task.status === "leased";
+  const live = isLive(task.status);
   if (live) {
     return (
       <LiveTaskView
@@ -123,16 +126,6 @@ export function LogViewer({ task, onClose, canStop, onResubmitted, onEdit, onSel
     />
   );
 }
-
-// Terminal statuses that make sense to resubmit as a fresh one-off run.
-const RESUBMITTABLE = new Set(["success", "error", "cancelled", "dead_lettered"]);
-
-// Statuses that can be kicked off on demand: the terminal ones (resubmit) plus
-// the not-yet-run ones (run now). A pending/scheduled task does run on its own
-// eventually — but "eventually" is the next cron tick, which is why a freshly
-// created daily job could not be exercised until the following day. Only an
-// in-flight task is excluded; it is already running.
-const RUNNABLE = new Set([...RESUBMITTABLE, "pending", "scheduled"]);
 
 // TaskSummary mirrors the Recent Tasks row the user clicked (ID / Status /
 // SLA / Schedule / Created By / Created) so the modal carries the row's
@@ -947,7 +940,7 @@ function LogViewerBody({
   // one-off copy and leave the source (and its schedule) untouched; only the
   // wording differs, because "Resubmit" on a job that has never run reads as
   // though something went wrong.
-  const hasRun = RESUBMITTABLE.has(task.status ?? "");
+  const hasRun = isTerminal(task.status);
   const actionLabel = hasRun ? "Resubmit" : "Run now";
 
   const resubmit = async () => {
@@ -982,7 +975,7 @@ function LogViewerBody({
     saveBlob(blob, `fleet-task-${task.id.slice(0, 8)}-logs.json`);
   };
 
-  const canResubmit = RUNNABLE.has(task.status ?? "");
+  const canResubmit = isRunnable(task.status);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [wakeNote, setWakeNote] = useState("");
   const [waking, setWaking] = useState(false);
@@ -1080,7 +1073,7 @@ function LogViewerBody({
                   ))}
                 </select>
               ) : null}
-              {onEdit && RUNNABLE.has(task.status ?? "") ? (
+              {onEdit && isRunnable(task.status) ? (
                 <button
                   type="button"
                   className="btn btn-secondary"

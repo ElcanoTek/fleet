@@ -1,4 +1,4 @@
-import type { Task } from "@/app/shared/lib/orchestratorApi";
+import type { Task, TaskStatus } from "@/app/shared/lib/orchestratorApi";
 import { formatTimeFirst, truncate } from "@/app/shared/lib/format";
 import { RunStatusChip, StatusChip, type RunTone } from "@/app/shared/ui/StatusChip";
 import type { ReactNode } from "react";
@@ -10,6 +10,70 @@ import {
 // Shared task-display helpers for the Operations Center. These produce the
 // exact labels the Recent Tasks table shows, so the log modal's task summary
 // (#TBD) can mirror the row the user clicked without duplicating the logic.
+
+// --- Task status classification -------------------------------------------
+// One home for the lifecycle groupings the table, the log modal and the edit
+// form act on. The statuses mirror internal/sched/models.TaskStatus; the
+// predicates take `string | undefined` because a row from an older server (or
+// a stream frame) may carry no status, which every predicate treats as
+// "unknown" exactly as the per-file sets it replaces did.
+
+export type { TaskStatus };
+
+// The finished statuses (models.TaskStatus.IsTerminal): editing one resubmits
+// a fresh run instead of rewriting history.
+export const TERMINAL_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>([
+  "success",
+  "error",
+  "cancelled",
+  "dead_lettered",
+]);
+
+// Statuses that can be kicked off on demand ("Run now"/Resubmit) and edited:
+// the terminal ones plus the not-yet-run ones. In-flight (leased/running) and
+// paused runs are excluded — a second concurrent copy of a running job is a
+// footgun, not a feature.
+const RUNNABLE_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>([
+  ...(TERMINAL_TASK_STATUSES as ReadonlySet<TaskStatus>),
+  "pending",
+  "scheduled",
+]);
+
+// Statuses with something left to stop: everything that has not finished,
+// including pending/scheduled (a recurring job that has not fired, #1152).
+const STOPPABLE_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>([
+  "pending",
+  "scheduled",
+  "leased",
+  "running",
+  "paused_awaiting_input",
+  "paused_awaiting_wake",
+]);
+
+// A live run: a worker holds the lease and is writing to the row.
+const LIVE_TASK_STATUSES: ReadonlySet<string> = new Set<TaskStatus>(["leased", "running"]);
+
+export function isTerminal(status: string | undefined): boolean {
+  return TERMINAL_TASK_STATUSES.has(status ?? "");
+}
+
+export function isRunnable(status: string | undefined): boolean {
+  return RUNNABLE_TASK_STATUSES.has(status ?? "");
+}
+
+export function isStoppable(status: string | undefined): boolean {
+  return STOPPABLE_TASK_STATUSES.has(status ?? "");
+}
+
+export function isLive(status: string | undefined): boolean {
+  return LIVE_TASK_STATUSES.has(status ?? "");
+}
+
+// Everything except a live run can be deleted (the server refuses a leased or
+// running task), including a row whose status is unknown.
+export function isDeletable(status: string | undefined): boolean {
+  return !isLive(status);
+}
 
 export function createdByLabel(task: Task): string {
   if (task.created_by_username) return task.created_by_username;

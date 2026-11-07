@@ -1,8 +1,21 @@
 import { describe, expect, it } from "vitest";
 
-import type { Task } from "@/app/shared/lib/orchestratorApi";
+import type { Task, TaskStatus } from "@/app/shared/lib/orchestratorApi";
 
-import { blockedReason, promptName, scheduleLabel, scheduleStoppedReason, scheduleTitle, taskRunLabel } from "./taskDisplay";
+import {
+  isDeletable,
+  isLive,
+  isRunnable,
+  isStoppable,
+  isTerminal,
+  TERMINAL_TASK_STATUSES,
+  blockedReason,
+  promptName,
+  scheduleLabel,
+  scheduleStoppedReason,
+  scheduleTitle,
+  taskRunLabel,
+} from "./taskDisplay";
 
 const recurring: Task = { id: "t1", recurrence: "0 9 * * 6,0" };
 
@@ -72,5 +85,40 @@ describe("task labels from a workflow's own name", () => {
     expect(taskRunLabel({ id: "b50b6d78-0000", prompt } as Task)).toBe("TWC Campaign Health Scan");
     expect(taskRunLabel({ id: "b50b6d78-0000", prompt, title: "TWC weekly" } as Task)).toBe("TWC weekly");
     expect(taskRunLabel({ id: "b50b6d78-0000", prompt: "Run the optimization protocol" } as Task)).toBe("Run the optimization protocol");
+  });
+});
+
+// The classification each call site used before #2031 consolidated them, row
+// by row over every Go status (internal/sched/models.TaskStatus) plus an
+// unknown/absent one. A change here changes which controls a task offers.
+describe("task status predicates", () => {
+  type Row = [TaskStatus | "" | undefined, { terminal: boolean; runnable: boolean; stoppable: boolean; live: boolean; deletable: boolean }];
+  const rows: Row[] = [
+    ["pending", { terminal: false, runnable: true, stoppable: true, live: false, deletable: true }],
+    ["scheduled", { terminal: false, runnable: true, stoppable: true, live: false, deletable: true }],
+    ["leased", { terminal: false, runnable: false, stoppable: true, live: true, deletable: false }],
+    ["running", { terminal: false, runnable: false, stoppable: true, live: true, deletable: false }],
+    ["success", { terminal: true, runnable: true, stoppable: false, live: false, deletable: true }],
+    ["error", { terminal: true, runnable: true, stoppable: false, live: false, deletable: true }],
+    ["cancelled", { terminal: true, runnable: true, stoppable: false, live: false, deletable: true }],
+    ["dead_lettered", { terminal: true, runnable: true, stoppable: false, live: false, deletable: true }],
+    ["paused_awaiting_input", { terminal: false, runnable: false, stoppable: true, live: false, deletable: true }],
+    ["paused_awaiting_wake", { terminal: false, runnable: false, stoppable: true, live: false, deletable: true }],
+    ["", { terminal: false, runnable: false, stoppable: false, live: false, deletable: true }],
+    [undefined, { terminal: false, runnable: false, stoppable: false, live: false, deletable: true }],
+  ];
+
+  it.each(rows)("classifies %j", (status, want) => {
+    expect({
+      terminal: isTerminal(status),
+      runnable: isRunnable(status),
+      stoppable: isStoppable(status),
+      live: isLive(status),
+      deletable: isDeletable(status),
+    }).toEqual(want);
+  });
+
+  it("lists exactly the Go terminal statuses", () => {
+    expect([...TERMINAL_TASK_STATUSES].sort()).toEqual(["cancelled", "dead_lettered", "error", "success"]);
   });
 });

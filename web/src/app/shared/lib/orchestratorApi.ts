@@ -28,6 +28,21 @@ export type RunIf = {
   on_error?: "run" | "skip";
 };
 
+// TaskStatus mirrors internal/sched/models.TaskStatus — the ten lifecycle
+// statuses a task row can carry. The classifications over it live in
+// orchestrator/taskDisplay.tsx.
+export type TaskStatus =
+  | "pending"
+  | "scheduled"
+  | "leased"
+  | "running"
+  | "success"
+  | "error"
+  | "cancelled"
+  | "dead_lettered"
+  | "paused_awaiting_input"
+  | "paused_awaiting_wake";
+
 export type Task = {
   id: string;
   // Short operator-facing label shown wherever the task is listed. Absent/empty
@@ -63,7 +78,7 @@ export type Task = {
   tags?: string[];
   retry_policy?: RetryPolicy;
   source_task_id?: string;
-  status?: string;
+  status?: TaskStatus;
   created_by?: string;
   created_by_username?: string;
   agent_session_id?: string;

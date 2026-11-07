@@ -346,7 +346,7 @@ describe("TasksTable Delete action", () => {
   // The server refuses a live run (the worker still holds the lease), so the
   // affordance is hidden rather than offered and then rejected.
   it("hides Delete on a live run", () => {
-    for (const status of ["running", "leased"]) {
+    for (const status of ["running", "leased"] as const) {
       const { unmount } = renderWithDelete([{ ...brokenJob, status }], vi.fn());
       expect(screen.queryByTestId("task-delete-button")).toBeNull();
       expect(screen.queryByTestId("task-delete-button-card")).toBeNull();

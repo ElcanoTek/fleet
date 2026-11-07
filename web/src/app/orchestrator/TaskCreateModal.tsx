@@ -14,6 +14,7 @@ import { validateTaskForm, validateCronExpression, describeEmailError } from "@/
 import { isValidEmail } from "@/app/shared/lib/format";
 import { buildPromptWithRecipients, splitPromptRecipients } from "./taskEmailBlock";
 import { rankRecipientSuggestions } from "./recipientSuggestions";
+import { isTerminal } from "./taskDisplay";
 import { describeCronExpression } from "@/app/shared/lib/cron";
 import { Icon } from "@/app/shared/ui/Icon";
 import { dateInZone, endOfDayInZone, nextCronOccurrence, formatNextRun } from "@/app/shared/lib/cronNext";
@@ -167,10 +168,6 @@ export type TaskCreateModalProps = {
   editTask?: Task | null;
   onUpdated?: () => void;
 };
-
-// Statuses that already finished: editing one resubmits (POST /rerun with
-// overrides) instead of rewriting history.
-const EDIT_TERMINAL = new Set(["success", "error", "cancelled", "dead_lettered"]);
 
 // taskToFormValues maps a task (or null for create mode) onto the form's
 // initial state. Pure: the modal remounts per edit target (parent keys the
@@ -391,7 +388,7 @@ export function TaskCreateModal({
 }: TaskCreateModalProps) {
   const { showToast } = useToast();
   const editing = !!editTask;
-  const editTerminal = editing && EDIT_TERMINAL.has(editTask?.status ?? "");
+  const editTerminal = editing && isTerminal(editTask?.status);
   // Which scope a recurring edit applies to: asked via an in-modal chooser.
   const [scopeOpen, setScopeOpen] = useState(false);
   // Mount-time form values (blank for create, prefilled for edit). The parent
