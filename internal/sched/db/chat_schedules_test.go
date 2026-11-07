@@ -127,10 +127,10 @@ func TestChatScheduleClaimSettle(t *testing.T) {
 	}
 }
 
-// expireLease makes a schedule's lease look abandoned.
-func expireLease(t *testing.T, db *Database, id string) {
+// expireLease makes every held lease look abandoned.
+func expireLease(t *testing.T, db *Database) {
 	t.Helper()
-	if _, err := db.conn.Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, id); err != nil {
+	if _, err := db.conn.Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE lease_owner IS NOT NULL`); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -150,7 +150,7 @@ func TestChatScheduleExpiredLeaseIsReclaimed(t *testing.T) {
 	if err != nil || len(first) != 1 || first[0].FireID == "" {
 		t.Fatalf("claim = %+v, %v", first, err)
 	}
-	expireLease(t, db, "p")
+	expireLease(t, db)
 	if again, err := db.ClaimDueChatSchedules(ctx, now, time.Minute, 25, nil); err != nil || len(again) != 0 {
 		t.Fatalf("due claim took an in-flight fire: %+v, %v", again, err)
 	}
@@ -188,7 +188,7 @@ func TestChatScheduleUnsettledManualFireIsRecovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expireLease(t, db, "p")
+	expireLease(t, db)
 	if _, err := db.ClaimChatScheduleNow(ctx, "p", now, time.Minute); !errors.Is(err, ErrChatScheduleFiring) {
 		t.Fatalf("Run now over an unsettled fire: err = %v, want ErrChatScheduleFiring", err)
 	}
@@ -235,7 +235,7 @@ func TestChatScheduleFailedDeliveryBacksOff(t *testing.T) {
 	if rec, _ := db.RecoverChatScheduleFires(ctx, now, time.Minute, 25); len(rec) != 0 {
 		t.Fatalf("recovery retook a failed fire before its backoff: %+v", rec)
 	}
-	expireLease(t, db, "p")
+	expireLease(t, db)
 	rec, err := db.RecoverChatScheduleFires(ctx, now, time.Minute, 25)
 	if err != nil || len(rec) != 1 || rec[0].FireID != fs[0].FireID {
 		t.Fatalf("retry = %+v, %v; want fire %s", rec, err, fs[0].FireID)
@@ -303,5 +303,37 @@ func TestCleanupOldChatScheduleRuns(t *testing.T) {
 	n, err := db.CleanupOldChatScheduleRuns(ctx, 90, 2)
 	if err != nil || n != 2 {
 		t.Fatalf("pruned %d, %v; want 2 (keep the newest 2)", n, err)
+	}
+}
+
+// A deferred fire (the chat server was draining) is kept, with a short
+// retry, and the recovery pass retries it as the same fire — even a manual
+// one on a paused schedule; and the next-wake time includes that retry.
+func TestChatScheduleDeferredFireIsKept(t *testing.T) {
+	t.Parallel()
+	db := setupTestDB(t)
+	ctx := context.Background()
+	now := time.Now()
+	insertChatSchedule(t, db, "p", "*/10 * * * *", 0, "paused", now.Add(time.Hour).Unix(), 0, 0)
+
+	f, err := db.ClaimChatScheduleNow(ctx, "p", now, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := db.SettleChatScheduleFire(ctx, f, models.ChatScheduleDelivery{Outcome: models.ChatScheduleDeferred}, now); err != nil || !ok {
+		t.Fatalf("settle deferred = %v, %v", ok, err)
+	}
+	if s := chatScheduleStateOf(t, db, "p"); !s.leased || s.runCount != 0 {
+		t.Fatalf("deferred fire = %+v; want kept (leased), not counted", s)
+	}
+	// The retry (10s), not the claim's one-minute lease or the hour-away slot.
+	due, ok, err := db.NextChatScheduleDueAt(ctx, now.Unix())
+	if err != nil || !ok || due > time.Now().Add(ChatScheduleDeferRetry+2*time.Second).Unix() {
+		t.Fatalf("next wake = %d (now %d), %v, %v; want the deferred fire's retry", due, now.Unix(), ok, err)
+	}
+	expireLease(t, db)
+	rec, err := db.RecoverChatScheduleFires(ctx, now, time.Minute, 25)
+	if err != nil || len(rec) != 1 || rec[0].FireID != f.FireID || rec[0].Trigger != models.ChatScheduleTriggerManual {
+		t.Fatalf("retry = %+v, %v; want manual fire %s", rec, err, f.FireID)
 	}
 }

@@ -22,6 +22,7 @@ type fakeDeliverer struct {
 	delivered map[string][]string // schedule -> fire ids delivered
 	settled   []string
 	after     func()
+	deferAll  bool // the chat server is draining: every fire is deferred
 }
 
 func newFakeDeliverer() *fakeDeliverer {
@@ -33,6 +34,10 @@ func (d *fakeDeliverer) DeliverChatScheduleFire(_ context.Context, f models.Chat
 	if d.fail[f.ScheduleID] {
 		d.mu.Unlock()
 		return models.ChatScheduleDelivery{}, errors.New("delivery failed")
+	}
+	if d.deferAll {
+		d.mu.Unlock()
+		return models.ChatScheduleDelivery{Outcome: models.ChatScheduleDeferred}, nil
 	}
 	d.delivered[f.ScheduleID] = append(d.delivered[f.ScheduleID], f.FireID)
 	after := d.after
@@ -182,5 +187,107 @@ func TestChatSchedules_PassAtStartup(t *testing.T) {
 	}
 	if d.deliveredTo("due") != 1 {
 		t.Fatal("the due schedule was not fired at startup")
+	}
+}
+
+func expireChatLease(t *testing.T, s *Scheduler, id string) {
+	t.Helper()
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A Run now deferred because the chat server is draining is kept, not
+// dropped: on a paused schedule nothing else would ever fire it. Once the
+// server takes turns again the recovery pass delivers it — once, as the same
+// fire — and a due fire deferred at shutdown is likewise delivered once.
+func TestChatSchedules_DeferredFiresAreRetried(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	addChatSchedule(t, s, "paused", "paused", time.Now().Add(time.Hour).Unix())
+	addChatSchedule(t, s, "due", "active", time.Now().Add(-time.Minute).Unix())
+	d.mu.Lock()
+	d.deferAll = true
+	d.mu.Unlock()
+
+	got, err := s.RunChatScheduleNow(context.Background(), "paused")
+	if err != nil || got.Outcome != models.ChatScheduleDeferred {
+		t.Fatalf("run now while draining = %+v, %v", got, err)
+	}
+	s.runChatSchedules()
+
+	d.mu.Lock()
+	d.deferAll = false
+	d.mu.Unlock()
+	expireChatLease(t, s, "paused")
+	expireChatLease(t, s, "due")
+	s.runChatSchedules()
+	s.runChatSchedules()
+
+	for _, id := range []string{"paused", "due"} {
+		if n := d.deliveredTo(id); n != 1 {
+			t.Errorf("%s: delivered %d times after the drain ended, want 1", id, n)
+		}
+		if n, leased := runCountOf(t, s, id); n != 1 || leased {
+			t.Errorf("%s: run count %d, leased %v; want 1, released", id, n, leased)
+		}
+	}
+}
+
+// A failed delivery's retry is armed as a wake-up at its backoff's end, not
+// left to the next tick.
+func TestChatSchedules_FailedDeliveryArmsRetryWake(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	addChatSchedule(t, s, "bad", "active", time.Now().Add(-time.Minute).Unix())
+	d.fail["bad"] = true
+	s.runChatSchedules()
+	select {
+	case at := <-s.chatWake:
+		if until := time.Until(at); until < 20*time.Second || until > 40*time.Second {
+			t.Fatalf("retry wake in %s, want about the 30s backoff", until)
+		}
+	default:
+		t.Fatal("no wake-up armed for the failed fire's retry")
+	}
+}
+
+// The daily maintenance runs off the loop: a cleanup that blocks must not
+// delay a due chat schedule's wake-up.
+func TestChatSchedules_MaintenanceDoesNotBlockWake(t *testing.T) {
+	t.Parallel()
+	s, d := newEngineScheduler(t)
+	s.tickInterval = time.Hour
+	s.retentionDays = 30
+	s.firstCleanupIn = time.Millisecond
+	release := make(chan struct{})
+	started := make(chan struct{})
+	s.maintenance = func() {
+		close(started)
+		select {
+		case <-release:
+		case <-s.ctx.Done():
+		}
+	}
+	s.Start()
+	t.Cleanup(func() {
+		close(release)
+		s.Stop()
+	})
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("maintenance did not start")
+	}
+
+	addChatSchedule(t, s, "due", "active", time.Now().Unix())
+	s.WakeChatSchedulesAt(time.Now())
+	deadline := time.Now().Add(5 * time.Second)
+	for d.deliveredTo("due") == 0 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if d.deliveredTo("due") != 1 {
+		t.Fatal("a blocked maintenance run held up a due chat schedule")
 	}
 }

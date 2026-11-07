@@ -46,6 +46,10 @@ const (
 	chatScheduleFailureBackoffMax  = 30 * time.Minute
 )
 
+// ChatScheduleDeferRetry is how long a deferred fire (the chat server was not
+// taking turns) waits before the recovery pass retries it.
+const ChatScheduleDeferRetry = 10 * time.Second
+
 // ChatScheduleFailureBackoff is the lease extension after the n-th
 // consecutive failed delivery of a schedule's fire (n >= 1).
 func ChatScheduleFailureBackoff(n int) time.Duration {
@@ -263,7 +267,13 @@ func (db *Database) FailChatScheduleFire(ctx context.Context, fire models.ChatSc
 //     retries in chatScheduleBusyRetry — so a blocked schedule never sits at
 //     the head of the due scan.
 //   - gone: the schedule is cancelled.
-//   - coalesced, stale, deferred: the definition is left as it is.
+//   - coalesced, stale: the definition is left as it is and the fire ends.
+//   - deferred (the chat server is draining or shutting down): the fire is
+//     KEPT — same id, run number and trigger — with its lease pushed out by
+//     ChatScheduleDeferRetry, so the recovery pass retries it as itself
+//     then (or after a restart). Nothing is recorded or counted, so a fire
+//     deferred at shutdown is neither lost nor counted twice, and a manual
+//     one on a paused or not-yet-due schedule is not dropped.
 //
 // queued, coalesced, busy and gone each add a row to the run history.
 func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire, d models.ChatScheduleDelivery, now time.Time) (bool, error) {
@@ -340,7 +350,13 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 			   SET status = $2, updated_at = $3, `+releaseFireSQL+`
 			 WHERE id = $1`,
 			fire.ScheduleID, status, nowUnix)
-	default: // coalesced, stale, deferred
+	case models.ChatScheduleDeferred:
+		recordRun = false
+		_, err = tx.ExecContext(ctx, `
+			UPDATE chat_schedules SET lease_expires_at = now() + make_interval(secs => $2)
+			 WHERE id = $1`,
+			fire.ScheduleID, ChatScheduleDeferRetry.Seconds())
+	default: // coalesced, stale
 		recordRun = d.Outcome == models.ChatScheduleCoalesced
 		_, err = tx.ExecContext(ctx, `UPDATE chat_schedules SET `+releaseFireSQL+` WHERE id = $1`, fire.ScheduleID)
 	}
@@ -365,16 +381,25 @@ func (db *Database) SettleChatScheduleFire(ctx context.Context, fire models.Chat
 	return true, tx.Commit()
 }
 
-// NextChatScheduleDueAt is the earliest next_run_at after `after` of any
-// active chat schedule (Unix seconds); ok is false when there is none. The
-// scheduler arms its wake-up with it so a schedule fires on time instead of
-// on the next tick. Only future slots count: a row already due that the last
-// pass could not fire (leased by a live fire, deferred) waits for the tick,
-// so it can never spin the wake-up.
+// NextChatScheduleDueAt is the earliest time after `after` (Unix seconds) at
+// which a chat schedule pass has work: an active, unleased schedule's
+// next_run_at, or the lease expiry of a fire in flight — a failed delivery's
+// backoff or a deferred fire's retry, which the recovery pass re-drives then
+// (rounded up, plus one second, so the lease has expired when the pass
+// runs). ok is false when there is none. The scheduler arms its wake-up with
+// it so work runs on time instead of on the next tick. Only future times
+// count: work already due that the last pass could not do waits for the
+// tick, so it can never spin the wake-up.
 func (db *Database) NextChatScheduleDueAt(ctx context.Context, after int64) (int64, bool, error) {
 	var next sql.NullInt64
-	if err := db.conn.QueryRowContext(ctx,
-		`SELECT min(next_run_at) FROM chat_schedules WHERE status = 'active' AND next_run_at > $1`, after,
+	if err := db.conn.QueryRowContext(ctx, `
+		SELECT min(t) FROM (
+			SELECT min(next_run_at) AS t FROM chat_schedules
+			 WHERE status = 'active' AND lease_owner IS NULL AND next_run_at > $1
+			UNION ALL
+			SELECT min(ceil(EXTRACT(EPOCH FROM lease_expires_at))::bigint + 1) FROM chat_schedules
+			 WHERE lease_owner IS NOT NULL AND lease_expires_at > to_timestamp($1)
+		) due`, after,
 	).Scan(&next); err != nil {
 		return 0, false, err
 	}

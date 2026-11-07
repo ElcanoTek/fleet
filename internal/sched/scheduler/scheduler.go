@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -111,6 +112,17 @@ type Scheduler struct {
 	// chat_schedules.go.
 	chatDeliverer ChatScheduleDeliverer
 	chatWake      chan time.Time
+
+	// The daily maintenance (retention prune, chat run prune, log archival)
+	// runs off the loop, in its own goroutine, so its up-to-30-minute sweeps
+	// never hold up ticks or chat schedule wake-ups. maintRunning makes it
+	// single-flight (a day's run still going skips the next); maintWG lets
+	// Stop wait for it (its sweeps run under s.ctx, which Stop cancels).
+	// maintenance and firstCleanupIn are overridable only by tests.
+	maintRunning   atomic.Bool
+	maintWG        sync.WaitGroup
+	maintenance    func()
+	firstCleanupIn time.Duration
 }
 
 // maxConcurrentGateEvals bounds how many run_if gate commands may execute at
@@ -283,6 +295,7 @@ func (s *Scheduler) Stop() {
 			<-s.loopDone
 		}
 		s.gateWG.Wait()
+		s.maintWG.Wait()
 		close(settled)
 	}()
 	select {
@@ -290,6 +303,30 @@ func (s *Scheduler) Stop() {
 	case <-time.After(gateDrainTimeout):
 		log.Printf("scheduler: stopped with run_if gate evaluations still in flight; their tasks stay scheduled and are re-evaluated after restart")
 	}
+}
+
+// startMaintenance runs the daily maintenance in its own goroutine, unless the
+// previous run is still going.
+func (s *Scheduler) startMaintenance() {
+	if !s.maintRunning.CompareAndSwap(false, true) {
+		log.Printf("scheduler: daily maintenance still running from the last run; skipping this one")
+		return
+	}
+	run := s.maintenance
+	if run == nil {
+		run = func() {
+			s.runCleanup()
+			s.runChatScheduleCleanup()
+			s.runLogArchival()
+		}
+	}
+	s.maintWG.Add(1)
+	go func() {
+		defer s.maintWG.Done()
+		defer s.maintRunning.Store(false)
+		defer safe.Recover("scheduler.cleanup", nil)
+		run()
+	}()
 }
 
 func (s *Scheduler) runLoop() {
@@ -304,7 +341,11 @@ func (s *Scheduler) runLoop() {
 	var cleanupC <-chan time.Time
 	var cleanupTimer *time.Timer
 	if s.retentionDays > 0 || s.archiveAfterDays > 0 {
-		cleanupTimer = time.NewTimer(durationUntilHour(time.Now().UTC(), s.cleanupHour))
+		first := durationUntilHour(time.Now().UTC(), s.cleanupHour)
+		if s.firstCleanupIn > 0 {
+			first = s.firstCleanupIn
+		}
+		cleanupTimer = time.NewTimer(first)
 		defer cleanupTimer.Stop()
 		cleanupC = cleanupTimer.C
 	}
@@ -372,12 +413,7 @@ func (s *Scheduler) runLoop() {
 				s.runChatSchedules()
 			}()
 		case <-cleanupC:
-			func() {
-				defer safe.Recover("scheduler.cleanup", nil)
-				s.runCleanup()
-				s.runChatScheduleCleanup()
-				s.runLogArchival()
-			}()
+			s.startMaintenance()
 			cleanupTimer.Reset(24 * time.Hour)
 		case <-s.stop:
 			return
