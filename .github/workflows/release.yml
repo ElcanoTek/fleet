@@ -644,6 +644,7 @@ jobs:
           FLEET_ARM64: ${{ steps.images.outputs.fleet_arm64 }}
           SANDBOX_AMD64: ${{ steps.images.outputs.fleet_sandbox_amd64 }}
           SANDBOX_ARM64: ${{ steps.images.outputs.fleet_sandbox_arm64 }}
+          SBOM_REF_TYPE: https://github.com/ElcanoTek/fleet/sbom-reference/v1
         run: |
           set -euo pipefail
           # Every call that talks to Sigstore (Fulcio, Rekor) or the registry
@@ -652,10 +653,20 @@ jobs:
           # 5xx, timeouts and dropped connections only, ~3 minutes in all).
           scripts/retry-transient.sh cosign sign --yes "${FLEET_REF}"
           scripts/retry-transient.sh cosign sign --yes "${SANDBOX_REF}"
-          scripts/retry-transient.sh cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
-          scripts/retry-transient.sh cosign attest --yes --type spdxjson --predicate dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
-          scripts/retry-transient.sh cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
-          scripts/retry-transient.sh cosign attest --yes --type spdxjson --predicate dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
+          # Each image's SBOM is attested BY REFERENCE (name, SHA-256, release
+          # URL), not inline: the sandbox image's SPDX SBOM is ~28 MB, and a
+          # DSSE envelope of it is past what Rekor accepts (its upload fails
+          # with a 502 every time — not a transient error). The SBOM files
+          # themselves ship as release assets under the signed SHA256SUMS.
+          attest_sbom() {
+            local sbom="$1" ref="$2" pred
+            pred="$(scripts/sbom-reference.sh "${TAG}" "${sbom}")"
+            scripts/retry-transient.sh cosign attest --yes --type "${SBOM_REF_TYPE}" --predicate "${pred}" "${ref}"
+          }
+          attest_sbom dist/fleet-image-linux-amd64.spdx.json "${FLEET_AMD64}"
+          attest_sbom dist/fleet-image-linux-arm64.spdx.json "${FLEET_ARM64}"
+          attest_sbom dist/fleet-sandbox-image-linux-amd64.spdx.json "${SANDBOX_AMD64}"
+          attest_sbom dist/fleet-sandbox-image-linux-arm64.spdx.json "${SANDBOX_ARM64}"
           for ref in "${FLEET_REF}" "${SANDBOX_REF}"; do
             scripts/retry-transient.sh cosign verify --certificate-identity "${SIGNER_IDENTITY}" --certificate-oidc-issuer "${OIDC_ISSUER}" "${ref}" >/dev/null
           done

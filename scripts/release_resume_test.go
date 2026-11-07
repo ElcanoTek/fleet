@@ -189,3 +189,44 @@ echo "$MSG" >&2; exit 1
 		t.Errorf("want 3 provenance steps each with a retry, got %d and %d retries", first, retries)
 	}
 }
+
+// TestSBOMAttestationsAreByReference — the image SBOM attestations name the
+// SBOM release asset and its hash instead of embedding it (the sandbox SBOM
+// is too large for Rekor), and nothing attests an SBOM inline.
+func TestSBOMAttestationsAreByReference(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	sbom := filepath.Join(t.TempDir(), "fleet-sandbox-image-linux-amd64.spdx.json")
+	body := `{"spdxVersion":"SPDX-2.3","name":"placeholder"}`
+	if err := os.WriteFile(sbom, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(filepath.Join(repoRoot(t), "scripts/sbom-reference.sh"), "v2026.11.07.18", sbom).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pred, err := os.ReadFile(strings.TrimSpace(string(out)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`"name": "fleet-sandbox-image-linux-amd64.spdx.json"`,
+		`"sha256": "` + strings.TrimPrefix(digestOf(body), "sha256:") + `"`,
+		`"uri": "https://github.com/ElcanoTek/fleet/releases/download/v2026.11.07.18/fleet-sandbox-image-linux-amd64.spdx.json"`,
+	} {
+		if !strings.Contains(string(pred), want) {
+			t.Errorf("predicate lacks %s:\n%s", want, pred)
+		}
+	}
+	if strings.Contains(string(pred), "spdxVersion") {
+		t.Error("the predicate embeds the SBOM")
+	}
+	if _, err := exec.Command(filepath.Join(repoRoot(t), "scripts/sbom-reference.sh"), "latest", sbom).Output(); err == nil {
+		t.Error("a non-release tag was accepted")
+	}
+	raw, _ := releaseWorkflow(t)
+	if strings.Contains(raw, "--type spdxjson") {
+		t.Error("release.yml still attests an SBOM inline (--type spdxjson); Rekor refuses the sandbox's")
+	}
+}

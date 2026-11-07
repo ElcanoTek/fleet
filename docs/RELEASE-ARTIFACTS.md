@@ -44,7 +44,13 @@ Images, multi-arch (amd64 + arm64) indexes tagged with the release tag (and
   (`config/default/sandbox/Containerfile`).
 
 Each index digest is signed with cosign; each per-architecture image carries a
-signed SPDX attestation (`cosign attest --type spdxjson`); both indexes and the
+signed SBOM attestation BY REFERENCE (`cosign attest --type
+https://github.com/ElcanoTek/fleet/sbom-reference/v1`,
+`scripts/sbom-reference.sh`): it names that image's SPDX SBOM release asset —
+file name, SHA-256, download URL — and the asset is covered by the signed
+`SHA256SUMS`. Not the SBOM inline: the sandbox image's SBOM is ~28 MB, and a
+DSSE envelope that large is refused by Rekor (the upload fails with a 502 on
+every attempt, which is how the first releases failed). Both indexes and the
 binaries have SLSA build provenance in GitHub's attestation store (pushed to
 the registry for the images). The provenance's source
 (`resolvedDependencies[0]`) is the release tag at the release commit:
@@ -318,9 +324,12 @@ cosign verify-blob --bundle SHA256SUMS.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 gh attestation verify fleet-linux-amd64 --repo ElcanoTek/fleet      # SLSA provenance
-cosign verify-attestation --type spdxjson ghcr.io/elcanotek/fleet-sandbox@sha256:<per-arch digest> \
+cosign verify-attestation --type https://github.com/ElcanoTek/fleet/sbom-reference/v1 \
+  ghcr.io/elcanotek/fleet-sandbox@sha256:<per-arch digest> \
   --certificate-identity https://github.com/ElcanoTek/fleet/.github/workflows/release.yml@refs/heads/main \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com   # the image SBOM
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  | jq -r '.payload | @base64d | fromjson | .predicate.sbom'   # names the SBOM asset and its SHA-256
+# the SBOM itself: fleet-sandbox-image-linux-<arch>.spdx.json, checked by sha256sum -c above
 ```
 
 ## Knobs
