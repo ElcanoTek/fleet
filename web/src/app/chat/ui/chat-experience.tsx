@@ -74,6 +74,7 @@ import {
   droppedOptionalMcpServerNames,
   setOptionalMcpServersEnabled,
   enabledOptionalMcpServerNames,
+  reconcileMcpAccounts,
   reconcileMcpSelection,
 } from "./mcpSelection";
 import { isToggleable, type PickerCategory } from "./toolsPicker";
@@ -922,6 +923,17 @@ export function ChatExperience({
     [],
   );
   const newChatDraftGenRef = useRef(0);
+  // Bumped by every navigation (not background, adopt or restore)
+  // loadConversation: the navigation that started LAST owns the view. Opening A (slow) and then B used
+  // to let A's late response switch the active chat back to A — persona,
+  // model and Tools catalog with it — and A's `finally` cleared B's loading
+  // spinner (#2043). A superseded load still merges its transcript and rail
+  // row; only the view-moving half is gated on this.
+  const loadConversationGenRef = useRef(0);
+  // The generation of the last navigation that finished. Behind
+  // loadConversationGenRef while a navigation is still in flight, which is
+  // how the tab-return refresh knows to stay out of its way.
+  const loadConversationSettledGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -1995,12 +2007,21 @@ export function ChatExperience({
     }
   };
 
+  // A local selection change retires every catalog load already in flight:
+  // its response was read before the change, so applying it would switch the
+  // row the user just flipped back (#2046). The retired load's finally no
+  // longer owns the spinner, so it is cleared here; a later load sets it again.
+  const supersedeMcpCatalogLoads = () => {
+    mcpCatalogGenRef.current += 1;
+    setIsLoadingMcpServers(false);
+  };
+
   // toggleMcpServer optimistically flips the local enabled flag for a
   // server and POSTs the FULL enabled set to the backend. The server is
   // the source of truth for which names are valid optional servers — we
   // just compute the new set from current state and send it. On failure
-  // we revert the local state so the UI doesn't claim a change the
-  // backend rejected.
+  // the picker re-reads the catalog so it doesn't claim a change the
+  // backend rejected (postMcpServerState).
   //
   // conversationId === null is the pre-chat case: no row exists yet, so
   // we skip the POST and keep the toggles in local state. They get
@@ -2020,6 +2041,7 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, enabled: !s.enabled } : s,
     );
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -2042,6 +2064,7 @@ export function ChatExperience({
     // that changes nothing (the bar marks the button aria-disabled, but a
     // keyboard user can still activate it) neither re-renders nor POSTs.
     if (nextServers.every((row, i) => row === prev[i])) return;
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -2049,7 +2072,7 @@ export function ChatExperience({
 
   // setMcpServerAccount records which credential seat (login) a server
   // should use in this conversation ("" = the user's default seat). Same
-  // optimistic-update + full-state POST + revert-on-failure shape as the
+  // optimistic-update + full-state POST + re-read-on-failure shape as the
   // toggle above; pre-chat the choice stays local and rides on the first
   // POST /chat body as `mcp_accounts`.
   const setMcpServerAccount = async (
@@ -2061,6 +2084,7 @@ export function ChatExperience({
     const nextServers = prev.map((s) =>
       s.name === name ? { ...s, account } : s,
     );
+    supersedeMcpCatalogLoads();
     setMcpServers(nextServers);
     if (!conversationId) return;
     await postMcpServerState(conversationId, nextServers, prev);
@@ -2082,62 +2106,145 @@ export function ChatExperience({
   //
   // The reconciliation itself lives in mcpSelection.ts with the rest of the
   // selection rules, and is unit-tested there.
+  //
+  // Saves are chained per conversation (the autoApproveChainRef pattern,
+  // #2046). Each POST replaces the whole selection, so two in flight at once
+  // could land out of order — and the earlier one's response, applied last,
+  // turned off a connector the user had just turned on.
+  //
+  // Each save sends exactly ITS edit: the rows that edit changed, laid over
+  // what the server holds after the save ahead of it in the chain (that
+  // save's persisted answer, or — if it failed — what it started from). So
+  // request N carries edit N and nothing later, and a failure tells us
+  // exactly which edit the server did not take.
+  //
+  // Only the newest save touches the picker: on success it reconciles the
+  // current rows with the persisted answer; on failure it re-reads the
+  // catalog rather than guessing which rows to put back. An older save's
+  // outcome is folded into the newer save's request and answer instead.
+  const mcpSaveChainRef = useRef<
+    Map<string, Promise<MCPServerInfo[] | null>>
+  >(new Map());
+  const mcpSaveSeqRef = useRef<Map<string, number>>(new Map());
+  const mcpSavePendingRef = useRef<Map<string, number>>(new Map());
   const postMcpServerState = async (
     conversationId: string,
     next: MCPServerInfo[],
     prev: MCPServerInfo[],
-  ) => {
-    const requested = enabledOptionalMcpServerNames(next);
-    // A failed save reverts only the rows THIS request changed (switch and
-    // seat), so a catalog load or another toggle that landed meanwhile is
-    // kept — and only while the picker still shows this conversation.
+  ): Promise<void> => {
+    const seq = (mcpSaveSeqRef.current.get(conversationId) ?? 0) + 1;
+    mcpSaveSeqRef.current.set(conversationId, seq);
+    const pending = mcpSavePendingRef.current.get(conversationId) ?? 0;
+    mcpSavePendingRef.current.set(conversationId, pending + 1);
+    // A chain whose saves have all settled starts over from the picker:
+    // its last answer may be older than a catalog read since.
+    const ahead =
+      pending > 0
+        ? (mcpSaveChainRef.current.get(conversationId) ??
+          Promise.resolve(null))
+        : Promise.resolve(null);
+    const run = ahead.then(async (held) => {
+      try {
+        return await sendMcpServerState(
+          conversationId,
+          seq,
+          next,
+          prev,
+          held,
+        );
+      } finally {
+        mcpSavePendingRef.current.set(
+          conversationId,
+          Math.max(0, (mcpSavePendingRef.current.get(conversationId) ?? 1) - 1),
+        );
+      }
+    });
+    mcpSaveChainRef.current.set(conversationId, run);
+    await run;
+  };
+  // Returns the rows the server holds after this save: the persisted answer,
+  // or the base it started from when the save failed.
+  const sendMcpServerState = async (
+    conversationId: string,
+    seq: number,
+    next: MCPServerInfo[],
+    prev: MCPServerInfo[],
+    held: MCPServerInfo[] | null,
+  ): Promise<MCPServerInfo[] | null> => {
+    // This edit: the rows whose switch or seat it changed.
     const before = new Map(prev.map((row) => [row.name, row]));
-    const changed = new Map<string, MCPServerInfo>();
+    const edited = new Set<string>();
     for (const row of next) {
       const old = before.get(row.name);
       if (old && (old.enabled !== row.enabled || old.account !== row.account)) {
-        changed.set(row.name, old);
+        edited.add(row.name);
       }
     }
+    // …laid over what the server holds now (the picker before this edit when
+    // no earlier save is in the chain).
+    const base = new Map((held ?? prev).map((row) => [row.name, row]));
+    const sent = next.map((row) => {
+      if (edited.has(row.name)) return row;
+      const b = base.get(row.name);
+      return b ? { ...row, enabled: b.enabled, account: b.account } : row;
+    });
+    const requested = enabledOptionalMcpServerNames(sent);
+    const baseRows = held ?? prev;
     const stillShown = () => activeConversationIdRef.current === conversationId;
-    const revert = () => {
-      if (!stillShown()) return;
-      setMcpServers((curr) =>
-        curr.map((row) => {
-          const old = changed.get(row.name);
-          return old ? { ...row, enabled: old.enabled, account: old.account } : row;
-        }),
-      );
+    const isLatest = () => mcpSaveSeqRef.current.get(conversationId) === seq;
+    const failed = () => {
+      // Show what the server actually holds. A newer save queued behind this
+      // one is built on baseRows and reconciles the picker itself.
+      if (isLatest() && stillShown()) void loadMcpServerCatalog(conversationId);
+      return baseRows;
     };
     const url = conversationApiUrl(conversationId, "/mcp-servers");
-    if (!url) {
-      revert();
-      return;
-    }
+    if (!url) return failed();
     try {
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           enabled_optional: requested,
-          accounts: mcpAccountOverrides(next),
+          accounts: mcpAccountOverrides(sent),
         }),
       });
-      if (!response.ok) {
-        revert();
-        return;
-      }
-      const body = (await response.json()) as { enabled_optional?: unknown };
+      if (!response.ok) return failed();
+      const body = (await response.json()) as {
+        enabled_optional?: unknown;
+        accounts?: unknown;
+      };
       if (!Array.isArray(body.enabled_optional)) {
         // No authoritative list came back (an older server, or a proxy that
         // rewrote the body). Leave the optimistic state alone rather than
         // clearing every toggle off a shape we did not understand.
-        return;
+        return sent;
       }
       const persisted = body.enabled_optional.filter(
         (n): n is string => typeof n === "string",
       );
-      if (stillShown()) setMcpServers(reconcileMcpSelection(next, persisted));
+      // Seats too: a catalog read (reopening the picker) that landed while
+      // this save was in flight carries the seats from before it. The
+      // response's `accounts` is what was persisted; an older server that
+      // omits it is trusted to have taken what was sent.
+      const persistedAccounts =
+        body.accounts && typeof body.accounts === "object"
+          ? Object.fromEntries(
+              Object.entries(body.accounts as Record<string, unknown>).filter(
+                (e): e is [string, string] => typeof e[1] === "string",
+              ),
+            )
+          : mcpAccountOverrides(sent);
+      // Reconciling the CURRENT rows (not this request's snapshot) keeps
+      // anything a catalog load put there meanwhile.
+      if (isLatest() && stillShown()) {
+        setMcpServers((curr) =>
+          reconcileMcpAccounts(
+            reconcileMcpSelection(curr, persisted),
+            persistedAccounts,
+          ),
+        );
+      }
       const dropped = droppedOptionalMcpServerNames(requested, persisted);
       if (dropped.length > 0) {
         // The toggle visibly springing back is the user-facing signal; this is
@@ -2149,8 +2256,12 @@ export function ChatExperience({
           dropped,
         );
       }
+      return reconcileMcpAccounts(
+        reconcileMcpSelection(sent, persisted),
+        persistedAccounts,
+      );
     } catch {
-      revert();
+      return failed();
     }
   };
 
@@ -2327,6 +2438,28 @@ export function ChatExperience({
     // tab-return staleness refetch) — otherwise the boot load resolving a
     // beat after the user opens a project home would silently close it.
     const prevProjectHome = projectHome;
+    // Claimed before the attach short-circuit below, which switches the view
+    // synchronously: an older load still in flight must not move it back.
+    // Background, adopt and restore loads only read the generation, so any
+    // navigation after them wins — a boot or tab-return restore must never
+    // take the view from a chat the user opened while it ran.
+    const claimsView =
+      !options.background && !options.adopt && !options.restore;
+    if (claimsView) loadConversationGenRef.current += 1;
+    const loadGenAtStart = loadConversationGenRef.current;
+    // A load that claimed nothing must also wait out a navigation still in
+    // flight when it started: it reads that navigation's generation, and a
+    // restore landing first would otherwise move the view and clear the
+    // spinner the navigation still owns.
+    const isCurrentLoad = () =>
+      loadConversationGenRef.current === loadGenAtStart &&
+      (claimsView ||
+        loadConversationSettledGenRef.current === loadGenAtStart);
+    const settleNavigation = () => {
+      if (claimsView && isCurrentLoad()) {
+        loadConversationSettledGenRef.current = loadGenAtStart;
+      }
+    };
     if (!options.background && !options.restore) {
       setProjectHome(null);
       // The team-chat viewer is a full-page overlay too, and it hid the chat
@@ -2372,6 +2505,12 @@ export function ChatExperience({
         setSelectedModel(conv.model || currentDefaultModel());
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
+      // This navigation just superseded any load still in flight, whose
+      // finally no longer owns the spinner — and it fetches nothing itself.
+      // Without this, opening a live chat while another was loading left
+      // "Loading conversation..." up for good.
+      if (claimsView) setIsLoadingHistory(false);
+      settleNavigation();
       return;
     }
 
@@ -2401,6 +2540,8 @@ export function ChatExperience({
           options.fallbackToTeamChatView &&
           (response.status === 404 || response.status === 403)
         ) {
+          // The viewer is a view switch too: a superseded load opens nothing.
+          if (!isCurrentLoad()) return;
           if (prevProjectHome) setProjectHome(prevProjectHome);
           setTeamChatView(conversationId);
           return;
@@ -2495,6 +2636,7 @@ export function ChatExperience({
         ? { ...data.conversation, persona: effectiveConvPersona }
         : data.conversation;
       const movesTheUser =
+        isCurrentLoad() &&
         newChatDraftGenRef.current === draftGenAtStart &&
         (!options.background ||
           activeConversationIdRef.current === conversationId);
@@ -2709,7 +2851,7 @@ export function ChatExperience({
       // via visibilitychange), the user is already in the chat and may
       // have been reading older messages — preserve their scroll
       // position instead of yanking them to the latest reply.
-      if (!options.preserveScroll) {
+      if (!options.preserveScroll && isCurrentLoad()) {
         pendingHistoryScrollRef.current = data.conversation.id;
       }
       setConvMessages(data.conversation.id, next);
@@ -2717,7 +2859,9 @@ export function ChatExperience({
       // the reader opened while that request was in flight.
       if (!options.background && !options.restore) setSidebarOpen(false);
     } finally {
-      if (!options.background) setIsLoadingHistory(false);
+      // A superseded load leaves the spinner to the load that replaced it.
+      if (!options.background && isCurrentLoad()) setIsLoadingHistory(false);
+      settleNavigation();
     }
 
     // Pull the authoritative pending-input snapshot (#785). Queue chips only
@@ -5612,6 +5756,8 @@ export function ChatExperience({
       if (document.visibilityState !== "visible") return;
       const convId = activeConversationIdRef.current;
       if (!convId) return;
+      // The navigation generation at the moment this refresh picked convId.
+      const navGenAtStart = loadConversationGenRef.current;
       // "Attached" is not the same as "alive". A phone that locks mid-turn
       // leaves a zombie socket: the reader never delivers another chunk and
       // never rejects, so the conversation keeps looking attached while the
@@ -5666,6 +5812,15 @@ export function ChatExperience({
         (m) => m.state === "streaming" || m.state === "thinking",
       );
       if (!hasStaleStream) return;
+      // The awaits above can outlast a navigation: if the user opened another
+      // chat since convId was picked (or one was still loading then), this
+      // reload is for a chat they have left and must not compete with it.
+      if (
+        loadConversationGenRef.current !== navGenAtStart ||
+        loadConversationSettledGenRef.current !== navGenAtStart ||
+        activeConversationIdRef.current !== convId
+      )
+        return;
 
       // preserveScroll: the user was already on this conversation and may
       // have been mid-read. Even when we do refetch (turn dropped while
@@ -5985,7 +6140,16 @@ export function ChatExperience({
         await loadConversationRef.current(target, { restore: true });
       } finally {
         if (!cancelled) {
-          setIsLoadingHistory(false);
+          // The boot spinner is the bootstrap's only while no navigation has
+          // claimed it: a chat the user opened while the restore ran is still
+          // loading when the gens differ, and its own finally clears it.
+          // Clearing it here showed that chat's composer before its transcript.
+          if (
+            loadConversationGenRef.current ===
+            loadConversationSettledGenRef.current
+          ) {
+            setIsLoadingHistory(false);
+          }
           // Bootstrap done — start mirroring state into the module store so a
           // later navigation to /settings leaves a warm snapshot to return to.
           setBootstrapped(true);

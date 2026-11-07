@@ -97,6 +97,40 @@ describe("DatasetsPanel", () => {
     expect(screen.queryByText("Alpha Inc")).toBeNull();
   });
 
+  it("reloads the CURRENT selection's rows after an action the user clicked away from (#2045)", async () => {
+    datasets.mockResolvedValue({ datasets: [dataset("a", "alpha"), dataset("b", "beta")] });
+    datasetRows.mockImplementation(async (id: string) =>
+      id === "a"
+        ? { rows: [row("r-a", "Alpha Inc")], row_counts: { proposed: 1 } }
+        : { rows: [row("r-b", "Beta Corp")], row_counts: { pending: 1 } },
+    );
+    const approval = deferred<{ approved: number }>();
+    approveDatasetRows.mockReturnValue(approval.promise);
+    render(
+      <ToastProvider>
+        <DatasetsPanel />
+      </ToastProvider>,
+    );
+    fireEvent.click(await screen.findByRole("tab", { name: /alpha/ }));
+    await screen.findByText("Alpha Inc");
+
+    // Approve on alpha, then switch to beta while the approval is in flight.
+    fireEvent.click(screen.getByRole("button", { name: /Approve all proposed/ }));
+    await waitFor(() => expect(approveDatasetRows).toHaveBeenCalledWith("a"));
+    fireEvent.click(screen.getByRole("tab", { name: /beta/ }));
+    await screen.findByText("Beta Corp");
+
+    datasetRows.mockClear();
+    await act(async () => {
+      approval.resolve({ approved: 1 });
+    });
+    // The post-action reload asks for beta's rows, and beta stays on screen.
+    await waitFor(() => expect(datasetRows).toHaveBeenCalled());
+    expect(datasetRows.mock.calls.every(([id]) => id === "b")).toBe(true);
+    expect(screen.getByText("Beta Corp")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha Inc")).toBeNull();
+  });
+
   it("clears the previous dataset's rows the moment another is selected", async () => {
     datasets.mockResolvedValue({ datasets: [dataset("a", "alpha"), dataset("b", "beta")] });
     const pending = new Map<string, ReturnType<typeof deferred<{ rows: DatasetRow[] }>>>();

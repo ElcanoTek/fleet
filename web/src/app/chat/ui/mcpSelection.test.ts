@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   droppedOptionalMcpServerNames,
   enabledOptionalMcpServerNames,
+  reconcileMcpAccounts,
   reconcileMcpSelection,
   setOptionalMcpServersEnabled,
 } from "./mcpSelection";
@@ -167,5 +168,19 @@ describe("setOptionalMcpServersEnabled", () => {
     expect(enabledOptionalMcpServerNames(next)).toEqual(["github", "notion"]);
     expect(next[1]).toEqual({ name: "github", enabled: true, account: "work" });
     expect(enabledOptionalMcpServerNames(setOptionalMcpServersEnabled(seated, names, false))).toEqual([]);
+  });
+});
+
+describe("reconcileMcpAccounts", () => {
+  it("applies persisted seats, resets omitted ones to the default and keeps matching rows", () => {
+    const keep: { name: string; enabled: boolean; account?: string } = { name: "plain", enabled: true };
+    const rows: Array<{ name: string; enabled: boolean; account?: string }> = [
+      { name: "Gamma", enabled: true, account: "work" },
+      { name: "ix", enabled: true, account: "OMG_USD" },
+      keep,
+    ];
+    const out = reconcileMcpAccounts(rows, { gamma: "personal" });
+    expect(out.map((r) => r.account)).toEqual(["personal", "", undefined]);
+    expect(out[2]).toBe(keep);
   });
 });
