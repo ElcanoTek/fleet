@@ -34,6 +34,12 @@ for v in GITHUB_SERVER_URL GITHUB_REPOSITORY GITHUB_REF GITHUB_SHA GITHUB_WORKFL
 done
 command -v jq >/dev/null 2>&1 || { echo "jq is required" >&2; exit 2; }
 
+# resolvedDependencies[0] MUST be the signing workflow source: GitHub's
+# attestation API rejects a predicate whose first dependency differs from the
+# Fulcio certificate (SourceRepositoryURI@SourceRepositoryRef and the token's
+# sha) -- under workflow_run, the default branch that ran release.yml at
+# GITHUB_SHA. [1] is the release itself: the tag at the commit that was built
+# (scripts/check-attested-commit.sh reads the release commit from it).
 jq -n \
   --arg server "$GITHUB_SERVER_URL" --arg repo "$GITHUB_REPOSITORY" \
   --arg ref "$GITHUB_REF" --arg sha "$GITHUB_SHA" --arg wref "$GITHUB_WORKFLOW_REF" \
@@ -56,9 +62,10 @@ jq -n \
           }
         },
         resolvedDependencies: [
-          { uri: ("git+" + $server + "/" + $repo + "@refs/tags/" + $tag), digest: { gitCommit: $commit } },
           { uri: ("git+" + $server + "/" + $repo + "@" + $ref), digest: { gitCommit: $sha },
-            annotations: { role: "workflow definition (the default branch that ran release.yml)" } }
+            annotations: { role: "workflow definition (the default branch that ran release.yml)" } },
+          { uri: ("git+" + $server + "/" + $repo + "@refs/tags/" + $tag), digest: { gitCommit: $commit },
+            annotations: { role: "release source (the commit built and published)" } }
         ]
       },
       runDetails: {

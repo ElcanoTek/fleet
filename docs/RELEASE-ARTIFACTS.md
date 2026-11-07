@@ -52,15 +52,18 @@ file name, SHA-256, download URL — and the asset is covered by the signed
 DSSE envelope that large is refused by Rekor (the upload fails with a 502 on
 every attempt, which is how the first releases failed). Both indexes and the
 binaries have SLSA build provenance in GitHub's attestation store (pushed to
-the registry for the images). The provenance's source
-(`resolvedDependencies[0]`) is the release tag at the release commit:
-release.yml runs on `workflow_run`, where the job's own commit is the
-default-branch head when the release ran — possibly a later commit than the one
-built — so the publish job writes the predicate itself
-(`scripts/slsa-predicate.sh`; the second dependency names that workflow
-commit), then verifies every attestation with `gh attestation verify` and
-requires the release commit (`scripts/check-attested-commit.sh`) before it
-writes `release.json`. The Sigstore certificate still records the workflow's
+the registry for the images). release.yml runs on `workflow_run`, where the
+job's own commit is the default-branch head when the release ran, possibly a
+later commit than the one built, so the publish job writes the predicate
+itself (`scripts/slsa-predicate.sh`). Its first dependency
+(`resolvedDependencies[0]`) is that workflow source, the default branch at the
+run commit, because GitHub's attestation API requires the first dependency to
+match the signing certificate and rejects anything else ("values do not
+match", which is how v2026.11.07.19 failed). The second dependency is the
+release tag at the release commit. The publish job verifies every attestation
+with `gh attestation verify` and requires the release commit in the tag's
+dependency (`scripts/check-attested-commit.sh`) before it writes
+`release.json`. The Sigstore certificate likewise records the workflow's
 own run commit: that is the signer, not the source.
 
 ## The trust rule
