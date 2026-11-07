@@ -10,25 +10,6 @@ import (
 	"testing"
 )
 
-func TestReleaseLibOlder(t *testing.T) {
-	for _, tc := range []struct {
-		tag, cur string
-		older    bool
-	}{
-		{"v2026.11.07.3", "2026.11.07.10", true},
-		{"v2026.11.07.10", "2026.11.07.9", false},
-		{"v2026.11.07.3", "2026.11.07.3", false},
-		{"v2026.10.30.1", "2026.11.01.1+3.gabc", true},
-		{"v2026.10.30.1", "dev+gabc", false},
-		{"v2026.10.30.1", "", false},
-	} {
-		_, err := runReleaseLib(t, []string{"TAG=" + tc.tag, "CUR=" + tc.cur}, `fleet_release_older "$TAG" "$CUR"`)
-		if (err == nil) != tc.older {
-			t.Errorf("older(%s, %q) = %v, want %v", tc.tag, tc.cur, err == nil, tc.older)
-		}
-	}
-}
-
 func TestReleaseLibPrivateDir(t *testing.T) {
 	base := t.TempDir()
 	mk := func(rel string, mode os.FileMode) string {

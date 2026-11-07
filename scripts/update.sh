@@ -25,9 +25,11 @@
 # (missing image, failed build) must leave the box coherent — old binary, old
 # service — rather than half-updated.
 #
-# --from-source keeps the old path (make build on the box: Go + Node) for
-# DEVELOPMENT boxes only. It is isolated below and marked
-# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
+# There is no on-box build of fleet: the --from-source path ADR-0100 kept for
+# the migration was removed once every box ran signed releases (ADR-0101). A box
+# that cannot reach a published release stops with a message; it never falls
+# back to building. (A bundle's own sandbox Containerfile is still built on the
+# box — step 4 above; that is the bundle's image, not fleet.)
 #
 # Invoked by `fleet update`, but also runnable directly on the host.
 #
@@ -62,14 +64,11 @@
 #                          roll back (env FLEET_UPDATE_ALLOW_DOWNGRADE=1). For
 #                          "undo the last update", `fleet release rollback` is
 #                          faster: it swaps fleet.prev back without a download.
-#   --artifact             the default; accepted so scripts can say it
-#   --from-source          DEVELOPMENT BOXES ONLY: build fleet on the box (make
-#                          build: Go + Node on PATH) from the checkout's branch
-#                          tip instead of installing a signed release (env
-#                          FLEET_UPDATE_FROM_SOURCE=1). LEGACY-BUILD-FROM-SOURCE:
-#                          remove after boxes run artifacts.
+#   --artifact             the only mode; accepted so existing scripts keep working.
+#                          (--from-source and FLEET_UPDATE_FROM_SOURCE=1 were
+#                          removed, ADR-0101: they now stop with a message.)
 #   --no-pull              skip git fetch/ff; reinstall the release the checkout
-#                          is at (from source: rebuild the current checkout)
+#                          is at
 #   --sandbox-max-age <d>  rebuild the sandbox image when the installed one is
 #                          <d> or more days old, even if nothing else changed
 #                          (env FLEET_SANDBOX_MAX_AGE_DAYS, default 7; 0 disables).
@@ -96,7 +95,7 @@
 #                          scheduled tasks, chat turns, or approval executions
 #                          to finish before starting the update (env
 #                          FLEET_UPDATE_WAIT=1). Even without --wait, if a task
-#                          or turn starts while the build is running, update.sh
+#                          or turn starts while the release is being fetched, update.sh
 #                          waits up to --wait-timeout before installing the new
 #                          binary and restarting the service. (Pre-restart
 #                          admission quiescing via the drain sentinel requires
@@ -178,9 +177,9 @@ CLIENT_DIR_EXPLICIT=0
 [[ -n "${FLEET_CLIENT_CONFIG_EXPLICIT:-}" ]] && CLIENT_DIR_EXPLICIT="$FLEET_CLIENT_CONFIG_EXPLICIT"
 SERVICE_NAME="${FLEET_SERVICE_NAME:-fleet}"
 # Where the running unit's binaries live. Resolved (in order): --install-dir /
-# $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet. The
-# The freshly built $SRC_DIR/fleet is installed here so the restart actually
-# runs the new code (a build alone leaves the live ExecStart untouched).
+# $FLEET_INSTALL_DIR, else the dir of the unit's ExecStart, else /opt/fleet.
+# The verified release binary is swapped in here so the restart actually
+# runs the new code (a download alone leaves the live ExecStart untouched).
 INSTALL_DIR="${FLEET_INSTALL_DIR:-}"
 NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 # REEXEC is an INTERNAL marker set only by the self-update re-exec below (never a
@@ -188,7 +187,7 @@ NO_PULL="${FLEET_UPDATE_NO_PULL:-0}"
 # target — skip re-fetching it (and the self-update detection, so we don't loop),
 # but otherwise run a NORMAL update: the client-config bundle still pulls, the
 # sandbox-rebuild gate still compares Containerfile hashes." Distinct from
-# NO_PULL, which is the user's "rebuild the current checkouts, pull NOTHING".
+# NO_PULL, which is the user's "reinstall the current checkouts, pull NOTHING".
 # Conflating the two used to make the re-exec skip the client-bundle pull too, so
 # an update that changed update.sh itself never advanced the bundle.
 REEXEC="${FLEET_UPDATE_REEXEC:-0}"
@@ -219,11 +218,19 @@ ADOPT_UNITS="${FLEET_UPDATE_ADOPT_UNITS:-0}"
 # timer doesn't nag on every update.
 OFFER_TIMERS="${FLEET_UPDATE_OFFER_TIMERS:-1}"
 
-# Which release to install (empty = the newest published one), whether an older
-# one is allowed, and the development-only from-source path.
+# Which release to install (empty = the newest published one), and whether an
+# older one is allowed.
 RELEASE_TAG="${FLEET_UPDATE_TAG:-}"
 ALLOW_DOWNGRADE="${FLEET_UPDATE_ALLOW_DOWNGRADE:-0}"
-FROM_SOURCE="${FLEET_UPDATE_FROM_SOURCE:-0}"
+# The on-box build is gone (ADR-0101). Refuse a request for it by name rather
+# than quietly installing a release instead: whoever asked expected a build.
+# FLEET_UPDATE_FROM_SOURCE=0 is accepted and ignored — an update.sh from before
+# the removal forwards it on its self-update re-exec into this copy.
+FROM_SOURCE_RETIRED="update.sh no longer builds fleet on the box: --from-source / FLEET_UPDATE_FROM_SOURCE=1 were removed (ADR-0101). Every box installs a signed release — run plain \`sudo fleet update\` (or --tag vYYYY.MM.DD.N). To run unreleased code, build it on a development machine with \`make build\`."
+case "${FLEET_UPDATE_FROM_SOURCE:-0}" in
+  0|"") ;;
+  *) echo "error: ${FROM_SOURCE_RETIRED}" >&2; exit 1 ;;
+esac
 # Sandbox image freshness backstop (on-box builds only — the published image is
 # rebuilt by every release): rebuild the on-box sandbox image when the
 # one in the service user's store is this many days old or older, even when the
@@ -268,8 +275,8 @@ while [[ $# -gt 0 ]]; do
     --tag)            shift; [[ $# -gt 0 ]] || { echo "error: --tag needs a release tag" >&2; exit 1; }; RELEASE_TAG="$1" ;;
     --tag=*)          RELEASE_TAG="${1#*=}" ;;
     --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
-    --artifact)       FROM_SOURCE=0 ;;
-    --from-source)    FROM_SOURCE=1 ;;
+    --artifact)       ;;
+    --from-source)    echo "error: ${FROM_SOURCE_RETIRED}" >&2; exit 1 ;;
     -h|--help)        awk 'NR>1 && /^#/ { sub(/^# ?/, ""); print; next } NR>1 { exit }' "$0"; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 1 ;;
   esac
@@ -314,7 +321,6 @@ DRY_RUN_BLOCKED=0
 if [[ -n "$RELEASE_TAG" && ! "$RELEASE_TAG" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$ ]]; then
   die "--tag must be a release tag like v2026.11.07.3, got: ${RELEASE_TAG}"
 fi
-[[ "$FROM_SOURCE" != "1" || -z "$RELEASE_TAG" ]] || die "--tag selects a signed release; it cannot be combined with --from-source"
 
 # Fall back to the deployment env file for lifecycle wait knobs when neither
 # command-line flags nor exported environment variables supplied them.
@@ -341,50 +347,6 @@ else
   WAIT_SECONDS=600
 fi
 
-# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-# require_go_toolchain — fail the --from-source build with an actionable message
-# rather than an opaque one.
-#
-# The Makefile exports GOTOOLCHAIN=auto, so the operator does NOT need go.mod's
-# exact pinned patch release installed: Go fetches it. What Go cannot do is
-# bootstrap that fetch from a toolchain older than 1.21, which is when
-# GOTOOLCHAIN was introduced. That is the one case worth naming up front —
-# otherwise `make build` dies on a raw version-mismatch line the operator has to
-# decode into "upgrade Go".
-#
-# A GOVERSION we can't parse (a devel/source build) is not treated as a failure:
-# the build itself is the real check, and refusing to run on an unrecognized
-# string would be worse than letting it proceed.
-require_go_toolchain() {
-  command -v go >/dev/null 2>&1 \
-    || die "go not found on PATH — install Go (1.21 or newer) and re-run; the build fetches the exact pinned toolchain itself, so the distro's version does not have to match go.mod"
-  local goversion minor pinned
-  goversion="$(go env GOVERSION 2>/dev/null || true)"   # e.g. "go1.26.2"
-  [[ "$goversion" == go1.* ]] || return 0
-  minor="${goversion#go1.}"; minor="${minor%%.*}"
-  [[ "$minor" =~ ^[0-9]+$ ]] || return 0
-  if (( minor < 21 )); then
-    pinned="$(awk '/^go /{print $2; exit}' "$SRC_DIR/go.mod" 2>/dev/null || true)"
-    die "installed Go is ${goversion}, which predates GOTOOLCHAIN (added in 1.21) and so cannot fetch the pinned toolchain${pinned:+ (go.mod pins $pinned)} — upgrade Go and re-run; live binary left in place"
-  fi
-}
-# LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-# legacy_build_from_source — `make build` on the box for --from-source
-# (development boxes). The toolchain is whatever is on PATH: this script no
-# longer installs or repairs Go or Node (a release box needs neither). `make
-# build` ends with `fleet version --web`, and the result is re-checked here.
-legacy_build_from_source() {
-  require_go_toolchain
-  command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1 \
-    || die "--from-source builds the web bundle: put node (>= $(tr -d '[:space:]v' < "$SRC_DIR/web/.nvmrc" 2>/dev/null || echo '?'), per web/.nvmrc) and npm on PATH — or drop --from-source and install the signed release"
-  ( cd "$SRC_DIR" && make build ) || die "make build failed — live binary left in place"
-  [[ -x "$SRC_DIR/fleet" ]] || die "make build did not emit ${SRC_DIR}/fleet"
-  local web_bundle
-  web_bundle="$("$SRC_DIR/fleet" version --web 2>/dev/null)" \
-    || die "the built binary carries no web bundle — live binary left in place"
-  ok "built from source on $(node -v) — ${web_bundle}; $("$SRC_DIR/fleet" version 2>/dev/null || true)"
-  NEW_FLEET="$SRC_DIR/fleet"
-}
 # upsert_env_file FILE KEY VALUE — update one key without sourcing the secrets
 # file or disturbing operator-managed entries. Encoded by lib/envfile.sh so
 # systemd, fleet's own parser and env_get all read back the exact bytes; a value
@@ -470,7 +432,7 @@ else
   if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$_pre_wait" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
     die "refusing to update while work is in flight (${_active_summary}) — wait for it to finish, pass --wait (FLEET_UPDATE_WAIT=1), or pass --force (FLEET_UPDATE_FORCE=1)"
   fi
-  # Release the pre-check drain fence while git fetch and make build run; step 4
+  # Release the pre-check drain fence while git fetch and the download run; step 4
   # re-establishes the drain fence before installing the new binary and holds it
   # until step 5 has stopped the old process (it is cleared before the new one
   # starts, so the new process does not come up draining).
@@ -492,7 +454,7 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   target_branch="$(git rev-parse --abbrev-ref HEAD)"
   # No fetch: reinstall the release the checkout is at (or --tag, which the
   # self-update re-exec always carries).
-  if [[ "$FROM_SOURCE" != "1" && -z "$RELEASE_TAG" ]]; then
+  if [[ -z "$RELEASE_TAG" ]]; then
     RELEASE_TAG="$("$SRC_DIR/scripts/version.sh" current 2>/dev/null || true)"
     [[ -z "$RELEASE_TAG" || "$RELEASE_TAG" == v* ]] || RELEASE_TAG="v${RELEASE_TAG}"
     if [[ ! "$RELEASE_TAG" =~ ^v[0-9]{4}\. ]]; then
@@ -510,7 +472,7 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   # --no-pull with an explicit --tag must name the release the checkout is
   # AT: installing another one would run its binary on this checkout's units,
   # scripts and generic bundle. (The re-exec carries the tag it just aligned to.)
-  if [[ "$REEXEC" != "1" && "$FROM_SOURCE" != "1" && -n "$RELEASE_TAG" ]]; then
+  if [[ "$REEXEC" != "1" && -n "$RELEASE_TAG" ]]; then
     _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
     if [[ "$_tag_sha" != "$after_sha" ]]; then
       if [[ "$DRY_RUN" == "1" ]]; then
@@ -523,26 +485,21 @@ if [[ "$SKIP_SRC_FETCH" == "1" ]]; then
   fi
   if [[ "$REEXEC" == "1" ]]; then
     ok "post-self-update re-exec — fleet checkout already at ${after_sha:0:12}; continuing (client bundle still pulls)"
-  elif [[ "$FROM_SOURCE" == "1" ]]; then
-    ok "rebuild-only mode — skipping fetch, building ${after_sha:0:12}"
   else
     ok "no-pull mode — skipping fetch, reinstalling release ${RELEASE_TAG:-<none reachable>}"
   fi
 else
   if [[ "$DRY_RUN" == "1" ]]; then
-    if [[ "$FROM_SOURCE" == "1" ]]; then
-      info "[dry-run] would: git fetch --tags origin && fast-forward the current branch (--from-source)"
-    else
-      info "[dry-run] would: git fetch --tags origin, resolve ${RELEASE_TAG:-the newest published release} and fast-forward the checkout to that tag"
-    fi
+    info "[dry-run] would: git fetch --tags origin, resolve ${RELEASE_TAG:-the newest published release} and fast-forward the checkout to that tag"
     after_sha="$before_sha"
     target_branch="$(git rev-parse --abbrev-ref HEAD)"
   else
-    # --tags is explicit rather than relying on git's tag-following: the build
-    # stamps its version from the release tags (docs/VERSIONING.md), so a
-    # checkout that fetched commits but not tags would rebuild and then report
-    # `dev+g<sha>` instead of the release it is actually running.
-    git fetch --quiet --tags origin
+    # --tags is explicit rather than relying on git's tag-following: the
+    # checkout moves to a release TAG, so a fetch of commits alone would not
+    # find it. A box that cannot reach origin stops here: there is no
+    # on-box build to fall back to (ADR-0101).
+    git fetch --quiet --tags origin \
+      || die "could not fetch ${SRC_DIR}'s origin (offline? GitHub unreachable?) — an update installs a published, signed release and has no on-box build to fall back to (ADR-0101); retry once the network is back. Nothing was changed"
     target_branch="${BRANCH_OVERRIDE:-$(git rev-parse --abbrev-ref HEAD)}"
     # Refuse to act on a detached HEAD: we need a named branch both so
     # origin/$target_branch resolves and so the checkout stays reattached.
@@ -555,43 +512,41 @@ else
     # the branch tip — its scripts, units and generic bundle then match the
     # binary exactly. Only a published release has artifacts, and GitHub's
     # "latest" is published only after its assets are uploaded.
-    if [[ "$FROM_SOURCE" != "1" ]]; then
-      if [[ -z "$RELEASE_TAG" ]]; then
-        RELEASE_TAG="$(fleet_release_latest_tag)" \
-          || die "could not ask GitHub which release is newest (offline? rate-limited?) — retry, or name one: fleet update --tag vYYYY.MM.DD.N"
-      fi
-      # The API answer can be newer than the fetch above (a release published
-      # in between): fetch once more before calling the tag missing.
-      _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
-        || { git fetch --quiet --tags origin; _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)"; } \
-        || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} even after fetching tags — is origin ElcanoTek/fleet?"
-      git merge-base --is-ancestor "$_tag_sha" "origin/$target_branch" \
-        || die "release ${RELEASE_TAG} is not on origin/${target_branch} — refusing to move the checkout off its branch"
-      after_sha="$_tag_sha"
-      ok "release to install: ${RELEASE_TAG} (${after_sha:0:12})"
-      # The checkout must BE the release: its units, scripts and generic
-      # bundle ship with the binary. A checkout PAST the tag — a downgrade
-      # (--tag older --allow-downgrade), or a box that tracked the branch tip
-      # before artifacts — is moved BACK to it, which a fast-forward cannot
-      # do. Only commits that are on origin/<branch> may be left behind
-      # (they come back on the next update); local-only commits refuse.
-      _realign=0
-      if [[ "$before_sha" != "$after_sha" ]] && git merge-base --is-ancestor "$after_sha" "$before_sha"; then
-        git merge-base --is-ancestor "$before_sha" "origin/$target_branch" \
-          || die "${SRC_DIR} has commits that are not on origin/${target_branch}; moving it back to ${RELEASE_TAG} would strand them — push or reset them first"
-        _realign=1
-      fi
-      # Nothing from the tag runs (not even a re-exec of its update.sh) until
-      # its SIGNED manifest is checked: SHA256SUMS signed by the release
-      # identity, release.json matching it, naming this tag AND the commit the
-      # tag resolves to here. A tag moved or forged in the local clone fails
-      # here, before the checkout moves. Verified with this (current,
-      # already-trusted) checkout's pinned cosign.
-      if [[ "$before_sha" != "$after_sha" ]]; then
-        fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$after_sha" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" \
-          || die "release ${RELEASE_TAG} could not be verified (above) — the checkout was NOT moved and nothing was installed"
-        ok "the signed release.json names ${RELEASE_TAG} = ${after_sha:0:12}"
-      fi
+    if [[ -z "$RELEASE_TAG" ]]; then
+      RELEASE_TAG="$(fleet_release_latest_tag)" \
+        || die "could not ask GitHub which release is newest (offline? rate-limited? none published yet?) — an update installs only a published, signed release and has no on-box build to fall back to (ADR-0101); retry, or name one: fleet update --tag vYYYY.MM.DD.N. Nothing was changed"
+    fi
+    # The API answer can be newer than the fetch above (a release published
+    # in between): fetch once more before calling the tag missing.
+    _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)" \
+      || { git fetch --quiet --tags origin; _tag_sha="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null)"; } \
+      || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} even after fetching tags — is origin ElcanoTek/fleet?"
+    git merge-base --is-ancestor "$_tag_sha" "origin/$target_branch" \
+      || die "release ${RELEASE_TAG} is not on origin/${target_branch} — refusing to move the checkout off its branch"
+    after_sha="$_tag_sha"
+    ok "release to install: ${RELEASE_TAG} (${after_sha:0:12})"
+    # The checkout must BE the release: its units, scripts and generic
+    # bundle ship with the binary. A checkout PAST the tag — a downgrade
+    # (--tag older --allow-downgrade), or a box that tracked the branch tip
+    # before artifacts — is moved BACK to it, which a fast-forward cannot
+    # do. Only commits that are on origin/<branch> may be left behind
+    # (they come back on the next update); local-only commits refuse.
+    _realign=0
+    if [[ "$before_sha" != "$after_sha" ]] && git merge-base --is-ancestor "$after_sha" "$before_sha"; then
+      git merge-base --is-ancestor "$before_sha" "origin/$target_branch" \
+        || die "${SRC_DIR} has commits that are not on origin/${target_branch}; moving it back to ${RELEASE_TAG} would strand them — push or reset them first"
+      _realign=1
+    fi
+    # Nothing from the tag runs (not even a re-exec of its update.sh) until
+    # its SIGNED manifest is checked: SHA256SUMS signed by the release
+    # identity, release.json matching it, naming this tag AND the commit the
+    # tag resolves to here. A tag moved or forged in the local clone fails
+    # here, before the checkout moves. Verified with this (current,
+    # already-trusted) checkout's pinned cosign.
+    if [[ "$before_sha" != "$after_sha" ]]; then
+      fleet_release_verify_manifest "$REPO_ROOT" "$RELEASE_TAG" "$after_sha" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" \
+        || die "release ${RELEASE_TAG} could not be verified (above) — the checkout was NOT moved and nothing was installed"
+      ok "the signed release.json names ${RELEASE_TAG} = ${after_sha:0:12}"
     fi
 
     if [[ "$before_sha" == "$after_sha" ]]; then
@@ -673,7 +628,6 @@ else
           FLEET_UPDATE_OFFER_TIMERS="$OFFER_TIMERS" \
           FLEET_UPDATE_TAG="$RELEASE_TAG" \
           FLEET_UPDATE_ALLOW_DOWNGRADE="$ALLOW_DOWNGRADE" \
-          FLEET_UPDATE_FROM_SOURCE="$FROM_SOURCE" \
           FLEET_UPDATE_WAIT="$WAIT_FOR_IDLE" \
           FLEET_UPDATE_WAIT_SECONDS="$WAIT_SECONDS" \
           FLEET_UPDATE_FORCE="$FORCE_UPDATE" \
@@ -835,7 +789,7 @@ elif [[ ! -e "$CLIENT_DIR/.git" ]]; then
   BUNDLE_STALE=1
   BUNDLE_STALE_WHY="${CLIENT_DIR} is not a git checkout, so nothing can be pulled into it"
 elif [[ "$NO_PULL" == "1" ]]; then
-  info "rebuild-only mode — skipping client-config pull."
+  info "no-pull mode — skipping client-config pull."
   BUNDLE_STALE=1
   BUNDLE_STALE_WHY="--no-pull / FLEET_UPDATE_NO_PULL skipped the bundle pull"
 elif [[ "$DRY_RUN" == "1" ]]; then
@@ -960,7 +914,7 @@ fi
 # One root-owned protocols/*.yaml is enough to kill every container start with
 # `lsetxattr … operation not permitted` (exit 126) until the next chown.
 # Skipped for the in-repo generic bundle (chowning the fleet checkout would be
-# wrong); runs even in rebuild-only mode to heal a checkout a previous
+# wrong); runs even in no-pull mode to heal a checkout a previous
 # root-run pull broke. Idempotent.
 if [[ -d "$CLIENT_DIR/.git" && "$CLIENT_DIR" != "$SRC_DIR"/* && "$CLIENT_DIR" != "config/default" ]]; then
   bundle_owner="${service_user:-fleet}"
@@ -1132,54 +1086,39 @@ resolve_install_dir() {
 }
 NEW_FLEET=""     # the verified binary this update installs
 RELEASE_DIR=""   # its staging dir (SHA256SUMS, signatures, release.json, binary)
-if [[ "$FROM_SOURCE" != "1" ]]; then
-  resolve_install_dir
-  step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
-  # Staging lives under the root-owned release cache, never under the
-  # checkout (which another user may own): it must be private — see
-  # internal/release CheckPrivateDir — or the verified files could be swapped.
-  RELEASE_ROOT="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
-  RELEASE_DIR="${RELEASE_ROOT}/${RELEASE_TAG:-latest}"
-  RELEASE_COMMIT="$(git -C "$SRC_DIR" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
-  _fetch_flags=()
-  [[ "$ALLOW_DOWNGRADE" == "1" ]] && _fetch_flags+=(--allow-downgrade)
-  if [[ "$DRY_RUN" == "1" ]]; then
-    info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
-    info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
-  else
-    # Only the release being installed is staged: earlier releases' staging
-    # dirs (~100 MB each) are dropped first — the previous binary lives on as
-    # fleet.prev in the install dir, which is all a rollback needs.
-    [[ -n "$RELEASE_COMMIT" ]] || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} — cannot tie the release to a commit"
-    if [[ -d "$RELEASE_ROOT" ]]; then
-      find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
-    fi
-    rm -rf "$RELEASE_DIR"
-    install -d -m 0700 "$RELEASE_ROOT" "$RELEASE_DIR"
-    if fleet_release_capable "$INSTALL_DIR/fleet"; then
-      NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
-        || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
-    else
-      # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-      # The installed fleet predates `fleet release` — the first artifact
-      # update on a box that used to build from source. Verify with the shell
-      # verifier (the same pinned cosign and signer identity), then let the
-      # verified binary check its own build info the way `fleet release
-      # fetch` would.
-      warn "${INSTALL_DIR}/fleet predates \`fleet release\`; verifying this first artifact with scripts/lib/release.sh (same pinned cosign and signer identity)"
-      # The downgrade guard `fleet release fetch` applies, applied here too.
-      _installed_version="$("$INSTALL_DIR/fleet" version 2>/dev/null | awk 'NR==1 {print $2}' || true)"
-      if [[ "$ALLOW_DOWNGRADE" != "1" ]] && fleet_release_older "$RELEASE_TAG" "$_installed_version"; then
-        die "${RELEASE_TAG} is older than the installed ${_installed_version} — refusing a downgrade (pass --allow-downgrade to roll back on purpose)"
-      fi
-      NEW_FLEET="$(fleet_release_fetch "$SRC_DIR" "$RELEASE_TAG" "$RELEASE_DIR" "${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}" "$RELEASE_COMMIT")" \
-        || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
-      "$NEW_FLEET" version --build-info | grep -Eq '"host_executor":[[:space:]]*false' \
-        || die "the verified binary reports the host executor compiled in — refusing it"
-      "$NEW_FLEET" version --web >/dev/null || die "the verified binary carries no web bundle — refusing it"
-    fi
-    ok "verified ${RELEASE_TAG}: $("$NEW_FLEET" version 2>/dev/null || echo "$NEW_FLEET")"
+resolve_install_dir
+step "Fetching + verifying release ${RELEASE_TAG:-<newest published>} (signed artifacts)"
+# Staging lives under the root-owned release cache, never under the
+# checkout (which another user may own): it must be private — see
+# internal/release CheckPrivateDir — or the verified files could be swapped.
+RELEASE_ROOT="${FLEET_RELEASE_CACHE_DIR:-/var/cache/fleet}/release"
+RELEASE_DIR="${RELEASE_ROOT}/${RELEASE_TAG:-latest}"
+RELEASE_COMMIT="$(git -C "$SRC_DIR" rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+_fetch_flags=()
+[[ "$ALLOW_DOWNGRADE" == "1" ]] && _fetch_flags+=(--allow-downgrade)
+if [[ "$DRY_RUN" == "1" ]]; then
+  info "[dry-run] would download fleet-linux-$(fleet_release_arch 2>/dev/null || echo '<arch>'), SHA256SUMS and release.json for ${RELEASE_TAG:-the newest release} into ${RELEASE_DIR}"
+  info "[dry-run] would verify them before use: the signature by ${FLEET_RELEASE_IDENTITY}, checksums, the release tag, the architecture, no host executor, no downgrade (fleet release fetch)"
+else
+  # Only the release being installed is staged: earlier releases' staging
+  # dirs (~100 MB each) are dropped first — the previous binary lives on as
+  # fleet.prev in the install dir, which is all a rollback needs.
+  [[ -n "$RELEASE_COMMIT" ]] || die "release ${RELEASE_TAG} is not a tag in ${SRC_DIR} — cannot tie the release to a commit"
+  if [[ -d "$RELEASE_ROOT" ]]; then
+    find "$RELEASE_ROOT" -mindepth 1 -maxdepth 1 -type d ! -name "${RELEASE_TAG}" -exec rm -rf {} + 2>/dev/null || true
   fi
+  rm -rf "$RELEASE_DIR"
+  install -d -m 0700 "$RELEASE_ROOT" "$RELEASE_DIR"
+  # The installed binary verifies the next one (`fleet release fetch`). A box
+  # whose fleet predates those verbs — a from-source install that never took
+  # a release — used to get a shell-verifier fallback here; that went with
+  # the on-box build (ADR-0101). bootstrap.sh is what installs a first
+  # release, and it converges an existing box in place.
+  fleet_release_capable "$INSTALL_DIR/fleet" \
+    || die "${INSTALL_DIR}/fleet is missing or predates \`fleet release\`, so it cannot verify ${RELEASE_TAG} — install the signed release by re-running sudo ${SRC_DIR}/scripts/bootstrap.sh --enable-service with the flags this box was installed with (bootstrap is idempotent and converges an existing install), then use fleet update. Nothing was installed and ${SERVICE_NAME} was not restarted"
+  NEW_FLEET="$("$INSTALL_DIR/fleet" release fetch --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" --commit "$RELEASE_COMMIT" "${_fetch_flags[@]}")" \
+    || die "release ${RELEASE_TAG} did not verify (above) — nothing was installed and ${SERVICE_NAME} was not restarted"
+  ok "verified ${RELEASE_TAG}: $("$NEW_FLEET" version 2>/dev/null || echo "$NEW_FLEET")"
 fi
 
 # ── 3. rebuild the sandbox image when its gate inputs changed ───────────────
@@ -1191,7 +1130,7 @@ step "3/5  Sandbox image (the release's signed image, or an on-box build for a c
 # own Containerfile is still built here — layered on the verified image when it
 # declares `ARG FLEET_SANDBOX_BASE` (docs/RELEASE-ARTIFACTS.md).
 sandbox_published=0
-if [[ "$FROM_SOURCE" != "1" ]] && fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
+if fleet_sandbox_uses_release_image "$CLIENT_DIR" "$SRC_DIR/config/default"; then
   sandbox_published=1
 fi
 sandbox_base=""   # the verified release image a custom Containerfile layers on
@@ -1238,7 +1177,7 @@ elif [[ "$cf_now" == "absent" ]] && fleet_sandbox_containerfile_named "$CLIENT_D
 elif [[ "$cf_now" == "absent" ]]; then
   info "no ${sandbox_cf} — bundle ships no sandbox Containerfile; skipping (set sandbox.image or add one)."
 elif [[ "$DRY_RUN" == "1" ]]; then
-  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
+  if grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
     info "[dry-run] the bundle's Containerfile declares FLEET_SANDBOX_BASE — the build would layer on the release's verified sandbox image (fleet release sandbox), and a new base digest triggers a rebuild"
   fi
   info "[dry-run] would rebuild if the Containerfile hash or resolved tag (${ref_now:-unresolved}) changed, the tag is missing from the service user's store, or the installed image is ${SANDBOX_MAX_AGE_DAYS}+ days old (FLEET_SANDBOX_MAX_AGE_DAYS; 0 disables the freshness backstop)"
@@ -1264,13 +1203,11 @@ else
   # digest) is a reason to rebuild on its own.
   base_prev=""
   [[ -f "$SANDBOX_BASE_FILE" ]] && base_prev="$(tr -d '[:space:]' < "$SANDBOX_BASE_FILE")"
-  if [[ "$FROM_SOURCE" != "1" ]] && grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
+  if grep -q 'FLEET_SANDBOX_BASE' "$sandbox_cf" 2>/dev/null; then
     sandbox_base="$("$NEW_FLEET" release sandbox --tag "$RELEASE_TAG" --dir "$RELEASE_DIR")" \
       || die "the release's sandbox image (this bundle's FLEET_SANDBOX_BASE) did not verify — nothing was installed and ${SERVICE_NAME} was not restarted"
   fi
-  if [[ "$NO_PULL" == "1" && "$FROM_SOURCE" == "1" ]]; then
-    build_reason="rebuild-only mode"
-  elif [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
+  if [[ -n "$sandbox_base" && "$sandbox_base" != "$base_prev" ]]; then
     build_reason="the release's sandbox base moved to ${sandbox_base##*@} — rebuilding the bundle's layers on it"
   elif [[ "$cf_prev" == "absent" ]]; then
     build_reason="no stored Containerfile hash yet — establishing the baseline"
@@ -1392,11 +1329,7 @@ if [[ -n "$web_origin" ]]; then
   fi
 fi
 if [[ "$DRY_RUN" == "1" ]]; then
-  if [[ "$FROM_SOURCE" == "1" ]]; then
-    info "[dry-run] --from-source: would run (cd ${SRC_DIR} && make build) with the go, node and npm on PATH → ${SRC_DIR}/fleet with the web bundle embedded (checked: fleet version --web), then install it → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}"
-  else
-    info "[dry-run] would install fleet ${RELEASE_TAG:-<release>} → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}/fleet in step 5 (atomic swap; the running binary kept as fleet.prev)"
-  fi
+  info "[dry-run] would install fleet ${RELEASE_TAG:-<release>} → ${INSTALL_DIR:-<unit ExecStart dir, else /opt/fleet>}/fleet in step 5 (atomic swap; the running binary kept as fleet.prev)"
   info "[dry-run] would remove a leftover fleet-admin shim from the install dir and /usr/local/bin, if present"
   info "[dry-run] would refresh /etc/profile.d/fleet-motd.sh (login banner) if it differs from deploy/fleet-motd.sh"
   if [[ -f "$web_env_file" ]]; then
@@ -1406,12 +1339,9 @@ if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] would run: python3 -m pip install --break-system-packages -r ${mcp_reqs} if its hash (${mcp_reqs_now:0:12}) changed from ${MCP_REQS_STAMP}"
   fi
 else
-  if [[ "$FROM_SOURCE" == "1" ]]; then
-    legacy_build_from_source
-  fi
   resolve_install_dir
-  # If a scheduled task or chat turn started while the build was running,
-  # wait up to WAIT_SECONDS for it to finish before overwriting the live
+  # If a scheduled task or chat turn started while the release was being
+  # fetched and the sandbox image prepared, wait up to WAIT_SECONDS for it to finish before overwriting the live
   # binary or restarting the service.
   if [[ "$FORCE_UPDATE" != "1" ]]; then
     if ! _active_summary="$(fleet_wait_for_idle "$backend_env_file" "$WAIT_SECONDS" "${FLEET_UPDATE_POLL_SECONDS:-5}")"; then
@@ -1428,7 +1358,7 @@ else
     else
       mcp_reqs_reason=""
       if [[ "$NO_PULL" == "1" ]]; then
-        mcp_reqs_reason="rebuild-only mode"
+        mcp_reqs_reason="no-pull mode"
       elif [[ "$mcp_reqs_prev" == "absent" ]]; then
         mcp_reqs_reason="no stored mcp/requirements.txt hash yet — establishing the baseline"
       elif [[ "$mcp_reqs_now" != "$mcp_reqs_prev" ]]; then
@@ -1461,19 +1391,7 @@ else
   if command -v python3 >/dev/null 2>&1 && ! python3 -c "import playwright" >/dev/null 2>&1; then
     python3 -m pip install --break-system-packages playwright >/dev/null 2>&1 || warn "pip install playwright failed — install python3 playwright for built-in browser automation."
   fi
-  if [[ "$FROM_SOURCE" == "1" ]]; then
-    # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-    # Skip the copy when we'd install onto ourselves (dev box running from $SRC_DIR).
-    if [[ "$(cd "$INSTALL_DIR" 2>/dev/null && pwd || echo "$INSTALL_DIR")" == "$SRC_DIR" ]]; then
-      info "install dir == source checkout (${SRC_DIR}) — running in place, no copy needed."
-    elif install -D -m 0755 "$SRC_DIR/fleet" "$INSTALL_DIR/fleet" 2>/dev/null; then
-      ok "installed fleet → ${INSTALL_DIR}"
-    else
-      die "could not install binaries into ${INSTALL_DIR} (need root? set --install-dir or FLEET_INSTALL_DIR) — live binary left in place"
-    fi
-  else
-    info "the verified ${RELEASE_TAG} binary is swapped in at step 5, inside the drain fence, with a readiness gate and automatic rollback"
-  fi
+  info "the verified ${RELEASE_TAG} binary is swapped in at step 5, inside the drain fence, with a readiness gate and automatic rollback"
 
   # Evict the retired `fleet-admin` shim (ADR-0060). Deleting it from the repo
   # is not what removes it from a BOX: a copy installed by an earlier update
@@ -1794,14 +1712,14 @@ artifact_swap_only() {
     die "could not install ${RELEASE_TAG} into ${INSTALL_DIR} (above) — the previous binary is unchanged"
   fi
 }
-if [[ "$DRY_RUN" != "1" && "$FROM_SOURCE" != "1" ]] && { ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; }; then
+if [[ "$DRY_RUN" != "1" ]] && { ! command -v systemctl >/dev/null 2>&1 || ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; }; then
   if command -v systemctl >/dev/null 2>&1; then
     artifact_swap_only "${SERVICE_NAME}.service is not installed"
   else
     artifact_swap_only "no systemd on this box"
   fi
 elif ! command -v systemctl >/dev/null 2>&1; then
-  if [[ "$DRY_RUN" == "1" && "$FROM_SOURCE" != "1" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
     info "[dry-run] no systemd: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor"
   else
     warn "systemctl not found — restart ${SERVICE_NAME} manually (no systemd on this box)."
@@ -1810,9 +1728,7 @@ elif [[ "$DRY_RUN" == "1" ]]; then
   if [[ -f /etc/systemd/system/fleet-web.service ]] || systemctl cat fleet-web.service >/dev/null 2>&1; then
     info "[dry-run] would retire the Next.js web tier (ADR-0091): stop + disable fleet-web, remove its unit, drop-in, start shim and /opt/fleet/web — fleet serves the web UI on 127.0.0.1:3000 itself"
   fi
-  if [[ "$FROM_SOURCE" == "1" ]]; then
-    info "[dry-run] would run: systemctl stop ${SERVICE_NAME}, clear the update drain marker, systemctl start ${SERVICE_NAME}"
-  elif ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+  if ! systemctl cat "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     info "[dry-run] ${SERVICE_NAME}.service is not installed: would install ${RELEASE_TAG:-<release>} with an atomic swap and NO restart (fleet release install --no-restart) — you restart fleet with your supervisor; the run would not report it as running"
   else
     info "[dry-run] would run: fleet release install --tag ${RELEASE_TAG:-<release>} — re-verify the staged files, swap the binary in atomically (the running one kept as fleet.prev), stop ${SERVICE_NAME}, clear the update drain marker, start it (it migrates on start), wait for $(fleet_release_health_url "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" "$(env_get FLEET_TLS_MODE "$backend_env_file")"), and roll back to fleet.prev automatically if it is not ready"
@@ -1842,32 +1758,19 @@ else
   # --force update failed its readiness gate and rolled back). So: stop, clear
   # the marker, start — never a plain restart while it is held.
   # (scripts/update_drain_order_test.go pins this order.)
-  if [[ "$FROM_SOURCE" == "1" ]]; then
-    # LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts.
-    # The from-source binary was installed in step 4; restart onto it. No
-    # readiness gate and no rollback here — that is the artifact path's.
-    if systemctl stop "$SERVICE_NAME"; then
-      fleet_clear_drain "$backend_env_file"
-      systemctl start "$SERVICE_NAME" \
-        && FLEET_WEB_TIER_READY_WAIT="${FLEET_WEB_TIER_READY_WAIT:-8}" fleet_web_tier_wait_active "$SERVICE_NAME" \
-        || _install_rc=1
-    else
-      _install_rc=1
-    fi
-  else
-    # Swap + restart + readiness gate + automatic rollback, in one verb of the
-    # VERIFIED new binary, which re-verifies the staged files before it trusts
-    # them (exit 4 = rolled back to the previous binary). The drain is handed
-    # to it (the marker's path and this run's owner token): it stops the old
-    # process, removes the marker, and only then starts the new binary — and
-    # does the same for the previous binary if it has to roll back.
-    FLEET_UPDATE_DRAIN_FILE="$(fleet_drain_file "$backend_env_file")" \
-    FLEET_DRAIN_OWNER_TOKEN="$FLEET_DRAIN_OWNER_TOKEN" \
-    "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
-      --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" \
-      --server-addr "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" \
-      --health-timeout "${FLEET_HEALTH_TIMEOUT:-90}s" || _install_rc=$?
-  fi
+  #
+  # Swap + restart + readiness gate + automatic rollback, in one verb of the
+  # VERIFIED new binary, which re-verifies the staged files before it trusts
+  # them (exit 4 = rolled back to the previous binary). The drain is handed
+  # to it (the marker's path and this run's owner token): it stops the old
+  # process, removes the marker, and only then starts the new binary — and
+  # does the same for the previous binary if it has to roll back.
+  FLEET_UPDATE_DRAIN_FILE="$(fleet_drain_file "$backend_env_file")" \
+  FLEET_DRAIN_OWNER_TOKEN="$FLEET_DRAIN_OWNER_TOKEN" \
+  "$NEW_FLEET" release install --tag "$RELEASE_TAG" --dir "$RELEASE_DIR" \
+    --install-dir "$INSTALL_DIR" --service "$SERVICE_NAME" \
+    --server-addr "$(env_get FLEET_SERVER_ADDR "$backend_env_file")" \
+    --health-timeout "${FLEET_HEALTH_TIMEOUT:-90}s" || _install_rc=$?
   fleet_clear_drain "$backend_env_file"
   if [[ "$_install_rc" == "0" ]]; then
     INSTALL_STATE=restarted
@@ -1910,9 +1813,9 @@ report_bundle_state() {
 if [[ "$DRY_RUN" == "1" ]]; then
   report_bundle_state
 fi
-# A dry run must not sign off with the same green "rebuilt/updated" banner a
-# real run prints — it built nothing, and on a box the node gate would stop it
-# reported a blocker three steps ago. Saying so here is the difference between
+# A dry run must not sign off with the same green "installed" banner a
+# real run prints — it installed nothing, and a box the plan would stop has
+# reported a blocker above. Saying so here is the difference between
 # a plan and a claim.
 if [[ "$DRY_RUN" == "1" ]]; then
   if [[ "$DRY_RUN_BLOCKED" == "1" ]]; then
@@ -1928,16 +1831,12 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
-if [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" == "swapped" ]]; then
+if [[ "$INSTALL_STATE" == "swapped" ]]; then
   printf '%s ! fleet %s installed (signed release, verified) — NOT restarted: restart it with your supervisor%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
-elif [[ "$FROM_SOURCE" != "1" && "$INSTALL_STATE" != "restarted" ]]; then
+elif [[ "$INSTALL_STATE" != "restarted" ]]; then
   die "${RELEASE_TAG} was verified but not installed — see the warnings above"
-elif [[ "$FROM_SOURCE" != "1" ]]; then
-  printf '%s ✓ fleet %s installed (signed release, verified) and ready%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
-elif [[ "$before_sha" == "$after_sha" ]]; then
-  printf '%s ✓ fleet rebuilt at %s%s\n' "$c_bold" "${after_sha:0:12}" "$c_reset"
 else
-  printf '%s ✓ fleet updated %s → %s%s\n' "$c_bold" "${before_sha:0:12}" "${after_sha:0:12}" "$c_reset"
+  printf '%s ✓ fleet %s installed (signed release, verified) and ready%s\n' "$c_bold" "$RELEASE_TAG" "$c_reset"
 fi
 printf '%s═══════════════════════════════════════════════%s\n' "$c_green" "$c_reset"
 say
@@ -1948,8 +1847,4 @@ say
 report_bundle_state
 say "  Health:    ${c_dim}fleet status${c_reset}"
 say "  Logs:      ${c_dim}journalctl -u ${SERVICE_NAME} -n 50${c_reset}"
-if [[ "$FROM_SOURCE" != "1" ]]; then
-  say "  Roll back: ${c_dim}sudo fleet release rollback${c_reset}   (swaps ${INSTALL_DIR}/fleet.prev back in, restarts, waits for /readyz)"
-elif [[ "$before_sha" != "$after_sha" ]]; then
-  say "  Roll back: ${c_dim}cd $SRC_DIR && git checkout $before_sha && scripts/update.sh --from-source --no-pull${c_reset}"
-fi
+say "  Roll back: ${c_dim}sudo fleet release rollback${c_reset}   (swaps ${INSTALL_DIR}/fleet.prev back in, restarts, waits for /readyz)"

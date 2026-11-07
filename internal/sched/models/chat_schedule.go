@@ -80,8 +80,8 @@ type ChatScheduleFire struct {
 	CronExpr        string
 	Timezone        string
 	DurationSeconds int
-	// RunNumber is run_count + 1 at the claim: the number a queued turn takes,
-	// and part of its idempotency key.
+	// RunNumber is run_count + 1 at the fire's first claim: the number a
+	// queued turn takes.
 	RunNumber int
 	// DueAt is next_run_at at the claim (Unix seconds).
 	DueAt   int64
@@ -89,7 +89,11 @@ type ChatScheduleFire struct {
 	// LeaseToken is the lease_owner the claim wrote. Delivery and settle act
 	// only while the row still carries it.
 	LeaseToken string
-	// ClaimedAt is the claim time; a manual fire's idempotency key uses it.
+	// FireID identifies the fire across lease expiries: a fire re-claimed by
+	// the recovery pass keeps it (a new LeaseToken, the same FireID), so its
+	// delivery's idempotency key is the same.
+	FireID string
+	// ClaimedAt is the claim time.
 	ClaimedAt time.Time
 }
 

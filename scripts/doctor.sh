@@ -234,7 +234,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   info "[dry-run] 4/9 Installed artifacts: ${SERVICE_NAME}.service + the fleet-backup and fleet-maintenance service/timer pairs' functional drift vs ${SRC_DIR}/deploy (reinstall + daemon-reload), the retired Next.js tier (fleet-web.service, its drop-in, start shim and /opt/fleet/web — stopped, disabled and removed when present; ADR-0091), /etc/profile.d/fleet-motd.sh (login banner hook), removal of the retired fleet-admin shim, /usr/local/bin/fleet symlink → ${INSTALL_DIR}/fleet, the binary present with no host executor and a web bundle (fleet version --build-info), fleet.prev kept for \`fleet release rollback\`"
   info "[dry-run] 5/9 Configuration: ${ENV_FILE} exists root-owned 0600 with OPENROUTER_API_KEY + DB DSNs; APP_SESSION_SECRET set (carried over from ${WEB_ENV_FILE}, else generated, when absent and the web UI is on); ${FLEET_CADDYFILE:-/etc/caddy/Caddyfile} (when fleet-managed) matches scripts/lib/caddyfile.sh — /v1/*, /api-info, agent card, /triggers/* → orchestrator, /webhooks/* → chat (rewrite from the renderer, backup kept, caddy reload) and FLEET_TRUSTED_PROXIES in ${ENV_FILE} (added as ${CADDY_TRUSTED_PROXIES} when absent behind that front and both backends are on loopback; an advisory otherwise; an operator's value is left alone); an operator-managed Caddyfile only gets an advisory when it routes no /v1; an advisory when sshd -T says passwordauthentication/permitrootlogin yes (never edits sshd)"
   info "[dry-run] 6/9 Services: ${SERVICE_NAME} active; postgresql/caddy active when enabled (systemctl start), then /healthz + /readyz respond, then https://<caddy domain>/api-info answers THROUGH caddy (--resolve pinned to 127.0.0.1) when caddy is active, then the running server's record of MCP tool schema findings (fleet mcp schema-issues: invalid = withheld from the model, rewritten = older JSON Schema draft translated) is read and each finding advised"
-  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: root build caches (go build/module, npm, dnf — filled as root by from-source builds, never reached by the maintenance timer) reclaimed above 3 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
+  info "[dry-run] 7/9 Scheduled maintenance: ${BACKUP_TIMER} installed + enabled + active (advisory when absent) and ${BACKUP_SERVICE}'s last run succeeded; ${MAINT_TIMER} likewise; free space on the data dir + the podman image store above the disk floor; disk hygiene: the root package cache (dnf — filled as root, never reached by the maintenance timer) reclaimed above 1 GiB, the journal capped at 1G via journald.conf.d/60-fleet-journal-cap.conf (persistent + volatile) unless the operator set a limit in journald's merged config, and images left in root's podman store reported"
   info "[dry-run] 8/9 Sandbox smoke: podman run --rm --network=none <sandbox image> true as ${SERVICE_USER}"
   info "[dry-run] 9/9 Release + checkout: the installed release vs the newest published one (fleet release latest), the checkout's release vs the installed binary's, and the paths that make the checkout read '.dirty' (fix stays 'fleet update' — doctor never pulls or installs)"
   info "[dry-run] would restart ${SERVICE_NAME} after a package upgrade, an app-unit reinstall, the web-tier retirement or a new APP_SESSION_SECRET above — a reinstalled fleet-backup unit does not bounce the app (unless --no-restart)"
@@ -257,8 +257,8 @@ DNF=(dnf --setopt='*.skip_if_unavailable=1')
 
 # ── 1. toolchain ─────────────────────────────────────────────────────────────
 # Runtime tools only. Go and Node are not box dependencies: fleet installs the
-# signed release binary (docs/RELEASE-ARTIFACTS.md); `fleet update --from-source`
-# on a development box brings its own toolchain.
+# signed release binary (docs/RELEASE-ARTIFACTS.md) and nothing is built on the
+# box (ADR-0101).
 step "1/9  Toolchain"
 
 doctor_tools=(git curl jq podman psql python3)
@@ -1062,19 +1062,16 @@ if command -v systemctl >/dev/null 2>&1; then
   fi
 fi
 
-# Disk hygiene: the three trees that filled every production box and that NO
-# scheduled job reclaims (measured across five boxes: 2–6 GiB of root build
-# caches each, journals at 1.3–4 GiB, stale images in root's podman store).
+# Disk hygiene: the trees that filled every production box and that NO
+# scheduled job reclaims (measured across five boxes: 2–6 GiB of root caches
+# each, journals at 1.3–4 GiB, stale images in root's podman store).
 #
 # They escape the maintenance timer for one reason: fleet-maintenance runs
-# `fleet cleanup` as the SERVICE user, so its `go clean` and `podman image
-# prune` sweep that user's caches — while a from-source build (`fleet update
-# --from-source`, and every update before signed releases) runs as ROOT, so the
-# Go build cache, the Go module cache and the npm cache it fills are root's, and
-# the service user cannot touch them. Doctor runs as root, so it is the pass
-# that can. Everything here is a cache or a log: the next `fleet update`
-# re-downloads what it needs, and nothing touches databases, workspaces, the
-# bundle or the service user's image store. It runs BEFORE the headroom
+# `fleet cleanup` as the SERVICE user, so its `podman image prune` sweeps that
+# user's store — while dnf (and, before signed releases, the on-box Go/npm
+# build) runs as ROOT. Doctor runs as root, so it is the pass that can.
+# Everything here is a cache or a log: nothing touches databases, workspaces,
+# the bundle or the service user's image store. It runs BEFORE the headroom
 # verdict below, so a box these trees had filled is judged on the space left
 # after the reclaim, not failed for a problem this pass just fixed.
 human_bytes() { numfmt --to=iec --suffix=B "${1:-0}" 2>/dev/null || echo "${1:-0}B"; }
@@ -1086,25 +1083,17 @@ dir_bytes() {
   echo "${b:-0}"
 }
 
-# Root build caches. Reclaimed above a threshold rather than on every run: one
-# from-source update re-creates ~2 GiB (Go build + module cache, npm), so a lower bar would
-# just make every doctor run cost the next update a full re-download.
-ROOT_CACHE_RECLAIM_BYTES=$((3 * 1024 * 1024 * 1024))
-# measure_root_build_caches sets rc_total (bytes) and rc_summary for the caches
-# below; called again after a reclaim so the verdict reports what is left, not
-# what was attempted.
-measure_root_build_caches() {
-  local gocache="" gomodcache="" npmcache="" dnfcache="" parts=() b p
-  rc_total=0 rc_summary="none" rc_have_go=0
-  if command -v go >/dev/null 2>&1; then
-    gocache="$(go env GOCACHE 2>/dev/null || true)"
-    gomodcache="$(go env GOMODCACHE 2>/dev/null || true)"
-    [[ -n "$gocache$gomodcache" ]] && rc_have_go=1
-  fi
-  if command -v npm >/dev/null 2>&1; then
-    npmcache="$(npm config get cache 2>/dev/null || true)"
-  fi
-  [[ -z "$npmcache" ]] && npmcache="${HOME:-/root}/.npm"
+# Root package cache (dnf). The Go build/module and npm caches this check also
+# reclaimed went with the on-box build (ADR-0101): a release box has neither
+# toolchain, so it has neither cache. Reclaimed above a threshold rather than on
+# every run, so a doctor run does not cost the next dnf transaction a full
+# metadata re-download for a few hundred MB.
+ROOT_CACHE_RECLAIM_BYTES=$((1024 * 1024 * 1024))
+# measure_root_package_cache sets rc_total (bytes) and rc_summary; called again
+# after a reclaim so the verdict reports what is left, not what was attempted.
+measure_root_package_cache() {
+  local dnfcache="" b
+  rc_total=0 rc_summary="none"
   # dnf5's system_cachedir is configurable; ask dnf for the active one and fall
   # back to the defaults (dnf5, then dnf4) when it cannot say.
   if [[ "$HAVE_DNF" == "1" ]]; then
@@ -1114,41 +1103,37 @@ measure_root_build_caches() {
     dnfcache=/var/cache/libdnf5
     [[ -d "$dnfcache" ]] || dnfcache=/var/cache/dnf
   fi
-  for p in "go build cache:$gocache" "go module cache:$gomodcache" "npm cache:$npmcache" "dnf cache:$dnfcache"; do
-    b="$(dir_bytes "${p#*:}")"
-    (( b > 0 )) || continue
-    rc_total=$(( rc_total + b ))
-    parts+=("${p%%:*} $(human_bytes "$b")")
-  done
-  (( ${#parts[@]} )) && { rc_summary="$(printf '%s, ' "${parts[@]}")"; rc_summary="${rc_summary%, }"; }
+  b="$(dir_bytes "$dnfcache")"
+  if (( b > 0 )); then
+    rc_total="$b"
+    rc_summary="dnf cache $(human_bytes "$b")"
+  fi
   return 0
 }
-check_root_build_caches() {
+check_root_package_cache() {
   local before before_summary
-  measure_root_build_caches
+  measure_root_package_cache
   if (( rc_total < ROOT_CACHE_RECLAIM_BYTES )); then
-    pass "root build caches $(human_bytes "$rc_total") (below the $(human_bytes "$ROOT_CACHE_RECLAIM_BYTES") reclaim threshold)"
+    pass "root package cache $(human_bytes "$rc_total") (below the $(human_bytes "$ROOT_CACHE_RECLAIM_BYTES") reclaim threshold)"
     return 0
   fi
-  if [[ "$CHECK_ONLY" == "1" ]]; then
-    advise "root build caches hold $(human_bytes "$rc_total") (${rc_summary}) — from-source builds (fleet update --from-source, and every update before signed releases) filled them as root and the maintenance timer (which runs as ${SERVICE_USER}) never reclaims them; a doctor run without --check does: go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+  if [[ "$CHECK_ONLY" == "1" || "$HAVE_DNF" != "1" ]]; then
+    advise "root package cache holds $(human_bytes "$rc_total") (${rc_summary}) — the maintenance timer (which runs as ${SERVICE_USER}) never reclaims it; a doctor run without --check does: dnf clean all"
     return 0
   fi
   before="$rc_total" before_summary="$rc_summary"
-  # Each step is best-effort and independent (doctor runs under set -e); the
-  # re-measure below, not the exit codes, decides the verdict — a dnf lock or a
-  # read-only cache leaves bytes behind whatever the command claimed.
-  if [[ "$rc_have_go" == "1" ]]; then go clean -cache -testcache -modcache >/dev/null 2>&1 || true; fi
-  if command -v npm >/dev/null 2>&1; then npm cache clean --force >/dev/null 2>&1 || true; fi
-  if [[ "$HAVE_DNF" == "1" ]]; then dnf clean all >/dev/null 2>&1 || true; fi
-  measure_root_build_caches
+  # Best-effort (doctor runs under set -e); the re-measure below, not the exit
+  # code, decides the verdict — a dnf lock or a read-only cache leaves bytes
+  # behind whatever the command claimed.
+  dnf clean all >/dev/null 2>&1 || true
+  measure_root_package_cache
   if (( rc_total < ROOT_CACHE_RECLAIM_BYTES )); then
-    fixed "reclaimed root build caches: $(human_bytes "$before") -> $(human_bytes "$rc_total") (were: ${before_summary}) — the next fleet update re-downloads what it needs"
+    fixed "reclaimed the root package cache: $(human_bytes "$before") -> $(human_bytes "$rc_total") (was: ${before_summary}) — the next dnf transaction re-downloads the metadata it needs"
   else
-    fail "root build cache reclaim left $(human_bytes "$rc_total") (${rc_summary}; was $(human_bytes "$before")) — a cleanup step failed (dnf lock? read-only cache?): go clean -cache -testcache -modcache; npm cache clean --force; dnf clean all"
+    fail "root package cache reclaim left $(human_bytes "$rc_total") (${rc_summary}; was $(human_bytes "$before")) — dnf clean all did not free it (dnf lock? read-only cache?)"
   fi
 }
-check_root_build_caches
+check_root_package_cache
 
 # Journal cap. journald's default ceiling is 10% of the filesystem (≤ 4 GiB),
 # taken from the same volume as the databases and the image store. Doctor

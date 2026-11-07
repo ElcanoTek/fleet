@@ -578,43 +578,51 @@ func TestUpdateDryRunSmoke(t *testing.T) {
 	}
 }
 
-// TestUpdateFromSourceIsIsolatedLegacy — the on-box build survives only behind
-// --from-source for development boxes, and every piece of it carries the
-// marker the owner asked for so it can be found and deleted in one pass.
-func TestUpdateFromSourceIsIsolatedLegacy(t *testing.T) {
-	out := runScriptDryRun(t, "update.sh", "--dry-run", "--no-pull", "--from-source")
-	// The restart is stop, clear the update drain marker, start: the new
-	// process must not start under the old one's drain fence.
-	if !strings.Contains(out, "make build") || !strings.Contains(out, "systemctl stop") || !strings.Contains(out, "systemctl start") {
-		t.Errorf("--from-source plan must build on the box and restart (stop, clear the drain, start)\n--- output ---\n%s", out)
+// TestOnBoxBuildIsGone — ADR-0101 removed the --from-source path ADR-0100 kept
+// for the migration. Asking for it, by flag or by env, stops with a message
+// naming the removal rather than quietly installing a release instead; the
+// =0 spelling an update.sh from before the removal forwards on its self-update
+// re-exec is still accepted. Neither script builds fleet or reaches for a Go
+// or Node toolchain any more.
+func TestOnBoxBuildIsGone(t *testing.T) {
+	const retired = "no longer builds fleet on the box"
+	for _, tc := range []struct {
+		script string
+		env    []string
+		args   []string
+	}{
+		{"update.sh", nil, []string{"--dry-run", "--no-pull", "--from-source"}},
+		{"update.sh", []string{"FLEET_UPDATE_FROM_SOURCE=1"}, []string{"--dry-run", "--no-pull"}},
+		{"bootstrap.sh", nil, []string{"--dry-run", "--postgres=local", "--from-source"}},
+		{"bootstrap.sh", []string{"FLEET_BOOTSTRAP_FROM_SOURCE=1"}, []string{"--dry-run", "--postgres=local"}},
+	} {
+		out, err := runScript(t, tc.env, tc.script, tc.args...)
+		if err == nil || !strings.Contains(out, retired) || !strings.Contains(out, "ADR-0101") {
+			t.Errorf("%s %v %v: want a refusal naming the removal (err=%v)\n--- output ---\n%s", tc.script, tc.env, tc.args, err, out)
+		}
 	}
-	if strings.Contains(out, "fleet release install") {
-		t.Errorf("--from-source must not run the signed-artifact install\n--- output ---\n%s", out)
+	if out, err := runScript(t, []string{"FLEET_UPDATE_FROM_SOURCE=0"}, "update.sh", "--dry-run", "--no-pull", "--artifact"); err != nil || strings.Contains(out, retired) {
+		t.Errorf("FLEET_UPDATE_FROM_SOURCE=0 (forwarded by an older update.sh's re-exec) and --artifact must still be accepted (err=%v)\n--- output ---\n%s", err, out)
 	}
+
 	root := repoRootFromTest(t)
-	for _, script := range []string{"update.sh", "bootstrap.sh"} {
+	for _, script := range []string{"update.sh", "bootstrap.sh", "lib/release.sh"} {
 		body, err := os.ReadFile(filepath.Join(root, "scripts", script))
 		if err != nil {
 			t.Fatal(err)
 		}
 		src := string(body)
-		if !strings.Contains(src, "LEGACY-BUILD-FROM-SOURCE: remove after boxes run artifacts") {
-			t.Errorf("%s: the from-source path must carry the LEGACY-BUILD-FROM-SOURCE marker", script)
+		if regexp.MustCompile(`&& (?:export [^)]*&& )?make build \)`).MatchString(src) {
+			t.Errorf("%s runs `make build` — fleet is never built on the box (ADR-0101)", script)
 		}
-		// Every `make build` the script RUNS sits in a marked block.
-		runs := regexp.MustCompile(`&& (?:export [^)]*&& )?make build \)`).FindAllStringIndex(src, -1)
-		if len(runs) == 0 {
-			t.Errorf("%s: no from-source `make build` invocation found — the marker check is asserting nothing", script)
-		}
-		for _, m := range runs {
-			marker := strings.LastIndex(src[:m[0]], "LEGACY-BUILD-FROM-SOURCE")
-			if marker < 0 || m[0]-marker > 1500 {
-				t.Errorf("%s: `make build` at byte %d is not inside a LEGACY-BUILD-FROM-SOURCE block", script, m[0])
-			}
-		}
-		for _, gone := range []string{"node-version.sh", "fleet_resolve_node_bin", "fleet_node_tarball_install", "doctor.sh --node", "--no-node-repair"} {
+		for _, gone := range []string{
+			// The old marker, split so `git grep` for it stays empty.
+			"LEGACY-BUILD-" + "FROM-SOURCE", "require_go_toolchain", "legacy_build_from_source", "build_fleet_binary",
+			"fleet_install_built_binary", "GOTOOLCHAIN", "node-version.sh", "fleet_resolve_node_bin",
+			"fleet_node_tarball_install", "doctor.sh --node", "--no-node-repair",
+		} {
 			if strings.Contains(src, gone) {
-				t.Errorf("%s still references %q — the box-side node toolchain is gone (ADR-0100)", script, gone)
+				t.Errorf("%s still references %q — the on-box build and its toolchains are gone (ADR-0101)", script, gone)
 			}
 		}
 	}

@@ -1,6 +1,11 @@
 # ADR-0104: One scheduler — chat schedules run on the sched engine
 
-- **Status:** Accepted
+- **Status:** Proposed — lands in two steps. Part (a) (#2076) adds the
+  engine half: the sched tables (migration 076), claim / recovery / settle,
+  the tick phase and wake-ups, the deliverer seam; nothing fires through it
+  yet and the chat loop still runs. Part (b) (#2077) moves the rows
+  (migration 077), wires the chat server in, deletes the chat loop, and
+  marks this record Accepted.
 - **Date:** 2026-11-07
 - **Deciders:** fleet maintainers
 - **Amends:** [ADR-0005](0005-separate-chat-and-sched-databases.md) (already
@@ -40,29 +45,42 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
 
 - **Storage.** The table moves to the scheduler's schema:
   `sched.chat_schedules` (same columns, ids and values) plus the engine's
-  lease columns `lease_owner` / `lease_expires_at`, and
+  lease columns `lease_owner` / `lease_expires_at` and the fire a lease is
+  for (`fire_id`, `fire_trigger`, `fire_run_number`, `fire_failures`), and
   `sched.chat_schedule_runs`, the run history (one row per settled fire:
   run number, `schedule`/`manual` trigger, outcome `queued` / `coalesced` /
   `busy` / `gone`, the input-queue row, due and fire times). Sched migration
   076 creates both; 077 **moves** every row from `chat.chat_schedules` in one
   transaction, then drops the chat table.
 - **One tick loop.** `Scheduler.runLoop` runs a chat-schedule phase on every
-  tick and on a wake-up the loop arms for the earliest active schedule due
-  before the next tick (and that the chat server requests when a schedule is
-  created, edited or resumed). The chat-side sweeper goroutine and its
-  `AfterFunc` timers are deleted.
+  tick, once as soon as it starts, and on a wake-up the loop arms for the
+  earliest active schedule due before the next tick (and that the chat server
+  requests when a schedule is created, edited or resumed; a request is kept
+  when it is within one tick interval or five minutes, whichever is longer).
+  A pass drains everything due, bounded by the sweep's deadline (and a
+  10,000-fire backstop), never re-claiming a row it already attempted. The
+  chat-side sweeper goroutine and its `AfterFunc` timers are deleted (part
+  b).
 - **One lease model.** A fire is claim → delivery → settle. The claim
   (`db.ClaimDueChatSchedules`, `FOR UPDATE SKIP LOCKED`) writes a per-claim
   token into `lease_owner` with an expiry, as a task lease does; the chat
   server's `store.DeliverChatScheduleFire` enqueues the turn in a chat
   transaction that re-checks the lease and status under lock, keyed by the
-  idempotency key `chat-patrol:<id>:<run>`; `db.SettleChatScheduleFire`
+  idempotency key `chat-patrol:<id>:<run>:<fire_id>`; `db.SettleChatScheduleFire`
   advances the row (run count, next slot or completion), appends the run
   history row and releases the lease — only while the row still carries the
-  claim's token. A fire whose process died mid-way is re-claimed when its
-  lease expires with the same run number, so its re-delivery finds its own
-  queue row (never a second turn), and the dead claim's late settle is
-  refused. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`).
+  claim's token. A fire whose process died mid-way is not a new due fire:
+  when its lease expires the recovery pass (`db.RecoverChatScheduleFires`)
+  re-claims the SAME fire — same `fire_id` (part of the idempotency key) and
+  run number, under a new token — whatever the schedule's status or due
+  time, so its re-delivery finds its own queue row (never a second turn) and
+  the dead claim's late settle is refused. A delivery that errors keeps its
+  fire and lease, the lease pushed out by a backoff (30s doubling to 30m), so
+  a failing schedule is retried by recovery and never crowds out the healthy
+  ones. "Run now" takes the same path (`Scheduler.RunChatScheduleNow`): only
+  its claim runs on the caller's context; delivery and settle run on a
+  detached, bounded one, and a second Run now while a fire is pending is
+  refused rather than minting a new fire for the same run.
 - **One run history.** Every fire, scheduled or manual, settles into
   `sched.chat_schedule_runs`, pruned by the scheduler's daily retention sweep
   under the same policy as task runs (`FLEET_RUN_LOG_RETENTION_DAYS`,
@@ -109,18 +127,23 @@ copies, and drops it in the same transaction:
 
 ## Enforcement
 
-- `internal/sched/db/chat_schedules_migration_test.go` seeds old-shape rows
+- (part b) `internal/sched/db/chat_schedules_migration_test.go` seeds old-shape rows
   and patrol turns on a database at sched 076 and pins the move (077) (column for
   column), the dropped chat table, the history backfill, re-run idempotency,
   the down/up round trip, and the first post-upgrade pass firing a due slot
   once with the next run number.
 - `internal/sched/db/chat_schedules_test.go` pins claim/settle (queued, busy,
-  gone, max runs, timers), lease expiry and re-claim, the refused stale
+  gone, max runs, timers), recovery of an expired fire as itself (scheduled,
+  and manual on a paused schedule), the failure backoff, the refused stale
   settle, Run now's claim errors and the retention prune.
-- `internal/sched/scheduler/chat_schedules_test.go` runs the tick phase, Run
+- `internal/sched/scheduler/chat_schedules_engine_test.go` pins the pass
+  against a fake deliverer: a failing batch does not starve the rows behind
+  it, a backlog drains in one pass, the wake horizon follows the tick, Run now
+  settles after its caller's context ends, and a pass runs at startup.
+- (part b) `internal/sched/scheduler/chat_schedules_test.go` runs the tick phase, Run
   now and the between-tick wake-up against both real stores in one database.
-- There is no other ticker for chat schedules to drift back into: the cmd
-  sweeper and `SweepDueChatSchedules` are deleted.
+- (part b) There is no other ticker for chat schedules to drift back into:
+  the cmd sweeper and `SweepDueChatSchedules` are deleted.
 
 ## Consequences
 

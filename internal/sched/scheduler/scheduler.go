@@ -329,6 +329,12 @@ func (s *Scheduler) runLoop() {
 	// the chat server when a schedule is created or edited.
 	var chatWake chatWakeTimer
 	defer chatWake.stop()
+	// One pass right away: a schedule that fell due while the process was
+	// down, or is due before the first tick, fires now rather than a tick
+	// interval after boot.
+	if s.chatDeliverer != nil {
+		chatWake.request(time.Now())
+	}
 
 	for {
 		select {

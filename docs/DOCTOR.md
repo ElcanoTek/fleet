@@ -141,15 +141,16 @@ Division of labor across the three health verbs:
   journals at 1.3–4 GiB, and, on two of them, ~1.3 GiB of images in
   **root's** podman store. The caches escape the maintenance timer for a
   structural reason. `fleet-maintenance` runs `fleet cleanup` as the service
-  user, so its `go clean` and `podman image prune` sweep *that* user's
-  caches, while `fleet update` builds as root. Doctor runs as root, so
-  doctor is the pass that can reclaim them. Three checks, each scoped
-  differently on purpose:
-  - **Root build caches** are reclaimed (`go clean -cache -testcache
-    -modcache`, `npm cache clean --force`, `dnf clean all`) only above
-    **3 GiB** combined. One update re-creates about 2 GiB, so a lower bar
-    would make every doctor run cost the next update a full re-download.
-    `--check` advises instead.
+  user, so its `podman image prune` sweeps *that* user's store, while dnf
+  (and, before signed releases, the on-box Go/npm build) runs as root.
+  Doctor runs as root, so doctor is the pass that can reclaim them. Three
+  checks, each scoped differently on purpose:
+  - **Root's package cache** (dnf) is reclaimed (`dnf clean all`) only above
+    **1 GiB**, so a doctor run does not cost the next dnf transaction a
+    metadata re-download for a few hundred MB. `--check` advises instead.
+    The Go and npm caches this check used to sweep came from on-box builds,
+    which were removed ([ADR-0101](adr/0101-remove-the-on-box-build.md));
+    a release box has neither toolchain, so neither cache.
   - **The journal** gets the shipped `deploy/journald.conf.d/60-fleet-journal-cap.conf`
     (`SystemMaxUse=1G` and `RuntimeMaxUse=1G`, so a volatile journal is capped
     too). It is installed **only** when no other file sets a limit (the
