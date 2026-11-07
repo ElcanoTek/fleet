@@ -200,7 +200,8 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 		t.Fatalf("chat.chat_schedules should be dropped (to_regclass = %v, err %v)", reg, err)
 	}
 	var leased int
-	if err := schedConn.QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL`).Scan(&leased); err != nil || leased != 0 {
+	if err := schedConn.QueryRow(`SELECT count(*) FROM chat_schedules WHERE lease_owner IS NOT NULL OR lease_expires_at IS NOT NULL
+		OR fire_id IS NOT NULL OR fire_trigger IS NOT NULL OR fire_run_number IS NOT NULL OR fire_failures <> 0`).Scan(&leased); err != nil || leased != 0 {
 		t.Fatalf("moved rows must start unleased (leased = %d, err %v)", leased, err)
 	}
 
@@ -244,7 +245,7 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 	// it fires once, as run 8 (the old engine's next number, so its key
 	// cannot collide with run 7's turn); nothing else is due; a second pass
 	// while the fire is in flight claims nothing.
-	fires, err := d.ClaimDueChatSchedules(ctx, time.Unix(now, 0), time.Minute, 25)
+	fires, err := d.ClaimDueChatSchedules(ctx, time.Unix(now, 0), time.Minute, 25, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,10 +253,10 @@ func TestMigration077_MovesChatSchedules(t *testing.T) {
 		fires[0].Timezone != "America/New_York" || fires[0].Trigger != models.ChatScheduleTriggerSchedule {
 		t.Fatalf("first pass fires = %+v, want only %s as run 8", fires, dueID)
 	}
-	if key := store.ChatScheduleInputKey(fires[0]); key != "chat-patrol:"+dueID+":8" {
+	if key := store.ChatScheduleInputKey(fires[0]); key != "chat-patrol:"+dueID+":8:"+fires[0].FireID {
 		t.Fatalf("idempotency key = %q", key)
 	}
-	if again, err := d.ClaimDueChatSchedules(ctx, time.Unix(now, 0), time.Minute, 25); err != nil || len(again) != 0 {
+	if again, err := d.ClaimDueChatSchedules(ctx, time.Unix(now, 0), time.Minute, 25, nil); err != nil || len(again) != 0 {
 		t.Fatalf("second pass while leased = %+v, %v; want nothing", again, err)
 	}
 }

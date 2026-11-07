@@ -1,11 +1,9 @@
 # ADR-0104: One scheduler — chat schedules run on the sched engine
 
-- **Status:** Proposed — lands in two steps. Part (a) (#2076) adds the
-  engine half: the sched tables (migration 076), claim / recovery / settle,
-  the tick phase and wake-ups, the deliverer seam; nothing fires through it
-  yet and the chat loop still runs. Part (b) (#2077) moves the rows
-  (migration 077), wires the chat server in, deletes the chat loop, and
-  marks this record Accepted.
+- **Status:** Accepted. Landed in two steps: part (a) (#2076) added the
+  engine half (sched migration 076, claim / recovery / settle, the tick phase
+  and wake-ups, the deliverer seam); part (b) (#2077) moved the rows
+  (migration 077), wired the chat server in and deleted the chat loop.
 - **Date:** 2026-11-07
 - **Deciders:** fleet maintainers
 - **Amends:** [ADR-0005](0005-separate-chat-and-sched-databases.md) (already
@@ -59,8 +57,7 @@ are fired by its tick loop; the chat server is only the deliverer of a fire.**
   when it is within one tick interval or five minutes, whichever is longer).
   A pass drains everything due, bounded by the sweep's deadline (and a
   10,000-fire backstop), never re-claiming a row it already attempted. The
-  chat-side sweeper goroutine and its `AfterFunc` timers are deleted (part
-  b).
+  chat-side sweeper goroutine and its `AfterFunc` timers are deleted.
 - **One lease model.** A fire is claim → delivery → settle. The claim
   (`db.ClaimDueChatSchedules`, `FOR UPDATE SKIP LOCKED`) writes a per-claim
   token into `lease_owner` with an expiry, as a task lease does; the chat
@@ -127,7 +124,7 @@ copies, and drops it in the same transaction:
 
 ## Enforcement
 
-- (part b) `internal/sched/db/chat_schedules_migration_test.go` seeds old-shape rows
+- `internal/sched/db/chat_schedules_migration_test.go` seeds old-shape rows
   and patrol turns on a database at sched 076 and pins the move (077) (column for
   column), the dropped chat table, the history backfill, re-run idempotency,
   the down/up round trip, and the first post-upgrade pass firing a due slot
@@ -140,10 +137,15 @@ copies, and drops it in the same transaction:
   against a fake deliverer: a failing batch does not starve the rows behind
   it, a backlog drains in one pass, the wake horizon follows the tick, Run now
   settles after its caller's context ends, and a pass runs at startup.
-- (part b) `internal/sched/scheduler/chat_schedules_test.go` runs the tick phase, Run
+- `internal/sched/scheduler/chat_schedules_test.go` runs the tick phase, Run
   now and the between-tick wake-up against both real stores in one database.
-- (part b) There is no other ticker for chat schedules to drift back into:
-  the cmd sweeper and `SweepDueChatSchedules` are deleted.
+- `internal/store/chat_schedules_test.go` pins that a pause or cancel
+  between delivery and settle revokes the fire (no run counted, a paused
+  timer stays paused); `internal/store/chat_schedules_cascade_test.go` pins
+  that every hard-delete path takes a conversation's schedules and history
+  with it, and that account erasure works on a chat-only database.
+- There is no other ticker for chat schedules to drift back into: the cmd
+  sweeper and `SweepDueChatSchedules` are deleted.
 
 ## Consequences
 
@@ -156,9 +158,17 @@ copies, and drops it in the same transaction:
   `sched.chat_schedules`), so the chat store's own test template now migrates
   both stores (it is the same template `internal/testdb/fleetdb` builds).
 - `conversation_id` is no longer a foreign key (the conversation is in the
-  other schema). A schedule whose conversation is hard-deleted is cancelled by
-  its next fire (`gone`) instead of disappearing with it; a paused one stays
-  as an inert row. Account erasure still deletes a user's schedules.
+  other schema). Chat migration 099 restores the cascade: a statement-level
+  `AFTER DELETE` trigger on `conversations` deletes the deleted rows'
+  schedules (their history follows by sched's FK), so every hard-delete path
+  — present and future — is covered by one mechanism; it is a no-op while
+  the sched table does not exist. Account erasure deletes a user's schedules
+  the same way (and tolerates a chat-only database, for the chat-only CLI
+  verbs).
+- Pausing or cancelling a schedule revokes a fire in flight (its lease and
+  fire are cleared under the row lock its settle needs): a turn the user
+  stopped is not counted as a run. A patrol turn already *running* when its
+  schedule is paused finishes but is not counted.
 - Restoring a chat-schema dump taken before this release recreates an inert
   `chat.chat_schedules` that nothing reads; restore the sched dump of the
   same moment for the schedules.

@@ -24,6 +24,22 @@ import (
 // delivering a fire as a queued turn (DeliverChatScheduleFire).
 const chatSchedulesTable = config.SchedSchema + ".chat_schedules"
 
+// deleteUserChatSchedulesTx erases a user's chat schedules (and, by sched's
+// cascade, their run history). The scheduler's table may not exist yet when a
+// chat-only CLI verb (fleet chat user del, fleet admin rm) runs before the
+// first boot has migrated the sched schema; then there is nothing to erase.
+func deleteUserChatSchedulesTx(ctx context.Context, tx *sql.Tx, email string) error {
+	var exists bool
+	if err := tx.QueryRowContext(ctx, `SELECT to_regclass($1) IS NOT NULL`, chatSchedulesTable).Scan(&exists); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	_, err := tx.ExecContext(ctx, `DELETE FROM `+chatSchedulesTable+` WHERE user_email = $1`, email)
+	return err
+}
+
 // ChatSchedule status values (the sched.chat_schedules CHECK constraint).
 const (
 	ChatScheduleStatusActive    = models.ChatScheduleStatusActive
@@ -488,6 +504,18 @@ func (s *Store) UpdateChatSchedule(ctx context.Context, userEmail, convID, sched
 	}
 
 	if updated.Status == ChatScheduleStatusCancelled || updated.Status == ChatScheduleStatusPaused {
+		// Revoke any fire in flight, under the row lock its settle needs: a
+		// fire not yet delivered is then stale, and one already delivered —
+		// whose queued turn is cancelled just below — settles to nothing,
+		// so a turn the user stopped is never counted as a run and a paused
+		// one-shot is never completed behind their back.
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE `+chatSchedulesTable+`
+			    SET lease_owner = NULL, lease_expires_at = NULL, fire_id = NULL,
+			        fire_trigger = NULL, fire_run_number = NULL, fire_failures = 0
+			  WHERE id = $1 AND lease_owner IS NOT NULL`, cur.ID); err != nil {
+			return nil, err
+		}
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE chat_input_queue
 			    SET state = 'cancelled', updated_at = $1
@@ -592,15 +620,14 @@ func (s *Store) CancelChatSchedule(ctx context.Context, userEmail, convID, sched
 }
 
 // ChatScheduleInputKey is the chat_input_queue idempotency key of a fire's
-// turn: chat-patrol:<schedule>:<run> for a scheduled fire, and
-// chat-patrol:<schedule>:<run>:<claim unix> for Run now (two clicks are two
-// runs). A fire delivered twice — its lease expired before it settled — finds
-// its own row under the same key instead of queueing a second turn.
+// turn: chat-patrol:<schedule>:<run>:<fire id>. The fire id survives the
+// lease's expiry (the scheduler's recovery pass re-claims the same fire), so
+// a fire delivered twice — its claimer died, or a Run now's caller went away,
+// before it settled — finds its own row instead of queueing a second turn;
+// and a fire that was revoked (a pause or cancel) never lends its key to a
+// later fire of the same run number.
 func ChatScheduleInputKey(fire models.ChatScheduleFire) string {
-	if fire.Trigger == models.ChatScheduleTriggerManual {
-		return fmt.Sprintf("%s%s:%d:%d", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber, fire.ClaimedAt.Unix())
-	}
-	return fmt.Sprintf("%s%s:%d", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber)
+	return fmt.Sprintf("%s%s:%d:%s", ChatPatrolInputKeyPrefix, fire.ScheduleID, fire.RunNumber, fire.FireID)
 }
 
 // DeliverChatScheduleFire is the chat side of a chat schedule fire claimed by

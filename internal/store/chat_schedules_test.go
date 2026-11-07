@@ -35,7 +35,7 @@ func fireDueChatSchedules(t *testing.T, s *Store, dsn string, at time.Time) []fi
 	t.Helper()
 	ctx := context.Background()
 	sd := openSchedOn(t, dsn)
-	fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25)
+	fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
 	if err != nil {
 		t.Fatalf("ClaimDueChatSchedules: %v", err)
 	}
@@ -371,5 +371,62 @@ func TestClaimDueChatSchedules_IgnoresSuggestAdvancedModelApproval(t *testing.T)
 	}
 	if len(pending) != 0 {
 		t.Fatalf("expected pending suggest_advanced_model card to be superseded when patrol is claimed, got %+v", pending)
+	}
+}
+
+// A pause or cancel that lands between a fire's delivery and its settle
+// revokes the fire: the queued turn is cancelled, the settle finds no lease
+// and records nothing, so the run is not counted and a paused one-shot timer
+// stays paused (not completed).
+func TestChatSchedulePauseBetweenDeliveryAndSettle(t *testing.T) {
+	t.Parallel()
+	s, dsn := newTestStoreDSN(t)
+	ctx := context.Background()
+	const user = "pauser@elcanotek.com"
+	sd := openSchedOn(t, dsn)
+
+	for _, tc := range []struct {
+		name   string
+		in     ChatScheduleInput
+		status string
+	}{
+		{"paused timer", ChatScheduleInput{Prompt: "Ping.", DurationSeconds: 600}, ChatScheduleStatusPaused},
+		{"cancelled patrol", ChatScheduleInput{Prompt: "Check.", CronExpr: "*/10 * * * *"}, ChatScheduleStatusCancelled},
+	} {
+		conv, err := s.CreateConversation(ctx, user, tc.name, "victoria", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tc.in.ConversationID, tc.in.UserEmail = conv.ID, user
+		sc, err := s.CreateChatSchedule(ctx, tc.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		at := time.Unix(sc.NextRunAt+1, 0)
+		fires, err := sd.ClaimDueChatSchedules(ctx, at, time.Minute, 25, nil)
+		if err != nil || len(fires) != 1 {
+			t.Fatalf("%s: claim = %+v, %v", tc.name, fires, err)
+		}
+		d, err := s.DeliverChatScheduleFire(ctx, fires[0], 20)
+		if err != nil || d.Outcome != models.ChatScheduleQueued {
+			t.Fatalf("%s: deliver = %+v, %v", tc.name, d, err)
+		}
+		st := tc.status
+		if _, err := s.UpdateChatSchedule(ctx, user, conv.ID, sc.ID, ChatSchedulePatch{Status: &st}); err != nil {
+			t.Fatalf("%s: %s: %v", tc.name, st, err)
+		}
+		if ok, err := sd.SettleChatScheduleFire(ctx, fires[0], d, at); err != nil || ok {
+			t.Fatalf("%s: settle after %s = %v, %v; want the fire revoked", tc.name, st, ok, err)
+		}
+		if row := inputByID(t, s, conv.ID, d.InputID); row.State != InputStateCancelled {
+			t.Errorf("%s: delivered turn state = %q, want cancelled", tc.name, row.State)
+		}
+		all, err := s.ListChatSchedules(ctx, user, conv.ID, true)
+		if err != nil || len(all) != 1 || all[0].Status != st || all[0].RunCount != 0 {
+			t.Fatalf("%s: schedule = %+v, %v; want %s with no run counted", tc.name, all, err, st)
+		}
+		if runs, _ := sd.ListChatScheduleRuns(ctx, sc.ID, 10); len(runs) != 0 {
+			t.Errorf("%s: run history = %+v, want none", tc.name, runs)
+		}
 	}
 }

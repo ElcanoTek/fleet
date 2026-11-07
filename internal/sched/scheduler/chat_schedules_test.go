@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -160,5 +161,97 @@ func TestChatSchedules_WakeFiresBetweenTicks(t *testing.T) {
 	}
 	if d.settledCount() != 1 || d.settled[0].Outcome != models.ChatScheduleQueued {
 		t.Fatalf("timer did not fire on its wake-up: %+v", d.settled)
+	}
+}
+
+// cancelAfterDeliver wraps the store deliverer and ends the caller's context
+// right after the delivery commits — an HTTP client that disconnected while
+// Run now was in flight (the handler passes r.Context()).
+type cancelAfterDeliver struct {
+	*storeDeliverer
+	cancel context.CancelFunc
+}
+
+func (c cancelAfterDeliver) DeliverChatScheduleFire(ctx context.Context, fire models.ChatScheduleFire) (models.ChatScheduleDelivery, error) {
+	d, err := c.storeDeliverer.DeliverChatScheduleFire(ctx, fire)
+	c.cancel()
+	return d, err
+}
+
+// TestChatSchedules_RunNowCallerGoneStillSettles: the Run now path the HTTP
+// handler takes, against the real chat store: the caller's context ending
+// after the delivery must not leave the run unsettled or the lease held.
+func TestChatSchedules_RunNowCallerGoneStillSettles(t *testing.T) {
+	t.Parallel()
+	s, chat, d, convID := newChatScheduleFleet(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.SetChatScheduleDeliverer(cancelAfterDeliver{storeDeliverer: d, cancel: cancel})
+	sc, err := chat.CreateChatSchedule(context.Background(), store.ChatScheduleInput{
+		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.RunChatScheduleNow(ctx, sc.ID)
+	if err != nil || got.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("run now = %+v, %v", got, err)
+	}
+	var leased bool
+	if err := s.storage.DB().Conn().QueryRow(`SELECT lease_owner IS NOT NULL FROM chat_schedules WHERE id = $1`, sc.ID).Scan(&leased); err != nil || leased {
+		t.Fatalf("lease still held after Run now (err %v)", err)
+	}
+	list, _ := chat.ListChatSchedules(context.Background(), "owner@elcanotek.com", convID, false)
+	if len(list) != 1 || list[0].RunCount != 1 {
+		t.Fatalf("schedule = %+v; want the run counted", list)
+	}
+}
+
+// TestChatSchedules_UnsettledRunNowIsNotDuplicated: a Run now delivered but
+// never settled (the process died) cannot be repeated as a new fire; the
+// recovery pass re-drives it by the same key, so there is one turn and one
+// counted run, even on a paused schedule.
+func TestChatSchedules_UnsettledRunNowIsNotDuplicated(t *testing.T) {
+	t.Parallel()
+	s, chat, _, convID := newChatScheduleFleet(t)
+	ctx := context.Background()
+	sc, err := chat.CreateChatSchedule(ctx, store.ChatScheduleInput{
+		ConversationID: convID, UserEmail: "owner@elcanotek.com", Prompt: "Check.", CronExpr: "0 9 * * *", Timezone: "UTC",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := store.ChatScheduleStatusPaused
+	if _, err := chat.UpdateChatSchedule(ctx, "owner@elcanotek.com", convID, sc.ID, store.ChatSchedulePatch{Status: &st}); err != nil {
+		t.Fatal(err)
+	}
+	fire, err := s.storage.DB().ClaimChatScheduleNow(ctx, sc.ID, time.Now(), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := chat.DeliverChatScheduleFire(ctx, fire, 20)
+	if err != nil || first.Outcome != models.ChatScheduleQueued {
+		t.Fatalf("deliver = %+v, %v", first, err)
+	}
+	// ...and the process dies before the settle.
+	if _, err := s.storage.DB().Conn().Exec(`UPDATE chat_schedules SET lease_expires_at = now() - interval '1 second' WHERE id = $1`, sc.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunChatScheduleNow(ctx, sc.ID); !errors.Is(err, models.ErrChatScheduleFiring) {
+		t.Fatalf("Run now over the unsettled fire: err = %v, want ErrChatScheduleFiring", err)
+	}
+	s.runChatSchedules()
+
+	var turns int
+	if err := s.storage.DB().Conn().QueryRow(`SELECT count(*) FROM chat.chat_input_queue WHERE client_input_id LIKE $1`,
+		store.ChatPatrolInputKeyPrefix+sc.ID+":%").Scan(&turns); err != nil || turns != 1 {
+		t.Fatalf("patrol turns = %d (err %v), want 1", turns, err)
+	}
+	all, _ := chat.ListChatSchedules(ctx, "owner@elcanotek.com", convID, true)
+	if len(all) != 1 || all[0].RunCount != 1 || all[0].Status != store.ChatScheduleStatusPaused {
+		t.Fatalf("schedule = %+v; want paused with one counted run", all)
+	}
+	runs, err := s.storage.DB().ListChatScheduleRuns(ctx, sc.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].InputID != first.InputID || runs[0].Trigger != models.ChatScheduleTriggerManual {
+		t.Fatalf("run history = %+v, %v", runs, err)
 	}
 }
