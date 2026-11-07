@@ -458,26 +458,25 @@ func restartAndProbe(ctx context.Context, o InstallOptions) error {
 	return nil
 }
 
-// stopTimeout caps the detached `systemctl stop` (within ctx's deadline): well
-// past the shipped unit's TimeoutStopSec (60s), after which systemd has killed
-// the process.
-// startTimeout bounds a detached start (or fallback restart) when ctx has no
-// deadline of its own; minStartTimeout is what one still gets when ctx's
-// deadline has already passed — the start must be attempted, never skipped.
+// detachedTimeout caps a detached stop, start or fallback restart (within
+// ctx's deadline): well past the shipped unit's TimeoutStopSec (60s), after
+// which systemd has killed the process. minStartTimeout is what a step still
+// gets when ctx's deadline has already passed — the start must be attempted,
+// never skipped.
 const (
-	stopTimeout     = 3 * time.Minute
-	startTimeout    = 3 * time.Minute
+	detachedTimeout = 3 * time.Minute
 	minStartTimeout = 10 * time.Second
 )
 
 // detachedBounded returns a context that is not cancelled with ctx but keeps
-// a bound: ctx's remaining deadline when it has one (capped at maxWait; once
-// it has passed, minStartTimeout), else maxWait. A detached step must not be cut short by a
-// SIGINT, nor hang past RollbackTimeout or the caller's deadline.
-func detachedBounded(ctx context.Context, maxWait time.Duration) (context.Context, context.CancelFunc) {
-	bound := maxWait
+// a bound: ctx's remaining deadline when it has one (capped at
+// detachedTimeout; once it has passed, minStartTimeout), else detachedTimeout.
+// A detached step must not be cut short by a SIGINT, nor hang past
+// RollbackTimeout or the caller's deadline.
+func detachedBounded(ctx context.Context) (context.Context, context.CancelFunc) {
+	bound := detachedTimeout
 	if dl, ok := ctx.Deadline(); ok {
-		bound = min(time.Until(dl), maxWait)
+		bound = min(time.Until(dl), detachedTimeout)
 		if bound <= 0 {
 			bound = minStartTimeout // the deadline passed: still attempt it, briefly
 		}
@@ -522,14 +521,14 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 		clearDrain("after restarting")
 		return drainErr, err
 	}
-	stopCtx, stopCancel := detachedBounded(ctx, stopTimeout)
+	stopCtx, stopCancel := detachedBounded(ctx)
 	stopErr := ss.Stop(stopCtx, o.Service)
 	stopCancel()
 	if stopErr == nil {
 		clearDrain("before starting")
 		// The start's bound begins after the clear (whose lock wait can take
 		// a while), so the minimum start attempt is never already spent.
-		startCtx, cancel := detachedBounded(ctx, startTimeout)
+		startCtx, cancel := detachedBounded(ctx)
 		defer cancel()
 		if err := ss.Start(startCtx, o.Service); err != nil {
 			return drainErr, fmt.Errorf("start: %w", err)
@@ -538,7 +537,7 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 	}
 	drainErr = fmt.Errorf("stop %s: %w", o.Service, stopErr)
 	o.logf("warning: %v — restarting it instead, with the update drain marker kept until the restart returns", drainErr)
-	restartCtx, cancel := detachedBounded(ctx, startTimeout)
+	restartCtx, cancel := detachedBounded(ctx)
 	defer cancel()
 	rerr := o.Restarter.Restart(restartCtx, o.Service)
 	clearDrain("after restarting")
@@ -546,7 +545,7 @@ func (o *InstallOptions) restart(ctx context.Context) (drainErr, err error) {
 		// Neither stop nor restart replaced the process. Make sure fleet runs
 		// (a no-op if the old one still does), and fail: the new release is
 		// not what is serving.
-		lastCtx, lastCancel := detachedBounded(ctx, startTimeout)
+		lastCtx, lastCancel := detachedBounded(ctx)
 		defer lastCancel()
 		if serr := ss.Start(lastCtx, o.Service); serr != nil {
 			rerr = errors.Join(rerr, fmt.Errorf("start: %w", serr))
