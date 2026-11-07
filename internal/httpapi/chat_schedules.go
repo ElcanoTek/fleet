@@ -604,7 +604,7 @@ func (s *Server) handleScheduleRunNow(w http.ResponseWriter, r *http.Request, us
 		http.Error(w, "the schedule changed while it was being run; try again", http.StatusConflict)
 		return
 	case models.ChatScheduleDeferred:
-		http.Error(w, "the server is not taking new turns right now", http.StatusServiceUnavailable)
+		http.Error(w, "the server is not taking new turns right now; the run starts when it does", http.StatusServiceUnavailable)
 		return
 	case models.ChatScheduleQueued, models.ChatScheduleCoalesced, models.ChatScheduleBusy:
 	}
