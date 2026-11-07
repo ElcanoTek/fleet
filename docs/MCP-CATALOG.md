@@ -256,8 +256,15 @@ the connector directory by default:
   return and keyboard navigation. A `#connector-<name>` link to a bundled
   connector beyond the preview opens the dialog and scrolls to that card.
 - **Credential accounts** previews four account rows. **Show all (N)** expands
-  them inline; **Show less** collapses them. Add/delete and write-only secret
-  handling are unchanged.
+  them inline; **Show less** collapses them. The panel is read-only: it lists
+  account NAMES from `GET /mcp-servers` and has no add or delete control.
+  Account secrets live in the server env file as `<VAR>_<ACCOUNT>` keys that
+  the credential broker reads at boot, so operators provision them with
+  `fleet mcp account set|list|del` and a restart ([OPERATORS.md](OPERATORS.md)).
+  The add/delete form the panel used to carry posted to
+  `/api/orchestrator/mcp-servers/{server}/accounts`, a route ported from the
+  retired Next.js tier whose backend only moc ever served; fleet's orchestrator
+  answered 404, so it was removed rather than left as a dead button.
 - **Popular picks** — eight editorial choices, not measured usage rankings:
   Microsoft 365 (the `microsoft-workiq-mail` Outlook endpoint), GitHub, Slack,
   Gmail, Google Drive, Notion, Linear and Salesforce. Short card titles keep

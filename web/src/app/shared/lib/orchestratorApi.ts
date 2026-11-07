@@ -900,24 +900,10 @@ export const orchestratorApi = {
   deletePrompt: (id: string) =>
     request<void>(`/prompts/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  // MCP catalog + credential accounts.
+  // MCP catalog + credential-account NAMES (read-only: accounts are
+  // provisioned on the server with `fleet mcp account set`, never from here).
   mcpServers: (signal?: AbortSignal) =>
     request<{ servers: McpServer[] }>("/mcp-servers", withSignal(signal)),
-  createAccount: (server: string, body: { account: string; secrets: Record<string, string> }) =>
-    request<{ server: string; account: string }>(
-      `/mcp-servers/${encodeURIComponent(server)}/accounts`,
-      { method: "POST", body: JSON.stringify(body) },
-    ),
-  updateAccount: (server: string, account: string, body: { secrets: Record<string, string> }) =>
-    request<{ server: string; account: string }>(
-      `/mcp-servers/${encodeURIComponent(server)}/accounts/${encodeURIComponent(account)}`,
-      { method: "PUT", body: JSON.stringify(body) },
-    ),
-  deleteAccount: (server: string, account: string) =>
-    request<{ deleted: boolean }>(
-      `/mcp-servers/${encodeURIComponent(server)}/accounts/${encodeURIComponent(account)}`,
-      { method: "DELETE" },
-    ),
 
   // Dataset / table agent (#514).
   datasets: (signal?: AbortSignal) => request<{ datasets: Dataset[] }>("/datasets", withSignal(signal)),

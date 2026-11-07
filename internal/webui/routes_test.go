@@ -83,6 +83,42 @@ func TestEveryNextRouteIsServed(t *testing.T) {
 	}
 }
 
+// TestRetiredNextRoutesAreNotForwarded: the inventory's "# retired:" rows
+// (credential-account writes the Next.js tier proxied to a backend route fleet
+// never served) are not registered, so the browser gets the gateway's JSON 404
+// and nothing — no secret-bearing body above all — is forwarded upstream.
+func TestRetiredNextRoutesAreNotForwarded(t *testing.T) {
+	raw, err := os.ReadFile("testdata/next-api-routes.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retired []nextRoute
+	for _, line := range strings.Split(string(raw), "\n") {
+		rest, ok := strings.CutPrefix(strings.TrimSpace(line), "# retired: ")
+		if !ok {
+			continue
+		}
+		m, p, _ := strings.Cut(rest, " ")
+		retired = append(retired, nextRoute{m, p})
+	}
+	if len(retired) != 4 {
+		t.Fatalf("found %d retired rows; want the 4 credential-account routes", len(retired))
+	}
+	e := newTestEnv(t)
+	for _, rt := range retired {
+		r := signedIn(t, req(rt.method, samplePath(rt.path), `{"account":"a","secrets":{"K":"v"}}`,
+			"Origin", testOrigin, "Content-Type", "application/json"))
+		res := e.do(r)
+		body := readBody(t, res)
+		if res.StatusCode != http.StatusNotFound || !strings.Contains(body, `"not found"`) {
+			t.Errorf("%s %s: %d %q, want the JSON 404", rt.method, rt.path, res.StatusCode, body)
+		}
+	}
+	if n := e.orch.count(); n != 0 {
+		t.Fatalf("orchestrator received %d calls for retired routes", n)
+	}
+}
+
 // registeredPatterns lists the API mux patterns by probing the inventory's
 // own shapes plus the routes registered by name (the mux has no listing API).
 func registeredPatterns(g *Gateway) []string {

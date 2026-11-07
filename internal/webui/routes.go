@@ -198,16 +198,19 @@ func (g *Gateway) notFoundAPI(w http.ResponseWriter, r *http.Request) {
 
 var projectFocusID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
-func (g *Gateway) registerAPI(mux *http.ServeMux) {
-	mux.HandleFunc("/api/", g.notFoundAPI)
+// conv is a conversation's chat-server path.
+func conv(r *http.Request) string { return "/conversations/" + p(r, "id") }
 
-	conv := func(r *http.Request) string { return "/conversations/" + p(r, "id") }
+// chatRoutes is the chat-server passthrough table. Every target must name a
+// path the chat server's mux serves; TestGatewayRowsResolveOnBackends
+// (cmd/fleet) holds the table to that.
+func chatRoutes() []chatRoute {
 	textOK := out{headers: contentTypeOnly, ctFallback: "application/json", okOn204: true}
 	jsonForced := out{headers: contentTypeOnly, ctForce: "application/json"}
 	jsonForcedOK := out{headers: contentTypeOnly, ctForce: "application/json", okOn204: true}
 	textPlainFallback := out{headers: contentTypeOnly, ctFallback: "text/plain"}
 
-	chat := []chatRoute{
+	return []chatRoute{
 		// ── admin ──
 		{"GET /api/admin/decision-models", fixed("/admin/decision-models"), noBody, textJSON},
 		{"GET /api/admin/doctor", func(r *http.Request) string {
@@ -424,7 +427,12 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 			return withRawQuery("/browser-sessions/"+p(r, "id")+"/close", r)
 		}, noBody, textJSON},
 	}
-	for _, rt := range chat {
+}
+
+func (g *Gateway) registerAPI(mux *http.ServeMux) {
+	mux.HandleFunc("/api/", g.notFoundAPI)
+
+	for _, rt := range chatRoutes() {
 		mux.HandleFunc(rt.pattern, g.handleChatRoute(rt))
 	}
 
@@ -471,10 +479,15 @@ func (g *Gateway) registerAPI(mux *http.ServeMux) {
 	g.registerOrchestrator(mux)
 }
 
-func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
+// orchRoutes is the orchestrator passthrough table. Every target must name a
+// route the orchestrator's chi mux registers for that method;
+// TestGatewayRowsResolveOnBackends (cmd/fleet) walks this table against the
+// real mux, so a row that points at nothing fails CI instead of answering the
+// browser a 404 at run time.
+func orchRoutes() []orchRoute {
 	task := func(r *http.Request) string { return "/tasks/" + p(r, "taskId") }
 	ds := func(r *http.Request) string { return "/datasets/" + p(r, "datasetId") }
-	routes := []orchRoute{
+	return []orchRoute{
 		{"GET /api/orchestrator/admin/budgets", fixed("/admin/budgets")},
 		{"POST /api/orchestrator/admin/budgets", fixed("/admin/budgets")},
 		{"DELETE /api/orchestrator/admin/budgets/{budgetId}", func(r *http.Request) string { return "/admin/budgets/" + p(r, "budgetId") }},
@@ -502,15 +515,13 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 		{"GET /api/orchestrator/logs/{taskId}/subagents/{childId}", func(r *http.Request) string {
 			return "/logs/" + p(r, "taskId") + "/subagents/" + p(r, "childId")
 		}},
+		// Read-only: the catalog lists each server's credential-account
+		// NAMES. There is no browser write path for accounts — their secrets
+		// live in the server env file and are provisioned with
+		// `fleet mcp account set` (docs/OPERATORS.md); the
+		// /mcp-servers/{server}/accounts rows the Next.js tier carried pointed
+		// at a moc-only backend route fleet never served.
 		{"GET /api/orchestrator/mcp-servers", fixed("/mcp-servers")},
-		{"GET /api/orchestrator/mcp-servers/{server}/accounts", func(r *http.Request) string { return "/mcp-servers/" + p(r, "server") + "/accounts" }},
-		{"POST /api/orchestrator/mcp-servers/{server}/accounts", func(r *http.Request) string { return "/mcp-servers/" + p(r, "server") + "/accounts" }},
-		{"PUT /api/orchestrator/mcp-servers/{server}/accounts/{account}", func(r *http.Request) string {
-			return "/mcp-servers/" + p(r, "server") + "/accounts/" + p(r, "account")
-		}},
-		{"DELETE /api/orchestrator/mcp-servers/{server}/accounts/{account}", func(r *http.Request) string {
-			return "/mcp-servers/" + p(r, "server") + "/accounts/" + p(r, "account")
-		}},
 		{"GET /api/orchestrator/me", fixed("/api/me")},
 		{"GET /api/orchestrator/prompts", fixed("/prompts")},
 		{"POST /api/orchestrator/prompts", fixed("/prompts")},
@@ -544,7 +555,10 @@ func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
 		{"POST /api/orchestrator/tasks/{taskId}/wake", func(r *http.Request) string { return task(r) + "/wake" }},
 		{"POST /api/orchestrator/upload", fixed("/upload")},
 	}
-	for _, rt := range routes {
+}
+
+func (g *Gateway) registerOrchestrator(mux *http.ServeMux) {
+	for _, rt := range orchRoutes() {
 		mux.HandleFunc(rt.pattern, g.handleOrchRoute(rt))
 	}
 	mux.HandleFunc("POST /api/orchestrator/tasks/{taskId}/discuss", g.handleDiscuss)

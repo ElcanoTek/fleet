@@ -383,22 +383,3 @@ export function AdminStats({ items, testId }: { items: AdminStat[]; testId?: str
     </div>
   );
 }
-
-/* ── Secrets fieldset (.secrets-set / .secret-row) ── */
-
-export function SecretsFieldset({
-  legend = "Secrets (write-only)",
-  children,
-}: {
-  legend?: string;
-  children: ReactNode;
-}) {
-  return (
-    <fieldset className="mt-[0.35rem] rounded-[var(--radius-md)] border border-[var(--color-border)] px-[0.9rem] pb-4 pt-[0.4rem]">
-      <legend className="px-[0.4rem] text-[0.78rem] font-medium text-[var(--color-text-secondary)]">
-        {legend}
-      </legend>
-      {children}
-    </fieldset>
-  );
-}
