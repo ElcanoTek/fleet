@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -137,19 +136,6 @@ func TestBackupFileName(t *testing.T) {
 	}
 }
 
-// withDBName returns dsn with its database path swapped to db (preserving creds,
-// host, and query like sslmode). Used to reach the maintenance DB and the scratch
-// DBs the round-trip test provisions.
-func withDBName(t *testing.T, dsn, db string) string {
-	t.Helper()
-	u, err := url.Parse(dsn)
-	if err != nil {
-		t.Fatalf("parse dsn: %v", err)
-	}
-	u.Path = "/" + db
-	return u.String()
-}
-
 // TestBackupRestoreRoundTrip is the load-bearing test the issue's Note demands: a
 // backup is only complete if its restore is verified. It provisions two scratch
 // databases of its own (internal/testdb), seeds a
@@ -243,10 +229,6 @@ func firstBytes(b []byte, n int) []byte {
 		return b
 	}
 	return b[:n]
-}
-
-func isPermissionError(err error) bool {
-	return err != nil && bytes.Contains([]byte(err.Error()), []byte("permission denied"))
 }
 
 // pgMajorVersions returns (pg_dump major, server major, ok). ok is false if

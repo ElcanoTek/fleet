@@ -539,7 +539,7 @@ func (s *server) createDB(ctx context.Context, name, template string) error {
 	if src == "" {
 		src = "template0"
 	}
-	stmt := `CREATE DATABASE ` + quoteIdent(name) + ` TEMPLATE ` + quoteIdent(src)
+	stmt := `CREATE DATABASE ` + quoteIdent(name) + ` TEMPLATE ` + quoteIdent(src) //nolint:gosec // G202: both names are testdb-generated identifiers, quoted
 	if s.strategy != "" {
 		stmt += ` STRATEGY ` + s.strategy
 	}

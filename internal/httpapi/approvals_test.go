@@ -171,7 +171,6 @@ func TestPrevalidateEmailSkippedWhenMCPDown(t *testing.T) {
 // is best-effort, so the email stages unvalidated rather than being refused.
 // A member naming another server's validator does not hide this one.
 func TestPrevalidateEmailSkipsInteractiveHiddenValidator(t *testing.T) {
-
 	broken := `{"valid":false,"errors":["Unclosed tag: <td>"],"warnings":[]}`
 	cases := []struct {
 		name       string

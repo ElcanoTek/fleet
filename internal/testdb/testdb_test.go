@@ -225,7 +225,7 @@ func TestBackgroundModeLeavesNothingBehind(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var got []string
+	got := make([]string, 0, 6)
 	ahead := 0
 	for range 6 {
 		name, ok := s.pooled(tmpl)

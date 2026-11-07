@@ -99,7 +99,6 @@ func (c *progressChild) CallMCP(ctx context.Context, _, _ string, _ map[string]a
 // protocol, and the update the server sent is stored on the executing row
 // before the call returns.
 func TestRunStagedTool_ProgressCrossesTheBrokerAndIsStored(t *testing.T) {
-
 	useProgressPolicy(t)
 	st := &progressStore{wrote: make(chan struct{}, 1)}
 	child := &progressChild{stored: st.wrote}
@@ -132,7 +131,6 @@ func TestRunStagedTool_ProgressCrossesTheBrokerAndIsStored(t *testing.T) {
 // A tool that did not opt in asks for nothing: the call crosses exactly as
 // before and nothing is written.
 func TestRunStagedTool_NoProgressForOtherTools(t *testing.T) {
-
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{CriticalToolSuffixes: []string{"create_deal"}})
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	st := &progressStore{}
@@ -207,7 +205,6 @@ func TestProgressMessage(t *testing.T) {
 // its latest progress when there is one; the pending card of such a tool
 // carries the flag too, and nothing else changes.
 func TestWithApprovalProgress(t *testing.T) {
-
 	useProgressPolicy(t)
 	s := &Server{}
 	stored := `{"progress":12,"total":24,"message":"creating deal 12","updated_at":5}`
@@ -312,7 +309,6 @@ func newPushRelay(t *testing.T) (*pushRelay, *webpush.Service) {
 // The owner gets a normal-urgency push once an opted-in approved call has
 // recorded its outcome; a call of any other tool sends none.
 func TestExecuteClaimedApproval_PushesWhenAnOptedInCallFinishes(t *testing.T) {
-
 	useProgressPolicy(t)
 	relay, svc := newPushRelay(t)
 	st := newGroupStore(

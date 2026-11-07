@@ -172,7 +172,6 @@ func decodeGroupReply(t *testing.T, body string) map[string]approvalGroupResult 
 // Approve all approves the checked cards and declines the unchecked one, each
 // through its own claim and outcome write, exactly as a single-card POST would.
 func TestApprovalGroup_ApprovesCheckedDeclinesUnchecked(t *testing.T) {
-
 	groupPolicy(t)
 	st := newGroupStore(groupRows()...)
 	s := groupMockServer(st)
@@ -209,7 +208,6 @@ func TestApprovalGroup_ApprovesCheckedDeclinesUnchecked(t *testing.T) {
 // again: every card answers its recorded state, and a card the person settled
 // individually in between keeps that decision.
 func TestApprovalGroup_ReplayIsIdempotent(t *testing.T) {
-
 	groupPolicy(t)
 	st := newGroupStore(groupRows()...)
 	s := groupMockServer(st)
@@ -237,7 +235,6 @@ func TestApprovalGroup_ReplayIsIdempotent(t *testing.T) {
 // A decision naming any card outside this conversation or group, an unknown
 // card, a duplicate, or nothing at all is refused whole: nothing is claimed.
 func TestApprovalGroup_RefusesWholeDecisionBeforeClaiming(t *testing.T) {
-
 	groupPolicy(t)
 	rows := append(groupRows(),
 		store.Approval{ID: "ap-other-group", ConversationID: "c1", ToolName: "mcp_ix_execute_plan", GroupID: "turn-2"},
@@ -287,7 +284,6 @@ func TestApprovalGroup_RefusesWholeDecisionBeforeClaiming(t *testing.T) {
 // executions, the approved cards answer 503 and stay pending (they can be
 // approved after the restart), while the declined card still settles.
 func TestApprovalGroup_PerCardOutcomeDuringDrain(t *testing.T) {
-
 	groupPolicy(t)
 	st := newGroupStore(groupRows()...)
 	s := groupMockServer(st)
@@ -317,7 +313,6 @@ func TestApprovalGroup_PerCardOutcomeDuringDrain(t *testing.T) {
 // on the live event; a tool that did not opt in, or a stager with no turn
 // group, records nothing and its event carries no group_id key.
 func TestStage_JoinsTheTurnsApprovalGroup(t *testing.T) {
-
 	groupPolicy(t)
 	st := &groupStageStore{groupStore: newGroupStore()}
 	sink := &eventSink{}
@@ -398,7 +393,6 @@ func TestWithApprovalGroup(t *testing.T) {
 // duplicate check would otherwise answer first, after sizing a map and a
 // slice for every id).
 func TestApprovalGroup_RefusesTooManyDecisionsBeforeSizingAnything(t *testing.T) {
-
 	groupPolicy(t)
 	ids := make([]string, 1_000_000)
 	for i := range ids {
@@ -424,7 +418,6 @@ func TestApprovalGroup_RefusesTooManyDecisionsBeforeSizingAnything(t *testing.T)
 // one multi-megabyte unknown id, or one huge narrowed-but-not-approved key,
 // is answered with a short message.
 func TestApprovalGroup_ErrorsNeverEchoAHugeID(t *testing.T) {
-
 	groupPolicy(t)
 	huge := strings.Repeat("x", 4<<20)
 	for name, req := range map[string]map[string]any{

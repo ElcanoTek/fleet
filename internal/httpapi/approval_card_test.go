@@ -187,7 +187,6 @@ const describedArgs = `{"deal_id":"PM-123","floor":2.5,"big":1234567890123456789
 // The happy path: the describer runs on the SAME server with the SAME args,
 // bounded, and its canonical card rides the approval row and the live event.
 func TestStage_DescriberCard(t *testing.T) {
-
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &cardStageStore{}
@@ -228,7 +227,6 @@ func TestStage_DescriberCard(t *testing.T) {
 // A named-account seat calls the describer on its own registered server, and
 // is accepted as a read through its base server's parallel-safe entry.
 func TestStage_DescriberOnNamedAccountSeat(t *testing.T) {
-
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &cardStageStore{}
@@ -296,7 +294,6 @@ func TestStage_DescriberFallbacks(t *testing.T) {
 // No describer is called when none is declared for the tool, or when the
 // declared one cannot be trusted as a read at call time.
 func TestStage_DescriberNotCalled(t *testing.T) {
-
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	cases := []struct {
 		name     string
@@ -490,7 +487,6 @@ func TestApprovalCardRefusalIsRedactedForLog(t *testing.T) {
 // (which this host-side call cannot run), skips the call and keeps the
 // generic card. A hook on another tool, or a persona that offers it, does not.
 func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
-
 	describerPolicy(t)
 	t.Cleanup(func() { agentcore.ConfigureLifecycleHooks(nil) })
 	cases := []struct {
@@ -536,7 +532,6 @@ func TestStage_DescriberHonorsPersonaAndHooks(t *testing.T) {
 // (agent_policy.interactive_hidden_tools) is not called either: the card is
 // staged by a chat turn, which could not call it.
 func TestStage_DescriberHiddenFromChatIsNotCalled(t *testing.T) {
-
 	t.Cleanup(func() { agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{}) })
 	agentcore.ConfigureAgentPolicy(agentcore.AgentPolicy{
 		CriticalToolSuffixes:       []string{"update_deal", "create_deal"},
@@ -573,7 +568,6 @@ func (s *supersedeOrderStore) SupersedePendingApprovals(context.Context, string,
 }
 
 func TestStage_DescribesBeforeSuperseding(t *testing.T) {
-
 	describerPolicy(t)
 	broker := &describerBroker{text: goodCard}
 	st := &supersedeOrderStore{broker: broker}
