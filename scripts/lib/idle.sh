@@ -335,16 +335,16 @@ fleet_db_parts_dsn() {
   fi
 }
 
-# fleet_kv_last_options DSN — parse a libpq key=value DSN (whitespace-separated
+# fleet_kv_parse DSN — parse a libpq key=value DSN (whitespace-separated
 # key = value pairs, a value bare or single-quoted with \' and \\ escapes)
-# and set REPLY_KV_START / REPLY_KV_END to the byte span of its LAST options
-# pair (-1 when it has none) and REPLY_KV_VALUE to that pair's decoded value.
-# Returns 1 when DSN is not a well-formed key=value string. Mirrors
-# parseKeywordDSN (internal/config/dsn.go).
-fleet_kv_last_options() {
-  local LC_ALL=C s="$1" n i=0 start key val c closed any=0
+# into the arrays REPLY_KV_KEYS, REPLY_KV_VALS (decoded values) and
+# REPLY_KV_STARTS / REPLY_KV_ENDS (each pair's byte span). Returns 1 when DSN
+# is not a well-formed key=value string. Mirrors parseKeywordDSN
+# (internal/config/dsn.go).
+fleet_kv_parse() {
+  local LC_ALL=C s="$1" n i=0 start key val c closed
   n=${#s}
-  REPLY_KV_START=-1 REPLY_KV_END=-1 REPLY_KV_VALUE=""
+  REPLY_KV_KEYS=() REPLY_KV_VALS=() REPLY_KV_STARTS=() REPLY_KV_ENDS=()
   while :; do
     while (( i < n )) && [[ "${s:i:1}" == [$' \t\n\r'] ]]; do i=$((i + 1)); done
     (( i < n )) || break
@@ -382,12 +382,19 @@ fleet_kv_last_options() {
         i=$((i + 1))
       done
     fi
-    any=1
-    if [[ "$key" == "options" ]]; then
-      REPLY_KV_START=$start REPLY_KV_END=$i REPLY_KV_VALUE="$val"
-    fi
+    REPLY_KV_KEYS+=("$key") REPLY_KV_VALS+=("$val") REPLY_KV_STARTS+=("$start") REPLY_KV_ENDS+=("$i")
   done
-  (( any ))
+  (( ${#REPLY_KV_KEYS[@]} > 0 ))
+}
+
+# fleet_kv_get KEY — the value of the LAST pair named KEY in the arrays
+# fleet_kv_parse filled ("" when absent), as libpq reads it.
+fleet_kv_get() {
+  local i v=""
+  for i in "${!REPLY_KV_KEYS[@]}"; do
+    [[ "${REPLY_KV_KEYS[i]}" == "$1" ]] && v="${REPLY_KV_VALS[i]}"
+  done
+  printf '%s' "$v"
 }
 
 # fleet_kv_quote VALUE — one key=value value, single-quoted (\ and ' escaped)
@@ -404,95 +411,214 @@ fleet_kv_quote() {
   fi
 }
 
+# fleet_query_unescape S — Go's url.QueryUnescape: + is a space, %XX a byte.
+# Returns 1 on a malformed escape.
+fleet_query_unescape() {
+  local LC_ALL=C s="${1//+/ }" out="" i=0 n
+  n=${#s}
+  while (( i < n )); do
+    if [[ "${s:i:1}" == "%" ]]; then
+      [[ "${s:i+1:2}" =~ ^[0-9A-Fa-f]{2}$ ]] || return 1
+      printf -v out '%s%b' "$out" "\\x${s:i+1:2}"
+      i=$((i + 3))
+    else
+      out+="${s:i:1}"
+      i=$((i + 1))
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# fleet_query_escape S — Go's url.QueryEscape: letters, digits and -_.~ stay,
+# a space is +, every other byte %XX (upper case).
+fleet_query_escape() {
+  local LC_ALL=C s="$1" out="" i=0 n c hex
+  n=${#s}
+  while (( i < n )); do
+    c="${s:i:1}"
+    if [[ "$c" =~ ^[A-Za-z0-9._~-]$ ]]; then
+      out+="$c"
+    elif [[ "$c" == " " ]]; then
+      out+="+"
+    else
+      printf -v hex '%%%02X' "'$c"
+      out+="$hex"
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+# fleet_options_with_schema PREV SCHEMA — an options value with every earlier
+# -csearch_path= switch dropped and -csearch_path=SCHEMA appended.
+fleet_options_with_schema() {
+  local prev="" w
+  local -a words=()
+  read -r -d '' -a words <<< "$1" || true
+  for w in "${words[@]}"; do
+    [[ "$w" == -csearch_path=* ]] || prev="${prev:+$prev }$w"
+  done
+  printf '%s' "${prev:+$prev }-csearch_path=$2"
+}
+
 # fleet_dsn_with_schema DSN SCHEMA — DSN with SCHEMA as its connections' only
-# search_path: an `options=-csearch_path%3D<schema>` query parameter appended
-# to a URL DSN (to an existing options value, after a +), every other byte
-# kept as written. A key=value DSN gets `-csearch_path=<schema>` added to its
-# LAST options pair in place (any earlier schema switch dropped), or an
-# options pair appended. Mirrors config.WithSchema byte for byte.
+# search_path. A URL DSN's options query parameter (its first one, in place;
+# else appended) becomes its decoded value with any earlier -csearch_path=
+# switch dropped and -csearch_path=SCHEMA appended, re-encoded as Go's
+# url.QueryEscape does; later options parameters and every top-level
+# search_path parameter (pgx would let it win) are removed; every other byte
+# is kept. A key=value DSN gets the same edit on its LAST options pair (or an
+# options pair appended), its search_path pairs removed with the whitespace
+# before each, and no leading whitespace. Mirrors config.WithSchema byte for
+# byte.
 fleet_dsn_with_schema() {
-  local LC_ALL=C dsn="$1" schema="$2" base query frag="" out="" p found=0
-  local opt="-csearch_path%3D${schema}"
+  local LC_ALL=C dsn="$1" schema="$2" base query frag="" out="" p found=0 at=-1 i last=0 new prev v
+  dsn="${dsn#"${dsn%%[![:space:]]*}"}"
+  dsn="${dsn%"${dsn##*[![:space:]]}"}"
   if [[ "$dsn" != postgres://* && "$dsn" != postgresql://* ]]; then
-    if ! fleet_kv_last_options "$dsn"; then
+    if ! fleet_kv_parse "$dsn"; then
       printf '%s' "$dsn" # not a DSN this can rewrite safely
       return 0
     fi
-    local prev="" w new
-    local -a words=()
-    if (( REPLY_KV_START >= 0 )); then
-      read -r -d '' -a words <<< "$REPLY_KV_VALUE" || true
-      for w in "${words[@]}"; do
-        [[ "$w" == -csearch_path=* ]] || prev="${prev:+$prev }$w"
-      done
-    fi
-    new="${prev:+$prev }-csearch_path=${schema}"
-    if (( REPLY_KV_START >= 0 )); then
-      printf '%s' "${dsn:0:REPLY_KV_START}options=$(fleet_kv_quote "$new")${dsn:REPLY_KV_END}"
-    else
-      printf '%s' "$dsn options=$(fleet_kv_quote "$new")"
-    fi
+    for i in "${!REPLY_KV_KEYS[@]}"; do
+      [[ "${REPLY_KV_KEYS[i]}" == "options" ]] && at=$i
+    done
+    prev=""
+    (( at >= 0 )) && prev="${REPLY_KV_VALS[at]}"
+    new="$(fleet_options_with_schema "$prev" "$schema")"
+    for i in "${!REPLY_KV_KEYS[@]}"; do
+      local start="${REPLY_KV_STARTS[i]}" end="${REPLY_KV_ENDS[i]}" gap
+      gap="${dsn:last:start-last}"
+      last=$end
+      [[ "${REPLY_KV_KEYS[i]}" == "search_path" ]] && continue
+      if (( i == at )); then
+        out+="${gap}options=$(fleet_kv_quote "$new")"
+      else
+        out+="${gap}${dsn:start:end-start}"
+      fi
+    done
+    out+="${dsn:last}"
+    (( at >= 0 )) || out+=" options=$(fleet_kv_quote "$new")"
+    while [[ "${out:0:1}" == [$' \t\n\r'] ]]; do out="${out:1}"; done
+    printf '%s' "$out"
     return 0
   fi
   if [[ "$dsn" == *"#"* ]]; then frag="#${dsn#*#}"; dsn="${dsn%%#*}"; fi
   base="${dsn%%\?*}"
   query=""
   [[ "$dsn" == *"?"* ]] && query="${dsn#*\?}"
-  if [[ -n "$query" ]]; then
-    local IFS='&'
-    for p in $query; do
-      if [[ "${p%%=*}" == "options" ]]; then
-        (( found )) && continue
+  local -a pairs=() keep=()
+  [[ -n "$query" ]] && IFS='&' read -r -a pairs <<< "$query"
+  local optAt=-1 raw=""
+  for p in "${pairs[@]}"; do
+    case "${p%%=*}" in
+      search_path) continue ;;
+      options)
+        if (( optAt < 0 )); then
+          optAt=${#keep[@]}
+          keep+=("")
+        fi
+        raw=""
+        [[ "$p" == *=* ]] && raw="${p#*=}"
+        # A malformed value is skipped, keeping the earlier one (as Go does).
+        if v="$(fleet_query_unescape "$raw")"; then prev="$v"; fi
         found=1
-        if [[ -n "${p#options=}" && "$p" == *=* ]]; then p="${p}+${opt}"; else p="options=${opt}"; fi
-      fi
-      out="${out:+${out}&}${p}"
-    done
-  fi
-  (( found )) || out="${out:+${out}&}options=${opt}"
+        continue ;;
+    esac
+    keep+=("$p")
+  done
+  (( found )) || prev=""
+  new="options=$(fleet_query_escape "$(fleet_options_with_schema "$prev" "$schema")")"
+  if (( optAt >= 0 )); then keep[optAt]="$new"; else keep+=("$new"); fi
+  out=""
+  for p in "${keep[@]}"; do out="${out:+${out}&}${p}"; done
   printf '%s' "${base}?${out}${frag}"
 }
 
-# fleet_dsn_identity DSN — host:port/dbname of a postgres URL DSN (a socket
-# host given as ?host=…&port=… counts as the host), or "" for anything else.
-# Mirrors config.DSNIdentity.
-fleet_dsn_identity() {
-  local dsn="$1" rest auth path query host="" qhost="" qport="" p
-  case "$dsn" in
-    postgres://*) rest="${dsn#postgres://}" ;;
-    postgresql://*) rest="${dsn#postgresql://}" ;;
-    *) return 0 ;;
-  esac
-  rest="${rest%%#*}"
-  query=""
-  [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
-  rest="${rest%%\?*}"
-  auth="${rest%%/*}"
-  path=""
-  [[ "$rest" == */* ]] && path="/${rest#*/}"
-  host="${auth##*@}"
-  if [[ -z "$host" && -n "$query" ]]; then
-    local IFS='&'
-    for p in $query; do
-      case "$p" in
-        host=*) [[ -n "$qhost" ]] || qhost="${p#host=}" ;;
-        port=*) [[ -n "$qport" ]] || qport="${p#port=}" ;;
-      esac
-    done
-    if [[ -n "$qhost" ]]; then
-      qhost="${qhost//+/ }"
-      printf -v qhost '%b' "${qhost//%/\\x}"
-      [[ "$qhost" == *:* ]] && qhost="[${qhost}]"
-      host="${qhost}:${qport}"
-    fi
+# fleet_identity_host HOST — "local" for every spelling of this box (no host,
+# a socket directory, localhost, a loopback address), else HOST lower-cased.
+fleet_identity_host() {
+  local h="$1"
+  if [[ -z "$h" || "$h" == /* || "${h,,}" == "localhost" || "$h" =~ ^127\.[0-9]+\.[0-9]+\.[0-9]+$ \
+        || "$h" == "::1" || "$h" == "0:0:0:0:0:0:0:1" || "${h,,}" =~ ^::ffff:127\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    printf 'local'
+  else
+    printf '%s' "${h,,}"
   fi
-  [[ -n "$host" ]] && printf '%s' "${host}${path}"
-  return 0
 }
 
-# fleet_same_database A B — true when two DSNs name the same database: URL
-# DSNs by host:port/dbname, anything else only when identical. Mirrors the Go
-# resolver's sameDatabase.
+# fleet_dsn_identity DSN — "<host>:<port>/<dbname>" of the database a DSN
+# names (URL or key=value; port 5432 by default, every local host form
+# "local", the user as the default database), or "" when it names none.
+# Mirrors config.DSNIdentity.
+fleet_dsn_identity() {
+  local LC_ALL=C dsn="$1" rest auth hostport user="" host="" port="" db="" query p v
+  dsn="${dsn#"${dsn%%[![:space:]]*}"}"
+  dsn="${dsn%"${dsn##*[![:space:]]}"}"
+  [[ -n "$dsn" ]] || return 0
+  case "$dsn" in
+    postgres://*|postgresql://*)
+      rest="${dsn#*://}"
+      rest="${rest%%#*}"
+      query=""
+      [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
+      rest="${rest%%\?*}"
+      auth="${rest%%/*}"
+      if [[ "$rest" == */* ]]; then
+        v="${rest#*/}"
+        db="$(fleet_query_unescape "${v//+/%2B}" || true)" # a path keeps +
+      fi
+      hostport="${auth##*@}"
+      if [[ "$auth" == *@* ]]; then
+        user="${auth%@*}"
+        user="${user%%:*}"
+        user="$(fleet_query_unescape "${user//+/%2B}" || true)"
+      fi
+      if [[ "$hostport" == \[* ]]; then
+        host="${hostport#\[}"
+        host="${host%%\]*}"
+        [[ "$hostport" == *\]:* ]] && port="${hostport##*\]:}"
+      elif [[ "$hostport" == *:* ]]; then
+        host="${hostport%:*}"
+        port="${hostport##*:}"
+      else
+        host="$hostport"
+      fi
+      if [[ -n "$query" ]]; then
+        local qhost="" qport="" qdb="" seenh=0 seenp=0 seend=0
+        local -a qpairs=()
+        IFS='&' read -r -a qpairs <<< "$query"
+        for p in "${qpairs[@]}"; do
+          v="${p#*=}"
+          [[ "$p" == *=* ]] || v=""
+          case "${p%%=*}" in
+            host) (( seenh )) || { qhost="$(fleet_query_unescape "$v" || true)"; seenh=1; } ;;
+            port) (( seenp )) || { qport="$(fleet_query_unescape "$v" || true)"; seenp=1; } ;;
+            dbname) (( seend )) || { qdb="$(fleet_query_unescape "$v" || true)"; seend=1; } ;;
+          esac
+        done
+        [[ -n "$host" ]] || host="$qhost"
+        [[ -n "$port" ]] || port="$qport"
+        [[ -n "$db" ]] || db="$qdb"
+      fi
+      [[ -n "$db" ]] || db="$user"
+      ;;
+    *)
+      fleet_kv_parse "$dsn" || return 0
+      host="$(fleet_kv_get host)"
+      [[ -n "$host" ]] || host="$(fleet_kv_get hostaddr)"
+      port="$(fleet_kv_get port)"
+      db="$(fleet_kv_get dbname)"
+      [[ -n "$db" ]] || db="$(fleet_kv_get user)"
+      ;;
+  esac
+  [[ -n "$db" ]] || return 0
+  printf '%s:%s/%s' "$(fleet_identity_host "$host")" "${port:-5432}" "$db"
+}
+
+# fleet_same_database A B — true when two DSNs name the same database
+# (fleet_dsn_identity), or are identical. Mirrors the Go resolver's
+# sameDatabase.
 fleet_same_database() {
   local a="$1" b="$2" ia
   [[ -n "$a" && -n "$b" ]] || return 1

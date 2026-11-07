@@ -113,6 +113,12 @@ func TestWithSchemaAndDSNSchema(t *testing.T) {
 		{"keyword options in the middle stay in place", `host=h options=-cwork_mem=4MB dbname=x`, `host=h options='-cwork_mem=4MB -csearch_path=chat' dbname=x`},
 		{"keyword: the last options pair is the one edited", `options=-ca=1 host=h options='-c b=2'`, `options=-ca=1 host=h options='-c b=2 -csearch_path=chat'`},
 		{"keyword: a schema switch is replaced, not stacked", `host=h options='-ca=1 -csearch_path=sched'`, `host=h options='-ca=1 -csearch_path=chat'`},
+		// #2055 review: a top-level search_path (pgx only) would win over the
+		// options switch, so it is removed, in both forms.
+		{"url: a top-level search_path is removed", "postgres://u@h/db?search_path=other&sslmode=disable", "postgres://u@h/db?sslmode=disable&" + chatOpt},
+		{"url: only search_path params removed", "postgres://u@h/db?search_path=a&options=-ca%3D1&search_path=b", "postgres://u@h/db?options=-ca%3D1+-csearch_path%3Dchat"},
+		{"keyword: a leading search_path is removed", "search_path=other host=h dbname=db", "host=h dbname=db options=-csearch_path=chat"},
+		{"keyword: a middle search_path is removed", "host=h search_path='a, b' options='-ca=1' dbname=x", "host=h options='-ca=1 -csearch_path=chat' dbname=x"},
 		{"url: existing options extended in place", "postgres://u@h/db?options=-ca%3D1&sslmode=disable", "postgres://u@h/db?options=-ca%3D1+-csearch_path%3Dchat&sslmode=disable"},
 	}
 	for _, tc := range cases {
@@ -190,6 +196,48 @@ func TestOverrideFor(t *testing.T) {
 	}
 	if got := one.ForSched(other); DSNSchema(got) != SchedSchema {
 		t.Errorf("ForSched(other) = %q, want the sched schema", got)
+	}
+}
+
+// TestDSNIdentityNormalises: spellings of one database compare equal (a
+// default port, every local host form, URL vs key=value, the user as the
+// default database), so neither the layout decision nor the distinct-stores
+// guard can be fooled into treating one database as two (#2055 review).
+func TestDSNIdentityNormalises(t *testing.T) {
+	same := [][]string{
+		{"postgres://u@h/db", "postgres://v:pw@H:5432/db?sslmode=require", "host=h dbname=db", "host=h port=5432 dbname=db user=x"},
+		{"postgres://u@localhost/db", "postgres://u@127.0.0.1:5432/db", "postgres://u@[::1]/db", "postgres://u@/db", "postgres://u@/db?host=/var/run/postgresql", "host=/tmp dbname=db", "hostaddr=127.0.0.1 dbname=db"},
+		{"postgres://fleet@h/fleet", "postgres://fleet@h", "host=h user=fleet"},
+	}
+	for _, group := range same {
+		want := DSNIdentity(group[0])
+		if want == "" {
+			t.Fatalf("DSNIdentity(%q) is empty", group[0])
+		}
+		for _, d := range group[1:] {
+			if got := DSNIdentity(d); got != want {
+				t.Errorf("DSNIdentity(%q) = %q, want %q (same database as %q)", d, got, want, group[0])
+			}
+		}
+	}
+	for _, pair := range [][2]string{
+		{"postgres://u@h/db", "postgres://u@h:5433/db"},
+		{"postgres://u@h/db", "postgres://u@other/db"},
+		{"postgres://u@localhost/a", "postgres://u@localhost/b"},
+	} {
+		if DSNIdentity(pair[0]) == DSNIdentity(pair[1]) {
+			t.Errorf("%q and %q compare as one database", pair[0], pair[1])
+		}
+	}
+	// The guard and the layout both see through the spelling.
+	if err := EnsureDistinctStores("postgres://u@h/x", "postgres://u@h:5432/x"); err == nil {
+		t.Error("two spellings of one database, both in public, were not refused")
+	}
+	d := ResolveDSNs(func(k string) string {
+		return map[string]string{"FLEET_CHAT_DATABASE_URL": "postgres://a@localhost/one", "FLEET_SCHED_DATABASE_URL": "postgres://b@127.0.0.1:5432/one"}[k]
+	})
+	if d.Layout != LayoutSchemas {
+		t.Errorf("two spellings of one local database resolved to layout %q", d.Layout)
 	}
 }
 

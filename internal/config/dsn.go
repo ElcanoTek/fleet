@@ -237,36 +237,77 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// DSNIdentity returns host:port/dbname for a postgres URL DSN (a socket host
-// given as ?host=…&port=… counts as the host), or "" when the DSN is not a
-// parseable URL with a host; key=value DSNs are compared verbatim by
-// sameDatabase instead.
+// DSNIdentity returns "<host>:<port>/<dbname>" for the database a DSN names,
+// URL or key=value, normalised so that spellings of one database compare
+// equal: the port defaults to 5432; every local form — no host, a Unix-socket
+// directory, localhost, a loopback address — is "local" (one box, one
+// cluster per port); other hosts are lower-cased; the database defaults to
+// the user, as in libpq. It is "" when the DSN names no database at all.
+// scripts/lib/idle.sh's fleet_dsn_identity mirrors it.
 func DSNIdentity(dsn string) string {
-	dsn = strings.TrimSpace(dsn)
-	if dsn == "" {
+	host, port, db, ok := dsnTarget(strings.TrimSpace(dsn))
+	if !ok || db == "" {
 		return ""
 	}
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return ""
+	if port == "" {
+		port = "5432"
 	}
-	host := u.Host
-	if host == "" {
-		if h := u.Query().Get("host"); h != "" {
-			host = net.JoinHostPort(h, u.Query().Get("port"))
-		}
-	}
-	if host == "" {
-		return ""
-	}
-	return host + u.Path
+	return identityHost(host) + ":" + port + "/" + db
 }
 
-// sameDatabase reports whether two DSNs name the same database: URL DSNs by
-// host:port/dbname (so DSNs differing only in user, password, options or
-// schema still match), and any two DSNs identical but for a WithSchema
-// switch — key=value form included — always. A key=value DSN is otherwise
-// compared verbatim, never parsed for its host and database.
+// dsnTarget extracts host, port and database (else user) from a DSN.
+func dsnTarget(dsn string) (host, port, db string, ok bool) {
+	if dsn == "" {
+		return "", "", "", false
+	}
+	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
+		q := u.Query()
+		host, port = u.Hostname(), u.Port()
+		if host == "" {
+			host = q.Get("host")
+		}
+		if port == "" {
+			port = q.Get("port")
+		}
+		db = strings.TrimPrefix(u.Path, "/")
+		if db == "" {
+			db = q.Get("dbname")
+		}
+		if db == "" && u.User != nil {
+			db = u.User.Username()
+		}
+		return host, port, db, true
+	}
+	kv, ok := parseKeywordDSN(dsn)
+	if !ok {
+		return "", "", "", false
+	}
+	host = kv.get("host")
+	if host == "" {
+		host = kv.get("hostaddr")
+	}
+	db = kv.get("dbname")
+	if db == "" {
+		db = kv.get("user")
+	}
+	return host, kv.get("port"), db, true
+}
+
+// identityHost folds every spelling of "this box" into "local".
+func identityHost(h string) string {
+	if h == "" || strings.HasPrefix(h, "/") || strings.EqualFold(h, "localhost") {
+		return "local"
+	}
+	if ip := net.ParseIP(h); ip != nil && ip.IsLoopback() {
+		return "local"
+	}
+	return strings.ToLower(h)
+}
+
+// sameDatabase reports whether two DSNs name the same database: by
+// DSNIdentity (so DSNs differing only in user, password, options, schema,
+// form or the spelling of a local host still match), and any two DSNs
+// identical but for a WithSchema switch always.
 func sameDatabase(a, b string) bool {
 	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
 	if a == "" || b == "" {
@@ -333,9 +374,15 @@ func WithSchema(dsn, schema string) string {
 		}
 		return opt
 	}
+	// A top-level search_path parameter (pgx accepts one; libpq rejects it)
+	// would compete with the options switch — and pgx lets it win — so it is
+	// removed: the store's schema must be the connection's only search_path.
 	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
-		dsn = stripSchemaOption(dsn)
-		return withRawQuery(dsn, func(q string) string { return editRawOption(q, appendOpt) })
+		// appendOpt drops an earlier schema switch itself, so the options
+		// parameter keeps its place.
+		return withRawQuery(dsn, func(q string) string {
+			return editRawOption(dropRawParam(q, "search_path"), appendOpt)
+		})
 	}
 	kv, ok := parseKeywordDSN(dsn)
 	if !ok {
@@ -343,13 +390,30 @@ func WithSchema(dsn, schema string) string {
 		return dsn
 	}
 	// In place, after the options already there (a later -c wins).
-	return editKeywordOption(dsn, kv, appendOpt)
+	return editKeywordOption(dsn, kv, appendOpt, "search_path")
 }
 
-// DSNSchema returns the schema dsn sets as its search_path (the last
-// -c search_path=… switch in its options, else a pgx search_path parameter),
-// or "" when it names none — the database's default search path, i.e.
-// public. Only one plain schema counts; a list reports "".
+// dropRawParam removes every key=value pair named key from a raw URL query,
+// keeping the others' order and encoding.
+func dropRawParam(rawQuery, key string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	var keep []string
+	for _, p := range strings.Split(rawQuery, "&") {
+		if k, _, _ := strings.Cut(p, "="); k != key {
+			keep = append(keep, p)
+		}
+	}
+	return strings.Join(keep, "&")
+}
+
+// DSNSchema returns the schema dsn sets as its search_path, or "" when it
+// names none — the database's default search path, i.e. public. A top-level
+// search_path parameter (pgx only) wins, as in Postgres, which applies
+// startup parameters after the options switches; otherwise the last
+// -c search_path=… switch in options counts. Only one plain schema counts; a
+// list reports "".
 func DSNSchema(dsn string) string {
 	dsn = strings.TrimSpace(dsn)
 	var options, searchPath string
@@ -358,7 +422,7 @@ func DSNSchema(dsn string) string {
 	} else if kv, ok := parseKeywordDSN(dsn); ok {
 		options, searchPath = kv.get("options"), kv.get("search_path")
 	}
-	schema := searchPath
+	schema := ""
 	fields := strings.Fields(options)
 	for i := 0; i < len(fields); i++ {
 		f := fields[i]
@@ -371,6 +435,10 @@ func DSNSchema(dsn string) string {
 				schema = strings.TrimPrefix(f, p)
 			}
 		}
+	}
+	if searchPath != "" {
+		// pgx sends a top-level search_path after options, so it wins.
+		schema = searchPath
 	}
 	if !PlainIdentifier(schema) {
 		return ""
@@ -561,7 +629,15 @@ func (kv *keywordDSN) get(key string) string {
 // stands, appended after a space when absent, or removed (with the
 // whitespace before it) when edit returns "". Every other byte is kept, so
 // the shell mirror (fleet_dsn_with_schema) produces the same text.
-func editKeywordOption(s string, kv keywordDSN, edit func(string) string) string {
+//
+// Pairs whose key is in drop are removed, each with the whitespace before it.
+// The result never starts with whitespace. scripts/lib/idle.sh's
+// fleet_dsn_with_schema implements exactly this walk.
+func editKeywordOption(s string, kv keywordDSN, edit func(string) string, drop ...string) string {
+	dropped := map[string]bool{}
+	for _, k := range drop {
+		dropped[k] = true
+	}
 	at := -1
 	for i, k := range kv.keys {
 		if k == "options" {
@@ -573,20 +649,26 @@ func editKeywordOption(s string, kv keywordDSN, edit func(string) string) string
 		prev = kv.vals[at]
 	}
 	next := edit(prev)
-	switch {
-	case at < 0 && next == "":
-		return s
-	case at < 0:
-		return s + " options=" + quoteKeywordValue(next)
-	case next == "":
-		start := kv.spans[at][0]
-		for start > 0 && (s[start-1] == ' ' || s[start-1] == '\t') {
-			start--
+	var b strings.Builder
+	last := 0
+	for i, k := range kv.keys {
+		start, end := kv.spans[i][0], kv.spans[i][1]
+		gap := s[last:start]
+		last = end
+		switch {
+		case dropped[k], i == at && next == "":
+			continue // the pair goes, with the whitespace before it
+		case i == at:
+			b.WriteString(gap + "options=" + quoteKeywordValue(next))
+		default:
+			b.WriteString(gap + s[start:end])
 		}
-		return s[:start] + s[kv.spans[at][1]:]
-	default:
-		return s[:kv.spans[at][0]] + "options=" + quoteKeywordValue(next) + s[kv.spans[at][1]:]
 	}
+	b.WriteString(s[last:])
+	if at < 0 && next != "" {
+		b.WriteString(" options=" + quoteKeywordValue(next))
+	}
+	return strings.TrimLeft(b.String(), " \t\n\r")
 }
 
 // quoteKeywordValue renders one key=value value, single-quoted (with \ and '

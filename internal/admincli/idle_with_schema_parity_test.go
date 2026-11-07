@@ -28,6 +28,18 @@ func TestIdleLibWithSchemaParity(t *testing.T) {
 		`host=h password='a b\'c' dbname=db`,
 		`host=h options='-ca=1 -csearch_path=sched'`,
 		"host = h  options = '-ca=1'",
+		// #2055 review round 3: top-level search_path, other encodings,
+		// several options parameters, a switch to replace.
+		"postgres://u@h/db?search_path=other&sslmode=disable",
+		"postgres://u@h/db?search_path=a&options=-ca%3D1&search_path=b",
+		"postgres://u@h/db?options=-c%20a%3D1&sslmode=disable",
+		"postgres://u@h/db?options=-csearch_path%3Dsched&sslmode=disable",
+		"postgres://u@h/db?options=-ca%3D1&options=-cb%3D2",
+		"postgres://u@h/db?options=%ZZ&options=-cb%3D2",
+		"  postgres://u@h/db  ",
+		"search_path=other host=h dbname=db",
+		"host=h search_path='a, b' options='-ca=1' dbname=x",
+		"  host=h dbname=db  ",
 	} {
 		for _, schema := range []string{config.ChatSchema, config.SchedSchema} {
 			want := config.WithSchema(dsn, schema)
