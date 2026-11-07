@@ -1321,15 +1321,32 @@ fi
 # freshly generated password was written into the env-file DSN while the
 # CREATE ROLE below was skipped (role exists), leaving a DSN the cluster
 # rejects — the "idempotent re-run" broke DB auth on the next restart.
+#
+# #2055 review round 6: the password the driver sends is pgx's — a
+# ?password= query parameter overrides the userinfo one (the last occurrence
+# winning), so it is the live password when present.
 env_dsn_password() {
-  local url
+  local url rest pw="" q p v
   url="$(fleet_env_value "$ENV_FILE" "$1")"
+  [[ "$url" == postgres://* || "$url" == postgresql://* ]] || return 0
+  rest="${url#*://}"
   if [[ "$url" =~ ^postgres(ql)?://[^:/@]+:([^@/]+)@ ]]; then
     # The DSN carries the password percent-encoded; the role gets it decoded,
     # exactly as the driver will send it.
-    local pw="${BASH_REMATCH[2]}"
-    printf '%b' "${pw//%/\\x}"
+    pw="${BASH_REMATCH[2]}"
+    printf -v pw '%b' "${pw//%/\\x}"
   fi
+  [[ "${rest%%/*}" == *@* ]] && rest="${rest#*@}"
+  if [[ "$rest" == *"?"* ]]; then
+    q="${rest#*\?}"
+    local -a pairs=()
+    IFS='&' read -r -a pairs <<< "$q"
+    for p in "${pairs[@]}"; do
+      [[ "${p%%=*}" == "password" && "$p" == *=* ]] || continue
+      v="$(fleet_pgx_unescape "${p#*=}")" && pw="$v"
+    done
+  fi
+  printf '%s' "$pw"
 }
 
 # pg_exists role|db NAME — probe the LOCAL cluster (as postgres) for an

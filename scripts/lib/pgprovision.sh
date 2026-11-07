@@ -37,10 +37,25 @@ SQL
 # fleet_dsn_role_db DSN — print "ROLE DATABASE" from a postgres:// URL DSN
 # whose user and database are lower-case plain identifiers (safe to quote
 # into SQL); return 1 for anything else.
+#
+# #2055 review round 6: pgx (like libpq) lets a query parameter override the
+# URL's role and database, the last occurrence winning, and reads no "#"
+# fragment (it is part of the name). A DSN with a user, dbname, database or
+# service query parameter, or a "#", is refused rather than read two ways;
+# the userinfo ends at the first "@" before any "/", as in pgx.
 fleet_dsn_role_db() {
-  local re='^postgres(ql)?://([a-z_][a-z0-9_]*)(:[^@]*)?@[^/?#]*/([a-z_][a-z0-9_]*)([?#].*)?$'
+  local LC_ALL=C re='^postgres(ql)?://([a-z_][a-z0-9_]*)(:[^@/]*)?@[^/?#@]*/([a-z_][a-z0-9_]*)(\?[^#]*)?$' q p k
   [[ "$1" =~ $re ]] || return 1
-  printf '%s %s\n' "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]}"
+  local role="${BASH_REMATCH[2]}" db="${BASH_REMATCH[4]}"
+  q="${BASH_REMATCH[5]#\?}"
+  local -a pairs=()
+  [[ -n "$q" ]] && IFS='&' read -r -a pairs <<< "$q"
+  for p in "${pairs[@]}"; do
+    k="${p%%=*}"
+    printf -v k '%b' "${k//%/\\x}"
+    case "$k" in user|dbname|database|service) return 1 ;; esac
+  done
+  printf '%s %s\n' "$role" "$db"
 }
 
 # fleet_dsn_is_local_default DSN — true when a postgres:// URL DSN names the
@@ -56,13 +71,16 @@ fleet_dsn_is_local_default() {
     postgres://*|postgresql://*) rest="${dsn#*://}" ;;
     *) return 1 ;;
   esac
-  rest="${rest%%#*}"
+  # pgx reads no "#" fragment, and ends the userinfo at the FIRST "@": a
+  # "#", a second "@" or a host list is not a DSN this answers for.
+  [[ "$rest" != *"#"* ]] || return 1
   query=""
   [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
   rest="${rest%%\?*}"
   [[ "$rest" == */* ]] || return 1
   auth="${rest%%/*}"
-  hostport="${auth##*@}"
+  hostport="${auth#*@}"
+  [[ "$hostport" != *[@,]* ]] || return 1
   if [[ "$hostport" == \[* ]]; then
     host="${hostport%%\]*}]"
     port=""

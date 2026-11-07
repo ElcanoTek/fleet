@@ -26,6 +26,40 @@ query parameter changes — so the shell mirror in `scripts/lib/idle.sh`
 (`fleet_resolve_dsn`, used by `update.sh`'s idle gate to psql into the stores)
 produces the same bytes; `TestIdleLibResolveDSNParity` pins the two.
 
+**Where a DSN connects is pgx's answer.** Every question about a DSN's target
+(host, port, database, role, password) is answered by `config.ParseConnTarget`,
+which is `pgconn.ParseConfig`, the reading the stores' own connections use.
+That covers the "same database?" identity (`config.DSNIdentity`), and so the
+layout decision, `fleet status` and `validate-config`. It also covers the
+host, port and role that `fleet backup`/`restore` hand to pg_dump/pg_restore,
+and consolidate's sources and instance check. Only *rewriting* a DSN (the
+schema option, consolidate's target DSN) edits the string itself. As in pgx:
+
+- a query parameter (`?host=`, `?port=`, `?dbname=`, `?user=`, `?password=`)
+  overrides the URL's own part, and the last occurrence wins;
+- what the DSN leaves out comes from the `PG*` environment (`PGHOST`,
+  `PGPORT`, `PGDATABASE`, `PGUSER`, a service file), `.pgpass` for the
+  password, then the defaults (the default socket directory, port 5432, the OS
+  user, and the role name as the database). This is deliberate, because the
+  process asking connects with that same environment. The exception is
+  `fleet db consolidate`, which answers for the *service's* environment (its
+  env file) and so refuses to run while one of those `PG*` target variables is
+  set in its shell;
+- a DSN listing several hosts (`host=a,b`, `postgres://a,b/db`) has no
+  identity and is refused wherever a target is needed: fleet needs one server
+  per store.
+
+The shell scripts take the same answer from the binary. `fleet_dsn_identity`
+(`scripts/lib/idle.sh`) asks the hidden verb `fleet db dsn-identity`, passing
+the DSN on stdin and never as an argument. It uses `FLEET_IDENTITY_BIN`, else
+`$FLEET_INSTALL_DIR/fleet` (default `/opt/fleet/fleet`), else `fleet` on PATH.
+Its shell mirror, which follows the same rules, answers only before any binary
+exists (a first bootstrap) or when the binary is too old to know the verb. It
+does not follow a service file. `TestIdleLibIdentityParity` pins the mirror to
+the Go answer. The other shell readers of a DSN either follow pgx or refuse:
+`fleet_dsn_role_db` refuses a DSN whose query overrides its role or database,
+and bootstrap's `env_dsn_password` takes a `?password=` override.
+
 Because the schema travels inside the DSN, every consumer agrees without
 deciding anything: `fleet serve`, the MCP broker, `fleet validate-config`,
 `fleet eval`, every admin verb (`status`, `import`, `migrate`, `backup`,

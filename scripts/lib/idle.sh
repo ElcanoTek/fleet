@@ -548,72 +548,140 @@ fleet_identity_host() {
 }
 
 # fleet_dsn_identity DSN — "<host>:<port>/<dbname>" of the database a DSN
-# names (URL or key=value; port 5432 by default, every local host form
-# "local", the user as the default database), or "" when it names none.
-# Mirrors config.DSNIdentity.
+# connects to, or "" when it names none: config.DSNIdentity. The answer
+# comes from the Go implementation itself — the hidden verb
+# `fleet db dsn-identity`, fed the DSN on stdin (never argv) — whenever a
+# fleet binary is at hand: FLEET_IDENTITY_BIN when set (set it empty to
+# force the shell fallback), else ${FLEET_INSTALL_DIR:-/opt/fleet}/fleet,
+# else `fleet` on PATH. Only before any binary exists (a first bootstrap),
+# or with one too old to know the verb, does fleet_dsn_identity_sh answer.
 fleet_dsn_identity() {
-  local LC_ALL=C dsn="$1" rest auth hostport user="" host="" port="" db="" query p v
+  local bin="${FLEET_IDENTITY_BIN-__auto__}" id
+  if [[ "$bin" == "__auto__" ]]; then
+    bin="${FLEET_INSTALL_DIR:-/opt/fleet}/fleet"
+    [[ -x "$bin" ]] || bin="$(command -v fleet 2>/dev/null || true)"
+  fi
+  if [[ -n "$bin" && -x "$bin" ]] && id="$(printf '%s' "$1" | "$bin" db dsn-identity 2>/dev/null)"; then
+    printf '%s' "$id"
+    return 0
+  fi
+  fleet_dsn_identity_sh "$1"
+}
+
+# fleet_pgx_unescape S — a URL component decoded as pgx (and libpq) decode
+# it: leading and trailing spaces dropped, an interior space refused, %XX
+# decoded (%00 refused), "+" kept as "+". Returns 1 when pgx would refuse it.
+fleet_pgx_unescape() {
+  local LC_ALL=C s="$1"
+  s="${s#"${s%%[! ]*}"}"
+  s="${s%"${s##*[! ]}"}"
+  [[ "$s" != *" "* && "$s" != *%00* ]] || return 1
+  fleet_query_unescape "${s//+/%2B}"
+}
+
+# fleet_dsn_identity_sh DSN — the shell mirror of config.DSNIdentity, which
+# reads the DSN through pgconn.ParseConfig. It follows pgx's rules: the
+# userinfo ends at the first "@" before any "/"; a query parameter (host,
+# port, dbname/database, user) overrides the URL's own part, the last
+# occurrence winning; what the DSN leaves out comes from PGHOST, PGPORT,
+# PGDATABASE and PGUSER, then the defaults (a default socket or localhost —
+# "local" either way — port 5432, the OS user); the database defaults to the
+# role. It answers "" for what pgx refuses or this mirror cannot follow: a
+# malformed DSN, several hosts, a bad port, a service (PGSERVICE / service=).
+# TestIdleLibIdentityParity pins it to the Go answer.
+fleet_dsn_identity_sh() {
+  local LC_ALL=C dsn="$1" rest head auth netloc user="" host="" port="" db="" query p k v i
+  local hset=0 pset=0 dset=0 uset=0
   dsn="${dsn#"${dsn%%[![:space:]]*}"}"
   dsn="${dsn%"${dsn##*[![:space:]]}"}"
   [[ -n "$dsn" ]] || return 0
   case "$dsn" in
     postgres://*|postgresql://*)
       rest="${dsn#*://}"
-      rest="${rest%%#*}"
-      query=""
-      [[ "$rest" == *"?"* ]] && query="${rest#*\?}"
-      rest="${rest%%\?*}"
-      auth="${rest%%/*}"
-      if [[ "$rest" == */* ]]; then
-        v="${rest#*/}"
-        db="$(fleet_query_unescape "${v//+/%2B}" || true)" # a path keeps +
+      head="${rest%%/*}"
+      if [[ "$head" == *@* ]]; then
+        auth="${rest%%@*}"
+        rest="${rest#*@}"
+        if [[ -n "${auth%%:*}" ]]; then
+          user="$(fleet_pgx_unescape "${auth%%:*}")" || return 0
+          uset=1
+        fi
       fi
-      hostport="${auth##*@}"
-      if [[ "$auth" == *@* ]]; then
-        user="${auth%@*}"
-        user="${user%%:*}"
-        user="$(fleet_query_unescape "${user//+/%2B}" || true)"
-      fi
-      if [[ "$hostport" == \[* ]]; then
-        host="${hostport#\[}"
+      netloc="${rest%%[/?]*}"
+      rest="${rest:${#netloc}}"
+      [[ "$netloc" != *,* ]] || return 0
+      if [[ "$netloc" == \[* ]]; then
+        [[ "$netloc" == *\]* ]] || return 0
+        host="${netloc#\[}"
         host="${host%%\]*}"
-        [[ "$hostport" == *\]:* ]] && port="${hostport##*\]:}"
-      elif [[ "$hostport" == *:* ]]; then
-        host="${hostport%:*}"
-        port="${hostport##*:}"
+        v="${netloc#*\]}"
+        if [[ -n "$v" ]]; then
+          [[ "$v" == :* ]] || return 0
+          port="${v#:}"
+        fi
       else
-        host="$hostport"
+        host="${netloc%%:*}"
+        [[ "$netloc" == *:* ]] && port="${netloc#*:}"
       fi
-      if [[ -n "$query" ]]; then
-        local qhost="" qport="" qdb="" seenh=0 seenp=0 seend=0
-        local -a qpairs=()
-        IFS='&' read -r -a qpairs <<< "$query"
-        for p in "${qpairs[@]}"; do
+      if [[ -n "$host" ]]; then host="$(fleet_pgx_unescape "$host")" || return 0; hset=1; fi
+      if [[ -n "$port" ]]; then port="$(fleet_pgx_unescape "$port")" || return 0; pset=1; fi
+      if [[ "$rest" == /* ]]; then
+        rest="${rest#/}"
+        v="${rest%%\?*}"
+        rest="${rest:${#v}}"
+        if [[ -n "$v" ]]; then db="$(fleet_pgx_unescape "$v")" || return 0; dset=1; fi
+      fi
+      if [[ "$rest" == \?* ]]; then
+        query="${rest#\?}"
+        while [[ -n "$query" ]]; do
+          p="${query%%&*}"
+          if [[ "$query" == *"&"* ]]; then query="${query#*&}"; else query=""; fi
+          [[ "$p" == *=* ]] || return 0
           v="${p#*=}"
-          [[ "$p" == *=* ]] || v=""
-          case "${p%%=*}" in
-            host) (( seenh )) || { qhost="$(fleet_query_unescape "$v" || true)"; seenh=1; } ;;
-            port) (( seenp )) || { qport="$(fleet_query_unescape "$v" || true)"; seenp=1; } ;;
-            dbname) (( seend )) || { qdb="$(fleet_query_unescape "$v" || true)"; seend=1; } ;;
+          [[ "$v" != *=* ]] || return 0
+          k="$(fleet_pgx_unescape "${p%%=*}")" || return 0
+          v="$(fleet_pgx_unescape "$v")" || return 0
+          case "$k" in
+            host) host="$v" hset=1 ;;
+            port) port="$v" pset=1 ;;
+            dbname|database) db="$v" dset=1 ;;
+            user) user="$v" uset=1 ;;
+            service) return 0 ;;
           esac
         done
-        [[ -n "$host" ]] || host="$qhost"
-        [[ -n "$port" ]] || port="$qport"
-        [[ -n "$db" ]] || db="$qdb"
       fi
-      [[ -n "$db" ]] || db="$user"
       ;;
     *)
       fleet_kv_parse "$dsn" || return 0
-      host="$(fleet_kv_get host)"
-      [[ -n "$host" ]] || host="$(fleet_kv_get hostaddr)"
-      port="$(fleet_kv_get port)"
-      db="$(fleet_kv_get dbname)"
-      [[ -n "$db" ]] || db="$(fleet_kv_get user)"
+      for i in "${!REPLY_KV_KEYS[@]}"; do
+        v="${REPLY_KV_VALS[i]}"
+        case "${REPLY_KV_KEYS[i]}" in
+          host) host="$v" hset=1 ;;
+          port) port="$v" pset=1 ;;
+          dbname|database) db="$v" dset=1 ;;
+          user) user="$v" uset=1 ;;
+          service) return 0 ;;
+        esac
+      done
       ;;
   esac
+  [[ -z "${PGSERVICE:-}" ]] || return 0
+  (( hset )) || host="${PGHOST:-}"
+  (( pset )) || port="${PGPORT:-}"
+  (( dset )) || db="${PGDATABASE:-}"
+  (( uset )) || user="${PGUSER:-}"
+  [[ -n "$user" ]] || user="$(id -un 2>/dev/null || true)"
+  [[ "$host$port" != *,* ]] || return 0
+  if [[ -z "$port" ]]; then
+    port=5432
+  else
+    [[ "$port" =~ ^[0-9]+$ ]] || return 0
+    while [[ "$port" == 0?* ]]; do port="${port#0}"; done
+    (( ${#port} <= 5 && port >= 1 && port <= 65535 )) || return 0
+  fi
+  [[ -n "$db" ]] || db="$user"
   [[ -n "$db" ]] || return 0
-  printf '%s:%s/%s' "$(fleet_identity_host "$host")" "${port:-5432}" "$db"
+  printf '%s:%s/%s' "$(fleet_identity_host "$host")" "$port" "$db"
 }
 
 # fleet_same_database A B — true when two DSNs name the same database
