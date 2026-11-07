@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { currentBuildId } from "@/app/lib/buildId";
+import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 
 // Deploy drift: has the server moved to a newer build than the JavaScript this
 // tab is running?
@@ -101,15 +102,14 @@ export function startDeployDriftProbe(): () => void {
     void probeDeploy();
   };
   probeIfVisible();
-  document.addEventListener("visibilitychange", probeIfVisible);
+  // The interval and the come-back-into-view probe (shared/lib/visibleInterval).
+  const stopInterval = startVisibleInterval(() => void probeDeploy(), PROBE_INTERVAL_MS);
   window.addEventListener("focus", probeIfVisible);
   window.addEventListener("online", probeIfVisible);
-  const interval = window.setInterval(probeIfVisible, PROBE_INTERVAL_MS);
   return () => {
-    document.removeEventListener("visibilitychange", probeIfVisible);
+    stopInterval();
     window.removeEventListener("focus", probeIfVisible);
     window.removeEventListener("online", probeIfVisible);
-    window.clearInterval(interval);
   };
 }
 

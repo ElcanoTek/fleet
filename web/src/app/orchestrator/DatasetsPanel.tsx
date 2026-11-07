@@ -13,6 +13,7 @@ import { useDialogA11y } from "@/app/shared/ui/useDialogA11y";
 import { downloadFile } from "@/app/shared/lib/downloadFile";
 import { plural } from "./plural";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
 // Dataset / table agent (#514): define a typed table + per-row goal, import
 // rows (CSV), run the agent over pending rows, review PROPOSED write-backs
@@ -151,15 +152,16 @@ export function DatasetsPanel() {
     };
   }, [reloadRows]);
 
-  // Poll while the selected dataset is running so statuses tick over.
-  useEffect(() => {
-    if (selected?.status !== "running") return;
-    const id = setInterval(() => {
+  // Poll while the selected dataset is running so statuses tick over; the
+  // poll rests while the tab is hidden (#2004).
+  useVisibleInterval(
+    () => {
       void reloadList();
       void reloadRows();
-    }, 5000);
-    return () => clearInterval(id);
-  }, [selected?.status, reloadList, reloadRows]);
+    },
+    5000,
+    selected?.status === "running",
+  );
 
   const act = async (label: string, fn: () => Promise<unknown>) => {
     if (busy) return;

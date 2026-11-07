@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "@/app/lib/navigation";
 
 import { useIsAdmin } from "../../useIsAdmin";
@@ -10,6 +10,7 @@ import { NoticeBanner } from "@/app/shared/ui/NoticeBanner";
 import { Icon } from "@/app/shared/ui/Icon";
 import { formatBytes, formatUptime } from "../lib";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
+import { useVisibleInterval } from "@/app/shared/hooks/useVisibleInterval";
 
 type ServerStats = {
   available: boolean;
@@ -103,16 +104,21 @@ export default function AdminServerPage() {
         if (!isStale()) setError(errorMessage(err, "server stats unavailable"));
       });
 
+  // The poll's staleness check: the current load effect's, so a poll that
+  // resolves after an unmount is dropped like the first load.
+  const pollStale = useRef<() => boolean>(() => true);
   useEffect(() => {
     if (admin !== "admin") return;
     let stale = false;
-    void load(() => stale);
-    const id = window.setInterval(() => void load(() => stale), REFRESH_MS);
+    const isStale = () => stale;
+    pollStale.current = isStale;
+    void load(isStale);
     return () => {
       stale = true;
-      window.clearInterval(id);
     };
   }, [admin]);
+  // Re-polls while the tab is visible, and once when it comes back (#2004).
+  useVisibleInterval(() => void load(pollStale.current), REFRESH_MS, admin === "admin");
 
   if (admin !== "admin") return <AdminGateFallback state={admin} />;
 

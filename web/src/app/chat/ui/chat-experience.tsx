@@ -167,6 +167,7 @@ import { readPref, writePref } from "@/app/shared/lib/storage";
 import { copyText } from "@/app/shared/lib/clipboard";
 import { errorMessage } from "@/app/shared/lib/errorMessage";
 import { filenameFrom, saveBlob } from "@/app/shared/lib/downloadFile";
+import { startVisibleInterval } from "@/app/shared/lib/visibleInterval";
 
 // Wall-clock read, isolated in a module-level helper. The async stream
 // handlers below run during a render pass (the React Compiler's lint rules
@@ -1762,8 +1763,8 @@ export function ChatExperience({
   }, [abortControllersRef]);
 
   // Keep the tab's client config current. Tiers and the lockdown list they
-  // drive are re-read on mount, visibilitychange, focus, online, and a
-  // 5-minute interval, so a long-lived tab picks up an operator's change
+  // drive are re-read on mount, on coming back into view, focus, online, and
+  // a 5-minute interval while visible, so a long-lived tab picks up an operator's change
   // without a reload. (Deploy detection used to ride on these same events
   // here; it is app-wide now — shared/deployDrift.ts, surfaced by
   // shared/UpdateNotice.tsx — so every page notices a deploy, not just chat.)
@@ -1780,15 +1781,15 @@ export function ChatExperience({
       });
     };
     handle();
-    document.addEventListener("visibilitychange", handle);
+    // The interval rests while the tab is hidden and re-reads once as it
+    // comes back into view — not as it is hidden (#2004).
+    const stopInterval = startVisibleInterval(handle, 5 * 60 * 1000);
     window.addEventListener("focus", handle);
     window.addEventListener("online", handle);
-    const interval = window.setInterval(handle, 5 * 60 * 1000);
     return () => {
-      document.removeEventListener("visibilitychange", handle);
+      stopInterval();
       window.removeEventListener("focus", handle);
       window.removeEventListener("online", handle);
-      window.clearInterval(interval);
     };
   }, [refreshServerConfig]);
 

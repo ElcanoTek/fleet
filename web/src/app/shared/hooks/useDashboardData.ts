@@ -4,6 +4,7 @@ import {
   type DashboardStats,
   type Task,
 } from "@/app/shared/lib/orchestratorApi";
+import { useVisibleInterval } from "./useVisibleInterval";
 
 // useDashboardData drives the orchestrator dashboard: stats + a
 // filtered/paginated task list, with 30s auto-refresh. React port of moc's
@@ -186,24 +187,21 @@ export function useDashboardData(active: boolean): UseDashboardData {
       (stats.running_tasks ?? 0) > 0 ||
       (stats.active_agents ?? 0) > 0);
   const refreshSeconds = fastPoll ? 5 : 30;
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => void reload(), refreshSeconds * 1000);
-    return () => clearInterval(id);
-  }, [active, reload, refreshSeconds]);
+  // The poll rests while the tab is hidden and refetches once when it comes
+  // back into view (#2004), so a backgrounded dashboard neither polls for
+  // nobody nor comes back up to 30s stale.
+  useVisibleInterval(() => void reload(), refreshSeconds * 1000, active);
 
-  // Refetch when the tab regains focus/visibility — a backgrounded dashboard
-  // comes back current instead of up to 30s stale.
+  // Refetch when the window regains focus too (a visible tab in a window
+  // that was behind another app).
   useEffect(() => {
     if (!active) return;
-    const onVisible = () => {
+    const onFocus = () => {
       if (document.visibilityState === "visible") void reload();
     };
-    window.addEventListener("focus", onVisible);
-    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
     return () => {
-      window.removeEventListener("focus", onVisible);
-      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
     };
   }, [active, reload]);
 
