@@ -30,7 +30,7 @@ proper. Each `Entry` carries:
 | `Secret` | redacted by `explain`, never printed by `migrate-env`, routed to `existingSecret` by the Helm docs |
 | `ProcessOnly` | fleet's own env-file loader does not admit the name |
 | `Chain`, `ChainFile` | the setting resolves `FLEET_<X>` → `CHAT_<X>` → `CUTLASS_<X>`; `ChainFile` names the legacy prefixes the env file admits. The chain aliases are derived, never spelled out |
-| `Aliases` | other spellings (`Deprecated`, `EnvFile`, a `Note` on who reads it) |
+| `Aliases` | other spellings (`Deprecated`; `EnvFile`, whether fleet's own loader admits it; `ReadBy`, the one reader of a reader-specific alias the server ignores) |
 | `Enum` | accepted values of an `enum` |
 | `Knob` | makes it a boot-validated typed knob: `Min`/`Max`, `ReadBy` (a consumer outside `config.Load`), `Lenient`/`Why` |
 | `Helm` | the chart value that sets it (the explicit values↔settings mapping) |
@@ -147,10 +147,36 @@ lists every setting with its default. An unknown KEY is an error.
   lines, order, `export ` prefixes and value text are untouched. An alias line
   whose canonical key already holds the same value is dropped. It refuses —
   writing nothing — when two spellings of one setting have different values,
-  or one alias is assigned twice with different values. An alias the env file
-  never admitted is left in place and reported: renaming it would start
-  applying a value the server has been ignoring, so that is an operator's
-  call.
+  or one alias is assigned twice with different values. An alias fleet's own
+  env-file loader does not admit is rewritten too: on the standard install the
+  systemd unit's `EnvironmentFile=` exports every line, so the line has been
+  effective there, and the plan says so. The one exception is a
+  *reader-specific* alias (`Alias.ReadBy`: `CHAT_`/`CUTLASS_TLS_*`, read only by
+  the CLI's local health probe), which the server ignores; it is left in place
+  and reported, because renaming it would start applying it to the server.
+
+`fleet config explain` and `fleet doctor` follow the same rules. When the
+box's fleet unit (or a drop-in) loads the env file with `EnvironmentFile=`,
+every line counts as the server's environment, not only the names fleet's own
+loader admits; without such a unit an unadmitted line is reported as ignored.
+A reader-specific alias is never reported as a setting's effective value,
+only as a note.
+
+### Redaction
+
+`explain` prints nothing of a `Secret` entry (`<redacted>`), except a DSN
+(`Type: dsn`), which keeps its host and database with the userinfo stripped.
+Every other value that contains `://` has its userinfo and its credential-like
+query parameters (token, key, secret, password, signature, auth, …) removed.
+`config.RedactDSN` does this, and `fleet status`, `fleet diagnose` and `fleet
+backup` share it. `TestCredentialValuesAreSecret` requires every entry whose
+name says it is a credential, and every DSN, to be `Secret`, except a short
+list with written reasons (a public key, a key-file path, a Secret object's
+name). `OPENAI_CUSTOM_HEADERS`, `FLEET_WEBHOOK_URL` and
+`FLEET_WEBHOOK_BODY_TEMPLATE` are pinned as secrets, because they can carry a
+credential without saying so in their name. Tests set every registered
+setting to a credential-shaped URL and assert that neither the table nor the
+JSON output prints any of it.
 
 ## Removing the aliases
 
@@ -230,6 +256,15 @@ LEGACY-ENV-ALIAS` lists them all. The checklist:
   The values are the same operator config they always were.
 - **A read of an undeclared name** logs `BUG: envreg: …` once in production;
   it used to be silent.
+- **DSN redaction is stricter.** `fleet status`, `fleet diagnose` and `fleet
+  backup` errors used to strip only a URL's userinfo; they now share
+  `config.RedactDSN`, which also removes credential-like query parameters and
+  the password of a key=value DSN.
+- **Four more settings are secrets** (`OPENAI_CUSTOM_HEADERS`,
+  `FLEET_WEBHOOK_URL`, `FLEET_WEBHOOK_BODY_TEMPLATE`, plus the internal
+  `FLEET_DRAIN_OWNER_TOKEN`): the generated docs mark them, and the Helm
+  schema points them at `config.existingSecret`. Nothing refuses them in
+  `config.env`.
 
 ## Contradictions fixed on the way
 

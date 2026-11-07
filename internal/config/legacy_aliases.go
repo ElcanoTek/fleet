@@ -25,8 +25,14 @@ type AliasFinding struct {
 	Alias     string // the deprecated spelling
 	Canonical string // the name to use instead
 	Where     string // SourceProcessEnv or SourceEnvFile
-	// Ignored: the alias is in the env file but the env file does not admit
-	// it, so nothing has been reading it from there.
+	// ReadBy is the alias's only reader when it is reader-specific (the
+	// server ignores it).
+	ReadBy string
+	// ViaSystemd: in the env file under a spelling fleet's own loader does
+	// not admit, but the systemd unit exports the file, so it is effective.
+	ViaSystemd bool
+	// Ignored: in the env file under a spelling fleet's own loader does not
+	// admit, and nothing exports the file, so nothing reads it today.
 	Ignored bool
 }
 
@@ -34,16 +40,23 @@ type AliasFinding struct {
 // value.
 func (f AliasFinding) String() string {
 	s := fmt.Sprintf("%s is a deprecated alias (set in the %s); use %s", f.Alias, f.Where, f.Canonical)
-	if f.Ignored {
-		s += " — the env file does not admit this spelling, so the value is being ignored today"
+	switch {
+	case f.ReadBy != "":
+		s += " — only " + f.ReadBy + " reads this spelling; the server ignores it"
+	case f.ViaSystemd:
+		s += " — it reaches the server only through the systemd unit's EnvironmentFile= (fleet's own loader does not admit this spelling)"
+	case f.Ignored:
+		s += " — fleet's own loader does not admit this spelling and the env file is not exported by a systemd unit, so the value is ignored today"
 	}
 	return s
 }
 
 // DeprecatedAliasFindings lists every deprecated alias spelling set
-// (non-empty) in the process environment or in envFile, sorted. A missing env
-// file is not an error; an unreadable one is.
-func DeprecatedAliasFindings(envFile string) ([]AliasFinding, error) {
+// (non-empty) in the process environment or in envFile, sorted. exported says
+// the box's systemd unit loads envFile with EnvironmentFile=
+// (EnvFileExportedBySystemd), which makes every line of it effective. A
+// missing env file is not an error; an unreadable one is.
+func DeprecatedAliasFindings(envFile string, exported bool) ([]AliasFinding, error) {
 	file := map[string]string{}
 	if envFile != "" {
 		vals, err := creds.ReadEnvValues(envFile)
@@ -56,10 +69,14 @@ func DeprecatedAliasFindings(envFile string) ([]AliasFinding, error) {
 	for _, e := range envreg.All() {
 		for _, a := range e.DeprecatedAliases() {
 			if v, ok := os.LookupEnv(a.Name); ok && strings.TrimSpace(v) != "" {
-				out = append(out, AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceProcessEnv})
+				out = append(out, AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceProcessEnv, ReadBy: a.ReadBy})
 			}
 			if v, ok := file[a.Name]; ok && strings.TrimSpace(v) != "" {
-				out = append(out, AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceEnvFile, Ignored: !isAllowedEnvVar(a.Name)})
+				f := AliasFinding{Alias: a.Name, Canonical: e.Name, Where: SourceEnvFile, ReadBy: a.ReadBy}
+				if a.ReadBy == "" && !isAllowedEnvVar(a.Name) {
+					f.ViaSystemd, f.Ignored = exported, !exported
+				}
+				out = append(out, f)
 			}
 		}
 	}
@@ -82,9 +99,10 @@ const (
 	// ActionDrop removes an alias line whose canonical key is also in the
 	// file with the SAME value (the alias was redundant).
 	ActionDrop MigrationAction = "drop"
-	// ActionLeave keeps a line migrate-env must not touch: an alias the env
-	// file never admitted, so renaming it would START applying a value that
-	// has been ignored. Reported so the operator decides.
+	// ActionLeave keeps a line migrate-env must not touch: a READER-SPECIFIC
+	// alias (envreg Alias.ReadBy) that only one reader honours and the server
+	// ignores, so renaming it to the canonical key would start applying it to
+	// the server. Reported so the operator decides.
 	ActionLeave MigrationAction = "leave"
 )
 
@@ -95,6 +113,13 @@ type MigrationChange struct {
 	Action    MigrationAction
 	From      string // the alias key on that line
 	Canonical string
+	// LoaderIgnored: fleet's own env-file loader does not admit From, so the
+	// line has been effective only where the systemd unit exports the file
+	// (EnvironmentFile=, the standard install). It is renamed all the same:
+	// the canonical key keeps it working when alias support is removed.
+	LoaderIgnored bool
+	// ReadBy is the only reader of a reader-specific alias (ActionLeave).
+	ReadBy string
 }
 
 // EnvMigration is a planned rewrite of one env file.
@@ -147,7 +172,7 @@ func PlanEnvMigration(path string) (*EnvMigration, error) {
 		// A deprecated key assigned twice with different values: the loader
 		// takes the last, the rewrite keeps the first line — refuse instead.
 		if prev, dup := values[k]; dup && prev != v {
-			if a, _, isAlias := envreg.AliasOf(k); isAlias && a.Deprecated {
+			if renamedAlias(k) {
 				m.Conflicts = append(m.Conflicts, fmt.Sprintf("%s is assigned more than once with different values — keep one line and run again", k))
 			}
 		}
@@ -181,10 +206,10 @@ func PlanEnvMigration(path string) (*EnvMigration, error) {
 		if !isAlias || !a.Deprecated {
 			continue
 		}
-		c := MigrationChange{Line: i + 1, From: k, Canonical: e.Name}
+		c := MigrationChange{Line: i + 1, From: k, Canonical: e.Name, LoaderIgnored: !a.EnvFile && a.ReadBy == "", ReadBy: a.ReadBy}
 		canonVal, canonInFile := values[e.Name]
 		switch {
-		case !a.EnvFile:
+		case a.ReadBy != "":
 			c.Action = ActionLeave
 		case (canonInFile && canonVal == v) || renamedTo[e.Name]:
 			c.Action = ActionDrop
@@ -206,16 +231,30 @@ func PlanEnvMigration(path string) (*EnvMigration, error) {
 	return m, nil
 }
 
-// isDeprecatedPair reports whether either name is a deprecated alias — a
-// conflict between two non-deprecated spellings (FLEET_PERSONA and PERSONA)
-// is not migrate-env's business.
+// isDeprecatedPair reports whether two spellings of one setting are a pair
+// migrate-env must reconcile: at least one is a deprecated alias it would
+// rename, and neither is a reader-specific alias (left in place, so it cannot
+// collide). A conflict between two non-deprecated spellings (FLEET_PERSONA
+// and PERSONA) is not migrate-env's business.
 func isDeprecatedPair(a, b string) bool {
+	deprecated := false
 	for _, n := range []string{a, b} {
-		if al, _, ok := envreg.AliasOf(n); ok && al.Deprecated {
-			return true
+		al, _, ok := envreg.AliasOf(n)
+		if !ok {
+			continue
 		}
+		if al.ReadBy != "" {
+			return false
+		}
+		deprecated = deprecated || al.Deprecated
 	}
-	return false
+	return deprecated
+}
+
+// renamedAlias reports whether k is a deprecated alias migrate-env renames.
+func renamedAlias(k string) bool {
+	a, _, ok := envreg.AliasOf(k)
+	return ok && a.Deprecated && a.ReadBy == ""
 }
 
 // replaceEnvKey swaps the key token of one KEY=VALUE line, keeping leading

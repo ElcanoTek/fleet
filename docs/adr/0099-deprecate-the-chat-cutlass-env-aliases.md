@@ -45,9 +45,16 @@ deployment whose env file must keep working indefinitely.
    `<file>.bak-<UTC timestamp>` first, then rewrites it atomically (0600,
    owner kept), changing only the key token of each line, so comments, order
    and values are preserved. It refuses when two spellings of one setting
-   (or two lines of one alias) disagree, never prints a value, and leaves an
-   alias line the env file never admitted untouched, because renaming it
-   would start applying a value the server has been ignoring.
+   (or two lines of one alias) disagree and never prints a value. It
+   rewrites an alias fleet's own env-file loader does not admit as well:
+   the standard install's systemd unit exports every line of the file
+   (`EnvironmentFile=`), so such a line is effective there and must keep
+   working after removal. The one exception is a *reader-specific* alias
+   (the `CHAT_`/`CUTLASS_TLS_*` spellings, read only by the CLI's local
+   health probe), which the server ignores. It is left in place and
+   reported, because renaming it would start applying it to the server.
+   `fleet config explain` and `fleet doctor` count systemd's export the same
+   way.
 4. **Removal is a follow-up PR, not a dated window.** Once the owner has run
    `fleet config migrate-env --write` on every box, that PR deletes the alias
    resolution, the doctor warning and migrate-env, following the checklist in

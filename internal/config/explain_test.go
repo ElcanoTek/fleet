@@ -30,7 +30,7 @@ func TestExplainSourcesAndPrecedence(t *testing.T) {
 	}, "\n")+"\n")
 	t.Setenv("FLEET_MAX_ITERATIONS", "40")
 
-	got, err := Explain(path, []string{"FLEET_MAX_COST_USD", "FLEET_TEMPERATURE", "OPENROUTER_API_KEY", "CHAT_MAX_ITERATIONS"}, false)
+	got, err := Explain(path, []string{"FLEET_MAX_COST_USD", "FLEET_TEMPERATURE", "OPENROUTER_API_KEY", "CHAT_MAX_ITERATIONS"}, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestExplainSourcesAndPrecedence(t *testing.T) {
 	if it.Value != "40" || it.Source != SourceProcessEnv || it.Deprecated {
 		t.Errorf("FLEET_MAX_ITERATIONS = %+v, want 40 from the process env", it)
 	}
-	if !strings.Contains(strings.Join(it.Notes, "\n"), "CUTLASS_MAX_ITERATIONS is set in the env file, which does not admit it") {
+	if !strings.Contains(strings.Join(it.Notes, "\n"), "CUTLASS_MAX_ITERATIONS is set in the env file, which fleet's own loader does not admit") {
 		t.Errorf("want an ignored-alias note, got %v", it.Notes)
 	}
 }
@@ -67,11 +67,11 @@ func TestExplainListsSetKeysByDefaultAndEverythingWithAll(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_GUARDRAIL_PROFILE=strict\n")
 	unsetForTest(t, "FLEET_GUARDRAIL_PROFILE", "CHAT_GUARDRAIL_PROFILE", "CUTLASS_GUARDRAIL_PROFILE")
-	set, err := Explain(path, nil, false)
+	set, err := Explain(path, nil, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := Explain(path, nil, true)
+	all, err := Explain(path, nil, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestExplainListsSetKeysByDefaultAndEverythingWithAll(t *testing.T) {
 	if len(all) <= len(set) {
 		t.Errorf("--all listed %d keys, the default %d", len(all), len(set))
 	}
-	if _, err := Explain(path, []string{"FLEET_NOT_A_SETTING"}, false); err == nil {
+	if _, err := Explain(path, []string{"FLEET_NOT_A_SETTING"}, false, false); err == nil {
 		t.Error("an unknown key must be an error")
 	}
 }
@@ -99,7 +99,7 @@ func TestExplainNeverReturnsASecretValue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.env")
 	writeEnv(t, path, "FLEET_SMTP_PASSWORD=placeholder-password\nAPP_SESSION_SECRET=placeholder-session\n")
 	unsetForTest(t, "FLEET_SMTP_PASSWORD", "APP_SESSION_SECRET")
-	all, err := Explain(path, nil, true)
+	all, err := Explain(path, nil, true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,6 +122,7 @@ func TestPlanEnvMigrationRewritesKeysOnly(t *testing.T) {
 		"FLEET_TEMPERATURE=0.2",
 		"CHAT_TEMPERATURE=0.2",
 		"CUTLASS_MAX_ITERATIONS=70",
+		"CHAT_TLS_MODE=auto",
 		"CHAT_RATE_PER_MIN=10",
 		"PERSONA=helper",
 	}, "\n") + "\n"
@@ -134,13 +135,19 @@ func TestPlanEnvMigrationRewritesKeysOnly(t *testing.T) {
 	if len(m.Conflicts) != 0 {
 		t.Fatalf("unexpected conflicts: %v", m.Conflicts)
 	}
+	// CUTLASS_MAX_ITERATIONS is not admitted by fleet's own loader, but the
+	// standard install's systemd unit exports every line, so it IS effective
+	// there and is renamed. CHAT_TLS_MODE is reader-specific (only the CLI
+	// health probe reads it; the server ignores it), so it is left alone:
+	// renaming it would turn TLS on for the server.
 	want := strings.Join([]string{
 		"# header comment",
 		"",
 		"export FLEET_MAX_COST_USD=12   # inline note",
 		"FLEET_TASK_MODEL='openai/gpt-x'",
 		"FLEET_TEMPERATURE=0.2",
-		"CUTLASS_MAX_ITERATIONS=70",
+		"FLEET_MAX_ITERATIONS=70",
+		"CHAT_TLS_MODE=auto",
 		"CHAT_RATE_PER_MIN=10",
 		"PERSONA=helper",
 	}, "\n") + "\n"
@@ -160,14 +167,21 @@ func TestPlanEnvMigrationRewritesKeysOnly(t *testing.T) {
 			t.Errorf("%s mode = %v, want 0600", p, fi.Mode().Perm())
 		}
 	}
-	actions := map[string]MigrationAction{}
+	changes := map[string]MigrationChange{}
 	for _, c := range m.Changes {
-		actions[c.From] = c.Action
+		changes[c.From] = c
 	}
-	if actions["CHAT_MAX_COST_USD"] != ActionRename || actions["CHAT_TEMPERATURE"] != ActionDrop || actions["CUTLASS_MAX_ITERATIONS"] != ActionLeave {
-		t.Errorf("actions = %v", actions)
+	if changes["CHAT_MAX_COST_USD"].Action != ActionRename || changes["CHAT_MAX_COST_USD"].LoaderIgnored ||
+		changes["CHAT_TEMPERATURE"].Action != ActionDrop {
+		t.Errorf("changes = %+v", changes)
 	}
-	if _, ok := actions["CHAT_RATE_PER_MIN"]; ok {
+	if c := changes["CUTLASS_MAX_ITERATIONS"]; c.Action != ActionRename || !c.LoaderIgnored {
+		t.Errorf("CUTLASS_MAX_ITERATIONS = %+v, want a rename flagged loader-ignored (effective via systemd)", c)
+	}
+	if c := changes["CHAT_TLS_MODE"]; c.Action != ActionLeave || c.ReadBy == "" {
+		t.Errorf("CHAT_TLS_MODE = %+v, want left in place as reader-specific", c)
+	}
+	if _, ok := changes["CHAT_RATE_PER_MIN"]; ok {
 		t.Error("CHAT_RATE_PER_MIN is canonical, not an alias")
 	}
 	// Idempotent: a second plan has nothing to do.
@@ -182,9 +196,11 @@ func TestPlanEnvMigrationRewritesKeysOnly(t *testing.T) {
 
 func TestPlanEnvMigrationRefusesConflictingSpellings(t *testing.T) {
 	for name, body := range map[string]string{
-		"canonical vs alias": "FLEET_MAX_COST_USD=10\nCHAT_MAX_COST_USD=12\n",
-		"two aliases":        "CHAT_MAX_COST_USD=10\nCUTLASS_MAX_COST_USD=12\n",
-		"alias twice":        "CHAT_MAX_COST_USD=10\nCHAT_MAX_COST_USD=12\n",
+		"canonical vs alias":         "FLEET_MAX_COST_USD=10\nCHAT_MAX_COST_USD=12\n",
+		"two aliases":                "CHAT_MAX_COST_USD=10\nCUTLASS_MAX_COST_USD=12\n",
+		"alias twice":                "CHAT_MAX_COST_USD=10\nCHAT_MAX_COST_USD=12\n",
+		"loader-ignored alias":       "FLEET_MAX_ITERATIONS=10\nCUTLASS_MAX_ITERATIONS=12\n",
+		"loader-ignored alias twice": "CUTLASS_MAX_ITERATIONS=10\nCUTLASS_MAX_ITERATIONS=12\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "fleet.env")
@@ -211,30 +227,56 @@ func TestPlanEnvMigrationRefusesConflictingSpellings(t *testing.T) {
 	}
 }
 
-func TestDeprecatedAliasFindings(t *testing.T) {
-	unsetForTest(t, "CHAT_SERVER_TOKEN", "CUTLASS_TEMPERATURE", "CHAT_TEMPERATURE")
-	t.Setenv("CUTLASS_TEMPERATURE", "0.5")
+// A reader-specific alias is left in place, so it never conflicts with the
+// canonical key.
+func TestPlanEnvMigrationReaderSpecificAliasNeverConflicts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fleet.env")
-	writeEnv(t, path, "CHAT_SERVER_TOKEN=placeholder-token\nCUTLASS_MAX_ITERATIONS=3\n")
-	got, err := DeprecatedAliasFindings(path)
+	writeEnv(t, path, "FLEET_TLS_MODE=off\nCHAT_TLS_MODE=auto\n")
+	m, err := PlanEnvMigration(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := make([]string, 0, len(got))
-	for _, f := range got {
-		lines = append(lines, f.String())
+	if len(m.Conflicts) != 0 || m.Pending() {
+		t.Fatalf("conflicts=%v pending=%v, want neither", m.Conflicts, m.Pending())
 	}
-	joined := strings.Join(lines, "\n")
+}
+
+func TestDeprecatedAliasFindings(t *testing.T) {
+	unsetForTest(t, "CHAT_SERVER_TOKEN", "CUTLASS_TEMPERATURE", "CHAT_TEMPERATURE", "CHAT_TLS_MODE")
+	t.Setenv("CUTLASS_TEMPERATURE", "0.5")
+	path := filepath.Join(t.TempDir(), "fleet.env")
+	writeEnv(t, path, "CHAT_SERVER_TOKEN=placeholder-token\nCUTLASS_MAX_ITERATIONS=3\nCHAT_TLS_MODE=auto\n")
+	findings := func(exported bool) string {
+		t.Helper()
+		got, err := DeprecatedAliasFindings(path, exported)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := make([]string, 0, len(got))
+		for _, f := range got {
+			lines = append(lines, f.String())
+		}
+		return strings.Join(lines, "\n")
+	}
+	notExported, exported := findings(false), findings(true)
 	for _, want := range []string{
 		"CHAT_SERVER_TOKEN is a deprecated alias (set in the env file); use FLEET_SERVER_TOKEN",
 		"CUTLASS_TEMPERATURE is a deprecated alias (set in the process env); use FLEET_TEMPERATURE",
-		"CUTLASS_MAX_ITERATIONS is a deprecated alias (set in the env file); use FLEET_MAX_ITERATIONS — the env file does not admit",
+		"CHAT_TLS_MODE is a deprecated alias (set in the env file); use FLEET_TLS_MODE — only the operator CLI's local health probe",
 	} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("missing finding %q in:\n%s", want, joined)
+		for _, joined := range []string{notExported, exported} {
+			if !strings.Contains(joined, want) {
+				t.Errorf("missing finding %q in:\n%s", want, joined)
+			}
 		}
 	}
-	if strings.Contains(joined, "placeholder-token") {
+	if !strings.Contains(notExported, "CUTLASS_MAX_ITERATIONS is a deprecated alias (set in the env file); use FLEET_MAX_ITERATIONS — fleet's own loader does not admit this spelling and the env file is not exported") {
+		t.Errorf("not-exported wording:\n%s", notExported)
+	}
+	if !strings.Contains(exported, "CUTLASS_MAX_ITERATIONS is a deprecated alias (set in the env file); use FLEET_MAX_ITERATIONS — it reaches the server only through the systemd unit's EnvironmentFile=") {
+		t.Errorf("exported wording:\n%s", exported)
+	}
+	if strings.Contains(notExported+exported, "placeholder-token") {
 		t.Error("a finding leaked a value")
 	}
 }

@@ -82,6 +82,7 @@ const (
 	TypeStrictBool Type = "strict-bool" // strconv.ParseBool tokens only: 1/0/t/f/true/false
 	TypeDuration   Type = "duration"    // Go duration: 90s, 5m, 1h30m
 	TypeURL        Type = "url"
+	TypeDSN        Type = "dsn" // a database connection string (always Secret; explain shows it with the credentials removed)
 	TypeCSV        Type = "csv" // comma-separated list
 	TypePath       Type = "path"
 	TypeEnum       Type = "enum"   // one of Entry.Enum
@@ -122,11 +123,19 @@ type Alias struct {
 	//
 	// LEGACY-ENV-ALIAS: remove after migrate-env
 	Deprecated bool
-	// EnvFile reports whether the deployment env file admits this spelling.
-	// A spelling it does not admit works only from the process environment.
+	// EnvFile reports whether fleet's own env-file loader admits this
+	// spelling. One it does not admit still reaches the server when something
+	// exports it into the process environment — on the standard install,
+	// systemd's EnvironmentFile= exports every line of the env file.
 	EnvFile bool
-	// Note qualifies who reads this spelling when it is not the loader.
-	Note string
+	// ReadBy, when set, makes this a READER-SPECIFIC alias: only the named
+	// reader honours the spelling (e.g. the operator CLI's local health
+	// probe) and the server's own resolution of the setting ignores it. `fleet
+	// config explain` never takes it as the effective value (it reports it in
+	// a note), and `fleet config migrate-env` does not rename it, because that
+	// would start applying it to the server. Empty means every reader of the
+	// setting honours the alias.
+	ReadBy string
 }
 
 // Knob marks an entry as a typed knob the boot gate validates

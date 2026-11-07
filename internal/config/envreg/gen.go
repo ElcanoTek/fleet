@@ -68,11 +68,13 @@ func Markdown() []byte {
 	}
 
 	w("## Deprecated aliases\n\n")
-	w("Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether the\n")
-	w("deployment env file admits the alias; one it does not admit was only ever read from the process environment, so\n")
-	w("migrate-env reports such a line instead of rewriting it.\n\n")
-	w("| Alias | Canonical | Env file |\n| --- | --- | --- |\n")
-	type row struct{ alias, canon, file string }
+	w("Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether\n")
+	w("fleet's own env-file loader admits the alias. One it does not admit is still effective on the standard install,\n")
+	w("because the systemd unit's `EnvironmentFile=` exports every line, so migrate-env rewrites it too. The exception is a\n")
+	w("*reader-specific* alias, which only the named reader honours and the server ignores: migrate-env leaves it in place,\n")
+	w("because renaming it would start applying it to the server.\n\n")
+	w("| Alias | Canonical | Env file | Read by |\n| --- | --- | --- | --- |\n")
+	type row struct{ alias, canon, file, readBy string }
 	var rows []row
 	for i := range entries {
 		for _, a := range entries[i].DeprecatedAliases() {
@@ -80,12 +82,16 @@ func Markdown() []byte {
 			if a.EnvFile {
 				file = "yes"
 			}
-			rows = append(rows, row{a.Name, entries[i].Name, file})
+			readBy := "every reader of the setting"
+			if a.ReadBy != "" {
+				readBy = "only " + a.ReadBy
+			}
+			rows = append(rows, row{a.Name, entries[i].Name, file, readBy})
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].alias < rows[j].alias })
 	for _, r := range rows {
-		w("| `%s` | `%s` | %s |\n", r.alias, r.canon, r.file)
+		w("| `%s` | `%s` | %s | %s |\n", r.alias, r.canon, r.file, cell(r.readBy))
 	}
 	return b.Bytes()
 }
@@ -146,11 +152,11 @@ func describe(e *Entry) string {
 	var dep, other []string
 	for _, a := range e.Aliases {
 		s := "`" + a.Name + "`"
-		if !a.EnvFile {
+		switch {
+		case a.ReadBy != "":
+			s += " (read only by " + a.ReadBy + "; the server ignores it)"
+		case !a.EnvFile:
 			s += " (process env only)"
-		}
-		if a.Note != "" {
-			s += " — " + a.Note
 		}
 		if a.Deprecated {
 			dep = append(dep, s)

@@ -87,22 +87,22 @@ var table = []Entry{
 		Description: "Public URL used to build deep links in task notifications and Web Push messages."},
 	{Name: "FLEET_TLS_MODE", Group: GroupServer, Scope: ScopeServer, Type: TypeEnum, Default: "off", Enum: []string{"off", "manual", "auto"},
 		Aliases: []Alias{
-			{Name: "CHAT_TLS_MODE", Deprecated: true, Note: "read only by the operator CLI's local health probe"},    // LEGACY-ENV-ALIAS: remove after migrate-env
-			{Name: "CUTLASS_TLS_MODE", Deprecated: true, Note: "read only by the operator CLI's local health probe"}, // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CHAT_TLS_MODE", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"},    // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CUTLASS_TLS_MODE", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"}, // LEGACY-ENV-ALIAS: remove after migrate-env
 		},
 		Description: "TLS termination by the chat listener itself. Most deployments leave it off and terminate TLS in Caddy."},
 	{Name: "FLEET_TLS_CERT_FILE", Group: GroupServer, Scope: ScopeServer, Type: TypePath,
 		Aliases: []Alias{
-			{Name: "CHAT_TLS_CERT_FILE", Deprecated: true, Note: "read only by the operator CLI's local health probe"},    // LEGACY-ENV-ALIAS: remove after migrate-env
-			{Name: "CUTLASS_TLS_CERT_FILE", Deprecated: true, Note: "read only by the operator CLI's local health probe"}, // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CHAT_TLS_CERT_FILE", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"},    // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CUTLASS_TLS_CERT_FILE", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"}, // LEGACY-ENV-ALIAS: remove after migrate-env
 		},
 		Description: "Certificate file for FLEET_TLS_MODE=manual."},
 	{Name: "FLEET_TLS_KEY_FILE", Group: GroupServer, Scope: ScopeServer, Type: TypePath,
 		Description: "Private-key file for FLEET_TLS_MODE=manual."},
 	{Name: "FLEET_TLS_DOMAIN", Group: GroupServer, Scope: ScopeServer, Type: TypeString,
 		Aliases: []Alias{
-			{Name: "CHAT_TLS_DOMAIN", Deprecated: true, Note: "read only by the operator CLI's local health probe"},    // LEGACY-ENV-ALIAS: remove after migrate-env
-			{Name: "CUTLASS_TLS_DOMAIN", Deprecated: true, Note: "read only by the operator CLI's local health probe"}, // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CHAT_TLS_DOMAIN", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"},    // LEGACY-ENV-ALIAS: remove after migrate-env
+			{Name: "CUTLASS_TLS_DOMAIN", Deprecated: true, ReadBy: "the operator CLI's local health probe (the active-work check of fleet update/restart/stop)"}, // LEGACY-ENV-ALIAS: remove after migrate-env
 		},
 		Description: "Domain the ACME certificate is issued for (FLEET_TLS_MODE=auto)."},
 	{Name: "FLEET_TLS_ACME_DIR", Group: GroupServer, Scope: ScopeServer, Type: TypePath, Default: "/var/lib/fleet/acme-cache",
@@ -195,15 +195,15 @@ var table = []Entry{
 	// ───────────────────────────── Databases ─────────────────────────────
 	// The DSN keys are resolved by internal/config/dsn.go (ResolveDSNs), read
 	// exactly as they always were.
-	{Name: "DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeURL, Secret: true,
+	{Name: "DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeDSN, Secret: true,
 		Description: "Generic Postgres DSN. Used for a store whose explicit DSN is unset (see internal/config/dsn.go for the resolution order)."},
-	{Name: "FLEET_CHAT_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeURL, Secret: true,
+	{Name: "FLEET_CHAT_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeDSN, Secret: true,
 		Helm:        "postgres.enabled (in-cluster database secret)",
 		Description: "Postgres DSN of the chat store."},
-	{Name: "FLEET_SCHED_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeURL, Secret: true,
+	{Name: "FLEET_SCHED_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeDSN, Secret: true,
 		Helm:        "postgres.enabled (in-cluster database secret)",
 		Description: "Postgres DSN of the scheduler store."},
-	{Name: "SCHED_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeURL, Secret: true,
+	{Name: "SCHED_DATABASE_URL", Group: GroupDatabase, Scope: ScopeServer, Type: TypeDSN, Secret: true,
 		Description: "Bare legacy spelling of the scheduler DSN, read as a fallback."},
 	{Name: "DB_HOST", Group: GroupDatabase, Scope: ScopeServer, Type: TypeString, Default: "localhost",
 		Description: "Postgres host, used to build a DSN when no URL is set."},
@@ -241,7 +241,7 @@ var table = []Entry{
 	// ───────────────────────────── Conversations, data and retention ─────────────────────────────
 	{Name: "FLEET_DATA_DIR", Group: GroupData, Scope: ScopeServer, Type: TypePath, Default: "./data",
 		Chain: true, ChainFile: fileCHAT, Helm: "dataDir",
-		Aliases:     []Alias{{Name: "DATA_DIR", Note: "bare spelling, read only by the operator CLI's key-store probe"}},
+		Aliases:     []Alias{{Name: "DATA_DIR", ReadBy: "the operator CLI's API-key store lookup (fleet sched apikey)"}},
 		Description: "Data directory: journals, caches, uploads, the encrypted key store."},
 	{Name: "EMAIL_ATTACHMENT_DIR", Group: GroupData, Scope: ScopeServer, Type: TypePath, Default: "./data/attachments",
 		Helm:        "dataDir (+ /attachments)",
@@ -299,8 +299,8 @@ var table = []Entry{
 		Description: "HTTP-Referer header sent with image-generation calls (OpenRouter app attribution)."},
 	{Name: "OPENROUTER_X_TITLE", Group: GroupModels, Scope: ScopeServer, Type: TypeString,
 		Description: "X-Title header sent with image-generation calls (OpenRouter app attribution)."},
-	{Name: "OPENAI_CUSTOM_HEADERS", Group: GroupModels, Scope: ScopeServer, Type: TypeString, ProcessOnly: true,
-		Description: "The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them."},
+	{Name: "OPENAI_CUSTOM_HEADERS", Group: GroupModels, Scope: ScopeServer, Type: TypeString, ProcessOnly: true, Secret: true,
+		Description: "The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. Treated as a secret: a header line can carry an Authorization value or an API key."},
 	{Name: "FLEET_DEFAULT_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Chain: true,
 		Description: "Env default of the workspace's everyday model tier (admin setting default_model)."},
 	{Name: "FLEET_ADVANCED_MODEL", Group: GroupModels, Scope: ScopeServer, Type: TypeString, Chain: true,
@@ -700,12 +700,12 @@ var table = []Entry{
 		Description: "SMTP password."},
 	{Name: "FLEET_SMTP_FROM", Group: GroupNotify, Scope: ScopeServer, Type: TypeString,
 		Description: "Sender address of notification email."},
-	{Name: "FLEET_WEBHOOK_URL", Group: GroupNotify, Scope: ScopeServer, Type: TypeURL,
-		Description: "Outbound webhook for task notifications."},
+	{Name: "FLEET_WEBHOOK_URL", Group: GroupNotify, Scope: ScopeServer, Type: TypeURL, Secret: true,
+		Description: "Outbound webhook for task notifications. Treated as a secret: Slack-style webhook URLs carry their token in the path."},
 	{Name: "FLEET_WEBHOOK_METHOD", Group: GroupNotify, Scope: ScopeServer, Type: TypeString, Default: "POST",
 		Description: "HTTP method of the outbound webhook."},
-	{Name: "FLEET_WEBHOOK_BODY_TEMPLATE", Group: GroupNotify, Scope: ScopeServer, Type: TypeString,
-		Description: "Body template of the outbound webhook."},
+	{Name: "FLEET_WEBHOOK_BODY_TEMPLATE", Group: GroupNotify, Scope: ScopeServer, Type: TypeString, Secret: true,
+		Description: "Body template of the outbound webhook. Treated as a secret: a template can embed a token."},
 	{Name: "FLEET_WEBHOOK_SECRET", Group: GroupNotify, Scope: ScopeServer, Type: TypeString, Secret: true,
 		Description: "HMAC-SHA256 signing secret of the outbound webhook; unset sends it unsigned."},
 	{Name: "FLEET_VAPID_PUBLIC_KEY", Group: GroupNotify, Scope: ScopeServer, Type: TypeString,
@@ -783,7 +783,7 @@ var table = []Entry{
 		Description: "Install checkout used by bootstrap, update and doctor."},
 	{Name: "FLEET_SANDBOX_MAX_AGE_DAYS", Group: GroupCLI, Scope: ScopeCLI, Type: TypeInt, ProcessOnly: true, Default: "7",
 		Description: "`fleet update` rebuilds a sandbox image older than this."},
-	{Name: "FLEET_DRAIN_OWNER_TOKEN", Group: GroupCLI, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true,
+	{Name: "FLEET_DRAIN_OWNER_TOKEN", Group: GroupCLI, Scope: ScopeCLI, Type: TypeString, ProcessOnly: true, Secret: true,
 		Description: "Internal: identifies the update that owns the drain sentinel (set by the CLI for scripts/lib/idle.sh)."},
 
 	// ───────────────────────────── Platform-provided ─────────────────────────────
@@ -851,7 +851,7 @@ var table = []Entry{
 		Description: "bootstrap.sh: where a cloned client bundle is checked out."},
 	{Name: "FLEET_ACME_EMAIL", Group: GroupScripts, Scope: ScopeScripts, Type: TypeString, ProcessOnly: true,
 		Description: "bootstrap.sh: ACME contact email written into the Caddyfile."},
-	{Name: "FLEET_DB_SUPERUSER_URL", Group: GroupScripts, Scope: ScopeScripts, Type: TypeURL, ProcessOnly: true, Secret: true,
+	{Name: "FLEET_DB_SUPERUSER_URL", Group: GroupScripts, Scope: ScopeScripts, Type: TypeDSN, ProcessOnly: true, Secret: true,
 		Description: "bootstrap.sh: superuser DSN for opt-in provisioning of roles and databases on an external Postgres."},
 	{Name: "FLEET_WEB_ENV_FILE", Group: GroupScripts, Scope: ScopeScripts, Type: TypePath, ProcessOnly: true, Default: "/etc/fleet/fleet-web.env",
 		Description: "The retired Next.js tier's env file, which bootstrap/doctor migrate keys out of (ADR-0091)."},
@@ -917,11 +917,11 @@ var table = []Entry{
 		Description: "bootstrap.sh: chat URL printed in its summary. A canonical name, not a legacy alias."},
 
 	// ───────────────────────────── Tests and harnesses ─────────────────────────────
-	{Name: "FLEET_TEST_DATABASE_URL", Group: GroupTest, Scope: ScopeTest, Type: TypeURL, ProcessOnly: true, Secret: true,
+	{Name: "FLEET_TEST_DATABASE_URL", Group: GroupTest, Scope: ScopeTest, Type: TypeDSN, ProcessOnly: true, Secret: true,
 		Description: "Postgres DSN of the chat test suites (internal/testdb)."},
 	{Name: "CHAT_PORT", Group: GroupTest, Scope: ScopeTest, Type: TypeInt, ProcessOnly: true, Default: "18080",
 		Description: "e2e-boot-server.sh: port of the e2e chat server."},
-	{Name: "CHAT_DSN", Group: GroupTest, Scope: ScopeTest, Type: TypeURL, ProcessOnly: true, Secret: true,
+	{Name: "CHAT_DSN", Group: GroupTest, Scope: ScopeTest, Type: TypeDSN, ProcessOnly: true, Secret: true,
 		Description: "e2e-boot-server.sh: chat DSN of the e2e server."},
 	{Name: "FAKE_LLM_ADDR", Group: GroupTest, Scope: ScopeTest, Type: TypeString, ProcessOnly: true, Default: "127.0.0.1:18090",
 		Description: "cmd/fake-llm listen address."},

@@ -70,7 +70,10 @@ func printMigrationPlan(w io.Writer, m *config.EnvMigration) {
 		case config.ActionDrop:
 			fmt.Fprintf(w, "  line %d: - %s=…   (%s already holds the same value)\n", c.Line, c.From, c.Canonical)
 		case config.ActionLeave:
-			fmt.Fprintf(w, "  line %d:   %s left as is: the env file never admitted this spelling, so the server has been ignoring it; renaming it to %s would start applying it — decide by hand\n", c.Line, c.From, c.Canonical)
+			fmt.Fprintf(w, "  line %d:   %s left as is: only %s reads this spelling and the server ignores it; renaming it to %s would start applying it to the server — remove it, or set %s deliberately\n", c.Line, c.From, c.ReadBy, c.Canonical, c.Canonical)
+		}
+		if c.LoaderIgnored && c.Action != config.ActionLeave {
+			fmt.Fprintf(w, "           (fleet's own env-file loader does not admit %s: it has been effective only through the systemd unit's EnvironmentFile=, the standard install; %s keeps it working either way)\n", c.From, c.Canonical)
 		}
 	}
 	for _, c := range m.Conflicts {
@@ -83,7 +86,7 @@ func printMigrationPlan(w io.Writer, m *config.EnvMigration) {
 // read-only and never prints a value; `fleet doctor` calls it first.
 func warnDeprecatedEnvAliases(w io.Writer) {
 	path := serverEnvFile("")
-	findings, err := config.DeprecatedAliasFindings(path)
+	findings, err := config.DeprecatedAliasFindings(path, envFileExportedBySystemd(path))
 	if err != nil {
 		fmt.Fprintf(w, "fleet doctor: could not check %s for deprecated env aliases: %v\n", path, err)
 		return

@@ -62,10 +62,10 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `ADMIN_API_KEY` | string | — | server | Admin API key for the orchestrator's admin endpoints (and `fleet mcp reload`). Not reloadable. **Secret.** |
 | `FLEET_PUBLIC_BASE_URL` | url | — | server | Public origin of this deployment (https://fleet.example.com). Used for OAuth redirect URIs, links and the browser tier's origin checks; a trailing slash is trimmed. Deprecated aliases: `CHAT_PUBLIC_BASE_URL` (process env only), `CUTLASS_PUBLIC_BASE_URL` (process env only). |
 | `FLEET_PUBLIC_URL` | url | — | server | Public URL used to build deep links in task notifications and Web Push messages. |
-| `FLEET_TLS_MODE` | enum: off, manual, auto | `off` | server | TLS termination by the chat listener itself. Most deployments leave it off and terminate TLS in Caddy. Deprecated aliases: `CHAT_TLS_MODE` (process env only) — read only by the operator CLI's local health probe, `CUTLASS_TLS_MODE` (process env only) — read only by the operator CLI's local health probe. |
-| `FLEET_TLS_CERT_FILE` | path | — | server | Certificate file for FLEET_TLS_MODE=manual. Deprecated aliases: `CHAT_TLS_CERT_FILE` (process env only) — read only by the operator CLI's local health probe, `CUTLASS_TLS_CERT_FILE` (process env only) — read only by the operator CLI's local health probe. |
+| `FLEET_TLS_MODE` | enum: off, manual, auto | `off` | server | TLS termination by the chat listener itself. Most deployments leave it off and terminate TLS in Caddy. Deprecated aliases: `CHAT_TLS_MODE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_MODE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
+| `FLEET_TLS_CERT_FILE` | path | — | server | Certificate file for FLEET_TLS_MODE=manual. Deprecated aliases: `CHAT_TLS_CERT_FILE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_CERT_FILE` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
 | `FLEET_TLS_KEY_FILE` | path | — | server | Private-key file for FLEET_TLS_MODE=manual. |
-| `FLEET_TLS_DOMAIN` | string | — | server | Domain the ACME certificate is issued for (FLEET_TLS_MODE=auto). Deprecated aliases: `CHAT_TLS_DOMAIN` (process env only) — read only by the operator CLI's local health probe, `CUTLASS_TLS_DOMAIN` (process env only) — read only by the operator CLI's local health probe. |
+| `FLEET_TLS_DOMAIN` | string | — | server | Domain the ACME certificate is issued for (FLEET_TLS_MODE=auto). Deprecated aliases: `CHAT_TLS_DOMAIN` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it), `CUTLASS_TLS_DOMAIN` (read only by the operator CLI's local health probe (the active-work check of fleet update/restart/stop); the server ignores it). |
 | `FLEET_TLS_ACME_DIR` | path | `/var/lib/fleet/acme-cache` | server | ACME certificate cache directory. |
 | `FLEET_TLS_ACME_EMAIL` | string | — | server | Contact email registered with the ACME CA. |
 | `FLEET_TLS_HTTP_ADDR` | string | `:80` | server | The HTTP→HTTPS redirect and ACME HTTP-01 challenge listener, when fleet terminates TLS itself. |
@@ -112,10 +112,10 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `DATABASE_URL` | url | — | server | Generic Postgres DSN. Used for a store whose explicit DSN is unset (see internal/config/dsn.go for the resolution order). **Secret.** |
-| `FLEET_CHAT_DATABASE_URL` | url | — | server | Postgres DSN of the chat store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
-| `FLEET_SCHED_DATABASE_URL` | url | — | server | Postgres DSN of the scheduler store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
-| `SCHED_DATABASE_URL` | url | — | server | Bare legacy spelling of the scheduler DSN, read as a fallback. **Secret.** |
+| `DATABASE_URL` | dsn | — | server | Generic Postgres DSN. Used for a store whose explicit DSN is unset (see internal/config/dsn.go for the resolution order). **Secret.** |
+| `FLEET_CHAT_DATABASE_URL` | dsn | — | server | Postgres DSN of the chat store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
+| `FLEET_SCHED_DATABASE_URL` | dsn | — | server | Postgres DSN of the scheduler store. **Secret.** Helm: set by the chart from `postgres.enabled (in-cluster database secret)`. |
+| `SCHED_DATABASE_URL` | dsn | — | server | Bare legacy spelling of the scheduler DSN, read as a fallback. **Secret.** |
 | `DB_HOST` | string | `localhost` | server | Postgres host, used to build a DSN when no URL is set. |
 | `DB_PORT` | int | `5432` | server | Postgres port for the discrete DSN parts. |
 | `DB_USER` | string | (per store) | server | Postgres user for the discrete DSN parts. |
@@ -137,7 +137,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Also read as `DATA_DIR` (process env only) — bare spelling, read only by the operator CLI's key-store probe. Deprecated aliases: `CHAT_DATA_DIR`, `CUTLASS_DATA_DIR` (process env only). Helm: set by the chart from `dataDir`. |
+| `FLEET_DATA_DIR` | path | `./data` | server | Data directory: journals, caches, uploads, the encrypted key store. Also read as `DATA_DIR` (read only by the operator CLI's API-key store lookup (fleet sched apikey); the server ignores it). Deprecated aliases: `CHAT_DATA_DIR`, `CUTLASS_DATA_DIR` (process env only). Helm: set by the chart from `dataDir`. |
 | `EMAIL_ATTACHMENT_DIR` | path | `./data/attachments` | server | Directory for uploads and email attachments. Relative to the working directory, not FLEET_DATA_DIR. Helm: set by the chart from `dataDir (+ /attachments)`. |
 | `CONVERSATION_TTL_DAYS` | int | `14` | server | Days an unpinned conversation is kept. *Validated at boot*. |
 | `CONVERSATION_UNPINNED_CAP` | int | `50` | server | Maximum unpinned conversations kept per user. *Validated at boot*. |
@@ -167,7 +167,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_OPENROUTER_BASE_URL` | url | — | server | Prefixed spelling of OPENROUTER_BASE_URL, read when that is unset. Deprecated aliases: `CHAT_OPENROUTER_BASE_URL` (process env only), `CUTLASS_OPENROUTER_BASE_URL` (process env only). |
 | `OPENROUTER_HTTP_REFERER` | string | — | server | HTTP-Referer header sent with image-generation calls (OpenRouter app attribution). |
 | `OPENROUTER_X_TITLE` | string | — | server | X-Title header sent with image-generation calls (OpenRouter app attribution). |
-| `OPENAI_CUSTOM_HEADERS` | string | — | server | The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `OPENAI_CUSTOM_HEADERS` | string | — | server | The OpenAI SDK's own header-injection variable. Fleet strips every header it names from requests to OpenAI-compatible providers, so a host-level setting cannot leak into them. Treated as a secret: a header line can carry an Authorization value or an API key. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_DEFAULT_MODEL` | string | — | server | Env default of the workspace's everyday model tier (admin setting default_model). Deprecated aliases: `CHAT_DEFAULT_MODEL` (process env only), `CUTLASS_DEFAULT_MODEL` (process env only). |
 | `FLEET_ADVANCED_MODEL` | string | — | server | Env default of the advanced model tier (admin setting advanced_model). Deprecated aliases: `CHAT_ADVANCED_MODEL` (process env only), `CUTLASS_ADVANCED_MODEL` (process env only). |
 | `FLEET_PINNED_MODELS` | string | — | server | JSON array of `{"slug","label","tag","free","input_price_per_mtok","output_price_per_mtok"}` pins: models both pickers list right after the recommended rows, with an optional display label, tag pill and displayed price. Display only — the real slug is sent and recorded and spend is metered at the provider's price. A malformed value refuses to boot (docs/PINNED-MODELS.md). Deprecated aliases: `CHAT_PINNED_MODELS` (process env only), `CUTLASS_PINNED_MODELS` (process env only). |
@@ -356,9 +356,9 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_SMTP_USERNAME` | string | — | server | SMTP user. |
 | `FLEET_SMTP_PASSWORD` | string | — | server | SMTP password. **Secret.** |
 | `FLEET_SMTP_FROM` | string | — | server | Sender address of notification email. |
-| `FLEET_WEBHOOK_URL` | url | — | server | Outbound webhook for task notifications. |
+| `FLEET_WEBHOOK_URL` | url | — | server | Outbound webhook for task notifications. Treated as a secret: Slack-style webhook URLs carry their token in the path. **Secret.** |
 | `FLEET_WEBHOOK_METHOD` | string | `POST` | server | HTTP method of the outbound webhook. |
-| `FLEET_WEBHOOK_BODY_TEMPLATE` | string | — | server | Body template of the outbound webhook. |
+| `FLEET_WEBHOOK_BODY_TEMPLATE` | string | — | server | Body template of the outbound webhook. Treated as a secret: a template can embed a token. **Secret.** |
 | `FLEET_WEBHOOK_SECRET` | string | — | server | HMAC-SHA256 signing secret of the outbound webhook; unset sends it unsigned. **Secret.** |
 | `FLEET_VAPID_PUBLIC_KEY` | string | — | server | Web Push VAPID public key (`fleet generate-vapid-keys`). Push is off unless all three VAPID keys are set. |
 | `FLEET_VAPID_PRIVATE_KEY` | string | — | server | Web Push VAPID private key. **Secret.** |
@@ -402,7 +402,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_USER_EMAIL` | string | — | cli | Email `fleet chat` and `fleet acp` act as when --email is not given. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_INSTALL_DIR` | path | `/opt/fleet` | cli | Install checkout used by bootstrap, update and doctor. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SANDBOX_MAX_AGE_DAYS` | int | `7` | cli | `fleet update` rebuilds a sandbox image older than this. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_DRAIN_OWNER_TOKEN` | string | — | cli | Internal: identifies the update that owns the drain sentinel (set by the CLI for scripts/lib/idle.sh). *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_DRAIN_OWNER_TOKEN` | string | — | cli | Internal: identifies the update that owns the drain sentinel (set by the CLI for scripts/lib/idle.sh). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 
 ## Platform-provided
 
@@ -444,7 +444,7 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 | `FLEET_CLIENT_CONFIG_EXPLICIT` | bool | — | scripts | Internal: update.sh records that the bundle directory was given explicitly. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_CLIENT_CONFIG_CHECKOUT` | path | `/opt/fleet/client` | scripts | bootstrap.sh: where a cloned client bundle is checked out. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_ACME_EMAIL` | string | — | scripts | bootstrap.sh: ACME contact email written into the Caddyfile. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `FLEET_DB_SUPERUSER_URL` | url | — | scripts | bootstrap.sh: superuser DSN for opt-in provisioning of roles and databases on an external Postgres. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_DB_SUPERUSER_URL` | dsn | — | scripts | bootstrap.sh: superuser DSN for opt-in provisioning of roles and databases on an external Postgres. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_WEB_ENV_FILE` | path | `/etc/fleet/fleet-web.env` | scripts | The retired Next.js tier's env file, which bootstrap/doctor migrate keys out of (ADR-0091). *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_SET_HOSTNAME` | bool | — | scripts | bootstrap.sh: 1 forces renaming the host to the --domain FQDN, 0 skips it. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_KEEP_COCKPIT` | bool | `0` | scripts | bootstrap.sh: keep Cockpit instead of removing it. *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -481,9 +481,9 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 | Variable | Type | Default | Scope | Description |
 | --- | --- | --- | --- | --- |
-| `FLEET_TEST_DATABASE_URL` | url | — | test | Postgres DSN of the chat test suites (internal/testdb). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `FLEET_TEST_DATABASE_URL` | dsn | — | test | Postgres DSN of the chat test suites (internal/testdb). **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `CHAT_PORT` | int | `18080` | test | e2e-boot-server.sh: port of the e2e chat server. *Process env only* (fleet's env-file loader does not admit it; export it). |
-| `CHAT_DSN` | url | — | test | e2e-boot-server.sh: chat DSN of the e2e server. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
+| `CHAT_DSN` | dsn | — | test | e2e-boot-server.sh: chat DSN of the e2e server. **Secret.** *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FAKE_LLM_ADDR` | string | `127.0.0.1:18090` | test | cmd/fake-llm listen address. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `FLEET_BENCH_EMAIL` | string | — | test | fleet-bench: the user it chats as. *Process env only* (fleet's env-file loader does not admit it; export it). |
 | `E2E_TEST_EMAIL` | string | — | test | fleet-bench / e2e: fallback user email. *Process env only* (fleet's env-file loader does not admit it; export it). |
@@ -508,316 +508,318 @@ client bundle's manifest names them, and fleet admits them at startup ([MCP-BUND
 
 ## Deprecated aliases
 
-Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether the
-deployment env file admits the alias; one it does not admit was only ever read from the process environment, so
-migrate-env reports such a line instead of rewriting it.
+Each legacy spelling and the canonical name `fleet config migrate-env` rewrites it to. *Env file* says whether
+fleet's own env-file loader admits the alias. One it does not admit is still effective on the standard install,
+because the systemd unit's `EnvironmentFile=` exports every line, so migrate-env rewrites it too. The exception is a
+*reader-specific* alias, which only the named reader honours and the server ignores: migrate-env leaves it in place,
+because renaming it would start applying it to the server.
 
-| Alias | Canonical | Env file |
-| --- | --- | --- |
-| `CHAT_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no |
-| `CHAT_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no |
-| `CHAT_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no |
-| `CHAT_A2A_MODEL` | `FLEET_A2A_MODEL` | no |
-| `CHAT_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no |
-| `CHAT_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no |
-| `CHAT_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no |
-| `CHAT_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no |
-| `CHAT_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no |
-| `CHAT_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no |
-| `CHAT_ALLOWED_DIRS` | `FLEET_ALLOWED_DIRS` | no |
-| `CHAT_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no |
-| `CHAT_AUDIT_DIR` | `FLEET_AUDIT_DIR` | no |
-| `CHAT_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no |
-| `CHAT_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no |
-| `CHAT_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no |
-| `CHAT_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no |
-| `CHAT_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no |
-| `CHAT_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no |
-| `CHAT_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no |
-| `CHAT_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no |
-| `CHAT_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no |
-| `CHAT_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no |
-| `CHAT_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no |
-| `CHAT_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no |
-| `CHAT_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no |
-| `CHAT_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no |
-| `CHAT_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no |
-| `CHAT_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no |
-| `CHAT_DATA_DIR` | `FLEET_DATA_DIR` | yes |
-| `CHAT_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no |
-| `CHAT_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no |
-| `CHAT_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no |
-| `CHAT_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no |
-| `CHAT_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no |
-| `CHAT_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no |
-| `CHAT_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no |
-| `CHAT_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no |
-| `CHAT_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no |
-| `CHAT_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no |
-| `CHAT_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no |
-| `CHAT_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no |
-| `CHAT_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no |
-| `CHAT_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no |
-| `CHAT_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no |
-| `CHAT_IMAGE_MODEL` | `FLEET_IMAGE_MODEL` | no |
-| `CHAT_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no |
-| `CHAT_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no |
-| `CHAT_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no |
-| `CHAT_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no |
-| `CHAT_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no |
-| `CHAT_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | yes |
-| `CHAT_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | yes |
-| `CHAT_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no |
-| `CHAT_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no |
-| `CHAT_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no |
-| `CHAT_LOG_FILE` | `FLEET_LOG_FILE` | no |
-| `CHAT_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no |
-| `CHAT_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no |
-| `CHAT_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no |
-| `CHAT_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no |
-| `CHAT_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no |
-| `CHAT_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no |
-| `CHAT_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes |
-| `CHAT_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | yes |
-| `CHAT_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes |
-| `CHAT_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no |
-| `CHAT_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no |
-| `CHAT_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no |
-| `CHAT_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no |
-| `CHAT_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no |
-| `CHAT_METADATA_MODEL` | `FLEET_METADATA_MODEL` | yes |
-| `CHAT_MOCK_MODE` | `FLEET_MOCK_MODE` | yes |
-| `CHAT_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no |
-| `CHAT_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no |
-| `CHAT_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no |
-| `CHAT_PERSONA` | `FLEET_PERSONA` | no |
-| `CHAT_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no |
-| `CHAT_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no |
-| `CHAT_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no |
-| `CHAT_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no |
-| `CHAT_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no |
-| `CHAT_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no |
-| `CHAT_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no |
-| `CHAT_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no |
-| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no |
-| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no |
-| `CHAT_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no |
-| `CHAT_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no |
-| `CHAT_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no |
-| `CHAT_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no |
-| `CHAT_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no |
-| `CHAT_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no |
-| `CHAT_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no |
-| `CHAT_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no |
-| `CHAT_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no |
-| `CHAT_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no |
-| `CHAT_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no |
-| `CHAT_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no |
-| `CHAT_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | yes |
-| `CHAT_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no |
-| `CHAT_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no |
-| `CHAT_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no |
-| `CHAT_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no |
-| `CHAT_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no |
-| `CHAT_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no |
-| `CHAT_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no |
-| `CHAT_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no |
-| `CHAT_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no |
-| `CHAT_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no |
-| `CHAT_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no |
-| `CHAT_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no |
-| `CHAT_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no |
-| `CHAT_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no |
-| `CHAT_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no |
-| `CHAT_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | yes |
-| `CHAT_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no |
-| `CHAT_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no |
-| `CHAT_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no |
-| `CHAT_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no |
-| `CHAT_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no |
-| `CHAT_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no |
-| `CHAT_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no |
-| `CHAT_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no |
-| `CHAT_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no |
-| `CHAT_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no |
-| `CHAT_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no |
-| `CHAT_SERVER_ADDR` | `FLEET_SERVER_ADDR` | yes |
-| `CHAT_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | yes |
-| `CHAT_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no |
-| `CHAT_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no |
-| `CHAT_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no |
-| `CHAT_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no |
-| `CHAT_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no |
-| `CHAT_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no |
-| `CHAT_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no |
-| `CHAT_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no |
-| `CHAT_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | no |
-| `CHAT_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no |
-| `CHAT_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no |
-| `CHAT_TASK_MODEL` | `FLEET_TASK_MODEL` | no |
-| `CHAT_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no |
-| `CHAT_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no |
-| `CHAT_TEMPERATURE` | `FLEET_TEMPERATURE` | yes |
-| `CHAT_TITLE_MODEL` | `FLEET_TITLE_MODEL` | yes |
-| `CHAT_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no |
-| `CHAT_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no |
-| `CHAT_TLS_MODE` | `FLEET_TLS_MODE` | no |
-| `CHAT_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no |
-| `CHAT_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no |
-| `CHAT_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | yes |
-| `CHAT_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no |
-| `CHAT_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no |
-| `CHAT_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | yes |
-| `CHAT_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no |
-| `CUTLASS_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no |
-| `CUTLASS_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no |
-| `CUTLASS_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no |
-| `CUTLASS_A2A_MODEL` | `FLEET_A2A_MODEL` | no |
-| `CUTLASS_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no |
-| `CUTLASS_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no |
-| `CUTLASS_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no |
-| `CUTLASS_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no |
-| `CUTLASS_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no |
-| `CUTLASS_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no |
-| `CUTLASS_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no |
-| `CUTLASS_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no |
-| `CUTLASS_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no |
-| `CUTLASS_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no |
-| `CUTLASS_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no |
-| `CUTLASS_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no |
-| `CUTLASS_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no |
-| `CUTLASS_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no |
-| `CUTLASS_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no |
-| `CUTLASS_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no |
-| `CUTLASS_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no |
-| `CUTLASS_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no |
-| `CUTLASS_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no |
-| `CUTLASS_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no |
-| `CUTLASS_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no |
-| `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no |
-| `CUTLASS_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no |
-| `CUTLASS_DATA_DIR` | `FLEET_DATA_DIR` | no |
-| `CUTLASS_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no |
-| `CUTLASS_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no |
-| `CUTLASS_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no |
-| `CUTLASS_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no |
-| `CUTLASS_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no |
-| `CUTLASS_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no |
-| `CUTLASS_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no |
-| `CUTLASS_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no |
-| `CUTLASS_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no |
-| `CUTLASS_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no |
-| `CUTLASS_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no |
-| `CUTLASS_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no |
-| `CUTLASS_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no |
-| `CUTLASS_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no |
-| `CUTLASS_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no |
-| `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no |
-| `CUTLASS_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no |
-| `CUTLASS_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no |
-| `CUTLASS_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no |
-| `CUTLASS_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no |
-| `CUTLASS_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | no |
-| `CUTLASS_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | no |
-| `CUTLASS_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no |
-| `CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no |
-| `CUTLASS_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no |
-| `CUTLASS_LOG_FILE` | `FLEET_LOG_FILE` | yes |
-| `CUTLASS_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no |
-| `CUTLASS_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no |
-| `CUTLASS_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no |
-| `CUTLASS_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no |
-| `CUTLASS_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no |
-| `CUTLASS_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no |
-| `CUTLASS_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes |
-| `CUTLASS_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | no |
-| `CUTLASS_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes |
-| `CUTLASS_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no |
-| `CUTLASS_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no |
-| `CUTLASS_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no |
-| `CUTLASS_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no |
-| `CUTLASS_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no |
-| `CUTLASS_METADATA_MODEL` | `FLEET_METADATA_MODEL` | no |
-| `CUTLASS_MOCK_MODE` | `FLEET_MOCK_MODE` | no |
-| `CUTLASS_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no |
-| `CUTLASS_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no |
-| `CUTLASS_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no |
-| `CUTLASS_PERSONA` | `FLEET_PERSONA` | no |
-| `CUTLASS_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no |
-| `CUTLASS_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no |
-| `CUTLASS_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no |
-| `CUTLASS_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no |
-| `CUTLASS_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no |
-| `CUTLASS_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no |
-| `CUTLASS_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no |
-| `CUTLASS_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no |
-| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no |
-| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no |
-| `CUTLASS_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no |
-| `CUTLASS_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no |
-| `CUTLASS_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no |
-| `CUTLASS_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no |
-| `CUTLASS_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no |
-| `CUTLASS_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no |
-| `CUTLASS_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no |
-| `CUTLASS_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no |
-| `CUTLASS_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no |
-| `CUTLASS_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no |
-| `CUTLASS_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no |
-| `CUTLASS_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no |
-| `CUTLASS_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | no |
-| `CUTLASS_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no |
-| `CUTLASS_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no |
-| `CUTLASS_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no |
-| `CUTLASS_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no |
-| `CUTLASS_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no |
-| `CUTLASS_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no |
-| `CUTLASS_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no |
-| `CUTLASS_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no |
-| `CUTLASS_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no |
-| `CUTLASS_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no |
-| `CUTLASS_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no |
-| `CUTLASS_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no |
-| `CUTLASS_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no |
-| `CUTLASS_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no |
-| `CUTLASS_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no |
-| `CUTLASS_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | no |
-| `CUTLASS_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no |
-| `CUTLASS_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no |
-| `CUTLASS_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no |
-| `CUTLASS_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no |
-| `CUTLASS_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no |
-| `CUTLASS_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no |
-| `CUTLASS_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no |
-| `CUTLASS_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no |
-| `CUTLASS_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no |
-| `CUTLASS_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no |
-| `CUTLASS_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no |
-| `CUTLASS_SERVER_ADDR` | `FLEET_SERVER_ADDR` | no |
-| `CUTLASS_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | no |
-| `CUTLASS_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no |
-| `CUTLASS_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no |
-| `CUTLASS_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no |
-| `CUTLASS_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no |
-| `CUTLASS_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no |
-| `CUTLASS_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no |
-| `CUTLASS_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no |
-| `CUTLASS_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no |
-| `CUTLASS_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | yes |
-| `CUTLASS_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no |
-| `CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no |
-| `CUTLASS_TASK_MODEL` | `FLEET_TASK_MODEL` | yes |
-| `CUTLASS_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no |
-| `CUTLASS_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no |
-| `CUTLASS_TEMPERATURE` | `FLEET_TEMPERATURE` | yes |
-| `CUTLASS_TITLE_MODEL` | `FLEET_TITLE_MODEL` | no |
-| `CUTLASS_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no |
-| `CUTLASS_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no |
-| `CUTLASS_TLS_MODE` | `FLEET_TLS_MODE` | no |
-| `CUTLASS_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no |
-| `CUTLASS_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no |
-| `CUTLASS_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | no |
-| `CUTLASS_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no |
-| `CUTLASS_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no |
-| `CUTLASS_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | no |
-| `CUTLASS_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no |
+| Alias | Canonical | Env file | Read by |
+| --- | --- | --- | --- |
+| `CHAT_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no | every reader of the setting |
+| `CHAT_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no | every reader of the setting |
+| `CHAT_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no | every reader of the setting |
+| `CHAT_A2A_MODEL` | `FLEET_A2A_MODEL` | no | every reader of the setting |
+| `CHAT_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no | every reader of the setting |
+| `CHAT_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no | every reader of the setting |
+| `CHAT_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no | every reader of the setting |
+| `CHAT_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no | every reader of the setting |
+| `CHAT_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no | every reader of the setting |
+| `CHAT_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no | every reader of the setting |
+| `CHAT_ALLOWED_DIRS` | `FLEET_ALLOWED_DIRS` | no | every reader of the setting |
+| `CHAT_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no | every reader of the setting |
+| `CHAT_AUDIT_DIR` | `FLEET_AUDIT_DIR` | no | every reader of the setting |
+| `CHAT_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no | every reader of the setting |
+| `CHAT_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
+| `CHAT_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no | every reader of the setting |
+| `CHAT_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no | every reader of the setting |
+| `CHAT_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
+| `CHAT_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no | every reader of the setting |
+| `CHAT_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
+| `CHAT_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
+| `CHAT_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no | every reader of the setting |
+| `CHAT_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no | every reader of the setting |
+| `CHAT_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no | every reader of the setting |
+| `CHAT_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no | every reader of the setting |
+| `CHAT_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no | every reader of the setting |
+| `CHAT_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no | every reader of the setting |
+| `CHAT_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no | every reader of the setting |
+| `CHAT_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no | every reader of the setting |
+| `CHAT_DATA_DIR` | `FLEET_DATA_DIR` | yes | every reader of the setting |
+| `CHAT_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no | every reader of the setting |
+| `CHAT_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no | every reader of the setting |
+| `CHAT_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no | every reader of the setting |
+| `CHAT_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no | every reader of the setting |
+| `CHAT_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no | every reader of the setting |
+| `CHAT_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no | every reader of the setting |
+| `CHAT_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no | every reader of the setting |
+| `CHAT_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no | every reader of the setting |
+| `CHAT_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no | every reader of the setting |
+| `CHAT_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no | every reader of the setting |
+| `CHAT_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no | every reader of the setting |
+| `CHAT_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no | every reader of the setting |
+| `CHAT_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no | every reader of the setting |
+| `CHAT_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no | every reader of the setting |
+| `CHAT_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no | every reader of the setting |
+| `CHAT_IMAGE_MODEL` | `FLEET_IMAGE_MODEL` | no | every reader of the setting |
+| `CHAT_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no | every reader of the setting |
+| `CHAT_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no | every reader of the setting |
+| `CHAT_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no | every reader of the setting |
+| `CHAT_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no | every reader of the setting |
+| `CHAT_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no | every reader of the setting |
+| `CHAT_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | yes | every reader of the setting |
+| `CHAT_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | yes | every reader of the setting |
+| `CHAT_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
+| `CHAT_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no | every reader of the setting |
+| `CHAT_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no | every reader of the setting |
+| `CHAT_LOG_FILE` | `FLEET_LOG_FILE` | no | every reader of the setting |
+| `CHAT_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no | every reader of the setting |
+| `CHAT_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no | every reader of the setting |
+| `CHAT_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no | every reader of the setting |
+| `CHAT_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no | every reader of the setting |
+| `CHAT_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no | every reader of the setting |
+| `CHAT_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no | every reader of the setting |
+| `CHAT_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes | every reader of the setting |
+| `CHAT_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | yes | every reader of the setting |
+| `CHAT_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes | every reader of the setting |
+| `CHAT_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no | every reader of the setting |
+| `CHAT_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no | every reader of the setting |
+| `CHAT_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no | every reader of the setting |
+| `CHAT_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no | every reader of the setting |
+| `CHAT_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no | every reader of the setting |
+| `CHAT_METADATA_MODEL` | `FLEET_METADATA_MODEL` | yes | every reader of the setting |
+| `CHAT_MOCK_MODE` | `FLEET_MOCK_MODE` | yes | every reader of the setting |
+| `CHAT_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no | every reader of the setting |
+| `CHAT_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no | every reader of the setting |
+| `CHAT_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no | every reader of the setting |
+| `CHAT_PERSONA` | `FLEET_PERSONA` | no | every reader of the setting |
+| `CHAT_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no | every reader of the setting |
+| `CHAT_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no | every reader of the setting |
+| `CHAT_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no | every reader of the setting |
+| `CHAT_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no | every reader of the setting |
+| `CHAT_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no | every reader of the setting |
+| `CHAT_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no | every reader of the setting |
+| `CHAT_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no | every reader of the setting |
+| `CHAT_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no | every reader of the setting |
+| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no | every reader of the setting |
+| `CHAT_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no | every reader of the setting |
+| `CHAT_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no | every reader of the setting |
+| `CHAT_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no | every reader of the setting |
+| `CHAT_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no | every reader of the setting |
+| `CHAT_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no | every reader of the setting |
+| `CHAT_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no | every reader of the setting |
+| `CHAT_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no | every reader of the setting |
+| `CHAT_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no | every reader of the setting |
+| `CHAT_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no | every reader of the setting |
+| `CHAT_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no | every reader of the setting |
+| `CHAT_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no | every reader of the setting |
+| `CHAT_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no | every reader of the setting |
+| `CHAT_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no | every reader of the setting |
+| `CHAT_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | yes | every reader of the setting |
+| `CHAT_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no | every reader of the setting |
+| `CHAT_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no | every reader of the setting |
+| `CHAT_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no | every reader of the setting |
+| `CHAT_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no | every reader of the setting |
+| `CHAT_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no | every reader of the setting |
+| `CHAT_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | yes | every reader of the setting |
+| `CHAT_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no | every reader of the setting |
+| `CHAT_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no | every reader of the setting |
+| `CHAT_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no | every reader of the setting |
+| `CHAT_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no | every reader of the setting |
+| `CHAT_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
+| `CHAT_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no | every reader of the setting |
+| `CHAT_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
+| `CHAT_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
+| `CHAT_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no | every reader of the setting |
+| `CHAT_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no | every reader of the setting |
+| `CHAT_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no | every reader of the setting |
+| `CHAT_SERVER_ADDR` | `FLEET_SERVER_ADDR` | yes | every reader of the setting |
+| `CHAT_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | yes | every reader of the setting |
+| `CHAT_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no | every reader of the setting |
+| `CHAT_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no | every reader of the setting |
+| `CHAT_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no | every reader of the setting |
+| `CHAT_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no | every reader of the setting |
+| `CHAT_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no | every reader of the setting |
+| `CHAT_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no | every reader of the setting |
+| `CHAT_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no | every reader of the setting |
+| `CHAT_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no | every reader of the setting |
+| `CHAT_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | no | every reader of the setting |
+| `CHAT_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no | every reader of the setting |
+| `CHAT_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no | every reader of the setting |
+| `CHAT_TASK_MODEL` | `FLEET_TASK_MODEL` | no | every reader of the setting |
+| `CHAT_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no | every reader of the setting |
+| `CHAT_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no | every reader of the setting |
+| `CHAT_TEMPERATURE` | `FLEET_TEMPERATURE` | yes | every reader of the setting |
+| `CHAT_TITLE_MODEL` | `FLEET_TITLE_MODEL` | yes | every reader of the setting |
+| `CHAT_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CHAT_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CHAT_TLS_MODE` | `FLEET_TLS_MODE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CHAT_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no | every reader of the setting |
+| `CHAT_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no | every reader of the setting |
+| `CHAT_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | yes | every reader of the setting |
+| `CHAT_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no | every reader of the setting |
+| `CHAT_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no | every reader of the setting |
+| `CHAT_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | yes | every reader of the setting |
+| `CHAT_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no | every reader of the setting |
+| `CUTLASS_A2A_CLIENT_ALLOW_PRIVATE` | `FLEET_A2A_CLIENT_ALLOW_PRIVATE` | no | every reader of the setting |
+| `CUTLASS_A2A_ENABLED` | `FLEET_A2A_ENABLED` | no | every reader of the setting |
+| `CUTLASS_A2A_MAX_DELEGATION_DEPTH` | `FLEET_A2A_MAX_DELEGATION_DEPTH` | no | every reader of the setting |
+| `CUTLASS_A2A_MODEL` | `FLEET_A2A_MODEL` | no | every reader of the setting |
+| `CUTLASS_A2A_PERSONA` | `FLEET_A2A_PERSONA` | no | every reader of the setting |
+| `CUTLASS_A2A_PUSH_ALLOW_PRIVATE` | `FLEET_A2A_PUSH_ALLOW_PRIVATE` | no | every reader of the setting |
+| `CUTLASS_A2A_UNARY_WAIT_SECONDS` | `FLEET_A2A_UNARY_WAIT_SECONDS` | no | every reader of the setting |
+| `CUTLASS_ACCOUNT_EVENTS_SECRET` | `FLEET_ACCOUNT_EVENTS_SECRET` | no | every reader of the setting |
+| `CUTLASS_ACCOUNT_EVENTS_URL` | `FLEET_ACCOUNT_EVENTS_URL` | no | every reader of the setting |
+| `CUTLASS_ADVANCED_MODEL` | `FLEET_ADVANCED_MODEL` | no | every reader of the setting |
+| `CUTLASS_APPROVAL_TIMEOUT_SECONDS` | `FLEET_APPROVAL_TIMEOUT_SECONDS` | no | every reader of the setting |
+| `CUTLASS_AUTO_APPROVE_IN_TEST` | `FLEET_AUTO_APPROVE_IN_TEST` | no | every reader of the setting |
+| `CUTLASS_AUTO_ARCHIVE_AFTER_DAYS` | `FLEET_AUTO_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
+| `CUTLASS_AUTO_TITLE` | `FLEET_AUTO_TITLE` | no | every reader of the setting |
+| `CUTLASS_BUDGET_WINDDOWN_FRACTION` | `FLEET_BUDGET_WINDDOWN_FRACTION` | no | every reader of the setting |
+| `CUTLASS_CHAT_DB_CONNECT_TIMEOUT` | `FLEET_CHAT_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
+| `CUTLASS_CHAT_DB_MAX_CONNS` | `FLEET_CHAT_DB_MAX_CONNS` | no | every reader of the setting |
+| `CUTLASS_CHAT_DB_MAX_CONN_IDLE_TIME` | `FLEET_CHAT_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
+| `CUTLASS_CHAT_DB_MAX_CONN_LIFETIME` | `FLEET_CHAT_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
+| `CUTLASS_CHAT_DB_MIN_CONNS` | `FLEET_CHAT_DB_MIN_CONNS` | no | every reader of the setting |
+| `CUTLASS_CLEANUP_HOUR` | `FLEET_CLEANUP_HOUR` | no | every reader of the setting |
+| `CUTLASS_CONNECTOR_RECOMMENDATIONS_ENABLED` | `FLEET_CONNECTOR_RECOMMENDATIONS_ENABLED` | no | every reader of the setting |
+| `CUTLASS_CONTEXT_COMPACTION_THRESHOLD` | `FLEET_CONTEXT_COMPACTION_THRESHOLD` | no | every reader of the setting |
+| `CUTLASS_CONTEXT_ELIDE_BEFORE_SUMMARY` | `FLEET_CONTEXT_ELIDE_BEFORE_SUMMARY` | no | every reader of the setting |
+| `CUTLASS_CONTEXT_HANDLES_ENABLED` | `FLEET_CONTEXT_HANDLES_ENABLED` | no | every reader of the setting |
+| `CUTLASS_CONTEXT_PRESSURE_WARN_THRESHOLD` | `FLEET_CONTEXT_PRESSURE_WARN_THRESHOLD` | no | every reader of the setting |
+| `CUTLASS_CONTEXT_RESEND_BUDGET_TOKENS` | `FLEET_CONTEXT_RESEND_BUDGET_TOKENS` | no | every reader of the setting |
+| `CUTLASS_DATA_DIR` | `FLEET_DATA_DIR` | no | every reader of the setting |
+| `CUTLASS_DEFAULT_MODEL` | `FLEET_DEFAULT_MODEL` | no | every reader of the setting |
+| `CUTLASS_DEFAULT_NETWORK_MODE` | `FLEET_DEFAULT_NETWORK_MODE` | no | every reader of the setting |
+| `CUTLASS_DEFAULT_THINKING_BUDGET_TOKENS` | `FLEET_DEFAULT_THINKING_BUDGET_TOKENS` | no | every reader of the setting |
+| `CUTLASS_DISABLE_OPENROUTER_MODELS` | `FLEET_DISABLE_OPENROUTER_MODELS` | no | every reader of the setting |
+| `CUTLASS_DISABLE_PROMPT_CACHE` | `FLEET_DISABLE_PROMPT_CACHE` | no | every reader of the setting |
+| `CUTLASS_DISK_MIN_FREE_PERCENT` | `FLEET_DISK_MIN_FREE_PERCENT` | no | every reader of the setting |
+| `CUTLASS_ERROR_ANALYSIS_ENABLED` | `FLEET_ERROR_ANALYSIS_ENABLED` | no | every reader of the setting |
+| `CUTLASS_ERROR_ANALYSIS_MODEL` | `FLEET_ERROR_ANALYSIS_MODEL` | no | every reader of the setting |
+| `CUTLASS_ESCALATION_CLASSIFIER_MODE` | `FLEET_ESCALATION_CLASSIFIER_MODE` | no | every reader of the setting |
+| `CUTLASS_ESCALATION_CLASSIFIER_MODEL` | `FLEET_ESCALATION_CLASSIFIER_MODEL` | no | every reader of the setting |
+| `CUTLASS_ESCALATION_CLASSIFIER_THRESHOLD` | `FLEET_ESCALATION_CLASSIFIER_THRESHOLD` | no | every reader of the setting |
+| `CUTLASS_ESCALATION_SIGNALS_ENABLED` | `FLEET_ESCALATION_SIGNALS_ENABLED` | no | every reader of the setting |
+| `CUTLASS_GUARDRAIL_MODE` | `FLEET_GUARDRAIL_MODE` | no | every reader of the setting |
+| `CUTLASS_GUARDRAIL_PROFILE` | `FLEET_GUARDRAIL_PROFILE` | no | every reader of the setting |
+| `CUTLASS_GUARDRAIL_URL` | `FLEET_GUARDRAIL_URL` | no | every reader of the setting |
+| `CUTLASS_INPUT_QUEUE_RETENTION_DAYS` | `FLEET_INPUT_QUEUE_RETENTION_DAYS` | no | every reader of the setting |
+| `CUTLASS_IP_ALLOWLIST` | `FLEET_IP_ALLOWLIST` | no | every reader of the setting |
+| `CUTLASS_IP_DENYLIST` | `FLEET_IP_DENYLIST` | no | every reader of the setting |
+| `CUTLASS_KEEP_RUNS_PER_TASK` | `FLEET_KEEP_RUNS_PER_TASK` | no | every reader of the setting |
+| `CUTLASS_LIBRARY_PROMPT_MODEL` | `FLEET_LIBRARY_PROMPT_MODEL` | no | every reader of the setting |
+| `CUTLASS_LOCKDOWN_ALLOWED_MODELS` | `FLEET_LOCKDOWN_ALLOWED_MODELS` | no | every reader of the setting |
+| `CUTLASS_LOCKDOWN_ONLY` | `FLEET_LOCKDOWN_ONLY` | no | every reader of the setting |
+| `CUTLASS_LOG_ARCHIVE_AFTER_DAYS` | `FLEET_LOG_ARCHIVE_AFTER_DAYS` | no | every reader of the setting |
+| `CUTLASS_LOG_ARCHIVE_ENCRYPTION_KEY` | `FLEET_LOG_ARCHIVE_ENCRYPTION_KEY` | no | every reader of the setting |
+| `CUTLASS_LOG_COMPRESS` | `FLEET_LOG_COMPRESS` | no | every reader of the setting |
+| `CUTLASS_LOG_FILE` | `FLEET_LOG_FILE` | yes | every reader of the setting |
+| `CUTLASS_LOG_FORMAT` | `FLEET_LOG_FORMAT` | no | every reader of the setting |
+| `CUTLASS_LOG_LEVEL` | `FLEET_LOG_LEVEL` | no | every reader of the setting |
+| `CUTLASS_LOG_MAX_AGE_DAYS` | `FLEET_LOG_MAX_AGE_DAYS` | no | every reader of the setting |
+| `CUTLASS_LOG_MAX_BACKUPS` | `FLEET_LOG_MAX_BACKUPS` | no | every reader of the setting |
+| `CUTLASS_LOG_MAX_SIZE_MB` | `FLEET_LOG_MAX_SIZE_MB` | no | every reader of the setting |
+| `CUTLASS_MAX_CONCURRENT_AGENTS` | `FLEET_MAX_CONCURRENT_AGENTS` | no | every reader of the setting |
+| `CUTLASS_MAX_COST_USD` | `FLEET_MAX_COST_USD` | yes | every reader of the setting |
+| `CUTLASS_MAX_ITERATIONS` | `FLEET_MAX_ITERATIONS` | no | every reader of the setting |
+| `CUTLASS_MAX_TOTAL_TOKENS` | `FLEET_MAX_TOTAL_TOKENS` | yes | every reader of the setting |
+| `CUTLASS_MCP_OAUTH_ENCRYPTION_KEY` | `FLEET_MCP_OAUTH_ENCRYPTION_KEY` | no | every reader of the setting |
+| `CUTLASS_MEMORY_AUTOINDEX_ENABLED` | `FLEET_MEMORY_AUTOINDEX_ENABLED` | no | every reader of the setting |
+| `CUTLASS_MEMORY_GRAPH_ENABLED` | `FLEET_MEMORY_GRAPH_ENABLED` | no | every reader of the setting |
+| `CUTLASS_MEMORY_GRAPH_MODEL` | `FLEET_MEMORY_GRAPH_MODEL` | no | every reader of the setting |
+| `CUTLASS_MEMORY_MODEL` | `FLEET_MEMORY_MODEL` | no | every reader of the setting |
+| `CUTLASS_METADATA_MODEL` | `FLEET_METADATA_MODEL` | no | every reader of the setting |
+| `CUTLASS_MOCK_MODE` | `FLEET_MOCK_MODE` | no | every reader of the setting |
+| `CUTLASS_MODEL_CACHE_TTL_MINUTES` | `FLEET_MODEL_CACHE_TTL_MINUTES` | no | every reader of the setting |
+| `CUTLASS_OPENROUTER_BASE_URL` | `FLEET_OPENROUTER_BASE_URL` | no | every reader of the setting |
+| `CUTLASS_PAUSED_TASK_EXPIRY_MINUTES` | `FLEET_PAUSED_TASK_EXPIRY_MINUTES` | no | every reader of the setting |
+| `CUTLASS_PERSONA` | `FLEET_PERSONA` | no | every reader of the setting |
+| `CUTLASS_PERSONA_DEFAULT` | `FLEET_PERSONA_DEFAULT` | no | every reader of the setting |
+| `CUTLASS_PHONE_A_FRIEND_ENABLED` | `FLEET_PHONE_A_FRIEND_ENABLED` | no | every reader of the setting |
+| `CUTLASS_PHONE_A_FRIEND_MODEL` | `FLEET_PHONE_A_FRIEND_MODEL` | no | every reader of the setting |
+| `CUTLASS_PII_RAMPART_URL` | `FLEET_PII_RAMPART_URL` | no | every reader of the setting |
+| `CUTLASS_PII_REDACTION_ENABLED` | `FLEET_PII_REDACTION_ENABLED` | no | every reader of the setting |
+| `CUTLASS_PII_REDACTION_ENGINE` | `FLEET_PII_REDACTION_ENGINE` | no | every reader of the setting |
+| `CUTLASS_PII_REDACTION_MODE` | `FLEET_PII_REDACTION_MODE` | no | every reader of the setting |
+| `CUTLASS_PINNED_MODELS` | `FLEET_PINNED_MODELS` | no | every reader of the setting |
+| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_MAX_SECONDS` | no | every reader of the setting |
+| `CUTLASS_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | `FLEET_PROVIDER_FIRST_CHUNK_TIMEOUT_SECONDS` | no | every reader of the setting |
+| `CUTLASS_PUBLIC_BASE_URL` | `FLEET_PUBLIC_BASE_URL` | no | every reader of the setting |
+| `CUTLASS_PYTHON_CELL_TIMEOUT` | `FLEET_PYTHON_CELL_TIMEOUT` | no | every reader of the setting |
+| `CUTLASS_PYTHON_REPL_IDLE_TTL` | `FLEET_PYTHON_REPL_IDLE_TTL` | no | every reader of the setting |
+| `CUTLASS_PYTHON_REPL_MAX` | `FLEET_PYTHON_REPL_MAX` | no | every reader of the setting |
+| `CUTLASS_PYTHON_REPL_MODE` | `FLEET_PYTHON_REPL_MODE` | no | every reader of the setting |
+| `CUTLASS_RECURRING_TASK_MODEL` | `FLEET_RECURRING_TASK_MODEL` | no | every reader of the setting |
+| `CUTLASS_REMOTE_MCP_ALLOW_INSECURE_HTTP` | `FLEET_REMOTE_MCP_ALLOW_INSECURE_HTTP` | no | every reader of the setting |
+| `CUTLASS_RETRY_MAX_ATTEMPTS` | `FLEET_RETRY_MAX_ATTEMPTS` | no | every reader of the setting |
+| `CUTLASS_RUN_LOG_RETENTION_DAYS` | `FLEET_RUN_LOG_RETENTION_DAYS` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_BACKEND` | `FLEET_SANDBOX_BACKEND` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_CPUS` | `FLEET_SANDBOX_CPUS` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_CPUS_MAX` | `FLEET_SANDBOX_CPUS_MAX` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_IMAGE` | `FLEET_SANDBOX_IMAGE` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | `FLEET_SANDBOX_K8S_BUNDLE_DOCS_IN_IMAGE` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_IMAGE_PULL_SECRET` | `FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_KUBECONFIG` | `FLEET_SANDBOX_K8S_KUBECONFIG` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_NAMESPACE` | `FLEET_SANDBOX_K8S_NAMESPACE` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_NETWORK_POLICY` | `FLEET_SANDBOX_K8S_NETWORK_POLICY` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_NODE_SELECTOR` | `FLEET_SANDBOX_K8S_NODE_SELECTOR` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_OPEN_EGRESS_POLICY` | `FLEET_SANDBOX_K8S_OPEN_EGRESS_POLICY` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_RUNTIME_CLASS` | `FLEET_SANDBOX_K8S_RUNTIME_CLASS` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_SECCOMP_PROFILE` | `FLEET_SANDBOX_K8S_SECCOMP_PROFILE` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_SERVICE_ACCOUNT` | `FLEET_SANDBOX_K8S_SERVICE_ACCOUNT` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_TOLERATIONS` | `FLEET_SANDBOX_K8S_TOLERATIONS` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_K8S_WORKSPACE_CLAIM` | `FLEET_SANDBOX_K8S_WORKSPACE_CLAIM` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_MEMORY` | `FLEET_SANDBOX_MEMORY` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_MEMORY_MAX_MB` | `FLEET_SANDBOX_MEMORY_MAX_MB` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_PIDS_MAX` | `FLEET_SANDBOX_PIDS_MAX` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_RUNTIME` | `FLEET_SANDBOX_RUNTIME` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_WARM_SIZE` | `FLEET_SANDBOX_WARM_SIZE` | no | every reader of the setting |
+| `CUTLASS_SANDBOX_WARM_TTL` | `FLEET_SANDBOX_WARM_TTL` | no | every reader of the setting |
+| `CUTLASS_SCHEDULED_AUTO_COMPACT` | `FLEET_SCHEDULED_AUTO_COMPACT` | no | every reader of the setting |
+| `CUTLASS_SCHEDULED_SHARED_WORKSPACE` | `FLEET_SCHEDULED_SHARED_WORKSPACE` | no | every reader of the setting |
+| `CUTLASS_SCHED_DB_CONNECT_TIMEOUT` | `FLEET_SCHED_DB_CONNECT_TIMEOUT` | no | every reader of the setting |
+| `CUTLASS_SCHED_DB_MAX_CONNS` | `FLEET_SCHED_DB_MAX_CONNS` | no | every reader of the setting |
+| `CUTLASS_SCHED_DB_MAX_CONN_IDLE_TIME` | `FLEET_SCHED_DB_MAX_CONN_IDLE_TIME` | no | every reader of the setting |
+| `CUTLASS_SCHED_DB_MAX_CONN_LIFETIME` | `FLEET_SCHED_DB_MAX_CONN_LIFETIME` | no | every reader of the setting |
+| `CUTLASS_SCHED_DB_MIN_CONNS` | `FLEET_SCHED_DB_MIN_CONNS` | no | every reader of the setting |
+| `CUTLASS_SCHED_TICK_SECONDS` | `FLEET_SCHED_TICK_SECONDS` | no | every reader of the setting |
+| `CUTLASS_SELF_IMPROVE_ENABLED` | `FLEET_SELF_IMPROVE_ENABLED` | no | every reader of the setting |
+| `CUTLASS_SERVER_ADDR` | `FLEET_SERVER_ADDR` | no | every reader of the setting |
+| `CUTLASS_SERVER_TOKEN` | `FLEET_SERVER_TOKEN` | no | every reader of the setting |
+| `CUTLASS_SHARED_FILES_MAX_TOTAL_MB` | `FLEET_SHARED_FILES_MAX_TOTAL_MB` | no | every reader of the setting |
+| `CUTLASS_SHUTDOWN_GRACE_SECONDS` | `FLEET_SHUTDOWN_GRACE_SECONDS` | no | every reader of the setting |
+| `CUTLASS_SUBAGENTS_BUDGET_FRACTION` | `FLEET_SUBAGENTS_BUDGET_FRACTION` | no | every reader of the setting |
+| `CUTLASS_SUBAGENTS_ENABLED` | `FLEET_SUBAGENTS_ENABLED` | no | every reader of the setting |
+| `CUTLASS_SUBAGENTS_MAX_CHILDREN` | `FLEET_SUBAGENTS_MAX_CHILDREN` | no | every reader of the setting |
+| `CUTLASS_SUBAGENTS_MAX_DEPTH` | `FLEET_SUBAGENTS_MAX_DEPTH` | no | every reader of the setting |
+| `CUTLASS_SUBAGENTS_MODEL` | `FLEET_SUBAGENTS_MODEL` | no | every reader of the setting |
+| `CUTLASS_TASK_DEFAULT_MAX_RETRIES` | `FLEET_TASK_DEFAULT_MAX_RETRIES` | no | every reader of the setting |
+| `CUTLASS_TASK_FALLBACK_MODEL` | `FLEET_TASK_FALLBACK_MODEL` | yes | every reader of the setting |
+| `CUTLASS_TASK_MEMORY_MAX_KEYS` | `FLEET_TASK_MEMORY_MAX_KEYS` | no | every reader of the setting |
+| `CUTLASS_TASK_MEMORY_MAX_VALUE_BYTES` | `FLEET_TASK_MEMORY_MAX_VALUE_BYTES` | no | every reader of the setting |
+| `CUTLASS_TASK_MODEL` | `FLEET_TASK_MODEL` | yes | every reader of the setting |
+| `CUTLASS_TASK_STARVATION_WINDOW_MINUTES` | `FLEET_TASK_STARVATION_WINDOW_MINUTES` | no | every reader of the setting |
+| `CUTLASS_TEAM_CHATS_SHARED_BY_DEFAULT` | `FLEET_TEAM_CHATS_SHARED_BY_DEFAULT` | no | every reader of the setting |
+| `CUTLASS_TEMPERATURE` | `FLEET_TEMPERATURE` | yes | every reader of the setting |
+| `CUTLASS_TITLE_MODEL` | `FLEET_TITLE_MODEL` | no | every reader of the setting |
+| `CUTLASS_TLS_CERT_FILE` | `FLEET_TLS_CERT_FILE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CUTLASS_TLS_DOMAIN` | `FLEET_TLS_DOMAIN` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CUTLASS_TLS_MODE` | `FLEET_TLS_MODE` | no | only the operator CLI's local health probe (the active-work check of fleet update/restart/stop) |
+| `CUTLASS_TRUSTED_PROXIES` | `FLEET_TRUSTED_PROXIES` | no | every reader of the setting |
+| `CUTLASS_TURN_EVENT_RETENTION_DAYS` | `FLEET_TURN_EVENT_RETENTION_DAYS` | no | every reader of the setting |
+| `CUTLASS_TURN_TIMEOUT_SECONDS` | `FLEET_TURN_TIMEOUT_SECONDS` | no | every reader of the setting |
+| `CUTLASS_UPLOAD_MAX_BYTES` | `FLEET_UPLOAD_MAX_BYTES` | no | every reader of the setting |
+| `CUTLASS_VERIFIER_MODEL` | `FLEET_VERIFIER_MODEL` | no | every reader of the setting |
+| `CUTLASS_WORKSPACE_ROOT` | `FLEET_WORKSPACE_ROOT` | no | every reader of the setting |
+| `CUTLASS_WORKTREE_PRUNE_AGE` | `FLEET_WORKTREE_PRUNE_AGE` | no | every reader of the setting |

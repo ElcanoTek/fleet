@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
@@ -34,7 +35,8 @@ func configExplain(argv []string) int {
 	}
 	keys = append(keys, fs.Args()...)
 	path := serverEnvFile(*envFile)
-	xs, err := config.Explain(path, keys, *all)
+	exported := envFileExportedBySystemd(path)
+	xs, err := config.Explain(path, keys, *all, exported)
 	if err != nil {
 		return errf(1, "%v", err)
 	}
@@ -42,20 +44,47 @@ func configExplain(argv []string) int {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		if err := enc.Encode(struct {
-			EnvFile  string               `json:"env_file"`
-			Settings []config.Explanation `json:"settings"`
-		}{path, xs}); err != nil {
+			EnvFile         string               `json:"env_file"`
+			SystemdExported bool                 `json:"env_file_exported_by_systemd"`
+			Settings        []config.Explanation `json:"settings"`
+		}{path, exported, xs}); err != nil {
 			return errf(5, "%v", err)
 		}
 		return 0
 	}
-	writeExplanations(os.Stdout, path, xs)
+	writeExplanations(os.Stdout, path, exported, xs)
 	return 0
 }
 
+// systemdUnitDirs are where the service unit and its drop-ins are looked for.
+// A var so tests can point it at a fixture.
+var systemdUnitDirs = []string{"/etc/systemd/system", "/usr/lib/systemd/system", "/lib/systemd/system"}
+
+// envFileExportedBySystemd reports whether the box's fleet unit (or a
+// drop-in) loads envFile with EnvironmentFile=. On the standard install it
+// does, and then every line of the file reaches the server — including
+// spellings fleet's own env-file loader does not admit.
+func envFileExportedBySystemd(envFile string) bool {
+	unit := serviceName("")
+	if !strings.HasSuffix(unit, ".service") {
+		unit += ".service"
+	}
+	var files []string
+	for _, d := range systemdUnitDirs {
+		files = append(files, filepath.Join(d, unit))
+		dropins, _ := filepath.Glob(filepath.Join(d, unit+".d", "*.conf"))
+		files = append(files, dropins...)
+	}
+	return config.EnvFileExportedBySystemd(envFile, files)
+}
+
 // writeExplanations renders the table: KEY, VALUE, SOURCE, then any notes.
-func writeExplanations(w io.Writer, envFile string, xs []config.Explanation) {
-	fmt.Fprintf(w, "env file: %s\n\n", envFile)
+func writeExplanations(w io.Writer, envFile string, exported bool, xs []config.Explanation) {
+	fmt.Fprintf(w, "env file: %s", envFile)
+	if exported {
+		fmt.Fprint(w, " (exported by the systemd unit's EnvironmentFile=: every line reaches the server)")
+	}
+	fmt.Fprint(w, "\n\n")
 	if len(xs) == 0 {
 		fmt.Fprintln(w, "no registered setting is set (use --all to list every setting and its default)")
 		return
