@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ChatExperience, type ConversationSummary } from "./chat-experience";
-import { clearChatSession } from "./chatSessionStore";
+import { clearChatSession, writeChatSession } from "./chatSessionStore";
 
 // Opening one chat and then another before the first has loaded (#2043): the
 // load that started LAST owns the view. The older response used to switch the
@@ -129,5 +129,62 @@ describe("loadConversation supersession (#2043)", () => {
     await release("/api/conversations/conv-c");
     await waitFor(() => expect(screen.queryByText("Loading conversation...")).not.toBeInTheDocument());
     expect(headerTitle()).toHaveTextContent("Gamma chat");
+  });
+
+  it("a tab-return refresh that outlasts a navigation does not take the view back", async () => {
+    // A warm return to Alpha with a turn that looked mid-stream when the tab
+    // was left: the tab-return refresh will want to reload it.
+    writeChatSession({
+      messagesByConv: new Map([
+        ["conv-a", [
+          { id: 1, role: "user", content: "hi", state: "done" },
+          { id: 2, role: "assistant", content: "partial", state: "streaming" },
+        ]],
+      ]),
+      conversations: CONVS,
+      archivedConversations: [],
+      activeConversationId: "conv-a",
+      personas: [],
+      selectedPersona: "default",
+      selectedModel: "vendor/one",
+      skills: [],
+      serverConfig: { lockdownAvailable: false, lockdownOnly: false, lockdownAllowedModels: [], uploadMaxBytes: 0 },
+      userEmail: "user@example.com",
+    });
+    mockBackend();
+    let releaseInflight: (() => void) | null = null;
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = String(input);
+      // A backend-down session answer skips the warm background revalidation.
+      if (url === "/api/session") return new Response("", { status: 503 });
+      if (url === "/api/conversations/conv-a/inflight") {
+        return new Promise<Response>((resolve) => {
+          releaseInflight = () => resolve(new Response(JSON.stringify({ inflight: false }), { status: 200 }));
+        });
+      }
+      return base(input, init);
+    });
+
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+
+    // Tab return: the refresh waits on Alpha's liveness probe…
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(releaseInflight).not.toBeNull());
+    // …while the user opens Beta.
+    fireEvent.click(screen.getByRole("button", { name: "Beta chat" }));
+    await waitFor(() => expect(held.some((d) => d.url === "/api/conversations/conv-b")).toBe(true));
+
+    await act(async () => {
+      releaseInflight!();
+    });
+    await release("/api/conversations/conv-b");
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Beta chat"));
+    // Settle any reload the refresh may have started; Beta must stay.
+    await act(async () => {});
+    expect(headerTitle()).toHaveTextContent("Beta chat");
   });
 });

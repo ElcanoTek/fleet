@@ -922,13 +922,17 @@ export function ChatExperience({
     [],
   );
   const newChatDraftGenRef = useRef(0);
-  // Bumped by every foreground (non-background, non-adopt) loadConversation:
-  // the load that started LAST owns the view. Opening A (slow) and then B used
+  // Bumped by every navigation (not background, adopt or restore)
+  // loadConversation: the navigation that started LAST owns the view. Opening A (slow) and then B used
   // to let A's late response switch the active chat back to A — persona,
   // model and Tools catalog with it — and A's `finally` cleared B's loading
   // spinner (#2043). A superseded load still merges its transcript and rail
   // row; only the view-moving half is gated on this.
   const loadConversationGenRef = useRef(0);
+  // The generation of the last navigation that finished. Behind
+  // loadConversationGenRef while a navigation is still in flight, which is
+  // how the tab-return refresh knows to stay out of its way.
+  const loadConversationSettledGenRef = useRef(0);
 
   // The very first mount of a session races the client-config fetch: state
   // seeds from the compiled-in fallback before the workspace's tier pair is
@@ -2386,14 +2390,26 @@ export function ChatExperience({
     const prevProjectHome = projectHome;
     // Claimed before the attach short-circuit below, which switches the view
     // synchronously: an older load still in flight must not move it back.
-    // Background and adopt loads never move the user on their own, so they
-    // only read the generation — any foreground load after them wins.
-    if (!options.background && !options.adopt) {
-      loadConversationGenRef.current += 1;
-    }
+    // Background, adopt and restore loads only read the generation, so any
+    // navigation after them wins — a boot or tab-return restore must never
+    // take the view from a chat the user opened while it ran.
+    const claimsView =
+      !options.background && !options.adopt && !options.restore;
+    if (claimsView) loadConversationGenRef.current += 1;
     const loadGenAtStart = loadConversationGenRef.current;
+    // A load that claimed nothing must also wait out a navigation still in
+    // flight when it started: it reads that navigation's generation, and a
+    // restore landing first would otherwise move the view and clear the
+    // spinner the navigation still owns.
     const isCurrentLoad = () =>
-      loadConversationGenRef.current === loadGenAtStart;
+      loadConversationGenRef.current === loadGenAtStart &&
+      (claimsView ||
+        loadConversationSettledGenRef.current === loadGenAtStart);
+    const settleNavigation = () => {
+      if (claimsView && isCurrentLoad()) {
+        loadConversationSettledGenRef.current = loadGenAtStart;
+      }
+    };
     if (!options.background && !options.restore) {
       setProjectHome(null);
       // The team-chat viewer is a full-page overlay too, and it hid the chat
@@ -2439,6 +2455,7 @@ export function ChatExperience({
         setSelectedModel(conv.model || currentDefaultModel());
       }
       if (!options.background && !options.restore) setSidebarOpen(false);
+      settleNavigation();
       return;
     }
 
@@ -2789,6 +2806,7 @@ export function ChatExperience({
     } finally {
       // A superseded load leaves the spinner to the load that replaced it.
       if (!options.background && isCurrentLoad()) setIsLoadingHistory(false);
+      settleNavigation();
     }
 
     // Pull the authoritative pending-input snapshot (#785). Queue chips only
@@ -5683,6 +5701,8 @@ export function ChatExperience({
       if (document.visibilityState !== "visible") return;
       const convId = activeConversationIdRef.current;
       if (!convId) return;
+      // The navigation generation at the moment this refresh picked convId.
+      const navGenAtStart = loadConversationGenRef.current;
       // "Attached" is not the same as "alive". A phone that locks mid-turn
       // leaves a zombie socket: the reader never delivers another chunk and
       // never rejects, so the conversation keeps looking attached while the
@@ -5737,6 +5757,15 @@ export function ChatExperience({
         (m) => m.state === "streaming" || m.state === "thinking",
       );
       if (!hasStaleStream) return;
+      // The awaits above can outlast a navigation: if the user opened another
+      // chat since convId was picked (or one was still loading then), this
+      // reload is for a chat they have left and must not compete with it.
+      if (
+        loadConversationGenRef.current !== navGenAtStart ||
+        loadConversationSettledGenRef.current !== navGenAtStart ||
+        activeConversationIdRef.current !== convId
+      )
+        return;
 
       // preserveScroll: the user was already on this conversation and may
       // have been mid-read. Even when we do refetch (turn dropped while
