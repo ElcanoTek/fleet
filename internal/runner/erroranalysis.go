@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // errorAnalysisBudget bounds one detached diagnosis goroutine, independent of any
@@ -82,9 +83,5 @@ func sessionTail(session *models.LogSession, n, maxChars int) string {
 		b.WriteString(m.Content)
 		b.WriteString("\n")
 	}
-	s := b.String()
-	if r := []rune(s); len(r) > maxChars {
-		s = string(r[len(r)-maxChars:])
-	}
-	return s
+	return truncate.TailRunes(b.String(), maxChars)
 }

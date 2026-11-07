@@ -5,10 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
 
 // DistillLearnedInstruction (#516) condenses a task's accumulated feedback
@@ -52,23 +48,19 @@ func (m *Manager) DistillLearnedInstruction(ctx context.Context, taskPrompt stri
 		fmt.Fprintf(&b, "- %s\n", truncate(strings.TrimSpace(c), 400))
 	}
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.2),
-		fantasy.WithMaxOutputTokens(300),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-	tctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-	maxTokens := int64(300)
-	out, err := ag.Generate(tctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	_, out, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      b.String(),
+		Temperature: 0.2,
+		MaxTokens:   300,
+		Timeout:     25 * time.Second,
 	})
 	if err != nil {
 		return ""
 	}
+	// The FIRST text part, not generateOnce's concatenation of every part:
+	// the distiller has always judged the opening instruction (and its NONE
+	// sentinel) on its own.
 	text := strings.TrimSpace(out.Response.Content.Text())
 	if text == "" || strings.EqualFold(text, "NONE") {
 		return ""

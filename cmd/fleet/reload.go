@@ -16,7 +16,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
-	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 )
 
 // reloadConfigHandler serves POST /admin/reload-config (#286): it re-reads the
@@ -84,7 +83,7 @@ func reloadMCPServers(ctx context.Context, mgr *agent.Manager) (*mcp.ReloadSumma
 	if err != nil {
 		return nil, fmt.Errorf("reload client-config bundle: %w", err)
 	}
-	specs := scheduledrun.BuildMCPSpecs(&config.Config{MCPServers: bundle.MCPServerConfigs()})
+	specs := agent.BuildMCPSpecs(&config.Config{MCPServers: bundle.MCPServerConfigs()})
 	summary, err := mgr.ReloadMCPServers(ctx, specs)
 	if err == nil {
 		// The picker's categories and needs-setup rows follow the same read.

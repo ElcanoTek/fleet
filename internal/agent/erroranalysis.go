@@ -7,8 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
@@ -83,46 +81,30 @@ func (m *Manager) AnalyzeTaskFailure(ctx context.Context, taskPrompt, errMsg, se
 		"an operator could take. Be precise and actionable; do not speculate beyond the evidence." +
 		structuredoutput.PromptAugmentation(json.RawMessage(errorAnalysisSchema))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.1),
-		fantasy.WithMaxOutputTokens(errorAnalysisMaxTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-
 	prompt := fmt.Sprintf("Task instructions:\n%s\n\nTerminal error:\n%s\n\nSession log tail:\n%s",
 		truncate(taskPrompt, errorAnalysisMaxPromptChars),
 		truncate(errMsg, errorAnalysisMaxErrChars),
 		truncate(sessionTail, errorAnalysisMaxSessionChars),
 	)
 
-	ctx, cancel := context.WithTimeout(ctx, errorAnalysisTimeout)
-	defer cancel()
-
-	maxTokens := int64(errorAnalysisMaxTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(prompt)},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("error-analysis generate: %w", err)
-	}
 	// Meter visibly (#1118): this call analyzes ONE specific failed run, but it
 	// fires AFTER that run's session log was persisted (the runner hands this
 	// method primitives, by design), so there is no live ledger to append to —
 	// the structured host log line is the record. Logged before validation: an
 	// unparseable diagnosis still cost money.
-	logAuxUsage(agentcore.NewAuxUsageRecord(agentcore.AuxUsageErrorAnalysis, model.Model(), result))
-
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      prompt,
+		Temperature: 0.1,
+		MaxTokens:   errorAnalysisMaxTokens,
+		Timeout:     errorAnalysisTimeout,
+		AuxLabel:    agentcore.AuxUsageErrorAnalysis,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("error-analysis generate: %w", err)
 	}
 
-	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(errorAnalysisSchema))
+	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(errorAnalysisSchema))
 	if err != nil {
 		return nil, fmt.Errorf("error-analysis output failed schema validation: %w", err)
 	}

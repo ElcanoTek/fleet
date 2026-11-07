@@ -1,12 +1,15 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"strings"
 	"time"
+
+	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 )
@@ -78,6 +81,57 @@ func writeValidatedLogFile(path string, data []byte) error {
 func logAuxUsage(rec agentcore.AuxUsageRecord) {
 	log.Printf("aux model call: label=%s model=%s prompt=%d completion=%d cost=$%.4f",
 		rec.Label, rec.Model, rec.PromptTokens, rec.CompletionTokens, rec.CostUSD)
+}
+
+// oneShotCall is one auxiliary, tool-less model call: a system prompt, a single
+// user message, and the call's sampling, output and time budgets. AuxLabel is
+// the agentcore.AuxUsage* label the call is metered under via logAuxUsage; ""
+// leaves it unmetered (docs/AUX-MODEL-CALL-METERING.md lists which are).
+type oneShotCall struct {
+	System      string
+	Prompt      string
+	Temperature float64
+	MaxTokens   int
+	Timeout     time.Duration
+	AuxLabel    string
+}
+
+// generateOnce runs call against model the way every short-lived host-side
+// helper (titles, memory extraction, error analysis, the synthesizers) does: a
+// fresh fantasy agent with the stable-prefix prompt-caching step and the
+// routing provider options, bounded by call.Timeout. A metered call is logged
+// before the caller validates anything, because a non-conforming answer still
+// cost money. text concatenates every text part of the response; res is the
+// raw result, nil on error.
+func generateOnce(ctx context.Context, model fantasy.LanguageModel, call oneShotCall) (text string, res *fantasy.AgentResult, err error) {
+	ag := fantasy.NewAgent(model,
+		fantasy.WithSystemPrompt(call.System),
+		fantasy.WithTemperature(call.Temperature),
+		fantasy.WithMaxOutputTokens(int64(call.MaxTokens)),
+		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
+	)
+	ctx, cancel := context.WithTimeout(ctx, call.Timeout)
+	defer cancel()
+
+	maxTokens := int64(call.MaxTokens)
+	res, err = ag.Generate(ctx, fantasy.AgentCall{
+		Messages:        []fantasy.Message{fantasy.NewUserMessage(call.Prompt)},
+		MaxOutputTokens: &maxTokens,
+		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	if call.AuxLabel != "" {
+		logAuxUsage(agentcore.NewAuxUsageRecord(call.AuxLabel, model.Model(), res))
+	}
+	var out strings.Builder
+	for _, c := range res.Response.Content {
+		if tc, ok := c.(fantasy.TextContent); ok {
+			out.WriteString(tc.Text)
+		}
+	}
+	return out.String(), res, nil
 }
 
 // redactLogSession returns a copy of session with secrets scrubbed from text,

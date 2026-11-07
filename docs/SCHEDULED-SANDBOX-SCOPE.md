@@ -23,7 +23,7 @@ Every sandbox that still mounts the **whole** root — chat, worktree runs,
 `FLEET_SCHEDULED_SHARED_WORKSPACE=1` runs, approved bash — now gets
 `<root>/tasks/` **read-only** over its read-write root mount
 (`ContainerConfig.WholeRootReadOnly`, created at boot by
-`ensureTaskWorkspacesDir`, which refuses a symlink on the name). Those
+`ensureMountBaseDir`, which refuses a symlink on the name). Those
 sandboxes can still read a job's files, but can no longer write, rename or
 replace anything under `tasks/` — which is what would let one swap another
 job's directory in for a scoped job's between the scope check and the mount.

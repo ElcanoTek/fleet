@@ -7,7 +7,10 @@
 // byte-slice call sites but always cuts on a rune boundary.
 package truncate
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // Clamp returns s unchanged when it fits in maxBytes bytes; otherwise it cuts
 // s at the largest rune boundary <= maxBytes and appends marker. The budget
@@ -63,4 +66,46 @@ func Tail(s string, maxBytes int) string {
 		cut++
 	}
 	return s[cut:]
+}
+
+// TailRunes returns s unchanged when it has at most n runes; otherwise it
+// keeps the last n runes. Use it where the end of the text is what matters (a
+// live preview, the close of a transcript) and the budget is characters.
+func TailRunes(s string, n int) string {
+	if n < 0 {
+		n = 0
+	}
+	count := utf8.RuneCountInString(s)
+	if count <= n {
+		return s
+	}
+	i := 0
+	for skip := count - n; skip > 0; skip-- {
+		_, size := utf8.DecodeRuneInString(s[i:])
+		i += size
+	}
+	return s[i:]
+}
+
+// Ends returns s unchanged when it has at most head+tail runes; otherwise it
+// keeps the first head runes and the last tail runes with marker between
+// them, dropping the middle. head 0 gives a marker-led tail ("…" + the last
+// tail runes).
+func Ends(s string, head, tail int, marker string) string {
+	if head < 0 {
+		head = 0
+	}
+	if tail < 0 {
+		tail = 0
+	}
+	if utf8.RuneCountInString(s) <= head+tail {
+		return s
+	}
+	return Runes(s, head, "") + marker + TailRunes(s, tail)
+}
+
+// OneLine folds every run of whitespace (newlines included) into a single
+// space and trims both ends, so multi-line text renders on one line.
+func OneLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }

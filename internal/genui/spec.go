@@ -27,9 +27,11 @@ package genui
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -334,7 +336,7 @@ func ComponentTypes() []string {
 	for k := range components {
 		out = append(out, k)
 	}
-	sortStrings(out)
+	sort.Strings(out)
 	return out
 }
 
@@ -678,7 +680,7 @@ func propNames(spec compSpec) []string {
 			out = append(out, k)
 		}
 	}
-	sortStrings(out)
+	sort.Strings(out)
 	return out
 }
 
@@ -705,7 +707,7 @@ func (v *validator) checkProp(path string, pr prop, val any, repeater string) {
 		}
 	case kEnum:
 		s, _ := val.(string)
-		if !containsStr(pr.enum, s) {
+		if !slices.Contains(pr.enum, s) {
 			v.addf(path, "must be one of: %s", strings.Join(pr.enum, ", "))
 		}
 	case kString, kURL, kDate, kFieldPath, kTemplate, kExpr, kNonBlank:
@@ -853,7 +855,7 @@ func (v *validator) checkListProp(path string, pr prop, val any, repeater string
 			for k, ev := range obj {
 				ip, ok := pr.items[k]
 				if !ok {
-					v.addf(ep+"."+k, "unknown property (allowed: %s)", strings.Join(sortedKeys(pr.items), ", "))
+					v.addf(ep+"."+k, "unknown property (allowed: %s)", strings.Join(slices.Sorted(maps.Keys(pr.items)), ", "))
 					continue
 				}
 				v.checkProp(ep+"."+k, ip, ev, repeater)
@@ -1459,7 +1461,7 @@ func (v *validator) disabledItems(path string, obj map[string]any, kids []any) {
 	} else {
 		items = make([]map[string]any, initialItems(obj))
 	}
-	for _, id := range sortedCompKeys(fields) {
+	for _, id := range slices.Sorted(maps.Keys(fields)) {
 		f := fields[id]
 		// A visible_if gate does not excuse it: once shown, the field is
 		// disabled with the rest of the item and submitted unvalidated.
@@ -1688,7 +1690,7 @@ func (v *validator) checkValue(path, typ string, obj map[string]any, val any) {
 	}
 	inOptions := func(s string) bool {
 		opts, ok := optionValues(obj["options"])
-		return !ok || containsStr(opts, s)
+		return !ok || slices.Contains(opts, s)
 	}
 	switch typ {
 	case "text_input":
@@ -1833,7 +1835,7 @@ func (v *validator) checkCollectionValue(path, typ string, obj map[string]any, v
 				ip := fmt.Sprintf("%s[%d].%s", path, i, k)
 				f, known := fields[k]
 				if !known {
-					v.addf(ip, "not a field of this repeater (fields: %s)", strings.Join(sortedCompKeys(fields), ", "))
+					v.addf(ip, "not a field of this repeater (fields: %s)", strings.Join(slices.Sorted(maps.Keys(fields)), ", "))
 					continue
 				}
 				// Each item value is checked exactly like a top-level default.
@@ -1919,7 +1921,7 @@ func (v *validator) includeExcludeEntries(path string, obj, m map[string]any, in
 // inOptionsStrict: s is literally one of the declared option values.
 func inOptionsStrict(obj map[string]any, s string) bool {
 	opts, ok := optionValues(obj["options"])
-	return ok && containsStr(opts, s)
+	return ok && slices.Contains(opts, s)
 }
 
 // collectInputs gathers the input components under a component list by id,
@@ -1982,7 +1984,7 @@ func (v *validator) actions(raw any, hasInput bool) {
 		for k, val := range obj {
 			pr, ok := actionProps[k]
 			if !ok {
-				v.addf(ap+"."+k, "unknown action property (allowed: %s)", strings.Join(sortedKeys(actionProps), ", "))
+				v.addf(ap+"."+k, "unknown action property (allowed: %s)", strings.Join(slices.Sorted(maps.Keys(actionProps)), ", "))
 				continue
 			}
 			v.checkProp(ap+"."+k, pr, val, "")
@@ -2662,7 +2664,7 @@ func (v *validator) repeaterFieldNames(rep string) string {
 			names = append(names, id)
 		}
 	}
-	sortStrings(names)
+	sort.Strings(names)
 	return strings.Join(names, ", ")
 }
 
@@ -2671,7 +2673,7 @@ func (v *validator) inputNames() string {
 	for k := range v.fields {
 		names = append(names, k)
 	}
-	sortStrings(names)
+	sort.Strings(names)
 	if len(names) == 0 {
 		return "none"
 	}
@@ -2680,35 +2682,6 @@ func (v *validator) inputNames() string {
 	}
 	return strings.Join(names, ", ")
 }
-
-func containsStr(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
-func sortedKeys(m map[string]prop) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sortStrings(out)
-	return out
-}
-
-func sortedCompKeys(m map[string]map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sortStrings(out)
-	return out
-}
-
-func sortStrings(s []string) { sort.Strings(s) }
 
 // componentProps checks one component's own properties, recursing into
 // children and tabs.

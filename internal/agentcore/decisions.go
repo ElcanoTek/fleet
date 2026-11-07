@@ -32,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
 
@@ -134,7 +135,7 @@ func CheckStruggle(ctx context.Context, apiKey, model, conversation string) (Str
 	if strings.TrimSpace(apiKey) == "" {
 		return StruggleVerdict{}, ErrDecisionUnavailable
 	}
-	conversation = tailRunes(conversation, MaxStruggleTranscriptRunes)
+	conversation = trunc.TailRunes(conversation, MaxStruggleTranscriptRunes) // the question is about how the conversation ends
 	// The same ingress boundary as the turn (screenSeedMessages): text the
 	// workspace guardrail would block, or cannot screen in block mode, never
 	// leaves for another vendor. The check starts alongside the turn, before
@@ -199,16 +200,6 @@ func CheckStruggle(ctx context.Context, apiKey, model, conversation string) (Str
 		CostUSD:     out.Usage.Cost,
 		Latency:     time.Since(start),
 	}, nil
-}
-
-// tailRunes keeps the last n runes of s: the question is about how the
-// conversation ends.
-func tailRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[len(r)-n:])
 }
 
 // DecisionModel is one OpenRouter decision model, for the admin picker.

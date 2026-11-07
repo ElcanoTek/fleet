@@ -87,7 +87,7 @@ func TestConvertLogSession_CarriesAuxUsage(t *testing.T) {
 		PromptTokens: 30, CompletionTokens: 9, CostUSD: 0.01,
 	})
 
-	out := convertLogSession(nil, ls)
+	out := convertLogSession(ls)
 	if out == nil {
 		t.Fatal("convertLogSession returned nil")
 	}

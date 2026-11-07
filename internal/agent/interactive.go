@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	"charm.land/fantasy"
@@ -660,29 +661,7 @@ func summarizeDroppedMiddleWith(ctx context.Context, model fantasy.LanguageModel
 func placeholderCompactionSummary(n int) string {
 	return strings.TrimSpace(
 		"earlier messages were dropped to fit the model's context window after the provider rejected the prompt size.",
-	) + " (" + itoa(n) + " messages compacted)"
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
+	) + " (" + strconv.Itoa(n) + " messages compacted)"
 }
 
 // compactionSummarizePromptFor selects the compaction summary system prompt:

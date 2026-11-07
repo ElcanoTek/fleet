@@ -193,36 +193,6 @@ func ValidatePathForRead(path string) (string, error) {
 	return absPath, nil
 }
 
-// ValidateDirectory validates that a directory path is within allowed
-// directories. An empty path means the process working directory — which is
-// then validated like any other path, NOT returned as-is: under a managed
-// deployment the cwd is the whole StateDirectory (attachments, uploads,
-// api_keys.json), which AllowedBaseDirs deliberately excludes once a workspace
-// root is registered, and an unchecked "" would have been a one-token bypass of
-// that confinement.
-func ValidateDirectory(path string) (string, error) {
-	if path == "" {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("failed to get current working directory: %w", err)
-		}
-		path = cwd
-	}
-
-	absPath, err := ValidatePath(path)
-	if err != nil {
-		return "", err
-	}
-
-	// Check it's a directory if it exists
-	info, err := os.Stat(absPath)
-	if err == nil && !info.IsDir() {
-		return "", fmt.Errorf("path is not a directory: %s", path)
-	}
-
-	return absPath, nil
-}
-
 // containsDotDotComponent reports whether path contains a ".." path
 // component. The check is component-wise (not a substring match), so a
 // legitimate filename like "my..report.csv" passes while "../x" and a

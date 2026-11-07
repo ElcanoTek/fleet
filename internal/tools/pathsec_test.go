@@ -343,65 +343,6 @@ func TestValidatePathForRead(t *testing.T) {
 	}
 }
 
-func TestValidateDirectory(t *testing.T) {
-	cwd, _ := os.Getwd()
-	absCwd, _ := filepath.Abs(cwd)
-
-	tempBase, err := os.MkdirTemp("", "pathsec-test-*")
-	if err != nil {
-		t.Fatalf("failed to create temp dir: %v", err)
-	}
-	defer os.RemoveAll(tempBase)
-
-	// Create a valid directory
-	validDir := filepath.Join(tempBase, "validdir")
-	err = os.MkdirAll(validDir, 0755)
-	if err != nil {
-		t.Fatalf("failed to create valid dir: %v", err)
-	}
-
-	// Create a valid file
-	validFile := filepath.Join(tempBase, "valid.txt")
-	err = os.WriteFile(validFile, []byte("test content"), 0644)
-	if err != nil {
-		t.Fatalf("failed to create valid file: %v", err)
-	}
-
-	tests := []struct {
-		name          string
-		path          string
-		expectedError string
-		expectedPath  string
-	}{
-		{"empty path returns cwd", "", "", absCwd},
-		{"valid directory", validDir, "", validDir},
-		{"file instead of directory", validFile, "path is not a directory", ""},
-		{"non-existent directory within allowed", filepath.Join(tempBase, "newdir"), "", filepath.Join(tempBase, "newdir")},
-		{"directory outside allowed", "/etc", "path is outside allowed directories", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result, err := ValidateDirectory(tt.path)
-
-			if tt.expectedError != "" {
-				if err == nil {
-					t.Errorf("ValidateDirectory() expected error containing %q, got nil", tt.expectedError)
-				} else if !strings.Contains(err.Error(), tt.expectedError) {
-					t.Errorf("ValidateDirectory() expected error containing %q, got %q", tt.expectedError, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("ValidateDirectory() unexpected error: %v", err)
-				}
-				if result != tt.expectedPath {
-					t.Errorf("ValidateDirectory() returned %q, expected %q", result, tt.expectedPath)
-				}
-			}
-		})
-	}
-}
-
 func TestValidatePathExploitDeepSubdir(t *testing.T) {
 	tempBase, err := os.MkdirTemp("", "pathsec-exploit-*")
 	if err != nil {
@@ -434,28 +375,5 @@ func TestValidatePathExploitDeepSubdir(t *testing.T) {
 		t.Fatalf("VULNERABILITY DETECTED! Returned allowed path for symlink bypass via nonexistent subdir")
 	} else if !strings.Contains(err.Error(), "parent directory symlink points outside allowed directories") {
 		t.Errorf("ValidatePath() expected error containing 'parent directory symlink points outside allowed directories', got %q", err.Error())
-	}
-}
-
-// TestValidateDirectoryEmptyPathIsConfined pins the fix for the one-token
-// bypass: "" means the process cwd, and the cwd is VALIDATED like any other
-// path. Under a managed deployment the cwd (the StateDirectory) is not in the
-// allowlist once a workspace root is registered, so "" must be refused there
-// rather than handed back unchecked.
-func TestValidateDirectoryEmptyPathIsConfined(t *testing.T) {
-	root := t.TempDir()
-	prev := managedWorkspaceRoot
-	managedWorkspaceRoot = root
-	t.Cleanup(func() { managedWorkspaceRoot = prev })
-
-	if _, err := ValidateDirectory(""); err == nil {
-		t.Fatal("ValidateDirectory(\"\") returned the cwd unchecked while a workspace root outside it is registered")
-	} else if !strings.Contains(err.Error(), "outside allowed directories") {
-		t.Fatalf("want an allowlist violation, got %v", err)
-	}
-	// The registered root itself is still fine, so the refusal above is the
-	// allowlist and not a broken helper.
-	if got, err := ValidateDirectory(root); err != nil || got == "" {
-		t.Fatalf("ValidateDirectory(root) = %q, %v", got, err)
 	}
 }

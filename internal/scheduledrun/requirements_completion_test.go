@@ -29,7 +29,7 @@ func TestExecutionRequirementsCompletionClause(t *testing.T) {
 		{ServerName: "pages", Tool: mcp.Tool{Name: "update_page_data_upload"}},
 	}
 	native := []fantasy.AgentTool{namedNativeTool("finish_note")}
-	if err := req.checkTools(catalog, native); err != nil {
+	if err := req.checkToolsAgainst(catalog, native, nil); err != nil {
 		t.Fatal(err)
 	}
 	got := req.resolveCompletion(catalog, native)
@@ -40,7 +40,7 @@ func TestExecutionRequirementsCompletionClause(t *testing.T) {
 
 	// A completion tool the roster cannot call fails dispatch with the same
 	// actionable roster error as an unavailable required tool.
-	if err := req.checkTools(catalog[:3], native); err == nil ||
+	if err := req.checkToolsAgainst(catalog[:3], native, nil); err == nil ||
 		!strings.Contains(err.Error(), "completion tool update_page_data_upload") ||
 		!strings.Contains(err.Error(), "check selected servers, tool permissions and connected accounts") {
 		t.Fatalf("unknown completion tool not diagnosed: %v", err)
@@ -108,7 +108,7 @@ func TestExecutionRequirementsBlockedWhenResolves(t *testing.T) {
 		{ServerName: "pages", Tool: mcp.Tool{Name: "record_refresh_check"}},
 		{ServerName: "pages", Tool: mcp.Tool{Name: "update_page_data"}},
 	}
-	if err := req.checkTools(catalog, nil); err != nil {
+	if err := req.checkToolsAgainst(catalog, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	req.completionRoster = req.resolveCompletion(catalog, nil)

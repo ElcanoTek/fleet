@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // TestLibraryPromptSchema pins the contract the synthesizer's output is
@@ -31,16 +32,16 @@ func TestLibraryPromptSchema(t *testing.T) {
 // carry its objective and its inputs — the template's first two sections — so
 // truncation here has to eat the middle, which is the repetitive part.
 func TestKeepTranscriptEnds(t *testing.T) {
-	if got := keepTranscriptEnds("short", 100); got != "short" {
+	if got := trunc.Ends("short", 100/3, 100-100/3, libraryTranscriptOmitted); got != "short" {
 		t.Errorf("under budget should pass through unchanged, got %q", got)
 	}
 
 	head := strings.Repeat("A", 600)
 	middle := strings.Repeat("M", 5000)
 	tail := strings.Repeat("Z", 600)
-	got := keepTranscriptEnds(head+middle+tail, 1500)
+	got := trunc.Ends(head+middle+tail, 1500/3, 1500-1500/3, libraryTranscriptOmitted)
 
-	if len([]rune(got)) > 1500+len([]rune("\n\n…[middle of the conversation omitted]…\n\n")) {
+	if len([]rune(got)) > 1500+len([]rune(libraryTranscriptOmitted)) {
 		t.Errorf("result exceeds the budget: %d runes", len([]rune(got)))
 	}
 	if !strings.HasPrefix(got, "AAAA") {

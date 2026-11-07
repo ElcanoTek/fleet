@@ -7,6 +7,7 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/scorers"
 )
 
 // A run that finished after its verifier could not answer is a success whose
@@ -21,7 +22,7 @@ func TestSuccessMessageFlagsVerifierOutage(t *testing.T) {
 	if got := successMessage(session); got != "["+flag+"] Published v874." {
 		t.Fatalf("successMessage = %q", got)
 	}
-	if got := finalAssistantText(session); got != "Published v874." {
+	if got := scorers.LastAssistantMessage(session); got != "Published v874." {
 		t.Fatalf("the final answer itself changed: %q", got)
 	}
 	structured := &models.LogSession{Messages: []models.LogMessage{

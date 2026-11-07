@@ -6,8 +6,10 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ElcanoTek/fleet/internal/agentcore"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 const (
@@ -223,15 +225,14 @@ func verifierBulkText(s string) bool {
 // UTF-8 for the verifier model.
 func verifierTextExcerpt(s string) string {
 	s = verifierURLToken.ReplaceAllString(s, "[url]")
-	s = strings.Join(strings.Fields(s), " ")
+	s = trunc.OneLine(s)
 	if strings.Trim(s, "[url] ") == "" {
 		return ""
 	}
-	runes := []rune(s)
-	if len(runes) <= verifierExcerptMax {
+	if utf8.RuneCountInString(s) <= verifierExcerptMax {
 		return s
 	}
-	return string(runes[:verifierExcerptHead]) + " … " + string(runes[len(runes)-verifierExcerptTail:])
+	return trunc.Ends(s, verifierExcerptHead, verifierExcerptTail, " … ")
 }
 
 func verifierScalar(value any) bool {

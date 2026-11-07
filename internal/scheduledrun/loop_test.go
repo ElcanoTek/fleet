@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/scorers"
 )
 
 // ── pure exit-condition helpers ──
@@ -28,19 +29,19 @@ func TestEvalRegexExit(t *testing.T) {
 
 func TestFirstWordIsYes(t *testing.T) {
 	for _, s := range []string{"YES", "yes", "  Yes, it does", "**YES**", "`yes`", "> YES\nbecause"} {
-		if !firstWordIsYes(s) {
+		if !scorers.FirstWordIsYes(s) {
 			t.Errorf("firstWordIsYes(%q) = false, want true", s)
 		}
 	}
 	for _, s := range []string{"NO", "no", "", "maybe", "not yes"} {
-		if firstWordIsYes(s) {
+		if scorers.FirstWordIsYes(s) {
 			t.Errorf("firstWordIsYes(%q) = true, want false", s)
 		}
 	}
 }
 
 func TestLastAssistantMessage(t *testing.T) {
-	if got := lastAssistantMessage(nil); got != "" {
+	if got := scorers.LastAssistantMessage(nil); got != "" {
 		t.Errorf("nil session = %q, want empty", got)
 	}
 	s := &models.LogSession{Messages: []models.LogMessage{
@@ -49,11 +50,11 @@ func TestLastAssistantMessage(t *testing.T) {
 		{Role: "user", Content: "again"},
 		{Role: "assistant", Content: "final answer"},
 	}}
-	if got := lastAssistantMessage(s); got != "final answer" {
+	if got := scorers.LastAssistantMessage(s); got != "final answer" {
 		t.Errorf("last assistant = %q, want %q", got, "final answer")
 	}
 	noAsst := &models.LogSession{Messages: []models.LogMessage{{Role: "user", Content: "x"}}}
-	if got := lastAssistantMessage(noAsst); got != "" {
+	if got := scorers.LastAssistantMessage(noAsst); got != "" {
 		t.Errorf("no assistant = %q, want empty", got)
 	}
 }
@@ -132,7 +133,7 @@ func TestRunLoop_PassesOnSecondIteration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected pass, got err: %v", err)
 	}
-	if session == nil || lastAssistantMessage(session) != "attempt two" {
+	if session == nil || scorers.LastAssistantMessage(session) != "attempt two" {
 		t.Errorf("expected the passing session returned, got %v", session)
 	}
 	if w.calls != 2 {

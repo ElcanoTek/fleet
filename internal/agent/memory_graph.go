@@ -7,9 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -114,33 +111,18 @@ func (m *Manager) ExtractMemoryGraph(ctx context.Context, content string) (*Extr
 		"Extract only what the fact actually states — no inference, no world knowledge. A fact with no clear entities yields empty lists." +
 		structuredoutput.PromptAugmentation(json.RawMessage(memoryGraphSchema))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0),
-		fantasy.WithMaxOutputTokens(memoryGraphMaxTokens),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-
-	ctx, cancel := context.WithTimeout(ctx, memoryGraphTimeout)
-	defer cancel()
-
-	maxTokens := int64(memoryGraphMaxTokens)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage("FACT:\n" + truncate(content, memoryGraphMaxContentChars))},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      "FACT:\n" + truncate(content, memoryGraphMaxContentChars),
+		Temperature: 0,
+		MaxTokens:   memoryGraphMaxTokens,
+		Timeout:     memoryGraphTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("memory-graph generate: %w", err)
 	}
 
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
-	}
-	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(memoryGraphSchema))
+	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(memoryGraphSchema))
 	if err != nil {
 		// Do NOT echo the model output (derived from memory content) — the bare
 		// failure is enough to diagnose (same posture as ExtractMemories).

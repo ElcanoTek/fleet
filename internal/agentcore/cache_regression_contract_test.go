@@ -712,42 +712,11 @@ func TestAllLLMCallSitesWirePromptCachingAndRouting_ASTGuard(t *testing.T) {
 			requireRoutingSymbol:    "RoutingProviderOptions",
 			requireStablePrefixOnly: true,
 		},
-		"internal/agent/erroranalysis.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/learned_instructions.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/library_prompt.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/memory_extract.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/memory_graph.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/patrol_draft.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/recurring_task.go": {
-			requireCacheSymbol:      "PromptCachingStep",
-			requireRoutingSymbol:    "RoutingProviderOptions",
-			requireStablePrefixOnly: true,
-		},
-		"internal/agent/title.go": {
+		// generateOnce: the one-shot aux helper every short-lived host-side
+		// call goes through (title, error analysis, memory extraction and
+		// graph, learned instructions, the library-prompt, recurring-task and
+		// patrol-draft synthesizers).
+		"internal/agent/session_log.go": {
 			requireCacheSymbol:      "PromptCachingStep",
 			requireRoutingSymbol:    "RoutingProviderOptions",
 			requireStablePrefixOnly: true,

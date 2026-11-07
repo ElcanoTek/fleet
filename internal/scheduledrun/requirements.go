@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -140,12 +141,6 @@ func resolveRosterNames(names []string, catalog []mcp.ServerTool, native []fanta
 	}
 	sort.Strings(out)
 	return out
-}
-
-// checkTools is checkToolsAgainst a run in which every selected server
-// registered.
-func (r *executionRequirements) checkTools(catalog []mcp.ServerTool, native []fantasy.AgentTool) error {
-	return r.checkToolsAgainst(catalog, native, nil)
 }
 
 // missingRequirement is one declared name the roster lacks: kind is "server",
@@ -378,10 +373,10 @@ func (r *executionRequirements) narrowedAllowlist(catalog []mcp.ServerTool, base
 		if !required[full] && !required[item.Tool.Name] {
 			continue
 		}
-		if list := agentcore.AllowlistToolsFor(base, item.ServerName); len(list) > 0 && !listHas(list, item.Tool.Name) {
+		if list := agentcore.AllowlistToolsFor(base, item.ServerName); len(list) > 0 && !slices.Contains(list, item.Tool.Name) {
 			continue // Gate-2 already removes it; narrowing never widens
 		}
-		if !listHas(out[item.ServerName], item.Tool.Name) {
+		if !slices.Contains(out[item.ServerName], item.Tool.Name) {
 			out[item.ServerName] = append(out[item.ServerName], item.Tool.Name)
 		}
 	}
@@ -404,15 +399,6 @@ func (r *executionRequirements) narrowedAllowlist(catalog []mcp.ServerTool, base
 // a narrowed run requires: an EMPTY entry reads as "allow all" under the
 // allowlist semantics, so denying needs one never-matching name.
 const rosterNarrowingDeniesAll = "__roster_narrowing_denies_all_tools__"
-
-func listHas(list []string, name string) bool {
-	for _, item := range list {
-		if item == name {
-			return true
-		}
-	}
-	return false
-}
 
 // checkTaskRequirementsAndRoster is the whole dispatch preflight of a task's
 // EXECUTION REQUIREMENTS: the declaration (checkTaskRequirements) and the

@@ -4,12 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
-	"charm.land/fantasy"
-
-	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/structuredoutput"
 )
 
@@ -100,7 +98,7 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 		b.WriteString("KNOWN (do not repeat; reference by number in `replaces` ONLY for a direct contradiction):\n")
 		for i, k := range known {
 			if s := strings.TrimSpace(k); s != "" {
-				b.WriteString(itoa(i+1) + ". ")
+				b.WriteString(strconv.Itoa(i+1) + ". ")
 				b.WriteString(truncate(s, 200))
 				b.WriteString("\n")
 			}
@@ -112,33 +110,19 @@ func (m *Manager) ExtractMemories(ctx context.Context, userMessage, assistantRep
 	b.WriteString("\n\nAssistant: ")
 	b.WriteString(truncate(assistantReply, 4000))
 
-	ag := fantasy.NewAgent(model,
-		fantasy.WithSystemPrompt(sys),
-		fantasy.WithTemperature(0.1),
-		fantasy.WithMaxOutputTokens(768),
-		fantasy.WithPrepareStep(agentcore.PromptCachingStep(model.Model(), agentcore.WithStablePrefixOnly())),
-	)
-	ctx, cancel := context.WithTimeout(ctx, 25*time.Second)
-	defer cancel()
-
-	maxTokens := int64(768)
-	result, err := ag.Generate(ctx, fantasy.AgentCall{
-		Messages:        []fantasy.Message{fantasy.NewUserMessage(b.String())},
-		MaxOutputTokens: &maxTokens,
-		ProviderOptions: agentcore.RoutingProviderOptions(model.Model()),
+	text, _, err := generateOnce(ctx, model, oneShotCall{
+		System:      sys,
+		Prompt:      b.String(),
+		Temperature: 0.1,
+		MaxTokens:   768,
+		Timeout:     25 * time.Second,
 	})
 	if err != nil {
 		log.Printf("ExtractMemories: %v", err)
 		return nil
 	}
 
-	var out strings.Builder
-	for _, c := range result.Response.Content {
-		if tc, ok := c.(fantasy.TextContent); ok {
-			out.WriteString(tc.Text)
-		}
-	}
-	validated, err := structuredoutput.ValidateOutput(out.String(), json.RawMessage(memoryExtractionSchema))
+	validated, err := structuredoutput.ValidateOutput(text, json.RawMessage(memoryExtractionSchema))
 	if err != nil {
 		// Deliberately do NOT log the validation error verbatim: it can echo the
 		// model's non-conforming output, which is derived from conversation

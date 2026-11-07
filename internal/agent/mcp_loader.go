@@ -152,7 +152,9 @@ func (a *Agent) loadMCPServers(ctx context.Context, names []string, account stri
 	// and `client_a` must not double-load as two distinct servers.
 	account = creds.CanonicalAccount(account)
 
-	bases := a.mcpBases()
+	// Disabled servers are absent from bases; the loop below refuses them by
+	// name before binding.
+	bases := BuildMCPBases(a.config)
 	var loadedNow []string
 	var errs []string
 	for _, name := range names {
@@ -207,31 +209,4 @@ func (a *Agent) loadMCPServers(ctx context.Context, names []string, account stri
 		resp.StopTurn = true
 	}
 	return resp, nil
-}
-
-// mcpBases maps each configured server name to the spawn spec + base env the
-// binder needs (account overlays are applied by BindMCPSelection via
-// creds.ApplyClientSuffix).
-func (a *Agent) mcpBases() map[string]agentcore.MCPServerBase {
-	bases := map[string]agentcore.MCPServerBase{}
-	if a.config == nil {
-		return bases
-	}
-	for name, sc := range a.config.MCPServers {
-		base := agentcore.MCPServerBase{
-			BaseEnv:     sc.Env,
-			Command:     sc.Command,
-			Args:        sc.Args,
-			Dir:         sc.Dir,
-			DirPinned:   sc.DirPinned,
-			HTTPHeaders: sc.Headers,
-			IdentityEnv: sc.IdentityEnv,
-		}
-		if sc.Type == "http" {
-			base.HTTPURL = sc.URL
-			base.HTTPTLS = sc.TLS
-		}
-		bases[name] = base
-	}
-	return bases
 }

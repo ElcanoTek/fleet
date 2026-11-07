@@ -1,4 +1,4 @@
-package scheduledrun
+package agent
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 
 // TestBuildMCPSpecs_CarriesOptionalMetadata is the regression guard for the
 // 128-tool-ceiling overflow: BuildMCPSpecs must propagate the Optional-server
-// metadata into agent.MCPServerSpec. When Optional was dropped here, the chat
+// metadata into MCPServerSpec. When Optional was dropped here, the chat
 // Manager's optional-set came back empty, Gate-1 never skipped any optional
 // connector, and every server's tools registered on every turn — blowing past
 // the model's tool ceiling and aborting the turn with no reply.

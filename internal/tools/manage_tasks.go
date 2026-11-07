@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
+
+	"github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // ManageTasksToolName is the canonical name of the interactive manage_tasks tool.
@@ -170,7 +172,7 @@ func (p ManageTasksParams) ChangeSummary() []string {
 		out = append(out, fmt.Sprintf("max_iterations → %d", p.MaxIterations))
 	}
 	if v := strings.TrimSpace(p.Prompt); v != "" {
-		out = append(out, "prompt → replaced ("+truncateForCard(v, 80)+")")
+		out = append(out, "prompt → replaced ("+truncate.Runes(truncate.OneLine(v), 80, "…")+")")
 	}
 	if tags := cleanStrings(p.AddTags); len(tags) > 0 {
 		out = append(out, "add tags → "+strings.Join(tags, ", "))
@@ -207,15 +209,4 @@ func cleanStrings(in []string) []string {
 		}
 	}
 	return out
-}
-
-// truncateForCard bounds by RUNES so a multibyte prompt is never cut mid-rune
-// into a replacement character on the card.
-func truncateForCard(s string, limit int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	r := []rune(s)
-	if len(r) <= limit {
-		return s
-	}
-	return string(r[:limit]) + "…"
 }

@@ -28,7 +28,7 @@ func TestConvertLogSession_RedactsSecretsEndToEnd(t *testing.T) {
 		nil, "internal note: token: "+sentinel,
 	)
 
-	out := convertLogSession(nil, ls)
+	out := convertLogSession(ls)
 	if out == nil {
 		t.Fatal("convertLogSession returned nil")
 	}

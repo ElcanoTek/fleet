@@ -606,7 +606,7 @@ func spawnFailureNote(runErr error, timedOut bool, answer string) string {
 	case timedOut:
 		return "timed out"
 	case runErr != nil:
-		return trunc.Runes(collapseWhitespace(runErr.Error()), subagentDetailChars, "…")
+		return trunc.Runes(trunc.OneLine(runErr.Error()), subagentDetailChars, "…")
 	case answer == "":
 		return "no final answer"
 	default:

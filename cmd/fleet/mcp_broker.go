@@ -19,7 +19,6 @@ import (
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
-	"github.com/ElcanoTek/fleet/internal/scheduledrun"
 	"github.com/ElcanoTek/fleet/internal/secretbox"
 	"github.com/ElcanoTek/fleet/internal/store"
 	"github.com/google/uuid"
@@ -61,14 +60,14 @@ func runMCPBroker() error {
 	// http_tools (issue #261) are resolved + registered HERE, in the broker process
 	// that holds the connector secrets, so their auth headers never cross back to
 	// the parent fleet process (only public tool descriptors + rendered text do).
-	specs := scheduledrun.BuildMCPSpecs(cfg)
+	specs := agent.BuildMCPSpecs(cfg)
 	client := agent.BuildMCPClient(specs, cfg.HTTPTools, cfg.A2APeers)
 	log.Printf("mcp-broker: serving %d MCP tools over stdio", len(client.GetAllTools()))
 
 	backend := &brokerBackend{
 		MCPBroker:   agentcore.NewLocalMCPBroker(client, agentcore.DefaultRemediationHints),
 		client:      client,
-		bases:       scheduledrun.BuildMCPBases(cfg),
+		bases:       agent.BuildMCPBases(cfg),
 		httpTools:   cfg.HTTPTools,
 		a2aPeers:    cfg.A2APeers,
 		bundleAllow: bundleToolAllowlist(specs),
@@ -444,12 +443,12 @@ func (b *brokerBackend) Reload(ctx context.Context) (*mcpbroker.ReloadResult, er
 	if err != nil {
 		return nil, err
 	}
-	specs := scheduledrun.BuildMCPSpecs(cfg)
+	specs := agent.BuildMCPSpecs(cfg)
 	summary, err := b.client.Reload(ctx, agent.MCPServerDefs(specs))
 	if err != nil {
 		return nil, err
 	}
-	b.bases = scheduledrun.BuildMCPBases(cfg)
+	b.bases = agent.BuildMCPBases(cfg)
 	// Re-derive the child's authoritative gates from the SAME bundle read that
 	// produced the new bases, so a reload can never leave the enforcement floor
 	// describing servers that no longer exist (issue #167 residual 1).
