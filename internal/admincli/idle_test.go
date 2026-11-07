@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestIdleLibSplitDSNPassword(t *testing.T) {
@@ -302,32 +302,9 @@ exit 0
 }
 
 func TestActiveWorkAndWaitIdle_DB(t *testing.T) {
-	database := db.New()
-	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "dataset_rows", "datasets", "logs", "tasks", "users")
+	t.Cleanup(ClearUpdateDrain)
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(6)"); err != nil {
-		_ = conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM dataset_rows", "DELETE FROM datasets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			_, _ = database.Conn().ExecContext(ctx, q)
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		ClearUpdateDrain()
-		clean()
-		_, _ = conn.ExecContext(ctx, "SELECT pg_advisory_unlock(6)")
-		_ = conn.Close()
-		database.Close()
-	})
 
 	drainFile := filepath.Join(t.TempDir(), "fleet.update.drain")
 	t.Setenv("FLEET_UPDATE_DRAIN_FILE", drainFile)

@@ -3,7 +3,6 @@ package storage
 import (
 	"context"
 	"math"
-	"os"
 	"testing"
 	"time"
 
@@ -11,26 +10,8 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
-
-func acquireTestLock(t *testing.T, db *db.Database) {
-	ctx := context.Background()
-	conn, err := db.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get DB connection for lock: %v", err)
-	}
-	// Serialize all sched tests sharing the DB on a fixed advisory lock.
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("Failed to acquire test lock: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)"); err != nil {
-			t.Logf("Failed to release test lock: %v", err)
-		}
-		conn.Close()
-	})
-}
 
 // listAllTasks returns every task row through the production listing query
 // (an empty filter), for tests that assert on the whole table.
@@ -41,25 +22,9 @@ func listAllTasks(s *Storage) ([]*models.Task, error) {
 
 func newTestStore(t *testing.T) (*Storage, *db.Database) {
 	t.Helper()
-	database := db.New()
-	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
-		t.Skipf("Skipping storage test because DB init failed: %v", err)
-	}
-
-	acquireTestLock(t, database)
-
-	ctx := context.Background()
-	cleanup := func() {
-		for _, q := range []string{"DELETE FROM prompt_library", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			database.Conn().ExecContext(ctx, q)
-		}
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-
+	database := testdb.SchedDB(t, "prompt_library", "logs", "tasks", "users")
 	store := New()
 	store.SetDatabase(database)
-	t.Cleanup(func() { database.Close() })
 	return store, database
 }
 

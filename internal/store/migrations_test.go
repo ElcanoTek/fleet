@@ -8,16 +8,15 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // openRawDB opens a raw pgx connection bypassing applyMigrations so a
 // test can inspect schema_migrations directly or seed weird state.
 func openRawDB(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -61,7 +60,7 @@ func TestMigrations_IdempotentReopen(t *testing.T) {
 	s1 := newTestStore(t)
 	v1 := maxAppliedVersion(t, s1.db)
 
-	dsn := testDSN()
+	dsn := testdb.ChatDSN(t)
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("second open: %v", err)
@@ -109,7 +108,7 @@ func TestMigrations_RefusesNewerDB(t *testing.T) {
 		_, _ = raw.ExecContext(ctx, `DELETE FROM schema_migrations WHERE version = 999`)
 	})
 
-	if _, err := Open(testDSN(), DefaultPoolConfig()); err == nil {
+	if _, err := Open(testdb.ChatDSN(t), DefaultPoolConfig()); err == nil {
 		t.Fatal("Open should reject a DB with a future schema version")
 	}
 }
@@ -126,7 +125,7 @@ func TestMigrations_PreservesExistingData(t *testing.T) {
 	_ = s.Close()
 
 	// Reopen WITHOUT truncating, to confirm Open itself is non-destructive.
-	dsn := testDSN()
+	dsn := testdb.ChatDSN(t)
 	s2, err := Open(dsn, DefaultPoolConfig())
 	if err != nil {
 		t.Fatal(err)

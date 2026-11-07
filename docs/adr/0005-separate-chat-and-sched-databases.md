@@ -23,8 +23,8 @@ The chat store and the scheduler use **separate Postgres databases**.
   **golang-migrate**.
 
 Both suites auto-migrate from an empty database. Test and CI configuration must
-give them **distinct** DSNs — in CI, `FLEET_TEST_DATABASE_URL` /
-`CHAT_TEST_DATABASE_URL` point at one database and `DATABASE_URL` at another
+give them **distinct** DSNs — in CI, `FLEET_TEST_DATABASE_URL` points at one
+database and `DATABASE_URL` at another
 (see `.github/workflows/ci.yml` and `CONTRIBUTING.md`).
 
 ## Enforcement

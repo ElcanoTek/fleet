@@ -9,8 +9,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -21,27 +19,13 @@ import (
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestTaskSchedulerProvider_BudgetGate(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping DB-backed test")
-	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if strings.Contains(err.Error(), "connection refused") {
-			t.Skipf("database unavailable: %v", err)
-		}
-		t.Fatalf("storage init: %v", err)
-	}
-	defer store.Close()
-
+	store.SetDatabase(testdb.SchedDB(t, "budgets", "logs", "tasks", "users"))
 	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM budgets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup %q: %v", q, err)
-		}
-	}
 
 	// alice has a $10/day budget and has already spent $12 today — seeded as a
 	// REAL task + iteration attributed to her user row, the same metering the
@@ -175,23 +159,9 @@ func assertChatTaskTitle(t *testing.T, store *storage.Storage, taskID, wantTitle
 // (blank servers dropped), so the scheduled run binds the same connectors the
 // chat had. Gated on DATABASE_URL like the budget test above.
 func TestTaskSchedulerProvider_CarriesConnectors(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping DB-backed test")
-	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if strings.Contains(err.Error(), "connection refused") {
-			t.Skipf("database unavailable: %v", err)
-		}
-		t.Fatalf("storage init: %v", err)
-	}
-	defer store.Close()
+	store.SetDatabase(testdb.SchedDB(t, "budgets", "logs", "tasks", "users"))
 	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM budgets", "DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup %q: %v", q, err)
-		}
-	}
 	provider := taskSchedulerProvider(store, budget.New(budget.Config{Store: store, Now: time.Now}))
 
 	res, err := provider(ctx, httpapi.TaskScheduleRequest{

@@ -9,13 +9,11 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func BenchmarkHandleAuthVerify_HasUsers(b *testing.B) {
-	dbURL := testDSN()
-	if dbURL == "" {
-		b.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testdb.ChatDSN(b)
 
 	st, err := store.Open(dbURL, store.DefaultPoolConfig())
 	if err != nil {
@@ -41,10 +39,7 @@ func BenchmarkHandleAuthVerify_HasUsers(b *testing.B) {
 }
 
 func BenchmarkHandleAuthVerify_NoUsers(b *testing.B) {
-	dbURL := testDSN()
-	if dbURL == "" {
-		b.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL not set")
-	}
+	dbURL := testdb.ChatDSN(b)
 
 	st, err := store.Open(dbURL, store.DefaultPoolConfig())
 	if err != nil {

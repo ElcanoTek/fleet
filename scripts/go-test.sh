@@ -5,7 +5,7 @@
 # share a Postgres DSN:
 #
 #   chat  — internal/store + internal/httpapi TRUNCATE fleet_chat_test
-#           (FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL)
+#           (FLEET_TEST_DATABASE_URL)
 #   sched — internal/sched/* + internal/runner share fleet_sched_test
 #           (DATABASE_URL) via TRUNCATE / pg_advisory_lock(1)
 #   both  — internal/admincli + cmd/fleet touch BOTH databases
@@ -236,7 +236,6 @@ pid_httpapi=""
 if (( ${#HTTPAPI[@]} > 0 )); then
   (
     export FLEET_TEST_DATABASE_URL="$HTTPAPI_TEST_DATABASE_URL"
-    export CHAT_TEST_DATABASE_URL="$HTTPAPI_TEST_DATABASE_URL"
     run_group httpapi 1 "$tmp/httpapi.log" "${HTTPAPI[@]}"
   ) &
   pid_httpapi=$!

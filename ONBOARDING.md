@@ -112,12 +112,12 @@ createdb fleet_sched_test
 ```
 
 Export the DSNs and the client-config dir. These mirror CI exactly — the chat
-suites read `FLEET_TEST_DATABASE_URL` (falling back to `CHAT_TEST_DATABASE_URL`);
-the scheduler suite reads `DATABASE_URL`:
+suites read `FLEET_TEST_DATABASE_URL`; the scheduler suite reads
+`DATABASE_URL` (both through `internal/testdb`, which skips only when the
+variable is unset and fails the test on any other database error):
 
 ```sh
 export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable"
-export CHAT_TEST_DATABASE_URL="$FLEET_TEST_DATABASE_URL"
 export DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable"
 export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
 ```

@@ -443,13 +443,12 @@ jobs:
           --health-retries 10
 
     env:
-      # Chat suites (internal/store, internal/httpapi) read FLEET_TEST_DATABASE_URL,
-      # falling back to CHAT_TEST_DATABASE_URL. Sched suite (internal/sched/*,
-      # internal/runner) reads DATABASE_URL. The chat and sched migration systems
+      # Chat suites (internal/store, internal/httpapi) read FLEET_TEST_DATABASE_URL
+      # and the sched suite (internal/sched/*, internal/runner) reads DATABASE_URL,
+      # both through internal/testdb. The chat and sched migration systems
       # both use a table named schema_migrations with INCOMPATIBLE schemas, so they
       # MUST point at separate databases. Both suites auto-migrate from an empty DB.
       FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
-      CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
       # internal/httpapi gets a database of its own so it runs alongside
       # internal/store instead of queuing behind it (scripts/go-test.sh).
@@ -779,7 +778,6 @@ jobs:
 
     env:
       FLEET_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
-      CHAT_TEST_DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable
       DATABASE_URL: postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable
       # internal/httpapi gets a database of its own so it runs alongside
       # internal/store instead of queuing behind it (scripts/go-test.sh).

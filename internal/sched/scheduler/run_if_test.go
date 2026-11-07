@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // newTestScheduler mirrors storage.newTestStore but for the scheduler package:
@@ -26,40 +26,10 @@ import (
 // storage so the test can drive ProcessScheduledTasks and inspect the rows.
 func newTestScheduler(t *testing.T) (*Scheduler, *storage.Storage) {
 	t.Helper()
-	database := db.New()
-	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
-		t.Skipf("Skipping scheduler test because DB init failed: %v", err)
-	}
-
-	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("Failed to get DB connection for lock: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("Failed to acquire test lock: %v", err)
-	}
-	t.Cleanup(func() {
-		if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)"); err != nil {
-			t.Logf("Failed to release test lock: %v", err)
-		}
-		conn.Close()
-	})
-
-	cleanup := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			database.Conn().ExecContext(ctx, q)
-		}
-	}
-	cleanup()
-	t.Cleanup(cleanup)
-
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	store := storage.New()
 	store.SetDatabase(database)
 	store.SetTimezone("UTC")
-	t.Cleanup(func() { database.Close() })
-
 	return New(store, "UTC"), store
 }
 

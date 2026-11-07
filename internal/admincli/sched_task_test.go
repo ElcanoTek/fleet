@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // fakeTaskStore is an in-memory taskStore for deterministic, DB-free tests of the
@@ -191,31 +191,8 @@ func exportTasksEnvelope(buf *bytes.Buffer, env taskExportEnvelope) (int, error)
 // TestExportImportRoundTrip_DB is the end-to-end proof against the real sched DB
 // (gated on DATABASE_URL — the sched-suite convention; skips when absent).
 func TestExportImportRoundTrip_DB(t *testing.T) {
-	database := db.New()
-	if err := database.Init(os.Getenv("DATABASE_URL"), db.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "logs", "tasks", "users")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-			database.Conn().ExecContext(ctx, q)
-		}
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)
@@ -239,7 +216,7 @@ func TestExportImportRoundTrip_DB(t *testing.T) {
 	if _, err := exportTasks(ctx, st, &buf); err != nil {
 		t.Fatalf("export: %v", err)
 	}
-	clean() // wipe, then import the export back
+	testdb.DeleteRows(t, database, "logs", "tasks", "users") // wipe, then import the export back
 	if n, err := importTasks(ctx, st, &buf, taskImportOpts{}); err != nil || n != 1 {
 		t.Fatalf("import n=%d err=%v", n, err)
 	}

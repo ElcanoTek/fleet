@@ -167,6 +167,13 @@ Each rule comes from a real fleet test that once passed while proving nothing.
   rootless podman. The always-on lane that must run them (`e2e-live`) greps for
   `--- PASS` and fails on any `--- SKIP`. A new must-run test needs the same
   treatment.
+- **A Postgres-backed test gets its database from `internal/testdb`.**
+  `testdb.ChatDSN(t)` (`FLEET_TEST_DATABASE_URL`) and `testdb.SchedDB(t,
+  tables...)` (`DATABASE_URL`; serialized on advisory lock 1, the listed tables
+  wiped before and after) skip only when the variable is unset — any open,
+  migration or lock error fails the test. `scripts/go_test_script_test.go`
+  recognises those calls, so the package must sit in a DSN-serial group of
+  `scripts/go-test.sh`.
 - **Don't hand-write the other side of a process boundary.** Use a contract
   recording. Where none exists yet, say so in the spec.
 

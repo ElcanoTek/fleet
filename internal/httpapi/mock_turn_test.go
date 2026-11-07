@@ -12,17 +12,15 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agent"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // mockServer wires a minimal Server with MockMode=true and a real Postgres
 // store. No Manager is needed because /chat short-circuits before RunTurn.
-// Skips when CHAT_TEST_DATABASE_URL is unset.
+// Skips when FLEET_TEST_DATABASE_URL is unset (testdb.ChatDSN).
 func mockServer(t *testing.T) *Server {
 	t.Helper()
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	st, err := store.Open(dsn, store.DefaultPoolConfig())
 	if err != nil {
 		t.Fatalf("open store: %v", err)

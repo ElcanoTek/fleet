@@ -2,16 +2,15 @@ package admincli
 
 import (
 	"context"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/ElcanoTek/fleet/internal/sched"
-	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestParseTaskID(t *testing.T) {
@@ -28,30 +27,8 @@ func TestParseTaskID(t *testing.T) {
 // TestTaskMemoriesCLI_DB exercises the list/delete/clear dispatch + exit codes
 // against the sched test DB (gated on DATABASE_URL, the sched-suite convention).
 func TestTaskMemoriesCLI_DB(t *testing.T) {
-	database := scheddb.New()
-	if err := database.Init(os.Getenv("DATABASE_URL"), scheddb.DefaultPoolConfig()); err != nil {
-		t.Skipf("sched DB unavailable: %v", err)
-	}
+	database := testdb.SchedDB(t, "task_memories", "tasks")
 	ctx := context.Background()
-	conn, err := database.Conn().Conn(ctx)
-	if err != nil {
-		t.Fatalf("conn: %v", err)
-	}
-	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(1)"); err != nil {
-		conn.Close()
-		t.Fatalf("lock: %v", err)
-	}
-	clean := func() {
-		database.Conn().ExecContext(ctx, "DELETE FROM task_memories")
-		database.Conn().ExecContext(ctx, "DELETE FROM tasks")
-	}
-	clean()
-	t.Cleanup(func() {
-		clean()
-		conn.ExecContext(ctx, "SELECT pg_advisory_unlock(1)")
-		conn.Close()
-		database.Close()
-	})
 
 	st := storage.New()
 	st.SetDatabase(database)

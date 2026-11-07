@@ -13,6 +13,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
 	"github.com/ElcanoTek/fleet/internal/sandbox"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestParseValidateFlags covers the verb's flag surface: defaults, each flag, and
@@ -2016,10 +2017,7 @@ agent_policy:
 // A reachable chat DB plus an unreachable sched DSN must fail on the sched
 // probe.
 func TestCheckDatabaseProbesSched(t *testing.T) {
-	chat := os.Getenv("FLEET_TEST_DATABASE_URL")
-	if chat == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL not set")
-	}
+	chat := testdb.ChatDSN(t)
 	cfg := &config.Config{
 		DatabaseURL:      chat,
 		SchedDatabaseURL: "postgres://nobody@127.0.0.1:1/nope?sslmode=disable&connect_timeout=1",

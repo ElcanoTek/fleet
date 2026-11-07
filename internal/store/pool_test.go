@@ -3,15 +3,14 @@ package store
 import (
 	"testing"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // TestOpen_AppliesPoolConfig proves the PoolConfig passed to Open is actually
 // applied to the underlying *sql.DB (#276), not silently ignored.
 func TestOpen_AppliesPoolConfig(t *testing.T) {
-	dsn := testDSN()
-	if dsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL / CHAT_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
-	}
+	dsn := testdb.ChatDSN(t)
 	s, err := Open(dsn, PoolConfig{
 		MaxOpenConns:    7,
 		MaxIdleConns:    2,

@@ -116,9 +116,7 @@ func checkDSNTestFile(t *testing.T, root, module string, classified map[string]s
 	if err != nil {
 		return err
 	}
-	text := string(body)
-	usesChat := strings.Contains(text, "FLEET_TEST_DATABASE_URL") || strings.Contains(text, "CHAT_TEST_DATABASE_URL")
-	usesSched := strings.Contains(text, `os.Getenv("DATABASE_URL")`) || strings.Contains(text, "pg_advisory_lock")
+	usesChat, usesSched := dsnUse(string(body))
 	if !usesChat && !usesSched {
 		return nil
 	}
@@ -142,6 +140,38 @@ func checkDSNTestFile(t *testing.T, root, module string, classified map[string]s
 		t.Errorf("%s uses the sched DSN but package %s is in group chat", rel, pkg)
 	}
 	return nil
+}
+
+// dsnUse reports whether a test file's text touches the chat and/or sched
+// test database. internal/testdb is the shared gate (#2019): its ChatDSN reads
+// FLEET_TEST_DATABASE_URL and its SchedDB/SchedDSN read DATABASE_URL (SchedDB
+// also takes pg_advisory_lock), so a call to one is a DSN use exactly like the
+// inline forms.
+func dsnUse(text string) (chat, sched bool) {
+	chat = strings.Contains(text, "FLEET_TEST_DATABASE_URL") || strings.Contains(text, "testdb.ChatDSN(")
+	sched = strings.Contains(text, `os.Getenv("DATABASE_URL")`) || strings.Contains(text, "pg_advisory_lock") ||
+		strings.Contains(text, "testdb.SchedDB(") || strings.Contains(text, "testdb.SchedDSN(")
+	return chat, sched
+}
+
+func TestDSNUseRecognisesTestdb(t *testing.T) {
+	cases := []struct {
+		text        string
+		chat, sched bool
+	}{
+		{`dsn := testdb.ChatDSN(t)`, true, false},
+		{`database := testdb.SchedDB(t, "tasks")`, false, true},
+		{`dsn := testdb.SchedDSN(t)`, false, true},
+		{`os.Getenv("FLEET_TEST_DATABASE_URL")`, true, false},
+		{`os.Getenv("DATABASE_URL")`, false, true},
+		{`conn.Exec("SELECT pg_advisory_lock(1)")`, false, true},
+		{`nothing here`, false, false},
+	}
+	for _, tc := range cases {
+		if chat, sched := dsnUse(tc.text); chat != tc.chat || sched != tc.sched {
+			t.Errorf("dsnUse(%q) = (%v, %v), want (%v, %v)", tc.text, chat, sched, tc.chat, tc.sched)
+		}
+	}
 }
 
 // TestGoTestScriptIsWhatCIRuns keeps the CI==local promise: a contributor's

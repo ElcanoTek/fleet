@@ -12,16 +12,14 @@ import (
 
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
 	"github.com/ElcanoTek/fleet/internal/store"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 // exportCLIFixture points the CLI at the test databases through the
 // deployment env, the way a provisioned box resolves them.
 func exportCLIFixture(t *testing.T) (*store.Store, *storage.Storage) {
 	t.Helper()
-	chatDsn, schedDsn := chatTestDSN(), os.Getenv("DATABASE_URL")
-	if chatDsn == "" || schedDsn == "" {
-		t.Skip("FLEET_TEST_DATABASE_URL and DATABASE_URL are required; skipping Postgres-backed test")
-	}
+	chatDsn, schedDsn := testdb.ChatDSN(t), testdb.SchedDSN(t)
 	envFile := filepath.Join(t.TempDir(), "fleet.env")
 	if err := os.WriteFile(envFile, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -69,7 +67,7 @@ func TestCLIExport(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Central Auth's revoke leaves the account disabled, not deleted.
-	db, err := sql.Open("pgx", chatTestDSN())
+	db, err := sql.Open("pgx", testdb.ChatDSN(t))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -21,26 +20,13 @@ import (
 	"github.com/ElcanoTek/fleet/internal/httpapi"
 	schedmodels "github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/sched/storage"
+	"github.com/ElcanoTek/fleet/internal/testdb"
 )
 
 func TestApplyTaskMutation_LockedEditPath(t *testing.T) {
-	if os.Getenv("DATABASE_URL") == "" {
-		t.Skip("DATABASE_URL not set, skipping DB-backed test")
-	}
 	store := storage.New()
-	if err := store.Initialize(os.Getenv("DATABASE_URL"), storage.DefaultPoolConfig()); err != nil {
-		if strings.Contains(err.Error(), "connection refused") {
-			t.Skipf("database unavailable: %v", err)
-		}
-		t.Fatalf("storage init: %v", err)
-	}
-	defer store.Close()
+	store.SetDatabase(testdb.SchedDB(t, "logs", "tasks", "users"))
 	ctx := context.Background()
-	for _, q := range []string{"DELETE FROM logs", "DELETE FROM tasks", "DELETE FROM users"} {
-		if _, err := store.DB().Conn().ExecContext(ctx, q); err != nil {
-			t.Fatalf("cleanup %q: %v", q, err)
-		}
-	}
 	now := time.Now().UTC()
 
 	t.Run("a running task is refused, not rewound", func(t *testing.T) {

@@ -2311,7 +2311,6 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	defer recCancel()
 	recovered, err := chatStore.RecoverStrandedTurns(recCtx)
 	if err != nil {
-		//nolint:gosec // G706: err wraps internal DB errors and an int count — no request input.
 		log.Printf("stranded-turn recovery: %v (recovered %d before failing)", err, len(recovered))
 	}
 	for _, r := range recovered {
@@ -2324,7 +2323,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	if count, err := chatStore.RecoverStrandedApprovals(recCtx); err != nil {
 		log.Printf("stranded-approval recovery: %v", err)
 	} else if count > 0 {
-		log.Printf("stranded-approval recovery: %d unknown outcomes", count) //nolint:gosec // G706: count is an integer database row count.
+		log.Printf("stranded-approval recovery: %d unknown outcomes", count)
 	}
 	// Input-queue recovery (#785) resolves rows claimed/injected by the dead
 	// process against the #798 durable record: durably-persisted ones complete,
@@ -2336,7 +2335,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	if qerr != nil {
 		log.Printf("input-queue recovery: %v", qerr)
 	} else if requeued+completed+cancelled > 0 {
-		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled) //nolint:gosec // G706: three int counts — no request input.
+		log.Printf("input-queue recovery: %d input(s) re-queued, %d completed, %d cancelled (post-injection side effects; not re-run)", requeued, completed, cancelled)
 	}
 	// Resume after approval (docs/RESUME-AFTER-APPROVAL.md): a resume that was
 	// due but had not started when the last process stopped is DROPPED, with a
@@ -2351,7 +2350,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 	if err != nil {
 		log.Printf("approval-resume recovery: %v (any stale resume row is still refused at launch)", err)
 	} else if noted > 0 {
-		log.Printf("approval-resume recovery: dropped the pending automatic resume in %d conversation(s), with a note in each", noted) //nolint:gosec // G706: noted is an integer count.
+		log.Printf("approval-resume recovery: dropped the pending automatic resume in %d conversation(s), with a note in each", noted)
 	}
 	// Reclaim terminal idempotency rows at boot as well as after turns. Recovery
 	// runs first so a stranded non-terminal row is resolved before retention is
@@ -2360,7 +2359,7 @@ func recoverStrandedTurns(chatStore *store.Store, inputQueueRetentionDays int) {
 		time.Duration(inputQueueRetentionDays)*24*time.Hour); err != nil {
 		log.Printf("input-queue startup purge: %v", err)
 	} else if purged > 0 {
-		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged) //nolint:gosec // G706: purged is an integer database row count, never request-authored text.
+		log.Printf("input-queue startup purge: removed %d terminal row(s)", purged)
 	}
 }
 

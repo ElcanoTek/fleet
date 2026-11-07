@@ -268,9 +268,8 @@ The chat suites (`internal/store`, `internal/httpapi`) and the scheduler suite
 creates both databases and sets these env vars:
 
 ```sh
-# Chat suites read FLEET_TEST_DATABASE_URL, falling back to CHAT_TEST_DATABASE_URL.
+# Chat suites read FLEET_TEST_DATABASE_URL (internal/testdb.ChatDSN).
 export FLEET_TEST_DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_chat_test?sslmode=disable"
-export CHAT_TEST_DATABASE_URL="$FLEET_TEST_DATABASE_URL"
 # The sched suite reads DATABASE_URL — a DIFFERENT database.
 export DATABASE_URL="postgres://fleet:fleet@localhost:5432/fleet_sched_test?sslmode=disable"
 # Point the binaries at the in-repo default bundle.
@@ -285,7 +284,7 @@ export FLEET_CLIENT_CONFIG_DIR="$(pwd)/config/default"
 > pair with [`scripts/test-db-setup.sh`](../scripts/test-db-setup.sh):
 >
 > ```sh
-> eval "$(scripts/test-db-setup.sh | tail -3)"   # suffix defaults to the branch name
+> eval "$(scripts/test-db-setup.sh | tail -2)"   # suffix defaults to the branch name
 > make test
 > scripts/test-db-setup.sh --drop "$(git rev-parse --abbrev-ref HEAD)"   # when done
 > ```
