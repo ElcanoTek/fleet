@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/release"
 	"github.com/ElcanoTek/fleet/internal/version"
 )
@@ -94,7 +95,7 @@ func releaseCacheDir(flagVal string) string {
 	if flagVal != "" {
 		return flagVal
 	}
-	if v := os.Getenv("FLEET_RELEASE_CACHE_DIR"); v != "" {
+	if v := envreg.Get("FLEET_RELEASE_CACHE_DIR"); v != "" {
 		return v
 	}
 	if os.Geteuid() == 0 {
@@ -109,7 +110,7 @@ func releaseCacheDir(flagVal string) string {
 // newVerifier provisions the pinned cosign and returns the fleet-policy
 // verifier.
 var newVerifier = func(ctx context.Context, cacheDir string) (release.Verifier, error) {
-	bin := os.Getenv("FLEET_COSIGN_BIN")
+	bin := envreg.Get("FLEET_COSIGN_BIN")
 	if bin != "" {
 		// An operator-supplied cosign must still be the pinned build: the
 		// digest is the trust anchor, not the path — and what runs is a

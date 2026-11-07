@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 //go:embed cosign.lock
@@ -74,7 +76,7 @@ func PinnedCosign() CosignPin {
 // cosignURL is where the pinned binary is fetched from. The digest, not the
 // URL, is the trust anchor: a mirror (FLEET_COSIGN_URL) works as well.
 func cosignURL(pin CosignPin, arch string) string {
-	if base := strings.TrimRight(os.Getenv("FLEET_COSIGN_URL"), "/"); base != "" {
+	if base := strings.TrimRight(envreg.Get("FLEET_COSIGN_URL"), "/"); base != "" {
 		return base + "/cosign-linux-" + arch
 	}
 	return "https://github.com/sigstore/cosign/releases/download/" + pin.Version + "/cosign-linux-" + arch
@@ -158,7 +160,7 @@ type Policy struct {
 
 // FleetPolicy is the policy every fleet release must satisfy.
 func FleetPolicy() Policy {
-	return Policy{Identity: SignerIdentity, Issuer: OIDCIssuer, TrustedRoot: os.Getenv("FLEET_SIGSTORE_TRUSTED_ROOT")}
+	return Policy{Identity: SignerIdentity, Issuer: OIDCIssuer, TrustedRoot: envreg.Get("FLEET_SIGSTORE_TRUSTED_ROOT")}
 }
 
 // Cosign runs the cosign CLI.
@@ -217,9 +219,10 @@ func (c *Cosign) run(ctx context.Context, args ...string) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, c.Bin, args...) //nolint:gosec // G204: c.Bin is the digest-checked pinned cosign; args are fixed flags + paths.
-	cmd.Env = os.Environ()
 	if c.TUFRoot != "" {
-		cmd.Env = append(cmd.Env, "TUF_ROOT="+c.TUFRoot)
+		// cmd.Environ: the environment the command would inherit, plus the
+		// private TUF cache cosign must use.
+		cmd.Env = append(cmd.Environ(), "TUF_ROOT="+c.TUFRoot)
 	}
 	var out bytes.Buffer
 	cmd.Stdout = &out

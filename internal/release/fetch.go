@@ -18,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Size ceilings for a download. Generous for what each file is; their job is
@@ -39,7 +41,7 @@ const DefaultLatestURL = "https://api.github.com/repos/" + Repository + "/releas
 
 // BaseURL resolves the asset base URL.
 func BaseURL() string {
-	if v := strings.TrimRight(os.Getenv("FLEET_RELEASE_BASE_URL"), "/"); v != "" {
+	if v := strings.TrimRight(envreg.Get("FLEET_RELEASE_BASE_URL"), "/"); v != "" {
 		return v
 	}
 	return DefaultBaseURL
@@ -110,7 +112,7 @@ func IsNotFound(err error) bool {
 // built.
 func (d *Downloader) LatestTag(ctx context.Context) (Tag, error) {
 	url := DefaultLatestURL
-	if v := os.Getenv("FLEET_RELEASE_LATEST_URL"); v != "" {
+	if v := envreg.Get("FLEET_RELEASE_LATEST_URL"); v != "" {
 		url = v
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil) // #nosec G704 — the GitHub API, or the operator's FLEET_RELEASE_LATEST_URL
