@@ -109,13 +109,8 @@ func (s *Server) handleConversationOutputs(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	conv, err := s.store.Get(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, false, "not found")
+	if !ok {
 		return
 	}
 	if r.Method == http.MethodPost {

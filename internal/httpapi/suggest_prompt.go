@@ -29,13 +29,8 @@ import (
 func (s *Server) handleSuggestPrompt(w http.ResponseWriter, r *http.Request, convID, user string) {
 	ctx := r.Context()
 
-	conv, err := s.getOwnedOrMultiplayerConversation(ctx, user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "not found")
+	if !ok {
 		return
 	}
 

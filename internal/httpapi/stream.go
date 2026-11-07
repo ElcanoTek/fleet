@@ -34,13 +34,8 @@ import (
 func (s *Server) handleStream(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
 	epoch := s.currentMultiplayerEpoch(convID)
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found")
+	if !ok {
 		return
 	}
 	var allowCheck func() bool
@@ -182,13 +177,7 @@ func replayEventsFromDB(w http.ResponseWriter, events []store.TurnEvent, caps ma
 // no evidence rather than as "not yours".
 func (s *Server) handleInflight(w http.ResponseWriter, r *http.Request, convID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	if _, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found"); !ok {
 		return
 	}
 

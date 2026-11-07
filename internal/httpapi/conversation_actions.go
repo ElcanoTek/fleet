@@ -459,13 +459,8 @@ func (s *Server) handleConversationModel(w http.ResponseWriter, r *http.Request,
 	model := strings.TrimSpace(req.Model)
 	ownerEmail := user
 	if model != "" {
-		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.NotFound(w, r)
+		conv, ok := s.conversationOr404(w, r, user, id, true, "404 page not found")
+		if !ok {
 			return
 		}
 		if conv.Lockdown && !s.cfg.LockdownAllows(model) {

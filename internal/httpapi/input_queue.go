@@ -667,13 +667,7 @@ func (s *Server) terminalizeQueueRowAttempt(convID, id, claimTurnID, state strin
 // GET (snapshot), DELETE {inputID} (remove), POST {inputID}/send-now
 // (promote; offered to the running turn when the row is steerable).
 func (s *Server) handleQueueRoutes(w http.ResponseWriter, r *http.Request, user, convID, subArg string) {
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	if _, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found"); !ok {
 		return
 	}
 	switch {

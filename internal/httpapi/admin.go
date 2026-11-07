@@ -81,15 +81,21 @@ func (s *Server) isAdmin(email string) bool {
 	return false
 }
 
+// callerIsAdmin reports whether the request's authenticated user is an admin:
+// the ADMIN_EMAILS env allowlist OR a users.role = 'admin' account (#237) —
+// the two are an OR, never a downgrade of the env bootstrap. The role comes
+// from the request context, so it is only set behind membershipMiddleware.
+func (s *Server) callerIsAdmin(ctx context.Context) bool {
+	return s.isAdmin(userFromCtx(ctx)) || roleFromCtx(ctx) == store.RoleAdmin
+}
+
 // adminMiddleware rejects non-admin users with 403. Runs after membershipMiddleware
 // (which enriches the request with the DB role), so admin is granted to either
 // the ADMIN_EMAILS env allowlist OR a users.role = 'admin' account (#237) — the
 // two are an OR, never a downgrade of the env bootstrap.
 func (s *Server) adminMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
-		user := userFromCtx(ctx)
-		if !s.isAdmin(user) && roleFromCtx(ctx) != store.RoleAdmin {
+		if !s.callerIsAdmin(r.Context()) {
 			http.Error(w, "forbidden — not an admin", http.StatusForbidden)
 			return
 		}

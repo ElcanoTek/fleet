@@ -38,13 +38,8 @@ import (
 // can't escape.
 func (s *Server) handleWorkspaceFile(w http.ResponseWriter, r *http.Request, convID, relPath string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found")
+	if !ok {
 		return
 	}
 

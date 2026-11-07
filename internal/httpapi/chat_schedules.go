@@ -393,13 +393,8 @@ func writeScheduleError(w http.ResponseWriter, err error) {
 //   - DELETE /conversations/{id}/schedules/{scheduleID}
 //   - POST /conversations/{id}/schedules/{scheduleID}/run-now
 func (s *Server) handleScheduleRoutes(w http.ResponseWriter, r *http.Request, user, convID, subArg string) {
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found")
+	if !ok {
 		return
 	}
 

@@ -549,13 +549,8 @@ type ownedConversationHandler func(s *Server, w http.ResponseWriter, r *http.Req
 // (migration 092) may use.
 func withOwnedOrMultiplayerConversation(notFound string, handler ownedConversationHandler) conversationSubrouteHandler {
 	return func(s *Server, w http.ResponseWriter, r *http.Request, user, id string) {
-		conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if conv == nil {
-			http.Error(w, notFound, http.StatusNotFound)
+		conv, ok := s.conversationOr404(w, r, user, id, true, notFound)
+		if !ok {
 			return
 		}
 		handler(s, w, r, user, id, conv)

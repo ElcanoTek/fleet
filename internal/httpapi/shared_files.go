@@ -45,8 +45,7 @@ func (s *Server) sharedFilesLibrary() sharedfiles.Library {
 // users.role = 'admin') inside a mixed-method handler. Reports success; on
 // failure the 403 has already been written.
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	ctx := r.Context()
-	if !s.isAdmin(userFromCtx(ctx)) && roleFromCtx(ctx) != store.RoleAdmin {
+	if !s.callerIsAdmin(r.Context()) {
 		http.Error(w, "forbidden — not an admin", http.StatusForbidden)
 		return false
 	}

@@ -124,7 +124,7 @@ func (s *Server) handleMyTeam(w http.ResponseWriter, r *http.Request) {
 	// Admins may join any team — they already have that power through the admin
 	// Users tab, and gating their own row differently would just push them
 	// there for no gain.
-	admin := s.isAdmin(caller) || roleFromCtx(r.Context()) == store.RoleAdmin
+	admin := s.callerIsAdmin(r.Context())
 	affectedConvIDs := s.activeMultiplayerAndPendingConvIDsBestEffort(r.Context())
 	u, err := s.store.SetOwnTeam(r.Context(), caller, *body.TeamID, admin)
 	if err != nil {

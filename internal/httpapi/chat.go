@@ -531,14 +531,8 @@ func (s *Server) postChat(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) resolveExistingChatConversation(w http.ResponseWriter, r *http.Request, user string, req *chatRequest, reqModel string) (conv *store.Conversation, unlockFirst func(), ok bool) {
 	unlockFirst = func() {}
-	var err error
-	conv, err = s.getOwnedOrMultiplayerConversation(r.Context(), user, req.ConversationID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return nil, unlockFirst, false
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok = s.conversationOr404(w, r, user, req.ConversationID, true, "conversation not found")
+	if !ok {
 		return nil, unlockFirst, false
 	}
 	if strings.TrimSpace(req.InputID) != "" &&

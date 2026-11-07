@@ -50,14 +50,10 @@ const promoteFallbackCron = "0 9 * * *"
 func (s *Server) handlePromoteToTask(w http.ResponseWriter, r *http.Request, convID, user string) {
 	ctx := r.Context()
 
-	// Ownership: Get is user-scoped, so a foreign/unknown id yields nil → 404.
-	conv, err := s.store.Get(ctx, user, convID)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+	// Ownership: owned-only (store.Get is user-scoped), so a foreign/unknown id
+	// is a 404.
+	conv, ok := s.conversationOr404(w, r, user, convID, false, "not found")
+	if !ok {
 		return
 	}
 

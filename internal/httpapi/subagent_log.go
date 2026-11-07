@@ -28,16 +28,8 @@ import (
 // spawn's tool result (role, spend, answer) remains in the conversation.
 func (s *Server) handleSubagentLog(w http.ResponseWriter, r *http.Request, convID, childID string) {
 	user := userFromCtx(r.Context())
-	conv, err := s.getOwnedOrMultiplayerConversation(r.Context(), user, convID)
-	if err != nil {
-		// A store failure is the server's problem, not a missing row: a 500
-		// keeps a Postgres blip from being read as "this transcript is gone"
-		// (the same split every other conversation sub-route makes).
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if conv == nil {
-		http.Error(w, "conversation not found", http.StatusNotFound)
+	conv, ok := s.conversationOr404(w, r, user, convID, true, "conversation not found")
+	if !ok {
 		return
 	}
 	if !agent.IsSubagentSessionID(childID) {
