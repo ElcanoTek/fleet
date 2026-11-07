@@ -237,60 +237,22 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// DSNIdentity returns "<host>:<port>/<dbname>" for the database a DSN names,
-// URL or key=value, normalised so that spellings of one database compare
-// equal: the port defaults to 5432; every local form — no host, a Unix-socket
-// directory, localhost, a loopback address — is "local" (one box, one
-// cluster per port); other hosts are lower-cased; the database defaults to
-// the user, as in libpq. It is "" when the DSN names no database at all.
-// scripts/lib/idle.sh's fleet_dsn_identity mirrors it.
+// DSNIdentity returns "<host>:<port>/<dbname>" for the database a DSN
+// connects to — its ConnTarget, read exactly as pgx reads it (query
+// overrides, PG* environment, defaults) — normalised so that spellings of
+// one database compare equal: every local form — a Unix-socket directory,
+// localhost, a loopback address — is "local" (one box, one cluster per
+// port); other hosts are lower-cased; the database defaults to the role.
+// It is "" for a DSN pgx cannot parse, an empty one, or one listing several
+// hosts (ErrMultiHost). The hidden verb "fleet db dsn-identity" prints it
+// for the shell scripts; scripts/lib/idle.sh's fleet_dsn_identity mirrors it
+// only as the fallback before a fleet binary exists.
 func DSNIdentity(dsn string) string {
-	host, port, db, ok := dsnTarget(strings.TrimSpace(dsn))
-	if !ok || db == "" {
+	t, err := ParseConnTarget(dsn)
+	if err != nil || t.DB() == "" {
 		return ""
 	}
-	if port == "" {
-		port = "5432"
-	}
-	return identityHost(host) + ":" + port + "/" + db
-}
-
-// dsnTarget extracts host, port and database (else user) from a DSN.
-func dsnTarget(dsn string) (host, port, db string, ok bool) {
-	if dsn == "" {
-		return "", "", "", false
-	}
-	if u, err := url.Parse(dsn); err == nil && isPostgresScheme(u.Scheme) {
-		q := u.Query()
-		host, port = u.Hostname(), u.Port()
-		if host == "" {
-			host = q.Get("host")
-		}
-		if port == "" {
-			port = q.Get("port")
-		}
-		db = strings.TrimPrefix(u.Path, "/")
-		if db == "" {
-			db = q.Get("dbname")
-		}
-		if db == "" && u.User != nil {
-			db = u.User.Username()
-		}
-		return host, port, db, true
-	}
-	kv, ok := parseKeywordDSN(dsn)
-	if !ok {
-		return "", "", "", false
-	}
-	host = kv.get("host")
-	if host == "" {
-		host = kv.get("hostaddr")
-	}
-	db = kv.get("dbname")
-	if db == "" {
-		db = kv.get("user")
-	}
-	return host, kv.get("port"), db, true
+	return identityHost(t.Host) + ":" + t.Port + "/" + t.DB()
 }
 
 // identityHost folds every spelling of "this box" into "local".

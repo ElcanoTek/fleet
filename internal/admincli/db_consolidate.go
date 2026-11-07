@@ -53,6 +53,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -85,6 +86,8 @@ func cmdDB(argv []string) int {
 		return cmdDBConsolidate(argv[1:])
 	case "layout":
 		return cmdDBLayout(argv[1:])
+	case "dsn-identity": // hidden: the shell scripts' one source of a DSN's identity
+		return cmdDBDSNIdentity(argv[1:], os.Stdin, os.Stdout)
 	case "-h", "--help", "help":
 		fmt.Println(dbUsage)
 		return 0
@@ -108,6 +111,26 @@ func cmdDBLayout(argv []string) int {
 		return errf(5, "read env file: %v", err)
 	}
 	fmt.Println(string(config.ResolveDSNs(func(k string) string { return vals[k] }).Layout))
+	return 0
+}
+
+// cmdDBDSNIdentity prints config.DSNIdentity of the DSN on stdin — never
+// argv, where a password would show in ps — and exits 0, printing nothing
+// for a DSN with no identity (unparsable, several hosts). It is hidden: the
+// shell scripts (bootstrap, update, doctor through scripts/lib/idle.sh's
+// fleet_dsn_identity) call it whenever a fleet binary exists, so their
+// "same database?" decisions come from the one Go implementation; a binary
+// without the verb exits non-zero and they fall back to the shell mirror.
+func cmdDBDSNIdentity(argv []string, in io.Reader, out io.Writer) int {
+	if len(argv) != 0 {
+		fmt.Fprintln(os.Stderr, "usage: fleet db dsn-identity < dsn   (the DSN on stdin, never as an argument)")
+		return 2
+	}
+	b, err := io.ReadAll(io.LimitReader(in, 64<<10))
+	if err != nil {
+		return errf(1, "read DSN: %v", err)
+	}
+	fmt.Fprintln(out, config.DSNIdentity(string(b)))
 	return 0
 }
 
@@ -246,10 +269,11 @@ type pgSource struct {
 	schema   string // the target schema it moves into
 	dsn      string
 	from     string // the env key that named it
-	host     string // host as written ("" for a socket in the query)
+	host     string // config.ParseConnTarget's host: a name, an address or a socket directory
 	port     string
 	database string
 	role     string
+	password string // the password the connection uses (never printed)
 }
 
 type tableCount struct {
@@ -379,6 +403,15 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 			fmt.Fprintf(d.out, "note: %s is set in this shell; ignored — consolidation reads only %s, which is what the service reads\n", k, o.envFile)
 		}
 	}
+	// A DSN's target is read as pgx reads it (config.ParseConnTarget), which
+	// fills what the DSN leaves out from PG* variables — this shell's, not
+	// the service's — and the client tools would read them too. Refused
+	// rather than mixed.
+	for _, k := range config.PGTargetEnv {
+		if os.Getenv(k) != "" {
+			return nil, 1, fmt.Errorf("%s is set in this shell; it would change where the source DSNs connect from what the service sees — unset it and run again", k)
+		}
+	}
 	dsns := config.ResolveDSNs(func(k string) string { return vals[k] })
 	if dsns.Layout != config.LayoutLegacy {
 		fmt.Fprintf(d.out, "%s already configures ONE database (schemas %s and %s). Nothing to do.\n", o.envFile, config.ChatSchema, config.SchedSchema)
@@ -407,6 +440,9 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 			return nil, 1, fmt.Errorf("the %s database is on %q, not this box; consolidation runs on the box that hosts Postgres", s.src.label, s.src.host)
 		}
 	}
+	// The same host form and port. A DSN with no host connects through
+	// pgx's default socket directory (ParseConnTarget), so it is a socket
+	// source here, as it is to the store.
 	if cSock != sSock || cPort != sPort {
 		return nil, 1, fmt.Errorf("chat (%s) and sched (%s) do not name the same Postgres instance; consolidation moves two databases of ONE local server — make both DSNs use the same host form and port",
 			serverLabel(cSock, cPort), serverLabel(sSock, sPort))
@@ -433,52 +469,44 @@ func buildPlan(o consolidateOptions, d consolidateDeps) (*consolidatePlan, int, 
 	if err != nil {
 		return nil, 1, err
 	}
-	// Every secret the DSNs carry, wherever they carry it: userinfo, and the
-	// password / sslpassword query parameters (config.SecretDSNParam).
-	for _, s := range []string{chat.dsn, sched.dsn} {
-		u, err := url.Parse(s)
-		if err != nil {
-			continue
+	// Every secret the DSNs carry, wherever they carry it: the password the
+	// connection really uses (userinfo, ?password=, .pgpass — ParseConnTarget),
+	// and the sslpassword parameter.
+	add := func(pw string) {
+		if pw != "" && !slices.Contains(p.passwords, pw) {
+			p.passwords = append(p.passwords, pw)
 		}
-		if u.User != nil {
-			if pw, ok := u.User.Password(); ok && pw != "" {
-				p.passwords = append(p.passwords, pw)
-			}
-		}
-		for k, vs := range u.Query() {
-			if config.SecretDSNParam(k) && k != "passfile" {
-				for _, v := range vs {
-					if v != "" {
-						p.passwords = append(p.passwords, v)
-					}
-				}
-			}
+	}
+	for _, s := range []pgSource{chat, sched} {
+		add(s.password)
+		add(config.DSNParam(s.dsn, "password"))
+		add(config.DSNParam(s.dsn, "sslpassword"))
+		if u, err := url.Parse(s.dsn); err == nil && u.User != nil {
+			pw, _ := u.User.Password()
+			add(pw)
 		}
 	}
 	return p, 0, nil
 }
 
-// parseSource parses one legacy source DSN (URL form only: the on-box
-// installs bootstrap.sh writes are all URLs).
+// parseSource reads one legacy source DSN. Its target (database, role,
+// host, port) is config.ParseConnTarget's — where the store's own pgx
+// connection goes, query overrides included. The DSN must be a URL (the
+// on-box installs bootstrap.sh writes all are), since the target DSN is
+// written by editing it.
 func parseSource(label, schema, dsn, from string) (pgSource, error) {
 	u, err := url.Parse(strings.TrimSpace(dsn))
 	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
 		return pgSource{}, fmt.Errorf("the %s DSN (%s) is not a postgres:// URL; consolidate supports URL DSNs only", label, from)
 	}
-	s := pgSource{label: label, schema: schema, dsn: dsn, from: from}
-	s.database = strings.TrimPrefix(u.Path, "/")
+	t, err := config.ParseConnTarget(dsn)
+	if err != nil {
+		return pgSource{}, fmt.Errorf("the %s DSN (%s): %w", label, from, err)
+	}
+	s := pgSource{label: label, schema: schema, dsn: dsn, from: from,
+		database: t.DB(), role: t.User, host: t.Host, port: t.Port, password: t.Password}
 	if s.database == "" {
 		return pgSource{}, fmt.Errorf("the %s DSN (%s) names no database", label, from)
-	}
-	if u.User != nil {
-		s.role = u.User.Username()
-	}
-	s.host, s.port = u.Hostname(), u.Port()
-	if s.host == "" {
-		s.host, s.port = u.Query().Get("host"), u.Query().Get("port")
-	}
-	if s.port == "" {
-		s.port = "5432"
 	}
 	return s, nil
 }
@@ -509,7 +537,10 @@ func localServer(s pgSource) (socketDir, port string, ok bool) {
 }
 
 // targetDSN is the sched DSN pointed at the target database: same role,
-// password, host, port and options.
+// password, host, port and options. A ?dbname= (or ?database=) override
+// would win over the path, as pgx reads it, so it is dropped; the result is
+// then read back through config.ParseConnTarget and must land in target on
+// the sched source's server as its role.
 func targetDSN(schedDSN, target string) (string, error) {
 	u, err := url.Parse(schedDSN)
 	if err != nil {
@@ -517,7 +548,24 @@ func targetDSN(schedDSN, target string) (string, error) {
 	}
 	u.Path = "/" + target
 	u.RawPath = ""
-	return u.String(), nil
+	if u.RawQuery != "" {
+		var keep []string
+		for _, p := range strings.Split(u.RawQuery, "&") {
+			k, _, _ := strings.Cut(p, "=")
+			if dk, err := url.PathUnescape(k); err == nil && (dk == "dbname" || dk == "database") {
+				continue
+			}
+			keep = append(keep, p)
+		}
+		u.RawQuery = strings.Join(keep, "&")
+	}
+	out := u.String()
+	src, err1 := config.ParseConnTarget(schedDSN)
+	got, err2 := config.ParseConnTarget(out)
+	if err1 != nil || err2 != nil || got.DB() != target || got.Host != src.Host || got.Port != src.Port || got.User != src.User {
+		return "", fmt.Errorf("cannot point the sched DSN at database %q without changing its server or role; write the target DSN by hand", target)
+	}
+	return out, nil
 }
 
 // redactMinBare is the shortest password redact also scrubs where it stands

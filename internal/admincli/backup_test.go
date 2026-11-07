@@ -49,11 +49,28 @@ func TestParsePGConn(t *testing.T) {
 		t.Fatalf("dbname from the query: %+v, %v", c4, err)
 	}
 
+	// #2055 review round 6: a query override WINS over the URL's own part,
+	// as in pgx — pg_dump goes to the host and port the store connects to,
+	// not the authority's.
+	c5, err := parsePGConn("postgres://u:placeholder-not-a-secret@authority.example:5432/db?host=override.example&port=6000&dbname=real&user=svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c5.host != "override.example" || c5.port != "6000" || c5.dbname != "real" || c5.user != "svc" {
+		t.Fatalf("query overrides lost to the authority: %+v", c5)
+	}
+	// No database: the server's default, the role name — as pgx connects.
+	if c6, err := parsePGConn("postgres://bob@localhost"); err != nil || c6.dbname != "bob" {
+		t.Fatalf("no database: %+v, %v", c6, err)
+	}
+
 	for _, bad := range []string{
-		"mysql://x/y",           // wrong scheme
-		"postgres://localhost",  // no dbname
-		"postgres://localhost/", // empty dbname
-		"://nonsense",           // unparseable scheme
+		"mysql://x/y",                      // wrong scheme
+		"://nonsense",                      // unparseable
+		"postgres://a,b/db",                // several hosts
+		"host=a,b dbname=db",               // several hosts, key=value
+		"postgres://h/db?port=notaport",    // pgx refuses it
+		"postgres://u@h/db?malformedparam", // pgx refuses it
 	} {
 		if _, err := parsePGConn(bad); err == nil {
 			t.Errorf("parsePGConn(%q) should error", bad)
