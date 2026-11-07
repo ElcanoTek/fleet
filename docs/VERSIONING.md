@@ -136,11 +136,12 @@ claiming a release it was not built from.
 
 ### "My box says `dev+g<sha>`"
 
-A release box cannot: `fleet update` installs a binary release.yml stamped from
-its tag. A development box that builds `--from-source` right after a merge
-can — release.yml tags a push to `main` only once its `CI` run has gone green,
-minutes after the push, so a from-source build of the new commit finds no tag
-and stamps `dev+g<sha>`. Rebuild once the tag exists. `fleet doctor` (step 9)
+A box cannot: `fleet update` installs a binary release.yml stamped from its
+tag, and nothing builds fleet on a box any more (ADR-0101). A `make build` on a
+development machine right after a merge can — release.yml tags a push to
+`main` only once its `CI` run has gone green, minutes after the push, so a
+build of the new commit finds no tag and stamps `dev+g<sha>`. Rebuild once the
+tag exists. `fleet doctor` (step 9)
 reports the installed release against the newest published one and the
 checkout's.
 

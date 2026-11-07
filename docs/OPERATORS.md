@@ -343,7 +343,7 @@ names a release and says how far past it this box is:
 | Output | Meaning |
 | --- | --- |
 | `2026.09.04.2 (…)` | exactly that release |
-| `2026.09.04.2+3.g<sha> (…)` | 3 commits past it — a development box built `--from-source` between releases |
+| `2026.09.04.2+3.g<sha> (…)` | 3 commits past it — a binary built with `make build` on a development machine between releases (a box only ever runs a release) |
 | `dev+g<sha> (…)` | the checkout has no release tags (fetched with `--no-tags`, or shallow) |
 | `dev (…)` | an unstamped binary — built with a bare `go build` rather than `make build` |
 
@@ -428,10 +428,16 @@ itself). To go back further, or to realign the checkout too, install an older
 release: `sudo fleet update --tag <tag> --allow-downgrade` (the newest ten
 releases stay downloadable).
 
-**Development boxes** can still build on the box: `fleet update --from-source`
-runs `make build` from the checkout's branch tip with the Go, Node and npm on
-PATH (nothing installs them), installs it and restarts — without the readiness
-gate or rollback. It is marked for removal once every box runs artifacts.
+**There is no on-box build.** `fleet update` installs a published, signed
+release and nothing else; `--from-source` was removed
+([ADR-0101](adr/0101-remove-the-on-box-build.md)) and is refused with a message.
+A box that cannot reach GitHub, or finds no published release, stops without
+changing anything: retry once the network is back, or name a release with
+`--tag`. A box whose installed fleet predates `fleet release` is told to run
+`sudo scripts/bootstrap.sh --enable-service` again, with the flags it was
+installed with: bootstrap is idempotent and installs the release over the
+existing install. To run unreleased code, build it on a development machine
+with `make build`.
 
 ## status — is the box healthy? (quick, read-only)
 
@@ -526,10 +532,10 @@ production-only bug. The pass covers, in order:
    **failed** is a failure, because a box that looks covered and is not is the
    worse state. See [`docs/BACKUP_RESTORE.md`](BACKUP_RESTORE.md).
    The same step checks disk headroom and **disk hygiene**. It reclaims root's
-   build caches (Go build + module cache, npm, dnf) once they pass 3 GiB.
-   From-source builds (`fleet update --from-source`, and every update before
-   signed releases) filled those as root, and the maintenance timer runs as
-   `fleet`, so the timer never reaches them. It caps the journal at 1G
+   package cache (dnf) once it passes 1 GiB: dnf fills it as root, and the
+   maintenance timer runs as `fleet`, so the timer never reaches it. (The Go
+   and npm caches it once also swept came from on-box builds, which are gone —
+   ADR-0101.) It caps the journal at 1G
    (`/etc/systemd/journald.conf.d/60-fleet-journal-cap.conf`) unless you set
    `SystemMaxUse`/`RuntimeMaxUse` yourself, and it *reports* images left in root's podman
    store. Doctor never deletes those images itself. `--check` only reports.

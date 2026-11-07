@@ -10,7 +10,7 @@
 // Subcommands (invoked as `fleet <verb>`):
 //
 //	fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
-//	fleet update    [--tag <vYYYY.MM.DD.N>] [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run] [--from-source]
+//	fleet update    [--tag <vYYYY.MM.DD.N>] [--no-pull] [--client-config <dir>] [--service <name>] [--yes] [--dry-run]
 //	fleet release   latest | fetch | sandbox | install | rollback
 //	fleet status    [--service <name>] [--no-sandbox]
 //	fleet doctor    [--check] [--no-restart] [--dry-run]
@@ -195,13 +195,12 @@ Preflight & diagnostics (in-binary; no server needed):
 Operator lifecycle (bootstrap → update → status/doctor):
   fleet bootstrap [--postgres=local|external] [--client-config <url|path>] [--enable-service] [--dry-run]
   fleet update    [--check] [--tag <vYYYY.MM.DD.N> [--allow-downgrade]] [--no-pull] [--client-config <dir>] [--service <name>]
-                  [--branch <name>] [--adopt-units] [--wait] [--force] [--yes] [--dry-run] [--from-source]
+                  [--branch <name>] [--adopt-units] [--wait] [--force] [--yes] [--dry-run]
                                                              (installs the newest signed release: verify, swap, restart, wait for
                                                               /readyz, roll back automatically — no Go or Node on the box;
                                                               --check: read-only "running vX, vY is published" + commits/bundle behind;
                                                               --adopt-units: adopt shipped systemd units that drifted, without the prompt;
-                                                              --wait: wait for running tasks/turns to finish; --force: update even if busy;
-                                                              --from-source: development boxes only — make build on the box)
+                                                              --wait: wait for running tasks/turns to finish; --force: update even if busy)
   fleet release   latest | fetch | sandbox | install | rollback   (the signed-artifact steps fleet update runs — docs/RELEASE-ARTIFACTS.md;
                                                               sudo fleet release rollback: put fleet.prev back, restart, wait for /readyz)
   fleet cleanup   [--dry-run] [--deep]                 (reclaim build cruft: dangling podman layers + Go caches)

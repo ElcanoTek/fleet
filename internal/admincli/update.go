@@ -25,16 +25,16 @@ import (
 )
 
 // cmdUpdate wraps scripts/update.sh. It forwards every flag verbatim
-// (--tag / --allow-downgrade / --from-source / --no-pull / --dry-run /
-// --client-config / --service / --branch / --yes / --sandbox-max-age / ...) to
-// the shell script, which owns the in-place update. By default (--artifact)
-// that is a SIGNED RELEASE: advance the fleet + client-config checkouts to the
+// (--tag / --allow-downgrade / --no-pull / --dry-run / --client-config /
+// --service / --branch / --yes / --sandbox-max-age / ...) to the shell script,
+// which owns the in-place update. That is always a SIGNED RELEASE: advance the fleet + client-config checkouts to the
 // release, download and verify the binary (`fleet release fetch`), verify and
 // pull the release's sandbox image or build a custom bundle's on top of it, then
 // swap the binary in atomically, restart, wait for /readyz and roll back
 // automatically (`fleet release install`) — no Go or Node on the box
-// (docs/RELEASE-ARTIFACTS.md, ADR-0100). --from-source keeps the old on-box
-// build for development boxes. Like bootstrap, the CLI runs NO migrations
+// (docs/RELEASE-ARTIFACTS.md, ADR-0100). There is no on-box build: the
+// --from-source path was removed (ADR-0101) and the script refuses it with a
+// message. Like bootstrap, the CLI runs NO migrations
 // (services self-migrate on restart).
 //
 // `--check` short-circuits to a READ-ONLY report (the release this box runs

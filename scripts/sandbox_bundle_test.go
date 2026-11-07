@@ -114,8 +114,8 @@ func TestSandboxContainerfileFollowsTheManifest(t *testing.T) {
 }
 
 // TestBuildSandboxImageFallsBackToTheGenericContainerfile — a bundle that
-// ships and names no Containerfile customizes nothing, so an on-box build
-// (--from-source, or no release image reachable) builds the generic bundle's
+// ships and names no Containerfile customizes nothing, so a by-hand build
+// (CI, release.yml, an operator rebuilding) builds the generic bundle's
 // Containerfile under the bundle's own sandbox.tag; a bundle that NAMES a
 // missing Containerfile is still refused.
 func TestBuildSandboxImageFallsBackToTheGenericContainerfile(t *testing.T) {
