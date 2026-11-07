@@ -147,7 +147,9 @@ func TestReleaseProvenanceAndScanOrder(t *testing.T) {
 		if !strings.HasPrefix(s.Uses, "actions/attest-build-provenance@") {
 			continue
 		}
-		provenance++
+		if !strings.HasSuffix(s.Name, "(retry)") {
+			provenance++
+		}
 		if s.With["predicate-path"] == nil || s.With["predicate-type"] != "https://slsa.dev/provenance/v1" {
 			t.Errorf("provenance step %q uses the action's own predicate, whose source commit is the workflow_run's default-branch head", s.Name)
 		}

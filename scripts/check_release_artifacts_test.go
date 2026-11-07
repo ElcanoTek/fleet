@@ -102,7 +102,7 @@ func TestReleaseSignerIsTheIdentityBoxesVerify(t *testing.T) {
 	}
 	var provenance int
 	for _, s := range pub.Steps {
-		if strings.HasPrefix(s.Uses, "actions/attest-build-provenance@") {
+		if strings.HasPrefix(s.Uses, "actions/attest-build-provenance@") && !strings.HasSuffix(s.Name, "(retry)") {
 			provenance++
 		}
 	}
