@@ -54,7 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          curl -sSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
           echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" grype
@@ -63,8 +63,8 @@ jobs:
 
       - name: Ensure podman
         run: |
-          sudo apt-get update -qq
-          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq podman
           podman --version
 
       - name: Build the sandbox image and export it to an archive
@@ -74,7 +74,10 @@ jobs:
         # it to a docker-archive tarball for a daemon-independent scan.
         run: |
           set -euo pipefail
-          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
+          # Retried once, like ci.yml's e2e-live build: ~300 RPMs from Fedora
+          # mirrors, and podman reuses the layers that finished.
+          IMAGE_NAME="${SANDBOX_IMAGE_LOCAL%%:*}" scripts/retry.sh --attempts 2 --delay 20 --what "sandbox image build" -- \
+            scripts/build-sandbox-image.sh "${SANDBOX_IMAGE_LOCAL##*:}"
           podman save --format docker-archive -o sandbox-image.tar "$SANDBOX_IMAGE_LOCAL"
 
       - name: Scan (weekly — report only, never fail)

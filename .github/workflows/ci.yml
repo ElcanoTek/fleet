@@ -192,7 +192,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -sSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${tarball}"
           echo "${GITLEAKS_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" gitleaks
@@ -263,7 +263,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
-          curl -sSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
           echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" actionlint
@@ -339,7 +339,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="kubeconform-linux-amd64.tar.gz"
-          curl -sSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/${tarball}"
           echo "${KUBECONFORM_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" kubeconform
@@ -580,15 +580,7 @@ jobs:
         # a compile error still fails on the first try, in the step that owns it.
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if go mod download; then
-              exit 0
-            fi
-            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
-            sleep "$(( attempt * 10 ))"
-          done
-          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
 
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
         # The runner ships client 16; the postgres service is server 18, and
@@ -609,12 +601,13 @@ jobs:
         run: |
           set -euxo pipefail
           sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+          sudo curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
             -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-18
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y -qq postgresql-client-18
           # Installing the package does NOT change what `pg_dump` resolves to,
           # and that is what made this step's first outing fail with `got=16`
           # over an install that had plainly succeeded. /usr/bin/pg_dump is a
@@ -783,7 +776,15 @@ jobs:
         # reports to the Security tab. That does not make anything greener; it
         # changes WHEN a newly published advisory is discovered, so it is found
         # on a schedule instead of ambushing the next unrelated PR.
-        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+        #
+        # The fetch of govulncheck itself is a separate, retried `go install`
+        # (still @latest), so a module-proxy blip retries the download while
+        # the scan — whose findings must fail the step — runs exactly once.
+        run: |
+          set -euo pipefail
+          scripts/retry.sh --what "go install govulncheck (the Go module proxy)" -- \
+            go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
 
       - name: Prune unused Go build cache entries before saving (main only)
         if: ${{ success() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
@@ -891,15 +892,7 @@ jobs:
       - name: Prefetch Go modules (retried — the proxy is not always up)
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if go mod download; then
-              exit 0
-            fi
-            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
-            sleep "$(( attempt * 10 ))"
-          done
-          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
 
       - name: Install postgresql-client-18 (so pg_dump matches the server major)
         # Same contract as the `go` job: backup_test.go self-skips on a major
@@ -909,12 +902,13 @@ jobs:
         run: |
           set -euxo pipefail
           sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+          sudo curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
             -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
             | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-18
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo apt-get -o Acquire::Retries=5 install -y -qq postgresql-client-18
           echo "/usr/lib/postgresql/18/bin" >> "$GITHUB_PATH"
           got="$(/usr/lib/postgresql/18/bin/pg_dump --version | grep -oE '[0-9]+' | head -1)"
           [ "$got" = "18" ] || {
@@ -1041,15 +1035,7 @@ jobs:
         if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if go mod download; then
-              exit 0
-            fi
-            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
-            sleep "$(( attempt * 10 ))"
-          done
-          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
 
       - name: Run live multi-provider prompt-cache regression suite
         if: ${{ needs.changes.outputs.cache_relevant == 'true' }}
@@ -1116,7 +1102,7 @@ jobs:
           RUFF_VERSION: '0.15.8'
         run: |
           set -euo pipefail
-          python3 -m pip install --user --quiet "ruff==${RUFF_VERSION}"
+          python3 -m pip install --user --quiet --retries 5 --timeout 30 "ruff==${RUFF_VERSION}"
           # GITHUB_PATH only affects LATER steps, so export for this one too.
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           export PATH="$HOME/.local/bin:$PATH"
@@ -1189,7 +1175,7 @@ jobs:
         run: npm audit --audit-level=low
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Lint
         run: npm run lint
@@ -1261,7 +1247,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Install Playwright browser (chromium, retried)
         # Retried for the same reason as the Go module prefetch: this step only
@@ -1273,15 +1259,8 @@ jobs:
         # failure still fails the job, with an annotation saying why.
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if npx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
-            sleep "$(( attempt * 15 ))"
-          done
-          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 15 --what "playwright install (apt or the Playwright CDN)" -- \
+            npx playwright install --with-deps chromium
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -1373,15 +1352,7 @@ jobs:
         # a compile error still fails on the first try, in the step that owns it.
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if go mod download; then
-              exit 0
-            fi
-            echo "go mod download failed (attempt ${attempt}/3); retrying in $(( attempt * 10 ))s"
-            sleep "$(( attempt * 10 ))"
-          done
-          echo "::error::go mod download failed three times — the Go module proxy is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 10 --what "go mod download (the Go module proxy)" -- go mod download
 
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1393,22 +1364,15 @@ jobs:
 
       - name: Install web dependencies
         working-directory: web
-        run: npm ci
+        run: npm ci --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Install Playwright browser (chromium, retried)
         working-directory: web
         # Retried: download-only step; see ci.yml's mocked e2e job for why.
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            if npx playwright install --with-deps chromium; then
-              exit 0
-            fi
-            echo "playwright install failed (attempt ${attempt}/3); retrying in $(( attempt * 15 ))s"
-            sleep "$(( attempt * 15 ))"
-          done
-          echo "::error::playwright install failed three times — apt or the Playwright CDN is unreachable from this runner"
-          exit 1
+          "$GITHUB_WORKSPACE/scripts/retry.sh" --attempts 3 --delay 15 --what "playwright install (apt or the Playwright CDN)" -- \
+            npx playwright install --with-deps chromium
 
       - name: Ensure podman + pasta + postgres client
         # ubuntu-latest already ships podman and the postgres client, but install
@@ -1419,10 +1383,10 @@ jobs:
         # tool sandbox; install it explicitly rather than relying on the runner
         # image's default rootless backend.
         run: |
-          sudo apt-get update -qq
-          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
-          command -v pasta  >/dev/null 2>&1 || sudo apt-get install -y -qq passt
-          command -v psql   >/dev/null 2>&1 || sudo apt-get install -y -qq postgresql-client
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq podman
+          command -v pasta  >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq passt
+          command -v psql   >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq postgresql-client
           podman --version
           pasta --version 2>/dev/null | head -1 || true
           psql --version
@@ -1592,7 +1556,7 @@ jobs:
         run: |
           set -euo pipefail
           tarball="grype_${GRYPE_VERSION}_linux_amd64.tar.gz"
-          curl -sSL -o "$tarball" \
+          curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 20 -o "$tarball" \
             "https://github.com/anchore/grype/releases/download/v${GRYPE_VERSION}/${tarball}"
           echo "${GRYPE_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "$tarball" grype
@@ -1604,8 +1568,8 @@ jobs:
         # ubuntu-latest ships podman, but install defensively so the job is robust
         # to runner image changes (mirrors the e2e-live job's approach).
         run: |
-          sudo apt-get update -qq
-          command -v podman >/dev/null 2>&1 || sudo apt-get install -y -qq podman
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          command -v podman >/dev/null 2>&1 || sudo apt-get -o Acquire::Retries=5 install -y -qq podman
           podman --version
 
       - name: Build the sandbox image and export it to an archive

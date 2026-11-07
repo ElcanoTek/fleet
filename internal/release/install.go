@@ -530,7 +530,10 @@ func (p HTTPProber) WaitReady(ctx context.Context, url string, timeout time.Dura
 				return nil
 			}
 			last = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
+		} else if last == nil || ctx.Err() == nil {
+			// Keep an earlier real answer (e.g. "HTTP 503") when this
+			// attempt failed only because the overall deadline cut it off:
+			// "context deadline exceeded" says nothing about the server.
 			last = err
 		}
 		select {

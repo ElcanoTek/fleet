@@ -200,7 +200,7 @@ jobs:
       - name: Ensure podman
         run: |
           command -v podman >/dev/null 2>&1 \
-            || (sudo apt-get update -qq && sudo apt-get install -y -qq podman)
+            || (sudo apt-get -o Acquire::Retries=5 update -qq && sudo apt-get -o Acquire::Retries=5 install -y -qq podman)
           podman --version
 
       # No IMAGE_NAME override: the script derives the tag from the bundle

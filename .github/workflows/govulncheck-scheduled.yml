@@ -78,7 +78,11 @@ jobs:
         # that died before writing anything.
         run: |
           set -uo pipefail
-          go run golang.org/x/vuln/cmd/govulncheck@latest \
+          # The download is retried on its own (ci.yml does the same), so a
+          # module-proxy blip is not reported as "no SARIF".
+          scripts/retry.sh --what "go install govulncheck (the Go module proxy)" -- \
+            go install golang.org/x/vuln/cmd/govulncheck@latest || exit 1
+          "$(go env GOPATH)/bin/govulncheck" \
             -format sarif ./... > govulncheck.sarif 2> govulncheck.err || true
           if [ ! -s govulncheck.sarif ]; then
             echo "govulncheck produced no SARIF; stderr was:" >&2

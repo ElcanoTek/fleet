@@ -210,7 +210,29 @@ func TestHTTPProber(t *testing.T) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
 	defer never.Close()
-	if err := p.WaitReady(context.Background(), never.URL, 100*time.Millisecond); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+	// A deadline long enough for a loaded CI runner to complete at least one
+	// request; 100ms was not (the probe's only request was cut off).
+	if err := p.WaitReady(context.Background(), never.URL, time.Second); err == nil || !strings.Contains(err.Error(), "HTTP 503") {
 		t.Fatalf("got %v", err)
+	}
+}
+
+// TestHTTPProberKeepsTheLastRealAnswer — an attempt cut off by the overall
+// deadline must not replace an earlier HTTP status with "context deadline
+// exceeded": the operator needs to see what the server last said.
+func TestHTTPProberKeepsTheLastRealAnswer(t *testing.T) {
+	var n atomic.Int32
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if n.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		<-r.Context().Done() // later attempts hang until the deadline cuts them off
+	}))
+	defer slow.Close()
+	p := HTTPProber{Interval: 10 * time.Millisecond}
+	err := p.WaitReady(context.Background(), slow.URL, 500*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "HTTP 503") {
+		t.Fatalf("want the last real answer (HTTP 503) in the error, got %v", err)
 	}
 }
