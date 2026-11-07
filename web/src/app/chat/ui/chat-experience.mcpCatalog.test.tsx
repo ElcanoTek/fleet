@@ -117,3 +117,77 @@ describe("Tools picker catalog loads", () => {
     expect(badge()).toBe("2");
   });
 });
+
+// Connector saves race (#2046): every POST carries the whole selection, so
+// two saves in flight at once could land out of order and the older answer
+// switched off a connector the user had just turned on. Saves now run one at
+// a time per conversation, and only the newest one reconciles the picker. The
+// mock answers each POST with exactly what it was sent, and the helper below
+// always answers the NEWEST POST it can see first.
+describe("Tools picker connector saves", () => {
+  let posts: Array<{ body: { enabled_optional: string[] }; resolve: () => void }> = [];
+  let catalogLoads = 0;
+  const checked = (name: string) => screen.getByRole("switch", { name }).getAttribute("aria-checked");
+
+  function mockSaveBackend() {
+    posts = [];
+    catalogLoads = 0;
+    const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (init?.method === "POST" && url === "/api/conversations/conv-a/mcp-servers") {
+          const body = JSON.parse(String(init.body)) as { enabled_optional: string[] };
+          return new Promise<Response>((resolve) => {
+            posts.push({ body, resolve: () => resolve(json({ enabled_optional: body.enabled_optional })) });
+          });
+        }
+        if (url === "/api/conversations/conv-a/mcp-servers") catalogLoads++;
+        if (url === "/api/mcp-servers" || /\/mcp-servers$/.test(url)) return json(catalog(0));
+        if (url === "/api/conversations") return json({ conversations: CONVS });
+        if (url === "/api/conversations?archived=true") return json({ conversations: [] });
+        if (url === "/api/conversations/conv-a") return json({ conversation: CONVS[0], history: [] });
+        if (/\/inflight$/.test(url)) return json({ inflight: false });
+        return json({}, 404);
+      }),
+    );
+  }
+
+  async function answerNewestPost() {
+    await waitFor(() => expect(posts.length).toBeGreaterThan(0));
+    const p = posts.pop()!;
+    await act(async () => {
+      p.resolve();
+    });
+    return p.body.enabled_optional;
+  }
+
+  it("ends on the last selection asked for when two saves overlap", async () => {
+    mockSaveBackend();
+    const sent: string[][] = [];
+    render(<ChatExperience initialUserEmail="user@example.com" />);
+    await waitFor(() => expect(headerTitle()).toHaveTextContent("Alpha chat"));
+    await waitFor(() => expect(catalogLoads).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "Tools" }));
+    // Opening the picker refreshes the catalog; let that land first.
+    await waitFor(() => expect(catalogLoads).toBe(2));
+    await act(async () => {});
+
+    fireEvent.click(screen.getByRole("switch", { name: "srv0" }));
+    fireEvent.click(screen.getByRole("switch", { name: "srv1" }));
+    expect(checked("srv0")).toBe("true");
+    expect(checked("srv1")).toBe("true");
+
+    sent.push(await answerNewestPost());
+    // Whichever save answered first, it must not switch srv1 back off.
+    expect(checked("srv1")).toBe("true");
+    sent.push(await answerNewestPost());
+    await waitFor(() => expect(posts.length).toBe(0));
+
+    // The last POST carried both connectors, and the picker shows both on.
+    expect(sent[sent.length - 1]).toEqual(["srv0", "srv1"]);
+    expect(checked("srv0")).toBe("true");
+    expect(checked("srv1")).toBe("true");
+  });
+});

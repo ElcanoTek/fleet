@@ -2089,12 +2089,42 @@ export function ChatExperience({
   //
   // The reconciliation itself lives in mcpSelection.ts with the rest of the
   // selection rules, and is unit-tested there.
-  const postMcpServerState = async (
+  //
+  // Saves are chained per conversation (the autoApproveChainRef pattern,
+  // #2046). Each POST replaces the whole selection, so two in flight at once
+  // could land out of order — and the earlier one's response, applied last,
+  // turned off a connector the user had just turned on. A queued save sends
+  // the newest selection asked for (not its own click-time snapshot), and
+  // only the newest save's response reconciles the picker.
+  const mcpSaveChainRef = useRef<Map<string, Promise<void>>>(new Map());
+  const mcpSaveSeqRef = useRef<Map<string, number>>(new Map());
+  // The newest selection asked for per conversation: set when a save is
+  // queued, and kept in step with a failed save's revert so a queued save
+  // never resends rows the server just rejected.
+  const mcpSaveDesiredRef = useRef<Map<string, MCPServerInfo[]>>(new Map());
+  const postMcpServerState = (
     conversationId: string,
     next: MCPServerInfo[],
     prev: MCPServerInfo[],
+  ): Promise<void> => {
+    const seq = (mcpSaveSeqRef.current.get(conversationId) ?? 0) + 1;
+    mcpSaveSeqRef.current.set(conversationId, seq);
+    mcpSaveDesiredRef.current.set(conversationId, next);
+    const queued = mcpSaveChainRef.current.get(conversationId) ?? Promise.resolve();
+    const run = queued.then(() =>
+      sendMcpServerState(conversationId, seq, next, prev),
+    );
+    mcpSaveChainRef.current.set(conversationId, run);
+    return run;
+  };
+  const sendMcpServerState = async (
+    conversationId: string,
+    seq: number,
+    next: MCPServerInfo[],
+    prev: MCPServerInfo[],
   ) => {
-    const requested = enabledOptionalMcpServerNames(next);
+    const sent = mcpSaveDesiredRef.current.get(conversationId) ?? next;
+    const requested = enabledOptionalMcpServerNames(sent);
     // A failed save reverts only the rows THIS request changed (switch and
     // seat), so a catalog load or another toggle that landed meanwhile is
     // kept — and only while the picker still shows this conversation.
@@ -2107,14 +2137,17 @@ export function ChatExperience({
       }
     }
     const stillShown = () => activeConversationIdRef.current === conversationId;
+    const isLatest = () => mcpSaveSeqRef.current.get(conversationId) === seq;
+    const revertRows = (rows: MCPServerInfo[]) =>
+      rows.map((row) => {
+        const old = changed.get(row.name);
+        return old ? { ...row, enabled: old.enabled, account: old.account } : row;
+      });
     const revert = () => {
+      const desired = mcpSaveDesiredRef.current.get(conversationId);
+      if (desired) mcpSaveDesiredRef.current.set(conversationId, revertRows(desired));
       if (!stillShown()) return;
-      setMcpServers((curr) =>
-        curr.map((row) => {
-          const old = changed.get(row.name);
-          return old ? { ...row, enabled: old.enabled, account: old.account } : row;
-        }),
-      );
+      setMcpServers(revertRows);
     };
     const url = conversationApiUrl(conversationId, "/mcp-servers");
     if (!url) {
@@ -2127,7 +2160,7 @@ export function ChatExperience({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           enabled_optional: requested,
-          accounts: mcpAccountOverrides(next),
+          accounts: mcpAccountOverrides(sent),
         }),
       });
       if (!response.ok) {
@@ -2144,7 +2177,12 @@ export function ChatExperience({
       const persisted = body.enabled_optional.filter(
         (n): n is string => typeof n === "string",
       );
-      if (stillShown()) setMcpServers(reconcileMcpSelection(next, persisted));
+      // An older save's answer is superseded by the newer one queued behind
+      // it; reconciling the CURRENT rows (not this request's snapshot) keeps
+      // anything a catalog load or another save put there meanwhile.
+      if (isLatest() && stillShown()) {
+        setMcpServers((curr) => reconcileMcpSelection(curr, persisted));
+      }
       const dropped = droppedOptionalMcpServerNames(requested, persisted);
       if (dropped.length > 0) {
         // The toggle visibly springing back is the user-facing signal; this is
