@@ -12,6 +12,7 @@ import (
 	"charm.land/fantasy"
 
 	"github.com/ElcanoTek/fleet/internal/tools"
+	trunc "github.com/ElcanoTek/fleet/internal/truncate"
 )
 
 // BM25 progressive tool disclosure (#506). When the registered roster would
@@ -518,9 +519,5 @@ func countNullVerdicts(schemas []any) (admitted, unknown int) {
 
 // oneLine collapses whitespace and clamps a description for the search listing.
 func oneLine(s string, maxChars int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > maxChars {
-		s = s[:maxChars] + "…"
-	}
-	return s
+	return trunc.Clamp(strings.Join(strings.Fields(s), " "), maxChars, "…")
 }
