@@ -39,6 +39,9 @@ func TestExternalSchemaPrivilegeCheck(t *testing.T) {
 	const role, pw = "fleet_extpriv_role", "placeholder-not-a-secret"
 	_, _ = admin.ExecContext(ctx, "DROP ROLE IF EXISTS "+role)
 	if _, err := admin.ExecContext(ctx, "CREATE ROLE "+role+" LOGIN PASSWORD '"+pw+"'"); err != nil {
+		if strings.Contains(err.Error(), "42501") {
+			t.Skipf("the test role cannot CREATE ROLE (CREATEROLE is not part of the test contract): %v", err)
+		}
 		t.Fatalf("create a role: %v", err)
 	}
 	dbDSN := testdb.Empty(t) // owned by the test role

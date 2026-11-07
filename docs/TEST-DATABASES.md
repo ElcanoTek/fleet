@@ -114,7 +114,7 @@ policy replaced theirs). `TestApprovalResume_RunningTurnQueuesTheResume`
 (18 s, serial: it shortens `approvalResumeDebounce`) is the single slowest
 test on httpapi's critical path.
 
-**Scripts and CI.** `scripts/go-test.sh` is one `go test` at default `-p`
+**Scripts and CI.** `scripts/go-test.sh` is one `go test` (`-p` and `-parallel` bounded by the server's free connections, below)
 (tags, `--race`, `--count`, `--coverprofile` kept; no groups, no prebuild,
 no `--print-groups`). `scripts/go_test_script_test.go` fails a test file
 outside `internal/testdb` that reads `DATABASE_URL` /
@@ -126,6 +126,42 @@ container cannot pass flags); the pg_dump-18 installs stay; the race job keeps
 its own server only because it is a separate runner.
 `scripts/test-db-setup.sh` is a preflight (role, `CREATEDB`, the export
 line) plus `--gc`.
+
+**A CREATEDB-only role is enough** (verified against Postgres 16 with a
+`CREATEDB NOSUPERUSER` role: template build, clone, write, drop; pinned by
+`TestCreateDBOnlyRole`). The owner of a database may mark it a template and
+close it to connections on Postgres 15+, and may clone its own database
+whether or not it is marked, so the marks are best effort: a server that
+refuses them (`insufficient_privilege`) still gets a working template.
+Templates are keyed by the test role as well as the migrations — a clone's
+objects belong to the template's owner, so another role's template would hand
+a non-superuser a database it cannot write to. Garbage collection skips
+another role's databases (`insufficient_privilege`) instead of failing. Tests
+that create server-wide roles (the external-privilege and hardened-public
+tests) skip when the test role lacks CREATEROLE, which is not part of the
+contract.
+
+**A failed background drop fails the run.** `testdb.Run` records the first
+background drop that fails (the database is left behind) and returns a nonzero
+code even when every test passed; synchronous mode reports the same failure as
+a `t.Errorf` on the owning test.
+
+**Connection budget.** `go test` runs `-p` binaries at once and each runs up to
+`-parallel` tests; both default to GOMAXPROCS, so a many-core box could open
+more connections than a default `max_connections=100` server allows.
+`scripts/go-test.sh` reads the server's free connections through
+`FLEET_TEST_DATABASE_URL` (`max_connections` − `superuser_reserved_connections`
+− current sessions) and keeps the suite within three quarters of them,
+counting 8 connections per test process (owner lock, background clone/drop)
+and 3 per running DB test (the stores' pools are `testdb.PoolMaxOpen` = 4
+each but rarely all busy). It lowers `-parallel` first and `-p` only when
+`-parallel 1` does not fit, never leaving 1..CPUs; without `psql` or a
+reachable server Go's defaults apply. Examples (pinned by
+`TestGoTestScriptBoundsConnections`): CI (300 connections, 4 CPUs) keeps the
+defaults, `-p 4 -parallel 4`; a default-100 server on 4 cores gets
+`-p 4 -parallel 2`; on 16 cores `-p 6 -parallel 1`. It is an estimate of how
+many connections a test holds, not a hard limit — a test that opens wider
+pools on purpose is not accounted for.
 
 ## Measured
 

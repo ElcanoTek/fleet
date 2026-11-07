@@ -70,9 +70,18 @@ if [[ $# -gt 0 ]]; then
   exit 2
 fi
 
+# redact strips credentials from text that may hold a DSN: a URL's whole
+# userinfo (user and password) and any password=… key (key=value DSNs, or a
+# query parameter).
+redact() {
+  printf '%s' "$1" | sed -E \
+    -e 's#([A-Za-z][A-Za-z0-9+.-]*://)[^@/?[:space:]]*@#\1***@#g' \
+    -e 's/(password=)[^[:space:]&]*/\1***/g'
+}
+
 # Preflight: the server answers, the role can create databases.
 if ! out="$(psqlq -c "SELECT current_user, rolcreatedb OR rolsuper FROM pg_roles WHERE rolname = current_user" 2>&1)"; then
-  echo "cannot connect with ${DSN%%@*}@…: ${out}" >&2
+  echo "cannot connect with $(redact "$DSN"): $(redact "$out")" >&2
   echo "start Postgres, create the role (CREATE ROLE fleet LOGIN PASSWORD 'fleet' CREATEDB), or set FLEET_TEST_DATABASE_URL" >&2
   exit 1
 fi

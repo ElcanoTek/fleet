@@ -351,7 +351,8 @@ connections is enough for one run); the same flags make it faster.
 
 4. **go test** — tagged, so the host-mode fixtures and MockMode tests compile.
    Both CI and `make test` call `scripts/go-test.sh`: one `go test` over the
-   whole tree at Go's default package parallelism — every DB test has a
+   whole tree, with `-p`/`-parallel` capped to fit the test server's free
+   connections (docs/TEST-DATABASES.md) — every DB test has a
    database of its own, so there are no serial groups. Each Go CI lane (`go`, `go-race`)
    keeps its own build cache, saved from `main` and restored by PRs, so a PR
    compiles only what changed. CI also adds `-count=1` to defeat the test cache and

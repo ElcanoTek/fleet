@@ -159,7 +159,8 @@ type server struct {
 	owner    uint32
 	seq      atomic.Uint64
 	strategy string
-	started  bool // the first collect has run
+	role     string // the test role (current_user); part of every template key
+	started  bool   // the first collect has run
 
 	mu    sync.Mutex      // one template build at a time in this process
 	ready map[string]bool // templates known to exist
@@ -236,6 +237,7 @@ func (s *server) init(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("maintenance connection: %w", err)
 	}
+	s.role = role
 	s.lockConn = conn
 	// A random owner id, unique among live processes: the lock is taken with
 	// try, so a collision with a live process just draws again.
@@ -376,7 +378,7 @@ func (s *server) collectOwner(ctx context.Context, owner string, dbs []string, l
 		}()
 	}
 	for _, db := range dbs {
-		if err := s.drop(ctx, db); err != nil {
+		if err := s.drop(ctx, db); err != nil && !isPrivilege(err) { // another role's leftovers are its own to collect
 			return err
 		}
 	}
@@ -434,11 +436,16 @@ func (s *server) dsnFor(name string) string {
 
 // template returns the name of spec's template, building it when it does not
 // exist yet (once per server, under the build lock).
+//
+// The key folds in the test role: a clone's objects belong to whoever owns
+// them in the template, so a template built by another role would hand this
+// role a database it cannot write to (a CREATEDB-only role is not a
+// superuser). Each role builds and clones its own.
 func (s *server) template(ctx context.Context, spec Spec) (string, error) {
 	if !specName.MatchString(spec.Name) || spec.Fingerprint == nil || spec.Migrate == nil {
 		return "", fmt.Errorf("invalid Spec %q: want a lower-case Name (1-12 letters), Fingerprint and Migrate", spec.Name)
 	}
-	sum := sha256.Sum256([]byte(recipeVersion + "\x00" + spec.Fingerprint()))
+	sum := sha256.Sum256([]byte(recipeVersion + "\x00" + s.role + "\x00" + spec.Fingerprint()))
 	key := spec.Name + "_" + hex.EncodeToString(sum[:6])
 	name := templatePrefix + key
 	s.mu.Lock()
@@ -447,19 +454,15 @@ func (s *server) template(ctx context.Context, spec Spec) (string, error) {
 		return name, nil
 	}
 	err := s.withBuildLock(ctx, func(ctx context.Context) error {
-		var isTemplate bool
-		err := s.admin.QueryRowContext(ctx, `SELECT datistemplate FROM pg_database WHERE datname = $1`, name).Scan(&isTemplate)
-		switch {
-		case err == nil && isTemplate:
-			return nil // built by an earlier run or another process
-		case err == nil:
-			// Renamed but never marked: a build interrupted between its last
-			// two steps. Rebuild rather than trust it.
-			if err := s.drop(ctx, name); err != nil {
-				return err
-			}
-		case !errors.Is(err, sql.ErrNoRows):
+		var exists bool
+		if err := s.admin.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)`, name).Scan(&exists); err != nil {
 			return fmt.Errorf("look up template %s: %w", name, err)
+		}
+		if exists {
+			// The rename is a build's last required step, so a template
+			// under its final name is complete — built by an earlier run or
+			// another process.
+			return nil
 		}
 		return s.build(ctx, spec, key, name)
 	})
@@ -470,8 +473,15 @@ func (s *server) template(ctx context.Context, spec Spec) (string, error) {
 	return name, nil
 }
 
-// build migrates a new database and turns it into template name. It runs
+// build migrates a new database and renames it to template name. It runs
 // under the build lock.
+//
+// Only CREATEDB is needed. The role owns the database it builds, and an owner
+// may clone its own database whether or not it is marked a template, so the
+// IS_TEMPLATE / ALLOW_CONNECTIONS marks are best effort: they keep strangers
+// off the template on servers that let the owner set them (Postgres 15+ does),
+// and a server that refuses them (insufficient_privilege) still gets a
+// working template — nothing in the suite connects to one.
 func (s *server) build(ctx context.Context, spec Spec, key, name string) error {
 	tmp := buildPrefix + key + "_" + s.ownerHex()
 	if err := s.drop(ctx, tmp); err != nil {
@@ -488,9 +498,9 @@ func (s *server) build(ctx context.Context, spec Spec, key, name string) error {
 		return fail(fmt.Errorf("migrate template %s: %w", spec.Name, err))
 	}
 	// CREATE DATABASE … TEMPLATE refuses a source with connections; make sure
-	// none is left and none can come.
+	// none is left (and, where allowed, none can come).
 	q := quoteIdent(tmp)
-	if _, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+q+` WITH ALLOW_CONNECTIONS false`); err != nil {
+	if _, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+q+` WITH ALLOW_CONNECTIONS false`); err != nil && !isPrivilege(err) {
 		return fail(fmt.Errorf("seal %s: %w", tmp, err))
 	}
 	if _, err := s.admin.ExecContext(ctx,
@@ -509,11 +519,12 @@ func (s *server) build(ctx context.Context, spec Spec, key, name string) error {
 		}
 		return fail(fmt.Errorf("rename %s: %w", tmp, err))
 	}
-	if _, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+quoteIdent(name)+` WITH IS_TEMPLATE true`); err != nil {
+	if _, err := s.admin.ExecContext(ctx, `ALTER DATABASE `+quoteIdent(name)+` WITH IS_TEMPLATE true`); err != nil && !isPrivilege(err) {
 		return fmt.Errorf("mark template %s: %w", name, err)
 	}
 	// Keep the newest few templates of this kind; older ones belong to
-	// migration sets nobody has run since.
+	// migration sets nobody has run since. Another role's template is not
+	// ours to drop (best effort: insufficient_privilege is skipped).
 	all, err := s.databases(ctx, templatePrefix+spec.Name+"_")
 	if err != nil {
 		return err
@@ -522,7 +533,7 @@ func (s *server) build(ctx context.Context, spec Spec, key, name string) error {
 		if all[i] == name {
 			continue
 		}
-		if err := s.drop(ctx, all[i]); err != nil {
+		if err := s.drop(ctx, all[i]); err != nil && !isPrivilege(err) {
 			return err
 		}
 	}
@@ -677,6 +688,13 @@ func MaintenanceDSN(t testing.TB) string {
 func isInUse(err error) bool {
 	var pg *pgconn.PgError
 	return errors.As(err, &pg) && pg.Code == "55006" // object_in_use
+}
+
+// isPrivilege reports insufficient_privilege (42501) — another role's
+// database, or a setting this role may not change.
+func isPrivilege(err error) bool {
+	var pg *pgconn.PgError
+	return errors.As(err, &pg) && pg.Code == "42501"
 }
 
 func isDuplicate(err error) bool {

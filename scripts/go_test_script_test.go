@@ -4,8 +4,11 @@
 package scripts
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -198,5 +201,38 @@ func TestGoTestScriptSurfacesGoListFailure(t *testing.T) {
 	}
 	if !strings.Contains(body, `if ! go list`) {
 		t.Error("go-test.sh does not check go list's exit status")
+	}
+}
+
+// TestGoTestScriptBoundsConnections: go-test.sh sizes -p and -parallel from
+// the test server's free connections, so a many-core box cannot open more
+// than the server allows. The bound keeps three quarters of FREE in use at
+// most (8 per test process + 3 per running test), lowers -p only when
+// -parallel 1 does not fit, and never leaves 1..CPUS.
+func TestGoTestScriptBoundsConnections(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "scripts", "go-test.sh")
+	for _, tc := range []struct{ free, cpus, want string }{
+		{"297", "4", "4 4"},  // CI: max_connections=300 — Go's defaults fit
+		{"90", "4", "4 2"},   // a default-100 server on a 4-core laptop
+		{"90", "16", "6 1"},  // …on a 16-core box: fewer binaries at once
+		{"5", "4", "1 1"},    // nearly full server: the floor
+		{"1000", "8", "8 8"}, // never above the CPU count
+	} {
+		out, err := exec.Command(script, "--connection-bound="+tc.free+","+tc.cpus).Output()
+		if err != nil {
+			t.Fatalf("--connection-bound=%s,%s: %v", tc.free, tc.cpus, err)
+		}
+		if got := strings.TrimSpace(string(out)); got != tc.want {
+			t.Errorf("bound for %s free, %s CPUs = %q, want %q", tc.free, tc.cpus, got, tc.want)
+		}
+		// The bound must actually fit the budget.
+		var p, par int
+		if _, err := fmt.Sscan(string(out), &p, &par); err != nil {
+			t.Fatal(err)
+		}
+		free, _ := strconv.Atoi(tc.free)
+		if p > 1 && p*(8+3*par) > free*3/4 {
+			t.Errorf("bound %d×(8+3×%d) exceeds 3/4 of %d free connections", p, par, free)
+		}
 	}
 }

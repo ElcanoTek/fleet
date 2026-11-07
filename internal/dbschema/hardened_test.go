@@ -3,6 +3,7 @@ package dbschema_test
 import (
 	"database/sql"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/ElcanoTek/fleet/internal/config"
@@ -37,6 +38,9 @@ func TestStoresOpenWithoutUsageOnPublic(t *testing.T) {
 	defer admin.Close()
 	_, _ = maint.Exec(`DROP ROLE IF EXISTS ` + role)
 	if _, err := maint.Exec(`CREATE ROLE ` + role + ` LOGIN PASSWORD '` + pw + `'`); err != nil {
+		if strings.Contains(err.Error(), "42501") {
+			t.Skipf("the test role cannot CREATE ROLE (CREATEROLE is not part of the test contract): %v", err)
+		}
 		t.Fatalf("create a role: %v", err)
 	}
 	u, _ := url.Parse(dsn)

@@ -27,13 +27,23 @@ import (
 // killed run's leftovers are garbage-collected by the next one (see the
 // package comment).
 //
+// A background drop that fails is a failed cleanup — the database is left
+// behind — so Run reports the first such error and returns a nonzero code
+// even when every test passed (in synchronous mode the same failure is a
+// t.Errorf on the test that owned the database).
+//
 // Without Run (a package with no TestMain, or one that does not call it)
 // everything still works: each clone is made and dropped synchronously.
 func Run(m *testing.M) int {
 	runMode.Store(true)
 	code := m.Run()
 	if s := live.Load(); s != nil {
-		s.shutdown()
+		if err := s.shutdown(); err != nil {
+			fmt.Fprintf(os.Stderr, "testdb: cleanup did not complete: %v\n", err)
+			if code == 0 {
+				code = 1
+			}
+		}
 	}
 	return code
 }
@@ -59,6 +69,20 @@ type background struct {
 	fillers sync.WaitGroup
 	drops   chan string
 	pending sync.WaitGroup
+
+	errMu    sync.Mutex
+	firstErr error // the first background drop that failed
+	failed   int   // how many failed
+}
+
+// recordDropError keeps the first background-drop failure for Run.
+func (b *background) recordDropError(err error) {
+	b.errMu.Lock()
+	defer b.errMu.Unlock()
+	b.failed++
+	if b.firstErr == nil {
+		b.firstErr = err
+	}
 }
 
 // startBackground turns background mode on, when Run drives the process.
@@ -80,6 +104,7 @@ func (s *server) startBackground() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 				if err := s.drop(ctx, name); err != nil {
 					fmt.Fprintf(os.Stderr, "testdb: background drop: %v\n", err)
+					b.recordDropError(err)
 				}
 				cancel()
 				b.pending.Done()
@@ -161,11 +186,11 @@ func (s *server) fill(template string, p *pool) {
 }
 
 // shutdown stops the fillers, drops every clone nobody used, and waits for
-// every background drop.
-func (s *server) shutdown() {
+// every background drop. It returns the first drop that failed, if any.
+func (s *server) shutdown() error {
 	b := &s.bg
 	if !b.on.Load() {
-		return
+		return nil
 	}
 	close(b.stop)
 	b.fillers.Wait()
@@ -177,4 +202,10 @@ func (s *server) shutdown() {
 	}
 	b.mu.Unlock()
 	b.pending.Wait()
+	b.errMu.Lock()
+	defer b.errMu.Unlock()
+	if b.firstErr != nil {
+		return fmt.Errorf("%d background drop(s) failed; first: %w", b.failed, b.firstErr)
+	}
+	return nil
 }

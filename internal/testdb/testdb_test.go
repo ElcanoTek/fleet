@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -246,7 +247,9 @@ func TestBackgroundModeLeavesNothingBehind(t *testing.T) {
 	for _, name := range got {
 		s.dropLater(name)
 	}
-	s.shutdown()
+	if err := s.shutdown(); err != nil {
+		t.Errorf("shutdown: %v", err)
+	}
 	var n int
 	if err := main.admin.QueryRow(`SELECT count(*) FROM pg_database WHERE starts_with(datname, $1)`,
 		clonePrefix+s.ownerHex()+"_").Scan(&n); err != nil {
@@ -254,5 +257,80 @@ func TestBackgroundModeLeavesNothingBehind(t *testing.T) {
 	}
 	if n != 0 {
 		t.Errorf("%d database(s) of the background server left behind", n)
+	}
+}
+
+// TestCreateDBOnlyRole is the documented contract: a role with CREATEDB and
+// nothing else (no superuser) builds a template, clones it and writes to the
+// clone — the clone's objects are its own because templates are keyed by role.
+// It needs a test role that can CREATE ROLE to set up the restricted role.
+func TestCreateDBOnlyRole(t *testing.T) {
+	main := get(t)
+	const role, pw = "fleet_testdb_createdb_only", "placeholder-not-a-secret"
+	ctx := t.Context()
+	_, _ = main.admin.ExecContext(ctx, `DROP ROLE IF EXISTS `+role)
+	if _, err := main.admin.ExecContext(ctx, `CREATE ROLE `+role+` LOGIN CREATEDB NOSUPERUSER PASSWORD '`+pw+`'`); err != nil {
+		if isPrivilege(err) {
+			t.Skipf("the test role cannot CREATE ROLE: %v", err)
+		}
+		t.Fatal(err)
+	}
+	u := *main.base
+	u.User = url.UserPassword(role, pw)
+	s, err := connect(u.String())
+	live.Store(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	made := make([]string, 0, 2)
+	t.Cleanup(func() {
+		for _, n := range made {
+			if err := s.drop(context.Background(), n); err != nil {
+				t.Errorf("drop %s as %s: %v", n, role, err)
+			}
+		}
+		_ = s.admin.Close()
+		if _, err := main.admin.ExecContext(context.Background(), `DROP ROLE IF EXISTS `+role); err != nil {
+			t.Errorf("drop role: %v", err)
+		}
+	})
+	tmpl, err := s.template(ctx, selfSpec)
+	made = append(made, tmpl)
+	if err != nil {
+		t.Fatalf("build a template as a CREATEDB-only role: %v", err)
+	}
+	if mainTmpl, err := main.template(ctx, selfSpec); err == nil && mainTmpl == tmpl {
+		t.Errorf("two roles share template %s; a clone of another role's template is not writable", tmpl)
+	}
+	clone := s.newName()
+	made = append(made, clone)
+	if err := s.createDB(ctx, clone, tmpl); err != nil {
+		t.Fatalf("clone as a CREATEDB-only role: %v", err)
+	}
+	db := open(t, s.dsnFor(clone))
+	if _, err := db.ExecContext(ctx, `INSERT INTO seeded VALUES ('written-by-the-role')`); err != nil {
+		t.Fatalf("write to the clone: %v", err)
+	}
+	_ = db.Close()
+}
+
+// TestBackgroundDropFailureIsReported: a background drop that fails leaves a
+// database behind, so shutdown — and with it Run's exit code — reports it
+// instead of only logging. drop refuses a name outside testdb's prefixes,
+// which makes a deterministic failure without touching anything.
+func TestBackgroundDropFailureIsReported(t *testing.T) {
+	main := get(t)
+	runMode.Store(true)
+	s, err := connect(main.base.String())
+	runMode.Store(false)
+	live.Store(main)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.admin.Close() }()
+	s.dropLater("not_a_testdb_database")
+	err = s.shutdown()
+	if err == nil || !strings.Contains(err.Error(), "1 background drop(s) failed") {
+		t.Fatalf("shutdown = %v, want the failed drop reported", err)
 	}
 }
