@@ -89,7 +89,6 @@ func setupRemoteMCP(cfg *config.Config, chatStore *store.Store) *remotemcp.Servi
 	// unreachable by the shutdown context, so it outlived the drain and could
 	// touch a closing store. Folding it into the one loop that already runs
 	// hourly fixed that and removed a redundant ticker.
-	//nolint:gosec // G706: PublicBaseURL is operator-set config (env var), not request input — it can't forge a log line.
 	log.Printf("remote MCP OAuth: ENABLED (per-user hosted servers; redirect %s/api/oauth/mcp/callback)", cfg.PublicBaseURL)
 	return svc
 }

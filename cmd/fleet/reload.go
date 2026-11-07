@@ -14,6 +14,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
@@ -29,7 +30,7 @@ func reloadConfigHandler(cfg *config.Config) http.HandlerFunc {
 			http.Error(w, "config reload unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		result, err := cfg.Reload(os.Getenv("FLEET_ENV_FILE"))
+		result, err := cfg.Reload(envreg.Get("FLEET_ENV_FILE"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return

@@ -443,19 +443,27 @@ var secretDSNParams = map[string]bool{"password": true, "sslpassword": true, "pa
 // points at) a credential: password, sslpassword, passfile.
 func SecretDSNParam(name string) bool { return secretDSNParams[name] }
 
-// RedactDSN is the ONE redaction for a DSN shown to a person: a URL's userinfo
-// becomes "***" and every secret parameter (SecretDSNParam) in its query —
-// raw key matched, as libpq and pgx read it — becomes key=***; a key=value
-// DSN's secret pairs become key=*** in place. Everything else is kept, so a
-// host, port, database and options stay visible. A string that is neither
-// form is returned unchanged unless it mentions "password", which then hides
-// it whole.
+// RedactDSN is the ONE redaction for a DSN or URL shown to a person (`fleet
+// status`, `diagnose`, `backup` errors, migration plans, `fleet config
+// explain`):
+//
+//   - a URL's userinfo becomes "***" — any scheme, not only postgres (a
+//     Sentry DSN's key, a webhook's user:password);
+//   - in its query, every secret parameter becomes key=***: the pgx/libpq
+//     ones (SecretDSNParam: password, sslpassword, passfile, raw key) and any
+//     credential-shaped key (token, secret, key, signature, auth, …) matched
+//     on the percent-DECODED name (`%74oken` is token), printed as written;
+//   - a key=value DSN's secret pairs become key=*** in place.
+//
+// Everything else is kept, so a host, port, database and options stay
+// visible. A string that is neither form is returned unchanged unless it
+// mentions "password", which then hides it whole.
 func RedactDSN(dsn string) string {
 	trimmed := strings.TrimSpace(dsn)
 	if trimmed == "" {
 		return dsn
 	}
-	if u, err := url.Parse(trimmed); err == nil && isPostgresScheme(u.Scheme) {
+	if u, err := url.Parse(trimmed); err == nil && u.Scheme != "" && strings.Contains(trimmed, "://") {
 		out := trimmed
 		if i := strings.Index(out, "://"); i >= 0 {
 			rest := out[i+3:]
@@ -473,7 +481,8 @@ func RedactDSN(dsn string) string {
 			}
 			pairs := strings.Split(q, "&")
 			for i, p := range pairs {
-				if k, _, _ := strings.Cut(p, "="); secretDSNParams[k] {
+				k, _, hasValue := strings.Cut(p, "=")
+				if secretDSNParams[k] || (hasValue && credentialQueryKey(k)) {
 					pairs[i] = k + "=***"
 				}
 			}

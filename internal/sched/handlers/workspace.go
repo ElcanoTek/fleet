@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/sched/models"
 	"github.com/ElcanoTek/fleet/internal/tools"
 )
@@ -78,7 +79,7 @@ type workspaceListResponse struct {
 // honouring FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES (a positive integer byte count).
 // A missing / invalid / non-positive value falls back to the 50 MiB default.
 func workspaceDownloadMaxBytes() int64 {
-	if v := strings.TrimSpace(os.Getenv("FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_WORKSPACE_DOWNLOAD_MAX_BYTES")); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
 			return n
 		}

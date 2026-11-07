@@ -21,10 +21,10 @@ package testdb
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	scheddb "github.com/ElcanoTek/fleet/internal/sched/db"
 )
 
@@ -36,7 +36,7 @@ const SchedLockKey = 1
 // test only when it is unset.
 func ChatDSN(t testing.TB) string {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("FLEET_TEST_DATABASE_URL"))
+	dsn := strings.TrimSpace(envreg.Get("FLEET_TEST_DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("FLEET_TEST_DATABASE_URL is not set — skipping Postgres-backed test")
 	}
@@ -48,7 +48,7 @@ func ChatDSN(t testing.TB) string {
 // only for a test that opens its own connection (a CLI verb under test).
 func SchedDSN(t testing.TB) string {
 	t.Helper()
-	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	dsn := strings.TrimSpace(envreg.Get("DATABASE_URL"))
 	if dsn == "" {
 		t.Skip("DATABASE_URL is not set — skipping sched-DB test")
 	}

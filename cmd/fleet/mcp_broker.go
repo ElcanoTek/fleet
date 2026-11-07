@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"maps"
-	"os"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/ElcanoTek/fleet/internal/agentcore"
 	"github.com/ElcanoTek/fleet/internal/clientconfig"
 	"github.com/ElcanoTek/fleet/internal/config"
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/mcp"
 	"github.com/ElcanoTek/fleet/internal/mcpbroker"
@@ -83,7 +83,7 @@ func runMCPBroker() error {
 func mcpBrokerRemoteConfigured() bool {
 	configured := func(name string) bool {
 		for _, alias := range config.EnvAliases(name) {
-			if strings.TrimSpace(os.Getenv(alias)) != "" {
+			if strings.TrimSpace(envreg.Get(alias)) != "" {
 				return true
 			}
 		}

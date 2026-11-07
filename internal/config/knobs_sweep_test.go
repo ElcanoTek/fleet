@@ -54,6 +54,9 @@ var sweepParseFuncs = map[string]map[string]bool{
 var sweepEnvReadFuncs = map[string]struct{ pkg, sel string }{
 	"os.Getenv":    {"os", "Getenv"},
 	"os.LookupEnv": {"os", "LookupEnv"},
+	// The registry accessor (#2053) every read outside internal/config uses.
+	"envreg.Get":    {"envreg", "Get"},
+	"envreg.Lookup": {"envreg", "Lookup"},
 }
 
 // sweepExemptKeys are keys the sweep finds but that need no registry row, each

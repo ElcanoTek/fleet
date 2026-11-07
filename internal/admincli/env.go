@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/term"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/creds"
 	"github.com/ElcanoTek/fleet/internal/redact"
 )
@@ -196,7 +197,7 @@ func envEdit(argv []string) int {
 		return errf(5, "%v", err)
 	}
 
-	editorArgv := resolveEditorArgv(*editor, os.Getenv)
+	editorArgv := resolveEditorArgv(*editor, envreg.Get)
 	if editorArgv == nil {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return errf(1, "no editor configured and stdin is not a terminal — set $EDITOR or pass --editor")

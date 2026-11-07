@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/systemd"
 )
 
@@ -77,7 +78,7 @@ func stagedCopyCheck(dir string) (handled, stale bool) {
 // shipped /var/lib/fleet/bundle when systemd cannot say. A var so tests can
 // point it at a temp dir.
 var expectedStagePath = func() string {
-	service := strings.TrimSpace(os.Getenv("FLEET_SERVICE_NAME"))
+	service := strings.TrimSpace(envreg.Get("FLEET_SERVICE_NAME"))
 	if service == "" {
 		service = "fleet"
 	}

@@ -40,6 +40,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // inClusterTokenFile / inClusterCAFile / inClusterNamespaceFile are the
@@ -115,7 +117,7 @@ func (c *k8sClient) bearerToken() (string, error) {
 
 // newInClusterClient builds a client from the standard service-account mount.
 func newInClusterClient() (*k8sClient, error) {
-	host, port := os.Getenv("KUBERNETES_SERVICE_HOST"), os.Getenv("KUBERNETES_SERVICE_PORT")
+	host, port := envreg.Get("KUBERNETES_SERVICE_HOST"), envreg.Get("KUBERNETES_SERVICE_PORT")
 	if host == "" || port == "" {
 		return nil, fmt.Errorf("not running in a cluster (KUBERNETES_SERVICE_HOST/PORT unset) and no kubeconfig configured")
 	}

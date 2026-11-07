@@ -1,10 +1,11 @@
 package notify
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 )
 
 // Config is the host-side notification configuration. Every field is sourced
@@ -120,31 +121,31 @@ func (c *Config) applyDefaults() {
 // the default, behavior-unchanged posture.
 func Load() Config {
 	c := Config{
-		On: splitCSV(os.Getenv("FLEET_NOTIFY_ON")),
+		On: splitCSV(envreg.Get("FLEET_NOTIFY_ON")),
 
-		SMTPHost:     strings.TrimSpace(os.Getenv("FLEET_SMTP_HOST")),
-		SMTPPort:     strings.TrimSpace(os.Getenv("FLEET_SMTP_PORT")),
-		SMTPUsername: os.Getenv("FLEET_SMTP_USERNAME"),
-		SMTPPassword: os.Getenv("FLEET_SMTP_PASSWORD"),
-		SMTPFrom:     strings.TrimSpace(os.Getenv("FLEET_SMTP_FROM")),
-		EmailTo:      splitCSV(os.Getenv("FLEET_NOTIFY_EMAIL_TO")),
+		SMTPHost:     strings.TrimSpace(envreg.Get("FLEET_SMTP_HOST")),
+		SMTPPort:     strings.TrimSpace(envreg.Get("FLEET_SMTP_PORT")),
+		SMTPUsername: envreg.Get("FLEET_SMTP_USERNAME"),
+		SMTPPassword: envreg.Get("FLEET_SMTP_PASSWORD"),
+		SMTPFrom:     strings.TrimSpace(envreg.Get("FLEET_SMTP_FROM")),
+		EmailTo:      splitCSV(envreg.Get("FLEET_NOTIFY_EMAIL_TO")),
 
-		WebhookURL:          strings.TrimSpace(os.Getenv("FLEET_WEBHOOK_URL")),
-		WebhookMethod:       strings.TrimSpace(os.Getenv("FLEET_WEBHOOK_METHOD")),
-		WebhookBodyTemplate: os.Getenv("FLEET_WEBHOOK_BODY_TEMPLATE"),
-		WebhookSecret:       os.Getenv("FLEET_WEBHOOK_SECRET"),
+		WebhookURL:          strings.TrimSpace(envreg.Get("FLEET_WEBHOOK_URL")),
+		WebhookMethod:       strings.TrimSpace(envreg.Get("FLEET_WEBHOOK_METHOD")),
+		WebhookBodyTemplate: envreg.Get("FLEET_WEBHOOK_BODY_TEMPLATE"),
+		WebhookSecret:       envreg.Get("FLEET_WEBHOOK_SECRET"),
 
-		PublicURLBase: strings.TrimRight(strings.TrimSpace(os.Getenv("FLEET_PUBLIC_URL")), "/"),
+		PublicURLBase: strings.TrimRight(strings.TrimSpace(envreg.Get("FLEET_PUBLIC_URL")), "/"),
 	}
 	if c.SMTPPort == "" {
 		c.SMTPPort = "587" // STARTTLS submission port, the common default
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_NOTIFY_TIMEOUT")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_NOTIFY_TIMEOUT")); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			c.Timeout = d
 		}
 	}
-	if v := strings.TrimSpace(os.Getenv("FLEET_NOTIFY_RETRIES")); v != "" {
+	if v := strings.TrimSpace(envreg.Get("FLEET_NOTIFY_RETRIES")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
 			c.Retries = n
 			c.retriesSet = true

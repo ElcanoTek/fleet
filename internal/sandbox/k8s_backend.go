@@ -51,6 +51,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ElcanoTek/fleet/internal/config/envreg"
 	"github.com/ElcanoTek/fleet/internal/safe"
 )
 
@@ -305,8 +306,8 @@ const (
 // Both are empty when fleet talks to a cluster from outside it (a kubeconfig
 // dev box), which is why every consumer keeps a fallback.
 var (
-	k8sControlPlaneUID   = sanitizeK8sLabelValue(os.Getenv("FLEET_POD_UID"))
-	k8sControlPlaneOwner = sanitizeK8sLabelValue(os.Getenv("FLEET_OWNER_ID"))
+	k8sControlPlaneUID   = sanitizeK8sLabelValue(envreg.Get("FLEET_POD_UID"))
+	k8sControlPlaneOwner = sanitizeK8sLabelValue(envreg.Get("FLEET_OWNER_ID"))
 )
 
 // k8sBootNonce is unique to this PROCESS, and that is the point: the pod UID
