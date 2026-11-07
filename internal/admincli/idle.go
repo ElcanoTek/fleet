@@ -280,7 +280,7 @@ func sanitizeSummaryText(s string) string {
 }
 
 func localHealthTLSMode() string {
-	for _, k := range []string{"FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE"} {
+	for _, k := range []string{"FLEET_TLS_MODE", "CHAT_TLS_MODE", "CUTLASS_TLS_MODE"} { // LEGACY-ENV-ALIAS: remove after migrate-env
 		if v := strings.ToLower(strings.TrimSpace(envOrFile(k))); v != "" {
 			return v
 		}
@@ -294,13 +294,13 @@ func localHealthTLSConfig(requireCert bool) (*tls.Config, error) {
 		rootCAs = x509.NewCertPool()
 	}
 	var serverName string
-	for _, k := range []string{"FLEET_TLS_DOMAIN", "CHAT_TLS_DOMAIN", "CUTLASS_TLS_DOMAIN"} {
+	for _, k := range []string{"FLEET_TLS_DOMAIN", "CHAT_TLS_DOMAIN", "CUTLASS_TLS_DOMAIN"} { // LEGACY-ENV-ALIAS: remove after migrate-env
 		if v := strings.TrimSpace(envOrFile(k)); v != "" {
 			serverName = v
 			break
 		}
 	}
-	for _, k := range []string{"FLEET_TLS_CERT_FILE", "CHAT_TLS_CERT_FILE", "CUTLASS_TLS_CERT_FILE"} {
+	for _, k := range []string{"FLEET_TLS_CERT_FILE", "CHAT_TLS_CERT_FILE", "CUTLASS_TLS_CERT_FILE"} { // LEGACY-ENV-ALIAS: remove after migrate-env
 		certFile := strings.TrimSpace(envOrFile(k))
 		if certFile == "" {
 			continue
@@ -339,10 +339,10 @@ func localHealthTLSConfig(requireCert bool) (*tls.Config, error) {
 func probeInMemoryActiveCounts(ctx context.Context, svcState string) (turns, approvals int, hasApprovalsHeader bool, err error) {
 	addr := strings.TrimSpace(envOrFile("FLEET_SERVER_ADDR"))
 	if addr == "" {
-		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR"))
+		addr = strings.TrimSpace(envOrFile("CHAT_SERVER_ADDR")) // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 	if addr == "" {
-		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR"))
+		addr = strings.TrimSpace(envOrFile("CUTLASS_SERVER_ADDR")) // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 	if addr == "" && (svcState == "active" || svcState == "unknown") && !truthy(envreg.Get("FLEET_ASSUME_SERVICE_ACTIVE")) {
 		addr = "127.0.0.1:8080"

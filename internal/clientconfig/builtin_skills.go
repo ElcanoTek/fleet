@@ -101,7 +101,7 @@ func fleetStateBase(sub string) string {
 	if d := strings.TrimSpace(envreg.Get("FLEET_DATA_DIR")); d != "" {
 		return filepath.Join(d, sub)
 	}
-	if d := strings.TrimSpace(envreg.Get("CHAT_DATA_DIR")); d != "" {
+	if d := strings.TrimSpace(envreg.Get("CHAT_DATA_DIR")); d != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return filepath.Join(d, sub)
 	}
 	if cache, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cache) != "" {

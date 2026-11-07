@@ -15,7 +15,7 @@ import (
 // back-compat aliases so a deployment that still sets CHAT_DISABLE_PROMPT_CACHE
 // or CUTLASS_RETRY_MAX_ATTEMPTS keeps working, and so the lifted parity tests
 // (which set the legacy names) stay green. The legacy prefixes are deprecated
-// (ADR-0098) and the spellings come from the configuration registry
+// (ADR-0099) and the spellings come from the configuration registry
 // (envreg.ChainSpellings), so every suffix read here is a declared setting.
 //
 // Every env lookup goes through fleetEnv, which tries the canonical FLEET_

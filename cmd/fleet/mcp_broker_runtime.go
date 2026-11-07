@@ -492,7 +492,7 @@ func parentOwnedRuntimeEnvNames(bundle *clientconfig.Bundle) []string {
 		"FLEET_MCP_OAUTH_ENCRYPTION_KEY", "FLEET_LOG_ARCHIVE_ENCRYPTION_KEY",
 		// Scheduled-task inputs the boot loader reads verbatim under their
 		// legacy names (exact os.Getenv, outside the alias machinery).
-		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL",
+		"CUTLASS_TASK_MODEL", "CUTLASS_TASK_FALLBACK_MODEL", // LEGACY-ENV-ALIAS: remove after migrate-env
 		"CUTLASS_IMAGE_OUTPUT", "CUTLASS_IMAGE_MODEL",
 		// Knobs the parent still resolves after broker boot through the
 		// FLEET_/CHAT_/CUTLASS_ alias machinery: config reload watches or

@@ -1149,7 +1149,7 @@ func childLogFilePath(parentLogFile, childID string) string {
 		base = envreg.Get("FLEET_LOG_FILE")
 	}
 	if base == "" {
-		base = envreg.Get("CUTLASS_LOG_FILE")
+		base = envreg.Get("CUTLASS_LOG_FILE") // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 	if base == "" {
 		base = "fleet-session.json"

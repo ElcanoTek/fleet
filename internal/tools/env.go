@@ -14,5 +14,5 @@ func fleetEnv(name string) string {
 	if v := envreg.Get("FLEET_" + name); v != "" {
 		return v
 	}
-	return envreg.Get("CHAT_" + name)
+	return envreg.Get("CHAT_" + name) // LEGACY-ENV-ALIAS: remove after migrate-env
 }

@@ -37,6 +37,11 @@ there) and [`../.agents/skills/steward/SKILL.md`](../.agents/skills/steward/SKIL
   verifier, the optional "phone a friend" super-LLM review, git-worktree
   isolation): [`docs/AGENT-RUNTIME.md`](AGENT-RUNTIME.md)
 - **Architecture overview:** [`README.md`](../README.md) ("Architecture at a glance")
+- **What does this environment variable do / what is it set to?** Every
+  variable, generated from the one place it is declared:
+  [`docs/CONFIGURATION.md`](CONFIGURATION.md); on a box, `fleet config explain
+  [KEY…]`. Adding a setting, the accessor and the lint rule:
+  [`docs/CONFIG-REGISTRY.md`](CONFIG-REGISTRY.md)
 - **Why the invariants are the way they are:** [`docs/adr/`](adr/)
   (Architecture Decision Records)
 - **Contributor workflow + CI gates:** [`CONTRIBUTING.md`](../CONTRIBUTING.md)
@@ -250,7 +255,9 @@ above fails otherwise.
 - [`COMPLETED-STEP-RECOVERY.md`](COMPLETED-STEP-RECOVERY.md) — Provider recovery after completed tool steps and preservation of verifier evidence.
 - [`COMPOSER-TOOLBAR-AND-SHARE.md`](COMPOSER-TOOLBAR-AND-SHARE.md) — Composer toolbar declutter & Share from the start of a chat
 - [`CONDITIONAL-TASK-COMPLETION.md`](CONDITIONAL-TASK-COMPLETION.md) — Conditional scheduled tasks
+- [`CONFIG-REGISTRY.md`](CONFIG-REGISTRY.md) — Configuration registry: every env var declared once (#2053)
 - [`CONFIG-RELOAD.md`](CONFIG-RELOAD.md) — Config hot-reload (#286)
+- [`CONFIGURATION.md`](CONFIGURATION.md) — Configuration reference: every environment variable (generated)
 - [`CONNECTION-SHARING.md`](CONNECTION-SHARING.md) — Sharing a remote MCP connection
 - [`CONNECTOR-BUILDER.md`](CONNECTOR-BUILDER.md) — Connector Builder (`/connector-builder`), Custom Connector Runtime (`http_tools` & `playwright`), and Co-Piloted Live Browser View
 - [`CONNECTOR-ONBOARDING.md`](CONNECTOR-ONBOARDING.md) — Connector-directory onboarding — guided setup, API keys, BYO OAuth clients

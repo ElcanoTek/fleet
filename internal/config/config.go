@@ -36,7 +36,7 @@ import (
 
 // Canonical + legacy env prefixes, owned by the configuration registry
 // (internal/config/envreg). FLEET_ wins; the legacy prefixes are tried in order
-// for back-compat until they are removed (ADR-0098).
+// for back-compat until they are removed (ADR-0099).
 const canonicalPrefix = envreg.CanonicalPrefix
 
 // legacyPrefixes is the registry's deprecated prefix list.
@@ -758,7 +758,7 @@ type Config struct {
 	// SandboxK8s* configure the kubernetes backend; ignored (and refused if
 	// set, to catch dead config) under the podman backend. Env values override
 	// the bundle manifest's sandbox.kubernetes block field-by-field.
-	SandboxK8sNamespace       string // FLEET_SANDBOX_K8S_NAMESPACE, default "fleet-sandboxes"
+	SandboxK8sNamespace       string // FLEET_SANDBOX_K8S_NAMESPACE; empty = the kubeconfig context's, else the control plane's own, else "fleet-sandboxes" (sandbox.NewKubernetesBackend)
 	SandboxK8sWorkspaceClaim  string // FLEET_SANDBOX_K8S_WORKSPACE_CLAIM — required RWX PVC name
 	SandboxK8sServiceAccount  string // FLEET_SANDBOX_K8S_SERVICE_ACCOUNT — pod identity (no token is ever mounted)
 	SandboxK8sImagePullSecret string // FLEET_SANDBOX_K8S_IMAGE_PULL_SECRET

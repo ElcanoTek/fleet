@@ -275,7 +275,7 @@ func ResolveWorkspaceRoot(explicit string) string {
 	if v := envreg.Get("FLEET_WORKSPACE_ROOT"); v != "" {
 		return v
 	}
-	if v := envreg.Get("CHAT_WORKSPACE_ROOT"); v != "" {
+	if v := envreg.Get("CHAT_WORKSPACE_ROOT"); v != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 		return v
 	}
 	if abs, err := filepath.Abs("workspace"); err == nil {

@@ -100,7 +100,7 @@ func checkBundle(r *report, dir string) *clientconfig.Bundle {
 // flag the credentials the env file must carry. OPENROUTER_API_KEY is treated as
 // required unless mock mode is on (matching config.Validate).
 func checkEnv(r *report) {
-	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE"))
+	mock := truthy(envOrFile("FLEET_MOCK_MODE")) || truthy(envOrFile("CHAT_MOCK_MODE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 	type envCheck struct {
 		name     string
 		required bool
@@ -297,7 +297,7 @@ func sandboxImageEnv() string {
 	if ref := strings.TrimSpace(envOrFile("FLEET_SANDBOX_IMAGE")); ref != "" {
 		return ref
 	}
-	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE"))
+	return strings.TrimSpace(envOrFile("CHAT_SANDBOX_IMAGE")) // LEGACY-ENV-ALIAS: remove after migrate-env
 }
 
 // ServiceUserAndHome is the exported companion of

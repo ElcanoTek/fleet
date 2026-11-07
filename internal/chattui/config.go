@@ -124,7 +124,7 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	}
 	if cfg.Token == "" {
 		// Env-var NAMES (not secret values): canonical first, legacy alias second.
-		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN")))
+		cfg.Token = strings.TrimSpace(firstNonEmpty(env("FLEET_SERVER_TOKEN"), env("CHAT_SERVER_TOKEN"))) // LEGACY-ENV-ALIAS: remove after migrate-env
 	}
 
 	// Server URL from flags/env (default applied after the env-file step below).
@@ -145,12 +145,12 @@ func Resolve(f Flags, env getenv, rf readFile, evf envValuesReader) (Config, err
 	// the deployment this client is talking to.
 	serverFile := ""
 	if cfg.Token == "" || cfg.ServerURL == "" {
-		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil {
+		if vals, path := discoverEnvValues(evf, candidates, "FLEET_SERVER_TOKEN", "CHAT_SERVER_TOKEN", "FLEET_SERVER_ADDR"); vals != nil { // LEGACY-ENV-ALIAS: remove after migrate-env
 			// serverFile is recorded only when the file actually fills a
 			// missing value: a file that merely matched on a key we already
 			// had says nothing about which deployment we are talking to.
 			if cfg.Token == "" {
-				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" {
+				if tok := strings.TrimSpace(firstNonEmpty(vals["FLEET_SERVER_TOKEN"], vals["CHAT_SERVER_TOKEN"])); tok != "" { // LEGACY-ENV-ALIAS: remove after migrate-env
 					cfg.Token, serverFile = tok, path
 				}
 			}

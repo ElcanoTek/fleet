@@ -23,7 +23,10 @@
 # The EnvironmentFile is the SAME 0600 credential file scripts/bootstrap.sh
 # ensures (FLEET_ENV_FILE). cmd/fleet *also* parses FLEET_ENV_FILE itself via
 # config.Load; pointing systemd at the same file keeps process-env and
-# config-loaded values in sync. Minimum keys it should contain:
+# config-loaded values in sync. Every variable is documented in
+# docs/CONFIGURATION.md (generated from internal/config/envreg/table.go);
+# `fleet config explain` shows the effective values. Minimum keys it should
+# contain:
 #
 #   OPENROUTER_API_KEY=...
 #   FLEET_CLIENT_CONFIG_DIR=/opt/fleet/client    # the checked-out client bundle

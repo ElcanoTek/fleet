@@ -250,7 +250,7 @@ func writeLogFile(session *LogSession, logFile string) {
 	if logFile == "" {
 		logFile = envreg.Get("FLEET_LOG_FILE")
 		if logFile == "" {
-			logFile = envreg.Get("CUTLASS_LOG_FILE")
+			logFile = envreg.Get("CUTLASS_LOG_FILE") // LEGACY-ENV-ALIAS: remove after migrate-env
 		}
 		if logFile == "" {
 			logFile = "fleet-session.json"
