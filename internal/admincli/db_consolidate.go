@@ -195,12 +195,36 @@ func cmdDBConsolidate(argv []string) int {
 // client's default socket directory (which loopback TCP DSNs map to) — and
 // their port. Preflight then confirms the instance answering is on that port.
 func superuserPG(p *consolidatePlan) pgSuper {
+	return &execPG{prefix: []string{"runuser", "-u", "postgres", "--"}, connArgs: p.connArgs(), needRoot: true}
+}
+
+// connArgs are the client-tool arguments that reach the plan's instance: the
+// socket directory when the DSNs give one, and the port. The runner and every
+// command the tool prints for the operator use the same ones.
+func (p *consolidatePlan) connArgs() []string {
 	var conn []string
 	if p.socketDir != "" {
 		conn = append(conn, "-h", p.socketDir)
 	}
-	conn = append(conn, "-p", p.port)
-	return &execPG{prefix: []string{"runuser", "-u", "postgres", "--"}, connArgs: conn, needRoot: true}
+	return append(conn, "-p", p.port)
+}
+
+// superuserCmd renders a client tool run as the postgres OS user against the
+// plan's instance, shell-quoted, for a command the operator copies.
+func (p *consolidatePlan) superuserCmd(tool string) string {
+	parts := []string{"runuser", "-u", "postgres", "--", tool}
+	for _, a := range p.connArgs() {
+		parts = append(parts, shellQuote(a))
+	}
+	return strings.Join(parts, " ")
+}
+
+// shellQuote single-quotes s for a POSIX shell unless it is plainly safe.
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_./=:") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // ── the plan ────────────────────────────────────────────────────────────────
@@ -900,7 +924,7 @@ func printInventory(out io.Writer, p *consolidatePlan) {
 }
 
 func printSteps(out io.Writer, o consolidateOptions, p *consolidatePlan) {
-	fmt.Fprintln(out, "\nSteps (--apply):")
+	fmt.Fprintf(out, "\nSteps (--apply; superuser work as %s):\n", p.superuserCmd("psql/pg_dump/pg_restore"))
 	n := 0
 	step := func(f string, a ...any) { n++; fmt.Fprintf(out, "  %2d. %s\n", n, fmt.Sprintf(f, a...)) }
 	if len(p.leftoverTmp) > 0 {
@@ -917,7 +941,8 @@ func printSteps(out io.Writer, o consolidateOptions, p *consolidatePlan) {
 		tmp := p.tmpDB(s)
 		step("CREATE DATABASE %s TEMPLATE %s  (a scratch copy; %s itself is never modified)", tmp, s.database, s.database)
 		step("in %s: ALTER SCHEMA public RENAME TO %s", tmp, s.schema)
-		step("pg_dump -Fc -n %s %s | pg_restore --single-transaction --no-owner --no-privileges --role=%s -d %s", s.schema, tmp, p.owner, p.target)
+		conn := strings.Join(p.connArgs(), " ")
+		step("pg_dump %s -Fc -n %s %s | pg_restore %s --single-transaction --no-owner --no-privileges --role=%s -d %s", conn, s.schema, tmp, conn, p.owner, p.target)
 		step("DROP DATABASE %s", tmp)
 	}
 	step("verify: per-table row counts, sequence values, schema_migrations (target vs source); sources unchanged; every object owned by %s", p.owner)
@@ -1026,13 +1051,13 @@ Rollback (any time before you drop the old databases):
   is NOT carried back.
 
 Once satisfied, drop the old databases (irreversible):
-  runuser -u postgres -- psql -c 'DROP DATABASE %s' -c 'DROP DATABASE %s'
+  %s -c %s -c %s
 `, p.envFile, p.target, backup,
-		serviceName(""), serviceName(""), backup, p.envFile, serviceName(""),
+		serviceName(""), serviceName(""), shellQuote(backup), shellQuote(p.envFile), serviceName(""),
 		p.chat.database, p.sched.database, p.target,
-		quoteIdent(p.chat.database), quoteIdent(p.sched.database))
+		p.superuserCmd("psql"), shellQuote("DROP DATABASE "+quoteIdent(p.chat.database)), shellQuote("DROP DATABASE "+quoteIdent(p.sched.database)))
 	if p.chat.role != "" && p.chat.role != p.owner {
-		fmt.Fprintf(out, "  and the chat role, if nothing else uses it: runuser -u postgres -- psql -c 'DROP ROLE %s'\n", quoteIdent(p.chat.role))
+		fmt.Fprintf(out, "  and the chat role, if nothing else uses it: %s -c %s\n", p.superuserCmd("psql"), shellQuote("DROP ROLE "+quoteIdent(p.chat.role)))
 	}
 	fmt.Fprintf(out, "  and the commented-out keys in %s (marked %s) once you are sure.\n", p.envFile, stamp)
 	return nil

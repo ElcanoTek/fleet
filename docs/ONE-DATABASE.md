@@ -214,7 +214,8 @@ returns the box to its state before the move; anything written after the
 switch exists only in the target and is not carried back.
 
 **Afterwards**, once satisfied: drop the old databases
-(`runuser -u postgres -- psql -c 'DROP DATABASE "chat"' -c 'DROP DATABASE "sched"'`),
+(`runuser -u postgres -- psql -p 5432 -c 'DROP DATABASE "chat"' -c 'DROP DATABASE "sched"'`;
+the tool prints it with the socket directory and port of the instance it moved),
 the chat role if nothing else uses it, and the commented-out keys.
 
 Tests: `internal/admincli/db_consolidate_test.go` drives the plan, every
