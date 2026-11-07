@@ -1666,9 +1666,14 @@ func (h *Handlers) CancelTask(w http.ResponseWriter, r *http.Request) {
 	// — may always stop it (taskStoppableByPrincipal). A task outside both is
 	// a 404, like a task read the principal may not make; a visible task the
 	// principal may not stop (a fleet-wide reader without the cancel grant)
-	// keeps the explanatory 403.
-	taskForAuth, err := h.storage.GetTask(taskID)
-	if err != nil || taskForAuth == nil {
+	// keeps the explanatory 403. Only a missing row is a 404; a failed lookup
+	// is a 500, so a storage fault never reads as "no such task".
+	taskForAuth, err := h.storage.GetTaskWithContext(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to look up task")
+		return
+	}
+	if taskForAuth == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
@@ -1737,8 +1742,13 @@ func (h *Handlers) DeleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.storage.GetTask(taskID)
-	if err != nil || task == nil {
+	// As in CancelTask, only a missing row is a 404.
+	task, err := h.storage.GetTaskWithContext(r.Context(), taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "Failed to look up task")
+		return
+	}
+	if task == nil {
 		writeError(w, http.StatusNotFound, "Task not found")
 		return
 	}
